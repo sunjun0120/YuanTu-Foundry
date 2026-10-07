@@ -32,9 +32,8 @@ export interface RunDefaults {
    *
    * Deliberately without a default. A window is a fact about somebody else's endpoint: 1,000,000 for every
    * protocol meant a gateway serving 128k was measured against a number nobody had checked, and the run that
-   * failed was blamed on the conversation. The entry points refuse a run that declares no window, and
-   * `discoverModels()` is what produces a number worth declaring; the kernel treats an absent window as one it
-   * cannot check a request against rather than inventing one.
+   * failed was blamed on the conversation. App entry points resolve metadata or a local application budget; an embedder that
+   * leaves the window absent still asks the kernel to run without token-window checks.
    */
   maxContextTokens?: number;
   maxOutputTokens: number;

@@ -602,23 +602,43 @@ test('models reads the window from the endpoint instead of guessing one', async 
   assert.match(human.stdout, /--max-context-tokens/);
 });
 
-test('a run with no declared window is refused, and the refusal names both ways to declare one', async (t) => {
-  // The endpoint is never reached: the run is refused before a request exists, which is the whole point of
-  // refusing rather than measuring the conversation against a number this runtime invented.
-  const url = await httpFixture(t, () => {
-    throw new Error('no request may be sent without a declared window');
+test('a CLI run with no declared window discovers its budget and completes', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-auto-capacity-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let probes = 0;
+  const url = await httpFixture(t, (body, res, _headers, requestUrl) => {
+    if (requestUrl === '/v1/models') {
+      probes++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          data: [{ id: 'fixture-model', context_length: 96000, max_output_tokens: 4096 }],
+        }),
+      );
+      return;
+    }
+    assert.equal(body.max_tokens, 4096);
+    sendFrames(res, frames('Done with automatic capacity.'));
   });
-  const result = await runCli(['run', 'Do something', '--json'], {
+  const result = await runCli(['run', 'Do something', '--json', '--workspace', root], {
     YUANTU_BASE_URL: url,
     YUANTU_MODEL: 'fixture-model',
     ANTHROPIC_API_KEY: 'fixture-secret',
-    // The fixture declares a window for every other test; an explicit empty value is how this one asks for
-    // the connection that declared none.
     YUANTU_MAX_CONTEXT_TOKENS: '',
+    YUANTU_MAX_OUTPUT_TOKENS: '',
+    YUANTU_MODEL_CAPACITIES: '',
   });
-  assert.notEqual(result.code, 0);
-  assert.match(result.stderr, /No context window is declared for "fixture-model"/);
-  assert.match(result.stderr, /yuantu-agent models/);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(probes, 1);
+  const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+  try {
+    const envelope = store
+      .events(store.list('', root)[0]!.id)
+      .find((event) => event.type === 'context.envelope');
+    assert.equal(envelope?.data.maxContextTokens, 96000);
+  } finally {
+    store.close();
+  }
 });
 
 /**

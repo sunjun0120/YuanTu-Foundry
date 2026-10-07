@@ -81,7 +81,7 @@ export interface RouteCapacity {
   contextWindow: number;
   maxOutputTokens?: number;
   /** Where the number came from, so a caller can say so instead of presenting every number as configured. */
-  source: 'declared' | 'catalog';
+  source: 'declared' | 'catalog' | 'discovered' | 'default';
 }
 /**
  * The windows an operator declared for *the other models on the same endpoint*.
@@ -133,9 +133,8 @@ export function declaredRoutes(
 /**
  * The capacity of one route: what the operator declared for it, else what this project asserts, else nothing.
  *
- * `undefined` is a real answer and the caller's problem to solve: the entry points refuse a run without a
- * window, and the refusal names the two ways to get one. Returning a default here would put the guess back
- * exactly where it was removed from.
+ * `undefined` means no declared or shipped capacity. App entry points separately consult discovered metadata
+ * and a local budget, keeping the default distinct from a claim about the endpoint's actual capacity.
  */
 export function resolveRouteCapacity(input: {
   model: string;

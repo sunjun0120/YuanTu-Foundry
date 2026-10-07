@@ -5,10 +5,6 @@ import type {
 } from './settings-contract.ts';
 import { locale, onLocaleChange, t } from './i18n.ts';
 import { showSettingsPanel } from './renderer-panels.ts';
-import {
-  DEFAULT_MAX_CONTEXT_TOKENS,
-  DEFAULT_MAX_OUTPUT_TOKENS,
-} from '../../packages/protocol/limits.ts';
 import { modelLimitRange } from '../../packages/protocol/settings.ts';
 
 export function setupModelSettings(
@@ -111,14 +107,19 @@ export function setupModelSettings(
       <div class="settings-model-details" hidden>
         <label><span data-label="context"></span><input data-field="maxContextTokens" type="number" step="1" /></label>
         <label><span data-label="output"></span><input data-field="maxOutputTokens" type="number" step="1" /></label>
+        <label><span data-label="compact"></span><input data-field="autoCompactTokens" type="number" step="1" /></label>
+        <label><span data-label="idle"></span><input data-field="streamIdleTimeoutMs" type="number" step="1" /></label>
       </div>`;
-    field(row, 'maxContextTokens').placeholder = `${DEFAULT_MAX_CONTEXT_TOKENS / 1_000_000}M`;
-    field(row, 'maxOutputTokens').placeholder = `${DEFAULT_MAX_OUTPUT_TOKENS / 1000}K`;
     field(row, 'model').value = entry?.model || '';
     row.dataset.supportsVision = String(entry?.supportsVision ?? true);
     // The bounds are the ones the host validates against, not a second pair typed into the markup: a form
     // that accepts a number the contract refuses (or refuses one it accepts) is how the two ends drifted apart.
-    for (const property of ['maxContextTokens', 'maxOutputTokens'] as const) {
+    for (const property of [
+      'maxContextTokens',
+      'maxOutputTokens',
+      'autoCompactTokens',
+      'streamIdleTimeoutMs',
+    ] as const) {
       const [min, max] = modelLimitRange(property);
       field(row, property).min = String(min);
       field(row, property).max = String(max);
@@ -174,11 +175,17 @@ export function setupModelSettings(
     button.setAttribute('aria-label', t(open ? 'settings.collapseModel' : 'settings.expandModel'));
   }
   function translateRow(row: HTMLElement): void {
+    field(row, 'maxContextTokens').placeholder = t('settings.automaticBudget');
+    field(row, 'maxOutputTokens').placeholder = t('settings.automaticBudget');
+    field(row, 'autoCompactTokens').placeholder = t('settings.defaultLimit');
+    field(row, 'streamIdleTimeoutMs').placeholder = t('settings.defaultLimit');
     field(row, 'model').setAttribute('aria-label', t('settings.modelId'));
     field(row, 'model').placeholder = t('settings.modelNote');
     for (const [name, key] of [
       ['context', 'settings.contextTokens'],
       ['output', 'settings.outputTokens'],
+      ['compact', 'settings.autoCompactTokens'],
+      ['idle', 'settings.streamIdleTimeoutMs'],
     ])
       row.querySelector<HTMLElement>(`[data-label="${name}"]`)!.textContent = t(key!);
     row
@@ -303,11 +310,11 @@ export function setupModelSettings(
   function openSettings(target: 'general' | 'model' = 'general'): void {
     if (pending) return;
     if (page.hidden) conversationScroll = byId('conversation').scrollTop;
+    window.dispatchEvent(new CustomEvent('yuantu-settings-open'));
     byId('chat-page').hidden = true;
     byId('chat-sidebar').hidden = true;
     page.hidden = false;
     document.body.dataset.page = 'settings';
-    window.dispatchEvent(new CustomEvent('yuantu-settings-open'));
     byId(target === 'model' ? 'model-settings' : 'general-settings').dispatchEvent(
       new Event('click'),
     );
@@ -378,7 +385,7 @@ export function setupModelSettings(
   function rowInput(row: HTMLElement): ModelGroupInput['models'][number] {
     const number = (name: string) => {
       const value = field(row, name).value.trim();
-      return value ? Number(value) : undefined;
+      return value ? Number(value) : null;
     };
     return {
       connectionId: row.dataset.connectionId || '',
@@ -387,6 +394,8 @@ export function setupModelSettings(
       supportsVision: row.dataset.supportsVision !== 'false',
       maxContextTokens: number('maxContextTokens'),
       maxOutputTokens: number('maxOutputTokens'),
+      autoCompactTokens: number('autoCompactTokens'),
+      streamIdleTimeoutMs: number('streamIdleTimeoutMs'),
     };
   }
   async function submit(type: 'test' | 'save-group'): Promise<void> {

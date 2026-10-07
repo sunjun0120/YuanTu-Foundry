@@ -40,6 +40,7 @@ import {
 import {
   openStore,
   createAgent,
+  resolveConnectionCapacities,
   modelInfoFor,
   resolveWorkspace,
   safeError,
@@ -877,7 +878,12 @@ async function main(): Promise<void> {
         const session = ownedSession(id),
           history = store.messages(id);
         if (params.offset === undefined) {
-          if (params.view !== undefined || params.chunkOffset !== undefined)
+          if (
+            params.view !== undefined ||
+            params.chunkOffset !== undefined ||
+            params.tail !== undefined ||
+            params.endOffset !== undefined
+          )
             throw new Error('Paged history requires an offset');
           return {
             session,
@@ -886,12 +892,32 @@ async function main(): Promise<void> {
             steps: store.stateOf<readonly StepRecord[]>('steps', id),
           };
         }
-        const offset = params.offset;
+        if (
+          params.tail !== undefined &&
+          (params.view !== 'display' ||
+            typeof params.tail !== 'number' ||
+            !Number.isSafeInteger(params.tail) ||
+            params.tail < 1 ||
+            params.chunkOffset !== undefined ||
+            params.offset !== 0)
+        )
+          throw new Error('Invalid history tail');
+        const endOffset = params.endOffset === undefined ? history.length : params.endOffset;
+        if (
+          typeof endOffset !== 'number' ||
+          !Number.isSafeInteger(endOffset) ||
+          endOffset < 0 ||
+          endOffset > history.length ||
+          (params.endOffset !== undefined && params.view !== 'display')
+        )
+          throw new Error('Invalid history end offset');
+        const offset =
+          params.tail === undefined ? params.offset : Math.max(0, endOffset - params.tail);
         if (
           typeof offset !== 'number' ||
           !Number.isSafeInteger(offset) ||
           offset < 0 ||
-          offset > history.length ||
+          offset > endOffset ||
           (params.view !== undefined && params.view !== 'display') ||
           (params.chunkOffset !== undefined &&
             (params.view !== 'display' ||
@@ -909,7 +935,7 @@ async function main(): Promise<void> {
         };
         let end = offset,
           bytes = 0;
-        while (end < history.length && end - offset < 100) {
+        while (end < endOffset && end - offset < 100) {
           const message = displayMessage(history[end]!);
           const serialized = JSON.stringify(message);
           const size = Buffer.byteLength(serialized);
@@ -926,13 +952,17 @@ async function main(): Promise<void> {
             return {
               session,
               messages: [],
-              ...(offset === 0 ? { statistics: store.statistics(id) } : {}),
+              offset,
+              totalMessages: endOffset,
+              ...(offset === 0 || params.tail !== undefined
+                ? { statistics: store.statistics(id) }
+                : {}),
               messageChunk: {
                 index: offset,
                 part: serialized.slice(start, next),
                 ...(next < serialized.length ? { nextChunkOffset: next } : {}),
               },
-              ...(next === serialized.length && offset + 1 < history.length
+              ...(next === serialized.length && offset + 1 < endOffset
                 ? { nextOffset: offset + 1 }
                 : {}),
             };
@@ -944,11 +974,17 @@ async function main(): Promise<void> {
         return {
           session,
           messages: history.slice(offset, end).map(displayMessage),
-          ...(offset === 0 ? { statistics: store.statistics(id) } : {}),
+          offset,
+          totalMessages: endOffset,
+          ...(offset === 0 || params.tail !== undefined
+            ? { statistics: store.statistics(id) }
+            : {}),
           // The step record travels with the first page, like the statistics: it describes the session, not the
           // window of history that happens to be loaded.
-          ...(offset === 0 ? { steps: store.stateOf<readonly StepRecord[]>('steps', id) } : {}),
-          ...(end < history.length ? { nextOffset: end } : {}),
+          ...(offset === 0 || params.tail !== undefined
+            ? { steps: store.stateOf<readonly StepRecord[]>('steps', id) }
+            : {}),
+          ...(end < endOffset ? { nextOffset: end } : {}),
         };
       }
       case 'session.audit': {
@@ -1058,20 +1094,23 @@ async function main(): Promise<void> {
           route,
         );
         try {
+          const provider = createProvider(config);
+          const capacityFor = await resolveConnectionCapacities(options, config, controller.signal);
+          const capacity = capacityFor(config.model);
           await prepareContext({
             store,
             sessionId,
             system: withoutSummarySection(replay.system!),
             tools: replay.tools!,
-            provider: createProvider(config),
+            provider,
             // A manual compaction is a model answer like any other, so its record says which route produced it —
             // the same two facts the run's own compactions record, taken from the same place.
             protocol: routeInfo.protocol,
             model: routeInfo.model,
             limit: limits.maxContextChars,
             signal: controller.signal,
-            maxOutputTokens: limits.maxOutputTokens,
-            maxContextTokens: limits.maxContextTokens,
+            maxOutputTokens: capacity.maxOutputTokens ?? limits.maxOutputTokens,
+            maxContextTokens: capacity.contextWindow,
             summaryTimeoutMs: limits.summaryTimeoutMs,
             // The recorded key, but only for the request that was recorded. A key names a cache entry, so handing
             // it to a prompt that is not the one behind it would ask the provider for somebody else's prefix — and
@@ -1710,7 +1749,7 @@ async function main(): Promise<void> {
           // process free of background timers whose only purpose is bookkeeping.
           residency.reapIdle();
           if (!sessionSandboxes.has(sessionId)) sessionSandboxes.set(sessionId, defaultSandboxMode);
-          const agent = createAgent(
+          const agent = await createAgent(
             store,
             workspace,
             options,
@@ -1735,6 +1774,7 @@ async function main(): Promise<void> {
                   image: launchSandbox.image,
                 },
               ),
+            controller.signal,
           );
           entry.agent = agent;
           // Created after the busy-guard above but before the run, so the row and the run that fills

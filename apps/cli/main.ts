@@ -797,7 +797,7 @@ async function main(): Promise<void> {
      */
     const terminals = new TerminalSessions(workspace);
     try {
-      const agent = createAgent(
+      const agent = await createAgent(
         store,
         workspace,
         options,
@@ -926,6 +926,8 @@ async function main(): Promise<void> {
         question,
         invariants,
         terminals,
+        undefined,
+        controller.signal,
       );
       const session = existing ?? store.create(workspace);
       sessionId = session.id;

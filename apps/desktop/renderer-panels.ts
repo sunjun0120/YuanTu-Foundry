@@ -24,6 +24,7 @@ const PANELS = {
   'general-settings-content': 'general-settings',
   'model-settings-content': 'model-settings',
   'mcp-panel': 'mcp-settings',
+  'backup-settings-content': 'backup-settings',
 } as const;
 export type SettingsPanelId = keyof typeof PANELS;
 

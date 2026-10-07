@@ -105,11 +105,17 @@ test('the URL keeps a /v1 base and adds one where the operator did not', async (
     'https://gateway.example/openai/v1/models',
   );
   // The defaults match the adapters' own, so a connection that names no base URL probes the protocol's home.
-  assert.equal(modelsUrl(config()), 'https://api.openai.com/v1/models');
+  assert.equal(modelsUrl(config({ protocol: 'openai' })), 'https://api.openai.com/v1/models');
+  assert.equal(modelsUrl(config()), 'https://api.anthropic.com/v1/models');
   assert.equal(modelsUrl(config({ protocol: 'anthropic' })), 'https://api.anthropic.com/v1/models');
 });
 
 test('the probe authenticates the way the adapter for that protocol does', () => {
+  assert.deepEqual(discoveryHeaders(config()), {
+    accept: 'application/json',
+    'x-api-key': 'secret',
+    'anthropic-version': '2023-06-01',
+  });
   assert.deepEqual(discoveryHeaders(config({ protocol: 'anthropic' })), {
     accept: 'application/json',
     'x-api-key': 'secret',
@@ -124,6 +130,23 @@ test('the probe authenticates the way the adapter for that protocol does', () =>
   return discoverModels(config({ protocol: 'openai' }), { fetch: impl }).then((result) => {
     assert.equal(result.protocol, 'openai');
   });
+});
+
+test('catalogue URLs strip inference suffixes and reject unsafe credential destinations', () => {
+  for (const suffix of ['chat/completions', 'responses', 'messages']) {
+    assert.equal(
+      modelsUrl(config({ baseUrl: `https://gateway.example/v1/${suffix}` })),
+      'https://gateway.example/v1/models',
+    );
+  }
+  for (const baseUrl of [
+    'http://remote.example/v1',
+    'https://user:password@remote.example/v1',
+    'https://remote.example/v1?token=x',
+    'https://remote.example/v1#fragment',
+  ]) {
+    assert.throws(() => modelsUrl(config({ baseUrl })));
+  }
 });
 
 test('a refusal from the endpoint is reported with its status, not as an empty catalogue', async () => {

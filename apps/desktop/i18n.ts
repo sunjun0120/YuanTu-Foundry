@@ -4,6 +4,45 @@ type Listener = () => void;
 export type TranslationValues = Record<string, string | number>;
 type Pair = [string, string];
 const messages: Record<string, Pair> = {
+  'backup.title': ['数据备份', 'Data backups'],
+  'backup.description': [
+    '为当前工作区保留会话快照，查看备份或恢复数据。',
+    'Keep session snapshots for the current workspace, inspect backups or restore data.',
+  ],
+  'backup.enabled': ['启用每日备份', 'Enable daily backups'],
+  'backup.scheduleNote': [
+    '默认关闭。启用后，在应用打开且距上次备份超过 24 小时时自动备份；每 15 分钟检查。保留最近 5 份，总计不超过 512 MB。',
+    'Off by default. While the app is open, a backup is made after 24 hours since the latest snapshot, checked every 15 minutes. Keep up to 5 snapshots within 512 MB.',
+  ],
+  'backup.scope': [
+    '包含数据库内的会话、记录和图片。工作区文件、外部附件及应用设置需另行备份。恢复前请结束运行并关闭使用同一工作区的其他 Host/CLI。',
+    'Includes sessions, records and images stored in the database. Back up workspace files, external attachments and app settings separately. Finish runs and close other Hosts/CLIs using this workspace before restoring.',
+  ],
+  'backup.list': ['可恢复的备份（从新到旧）', 'Available backups (newest first)'],
+  'backup.empty': ['尚无备份', 'No backups yet'],
+  'backup.create': ['立即备份', 'Back up now'],
+  'backup.refresh': ['刷新列表', 'Refresh'],
+  'backup.restore': ['恢复所选备份', 'Restore selected backup'],
+  'backup.working': ['正在处理…', 'Working…'],
+  'backup.saved': ['备份设置或快照已保存。', 'Backup settings or snapshot saved.'],
+  'backup.cancelled': ['已取消恢复。', 'Restore cancelled.'],
+  'backup.failed': [
+    '备份连接中断，请刷新后重试。',
+    'Backup connection interrupted. Refresh and try again.',
+  ],
+  'backup.restored': [
+    '已恢复备份。恢复前的数据副本保留在：{path}',
+    'Backup restored. The previous data is preserved at: {path}',
+  ],
+  'backup.reconnectFailed': [
+    '数据已恢复，但桌面重连失败，请重启应用。恢复前的数据副本保留在：{path}',
+    'Data restored, but desktop reconnection failed. Restart the app. The previous data is preserved at: {path}',
+  ],
+  'backup.confirm': ['恢复 {date} 的数据库快照？', 'Restore the database snapshot from {date}?'],
+  'backup.restoreDetail': [
+    '当前工作区数据库会回到备份时的状态；当前数据库先保存为独立恢复副本。不会修改工作区文件。主对话不会自动续跑；已保存的定时/触发任务和目标唤醒仍按现有规则运行。',
+    'The current workspace database returns to the snapshot state, after preserving the current database as a separate recovery copy. Workspace files are unaffected. The main conversation does not resume automatically; saved scheduled/event tasks and goal wake-ups continue under their existing rules.',
+  ],
   'upgrade.menu': ['应用', 'Application'],
   'upgrade.check': ['检查本地升级包…', 'Check a local upgrade package…'],
   'upgrade.about': ['版本与渠道', 'Version and channel'],
@@ -162,6 +201,14 @@ const messages: Record<string, Pair> = {
   'general.save': ['保存设置', 'Save settings'],
   'settings.contextTokens': ['上下文窗口 Token', 'Context window tokens'],
   'settings.outputTokens': ['单次输出上限 Token', 'Maximum output tokens per request'],
+  'settings.automaticBudget': ['自动（可手动指定）', 'Automatic (optional override)'],
+  'settings.defaultLimit': ['默认（留空恢复）', 'Default (clear to reset)'],
+  'settings.autoCompactTokens': ['自动压缩阈值 Token', 'Automatic compaction threshold tokens'],
+  'settings.streamIdleTimeoutMs': ['流空闲超时（毫秒）', 'Stream idle timeout (milliseconds)'],
+  'ui.loadOlderHistory': [
+    '加载更早的消息（还有 {count} 条）',
+    'Load earlier messages ({count} remaining)',
+  ],
   'settings.description': [
     '管理模型连接，为每次对话选择合适的模型。',
     'Manage model connections and choose a model for each conversation.',
@@ -222,8 +269,8 @@ const messages: Record<string, Pair> = {
     'Filled the window and output cap for {models}.',
   ],
   'settings.discoverNoWindow': [
-    '端点没有声明 {models} 的窗口，请按提供方规格填写。',
-    'The endpoint declared no window for {models}; fill it from the provider specification.',
+    '端点没有声明 {models} 的窗口；留空将自动采用应用预算，也可按提供方规格填写。',
+    'The endpoint declared no window for {models}; leave blank for the automatic app budget or enter the provider limit.',
   ],
   'settings.discoverMissing': [
     '端点目录里没有 {models}（可用：{list}）。',

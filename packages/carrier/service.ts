@@ -818,6 +818,9 @@ export class CarrierService {
           this.closeSubAgentTranscript();
           await this.controller.load(command.id);
           break;
+        case 'loadOlder':
+          await this.controller.loadOlder();
+          break;
         case 'sandbox':
           /**
            * The visible session owns the choice. Other sessions keep their own selections, and a run pins the

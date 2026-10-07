@@ -1,4 +1,3 @@
-import { DEFAULT_MAX_OUTPUT_TOKENS } from '../../packages/protocol/limits.ts';
 import { ENVIRONMENT } from '../../packages/protocol/settings.ts';
 export interface Options {
   images?: string[];
@@ -135,15 +134,6 @@ export function parseArgs(
     allowWrite: false,
     allowCommand: false,
     help: false,
-    /**
-     * No default window.
-     *
-     * A window is a fact about somebody else's endpoint, not a preference: this used to default to 1,000,000
-     * for every protocol, which meant a gateway serving 128k was measured against a number nobody had checked,
-     * and the run that failed was blamed on the conversation. The run is refused instead, and the refusal names
-     * the two ways to declare it.
-     */
-    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
   };
   if (env.YUANTU_HOOKS_MODULE) options.hooks = env.YUANTU_HOOKS_MODULE;
   if (env.YUANTU_SUBAGENTS) {

@@ -9,6 +9,7 @@ await build({
     'apps/desktop/attachment-worker.ts',
     'apps/desktop/preload.ts',
     'apps/desktop/mcp-test-worker.ts',
+    'apps/desktop/database-backup-worker.ts',
   ],
   outdir: 'dist/desktop',
   outExtension: { '.js': '.cjs' },

@@ -6,10 +6,11 @@ export interface ModelSettingsInput {
   connectionId?: string;
   name?: string;
   supportsVision?: boolean;
-  maxContextTokens?: number;
-  autoCompactTokens?: number;
-  maxOutputTokens?: number;
-  streamIdleTimeoutMs?: number;
+  /** Omitted preserves the saved value; null explicitly restores the default. */
+  maxContextTokens?: number | null;
+  autoCompactTokens?: number | null;
+  maxOutputTokens?: number | null;
+  streamIdleTimeoutMs?: number | null;
   protocol?: 'anthropic' | 'openai' | 'openai-responses';
   baseUrl: string;
   model: string;
@@ -204,6 +205,7 @@ export function parseSettingsCommand(input: unknown): SettingsCommand {
     const [min, max] = modelLimitRange(field);
     if (
       values[field] !== undefined &&
+      values[field] !== null &&
       (typeof values[field] !== 'number' ||
         !Number.isSafeInteger(values[field]) ||
         values[field] < min ||
@@ -211,7 +213,8 @@ export function parseSettingsCommand(input: unknown): SettingsCommand {
     )
       return invalid();
   }
-  if (values.autoCompactTokens !== undefined && values.maxContextTokens === undefined)
+  // Cross-field constraints are also checked after merging with the saved connection.
+  if (typeof values.autoCompactTokens === 'number' && values.maxContextTokens === null)
     return invalid();
   if (
     typeof values.autoCompactTokens === 'number' &&

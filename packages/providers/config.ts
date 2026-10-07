@@ -9,8 +9,8 @@ export interface ProviderConfig {
    *
    * Declared rather than assumed: this runtime cannot know what an endpoint serves, so the number comes from
    * the operator — `YUANTU_MAX_CONTEXT_TOKENS`, the matching flag, or the desktop's model settings — or from
-   * `discoverModels()`, which reads the endpoint's own catalogue. A run whose connection declares no window is
-   * refused by the entry points rather than run against a guess.
+   * `discoverModels()`, which reads the endpoint's own catalogue. Absence lets app entry points automatically
+   * discover capacity or select a local application budget without persisting a manual declaration.
    */
   maxContextTokens?: number;
   /** The per-request output cap this connection declares, when it declares one. */

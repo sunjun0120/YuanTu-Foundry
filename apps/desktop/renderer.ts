@@ -20,10 +20,12 @@ import { fileChangeAction, undoConfirmKey } from '../../packages/client/change-a
 import { validateImages, MAX_IMAGE_BYTES } from '../../packages/protocol/images.ts';
 import { setupModelSettings } from './renderer-settings.ts';
 import { renderMarkdown } from './markdown.ts';
+import { TranscriptCache, reconcileChildren } from './transcript-cache.ts';
 import { diffView } from './diff-view.ts';
 import { toolCardModel, toolCardView } from './tool-cards.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
+import { setupBackups } from './renderer-backups.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { SlotRegistry, mountSlot, type SlotMount } from './slots.ts';
@@ -158,6 +160,7 @@ let state: CarrierSnapshot | null = null;
 let mcpSettings: ReturnType<typeof setupMcpSettings> | undefined;
 let permissionSettings: ReturnType<typeof setupPermissionSettings> | undefined;
 let modelSettings: ReturnType<typeof setupModelSettings> | undefined;
+let backupSettings: ReturnType<typeof setupBackups> | undefined;
 let localError: string | null = null;
 let operation = false;
 let sending = false;
@@ -598,7 +601,7 @@ async function select(command: CarrierCommand): Promise<CarrierSnapshot | null> 
   } finally {
     operation = false;
     render();
-    prompt.focus();
+    if (command.type !== 'loadOlder') prompt.focus();
   }
 }
 /**
@@ -699,6 +702,13 @@ let processTail: HTMLDetailsElement | undefined;
 let processOpen = new Map<string, boolean>();
 let processScroll = new Map<string, number>();
 let runningProcessCalls = new Set<string>();
+let transcriptIdentity = '';
+const transcriptCache = new TranscriptCache<{
+  view: HTMLElement;
+  thought: HTMLElement | null;
+  calls: HTMLElement[];
+}>();
+let loadingOlderHistory = false;
 
 function updateProcessSummary(
   group: HTMLDetailsElement,
@@ -722,9 +732,33 @@ function processGroup(key: string): HTMLDetailsElement {
 }
 
 /** Consecutive operations share one fold; actual replies keep their own place in the transcript. */
-function transcriptViews(messages: Message[]): HTMLElement[] {
+function transcriptViews(messages: Message[], startIndex = 0): HTMLElement[] {
+  const visible = !element('chat-page').hidden;
+  const identity = `${state?.session.sessionId}:${locale()}`;
+  const reusableGroups =
+    identity === transcriptIdentity
+      ? new Map(
+          Array.from(
+            document.querySelectorAll<HTMLDetailsElement>('#messages > .process-group'),
+            (group) => [group.dataset.processKey!, group],
+          ),
+        )
+      : new Map<string, HTMLDetailsElement>();
+  transcriptIdentity = identity;
+  const internalAnchors = new Map<HTMLElement, { node: HTMLElement; top: number }>();
+  for (const previous of reusableGroups.values()) {
+    if (!previous.open || !visible) continue;
+    const steps = previous.querySelector<HTMLElement>('.process-steps')!;
+    const boundary = steps.getBoundingClientRect().top;
+    const anchor = Array.from(steps.children).find(
+      (step) => step.getBoundingClientRect().bottom > boundary,
+    ) as HTMLElement | undefined;
+    if (anchor)
+      internalAnchors.set(steps, { node: anchor, top: anchor.getBoundingClientRect().top });
+  }
   const sameSession = processSession === state?.session.sessionId;
   processSession = state?.session.sessionId ?? null;
+  const previousScroll = processScroll;
   processOpen = new Map();
   processScroll = new Map();
   if (!sameSession) runningProcessCalls.clear();
@@ -732,30 +766,68 @@ function transcriptViews(messages: Message[]): HTMLElement[] {
     for (const previous of document.querySelectorAll<HTMLDetailsElement>('[data-process-key]')) {
       processOpen.set(previous.dataset.processKey!, previous.open);
       const steps = previous.querySelector<HTMLElement>(':scope > .process-steps');
-      if (steps) processScroll.set(previous.dataset.processKey!, steps.scrollTop);
+      if (steps)
+        processScroll.set(
+          previous.dataset.processKey!,
+          visible ? steps.scrollTop : (previousScroll.get(previous.dataset.processKey!) ?? 0),
+        );
     }
   }
-  processMessageCount = messages.length;
+  processMessageCount = startIndex + messages.length;
+  const rows = messages
+    .map((message, index) => ({ index: startIndex + index, message }))
+    .filter(({ message }) => !(message.role === 'user' && isRuntimeContext(message.content)));
+  const fragments = transcriptCache.views(identity, rows, (message) => {
+    const view = messageView(message);
+    const thought = view.querySelector<HTMLElement>(':scope > .message-reasoning');
+    const calls = Array.from(view.querySelectorAll<HTMLElement>(':scope > .tool-call'));
+    thought?.remove();
+    for (const call of calls) call.remove();
+    return { view, thought, calls };
+  });
   const views: HTMLElement[] = [];
+  const groupSteps = new Map<HTMLDetailsElement, HTMLElement[]>();
+  const retainedGroups = new Set<HTMLDetailsElement>();
   let group: HTMLDetailsElement | undefined;
   const add = (step: HTMLElement, key: string) => {
     step.dataset.processKey = key;
     (step as HTMLDetailsElement).open = processOpen.get(key) ?? false;
     if (!group) {
-      group = processGroup(`group:${key}`);
+      group = reusableGroups.get(`group:${key}`) ?? processGroup(`group:${key}`);
+      if (reusableGroups.get(`group:${key}`) === group) retainedGroups.add(group);
       views.push(group);
+      groupSteps.set(group, []);
     }
-    group.querySelector('.process-steps')!.append(step);
-    updateProcessSummary(group);
+    const previousGroup = step.closest<HTMLDetailsElement>('.process-group');
+    if (
+      previousGroup &&
+      !retainedGroups.has(group) &&
+      !retainedGroups.has(previousGroup) &&
+      [...reusableGroups.values()].includes(previousGroup)
+    ) {
+      const newKey = group.dataset.processKey!;
+      const planned = groupSteps.get(group)!;
+      views[views.indexOf(group)] = previousGroup;
+      groupSteps.delete(group);
+      group = previousGroup;
+      const oldKey = group.dataset.processKey!;
+      group.dataset.processKey = newKey;
+      processScroll.set(
+        newKey,
+        visible
+          ? group.querySelector<HTMLElement>('.process-steps')!.scrollTop
+          : (processScroll.get(oldKey) ?? 0),
+      );
+      groupSteps.set(group, planned);
+      retainedGroups.add(group);
+    }
+    groupSteps.get(group)!.push(step);
   };
-  for (const [index, message] of messages.entries()) {
-    const view = messageView(message);
+  for (const [position, { index, message }] of rows.entries()) {
+    const { view, thought, calls } = fragments[position]!;
     if (message.role === 'tool') add(view, `${index}:result`);
     else if (message.role === 'assistant') {
-      const thought = view.querySelector<HTMLElement>(':scope > .message-reasoning');
       if (thought) add(thought, `${index}:reasoning`);
-      const calls = Array.from(view.querySelectorAll<HTMLElement>(':scope > .tool-call'));
-      for (const call of calls) call.remove();
       if (message.content.trim() || message.interrupted) {
         group = undefined;
         views.push(view);
@@ -765,6 +837,16 @@ function transcriptViews(messages: Message[]): HTMLElement[] {
       group = undefined;
       views.push(view);
     }
+  }
+  for (const [group, steps] of groupSteps) {
+    const container = group.querySelector<HTMLElement>('.process-steps')!;
+    reconcileChildren(container, steps);
+    updateProcessSummary(group);
+    const anchor = internalAnchors.get(container);
+    if (anchor?.node.isConnected)
+      container.scrollTop += anchor.node.getBoundingClientRect().top - anchor.top;
+    if (visible && retainedGroups.has(group))
+      processScroll.set(group.dataset.processKey!, container.scrollTop);
   }
   processTail = group;
   return views;
@@ -984,7 +1066,8 @@ function scheduleLivePaint(): void {
           : full || livePlaceholder();
       target.replaceWith(renderMarkdown(preview, markdownActions));
     } else target?.replaceWith(node('div', '', 'message-content'));
-    if (nearBottom && !childPageOpen()) conversation.scrollTop = conversation.scrollHeight;
+    if (nearBottom && !childPageOpen() && state?.session.running && !loadingOlderHistory)
+      conversation.scrollTop = conversation.scrollHeight;
     updateJumpButton();
   }, 100);
 }
@@ -1068,6 +1151,10 @@ function render(): void {
   const slotContext: PanelSlotContext = { session, workspace: state.workspace };
   for (const mount of slotMounts) mount.render(slotContext);
   const blocked = !state.ready || session.running || session.loading || operation || sending;
+  const older = element<HTMLButtonElement>('load-older-history');
+  older.hidden = !(session.historyStart && !childPageOpen());
+  older.disabled = blocked;
+  older.textContent = t('ui.loadOlderHistory', { count: session.historyStart ?? 0 });
   const nearBottom =
     conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 90;
   element('workspace').textContent = state.workspace;
@@ -1083,6 +1170,7 @@ function render(): void {
 
   renderTasks();
   modelSettings?.updateBusy();
+  backupSettings?.updateBusy();
   mcpSettings?.updateBusy();
   permissionSettings?.updateBusy();
   element('configuration').hidden = !state.ready || state.configured;
@@ -1217,7 +1305,8 @@ function render(): void {
   // Message timestamps are locale-formatted, so they follow the language too.
   const paused = session.error === RUN_CANCELLED;
   const nextTranscriptKey = `${session.sessionId}:${session.messageRevision}:${locale()}:${paused}`;
-  if (nextTranscriptKey !== transcriptKey) {
+  const transcriptChanged = nextTranscriptKey !== transcriptKey;
+  if (transcriptChanged) {
     transcriptKey = nextTranscriptKey;
     scheduleLivePaint();
     /**
@@ -1228,18 +1317,14 @@ function render(): void {
      * and `export` still writes it — the window simply does not draw it.
      */
     element('live').prepend(element('live-reasoning'));
-    element('messages').replaceChildren(
-      ...transcriptViews(
-        session.messages.filter(
-          (message) => !(message.role === 'user' && isRuntimeContext(message.content)),
-        ),
-      ),
+    reconcileChildren(element('messages'), [
+      ...transcriptViews(session.messages, session.historyStart ?? 0),
       /**
        * Where the run stopped, not at the top of the window: a stop is the end of what happened, so it belongs
        * after the last thing that happened. `renderPaused` is the only place this sentence is written.
        */
       ...(paused ? [node('p', t('ui.runPaused'), 'run-paused')] : []),
-    );
+    ]);
     for (const group of document.querySelectorAll<HTMLElement>('#messages > .process-group')) {
       const steps = group.querySelector<HTMLElement>('.process-steps');
       if (steps) steps.scrollTop = processScroll.get(group.dataset.processKey!) ?? 0;
@@ -1391,7 +1476,8 @@ function render(): void {
   renderTodos(session.todos);
   renderGoal(session.goal);
   renderDeliverables(session.deliverables);
-  if (nearBottom && !childPageOpen()) conversation.scrollTop = conversation.scrollHeight;
+  if (nearBottom && transcriptChanged && !childPageOpen() && !loadingOlderHistory)
+    conversation.scrollTop = conversation.scrollHeight;
   updateJumpButton();
 }
 function updateJumpButton(): void {
@@ -2047,11 +2133,38 @@ document.addEventListener('keydown', (event) => {
 });
 window.addEventListener('yuantu-settings-open', () => {
   closeBackgroundList();
+  for (const group of document.querySelectorAll<HTMLElement>('#messages > .process-group')) {
+    const steps = group.querySelector<HTMLElement>('.process-steps');
+    if (steps) processScroll.set(group.dataset.processKey!, steps.scrollTop);
+  }
 });
 window.addEventListener('yuantu-settings-close', () => {
   closeBackgroundList();
+  for (const group of document.querySelectorAll<HTMLElement>('#messages > .process-group')) {
+    const steps = group.querySelector<HTMLElement>('.process-steps');
+    if (steps) steps.scrollTop = processScroll.get(group.dataset.processKey!) ?? 0;
+  }
 });
 
+element('load-older-history').addEventListener('click', () => {
+  if (operation || sending || state?.session.running || state?.session.loading) return;
+  let anchor = element('messages').firstElementChild;
+  if (anchor instanceof HTMLDetailsElement && anchor.open) {
+    const steps = anchor.querySelector<HTMLElement>('.process-steps');
+    if (steps)
+      anchor =
+        Array.from(steps.children).find(
+          (step) => step.getBoundingClientRect().bottom > steps.getBoundingClientRect().top,
+        ) ?? anchor;
+  }
+  const top = anchor?.getBoundingClientRect().top;
+  loadingOlderHistory = true;
+  void select({ type: 'loadOlder' }).finally(() => {
+    if (anchor?.isConnected && top !== undefined)
+      conversation.scrollTop += anchor.getBoundingClientRect().top - top;
+    loadingOlderHistory = false;
+  });
+});
 window.yuantu.subscribe((next) => {
   state = next;
   // A recovery notice supersedes the error that caused it: both describe the same crash, and "the app came
@@ -2108,6 +2221,13 @@ new ResizeObserver(() => {
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
 setupGeneralSettings();
+backupSettings = setupBackups(
+  () => Boolean(operation || sending || state?.session.running || state?.session.loading),
+  (busy) => {
+    operation = busy;
+    render();
+  },
+);
 modelSettings = setupModelSettings(
   () => Boolean(operation || sending || state?.session.running || state?.session.loading),
   (busy) => {

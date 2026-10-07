@@ -8,6 +8,7 @@
  * reply envelope the IPC handlers answer with.
  */
 import type { AttachmentReply } from './attachment-contract.ts';
+import type { BackupCommand, BackupReply } from './backup-contract.ts';
 import type { FilesCommand, FilesReply } from './files-contract.ts';
 import type { McpCommand, McpReply } from './mcp-contract.ts';
 import type {
@@ -29,6 +30,7 @@ export type { MessageDelta, SubAgentDelta, StatisticsDelta };
 export type { CarrierCommand, CarrierSnapshot };
 export type DesktopReply = { ok: true; state: CarrierSnapshot } | { ok: false; error: string };
 export interface DesktopBridge {
+  backups(command: BackupCommand): Promise<BackupReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
   /**
    * The workspace's files, for the read-only tree and preview.

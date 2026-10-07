@@ -11,10 +11,9 @@ import type { ProviderConfig } from './config.ts';
  * OpenAI-compatible gateways, Anthropic's `/v1/models` and the aggregators that front them. This module reads
  * that catalogue once, on demand.
  *
- * Discovery is an **operator action, never a startup step**: it is a network call, and a run must still work
- * when the catalogue endpoint is unreachable, blocked, or requires a different credential. What it produces is
- * a number the operator declares — `--max-context-tokens` / `YUANTU_MAX_CONTEXT_TOKENS`, or the desktop model
- * settings — not a value this runtime starts trusting on its own.
+ * Explicit discovery reports catalogue errors. App entry points also use a separately bounded, cached,
+ * best-effort discovery path when no window is declared; an unreachable catalogue leaves the local budget
+ * available. Automatic results never overwrite the operator's saved configuration.
  */
 export interface DiscoveredModel {
   id: string;
@@ -83,16 +82,27 @@ function capacity(entry: Record<string, unknown>, paths: readonly string[]): num
 export function modelsUrl(config: ProviderConfig, path = '/models'): string {
   const base =
     config.baseUrl ??
-    (config.protocol === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com');
+    ((config.protocol ?? 'anthropic') === 'anthropic'
+      ? 'https://api.anthropic.com'
+      : 'https://api.openai.com');
   const url = new URL(base);
-  const basePath = url.pathname.replace(/\/+$/, '');
+  if (url.username || url.password || url.search || url.hash)
+    throw new Error('Base URL must not contain credentials, query parameters or fragments');
+  if (
+    url.protocol !== 'https:' &&
+    !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  )
+    throw new Error('Use HTTPS for remote model endpoints');
+  const basePath = url.pathname
+    .replace(/\/+$/, '')
+    .replace(/\/(?:chat\/completions|responses|messages)$/, '');
   url.pathname = basePath.endsWith('/v1') ? basePath + path : `${basePath}/v1${path}`;
   return url.toString();
 }
 /** The credential the adapter for this protocol would send with a real request. */
 export function discoveryHeaders(config: ProviderConfig): Record<string, string> {
   const headers: Record<string, string> = { accept: 'application/json' };
-  if (config.protocol === 'anthropic') {
+  if ((config.protocol ?? 'anthropic') === 'anthropic') {
     headers['x-api-key'] = config.apiKey;
     headers['anthropic-version'] = '2023-06-01';
   } else headers.authorization = `Bearer ${config.apiKey}`;

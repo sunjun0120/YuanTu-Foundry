@@ -48,6 +48,7 @@ export interface BrowserBridgeOptions {
 }
 /** The channels that only exist where there is a shell, and what to tell a page that asks for one. */
 const SHELL_ONLY: Record<string, string> = {
+  backups: '备份和恢复需在桌面版本地执行。',
   attachment: '附件在桌面版中通过原生读取器解析；网页版请把文件内容直接粘进对话。',
   mcp: 'MCP 服务器由桥的配置决定，网页版不提供编辑。',
   presets: '安全预设由桥的配置决定，网页版不提供编辑。',
@@ -158,6 +159,9 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
   const refusal = <T>(channel: keyof typeof SHELL_ONLY): T =>
     ({ ok: false, error: SHELL_ONLY[channel] }) as T;
   return {
+    async backups() {
+      return { ok: false, error: SHELL_ONLY.backups! };
+    },
     async readAttachment(): Promise<AttachmentReply> {
       return refusal<AttachmentReply>('attachment');
     },

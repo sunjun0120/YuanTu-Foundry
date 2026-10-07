@@ -2340,3 +2340,24 @@ select.model-chip:disabled {
 .deliverables .deliverable-description {
   color: #6f7568;
 }
+/* The data panel uses the settings page's existing typography and controls. */
+.backup-enabled {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.backup-enabled input {
+  width: auto;
+}
+.backup-note {
+  color: var(--muted);
+  line-height: 1.65;
+  margin: 16px 0;
+}
+#backup-settings-content .settings-field select {
+  display: block;
+  width: min(100%, 480px);
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+}

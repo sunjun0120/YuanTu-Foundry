@@ -10,6 +10,77 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { mcpHttpFixture } from './mcp-http-fixture.ts';
 
+test(
+  'desktop saves blank model limits and completes chat with automatic capacity',
+  { timeout: 45000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-auto-capacity-ui-'));
+    let probes = 0;
+    const endpoint = await httpFixture(t, (body, res, _headers, url) => {
+      if (url === '/v1/models') {
+        probes++;
+        res.end(
+          JSON.stringify({
+            data: [{ id: 'auto-model', context_length: 96000, max_output_tokens: 4096 }],
+          }),
+        );
+        return;
+      }
+      assert.equal(body.max_tokens, 4096);
+      sendFrames(res, frames('Automatic desktop reply'));
+    });
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_MODEL: '',
+      YUANTU_API_KEY: '',
+      ANTHROPIC_API_KEY: '',
+      OPENAI_API_KEY: '',
+      YUANTU_MAX_CONTEXT_TOKENS: '',
+      YUANTU_MAX_OUTPUT_TOKENS: '',
+      YUANTU_AUTO_COMPACT_TOKENS: '',
+      YUANTU_MODEL_CAPACITIES: '',
+      YUANTU_PROTOCOL: '',
+      YUANTU_BASE_URL: '',
+      YUANTU_SESSION_TITLES: 'false',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    t.after(async () => {
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(15000);
+    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.locator('#open-settings').click();
+    await page.locator('#model-settings').click();
+    await page.locator('#settings-endpoint-name').fill('Automatic gateway');
+    await page.locator('#settings-protocol').selectOption('anthropic');
+    await page.locator('#settings-url').fill(endpoint);
+    await page.locator('#settings-model').fill('auto-model');
+    await page.locator('#settings-key').fill('synthetic-unused-secret');
+    await page.locator('#settings-save').click();
+    await page.getByText('模型配置已保存并生效，可以开始聊天。', { exact: true }).waitFor();
+    const saved = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
+    assert.equal(saved.settings.maxContextTokens, undefined);
+    assert.equal(saved.settings.maxOutputTokens, undefined);
+    await page.locator('#settings-back').click();
+    await page.locator('#prompt').fill('Say hello');
+    await page.locator('#send').click();
+    await page.getByText('Automatic desktop reply', { exact: true }).waitFor();
+    assert.equal(probes, 1);
+  },
+);
+
 // ---- merged from settings-page.smoke.mjs ----
 
 test(
@@ -222,8 +293,14 @@ test(
     await page.locator('#model-settings').click();
     await page.locator('#settings-endpoint-name').fill('Primary endpoint');
     await page.locator('.settings-model-row').first().locator('[data-action="expand"]').click();
-    assert.equal(await page.locator('#settings-context-tokens').getAttribute('placeholder'), '1M');
-    assert.equal(await page.locator('#settings-output-tokens').getAttribute('placeholder'), '256K');
+    assert.equal(
+      await page.locator('#settings-context-tokens').getAttribute('placeholder'),
+      '自动（可手动指定）',
+    );
+    assert.equal(
+      await page.locator('#settings-output-tokens').getAttribute('placeholder'),
+      '自动（可手动指定）',
+    );
     await page.locator('#settings-context-tokens').fill('128000');
     await page.locator('#settings-output-tokens').fill('8192');
     await page.locator('#settings-protocol').selectOption('anthropic');
@@ -511,7 +588,7 @@ test(
     assert.equal(await page.locator('#settings-key').inputValue(), '');
     assert.equal(await page.locator('.settings-model-row').count(), 2);
     assert.equal(await page.locator('.settings-model-details').first().isHidden(), true);
-    assert.equal(await page.locator('.settings-model-row input[type="number"]').count(), 4);
+    assert.equal(await page.locator('.settings-model-row input[type="number"]').count(), 8);
     const selectedEndpoint = await page
       .locator('#settings-connection option:checked')
       .textContent();
@@ -664,7 +741,17 @@ test(
           protocol: 'anthropic',
           baseUrl: 'http://127.0.0.1:43123',
           apiKey: 'legacy-secret',
-          models: [{ model: 'old-model', name: 'Old alias', supportsVision: false }],
+          models: [
+            {
+              model: 'old-model',
+              name: 'Old alias',
+              supportsVision: false,
+              maxContextTokens: 128000,
+              autoCompactTokens: 100000,
+              maxOutputTokens: 8192,
+              streamIdleTimeoutMs: 180000,
+            },
+          ],
         },
       }),
     );
@@ -680,8 +767,37 @@ test(
       async () => (await window.yuantu.settings({ type: 'get' })).settings,
     );
     assert.equal(saved.connections[0].supportsVision, false);
+    assert.equal(saved.connections[0].autoCompactTokens, 100000);
+    assert.equal(saved.connections[0].streamIdleTimeoutMs, 180000);
     assert.equal(saved.connections[0].name, 'old-model');
     assert.equal(await page.locator('#model option:checked').textContent(), 'old-model');
+    await page.locator('[data-action="expand"]').click();
+    await page.locator('[data-field="autoCompactTokens"]').fill('90000');
+    await page.locator('[data-field="streamIdleTimeoutMs"]').fill('60000');
+    await page.locator('#settings-save').click();
+    await waitForPage(
+      page,
+      async () =>
+        (await window.yuantu.settings({ type: 'get' })).settings.autoCompactTokens === 90000,
+    );
+    await page.locator('[data-action="expand"]').click();
+    for (const field of [
+      'maxContextTokens',
+      'autoCompactTokens',
+      'maxOutputTokens',
+      'streamIdleTimeoutMs',
+    ])
+      await page.locator(`[data-field="${field}"]`).fill('');
+    await page.locator('#settings-save').click();
+    await waitForPage(page, async () => {
+      const settings = (await window.yuantu.settings({ type: 'get' })).settings;
+      return [
+        'maxContextTokens',
+        'autoCompactTokens',
+        'maxOutputTokens',
+        'streamIdleTimeoutMs',
+      ].every((field) => settings[field] === undefined);
+    });
   },
 );
 

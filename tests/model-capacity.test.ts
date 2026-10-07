@@ -237,28 +237,32 @@ test('the host resolver answers per model: the declaration for its own, the cata
     baseUrl: 'https://api.deepseek.com/anthropic',
   });
   const resolve = capacityResolver(options, config);
-  assert.deepEqual(resolve('configured-model'), { contextWindow: 40_000, source: 'declared' });
+  assert.deepEqual(resolve('configured-model'), {
+    contextWindow: 40_000,
+    maxOutputTokens: 10_000,
+    source: 'declared',
+  });
   // A declaration is a statement about *this* connection's model, so another model gets the catalogue instead.
   assert.deepEqual(resolve('deepseek-v4-flash'), {
     contextWindow: 1_000_000,
-    maxOutputTokens: 384_000,
+    maxOutputTokens: 256_000,
     source: 'catalog',
   });
-  // Neither knows it: no answer, and the round keeps the run's own window rather than inventing one.
-  assert.equal(resolve('mystery-model'), undefined);
+  // An unknown sibling uses a local budget instead of borrowing the active model's declared window.
+  assert.deepEqual(resolve('mystery-model'), {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 256_000,
+    source: 'default',
+  });
 });
 
-test('a run on any other endpoint still has to declare or discover one', () => {
-  assert.throws(
-    () =>
-      declaredCapacity(
-        runOptions(),
-        route({ model: 'mystery-model', baseUrl: 'https://gateway.example/v1' }),
-      ),
-    (error: unknown) =>
-      error instanceof Error &&
-      /No context window is declared/.test(error.message) &&
-      /yuantu-agent models/.test(error.message),
+test('an unresolved endpoint can start with the local context budget', () => {
+  assert.equal(
+    declaredCapacity(
+      runOptions(),
+      route({ model: 'mystery-model', baseUrl: 'https://gateway.example/v1' }),
+    ),
+    1_000_000,
   );
 });
 
@@ -281,16 +285,32 @@ test('a saved window for the endpoint’s other models answers for them, one mod
   );
   const config = route({ model: 'configured-model', baseUrl: 'https://gateway.example/v1' });
   const resolve = capacityResolver(runOptions({ maxContextTokens: 40_000 }), config);
-  assert.deepEqual(resolve('configured-model'), { contextWindow: 40_000, source: 'declared' });
+  assert.deepEqual(resolve('configured-model'), {
+    contextWindow: 40_000,
+    maxOutputTokens: 10_000,
+    source: 'declared',
+  });
   assert.deepEqual(resolve('cheap-model'), {
     contextWindow: 64_000,
     maxOutputTokens: 4_000,
     source: 'declared',
   });
-  assert.deepEqual(resolve('wide-model'), { contextWindow: 2_000_000, source: 'declared' });
-  assert.deepEqual(resolve('deepseek-v4-flash'), { contextWindow: 128_000, source: 'declared' });
+  assert.deepEqual(resolve('wide-model'), {
+    contextWindow: 2_000_000,
+    maxOutputTokens: 256_000,
+    source: 'declared',
+  });
+  assert.deepEqual(resolve('deepseek-v4-flash'), {
+    contextWindow: 128_000,
+    maxOutputTokens: 32_000,
+    source: 'declared',
+  });
   // A sibling the map says nothing about gets no answer: the run's own declaration is not stretched over it.
-  assert.equal(resolve('mystery-model'), undefined);
+  assert.deepEqual(resolve('mystery-model'), {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 256_000,
+    source: 'default',
+  });
   // The map is also what the *starting* model may be declared by, so the two readers agree about one route.
   assert.equal(
     declaredCapacity(
@@ -319,5 +339,19 @@ test('a map the runtime cannot read is an error, not a declaration dropped in si
   // An empty string is "nothing declared", which is not an error: a carrier with no map to send leaves the
   // variable empty rather than absent.
   declareRoutes(t, '   ');
-  assert.equal(capacityResolver(runOptions({ maxContextTokens: 40_000 }), route())('x'), undefined);
+  assert.deepEqual(capacityResolver(runOptions({ maxContextTokens: 40_000 }), route())('x'), {
+    contextWindow: 1_000_000,
+    maxOutputTokens: 256_000,
+    source: 'default',
+  });
+});
+
+test('the active model output override does not replace a sibling model output declaration', (t) => {
+  declareRoutes(t, JSON.stringify({ sibling: { contextWindow: 64000, maxOutputTokens: 2048 } }));
+  const resolve = capacityResolver(
+    runOptions({ maxContextTokens: 96000, maxOutputTokens: 16384 }),
+    route({ model: 'active' }),
+  );
+  assert.equal(resolve('active')?.maxOutputTokens, 16384);
+  assert.equal(resolve('sibling')?.maxOutputTokens, 2048);
 });

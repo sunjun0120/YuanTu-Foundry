@@ -199,10 +199,20 @@ export interface HostMethods {
   'session.rename': { params: { sessionId: string; title: string }; result: SessionInfo };
   'session.delete': { params: { sessionId: string }; result: { deleted: true } };
   'session.get': {
-    params: { sessionId: string; offset?: number; view?: 'display'; chunkOffset?: number };
+    params: {
+      sessionId: string;
+      offset?: number;
+      view?: 'display';
+      chunkOffset?: number;
+      tail?: number;
+      endOffset?: number;
+    };
     result: {
       session: SessionInfo;
       messages: Message[];
+      /** Absolute bounds of this display window; older clients may omit them. */
+      offset?: number;
+      totalMessages?: number;
       nextOffset?: number;
       messageChunk?: { index: number; part: string; nextChunkOffset?: number };
       statistics?: import('./statistics.ts').SessionStatistics;

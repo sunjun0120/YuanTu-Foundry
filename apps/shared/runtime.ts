@@ -14,7 +14,17 @@ import { createTools } from '../../packages/tools/index.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { createProvider, readConfig } from '../../packages/providers/index.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
-import { declaredRoutes, resolveRouteCapacity } from '../../packages/providers/capacity.ts';
+import {
+  declaredRoutes,
+  resolveRouteCapacity,
+  type RouteCapacity,
+} from '../../packages/providers/capacity.ts';
+import {
+  AUTOMATIC_CONTEXT_TOKENS,
+  AUTOMATIC_OUTPUT_TOKENS,
+  automaticOutputBudget,
+  discoverAutomaticCapacities,
+} from '../../packages/providers/automatic-capacity.ts';
 import type { SubAgentResidency } from '../../packages/core/residency.ts';
 import type { InvariantRegistry } from '../../packages/core/invariants.ts';
 import type { PermissionPolicyView } from '../../packages/protocol/permissions.ts';
@@ -101,27 +111,11 @@ export function resolveWorkspace(input: string): string {
  * project stands behind for an endpoint it ships knowledge about (`packages/providers/capacity.ts`), and
  * `discoverModels()` is what produces a number worth declaring for everything else.
  *
- * Nothing resolving is a refusal, not a default: a window this runtime invented is worse than no run at all,
- * because too small compacts conversations that fit and too large lets the endpoint refuse the first request
- * that outgrows the real limit — and both failures look like something else.
+ * With no declaration or metadata, the entry points use a local application budget. It is not an assertion
+ * about the endpoint's real limit; provider-confirmed overflow still uses the kernel's bounded recovery.
  */
 export function declaredCapacity(options: Options, config: ProviderConfig): number {
-  const capacity = resolveRouteCapacity({
-    model: config.model,
-    ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
-    declared: declaredRoute(options, config),
-    // The same map the per-round resolver reads, so "this model's window" has one answer whether it is asked
-    // before the run or during it.
-    routes: declaredRoutes(process.env.YUANTU_MODEL_CAPACITIES),
-  });
-  if (!capacity)
-    throw new Error(
-      `No context window is declared for "${config.model || '(no model configured)'}" on this connection. ` +
-        'The window is the only ceiling a run has, and this runtime does not guess it. Declare it with ' +
-        '--max-context-tokens <n> / YUANTU_MAX_CONTEXT_TOKENS, set it on the model in the desktop settings, ' +
-        'or read it from the endpoint with `yuantu-agent models`.',
-    );
-  return capacity.contextWindow;
+  return capacityResolver(options, config)(config.model)!.contextWindow;
 }
 /** What the operator declared for this connection's configured route. */
 function declaredRoute(
@@ -140,13 +134,14 @@ function declaredRoute(
  * A declaration is a statement about *this connection's model*, so it answers for that model and no other; the
  * models beside it on the same endpoint are answered by what the operator saved for them
  * (`YUANTU_MODEL_CAPACITIES`, written by the desktop from the endpoint group's model rows) and then by the
- * catalogue this project ships; a model none of them knows gets no answer at all — the round then keeps the
- * window this run declared rather than being measured against a second, invented one.
+ * catalogue this project ships, discovered metadata, then a local budget. An unknown sibling does not borrow
+ * the active model's manually declared window.
  */
 export function capacityResolver(
   options: Options,
   config: ProviderConfig,
-): (model: string) => { contextWindow: number; maxOutputTokens?: number } | undefined {
+  automatic: ReadonlyMap<string, RouteCapacity> = new Map(),
+): (model: string) => RouteCapacity {
   const base = config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl };
   const declared = declaredRoute(options, config);
   const routes = declaredRoutes(process.env.YUANTU_MODEL_CAPACITIES);
@@ -154,13 +149,46 @@ export function capacityResolver(
   return (model) => {
     // The kernel holds a redacted display label; capacity lookup needs the configured route ID.
     if (model === configuredLabel) model = config.model;
-    return resolveRouteCapacity({
+    const resolved = resolveRouteCapacity({
       model,
       ...base,
       ...(model === config.model ? { declared } : {}),
       routes,
-    });
+    }) ??
+      automatic.get(model.trim()) ?? {
+        contextWindow: AUTOMATIC_CONTEXT_TOKENS,
+        maxOutputTokens: AUTOMATIC_OUTPUT_TOKENS,
+        source: 'default' as const,
+      };
+    const declaredOutput =
+      (model === config.model ? (options.maxOutputTokens ?? config.maxOutputTokens) : undefined) ??
+      routes.get(model.trim())?.maxOutputTokens;
+    const defaultOutput = automaticOutputBudget(resolved.contextWindow);
+    return {
+      ...resolved,
+      maxOutputTokens:
+        declaredOutput ?? Math.min(defaultOutput, resolved.maxOutputTokens ?? defaultOutput),
+    };
   };
+}
+/** Share the connection budget between normal runs and manual context compaction. */
+export async function resolveConnectionCapacities(
+  options: Options,
+  config: ProviderConfig,
+  signal?: AbortSignal,
+): Promise<(model: string) => RouteCapacity> {
+  signal?.throwIfAborted();
+  const known = resolveRouteCapacity({
+    model: config.model,
+    baseUrl: config.baseUrl,
+    declared: declaredRoute(options, config),
+    routes: declaredRoutes(process.env.YUANTU_MODEL_CAPACITIES),
+  });
+  const automatic = known
+    ? new Map<string, RouteCapacity>()
+    : await discoverAutomaticCapacities(config, { signal });
+  signal?.throwIfAborted();
+  return capacityResolver(options, config, automatic);
 }
 /**
  * The models a sub-agent may be asked to run on, as this process can honestly promise them.
@@ -190,7 +218,7 @@ export function sessionDatabasePath(options: Options): string {
 export function openStore(options: Options): SessionStore {
   return new SessionStore(sessionDatabasePath(options));
 }
-export function createAgent(
+export async function createAgent(
   store: SessionStore,
   workspace: string,
   options: Options,
@@ -214,9 +242,12 @@ export function createAgent(
    */
   terminals?: TerminalSessions,
   executionPolicy?: () => ExecutionPolicy,
-): Agent {
+  signal?: AbortSignal,
+): Promise<Agent> {
   const config = readConfig();
   const provider = createProvider(config);
+  const capacityFor = await resolveConnectionCapacities(options, config, signal);
+  const capacity = capacityFor(config.model);
   const policyForCall =
     executionPolicy ??
     (() => {
@@ -288,12 +319,12 @@ export function createAgent(
         }
       : {}),
     maxContextChars: options.maxContextChars,
-    maxContextTokens: declaredCapacity(options, config),
+    maxContextTokens: capacity.contextWindow,
     // Per round, not per run: a policy that moves a round onto another model moves it onto that model's window
     // too, and the catalogue is what can answer for a model the operator declared nothing about.
-    capacityFor: capacityResolver(options, config),
+    capacityFor,
     autoCompactTokens: options.autoCompactTokens,
-    maxOutputTokens: options.maxOutputTokens,
+    maxOutputTokens: capacity.maxOutputTokens ?? options.maxOutputTokens,
     requestTimeoutMs: options.requestTimeoutMs,
     maxModelRetries: options.maxModelRetries,
     maxParallelToolCalls: options.maxParallelToolCalls,

@@ -38,6 +38,9 @@ import {
   type PermissionPresetView,
 } from './permission-presets.ts';
 import type { SandboxMode } from './sandbox-settings.ts';
+import { DailyBackups } from './daily-backups.ts';
+import { parseBackupCommand, type BackupReply } from './backup-contract.ts';
+import type { BackupAction, BackupResult } from './database-backup-worker.ts';
 
 let window: BrowserWindow | null = null;
 let service: CarrierService | null = null;
@@ -54,6 +57,10 @@ let settingsStore: ModelSettingsStore;
 let uiSettingsStore: UiSettingsStore;
 let permissionSettingsStore: PermissionSettingsStore;
 let sandboxEnvironment: SandboxEnvironment;
+let dailyBackups: DailyBackups;
+let backupTimer: NodeJS.Timeout | undefined;
+let backupRestoring: Promise<BackupReply> | undefined;
+const backupWorkers = new Set<Promise<BackupResult>>();
 /** One session's pair: where its commands run, and how much it may do without asking. */
 interface SessionChoice {
   sandbox: SandboxMode;
@@ -165,6 +172,8 @@ async function manualUpgrade(): Promise<void> {
     quitting = true;
     settingsAbort.abort();
     await Promise.all([...profileWrites]);
+    await dailyBackups.drain();
+    await Promise.allSettled([...backupWorkers]);
     await service.stop();
     stopped = true;
     await execute(node, copiedHelper, [
@@ -280,6 +289,101 @@ function createService(workspace: string, config?: ProviderConfig): CarrierServi
     },
   });
 }
+function sessionDatabase(): string {
+  if (!service) throw new Error('The desktop is not connected to a workspace');
+  return path.join(service.snapshot.workspace, '.yuantu', 'sessions.sqlite');
+}
+function executeBackup(file: string, action: BackupAction, id?: string): Promise<BackupResult> {
+  if (quitting && !backupRestoring) return Promise.reject(new Error(mainText('desktop.quitting')));
+  const runtime = desktopPaths({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    mainDirectory: __dirname,
+    userData: app.getPath('userData'),
+    cwd: process.cwd(),
+    env: process.env,
+    args: process.argv,
+  });
+  const work = promisify(execFile)(
+    runtime.nodePath,
+    [
+      path.join(__dirname, 'database-backup-worker.cjs'),
+      '--database-backup',
+      file,
+      action,
+      ...(id ? [id] : []),
+    ],
+    { windowsHide: true, timeout: 300000, maxBuffer: 1024 * 1024 },
+  ).then(({ stdout }) => JSON.parse(stdout.trim()) as BackupResult);
+  backupWorkers.add(work);
+  void work.finally(() => backupWorkers.delete(work)).catch(() => {});
+  return work;
+}
+async function restoreBackup(file: string, id: string): Promise<BackupReply> {
+  if (!service?.snapshot.ready || service.busy || switching || quitting || !window)
+    throw new Error(mainText('upgrade.busy'));
+  switching = true;
+  const workspace = service.snapshot.workspace;
+  let stopped = false;
+  let reopening = false;
+  let recoveryDirectory: string | undefined;
+  try {
+    await dailyBackups.drain();
+    await Promise.allSettled([...backupWorkers]);
+    const verified = await executeBackup(file, 'verify', id);
+    const selected = verified.backups.find((item) => item.id === id)!;
+    const confirm = await dialog.showMessageBox(window, {
+      type: 'warning',
+      title: mainText('backup.title'),
+      message: mainText('backup.confirm', { date: selected.createdAt }),
+      detail: mainText('backup.restoreDetail'),
+      buttons: [mainText('upgrade.cancel'), mainText('backup.restore')],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (confirm.response !== 1)
+      return { ok: true, view: await dailyBackups.view(file), cancelled: true };
+    if (quitting || service.busy) throw new Error(mainText('upgrade.busy'));
+    await service.stop();
+    stopped = true;
+    const restored = await executeBackup(file, 'restore', id);
+    recoveryDirectory = restored.recoveryDirectory;
+    if (!quitting) {
+      const next = createService(workspace);
+      openingService = next;
+      reopening = true;
+      attach(next);
+      await next.start();
+      await following;
+      stopped = false;
+    }
+    return {
+      ok: true,
+      view: await dailyBackups.view(file),
+      recoveryDirectory: restored.recoveryDirectory,
+    };
+  } catch (error) {
+    if (stopped && !reopening && !quitting) {
+      const next = createService(workspace);
+      openingService = next;
+      attach(next);
+      try {
+        await next.start();
+        await following;
+      } catch {
+        /* The visible Host error preserves the recovery instructions. */
+      }
+    }
+    if (recoveryDirectory)
+      throw new Error(mainText('backup.reconnectFailed', { path: recoveryDirectory }), {
+        cause: error,
+      });
+    throw error;
+  } finally {
+    openingService = null;
+    switching = false;
+  }
+}
 function attach(next: CarrierService): CarrierService {
   unsubscribe?.();
   unsubscribeDelta?.();
@@ -291,7 +395,12 @@ function attach(next: CarrierService): CarrierService {
   moving = undefined;
   following = undefined;
   service = next;
+  let backupStarted = false;
   unsubscribe = next.subscribe((state) => {
+    if (state.ready && !backupStarted && !quitting && !switching) {
+      backupStarted = true;
+      void dailyBackups?.tick(path.join(state.workspace, '.yuantu', 'sessions.sqlite'));
+    }
     if (state.ready && state.session.sessionId) followSession(state.session.sessionId);
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:state', state);
@@ -433,9 +542,13 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   if (quitting) return;
   quitting = true;
+  if (backupTimer) clearInterval(backupTimer);
   settingsAbort.abort();
   void (async () => {
     try {
+      await backupRestoring?.catch(() => {});
+      await dailyBackups?.drain();
+      await Promise.allSettled([...backupWorkers]);
       const results = await Promise.allSettled([service?.stop(), openingService?.stop()]);
       const failure = results.find((result) => result.status === 'rejected');
       if (failure?.status === 'rejected') throw failure.reason;
@@ -465,6 +578,19 @@ void app
       },
     );
     await settingsStore.load();
+    dailyBackups = new DailyBackups(
+      path.join(app.getPath('userData'), 'backup-settings.json'),
+      executeBackup,
+    );
+    await dailyBackups.load();
+    backupTimer = setInterval(
+      () => {
+        if (!quitting && !switching && service?.snapshot.ready)
+          void dailyBackups.tick(sessionDatabase());
+      },
+      15 * 60 * 1000,
+    );
+    backupTimer.unref();
     uiSettingsStore = new UiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
     await uiSettingsStore.load();
     /**
@@ -564,6 +690,39 @@ void app
       )
         throw new Error('Untrusted desktop sender');
     };
+    ipcMain.handle('yuantu:backups', async (event, input: unknown): Promise<BackupReply> => {
+      try {
+        assertSender(event);
+        const command = parseBackupCommand(input);
+        if (quitting || switching || !service?.snapshot.ready)
+          throw new Error(mainText('upgrade.busy'));
+        const file = sessionDatabase();
+        if (command.type === 'get') return { ok: true, view: await dailyBackups.view(file) };
+        if (command.type === 'configure') {
+          const write = dailyBackups.configure(command.enabled);
+          profileWrites.add(write);
+          try {
+            await write;
+          } finally {
+            profileWrites.delete(write);
+          }
+          if (quitting || switching) throw new Error(mainText('upgrade.busy'));
+          await dailyBackups.tick(file);
+          if (quitting || switching) throw new Error(mainText('upgrade.busy'));
+          return { ok: true, view: await dailyBackups.view(file) };
+        }
+        if (command.type === 'create') return { ok: true, view: await dailyBackups.create(file) };
+        const work = restoreBackup(file, command.id);
+        backupRestoring = work;
+        try {
+          return await work;
+        } finally {
+          if (backupRestoring === work) backupRestoring = undefined;
+        }
+      } catch (error) {
+        return { ok: false, error: safeError(error) };
+      }
+    });
     let readingAttachment = false;
     ipcMain.handle('yuantu:attachment', async (event, input): Promise<AttachmentReply> => {
       try {

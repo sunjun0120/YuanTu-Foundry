@@ -957,7 +957,12 @@ test('manual compaction merges new conversation with the prior summary before ad
 
   const requests: unknown[] = [];
   let failSummary = false;
-  const url = await httpFixture(t, (body, res) => {
+  const url = await httpFixture(t, (body, res, _headers, requestUrl) => {
+    if (requestUrl === '/v1/models') {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{}');
+      return;
+    }
     requests.push(body);
     /**
      * A summary request is the round's own prefix plus one instruction as its last message, so it is recognised

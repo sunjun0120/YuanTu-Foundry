@@ -6,6 +6,7 @@ import {
   existsSync,
   fsyncSync,
   mkdirSync,
+  lstatSync,
   openSync,
   readFileSync,
   readSync,
@@ -271,6 +272,11 @@ function createBackup(
   )
     throw new Error('Invalid database backup retention policy');
   const directory = `${source}.backups`;
+  if (
+    existsSync(directory) &&
+    (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink())
+  )
+    throw new Error('Invalid backup directory');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const destination = path.join(directory, `${Date.now()}-${randomUUID()}.sqlite`);
   const stage = `${destination}.tmp`;
@@ -338,6 +344,63 @@ export function backupDatabase(file: string, policy: DatabasePolicy): DatabaseBa
   } finally {
     db.close();
   }
+}
+
+/** Only this database's complete, regular snapshots are eligible for the desktop restore picker. */
+export function listDatabaseBackups(file: string): DatabaseBackup[] {
+  const source = identity(file);
+  const directory = `${source}.backups`;
+  if (!existsSync(directory)) return [];
+  if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink())
+    throw new Error('Invalid backup directory');
+  const entries: DatabaseBackup[] = [];
+  for (const name of readdirSync(directory)) {
+    if (!/^\d+-[a-f0-9-]{36}\.sqlite\.json$/.test(name)) continue;
+    const manifest = path.join(directory, name);
+    const ownedFile = manifest.slice(0, -5);
+    try {
+      const meta = lstatSync(manifest);
+      const data = lstatSync(ownedFile);
+      if (
+        !meta.isFile() ||
+        meta.isSymbolicLink() ||
+        meta.size > 32768 ||
+        !data.isFile() ||
+        data.isSymbolicLink()
+      )
+        continue;
+      const entry = JSON.parse(readFileSync(manifest, 'utf8')) as DatabaseBackup;
+      if (
+        entry.source !== source ||
+        entry.file !== ownedFile ||
+        !/^[a-f0-9]{64}$/.test(entry.sha256) ||
+        !Number.isSafeInteger(entry.bytes) ||
+        entry.bytes <= 0 ||
+        !Number.isFinite(Date.parse(entry.createdAt)) ||
+        !['manual', 'migration'].includes(entry.reason)
+      )
+        continue;
+      entries.push(entry);
+    } catch {
+      /* Unknown or incomplete files are not restore candidates. */
+    }
+  }
+  return entries.sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || b.file.localeCompare(a.file),
+  );
+}
+export function verifyDatabaseBackup(
+  file: string,
+  id: string,
+  policy: DatabasePolicy,
+): DatabaseBackup {
+  if (!/^\d+-[a-f0-9-]{36}\.sqlite$/.test(id)) throw new Error('Invalid backup id');
+  const entry = listDatabaseBackups(file).find((item) => path.basename(item.file) === id);
+  if (!entry) throw new Error('Backup does not belong to this database');
+  if (statSync(entry.file).size !== entry.bytes || digest(entry.file) !== entry.sha256)
+    throw new Error('Backup size or checksum check failed');
+  inspectDatabase(entry.file, policy);
+  return entry;
 }
 
 interface RestoreJournal {

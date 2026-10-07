@@ -313,6 +313,23 @@ export class ModelSettingsStore {
       apiKey = current?.apiKey || '';
     }
     if (!apiKey) throw new Error(mainText('settings.apiKeyRequired'));
+    const limits: Partial<Record<ModelLimitField, number>> = {};
+    for (const field of Object.keys(MODEL_LIMIT_KEYS) as ModelLimitField[]) {
+      const value = input[field] === undefined ? current?.[field] : input[field];
+      if (value !== undefined && value !== null) limits[field] = value;
+    }
+    if (limits.autoCompactTokens !== undefined && limits.maxContextTokens === undefined)
+      throw new Error(mainText('settings.modelRequestInvalid'));
+    parseSettingsCommand({
+      type: 'save',
+      values: {
+        ...input,
+        maxContextTokens: limits.maxContextTokens,
+        autoCompactTokens: limits.autoCompactTokens,
+        maxOutputTokens: limits.maxOutputTokens,
+        streamIdleTimeoutMs: limits.streamIdleTimeoutMs,
+      },
+    });
     return {
       groupId: current?.groupId || randomUUID(),
       groupName: current?.groupName || input.name?.trim() || model,
@@ -322,14 +339,7 @@ export class ModelSettingsStore {
         randomUUID(),
       name: input.name?.trim() || current?.name || model,
       supportsVision: input.supportsVision ?? current?.supportsVision ?? true,
-      ...(input.maxContextTokens !== undefined ? { maxContextTokens: input.maxContextTokens } : {}),
-      ...(input.autoCompactTokens !== undefined
-        ? { autoCompactTokens: input.autoCompactTokens }
-        : {}),
-      ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
-      ...(input.streamIdleTimeoutMs !== undefined
-        ? { streamIdleTimeoutMs: input.streamIdleTimeoutMs }
-        : {}),
+      ...limits,
       protocol: input.protocol ?? 'anthropic',
       model,
       baseUrl: target,
@@ -470,18 +480,10 @@ export class ModelSettingsStore {
       ...(metadata.connectionId !== undefined ? { connectionId: metadata.connectionId } : {}),
       ...(metadata.name !== undefined ? { name: metadata.name } : {}),
       ...(metadata.supportsVision !== undefined ? { supportsVision: metadata.supportsVision } : {}),
-      ...(metadata.maxContextTokens !== undefined
-        ? { maxContextTokens: metadata.maxContextTokens }
-        : {}),
-      ...(metadata.autoCompactTokens !== undefined
-        ? { autoCompactTokens: metadata.autoCompactTokens }
-        : {}),
-      ...(metadata.maxOutputTokens !== undefined
-        ? { maxOutputTokens: metadata.maxOutputTokens }
-        : {}),
-      ...(metadata.streamIdleTimeoutMs !== undefined
-        ? { streamIdleTimeoutMs: metadata.streamIdleTimeoutMs }
-        : {}),
+      maxContextTokens: metadata.maxContextTokens ?? null,
+      autoCompactTokens: metadata.autoCompactTokens ?? null,
+      maxOutputTokens: metadata.maxOutputTokens ?? null,
+      streamIdleTimeoutMs: metadata.streamIdleTimeoutMs ?? null,
       protocol: builtinProtocol(config.protocol),
       model: config.model,
       baseUrl: config.baseUrl || '',

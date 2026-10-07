@@ -8,15 +8,20 @@ export async function readDisplayHistory(
   sessionId: string,
   maxMessages = Infinity,
   startOffset = 0,
+  window: { tail?: number; endOffset?: number } = {},
 ): Promise<{
   messages: Message[];
   statistics?: SessionStatistics;
   truncated: boolean;
   nextOffset: number;
+  startOffset: number;
 }> {
   const messages: Message[] = [];
   const parts: string[] = [];
   let offset = startOffset;
+  let first = true;
+  let resolvedStart = startOffset;
+  let endOffset = window.endOffset;
   let chunkOffset: number | undefined;
   let statistics: SessionStatistics | undefined;
   for (;;) {
@@ -24,9 +29,22 @@ export async function readDisplayHistory(
       sessionId,
       offset,
       view: 'display',
+      ...(first && window.tail !== undefined ? { tail: window.tail } : {}),
+      ...(endOffset === undefined ? {} : { endOffset }),
       ...(chunkOffset === undefined ? {} : { chunkOffset }),
     });
-    if (offset === startOffset && statistics === undefined) statistics = page.statistics;
+    if (first) {
+      if (page.offset !== undefined) {
+        if (!Number.isSafeInteger(page.offset) || page.offset < 0)
+          throw new Error('Invalid history window offset');
+        offset = page.offset;
+      }
+      resolvedStart = offset;
+      if (window.tail !== undefined && page.totalMessages !== undefined)
+        endOffset = page.totalMessages;
+      statistics = page.statistics;
+      first = false;
+    }
     if (page.messageChunk) {
       const chunk = page.messageChunk;
       if (page.messages.length || chunk.index !== offset || !chunk.part)
@@ -60,6 +78,7 @@ export async function readDisplayHistory(
     if (messages.length >= maxMessages)
       return {
         messages: messages.slice(0, maxMessages),
+        startOffset: resolvedStart,
         statistics,
         truncated: page.nextOffset !== undefined,
         nextOffset: page.nextOffset ?? offset + (page.messageChunk ? 1 : page.messages.length),
@@ -67,6 +86,7 @@ export async function readDisplayHistory(
     if (page.nextOffset === undefined)
       return {
         messages,
+        startOffset: resolvedStart,
         statistics,
         truncated: false,
         nextOffset: offset + (page.messageChunk ? 1 : page.messages.length),

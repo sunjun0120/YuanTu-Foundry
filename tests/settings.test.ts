@@ -139,6 +139,82 @@ test('named connections persist independent keys, selection and vision settings 
   assert.doesNotMatch(JSON.stringify(final.view), /first-private|second-private|encryptedApiKey/);
   assert.doesNotMatch(await readFile(file, 'utf8'), /first-private|second-private/);
 });
+test('model limits preserve omitted fields and support explicit clearing across restart', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-limit-edit-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'settings.json');
+  const store = new ModelSettingsStore(file, cipher, {});
+  await store.save(
+    store.prepare({
+      connectionId: '',
+      model: 'm',
+      baseUrl: 'https://gateway.example',
+      apiKey: 'secret',
+      maxContextTokens: 128000,
+      autoCompactTokens: 100000,
+      maxOutputTokens: 8192,
+      streamIdleTimeoutMs: 180000,
+    }),
+  );
+  const id = store.view.connectionId;
+  const base = { connectionId: id, model: 'm', baseUrl: 'https://gateway.example', apiKey: '' };
+  await store.save(store.prepare({ ...base, name: 'Renamed' }));
+  assert.equal(store.environment().YUANTU_AUTO_COMPACT_TOKENS, '100000');
+  assert.equal(store.environment().YUANTU_STREAM_IDLE_TIMEOUT_MS, '180000');
+  await store.save(
+    store.prepare({ ...base, autoCompactTokens: 90000, streamIdleTimeoutMs: 60000 }),
+  );
+  assert.equal(store.environment().YUANTU_AUTO_COMPACT_TOKENS, '90000');
+  assert.equal(store.environment().YUANTU_MAX_CONTEXT_TOKENS, '128000');
+  await store.save(
+    store.prepare({
+      ...base,
+      maxContextTokens: null,
+      autoCompactTokens: null,
+      maxOutputTokens: null,
+      streamIdleTimeoutMs: null,
+    }),
+  );
+  const reopened = new ModelSettingsStore(file, cipher, {});
+  await reopened.load();
+  for (const key of [
+    'YUANTU_MAX_CONTEXT_TOKENS',
+    'YUANTU_AUTO_COMPACT_TOKENS',
+    'YUANTU_MAX_OUTPUT_TOKENS',
+    'YUANTU_STREAM_IDLE_TIMEOUT_MS',
+  ])
+    assert.equal(reopened.environment()[key], undefined);
+  assert.equal(reopened.configFor(id).apiKey, 'secret');
+});
+
+test('saving a smaller window validates preserved advanced limits before writing', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-limit-merge-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'settings.json');
+  const store = new ModelSettingsStore(file, cipher, {});
+  await store.save(
+    store.prepare({
+      connectionId: '',
+      model: 'm',
+      baseUrl: 'https://gateway.example',
+      apiKey: 'secret',
+      maxContextTokens: 128000,
+      autoCompactTokens: 100000,
+    }),
+  );
+  const before = await readFile(file, 'utf8');
+  assert.throws(() =>
+    store.prepare({
+      connectionId: store.view.connectionId,
+      model: 'm',
+      baseUrl: 'https://gateway.example',
+      apiKey: '',
+      maxContextTokens: 64000,
+    }),
+  );
+  assert.equal(await readFile(file, 'utf8'), before);
+});
+
 test('model runtime limits persist per connection and reach the Host environment', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-model-limits-'));
   t.after(() => rm(root, { recursive: true, force: true }));

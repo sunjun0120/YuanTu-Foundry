@@ -55,7 +55,8 @@ export type CarrierCommand =
         | 'refreshResources'
         | 'refreshBackground'
         | 'clearBackground'
-        | 'compact';
+        | 'compact'
+        | 'loadOlder';
     }
   | { type: 'stopBackground'; id: string; sessionId: string }
   | {
@@ -187,6 +188,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     pollBackground: ['type', 'id', 'sessionId', 'cursor'],
     sandbox: ['type', 'mode'],
     compact: ['type'],
+    loadOlder: ['type'],
     taskSave: [
       'type',
       'taskId',

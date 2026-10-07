@@ -335,15 +335,15 @@ test('sensitive nested workspace errors identify the relative file path', async 
 
 // ---- merged from runtime-limits.test.ts ----
 
-test('an undeclared window stays undeclared, and the output cap keeps its default', () => {
+test('undeclared runtime capacities remain available for automatic resolution', () => {
   /**
    * The window used to default to 1,000,000 for every protocol. That number is not this runtime's to choose:
    * a gateway serving 128k would be measured against it and the run that failed would be blamed on the
-   * conversation. Undeclared now means undeclared, and the run is refused where the model is configured.
+   * conversation. Undeclared stays distinct from a manual override so entry points can resolve it automatically.
    */
   const options = parseArgs([], {}).options;
   assert.equal(options.maxContextTokens, undefined);
-  assert.equal(options.maxOutputTokens, 256000);
+  assert.equal(options.maxOutputTokens, undefined);
 });
 
 test('runtime limits from the selected desktop model reach Host arguments', () => {

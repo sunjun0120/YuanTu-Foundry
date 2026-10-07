@@ -179,6 +179,8 @@ export interface SessionSnapshot {
   sessionId: string | null;
   messages: Message[];
   messageRevision: number;
+  /** Absolute index of the earliest visible message; earlier history remains in the Host. */
+  historyStart?: number;
   liveMessage: { id: string; text: string; reasoning: string } | null;
   /** Sub-agents this run delegated to, in request order. */
   subagents: SubAgentView[];
@@ -248,6 +250,7 @@ export class SessionController {
   private runId: string | null = null;
   private active: Promise<RunResult> | null = null;
   private aborter: AbortController | null = null;
+  private olderLoad: symbol | null = null;
   constructor(client: AgentHostClient) {
     this.client = client;
     this.unsubscribe = client.subscribe((event) => this.onEvent(event));
@@ -377,12 +380,56 @@ export class SessionController {
   }
   private async history(
     sessionId: string,
-  ): Promise<{ messages: Message[]; statistics: SessionStatistics }> {
-    const history = await readDisplayHistory(this.client, sessionId);
-    return { messages: history.messages, statistics: history.statistics ?? emptyStatistics() };
+  ): Promise<{ messages: Message[]; statistics: SessionStatistics; historyStart: number }> {
+    const tail = Math.max(100, this.state.sessionId === sessionId ? this.state.messages.length : 0);
+    const history = await readDisplayHistory(this.client, sessionId, Infinity, 0, { tail });
+    return {
+      messages: history.messages,
+      statistics: history.statistics ?? emptyStatistics(),
+      historyStart: history.startOffset,
+    };
+  }
+  async loadOlder(): Promise<void> {
+    this.assertIdle();
+    const sessionId = this.state.sessionId;
+    const endOffset = this.state.historyStart ?? 0;
+    if (!sessionId || endOffset === 0) return;
+    const revision = this.state.messageRevision;
+    const operation = Symbol('older-history');
+    this.olderLoad = operation;
+    this.state.loading = true;
+    this.publish();
+    try {
+      const history = await readDisplayHistory(
+        this.client,
+        sessionId,
+        Infinity,
+        Math.max(0, endOffset - 100),
+        { endOffset },
+      );
+      if (
+        this.disposed ||
+        this.olderLoad !== operation ||
+        this.state.sessionId !== sessionId ||
+        this.state.messageRevision !== revision ||
+        this.state.historyStart !== endOffset ||
+        this.state.running
+      )
+        return;
+      this.state.messages.unshift(...history.messages);
+      this.state.historyStart = history.startOffset;
+      this.state.messageRevision++;
+    } finally {
+      if (this.olderLoad === operation) {
+        this.olderLoad = null;
+        this.state.loading = false;
+      }
+      this.publish();
+    }
   }
   private async read(sessionId: string): Promise<void> {
-    const { messages, statistics } = await this.history(sessionId);
+    this.olderLoad = null;
+    const { messages, statistics, historyStart } = await this.history(sessionId);
     if (this.disposed) return;
     // The plan lives outside the message history, so it is fetched separately: a plan proposed in an
     // earlier run is still the plan awaiting a decision after a reload.
@@ -410,6 +457,7 @@ export class SessionController {
       instructions: [],
       sessionId,
       messages,
+      historyStart,
       messageRevision: this.state.messageRevision + 1,
       statistics,
       statisticsActivity: null,
@@ -689,9 +737,10 @@ export class SessionController {
         this.state.error = result.error ?? null;
       }
       if (!this.disposed && this.client.status === 'ready') {
-        const { messages, statistics } = await this.history(sessionId);
+        const { messages, statistics, historyStart } = await this.history(sessionId);
         if (owns()) {
           this.state.messages = messages;
+          this.state.historyStart = historyStart;
           this.state.messageRevision++;
           this.state.statistics = statistics;
         }
@@ -706,9 +755,10 @@ export class SessionController {
       // Reconcile from the Host whenever it is still reachable instead of guessing which occurred.
       if (!this.disposed && this.client.status === 'ready') {
         try {
-          const { messages, statistics } = await this.history(sessionId);
+          const { messages, statistics, historyStart } = await this.history(sessionId);
           if (owns()) {
             this.state.messages = messages;
+            this.state.historyStart = historyStart;
             this.state.messageRevision++;
             this.state.statistics = statistics;
           }
@@ -805,9 +855,10 @@ export class SessionController {
     const owns = () =>
       this.state.sessionId === sessionId && this.runId === finishedRun && !this.state.running;
     try {
-      const { messages, statistics } = await this.history(sessionId);
+      const { messages, statistics, historyStart } = await this.history(sessionId);
       if (this.disposed || !owns()) return;
       this.state.messages = messages;
+      this.state.historyStart = historyStart;
       this.state.messageRevision++;
       this.state.statistics = statistics;
     } catch {
@@ -823,6 +874,7 @@ export class SessionController {
   private onEvent(event: AgentEvent): void {
     if (this.disposed || event.sessionId !== this.state.sessionId) return;
     if (event.type === 'run.started') {
+      this.olderLoad = null;
       if (!this.state.running) {
         this.statisticsBase = structuredClone(this.state.statistics ?? emptyStatistics());
         this.state.running = true;
