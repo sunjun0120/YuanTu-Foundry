@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { connect } from 'node:net';
 import { startBridge } from '../apps/web/main.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 
@@ -180,3 +181,76 @@ test('the bridge refuses a wrong token, and serves the page and its health check
   assert.equal(bundle.status, 200);
   assert.match(await bundle.text(), /yuantu/);
 });
+
+test(
+  'malformed asset URLs are refused without terminating the bridge',
+  { timeout: 15_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-malformed-url-'));
+    const bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'url-fixture',
+      page: path.resolve('apps/web/dist'),
+    });
+    t.after(async () => {
+      await bridge.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    for (const asset of ['/%ZZ', '/%', '/%E0%A4%A']) {
+      const response = await fetch(new URL(asset, bridge.url), {
+        signal: AbortSignal.timeout(3000),
+      });
+      assert.equal(response.status, 400, asset);
+      await response.text();
+      const health = await fetch(new URL('/health', bridge.url), {
+        signal: AbortSignal.timeout(3000),
+      });
+      assert.deepEqual(await health.json(), { ok: true });
+    }
+    const traversal = await fetch(new URL('/%2e%2e%2fpackage.json', bridge.url));
+    assert.equal(traversal.status, 403);
+    const missing = await fetch(new URL('/missing-asset.js', bridge.url));
+    assert.equal(missing.status, 404);
+  },
+);
+
+test(
+  'malformed upgrade URLs are refused without terminating the bridge',
+  { timeout: 15_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-malformed-upgrade-'));
+    const bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'upgrade-fixture',
+      page: path.resolve('apps/web/dist'),
+    });
+    t.after(async () => {
+      await bridge.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const port = Number(new URL(bridge.url).port);
+    const response = await new Promise((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1');
+      t.after(() => socket.destroy());
+      let data = '';
+      socket.setTimeout(3000, () => socket.destroy(new Error('upgrade response timed out')));
+      socket.on('error', reject);
+      socket.on('data', (bytes) => {
+        data += bytes;
+      });
+      socket.on('end', () => resolve(data));
+      socket.on('connect', () =>
+        socket.write(
+          'GET //%ZZ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+        ),
+      );
+    });
+    assert.match(response, /^HTTP\/1\.1 400 Bad Request/);
+    const health = await fetch(new URL('/health', bridge.url), {
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.deepEqual(await health.json(), { ok: true });
+  },
+);

@@ -253,14 +253,26 @@ export async function startBridge(options: Options): Promise<{
   };
 
   const server = createServer((request, response) => {
-    void servePage(request, response, options);
+    void servePage(request, response, options).catch(() => {
+      if (response.headersSent) response.destroy();
+      else {
+        response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+        response.end('internal server error');
+      }
+    });
   });
   /** Every socket this bridge upgraded, so shutdown can end them itself (see `close`). */
   const sockets = new Set<Socket>();
   server.on('upgrade', (request, socket: Socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    let url: URL;
+    try {
+      url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    } catch {
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
     const remote = request.socket.remoteAddress ?? '';
     const loopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
     if (!loopback) {
@@ -347,14 +359,22 @@ async function servePage(
   response: ServerResponse,
   options: Options,
 ): Promise<void> {
-  const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+  let url: URL;
+  let relative: string;
+  try {
+    url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    relative =
+      url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');
+  } catch {
+    response.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('bad request');
+    return;
+  }
   if (url.pathname === '/health') {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ ok: true }));
     return;
   }
-  const relative =
-    url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');
   const target = path.resolve(options.page, relative);
   if (target !== options.page && !target.startsWith(options.page + path.sep)) {
     response.writeHead(403);
