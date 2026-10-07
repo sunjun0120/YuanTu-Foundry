@@ -154,12 +154,16 @@ class PageLink {
       this.socket.write(encodeText(JSON.stringify(frame)));
   }
   private receive(chunk: Buffer): void {
+    if (this.closed) return;
     try {
       for (const frame of this.decoder.push(chunk))
         for (const message of this.assembler.push(frame)) {
           if (message.kind === 'text') this.onRequest(message.text);
           else if (message.kind === 'ping') this.socket.write(encodePong(message.payload));
-          else if (message.kind === 'close') this.refuse(1000, 'the page closed the link');
+          else if (message.kind === 'close') {
+            this.refuse(1000, 'the page closed the link');
+            return;
+          }
         }
     } catch (error) {
       // A protocol error is answered with a close code and a reason, never with silence.

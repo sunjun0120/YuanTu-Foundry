@@ -68,10 +68,20 @@ async function until(client, predicate, what, timeoutMs = 20_000) {
 }
 const socketUrl = (url) => url.replace('http://', 'ws://').replace('/?', '/ws?');
 
-test(
-  'an oversized frame header closes only its page with code 1009',
-  { timeout: 15_000 },
-  async (t) => {
+const oversizedHeader = Buffer.alloc(14);
+oversizedHeader[0] = 0x81;
+oversizedHeader[1] = 0xff;
+oversizedHeader.writeBigUInt64BE(1024n * 1024n * 1024n, 2);
+for (const [name, input, expectedCode] of [
+  ['an oversized frame header', oversizedHeader, 1009],
+  [
+    'interleaved fragmented messages',
+    Buffer.from([1, 129, 0, 0, 0, 0, 120, 129, 129, 0, 0, 0, 0, 121]),
+    1002,
+  ],
+  ['invalid UTF-8 text', Buffer.from([129, 129, 0, 0, 0, 0, 255]), 1007],
+]) {
+  test(`${name} closes only its page with code ${expectedCode}`, { timeout: 15_000 }, async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-frame-limit-'));
     const bridge = await startBridge({
       workspace: root,
@@ -98,11 +108,7 @@ test(
           assert.match(received.subarray(0, boundary).toString(), /^HTTP\/1\.1 101/);
           received = received.subarray(boundary + 4);
           upgraded = true;
-          const header = Buffer.alloc(14);
-          header[0] = 0x81;
-          header[1] = 0xff;
-          header.writeBigUInt64BE(1024n * 1024n * 1024n, 2);
-          socket.write(header);
+          socket.write(input);
         }
       });
       socket.on('end', () => resolve(received));
@@ -127,11 +133,78 @@ test(
       if (opcode === 8) closeCode = response.readUInt16BE(offset);
       offset += length;
     }
-    assert.equal(closeCode, 1009);
+    assert.equal(closeCode, expectedCode);
     const health = await fetch(new URL('/health', bridge.url), {
       signal: AbortSignal.timeout(3000),
     });
     assert.deepEqual(await health.json(), { ok: true });
+  });
+}
+
+test(
+  'a close frame prevents subsequent requests from creating a real Host session',
+  { timeout: 15_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-close-boundary-'));
+    const bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'close-fixture',
+      page: path.resolve('apps/web/dist'),
+    });
+    t.after(async () => {
+      await bridge.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const deadline = Date.now() + 5000;
+    while (!bridge.carrier.snapshot.ready && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(bridge.carrier.snapshot.ready, true);
+    const before = bridge.carrier.snapshot;
+    const request = Buffer.from(
+      JSON.stringify({ id: 1, kind: 'command', command: { type: 'create' } }),
+    );
+    assert(request.length < 126);
+    const input = Buffer.concat([
+      Buffer.from([1, 129, 0, 0, 0, 0, 120]),
+      Buffer.from([136, 130, 0, 0, 0, 0, 3, 232]),
+      Buffer.from([129, 128 | request.length, 0, 0, 0, 0]),
+      request,
+    ]);
+    // Observe dispatch while retaining its real behavior, then verify persisted session effects too.
+    const dispatch = bridge.carrier.dispatch.bind(bridge.carrier);
+    const effects = [];
+    t.mock.method(bridge.carrier, 'dispatch', (command) => {
+      const effect = dispatch(command);
+      effects.push(effect);
+      return effect;
+    });
+    await new Promise((resolve, reject) => {
+      const socket = connect(Number(new URL(bridge.url).port), '127.0.0.1');
+      t.after(() => socket.destroy());
+      let response = '';
+      let upgraded = false;
+      socket.setTimeout(3000, () => socket.destroy(new Error('close response timed out')));
+      socket.on('error', reject);
+      socket.on('data', (chunk) => {
+        response += chunk;
+        if (!upgraded && response.includes('\r\n\r\n')) {
+          assert.match(response, /^HTTP\/1\.1 101/);
+          upgraded = true;
+          socket.write(input);
+        }
+      });
+      socket.on('end', resolve);
+      socket.on('connect', () =>
+        socket.write(
+          'GET /ws?token=close-fixture HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+        ),
+      );
+    });
+    await Promise.all(effects);
+    assert.deepEqual(bridge.carrier.snapshot.sessions, before.sessions);
+    assert.equal(bridge.carrier.snapshot.session.sessionId, before.session.sessionId);
+    assert.equal(effects.length, 0);
   },
 );
 

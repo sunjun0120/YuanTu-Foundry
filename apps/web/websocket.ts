@@ -18,6 +18,7 @@
  *   reason instead of being ignored — a bridge that silently dropped half a message would look like a Host bug.
  */
 import { createHash } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 export const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 /** The accept token a server must answer a client's key with. Exported so a test can pin the RFC's own example. */
 export function acceptKey(secWebSocketKey: string): string {
@@ -120,6 +121,8 @@ export class FrameDecoder {
         return undefined;
       }
       length = buffer.readUInt16BE(offset);
+      if (length < 126)
+        throw new WebSocketProtocolError('frame length must use its minimum encoding');
       offset += 2;
     } else if (length === 127) {
       if (this.buffered < offset + 8) {
@@ -131,6 +134,8 @@ export class FrameDecoder {
       if (wide > BigInt(Number.MAX_SAFE_INTEGER))
         throw new WebSocketProtocolError('frame payload length is not addressable');
       length = Number(wide);
+      if (length < 65_536)
+        throw new WebSocketProtocolError('frame length must use its minimum encoding');
       offset += 8;
     }
     const isControl = (opcode & 0x8) !== 0;
@@ -156,6 +161,10 @@ export type AssembledMessage =
   | { readonly kind: 'close'; readonly code: number; readonly reason: string }
   | { readonly kind: 'ping'; readonly payload: Buffer }
   | { readonly kind: 'pong'; readonly payload: Buffer };
+function utf8Text(payload: Buffer): string {
+  if (!isUtf8(payload)) throw new WebSocketProtocolError('invalid UTF-8 text', 1007);
+  return payload.toString('utf8');
+}
 /**
  * Turn frames into messages: continuation frames are joined, control frames may arrive between them, and a
  * sequence the standard does not allow is an error.
@@ -186,8 +195,22 @@ export class MessageAssembler {
   }
   push(frame: RawFrame): AssembledMessage[] {
     if (frame.opcode === OPCODE.close) {
+      if (frame.payload.length === 1)
+        throw new WebSocketProtocolError('close payload must contain a complete status code');
       const code = frame.payload.length >= 2 ? frame.payload.readUInt16BE(0) : 1005;
-      return [{ kind: 'close', code, reason: frame.payload.subarray(2).toString('utf8') }];
+      if (
+        frame.payload.length >= 2 &&
+        !(
+          (code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) ||
+          (code >= 3000 && code <= 4999)
+        )
+      )
+        throw new WebSocketProtocolError('invalid close status code');
+      const reason = utf8Text(frame.payload.subarray(2));
+      this.fragments = Buffer.alloc(0);
+      this.fragmentedOpcode = undefined;
+      this.fragmentBytes = 0;
+      return [{ kind: 'close', code, reason }];
     }
     if (frame.opcode === OPCODE.ping) return [{ kind: 'ping', payload: frame.payload }];
     if (frame.opcode === OPCODE.pong) return [{ kind: 'pong', payload: frame.payload }];
@@ -198,7 +221,7 @@ export class MessageAssembler {
         throw new WebSocketProtocolError('continuation frame without a started message');
       this.append(frame.payload);
       if (!frame.fin) return [];
-      const text = this.fragments.subarray(0, this.fragmentBytes).toString('utf8');
+      const text = utf8Text(this.fragments.subarray(0, this.fragmentBytes));
       this.fragments = Buffer.alloc(0);
       this.fragmentedOpcode = undefined;
       this.fragmentBytes = 0;
@@ -206,9 +229,11 @@ export class MessageAssembler {
     }
     if (frame.opcode !== OPCODE.text)
       throw new WebSocketProtocolError(`unknown opcode ${String(frame.opcode)}`);
+    if (this.fragmentedOpcode !== undefined)
+      throw new WebSocketProtocolError('new data message before fragmented message completed');
     if (frame.payload.length > this.maxMessageBytes)
       throw new WebSocketProtocolError('message exceeds byte limit', 1009);
-    if (frame.fin) return [{ kind: 'text', text: frame.payload.toString('utf8') }];
+    if (frame.fin) return [{ kind: 'text', text: utf8Text(frame.payload) }];
     this.fragmentedOpcode = frame.opcode;
     this.fragments = Buffer.alloc(0);
     this.fragmentBytes = 0;
@@ -244,7 +269,11 @@ export const encodeText = (text: string): Buffer =>
 export const encodePong = (payload: Buffer): Buffer => encodeFrame(OPCODE.pong, payload);
 /** A close frame with a code and a reason, bounded to what a control frame may carry. */
 export function encodeClose(code: number, reason = ''): Buffer {
-  const text = Buffer.from(reason, 'utf8').subarray(0, MAX_CONTROL_PAYLOAD - 2);
+  const bytes = Buffer.from(reason, 'utf8');
+  let end = Math.min(bytes.length, MAX_CONTROL_PAYLOAD - 2);
+  // An excluded continuation byte means the preceding code point is only partly included.
+  while (end < bytes.length && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
+  const text = bytes.subarray(0, end);
   const payload = Buffer.alloc(2 + text.length);
   payload.writeUInt16BE(code, 0);
   text.copy(payload, 2);

@@ -260,3 +260,79 @@ test('many tiny fragments retain bounded memory while preserving their message',
   );
   assert.equal(result.status, 0, result.stderr || String(result.error));
 });
+
+test('a second data message cannot replace or bypass an unfinished fragmented message', () => {
+  for (const fin of [true, false]) {
+    const assembler = new MessageAssembler();
+    assembler.push({ fin: false, opcode: OPCODE.text, payload: Buffer.from('first') });
+    assert.throws(
+      () => assembler.push({ fin, opcode: OPCODE.text, payload: Buffer.from('second') }),
+      (error: unknown) => error instanceof WebSocketProtocolError && error.closeCode === 1002,
+    );
+  }
+});
+
+test('text messages reject invalid UTF-8 but allow code points split between fragments', () => {
+  const text = Buffer.from('\uFEFF中文🙂');
+  const valid = new MessageAssembler();
+  valid.push({ fin: false, opcode: OPCODE.text, payload: text.subarray(0, 4) });
+  assert.deepEqual(
+    valid.push({ fin: true, opcode: OPCODE.continuation, payload: text.subarray(4) }),
+    [{ kind: 'text', text: '\uFEFF中文🙂' }],
+  );
+  for (const fragmented of [false, true]) {
+    const assembler = new MessageAssembler();
+    if (fragmented)
+      assembler.push({ fin: false, opcode: OPCODE.text, payload: Buffer.from([0xc3]) });
+    assert.throws(
+      () =>
+        assembler.push({
+          fin: true,
+          opcode: fragmented ? OPCODE.continuation : OPCODE.text,
+          payload: Buffer.from([0xff]),
+        }),
+      (error: unknown) => error instanceof WebSocketProtocolError && error.closeCode === 1007,
+    );
+  }
+});
+
+test('close payloads reject incomplete codes, prohibited codes and invalid reason encoding', () => {
+  const close = (payload: Buffer) =>
+    new MessageAssembler().push({ fin: true, opcode: OPCODE.close, payload });
+  assert.deepEqual(close(Buffer.alloc(0)), [{ kind: 'close', code: 1005, reason: '' }]);
+  assert.throws(() => close(Buffer.from([3])), WebSocketProtocolError);
+  for (const code of [999, 1004, 1005, 1006, 1015, 2000, 5000]) {
+    const payload = Buffer.alloc(2);
+    payload.writeUInt16BE(code);
+    assert.throws(() => close(payload), WebSocketProtocolError, String(code));
+  }
+  for (const code of [1000, 1014, 3000, 4999]) {
+    const payload = Buffer.alloc(2);
+    payload.writeUInt16BE(code);
+    assert.equal(close(payload)[0]?.kind, 'close');
+  }
+  assert.throws(
+    () => close(Buffer.from([3, 232, 255])),
+    (error: unknown) => error instanceof WebSocketProtocolError && error.closeCode === 1007,
+  );
+});
+
+test('extended frame lengths use their minimum encoding', () => {
+  const short = Buffer.from([0x81, 0xfe, 0, 1, 0, 0, 0, 0, 120]);
+  assert.throws(() => new FrameDecoder().push(short), WebSocketProtocolError);
+  const wide = Buffer.alloc(14);
+  wide[0] = 0x81;
+  wide[1] = 0xff;
+  wide.writeBigUInt64BE(126n, 2);
+  assert.throws(() => new FrameDecoder().push(wide), WebSocketProtocolError);
+});
+
+test('truncating a close reason preserves UTF-8 boundaries', () => {
+  for (const reason of ['a'.repeat(122) + '中', 'a'.repeat(121) + '🙂', '中'.repeat(100)]) {
+    const frame = encodeClose(1000, reason);
+    const payload = frame.subarray(4);
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(payload);
+    assert(reason.startsWith(decoded));
+    assert(payload.length <= 123);
+  }
+});
