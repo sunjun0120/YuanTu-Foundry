@@ -1,0 +1,65 @@
+name: Windows installation
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run package:windows
+      - name: Install in isolated directory
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
+          ./scripts/verify-windows-install.ps1 -Installer $installer.FullName -InstallDirectory "$pwd/.scratch/中文 安装验证"
+      - name: Installed desktop and bundled runtime
+        shell: pwsh
+        run: |
+          $env:PACKAGED_TEST_DIRECTORY = "$pwd/.scratch/中文 安装验证"
+          $env:PACKAGED_TEST_PROFILE = "$pwd/.scratch/安装保留 profile"
+          $env:PACKAGED_TEST_WORKSPACE = "$pwd/.scratch/安装保留 workspace"
+          $env:PACKAGED_TEST_INSTALLER = (Get-ChildItem dist/*-setup.exe | Select-Object -First 1).FullName
+          node --test tests/installed-desktop.smoke.mjs
+      - name: Uninstall and retain user data
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "$pwd/.scratch/中文 安装验证/YuanTu Agent.exe") {
+            ./scripts/verify-windows-install.ps1 -Installer unused -InstallDirectory "$pwd/.scratch/中文 安装验证" -Uninstall
+          }
+          if (-not (Test-Path "$pwd/.scratch/安装保留 workspace/.yuantu/sessions.sqlite")) { throw 'Session data was not retained' }
+      - name: Build an isolated upgrade candidate
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path .scratch/p1 -Force | Out-Null
+          Copy-Item dist/win-unpacked .scratch/p1/dev03-old-application -Recurse
+          $versionParts = ((Get-Content package.json -Raw | ConvertFrom-Json).version).Split('.')
+          $nextVersion = "$($versionParts[0]).$($versionParts[1]).$([int]$versionParts[2] + 1)"
+          npx electron-builder --config electron-builder.config.cjs --config.directories.output=.scratch/p1/upgrade-release --config.extraMetadata.version=$nextVersion --win --x64
+          node scripts/write-release-manifest.mjs .scratch/p1/upgrade-release
+      - name: Native desktop upgrade and retained credentials
+        shell: pwsh
+        run: |
+          $env:UPGRADE_TEST_INSTALLER = (Get-ChildItem .scratch/p1/upgrade-release/*-setup.exe | Select-Object -First 1).FullName
+          node --test tests/desktop-upgrade.smoke.mjs
+      - name: Old desktop and compatible database recovery
+        shell: pwsh
+        run: |
+          $env:UPGRADE_TEST_JOURNAL = (Get-ChildItem '.scratch/p1/upgrade-*/用户 profile/upgrades/*/upgrade.json' | Select-Object -First 1).FullName
+          if (-not $env:UPGRADE_TEST_JOURNAL) { throw 'Upgrade recovery record was not created' }
+          node --test tests/desktop-rollback.smoke.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YuanTu-Agent-Windows-x64
+          path: |
+            dist/*-setup.exe
+            dist/*-setup.exe.json

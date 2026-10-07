@@ -1,0 +1,72 @@
+{
+  "name": "yuantu-agent",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./sdk": {
+      "types": "./dist/packages/sdk/index.d.ts",
+      "import": "./dist/packages/sdk/index.js"
+    }
+  },
+  "description": "Independent YuanTu coding agent runtime, CLI and desktop",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "yuantu-agent": "dist/apps/cli/main.js"
+  },
+  "scripts": {
+    "package:windows": "npm run build && node scripts/prepare-windows-package.mjs && electron-builder --config electron-builder.config.cjs --win --x64 && node scripts/write-release-manifest.mjs",
+    "package:windows:dir": "npm run build && node scripts/prepare-windows-package.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir",
+    "dev": "node apps/cli/main.ts",
+    "host": "node apps/agent-host/main.ts",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-desktop.mjs && node scripts/build-web.mjs",
+    "desktop": "npm run build && node scripts/start-desktop.mjs",
+    "web": "node scripts/build-web.mjs && node apps/web/main.ts",
+    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/settings.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs",
+    "smoke:web": "node scripts/run-tests.mjs tests/web.smoke.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check . --log-level warn",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "test:verbose": "node --test --test-concurrency=1 tests/*.test.ts",
+    "snapshot:update": "node scripts/update-snapshots.mjs",
+    "bench": "node benchmarks/run.mjs",
+    "bench:check": "node benchmarks/run.mjs --check",
+    "coverage": "node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=75 --test-coverage-functions=85 tests/*.test.ts",
+    "docs:generate": "node scripts/docs-facts.mjs --write",
+    "docs:check": "node scripts/docs-facts.mjs --check",
+    "references:check": "node scripts/check-references.mjs",
+    "i18n:check": "node scripts/check-i18n.mjs",
+    "smoke:client": "node scripts/run-tests.mjs --concurrency=2 tests/compiled-client.smoke.mjs tests/compiled-sdk.smoke.mjs",
+    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run i18n:check && npm run typecheck && npm test && npm run build && npm run smoke:client && npm run smoke:web",
+    "check:changed": "node scripts/check-changed.mjs",
+    "check:full": "npm run check",
+    "check:release": "npm run check && npm run smoke:desktop"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.7.0",
+    "@lydell/node-pty": "^1.2.0-beta.15",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.17.1",
+    "diff": "^9.0.0",
+    "highlight.js": "^11.12.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.12.3",
+    "marked": "^18.0.13",
+    "pdfjs-dist": "^6.3.289",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^43.5.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="system">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    />
+    <title>YuanTu Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./layout.css" />
+  </head>
+  <body>
+    <aside id="chat-sidebar" class="sidebar">
+      <div class="brand">
+        <div class="brand-logo" role="img" aria-label="源图 AI">
+          <img class="logo-light" src="./img/logo-light.png" alt="" />
+          <img class="logo-dark" src="./img/logo-dark.png" alt="" />
+        </div>
+      </div>
+      <button id="new-session" class="new-session" disabled>
+        <span aria-hidden="true">＋</span> 新建会话
+      </button>
+      <div class="workspace-box">
+        <div class="section-label">工作区</div>
+        <div id="workspace">正在连接…</div>
+        <button id="choose-workspace" class="text-button" disabled>
+          更换目录 <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+      <div id="session-search-row" class="session-search-row">
+        <div id="recent-sessions-label" class="section-label">
+          最近会话 <span id="session-count">0</span>
+        </div>
+        <button
+          id="open-session-search"
+          aria-expanded="false"
+          aria-controls="session-search"
+          type="button"
+          aria-label="搜索会话"
+          title="搜索会话"
+        >
+          <span class="search-icon" aria-hidden="true"></span>
+        </button>
+        <input
+          id="session-search"
+          type="search"
+          maxlength="200"
+          placeholder="搜索会话或消息"
+          aria-label="搜索会话"
+          hidden
+        />
+        <button
+          id="clear-session-search"
+          type="button"
+          aria-label="清除并关闭搜索"
+          title="清除并关闭搜索"
+          hidden
+        >
+          ×
+        </button>
+      </div>
+      <p id="session-search-note" class="session-search-note" hidden>
+        内容搜索不可用，仅显示名称匹配。
+      </p>
+      <p id="session-search-empty" class="session-empty" hidden>无匹配会话</p>
+      <nav id="sessions" aria-label="会话列表"></nav>
+      <div class="sidebar-footer">
+        <button id="open-settings" class="settings-entry" type="button">
+          <span aria-hidden="true">⚙</span> <span id="settings-label">设置</span>
+        </button>
+      </div>
+    </aside>
+    <main id="chat-page">
+      <header>
+        <div class="chat-heading">
+          <strong id="chat-title">新会话</strong>
+          <span id="chat-breadcrumb-sep" class="chat-breadcrumb-sep" aria-hidden="true" hidden
+            >/</span
+          >
+          <strong id="subagent-transcript-title" class="chat-breadcrumb-child" hidden></strong>
+          <div class="subagent-anchor">
+            <button
+              id="open-subagents"
+              type="button"
+              aria-expanded="false"
+              aria-controls="subagents-popover"
+              hidden
+            >
+              <span id="subagents-pulse" class="subagent-pulse" aria-hidden="true" hidden></span>
+              <span id="subagents-label">子代理</span>
+            </button>
+            <section id="subagents-popover" class="subagents-popover" aria-label="子代理" hidden>
+              <div
+                id="subagent-catalog"
+                class="subagent-catalog"
+                role="tree"
+                aria-label="子代理会话"
+              ></div>
+            </section>
+          </div>
+          <div class="background-anchor">
+            <button
+              id="open-background"
+              type="button"
+              aria-expanded="false"
+              aria-controls="background-popover"
+              hidden
+            >
+              <span class="background-icon" aria-hidden="true"></span>
+              <span id="background-label">后台任务</span>
+              <span class="background-chevron" aria-hidden="true"></span>
+            </button>
+            <section
+              id="background-popover"
+              class="background-popover"
+              aria-label="后台任务"
+              hidden
+            >
+              <div id="background-list" class="background-list"></div>
+            </section>
+          </div>
+        </div>
+        <div class="workspace-anchor">
+          <button
+            id="open-workspace"
+            type="button"
+            aria-expanded="false"
+            aria-controls="workspace-panel"
+            aria-label="工作区文件"
+            title="显示工作区文件"
+          >
+            文件
+          </button>
+        </div>
+      </header>
+      <div class="conversation-heading"><span>对话</span></div>
+      <div id="error" class="error-banner" role="alert" hidden></div>
+      <div id="notice" class="notice-banner" role="status" hidden></div>
+      <div id="configuration" class="configuration" hidden>
+        尚未配置模型。点击左下角“设置”，进入“模型设置”，填写接口和密钥即可开始聊天。已有会话仍可查看。
+      </div>
+      <section id="conversation" aria-label="对话内容" tabindex="0">
+        <div id="welcome" class="welcome">
+          <div class="eyebrow">YOUR PROJECT, IN FOCUS</div>
+          <h1>从一个任务开始。</h1>
+          <p>读懂项目，梳理思路，让改动逐步落地。</p>
+          <div class="suggestions">
+            <button data-prompt="先查看项目目录，简要介绍项目结构。">
+              <span>01</span><strong>认识这个项目</strong
+              ><small>了解目录与关键文件 ↗</small></button
+            ><button data-prompt="阅读项目说明，整理本地运行步骤。">
+              <span>02</span><strong>找到运行方式</strong><small>从项目说明开始 ↗</small>
+            </button>
+          </div>
+        </div>
+        <section id="plan-panel" class="plan-panel" hidden aria-label="计划">
+          <header class="plan-head">
+            <strong id="plan-title"></strong>
+            <span id="plan-status" class="plan-status"></span>
+          </header>
+          <p id="plan-summary" class="plan-summary"></p>
+          <ol id="plan-steps" class="plan-steps"></ol>
+          <p id="plan-reason" class="plan-reason" hidden></p>
+          <div id="plan-actions" class="plan-actions"></div>
+        </section>
+        <details id="changes" class="changes-summary" hidden>
+          <summary id="changes-count">会话改动</summary>
+          <div id="changes-list"></div>
+        </details>
+        <section id="subagents-panel" class="subagents-panel" aria-label="子代理" hidden>
+          <div class="subagents-panel-header">
+            <h2>子代理</h2>
+          </div>
+          <div id="subagent-list" class="subagent-list"></div>
+        </section>
+        <section id="tasks-panel" class="tasks-panel" aria-label="任务进度" hidden>
+          <div class="tasks-panel-header">
+            <h2>任务闭环</h2>
+            <button id="refresh-tasks" type="button" class="text-button">刷新</button>
+          </div>
+          <div id="task-list" class="task-list"></div>
+        </section>
+        <div id="messages"></div>
+        <!-- A sub-agent's own record, opened as a page: the header's title goes back to the conversation
+             that delegated it, which is the navigation DSH uses for the same view. -->
+        <section id="subagent-transcript" class="subagent-page" aria-label="子代理记录" hidden>
+          <p id="subagent-transcript-note" class="subagent-transcript-note"></p>
+          <div id="subagent-transcript-messages" class="subagent-transcript-messages"></div>
+        </section>
+        <div id="live" class="message assistant" hidden>
+          <details id="live-reasoning" class="message-reasoning" hidden>
+            <summary></summary>
+            <pre class="reasoning-content"></pre>
+          </details>
+          <div class="message-content"></div>
+        </div>
+        <div id="tools" class="tool-progress" hidden></div>
+        <section id="goal-panel" class="goal-panel" aria-label="会话目标" hidden>
+          <div class="goal-panel-header">
+            <h2 id="goal-title">会话目标</h2>
+            <span id="goal-status" class="goal-status"></span>
+          </div>
+          <p id="goal-objective" class="goal-objective"></p>
+          <p id="goal-meta" class="goal-meta"></p>
+        </section>
+        <section id="deliverables-panel" class="deliverables-panel" aria-label="交付物" hidden>
+          <div class="deliverables-panel-header">
+            <h2 id="deliverables-title">交付物</h2>
+          </div>
+          <ul id="deliverables" class="deliverables"></ul>
+        </section>
+        <div id="approvals" aria-label="待审批操作"></div>
+        <div id="questions" aria-label="需要你的回答"></div>
+      </section>
+      <button
+        id="jump-to-latest"
+        type="button"
+        aria-label="回到最新消息"
+        title="回到最新消息"
+        hidden
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="m5 9 7 7 7-7" />
+        </svg>
+      </button>
+      <footer class="composer-area">
+        <div class="run-status">
+          <span id="run-status" role="status">正在连接…</span><span id="session-short"></span>
+        </div>
+        <details id="todos-panel" class="todos-panel" aria-label="任务" hidden>
+          <summary>
+            <span class="todos-icon" aria-hidden="true">☷</span
+            ><strong id="todos-title">任务</strong
+            ><span id="todos-summary" class="todos-summary"></span
+            ><span class="todos-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="todos-body">
+            <ul id="todos" class="todos"></ul>
+          </div>
+        </details>
+        <form id="composer">
+          <div id="attachments" class="attachments" aria-label="待发送附件"></div>
+          <div
+            id="command-menu"
+            class="command-menu"
+            role="listbox"
+            aria-label="指令和技能"
+            hidden
+          ></div>
+          <textarea
+            id="prompt"
+            aria-label="任务描述"
+            placeholder="发消息或描述任务，让想法逐步落地…"
+            rows="2"
+            maxlength="100000"
+            disabled
+          ></textarea>
+          <div class="composer-bottom">
+            <input id="image-input" type="file" multiple hidden />
+            <button
+              type="button"
+              id="attach-image"
+              class="secondary"
+              aria-label="添加图片或文件"
+              title="添加图片或文件"
+            >
+              +
+            </button>
+            <div class="permission-picker">
+              <button
+                id="permission-trigger"
+                type="button"
+                aria-label="权限与隔离"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="permission-menu"
+                disabled
+              ></button>
+              <div id="permission-menu" role="menu" aria-label="权限与隔离" hidden>
+                <p id="permission-environment" role="presentation" hidden></p>
+              </div>
+            </div>
+            <!--
+              The chip's machine-readable current value. It has no visible role: the menu is the control, and the
+              neighbouring `enqueue-mode` select that used to sit beside it is gone (the runtime still queues for
+              after the turn; the desktop no longer offers to steer a live one).
+            -->
+            <select id="permission-mode" aria-label="权限与隔离" hidden disabled>
+              <option value="observe">仅可查看</option>
+              <option value="guarded" selected>工作区内修改</option>
+              <option value="unconfined">完全权限</option>
+              <option value="custom">自定义</option>
+            </select>
+            <div class="chat-model">
+              <label for="model">模型</label
+              ><select id="model" class="model-chip" aria-label="切换模型" disabled>
+                <option>正在加载…</option></select
+              ><span id="model-switch-status" role="status" hidden></span>
+            </div>
+            <button
+              id="send"
+              type="submit"
+              class="primary"
+              aria-label="发送"
+              title="发送"
+              data-mode="send"
+              disabled
+            >
+              <svg
+                class="send-arrow"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12 19V5m-6 6 6-6 6 6"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <svg class="send-stop" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                <rect width="12" height="12" rx="2" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
+        </form>
+        <div id="composer-statistics" class="composer-statistics" aria-label="会话用量统计"></div>
+        <div id="queue" class="queue-status" aria-live="polite"></div>
+        <button type="button" id="clear-queue" class="text-button" hidden>清空待执行消息</button>
+      </footer>
+    </main>
+    <aside id="workspace-panel" class="workspace-panel" aria-label="工作区文件" hidden>
+      <div
+        id="workspace-resize"
+        class="workspace-resize"
+        role="separator"
+        aria-orientation="vertical"
+        tabindex="0"
+      ></div>
+      <header class="workspace-panel-header">
+        <div id="workspace-tabs" class="workspace-tabs" role="tablist"></div>
+        <div class="workspace-panel-actions">
+          <button id="workspace-fullscreen" type="button" aria-pressed="false">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              aria-hidden="true"
+            >
+              <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />
+            </svg>
+          </button>
+          <button id="workspace-refresh" type="button"></button>
+          <button id="workspace-close" type="button"></button>
+        </div>
+      </header>
+      <div id="workspace-location" class="workspace-location"></div>
+      <div
+        id="workspace-tree"
+        class="workspace-tree"
+        role="group"
+        aria-label="工作区文件树"
+        tabindex="-1"
+      ></div>
+      <section id="workspace-preview" class="workspace-preview" aria-label="文件预览" hidden>
+        <div id="workspace-preview-body" class="workspace-preview-body"></div>
+      </section>
+    </aside>
+    <div id="workspace-tooltip" class="workspace-tooltip" role="tooltip" hidden></div>
+    <dialog id="session-dialog" aria-labelledby="session-dialog-title">
+      <form id="session-dialog-form">
+        <h2 id="session-dialog-title"></h2>
+        <p id="session-dialog-description"></p>
+        <label id="session-title-label" for="session-title-input">会话名称</label>
+        <input id="session-title-input" maxlength="120" autocomplete="off" />
+        <p id="session-dialog-error" role="alert" hidden></p>
+        <div class="session-dialog-actions">
+          <button id="session-dialog-cancel" type="button">取消</button>
+          <button id="session-dialog-confirm" type="submit" class="primary">确认</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="full-access-dialog" aria-labelledby="full-access-title">
+      <form id="full-access-form">
+        <header class="risk-dialog-head">
+          <h2 id="full-access-title">确认启用完全权限？</h2>
+          <button id="full-access-close" type="button" aria-label="关闭">✕</button>
+        </header>
+        <div class="risk-dialog-body">
+          <span class="risk-dialog-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="M12 7.4v5.2"></path>
+              <path d="M12 16.2h.01"></path>
+            </svg>
+          </span>
+          <p id="full-access-description">
+            启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。
+          </p>
+        </div>
+        <label class="risk-confirmation">
+          <input id="full-access-acknowledge" type="checkbox" />
+          <span id="full-access-acknowledge-label">我已了解风险，并愿意继续</span>
+        </label>
+        <div class="session-dialog-actions">
+          <button id="full-access-cancel" type="button">取消</button>
+          <button id="full-access-enable" type="submit" class="primary" disabled>
+            启用完全权限
+          </button>
+        </div>
+      </form>
+    </dialog>
+    <section id="settings-page" class="settings-page" aria-label="设置页面" hidden>
+      <aside class="settings-sidebar">
+        <button id="settings-back" type="button"><span aria-hidden="true">←</span> 返回对话</button>
+        <h1>设置</h1>
+        <nav aria-label="设置菜单">
+          <button id="general-settings" type="button">
+            <span aria-hidden="true">⚙</span> 通用设置
+          </button>
+          <button id="model-settings" type="button" aria-current="page">
+            <span aria-hidden="true">◈</span> 模型设置
+          </button>
+        </nav>
+      </aside>
+      <section
+        id="general-settings-content"
+        class="settings-content"
+        aria-labelledby="general-settings-title"
+        hidden
+      >
+        <div class="settings-page-header">
+          <div class="eyebrow">PREFERENCES / GENERAL</div>
+          <h2 id="general-settings-title">通用设置</h2>
+          <p>调整界面语言、外观和阅读字号。</p>
+        </div>
+        <form id="general-settings-form">
+          <label class="settings-field" for="ui-language"
+            >语言<select id="ui-language">
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English</option></select
+            ><small>设置界面首选语言。</small></label
+          >
+          <label class="settings-field" for="ui-appearance"
+            >外观<select id="ui-appearance">
+              <option value="system">跟随系统</option>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option></select
+            ><small>选择应用的明暗外观。</small></label
+          >
+          <label class="settings-field" for="ui-font-size"
+            >字号<select id="ui-font-size">
+              <option value="small">小</option>
+              <option value="medium">标准</option>
+              <option value="large">大</option></select
+            ><small>调整聊天内容和操作界面的基础字号。</small></label
+          >
+          <p
+            id="general-settings-feedback"
+            class="settings-feedback"
+            role="status"
+            aria-live="polite"
+            hidden
+          ></p>
+          <div class="settings-actions">
+            <button id="general-settings-save" type="submit" class="primary">保存设置</button>
+          </div>
+        </form>
+      </section>
+      <section
+        id="model-settings-content"
+        class="settings-content"
+        aria-labelledby="settings-title"
+      >
+        <div class="settings-page-header">
+          <div class="eyebrow">PREFERENCES / MODELS</div>
+          <h2 id="settings-title">模型设置</h2>
+          <p>管理模型连接，为每次对话选择合适的模型。</p>
+        </div>
+        <form id="settings-form">
+          <div class="model-group-bar">
+            <label for="settings-connection"
+              ><span id="settings-connection-label"></span>
+              <select id="settings-connection"></select>
+            </label>
+            <button id="settings-new" type="button" class="secondary"></button>
+          </div>
+
+          <label
+            id="settings-endpoint-name-label"
+            class="settings-field"
+            for="settings-endpoint-name"
+            ><input
+              id="settings-endpoint-name"
+              type="text"
+              maxlength="128"
+              autocomplete="off"
+              required
+          /></label>
+          <label id="settings-url-label" class="settings-field" for="settings-url"
+            >接口地址<input
+              id="settings-url"
+              aria-label="接口地址"
+              aria-describedby="settings-url-note"
+              type="url"
+              placeholder="https://api.anthropic.com"
+              maxlength="2048"
+              autocomplete="off"
+              required
+            /><small id="settings-url-note">填写根地址或以 /v1 结尾的地址。</small></label
+          >
+          <div class="settings-protocol">
+            <label id="settings-protocol-label" for="settings-protocol">接口协议</label
+            ><select id="settings-protocol" aria-label="接口协议">
+              <option value="openai">OpenAI Chat Completions</option>
+              <option value="anthropic">Anthropic Messages</option>
+              <option value="openai-responses">OpenAI Responses</option></select
+            ><small id="settings-protocol-note">支持官方接口与兼容网关</small>
+          </div>
+          <label id="settings-key-label" class="settings-field" for="settings-key"
+            >API 密钥<input
+              id="settings-key"
+              aria-label="API 密钥"
+              aria-describedby="settings-key-note"
+              type="password"
+              placeholder="输入 API 密钥"
+              maxlength="16384"
+              autocomplete="off"
+              spellcheck="false"
+            /><small id="settings-key-note">密钥将使用系统加密存储保存在本机。</small></label
+          >
+          <div id="settings-model-list" class="settings-model-list"></div>
+          <button id="settings-add-model" type="button" class="secondary model-add"></button>
+          <div id="settings-source" class="settings-source"></div>
+          <p id="settings-test-note" class="settings-test-note">
+            测试连接会发送一条简短请求，消耗少量 Token。
+          </p>
+          <div
+            id="settings-feedback"
+            class="settings-feedback"
+            role="status"
+            aria-live="polite"
+            hidden
+          ></div>
+          <div class="settings-actions">
+            <button id="settings-discover" type="button" class="secondary">从端点读取</button
+            ><button id="settings-test" type="button" class="secondary">测试连接</button
+            ><button id="settings-cancel" type="button" class="secondary"></button
+            ><button id="settings-save" type="submit" class="primary">保存并应用</button>
+          </div>
+        </form>
+      </section>
+    </section>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

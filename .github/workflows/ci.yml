@@ -1,0 +1,80 @@
+# CI for YuanTu Agent.
+#
+# The `desktop-smoke` job is Windows-verified: `npm run smoke:desktop` launches a
+# real Electron window through Playwright, so it needs a real graphical desktop
+# and a Chromium/Electron install. It must not be moved to a headless runner
+# without re-verifying it there.
+#
+# Some tests skip themselves, with a stated reason, when an external dependency
+# is absent — that is expected behaviour, not a failure:
+#   - the real-language-server section of tests/lsp.test.ts needs a real language server on PATH
+#   - Docker sandbox tests need a reachable Docker daemon
+#   - Office tests need a local Microsoft Office install
+#   - Chromium-dependent tests need Playwright's browser download
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # The aggregate is the entry point, and that is the point: `check` is what the README tells a developer to
+      # run and what every gate is added to, so a job that listed the steps itself could leave a new one out — as
+      # it did with `smoke:web`, which no job ever ran. `docs:check` and `references:check` inside it are what
+      # make the numbers and the paths in the documentation fail here rather than in a reader's browser.
+      - run: npm run check
+
+  # The benchmark gate. Every rule is deterministic (schema bytes, publish counts, records per message) or a
+  # ratio measured inside the run itself (batched against per-message commits, cached against cold folds), so
+  # it means the same thing on a runner as it does locally. A machine-relative timing threshold would not.
+  bench:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run bench:check
+
+  # Coverage is a floor, not a badge: the suite already covers what it covers, and this job exists so a
+  # change that deletes a whole area's tests cannot land quietly. The floor is deliberately below the
+  # measured value so it catches a collapse, not drift.
+  coverage:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run coverage
+
+  desktop-smoke:
+    needs: check
+    runs-on: windows-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run smoke:desktop

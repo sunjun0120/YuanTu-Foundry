@@ -1,0 +1,36 @@
+module.exports = {
+  appId: 'com.yuantu.agent',
+  productName: 'YuanTu Agent',
+  extraMetadata: { main: 'dist/desktop/main.cjs' },
+  directories: { output: 'dist', buildResources: 'build' },
+  icon: 'build/icon.png',
+  asar: false,
+  npmRebuild: false,
+  // Keep release artifacts beside compiled code without packaging previous installers or unpacked apps.
+  files: [
+    'dist/apps/**/*',
+    'dist/desktop/**/*',
+    'dist/packages/**/*',
+    'package.json',
+    'LICENSE',
+    '!dist/**/*.map',
+    '!dist/**/*.d.ts',
+  ],
+  extraResources: [{ from: '.scratch/packaging/runtime', to: 'runtime' }],
+  win: {
+    target: [{ target: 'nsis', arch: ['x64'] }],
+    icon: 'build/icon.ico',
+    signExecutable: false,
+  },
+  nsis: {
+    installerIcon: 'build/icon.ico',
+    uninstallerIcon: 'build/icon.ico',
+    oneClick: false,
+    perMachine: false,
+    allowToChangeInstallationDirectory: true,
+    deleteAppDataOnUninstall: false,
+    createDesktopShortcut: false,
+    createStartMenuShortcut: true,
+    artifactName: 'YuanTu-Agent-${version}-windows-${arch}-setup.${ext}',
+  },
+};
