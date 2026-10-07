@@ -76,5 +76,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Windows platform regressions
+        run: node scripts/run-tests.mjs tests/sandbox-windows.test.ts tests/desktop-installation.test.ts tests/windows-install-safety.test.ts
       - run: npm run build
       - run: npm run smoke:desktop
