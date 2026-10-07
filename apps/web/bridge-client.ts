@@ -66,6 +66,7 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
   >();
   let nextId = 1;
   let socket: WebSocket | undefined;
+  let connecting: Promise<WebSocket> | undefined;
   let refused: string | undefined;
   /**
    * One socket for every request, opened lazily and kept.
@@ -73,21 +74,31 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
    * `send` queues until the socket is open: the page builds its bridge before the module that renders it asks
    * for anything, and a request that arrived during the handshake must not be dropped.
    */
-  const connect = (): Promise<WebSocket> =>
-    new Promise((resolve, reject) => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        resolve(socket);
-        return;
-      }
-      const created = socket ?? new WebSocket(options.url);
+  const connect = (): Promise<WebSocket> => {
+    if (socket?.readyState === WebSocket.OPEN) return Promise.resolve(socket);
+    if (connecting) return connecting;
+    if (socket) {
+      for (const entry of pending.values()) entry.reject(new Error('与本机桥的连接已断开'));
+      pending.clear();
+    }
+    const created = new WebSocket(options.url);
+    connecting = new Promise((resolve, reject) => {
       socket = created;
-      created.addEventListener('open', () => resolve(created), { once: true });
+      created.addEventListener(
+        'open',
+        () => {
+          connecting = undefined;
+          resolve(created);
+        },
+        { once: true },
+      );
       created.addEventListener(
         'error',
         () => reject(new Error('无法连接本机桥（apps/web/main.ts 是否在运行？）')),
         { once: true },
       );
       created.addEventListener('message', (event: MessageEvent) => {
+        if (socket !== created) return;
         const frame = JSON.parse(String(event.data)) as BridgeFrame;
         if (frame.kind === 'reply') {
           const entry = pending.get(frame.id);
@@ -111,11 +122,16 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
       });
       created.addEventListener('close', () => {
         const reason = refused ?? '与本机桥的连接已断开';
+        reject(new Error(reason));
+        if (socket !== created) return;
         for (const entry of pending.values()) entry.reject(new Error(reason));
         pending.clear();
-        if (socket === created) socket = undefined;
+        socket = undefined;
+        connecting = undefined;
       });
     });
+    return connecting;
+  };
   const request = async (body: Omit<BridgeRequest, 'id'>): Promise<unknown> => {
     if (refused) throw new Error(refused);
     const live = await connect();

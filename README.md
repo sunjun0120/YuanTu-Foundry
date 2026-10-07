@@ -683,7 +683,7 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | 会话 schema 版本 | v28 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 49 / 41 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 5 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 151 个 | `tests/*.test.ts` |
+| 行为测试文件 | 152 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（描述文本与 schema 必须一致） |
 
