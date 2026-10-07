@@ -24,6 +24,8 @@ import { isMachineContext, isRuntimeContext } from '../packages/protocol/context
 import { resetRepoMapCache } from '../packages/tools/repo-map.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/tools/index.ts';
+import { capacityResolver, modelInfoFor } from '../apps/shared/runtime.ts';
+import { parseArgs } from '../apps/shared/args.ts';
 import type { Message, ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';
 
 const reply = (text = 'Done'): ModelResponse => ({
@@ -87,6 +89,50 @@ const snapshotsIn = (messages: readonly Message[], source: string) =>
         message.content.startsWith(`<runtime-context source="${source}">`),
     )
     .map((message) => message.content);
+
+test('a redacted model label keeps the configured request budget', async (t) => {
+  const previousKey = process.env.YUANTU_API_KEY;
+  process.env.YUANTU_API_KEY = 'budget-fixture';
+  t.after(() => {
+    if (previousKey === undefined) delete process.env.YUANTU_API_KEY;
+    else process.env.YUANTU_API_KEY = previousKey;
+  });
+  const config = {
+    apiKey: 'budget-fixture',
+    model: 'progress-budget-fixture',
+    protocol: 'openai' as const,
+    baseUrl: 'https://budget.invalid/v1',
+    maxContextTokens: 128_000,
+    maxOutputTokens: 100,
+  };
+  const modelInfo = modelInfoFor(config);
+  assert.equal(modelInfo.model, 'progress-[redacted]');
+  const capacityFor = capacityResolver(parseArgs([], {}).options, config);
+  assert.equal(capacityFor(modelInfo.model)?.contextWindow, 128_000);
+  assert.equal(capacityFor(modelInfo.model)?.maxOutputTokens, 100);
+  assert.notEqual(capacityFor('other-model')?.contextWindow, 128_000);
+  let outputBudget: number | undefined;
+  const provider: Provider = {
+    async complete(request) {
+      outputBudget = request.maxOutputTokens;
+      return reply();
+    },
+  };
+  const { store, sessionId, root } = await fixture(t, provider);
+  const agent = new Agent({
+    store,
+    provider,
+    tools: createTools(root),
+    approve: async () => false,
+    modelInfo,
+    capacityFor,
+    maxContextTokens: 128_000,
+    maxOutputTokens: 100,
+  });
+  const result = await agent.run({ sessionId, prompt: 'Keep the configured budget' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(outputBudget, 100);
+});
 
 test('the newest announcement of a source is the one the conversation is read back from', () => {
   const empty: Message[] = [];

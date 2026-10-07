@@ -677,7 +677,9 @@ test(
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-model-progress-'));
     const hidden = 'private thought never shown';
-    const url = await httpFixture(t, async (_body, res) => {
+    let requestBudget;
+    const url = await httpFixture(t, async (body, res) => {
+      requestBudget = body.max_completion_tokens;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const send = (value) => res.write('data: ' + JSON.stringify(value) + '\n\n');
       send({
@@ -755,6 +757,7 @@ test(
     );
     await page.locator('#run-status').getByText('正在生成工具调用…').waitFor();
     await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    assert.equal(requestBudget, 100, 'the provider request retains the configured output budget');
     assert.match(await page.locator('#error').innerText(), /100\/100 output tokens/);
     assert.equal(await page.locator('#messages .tool-call').count(), 0);
     assert.doesNotMatch(

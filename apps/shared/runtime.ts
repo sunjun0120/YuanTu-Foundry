@@ -150,13 +150,17 @@ export function capacityResolver(
   const base = config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl };
   const declared = declaredRoute(options, config);
   const routes = declaredRoutes(process.env.YUANTU_MODEL_CAPACITIES);
-  return (model) =>
-    resolveRouteCapacity({
+  const configuredLabel = modelInfoFor(config).model;
+  return (model) => {
+    // The kernel holds a redacted display label; capacity lookup needs the configured route ID.
+    if (model === configuredLabel) model = config.model;
+    return resolveRouteCapacity({
       model,
       ...base,
       ...(model === config.model ? { declared } : {}),
       routes,
     });
+  };
 }
 /**
  * The models a sub-agent may be asked to run on, as this process can honestly promise them.
