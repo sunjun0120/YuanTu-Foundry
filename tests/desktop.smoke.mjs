@@ -1106,6 +1106,34 @@ test(
         .evaluate((button) => button.closest('.chat-heading') !== null),
       true,
     );
+    await page.evaluate(() => {
+      const trace = (window.__backgroundPopoverTrace = []);
+      const record = (entry) => {
+        trace.push({ ...entry, at: Math.round(performance.now()) });
+        if (trace.length > 100) trace.shift();
+      };
+      for (const selector of ['.background-anchor', '#background-popover']) {
+        const target = document.querySelector(selector);
+        for (const type of ['pointerenter', 'pointerleave', 'pointerdown', 'click'])
+          target.addEventListener(type, (event) =>
+            record({
+              type,
+              selector,
+              x: event.clientX,
+              y: event.clientY,
+              related: event.relatedTarget?.className,
+              hidden: document.querySelector('#background-popover').hidden,
+            }),
+          );
+      }
+      for (const type of ['blur', 'focus']) window.addEventListener(type, () => record({ type }));
+      new MutationObserver(() =>
+        record({ type: 'hidden', hidden: document.querySelector('#background-popover').hidden }),
+      ).observe(document.querySelector('#background-popover'), {
+        attributes: true,
+        attributeFilter: ['hidden'],
+      });
+    });
     await page.locator('#open-background').hover();
     await page.locator('#background-popover').waitFor({ state: 'visible' });
     const triggerBounds = await page.locator('#open-background').boundingBox();
@@ -1158,10 +1186,15 @@ test(
     assert.equal(await page.evaluate(() => window.__backgroundRow?.isConnected), true);
     assert.equal(await row.getAttribute('open'), null);
     assert.equal(await row.locator('summary, .background-meta, .background-log').count(), 0);
-    assert.equal(
-      await page.locator('#background-popover').evaluate((panel) => panel.hidden),
-      false,
-    );
+    const unexpectedlyHidden = await page
+      .locator('#background-popover')
+      .evaluate((panel) => panel.hidden);
+    if (unexpectedlyHidden)
+      t.diagnostic(
+        'background popover events: ' +
+          JSON.stringify(await page.evaluate(() => window.__backgroundPopoverTrace)),
+      );
+    assert.equal(unexpectedlyHidden, false);
     await row.getByRole('button', { name: '停止任务' }).click();
     await page.waitForFunction(
       () =>
