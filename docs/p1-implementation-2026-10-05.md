@@ -38,7 +38,7 @@ npm.cmd run dev -- db-recover --db 'E:\project\.yuantu\sessions.sqlite' --json
 
 ## DEV-02：Windows 安装包与安装验证
 
-交付入口：`npm.cmd run package:windows` 生成 Windows x64 NSIS 安装器及 SHA-256/版本/schema 清单，产物位于 `dist`（2026-10-07 调整，原为 `artifacts/releases`），程序、安装器与卸载器使用 `build` 中的图标。`package:windows:dir` 生成解包目录。随安装器分发独立 Node 24 运行时、完整 Node 许可证、编译 Host、页面资源及生产依赖（包括 Windows x64 原生 PTY）；Host 使用普通 Node ABI。应用资源保持普通文件，以便独立 Node 读取。
+交付入口：`npm.cmd run package:windows` 生成 Windows x64 NSIS 安装器及 SHA-256/版本/schema 清单，产物位于 `dist/release`（2026-10-07 调整，原为 `artifacts/releases`），程序、安装器与卸载器使用 `build` 中的图标。`package:windows:dir` 生成解包目录。随安装器分发独立 Node 24 运行时、完整 Node 许可证、编译 Host、页面资源及生产依赖（包括 Windows x64 原生 PTY）；Host 使用普通 Node ABI。应用资源保持普通文件，以便独立 Node 读取。
 
 安装版固定使用 `resources/runtime/node.exe`，不依赖开发 Node/npm 或环境中的 `YUANTU_NODE_PATH`。默认设置目录为 `%APPDATA%/YuanTu Agent`，默认工作区为该目录下的 `workspace`；可通过 `--workspace=绝对路径` 或原有工作区选择器使用其他目录。开发启动继续使用启动脚本提供的绝对 Node 路径。
 

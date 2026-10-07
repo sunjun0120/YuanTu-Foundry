@@ -37,7 +37,7 @@ test(
     await mkdir(workspace, { recursive: true });
     await writeFile(path.join(workspace, '用户文件.txt'), 'INSTALLER_MUST_PRESERVE_THIS_FILE');
     if (!process.env.PACKAGED_TEST_DIRECTORY)
-      await cp(path.resolve('dist/win-unpacked'), installed, { recursive: true });
+      await cp(path.resolve('dist/release/win-unpacked'), installed, { recursive: true });
     const node = path.join(installed, 'resources/runtime/node.exe');
     let parentStage = 0;
     let ptyPrinted = false;

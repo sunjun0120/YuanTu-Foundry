@@ -76,7 +76,7 @@ npm.cmd run host -- --workspace . --listen 127.0.0.1:0
 
 首次运行 Electron 可能需要下载对应二进制；终端依赖代理时可先设 `$env:NODE_USE_ENV_PROXY = '1'` 再执行 `node node_modules/electron/install.js`。`resources`、`models`、`mcp`、`sessions`、`show` 这些命令不需要 API 密钥。
 
-Windows x64 安装包通过 `npm.cmd run package:windows` 构建，产物位于 `dist`，附版本/schema 与 SHA-256 清单；程序、安装器与卸载器使用 `build` 中的图标。安装版自带 Node 运行时，不需要开发 Node/npm；卸载保留设置和工作区数据。安装、路径与数据保留验证及未签名发行边界见 [P1 实施记录](docs/p1-implementation-2026-10-05.md#dev-02windows-安装包与安装验证)。
+Windows x64 安装包通过 `npm.cmd run package:windows` 构建，产物位于 `dist/release`，附版本/schema 与 SHA-256 清单；程序、安装器与卸载器使用 `build` 中的图标。安装版自带 Node 运行时，不需要开发 Node/npm；卸载保留设置和工作区数据。安装、路径与数据保留验证及未签名发行边界见 [P1 实施记录](docs/p1-implementation-2026-10-05.md#dev-02windows-安装包与安装验证)。
 
 ---
 

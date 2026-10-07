@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-const directory = path.resolve(process.argv[2] || 'dist');
+const directory = path.resolve(process.argv[2] || 'dist/release');
 const pkg = JSON.parse(
   await readFile(path.join(directory, 'win-unpacked/resources/app/package.json'), 'utf8'),
 );

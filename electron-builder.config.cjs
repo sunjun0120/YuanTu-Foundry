@@ -2,11 +2,11 @@ module.exports = {
   appId: 'com.yuantu.agent',
   productName: 'YuanTu Agent',
   extraMetadata: { main: 'dist/desktop/main.cjs' },
-  directories: { output: 'dist', buildResources: 'build' },
+  directories: { output: 'dist/release', buildResources: 'build' },
   icon: 'build/icon.png',
   asar: false,
   npmRebuild: false,
-  // Keep release artifacts beside compiled code without packaging previous installers or unpacked apps.
+  // Package only compiled code, excluding release artifacts and unpacked apps.
   files: [
     'dist/apps/**/*',
     'dist/desktop/**/*',

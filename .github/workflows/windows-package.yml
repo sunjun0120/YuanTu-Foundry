@@ -19,7 +19,7 @@ jobs:
       - name: Install in isolated directory
         shell: pwsh
         run: |
-          $installer = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
+          $installer = Get-ChildItem dist/release/*-setup.exe | Select-Object -First 1
           ./scripts/verify-windows-install.ps1 -Installer $installer.FullName -InstallDirectory "$pwd/.scratch/中文 安装验证"
       - name: Installed desktop and bundled runtime
         shell: pwsh
@@ -27,7 +27,7 @@ jobs:
           $env:PACKAGED_TEST_DIRECTORY = "$pwd/.scratch/中文 安装验证"
           $env:PACKAGED_TEST_PROFILE = "$pwd/.scratch/安装保留 profile"
           $env:PACKAGED_TEST_WORKSPACE = "$pwd/.scratch/安装保留 workspace"
-          $env:PACKAGED_TEST_INSTALLER = (Get-ChildItem dist/*-setup.exe | Select-Object -First 1).FullName
+          $env:PACKAGED_TEST_INSTALLER = (Get-ChildItem dist/release/*-setup.exe | Select-Object -First 1).FullName
           node --test tests/installed-desktop.smoke.mjs
       - name: Uninstall and retain user data
         if: always()
@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path .scratch/p1 -Force | Out-Null
-          Copy-Item dist/win-unpacked .scratch/p1/dev03-old-application -Recurse
+          Copy-Item dist/release/win-unpacked .scratch/p1/dev03-old-application -Recurse
           $versionParts = ((Get-Content package.json -Raw | ConvertFrom-Json).version).Split('.')
           $nextVersion = "$($versionParts[0]).$($versionParts[1]).$([int]$versionParts[2] + 1)"
           npx electron-builder --config electron-builder.config.cjs --config.directories.output=.scratch/p1/upgrade-release --config.extraMetadata.version=$nextVersion --win --x64
@@ -61,5 +61,5 @@ jobs:
         with:
           name: YuanTu-Agent-Windows-x64
           path: |
-            dist/*-setup.exe
-            dist/*-setup.exe.json
+            dist/release/*-setup.exe
+            dist/release/*-setup.exe.json
