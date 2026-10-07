@@ -44,4 +44,14 @@
 
 ## 最终门禁
 
-正在执行修复后的完整 `npm run check`；随后验证完整桌面冒烟与性能基准，结果待回填。
+首次完整 `npm run check` 通过：152 个测试文件，1519 项（1511 通过、8 跳过、0 失败），编译客户端 4/4、Web 8/8，格式／文档／引用／国际化／类型／构建通过。此结果对应后续真实浏览器检查之前的代码，不能代替下面新增 CSP 修复的验证。性能基准 13 条规则通过，完整桌面冒烟正在执行。
+
+## 7. 真实浏览器发现的 Web 首页 CSP 阻断
+
+Chromium 真实页面首次检查停在“正在连接”，Host 已 ready，控制台明确报告 `connect-src 'none'` 阻断 WebSocket。原因是 Web 构建复用了桌面 HTML，而桌面通过 IPC 通信，该 CSP 不适用于 Web。此问题此前仅 HTTP／原生 WebSocket 测试未覆盖。
+
+Web 首页响应现将连接规则改成当前桥的具体本机 WebSocket 地址；端口来自服务端 socket，Host 的 hostname 先规范化再按本机名称白名单选择，其余回落 127.0.0.1。桌面 HTML 与其他 CSP 指令保持原有值，没有放开任意域名、任意端口或任意 WebSocket。使用具体地址也避免仅 `'self'` 在部分浏览器不匹配 WebSocket 的兼容差异，见 [MDN connect-src](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/connect-src)。服务器仍按原配置绑定 IPv4 loopback。
+
+先增加真实页面与首页连接规则的失败回归；修复后 Web 9/9，无跳过，包括真实 Chromium／Host 发送、流式回复只出现一次、刷新后会话恢复，以及无页面异常或错误控制台输出。类型检查通过。常规 Ubuntu CI 在完整门禁前安装 Chromium 及系统依赖，本机未安装浏览器时测试说明安装方法并跳过。GitHub runner 尚未实际执行。
+
+工作区在验证期间出现并行的模型容量改动，本次只提交以上修复涉及的文件，不覆盖这些改动。新增 CSP 修复后将补充最终完整门禁结果。

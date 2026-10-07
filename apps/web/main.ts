@@ -387,11 +387,25 @@ async function servePage(
   }
   try {
     const body = await readFile(target);
+    let servedBody: Buffer | string = body;
+    if (target === path.resolve(options.page, 'index.html')) {
+      // The desktop uses IPC and forbids network connections. This page needs only its local bridge.
+      const hostname = new URL(`http://${request.headers.host ?? '127.0.0.1'}`).hostname;
+      const localHostname = ['127.0.0.1', 'localhost', '[::1]'].includes(hostname)
+        ? hostname
+        : '127.0.0.1';
+      servedBody = body
+        .toString('utf8')
+        .replace(
+          "connect-src 'none';",
+          `connect-src ws://${localHostname}:${request.socket.localPort};`,
+        );
+    }
     response.writeHead(200, {
       'content-type': CONTENT_TYPES[path.extname(target)] ?? 'application/octet-stream',
       'cache-control': 'no-store',
     });
-    response.end(body);
+    response.end(servedBody);
   } catch {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('not found');

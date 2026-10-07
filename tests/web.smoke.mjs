@@ -11,9 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { connect } from 'node:net';
+import { chromium } from 'playwright';
 import { startBridge } from '../apps/web/main.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 
@@ -67,6 +69,72 @@ async function until(client, predicate, what, timeoutMs = 20_000) {
   );
 }
 const socketUrl = (url) => url.replace('http://', 'ws://').replace('/?', '/ws?');
+
+test(
+  'the built page completes a real Chromium turn and restores it after reload',
+  {
+    timeout: 30_000,
+    skip: existsSync(chromium.executablePath())
+      ? false
+      : 'Chromium is not installed; run npx playwright install chromium',
+  },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-page-'));
+    let bridge;
+    let browser;
+    t.after(async () => {
+      await browser?.close();
+      await bridge?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const url = await httpFixture(t, (_body, response) =>
+      sendFrames(response, frames('BROWSER_PAGE_REPLY')),
+    );
+    bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'page-fixture',
+      page: path.resolve('apps/web/dist'),
+      env: {
+        YUANTU_API_KEY: 'fixture',
+        YUANTU_PROTOCOL: 'anthropic',
+        YUANTU_MODEL: 'fixture',
+        YUANTU_MAX_CONTEXT_TOKENS: '128000',
+        YUANTU_BASE_URL: url,
+        YUANTU_SESSION_TITLES: '0',
+      },
+    });
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(10_000);
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await page.goto(bridge.url);
+    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await page.evaluate(() => {
+      window.__stream = '';
+      window.yuantu.subscribeDelta((delta) => {
+        if (!delta.reset) window.__stream += delta.text;
+      });
+    });
+    await page.locator('#prompt').fill('Actual browser fixture turn');
+    await page.locator('#send').click();
+    await page.waitForFunction(() =>
+      document.querySelector('#messages')?.textContent.includes('BROWSER_PAGE_REPLY'),
+    );
+    assert.equal(await page.evaluate(() => window.__stream), 'BROWSER_PAGE_REPLY');
+    assert.equal(await page.locator('#messages .message.assistant').count(), 1);
+    await page.reload();
+    await page.waitForFunction(() =>
+      document.querySelector('#messages')?.textContent.includes('BROWSER_PAGE_REPLY'),
+    );
+    assert.equal(await page.locator('#messages .message.assistant').count(), 1);
+    assert.deepEqual(errors, []);
+  },
+);
 
 const oversizedHeader = Buffer.alloc(14);
 oversizedHeader[0] = 0x81;
@@ -314,6 +382,7 @@ test('the bridge refuses a wrong token, and serves the page and its health check
   assert.equal(page.status, 200);
   const html = await page.text();
   assert.match(html, /<script type="module" src="\.\/app\.js"><\/script>/);
+  assert(html.includes(`connect-src ${new URL(socketUrl(bridge.url)).origin};`));
   const health = await fetch(new URL('/health', bridge.url));
   assert.deepEqual(await health.json(), { ok: true });
   // The bundle really is the renderer: it asks for the bridge, which only the desktop renderer does.

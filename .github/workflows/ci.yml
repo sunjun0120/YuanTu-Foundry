@@ -29,6 +29,8 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Browser runtime for the Web page smoke
+        run: npx playwright install --with-deps chromium
       # The aggregate is the entry point, and that is the point: `check` is what the README tells a developer to
       # run and what every gate is added to, so a job that listed the steps itself could leave a new one out — as
       # it did with `smoke:web`, which no job ever ran. `docs:check` and `references:check` inside it are what
