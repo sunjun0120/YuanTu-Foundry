@@ -8,6 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   FrameDecoder,
   MessageAssembler,
@@ -150,4 +151,112 @@ test('what the server writes back is unmasked and bounded', () => {
   const close = encodeClose(1000, 'r'.repeat(500));
   assert.equal(close[1], 125, 'a close reason is truncated to the control-frame limit');
   assert.equal(encodeFrame(OPCODE.pong, Buffer.alloc(0)).length, 2);
+});
+
+test('oversized frame declarations are refused before waiting for their payload', () => {
+  const header = Buffer.alloc(14);
+  header[0] = 0x81;
+  header[1] = 0xff;
+  header.writeBigUInt64BE(1024n * 1024n * 1024n, 2);
+  assert.throws(() => new FrameDecoder().push(header), /payload.*limit/i);
+  assert.throws(
+    () => new FrameDecoder(8).push(clientFrame(OPCODE.text, Buffer.from('123456789'))),
+    /payload.*limit/i,
+  );
+  assert.equal(
+    messageOf(new FrameDecoder(8).push(clientFrame(OPCODE.text, Buffer.from('12345678'))))[0]?.kind,
+    'text',
+  );
+});
+
+test('fragmented messages enforce a cumulative byte limit and release it after completion', () => {
+  const assembler = new MessageAssembler(8);
+  assembler.push({ fin: false, opcode: OPCODE.text, payload: Buffer.from('123456') });
+  assembler.push({ fin: true, opcode: OPCODE.ping, payload: Buffer.from('control') });
+  assert.throws(
+    () => assembler.push({ fin: true, opcode: OPCODE.continuation, payload: Buffer.from('789') }),
+    /message.*limit/i,
+  );
+  const complete = new MessageAssembler(8);
+  complete.push({ fin: false, opcode: OPCODE.text, payload: Buffer.from('123456') });
+  assert.deepEqual(
+    complete.push({ fin: true, opcode: OPCODE.continuation, payload: Buffer.from('78') }),
+    [{ kind: 'text', text: '12345678' }],
+  );
+  assert.deepEqual(
+    complete.push({ fin: true, opcode: OPCODE.text, payload: Buffer.from('next') }),
+    [{ kind: 'text', text: 'next' }],
+  );
+  assert.throws(
+    () =>
+      new MessageAssembler(8).push({
+        fin: true,
+        opcode: OPCODE.text,
+        payload: Buffer.from('123456789'),
+      }),
+    /message.*limit/i,
+  );
+});
+
+test('chunked large frames decode correctly with linear buffer copying', (t) => {
+  const payload = Buffer.from('x'.repeat(2 * 1024 * 1024));
+  const input = clientFrame(OPCODE.text, payload);
+  const originalConcat = Buffer.concat;
+  const originalCopy = Buffer.prototype.copy;
+  let copied = 0;
+  t.mock.method(Buffer, 'concat', (list: readonly Uint8Array[], length?: number) => {
+    copied += list.reduce((sum, bytes) => sum + bytes.byteLength, 0);
+    return originalConcat(list, length);
+  });
+  t.mock.method(
+    Buffer.prototype,
+    'copy',
+    function (this: Buffer, ...args: Parameters<Buffer['copy']>) {
+      const bytes = originalCopy.apply(this, args);
+      copied += bytes;
+      return bytes;
+    },
+  );
+  const decoder = new FrameDecoder();
+  const frames: ReturnType<FrameDecoder['push']> = [];
+  for (let offset = 0; offset < input.length; offset += 4096)
+    frames.push(...decoder.push(input.subarray(offset, offset + 4096)));
+  assert.equal(frames.length, 1);
+  assert.deepEqual(frames[0]?.payload, payload);
+  assert(copied < input.length * 8, `copied ${copied} bytes for ${input.length} received bytes`);
+});
+
+test('many tiny fragments retain bounded memory while preserving their message', () => {
+  const moduleUrl = new URL('../apps/web/websocket.ts', import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--expose-gc',
+      '--input-type=module',
+      '-e',
+      `
+    import assert from 'node:assert/strict';
+    import { FrameDecoder, MessageAssembler } from ${JSON.stringify(moduleUrl)};
+    const decoder = new FrameDecoder();
+    const assembler = new MessageAssembler();
+    const accept = (bytes) => decoder.push(bytes).flatMap((frame) => assembler.push(frame));
+    const first = Buffer.from([1, 129, 0, 0, 0, 0, 120]);
+    const continuation = Buffer.from([0, 129, 0, 0, 0, 0, 120]);
+    global.gc();
+    const before = process.memoryUsage();
+    accept(first);
+    for (let index = 0; index < 500000; index++) accept(continuation);
+    global.gc();
+    const after = process.memoryUsage();
+    assert(after.heapUsed - before.heapUsed < 16 * 1024 * 1024,
+      'tiny fragments retained ' + (after.heapUsed - before.heapUsed) + ' heap bytes');
+    assert(after.external - before.external < 8 * 1024 * 1024,
+      'tiny fragments retained oversized external buffers');
+    const messages = accept(Buffer.from([128, 128, 0, 0, 0, 0]));
+    assert.equal(messages[0].text, 'x'.repeat(500001));
+  `,
+    ],
+    { encoding: 'utf8', timeout: 15000, windowsHide: true },
+  );
+  assert.equal(result.status, 0, result.stderr || String(result.error));
 });

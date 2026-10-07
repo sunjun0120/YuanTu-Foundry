@@ -68,6 +68,73 @@ async function until(client, predicate, what, timeoutMs = 20_000) {
 }
 const socketUrl = (url) => url.replace('http://', 'ws://').replace('/?', '/ws?');
 
+test(
+  'an oversized frame header closes only its page with code 1009',
+  { timeout: 15_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-frame-limit-'));
+    const bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'size-fixture',
+      page: path.resolve('apps/web/dist'),
+    });
+    t.after(async () => {
+      await bridge.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const response = await new Promise((resolve, reject) => {
+      const socket = connect(Number(new URL(bridge.url).port), '127.0.0.1');
+      t.after(() => socket.destroy());
+      let received = Buffer.alloc(0);
+      let upgraded = false;
+      socket.setTimeout(3000, () => socket.destroy(new Error('frame refusal timed out')));
+      socket.on('error', reject);
+      socket.on('data', (chunk) => {
+        received = Buffer.concat([received, chunk]);
+        if (!upgraded) {
+          const boundary = received.indexOf('\r\n\r\n');
+          if (boundary < 0) return;
+          assert.match(received.subarray(0, boundary).toString(), /^HTTP\/1\.1 101/);
+          received = received.subarray(boundary + 4);
+          upgraded = true;
+          const header = Buffer.alloc(14);
+          header[0] = 0x81;
+          header[1] = 0xff;
+          header.writeBigUInt64BE(1024n * 1024n * 1024n, 2);
+          socket.write(header);
+        }
+      });
+      socket.on('end', () => resolve(received));
+      socket.on('connect', () =>
+        socket.write(
+          'GET /ws?token=size-fixture HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+        ),
+      );
+    });
+    let closeCode;
+    for (let offset = 0; offset < response.length;) {
+      const opcode = response[offset] & 15;
+      let length = response[offset + 1] & 127;
+      offset += 2;
+      if (length === 126) {
+        length = response.readUInt16BE(offset);
+        offset += 2;
+      } else if (length === 127) {
+        length = Number(response.readBigUInt64BE(offset));
+        offset += 8;
+      }
+      if (opcode === 8) closeCode = response.readUInt16BE(offset);
+      offset += length;
+    }
+    assert.equal(closeCode, 1009);
+    const health = await fetch(new URL('/health', bridge.url), {
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.deepEqual(await health.json(), { ok: true });
+  },
+);
+
 test('a page drives a real Host through the bridge: handshake, one turn, events', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-'));
   const url = await httpFixture(t, (_body, res) =>

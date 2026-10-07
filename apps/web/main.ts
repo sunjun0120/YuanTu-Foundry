@@ -164,7 +164,7 @@ class PageLink {
     } catch (error) {
       // A protocol error is answered with a close code and a reason, never with silence.
       const reason = error instanceof WebSocketProtocolError ? error.message : 'invalid frame';
-      this.refuse(1002, reason);
+      this.refuse(error instanceof WebSocketProtocolError ? error.closeCode : 1002, reason);
     }
   }
   refuse(code: number, reason: string): void {

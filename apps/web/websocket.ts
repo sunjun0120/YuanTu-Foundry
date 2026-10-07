@@ -35,7 +35,20 @@ export const OPCODE = {
 } as const;
 /** The largest control frame the standard allows. A close reason that exceeds it is a protocol error. */
 const MAX_CONTROL_PAYLOAD = 125;
-export class WebSocketProtocolError extends Error {}
+/** Match the Host transport's maximum JSONL message size. */
+export const MAX_WEBSOCKET_MESSAGE_BYTES = 64_000_000;
+export class WebSocketProtocolError extends Error {
+  readonly closeCode: number;
+  constructor(message: string, closeCode = 1002) {
+    super(message);
+    this.closeCode = closeCode;
+  }
+}
+function checkedLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > MAX_WEBSOCKET_MESSAGE_BYTES)
+    throw new RangeError('WebSocket byte limit must be between 0 and 64000000');
+  return limit;
+}
 /** One frame as it arrived, still fragmented and not yet interpreted. */
 export interface RawFrame {
   readonly fin: boolean;
@@ -56,19 +69,40 @@ function masked(payload: Buffer, mask: Buffer): Buffer {
  * assembler's business below.
  */
 export class FrameDecoder {
-  private buffer: Buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(14);
+  private buffered = 0;
+  private expectedBytes = 2;
+  private readonly maxPayloadBytes: number;
+  constructor(maxPayloadBytes = MAX_WEBSOCKET_MESSAGE_BYTES) {
+    this.maxPayloadBytes = checkedLimit(maxPayloadBytes);
+  }
   push(chunk: Buffer): RawFrame[] {
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
     const frames: RawFrame[] = [];
-    for (;;) {
+    let cursor = 0;
+    while (cursor < chunk.length) {
+      // Read and validate the header before reserving any space for its payload.
+      const count = Math.min(chunk.length - cursor, this.expectedBytes - this.buffered);
+      const required = this.buffered + count;
+      if (required > this.buffer.length) {
+        const capacity = Math.min(
+          this.maxPayloadBytes + 14,
+          Math.max(required, this.buffer.length * 2),
+        );
+        const grown = Buffer.allocUnsafe(capacity);
+        this.buffer.copy(grown, 0, 0, this.buffered);
+        this.buffer = grown;
+      }
+      chunk.copy(this.buffer, this.buffered, cursor, cursor + count);
+      this.buffered += count;
+      cursor += count;
       const frame = this.next();
-      if (!frame) return frames;
-      frames.push(frame);
+      if (frame) frames.push(frame);
     }
+    return frames;
   }
   private next(): RawFrame | undefined {
     const buffer = this.buffer;
-    if (buffer.length < 2) return undefined;
+    if (this.buffered < 2) return undefined;
     const first = buffer[0] ?? 0;
     const second = buffer[1] ?? 0;
     const fin = (first & 0x80) !== 0;
@@ -81,11 +115,17 @@ export class FrameDecoder {
     let length = second & 0x7f;
     let offset = 2;
     if (length === 126) {
-      if (buffer.length < offset + 2) return undefined;
+      if (this.buffered < offset + 2) {
+        this.expectedBytes = offset + 2;
+        return undefined;
+      }
       length = buffer.readUInt16BE(offset);
       offset += 2;
     } else if (length === 127) {
-      if (buffer.length < offset + 8) return undefined;
+      if (this.buffered < offset + 8) {
+        this.expectedBytes = offset + 8;
+        return undefined;
+      }
       const wide = buffer.readBigUInt64BE(offset);
       // A length beyond what a Buffer can hold is refused here rather than throwing out of `allocUnsafe` later.
       if (wide > BigInt(Number.MAX_SAFE_INTEGER))
@@ -96,11 +136,17 @@ export class FrameDecoder {
     const isControl = (opcode & 0x8) !== 0;
     if (isControl && (!fin || length > MAX_CONTROL_PAYLOAD))
       throw new WebSocketProtocolError('control frames must be final and at most 125 bytes');
-    if (buffer.length < offset + 4 + length) return undefined;
+    if (length > this.maxPayloadBytes)
+      throw new WebSocketProtocolError('frame payload exceeds byte limit', 1009);
+    this.expectedBytes = offset + 4 + length;
+    if (this.buffered < this.expectedBytes) return undefined;
     const mask = buffer.subarray(offset, offset + 4);
     offset += 4;
     const payload = masked(buffer.subarray(offset, offset + length), mask);
-    this.buffer = buffer.subarray(offset + length);
+    this.buffered = 0;
+    this.expectedBytes = 2;
+    // Do not retain a large allocation for the lifetime of an otherwise idle page.
+    if (this.buffer.length > 65_536) this.buffer = Buffer.alloc(14);
     return { fin, opcode, payload };
   }
 }
@@ -115,8 +161,29 @@ export type AssembledMessage =
  * sequence the standard does not allow is an error.
  */
 export class MessageAssembler {
-  private fragments: Buffer[] = [];
+  private fragments: Buffer = Buffer.alloc(0);
   private fragmentedOpcode: number | undefined;
+  private fragmentBytes = 0;
+  private readonly maxMessageBytes: number;
+  constructor(maxMessageBytes = MAX_WEBSOCKET_MESSAGE_BYTES) {
+    this.maxMessageBytes = checkedLimit(maxMessageBytes);
+  }
+  private append(payload: Buffer): void {
+    const required = this.fragmentBytes + payload.length;
+    if (required > this.maxMessageBytes)
+      throw new WebSocketProtocolError('message exceeds byte limit', 1009);
+    if (required > this.fragments.length) {
+      const capacity = Math.min(
+        this.maxMessageBytes,
+        Math.max(required, this.fragments.length * 2, 1024),
+      );
+      const grown = Buffer.allocUnsafe(capacity);
+      this.fragments.copy(grown, 0, 0, this.fragmentBytes);
+      this.fragments = grown;
+    }
+    payload.copy(this.fragments, this.fragmentBytes);
+    this.fragmentBytes = required;
+  }
   push(frame: RawFrame): AssembledMessage[] {
     if (frame.opcode === OPCODE.close) {
       const code = frame.payload.length >= 2 ? frame.payload.readUInt16BE(0) : 1005;
@@ -129,18 +196,23 @@ export class MessageAssembler {
     if (frame.opcode === OPCODE.continuation) {
       if (this.fragmentedOpcode === undefined)
         throw new WebSocketProtocolError('continuation frame without a started message');
-      this.fragments.push(frame.payload);
+      this.append(frame.payload);
       if (!frame.fin) return [];
-      const text = Buffer.concat(this.fragments).toString('utf8');
-      this.fragments = [];
+      const text = this.fragments.subarray(0, this.fragmentBytes).toString('utf8');
+      this.fragments = Buffer.alloc(0);
       this.fragmentedOpcode = undefined;
+      this.fragmentBytes = 0;
       return [{ kind: 'text', text }];
     }
     if (frame.opcode !== OPCODE.text)
       throw new WebSocketProtocolError(`unknown opcode ${String(frame.opcode)}`);
+    if (frame.payload.length > this.maxMessageBytes)
+      throw new WebSocketProtocolError('message exceeds byte limit', 1009);
     if (frame.fin) return [{ kind: 'text', text: frame.payload.toString('utf8') }];
     this.fragmentedOpcode = frame.opcode;
-    this.fragments = [frame.payload];
+    this.fragments = Buffer.alloc(0);
+    this.fragmentBytes = 0;
+    this.append(frame.payload);
     return [];
   }
 }
