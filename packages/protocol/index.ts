@@ -376,8 +376,12 @@ export interface ToolContext {
     durationMs?: number;
   }) => void;
   signal: AbortSignal;
-  /** Fixed for this invocation, including nested RPC calls and approval waits. */
+  /** Fixed invocation snapshot; only the trusted resolver below may refresh a pending dispatch. */
   executionPolicy?: import('./execution.ts').ExecutionPolicy;
+  /** Trusted session selection, refreshed before dispatch; an executing body keeps its snapshot. */
+  executionPolicyForCall?: () => import('./execution.ts').ExecutionPolicy;
+  /** Trusted approval selection; a change before body execution must be checked again. */
+  permissionPolicyForCall?: () => import('./permissions.ts').PermissionPolicyView | undefined;
   /** Canonical local workspace owned by this registry/run. Required for confined programs. */
   workspaceRoot?: string;
   /** Durable known/unknown outcomes of inner program calls, independent of the guest result. */

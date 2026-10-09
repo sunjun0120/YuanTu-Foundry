@@ -22,7 +22,8 @@
     "package:windows:dir": "npm run build && node scripts/prepare-windows-package.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir",
     "dev": "node apps/cli/main.ts",
     "host": "node apps/agent-host/main.ts",
-    "build": "tsc -p tsconfig.build.json && node scripts/build-desktop.mjs && node scripts/build-web.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-program-runner.mjs && node scripts/build-desktop.mjs && node scripts/build-web.mjs",
+    "build:program-runner": "node scripts/build-program-runner.mjs",
     "desktop": "npm run build && node scripts/start-desktop.mjs",
     "web": "node scripts/build-web.mjs && node apps/web/main.ts",
     "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/backups.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs",
@@ -43,6 +44,7 @@
     "smoke:client": "node scripts/run-tests.mjs --concurrency=2 tests/compiled-client.smoke.mjs tests/compiled-sdk.smoke.mjs",
     "check": "npm run format:check && npm run docs:check && npm run references:check && npm run i18n:check && npm run typecheck && npm test && npm run build && npm run smoke:client && npm run smoke:web",
     "check:changed": "node scripts/check-changed.mjs",
+    "check:related": "node scripts/check-related.mjs",
     "check:full": "npm run check",
     "check:release": "npm run check && npm run smoke:desktop"
   },

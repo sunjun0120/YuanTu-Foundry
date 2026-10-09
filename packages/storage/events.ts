@@ -279,7 +279,8 @@ export const SESSION_EVENT_TYPES = [
 export type SessionEventType = (typeof SESSION_EVENT_TYPES)[number];
 const KNOWN_EVENT_TYPES = new Set<string>(SESSION_EVENT_TYPES);
 /**
- * Event types a reader that does not know them may skip without losing model-visible content.
+ * Event types this build explicitly permits readers to skip without losing model-visible content.
+ * This is a local allowlist: extending it cannot teach an older binary about a newer event type.
  *
  * The bar for membership is high: every other event declared above either carries part of the transcript or
  * describes a durable state change a reader may have to act on. `todo.written` is the second kind, not the
@@ -445,6 +446,34 @@ function messageOf(event: SessionEvent): Message {
   if (!message || typeof message !== 'object' || Array.isArray(message))
     throw new Error(
       `Session log event ${event.type} at seq ${event.seq} has no message payload; the log is corrupt`,
+    );
+  const record = message as Record<string, unknown>;
+  const object = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  const callsUsable = (value: unknown): boolean =>
+    Array.isArray(value) &&
+    value.every(
+      (call) =>
+        object(call) &&
+        typeof call.id === 'string' &&
+        typeof call.name === 'string' &&
+        // Arguments are a keyed object or absent, never an array: a reader indexes into them by field name, and an
+        // array would put the call's shape in doubt without ever looking wrong.
+        (call.arguments === undefined || object(call.arguments)),
+    );
+  const valid =
+    typeof record.content === 'string' &&
+    ((event.type === 'message.user' && record.role === 'user') ||
+      (event.type === 'message.assistant' &&
+        record.role === 'assistant' &&
+        callsUsable(record.toolCalls)) ||
+      (event.type === 'message.tool' &&
+        record.role === 'tool' &&
+        typeof record.toolCallId === 'string' &&
+        typeof record.isError === 'boolean'));
+  if (!valid)
+    throw new Error(
+      `Session log event ${event.type} at seq ${event.seq} has an invalid message payload; the log is corrupt`,
     );
   return message as Message;
 }

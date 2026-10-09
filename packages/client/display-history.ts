@@ -45,6 +45,7 @@ export async function readDisplayHistory(
       statistics = page.statistics;
       first = false;
     }
+    const previousCount = messages.length;
     if (page.messageChunk) {
       const chunk = page.messageChunk;
       if (page.messages.length || chunk.index !== offset || !chunk.part)
@@ -75,14 +76,18 @@ export async function readDisplayHistory(
       if (chunkOffset !== undefined) throw new Error('Incomplete history message chunk');
       messages.push(...page.messages);
     }
-    if (messages.length >= maxMessages)
+    if (messages.length >= maxMessages) {
+      const unreadInPage = messages.length > maxMessages;
       return {
         messages: messages.slice(0, maxMessages),
         startOffset: resolvedStart,
         statistics,
-        truncated: page.nextOffset !== undefined,
-        nextOffset: page.nextOffset ?? offset + (page.messageChunk ? 1 : page.messages.length),
+        truncated: unreadInPage || page.nextOffset !== undefined,
+        nextOffset: unreadInPage
+          ? offset + (maxMessages - previousCount)
+          : (page.nextOffset ?? offset + (page.messageChunk ? 1 : page.messages.length)),
       };
+    }
     if (page.nextOffset === undefined)
       return {
         messages,

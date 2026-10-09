@@ -4,6 +4,7 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   mkdirSync,
   lstatSync,
@@ -13,6 +14,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -95,6 +97,8 @@ function alive(pid: number): boolean {
   }
 }
 
+const heldGates = new Set<string>();
+
 /** Serialize registration and maintenance. A malformed crash lock is refused, never guessed away. */
 function gated<T>(file: string, action: () => T): T {
   const lock = `${file}.maintenance-lock`;
@@ -108,20 +112,80 @@ function gated<T>(file: string, action: () => T): T {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       // Never unlink a stale lock automatically: two reclaimers could remove a new owner's lock.
-      if (Date.now() >= deadline)
+      if (Date.now() >= deadline) {
+        let contents: string;
+        try {
+          contents = readFileSync(lock, 'utf8');
+        } catch (inspectionError) {
+          if ((inspectionError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw inspectionError;
+        }
+        const record = contents.match(/^(\d+):[a-f0-9-]{36}$/i);
+        const pid = Number(record?.[1]);
+        if (Number.isSafeInteger(pid) && pid > 0 && alive(pid))
+          throw new Error(
+            `Database maintenance is active (process ${pid}); wait for it to finish: ${lock}`,
+          );
         throw new Error(
           `Database maintenance lock requires inspection; close all users before removing it: ${lock}`,
         );
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
   }
+  let createdLock: ReturnType<typeof fstatSync> | undefined;
+  let ownerWritten = false;
   try {
+    createdLock = fstatSync(fd);
     writeFileSync(fd, owner);
+    ownerWritten = true;
     fsyncSync(fd);
+    heldGates.add(file);
     return action();
   } finally {
+    heldGates.delete(file);
     closeSync(fd);
-    if (existsSync(lock) && readFileSync(lock, 'utf8') === owner) rmSync(lock);
+    if (createdLock && existsSync(lock)) {
+      const currentLock = lstatSync(lock);
+      if (
+        currentLock.dev === createdLock.dev &&
+        currentLock.ino === createdLock.ino &&
+        (!ownerWritten || readFileSync(lock, 'utf8') === owner)
+      )
+        rmSync(lock);
+    }
+  }
+}
+function registerUser(file: string): () => void {
+  const directory = `${file}.users`;
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const token = path.join(directory, `${process.pid}-${randomUUID()}`);
+  writeFileSync(token, '', { flag: 'wx', mode: 0o600 });
+  return () => rmSync(token, { force: true });
+}
+function withReadOnlyDatabase<T>(file: string, action: (db: DatabaseSync) => T): T {
+  const canonical = identity(file);
+  // An offline/initialization owner already excludes replacement. Do not reacquire its gate,
+  // and allow it to verify an installed database whose restore receipt is still pending.
+  const release = heldGates.has(canonical)
+    ? registerUser(canonical)
+    : gated(canonical, () => registerUser(canonical));
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(canonical, { readOnly: true });
+    db.exec('PRAGMA busy_timeout=5000');
+    return action(db);
+  } finally {
+    // Fail closed if SQLite cannot close: a still-open reader must retain its registration.
+    db?.close();
+    const unregister = () => {
+      release();
+      const directory = `${canonical}.users`;
+      if (readdirSync(directory).length === 0) rmdirSync(directory);
+    };
+    // Removing an empty directory must share registration's gate, or a new opener could lose it.
+    if (heldGates.has(canonical)) unregister();
+    else gated(canonical, unregister);
   }
 }
 function assertOffline(file: string): void {
@@ -189,29 +253,23 @@ export function registerDatabase(file: string): () => void {
       throw new Error(
         `Database restore was interrupted; run db-recover --db "${canonical}" before opening`,
       );
-    const directory = `${canonical}.users`;
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const token = path.join(directory, `${process.pid}-${randomUUID()}`);
-    writeFileSync(token, '', { flag: 'wx', mode: 0o600 });
-    return () => rmSync(token, { force: true });
+    return registerUser(canonical);
   });
 }
 
 /** Read-only inspection deliberately never opens a SessionStore (which would migrate). */
 export function inspectDatabase(file: string, policy: DatabasePolicy): DatabaseInspection {
   const canonical = identity(file);
-  if (existsSync(`${canonical}.json`)) {
-    const manifest = JSON.parse(readFileSync(`${canonical}.json`, 'utf8')) as DatabaseBackup;
-    if (
-      !/^[a-f0-9]{64}$/.test(manifest.sha256 ?? '') ||
-      digest(canonical) !== manifest.sha256 ||
-      (existsSync(`${canonical}-wal`) && statSync(`${canonical}-wal`).size > 0)
-    )
-      throw new Error(`Backup checksum check failed: ${canonical}`);
-  }
-  const db = new DatabaseSync(canonical, { readOnly: true });
-  try {
-    db.exec('PRAGMA busy_timeout=5000');
+  return withReadOnlyDatabase(canonical, (db) => {
+    if (existsSync(`${canonical}.json`)) {
+      const manifest = JSON.parse(readFileSync(`${canonical}.json`, 'utf8')) as DatabaseBackup;
+      if (
+        !/^[a-f0-9]{64}$/.test(manifest.sha256 ?? '') ||
+        digest(canonical) !== manifest.sha256 ||
+        (existsSync(`${canonical}-wal`) && statSync(`${canonical}-wal`).size > 0)
+      )
+        throw new Error(`Backup checksum check failed: ${canonical}`);
+    }
     const integrity = db.prepare('PRAGMA integrity_check').all();
     if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok')
       throw new Error(`Database integrity check failed: ${canonical}`);
@@ -241,9 +299,7 @@ export function inspectDatabase(file: string, policy: DatabasePolicy): DatabaseI
         `Unsupported session database version: ${version} (maximum ${policy.maxVersion})`,
       );
     return { file: canonical, version, bytes: statSync(canonical).size };
-  } finally {
-    db.close();
-  }
+  });
 }
 
 /** VACUUM INTO takes SQLite's committed snapshot, including WAL; the source is never copied bytewise. */
@@ -336,14 +392,10 @@ function createBackup(
   }
 }
 export function backupDatabase(file: string, policy: DatabasePolicy): DatabaseBackup {
-  inspectDatabase(file, policy);
-  const db = new DatabaseSync(identity(file), { readOnly: true });
-  try {
-    db.exec('PRAGMA busy_timeout=5000');
+  return withReadOnlyDatabase(file, (db) => {
+    inspectDatabase(file, policy);
     return createDatabaseBackup(db, file, policy, 'manual');
-  } finally {
-    db.close();
-  }
+  });
 }
 
 /** Only this database's complete, regular snapshots are eligible for the desktop restore picker. */
@@ -446,13 +498,9 @@ export function restoreDatabase(
     const stage = `${target}.${randomUUID()}.restore-stage`;
     try {
       // Re-snapshot the candidate too, so an external candidate with WAL is safe and inspected after copying.
-      const db = new DatabaseSync(inspected.file, { readOnly: true });
-      try {
-        db.exec('PRAGMA busy_timeout=5000');
+      withReadOnlyDatabase(inspected.file, (db) => {
         db.prepare('VACUUM main INTO ?').run(stage);
-      } finally {
-        db.close();
-      }
+      });
       inspectDatabase(stage, policy);
       syncFile(stage);
       const journal = preserveCurrent(target, inspected.file);
@@ -496,7 +544,8 @@ export function recoverDatabase(file: string): RestoreJournal {
         throw new Error('Preserved original failed its checksum; refusing recovery');
     }
     // Preserve the failed replacement as well, so rolling back cannot destroy new evidence.
-    preserveCurrent(target, journal.candidate);
+    const evidence = preserveCurrent(target, journal.candidate);
+    writeJson(path.join(evidence.recoveryDirectory, 'preserved.json'), evidence);
     for (const suffix of ['', '-wal', '-shm']) {
       const original = journal.originals.find((entry) => entry.suffix === suffix);
       if (original) {

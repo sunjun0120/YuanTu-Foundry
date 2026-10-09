@@ -45,7 +45,25 @@ export interface BrowserBridgeOptions {
   readonly url: string;
   /** Where page-local preferences live. Defaults to `localStorage`; a test passes its own store. */
   readonly storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  /** Handshake deadline; defaults to 10 seconds. */
+  readonly connectionTimeoutMs?: number;
+  /** Ordinary replies default to two minutes. Long commands follow Host completion unless explicitly capped. */
+  readonly requestTimeoutMs?: number;
 }
+// These commands await HOST_LONG_REQUESTS rather than an acceptance reply. Human approval and run
+// completion have no total deadline in the Host; transport failure still rejects all pending calls.
+const LONG_COMMANDS = new Set<CarrierCommand['type']>([
+  'send',
+  'goal',
+  'plan',
+  'planExecute',
+  'taskStart',
+  'taskRetry',
+  'taskPropose',
+  'taskVerify',
+  'taskConfirm',
+  'compact',
+]);
 /** The channels that only exist where there is a shell, and what to tell a page that asks for one. */
 const SHELL_ONLY: Record<string, string> = {
   backups: '备份和恢复需在桌面版本地执行。',
@@ -56,6 +74,11 @@ const SHELL_ONLY: Record<string, string> = {
 };
 const UI_SETTINGS_KEY = 'yuantu.ui-settings';
 export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridge {
+  const connectionTimeoutMs = options.connectionTimeoutMs ?? 10_000;
+  const requestTimeoutMs = options.requestTimeoutMs ?? 120_000;
+  for (const timeout of [connectionTimeoutMs, requestTimeoutMs])
+    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 2_147_483_647)
+      throw new Error('Bridge deadlines must be positive integer milliseconds');
   const storage = options.storage ?? localStorage;
   const states = new Set<(state: CarrierSnapshot) => void>();
   const deltas = new Set<(delta: MessageDelta) => void>();
@@ -63,8 +86,23 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
   const statisticsDeltas = new Set<(delta: StatisticsDelta) => void>();
   const pending = new Map<
     number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer?: ReturnType<typeof setTimeout>;
+    }
   >();
+  const take = (id: number) => {
+    const entry = pending.get(id);
+    if (entry) {
+      pending.delete(id);
+      if (entry.timer) clearTimeout(entry.timer);
+    }
+    return entry;
+  };
+  const rejectPending = (error: Error): void => {
+    for (const id of pending.keys()) take(id)?.reject(error);
+  };
   let nextId = 1;
   let socket: WebSocket | undefined;
   let connecting: Promise<WebSocket> | undefined;
@@ -79,15 +117,30 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
     if (socket?.readyState === WebSocket.OPEN) return Promise.resolve(socket);
     if (connecting) return connecting;
     if (socket) {
-      for (const entry of pending.values()) entry.reject(new Error('与本机桥的连接已断开'));
-      pending.clear();
+      rejectPending(new Error('与本机桥的连接已断开，执行结果可能未知；请检查状态后再操作。'));
     }
     const created = new WebSocket(options.url);
     connecting = new Promise((resolve, reject) => {
       socket = created;
+      const fail = (error: Error): void => {
+        clearTimeout(timer);
+        reject(error);
+        if (socket === created) {
+          rejectPending(error);
+          socket = undefined;
+          connecting = undefined;
+        }
+        created.close();
+      };
+      const timer = setTimeout(
+        () => fail(new Error('连接本机桥超时，请检查桥服务后重试。')),
+        connectionTimeoutMs,
+      );
       created.addEventListener(
         'open',
         () => {
+          clearTimeout(timer);
+          if (socket !== created) return;
           connecting = undefined;
           resolve(created);
         },
@@ -95,15 +148,40 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
       );
       created.addEventListener(
         'error',
-        () => reject(new Error('无法连接本机桥（apps/web/main.ts 是否在运行？）')),
+        () =>
+          fail(new Error('无法连接本机桥（apps/web/main.ts 是否在运行？）；执行结果可能未知。')),
         { once: true },
       );
       created.addEventListener('message', (event: MessageEvent) => {
         if (socket !== created) return;
-        const frame = JSON.parse(String(event.data)) as BridgeFrame;
+        let frame: BridgeFrame;
+        try {
+          frame = JSON.parse(String(event.data)) as BridgeFrame;
+          if (
+            !frame ||
+            typeof frame !== 'object' ||
+            Array.isArray(frame) ||
+            !['reply', 'refused', 'state', 'delta', 'subagent-delta', 'statistics-delta'].includes(
+              frame.kind,
+            )
+          )
+            throw new Error('Invalid bridge frame');
+          if (
+            frame.kind === 'reply' &&
+            (!Number.isSafeInteger(frame.id) ||
+              frame.id < 1 ||
+              typeof frame.ok !== 'boolean' ||
+              (!frame.ok && typeof frame.error !== 'string'))
+          )
+            throw new Error('Invalid bridge reply');
+          if (frame.kind === 'refused' && typeof frame.reason !== 'string')
+            throw new Error('Invalid bridge refusal');
+        } catch {
+          fail(new Error('本机桥回复格式错误，执行结果可能未知。'));
+          return;
+        }
         if (frame.kind === 'reply') {
-          const entry = pending.get(frame.id);
-          pending.delete(frame.id);
+          const entry = take(frame.id);
           if (!entry) return;
           if (frame.ok) entry.resolve(frame.value);
           else entry.reject(new Error(frame.error));
@@ -111,8 +189,7 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
         }
         if (frame.kind === 'refused') {
           refused = frame.reason;
-          for (const entry of pending.values()) entry.reject(new Error(frame.reason));
-          pending.clear();
+          rejectPending(new Error(frame.reason));
           return;
         }
         if (frame.kind === 'state') for (const listener of states) listener(frame.state);
@@ -122,24 +199,43 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
         else for (const listener of statisticsDeltas) listener(frame.delta);
       });
       created.addEventListener('close', () => {
-        const reason = refused ?? '与本机桥的连接已断开';
+        clearTimeout(timer);
+        const reason = refused ?? '与本机桥的连接已断开，执行结果可能未知；请检查状态后再操作。';
         reject(new Error(reason));
         if (socket !== created) return;
-        for (const entry of pending.values()) entry.reject(new Error(reason));
-        pending.clear();
+        rejectPending(new Error(reason));
         socket = undefined;
         connecting = undefined;
       });
     });
     return connecting;
   };
-  const request = async (body: Omit<BridgeRequest, 'id'>): Promise<unknown> => {
+  const request = async (
+    body:
+      | Omit<Extract<BridgeRequest, { kind: 'command' }>, 'id'>
+      | Omit<Extract<BridgeRequest, { kind: 'files' }>, 'id'>,
+  ): Promise<unknown> => {
     if (refused) throw new Error(refused);
     const live = await connect();
     const id = nextId++;
+    const timeoutMs =
+      options.requestTimeoutMs === undefined &&
+      body.kind === 'command' &&
+      LONG_COMMANDS.has(body.command.type)
+        ? 0
+        : requestTimeoutMs;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      live.send(JSON.stringify({ ...body, id }));
+      const timer = timeoutMs
+        ? setTimeout(() => {
+            take(id)?.reject(new Error('本机桥请求超时，执行结果可能未知；请检查状态后再操作。'));
+          }, timeoutMs)
+        : undefined;
+      pending.set(id, { resolve, reject, timer });
+      try {
+        live.send(JSON.stringify({ ...body, id }));
+      } catch {
+        take(id)?.reject(new Error('发送本机桥请求失败，执行结果可能未知；请检查状态后再操作。'));
+      }
     });
   };
   const localUiSettings = (): UiSettings => {

@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { SessionMigrations } from '../packages/storage/session-migrations.ts';
 import {
   SessionStore,
   SCHEMA_VERSION,
@@ -17,6 +18,7 @@ import {
   recoverDatabase,
 } from '../packages/storage/database-maintenance.ts';
 import { runCli } from './process-fixture.ts';
+import { spawnSync } from 'node:child_process';
 
 function fixture(t: test.TestContext) {
   const root = mkdtempSync(path.join(tmpdir(), 'yuantu-backup-'));
@@ -263,7 +265,7 @@ test('migration failure is recoverable from its pre-migration snapshot', (t) => 
   const db = new DatabaseSync(file);
   db.exec(`PRAGMA user_version=${SCHEMA_VERSION - 1}`);
   db.close();
-  const prototype = SessionStore.prototype as unknown as {
+  const prototype = SessionMigrations.prototype as unknown as {
     migrateMachineTitledSessions: (version: number) => void;
   };
   const migrate = prototype.migrateMachineTitledSessions;
@@ -312,3 +314,64 @@ test('a stale maintenance lock is refused without deleting another ownership rec
   assert.equal(readFileSync(lock, 'utf8'), '2147483647:dead-owner');
   assert.deepEqual(readFileSync(file), before);
 });
+
+test('ENOSPC while publishing a snapshot manifest retains the source and cleans the unpublished snapshot', (t) => {
+  const { root, file } = fixture(t);
+  const store = new SessionStore(file);
+  const session = store.create(root);
+  store.append(session.id, { role: 'user', content: 'committed before full disk' });
+  store.close();
+  const before = readFileSync(file);
+  const child = spawnSync(
+    process.execPath,
+    ['tests/database-fault-worker.ts', 'backup-full', file],
+    { encoding: 'utf8', timeout: 15_000, windowsHide: true },
+  );
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /ENOSPC/);
+  assert.deepEqual(readFileSync(file), before);
+  // Inspection readers may leave an empty admission directory; no snapshot, manifest or reader lease may remain.
+  for (const entry of readdirSync(`${file}.backups`, { withFileTypes: true })) {
+    assert(entry.isDirectory() && entry.name.endsWith('.sqlite.tmp.users'));
+    assert.deepEqual(readdirSync(path.join(`${file}.backups`, entry.name)), []);
+  }
+  const reopened = new SessionStore(file);
+  assert.equal(reopened.messages(session.id)[0]?.content, 'committed before full disk');
+  reopened.close();
+});
+
+for (const mode of ['restore-full', 'restore-crash']) {
+  test(`${mode} after replacement blocks opening and offline recovery returns the preserved original`, (t) => {
+    const { root, file } = fixture(t);
+    let store = new SessionStore(file);
+    const session = store.create(root);
+    store.append(session.id, { role: 'user', content: 'backup version' });
+    store.close();
+    const backup = backupDatabase(file, SESSION_DATABASE_POLICY);
+    store = new SessionStore(file);
+    store.append(session.id, { role: 'user', content: 'newer original to recover' });
+    store.close();
+    const child = spawnSync(
+      process.execPath,
+      ['tests/database-fault-worker.ts', mode, file, backup.file],
+      { encoding: 'utf8', timeout: 15_000, windowsHide: true },
+    );
+    assert.equal(child.status, mode === 'restore-crash' ? 86 : 1, child.stderr);
+    if (mode === 'restore-full') assert.match(child.stderr, /ENOSPC/);
+    else {
+      // The actual dead process leaves its gate behind. Follow the documented inspection-before-removal rule.
+      const lock = `${file}.maintenance-lock`;
+      assert.match(readFileSync(lock, 'utf8'), new RegExp(`^${child.pid}:`));
+      assert.throws(() => process.kill(child.pid!, 0), { code: 'ESRCH' });
+      rmSync(lock);
+    }
+    assert.throws(() => new SessionStore(file), /interrupted|db-recover/i);
+    assert.equal(recoverDatabase(file).phase, 'rolled-back');
+    store = new SessionStore(file);
+    assert.deepEqual(
+      store.messages(session.id).map((message) => message.content),
+      ['backup version', 'newer original to recover'],
+    );
+    store.close();
+  });
+}

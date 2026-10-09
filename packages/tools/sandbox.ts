@@ -17,6 +17,7 @@ import {
   type SandboxRequest,
 } from './sandbox-provider.ts';
 import { windowsSandboxProvider } from './sandbox-windows.ts';
+import { isCredentialFileName } from './credential-paths.ts';
 // The seam is `sandbox-provider.ts`; this file is the three backends that ship with the project plus the public
 // API, which is now a dispatch. Both are re-exported so a caller that only wants "the sandbox" keeps importing
 // one module — and so the built-ins are reachable through the same seam an embedder registers through.
@@ -68,12 +69,7 @@ async function inspectWorkspace(root: string): Promise<void> {
         continue;
       }
       const target = path.join(directory, entry.name);
-      if (
-        entry.name.toLowerCase() !== '.env.example' &&
-        /^(\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|credentials(?:\..*)?|id_(rsa|ed25519)|.*\.(pem|p12|pfx|key)|.*\.sqlite(?:3)?|.*\.db)$/i.test(
-          entry.name,
-        )
-      )
+      if (isCredentialFileName(entry.name) || /\.(?:sqlite3?|db)$/i.test(entry.name))
         throw new Error('Sandbox refuses sensitive workspace file: ' + path.relative(root, target));
       const stat = await lstat(target);
       if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()))

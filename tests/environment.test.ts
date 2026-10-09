@@ -134,15 +134,15 @@ test('the documented defaults are the defaults the code uses', async () => {
     assert.ok(line, `the help text documents --${flag}`);
     assert.match(line, new RegExp(`default: ${expected}\\b`));
   }
-  // The window is the one limit with no default to document: it is a fact about the endpoint, so the help
-  // says where to get it instead of naming a number this runtime would then be measuring against.
+  // Omitting the window uses the capacity resolver; the flag remains an explicit override.
+  // Help must describe automatic resolution without presenting one endpoint-specific number as universal.
   const windowLine = help.split('\n').find((entry) => entry.includes('--max-context-tokens <n>'));
   assert.ok(windowLine, 'the help text documents --max-context-tokens');
-  assert.match(windowLine, /required for a run/);
+  assert.match(windowLine, /omit.*resolved automatically/);
   assert.doesNotMatch(
     windowLine,
     /default:/,
-    'a window default would be a guess with a number on it',
+    'the help should explain resolution rather than hard-code a universal window',
   );
   const source = await readFile(path.join(projectRoot, 'apps/cli/main.ts'), 'utf8');
   // A round cap used to be documented here with a default. It is not a limit any more, and a flag for it

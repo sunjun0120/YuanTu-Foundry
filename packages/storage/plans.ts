@@ -7,7 +7,8 @@ import {
   type PlanBody,
   type PlanRepository,
 } from '../protocol/plans.ts';
-const PLAN_SELECT = `SELECT id,session_id AS sessionId,run_id AS runId,status,title,summary,steps,hash,reason,created_at AS createdAt,updated_at AS updatedAt,approved_at AS approvedAt FROM plans`;
+const PLAN_COLUMNS = `id,session_id AS sessionId,run_id AS runId,status,title,summary,steps,hash,reason,created_at AS createdAt,updated_at AS updatedAt,approved_at AS approvedAt`;
+const PLAN_SELECT = `SELECT ${PLAN_COLUMNS} FROM plans`;
 function planFromRow(row: Record<string, unknown>): Plan {
   let steps: PlanStep[] = [];
   try {
@@ -86,9 +87,10 @@ export class SqlitePlanStore implements PlanRepository {
   }
   /** Records which run is filling in a plan, so a stale `planning` row is diagnosable. */
   linkPlanRun(sessionId: string, planId: string, runId: string): void {
-    this.db
+    const result = this.db
       .prepare('UPDATE plans SET run_id=?, updated_at=? WHERE session_id=? AND id=?')
       .run(runId, new Date().toISOString(), sessionId, planId);
+    if (result.changes !== 1) throw new Error('Plan not found');
   }
   getPlan(sessionId: string, planId: string): Plan {
     const row = this.db
@@ -126,11 +128,11 @@ export class SqlitePlanStore implements PlanRepository {
     const current = this.getPlan(sessionId, planId);
     if (current.status !== 'planning') throw new Error(`Plan is already ${current.status}`);
     const normalized = normalizePlanBody(body);
-    this.db
+    const row = this.db
       .prepare(
-        "UPDATE plans SET status='proposed', title=?, summary=?, steps=?, hash=?, updated_at=? WHERE session_id=? AND id=?",
+        `UPDATE plans SET status='proposed', title=?, summary=?, steps=?, hash=?, updated_at=? WHERE session_id=? AND id=? AND status=? AND hash=? RETURNING ${PLAN_COLUMNS}`,
       )
-      .run(
+      .get(
         normalized.title,
         normalized.summary,
         JSON.stringify(normalized.steps),
@@ -138,8 +140,11 @@ export class SqlitePlanStore implements PlanRepository {
         new Date().toISOString(),
         sessionId,
         planId,
+        current.status,
+        current.hash,
       );
-    return this.getPlan(sessionId, planId);
+    if (!row) throw new Error('Plan changed while submitting; re-read it before submitting');
+    return planFromRow(row);
   }
   /**
    * Approves a plan. `hash` is the digest the human actually reviewed, so approving a plan that was
@@ -152,23 +157,32 @@ export class SqlitePlanStore implements PlanRepository {
     if (!hash || hash !== current.hash)
       throw new Error('Plan changed since it was reviewed; re-read it before approving');
     const now = new Date().toISOString();
-    this.db
+    const row = this.db
       .prepare(
-        "UPDATE plans SET status='approved', approved_at=?, reason=NULL, updated_at=? WHERE session_id=? AND id=?",
+        `UPDATE plans SET status='approved', approved_at=?, reason=NULL, updated_at=? WHERE session_id=? AND id=? AND status=? AND hash=? RETURNING ${PLAN_COLUMNS}`,
       )
-      .run(now, now, sessionId, planId);
-    return this.getPlan(sessionId, planId);
+      .get(now, now, sessionId, planId, current.status, hash);
+    if (!row) throw new Error('Plan changed since it was reviewed; re-read it before approving');
+    return planFromRow(row);
   }
   rejectPlan(sessionId: string, planId: string, reason?: string): Plan {
     const current = this.getPlan(sessionId, planId);
     if (current.status === 'approved' || current.status === 'rejected')
       throw new Error(`Plan is already ${current.status}`);
-    this.db
+    const row = this.db
       .prepare(
-        "UPDATE plans SET status='rejected', reason=?, updated_at=? WHERE session_id=? AND id=?",
+        `UPDATE plans SET status='rejected', reason=?, updated_at=? WHERE session_id=? AND id=? AND status=? AND hash=? RETURNING ${PLAN_COLUMNS}`,
       )
-      .run(reason?.slice(0, 500) ?? null, new Date().toISOString(), sessionId, planId);
-    return this.getPlan(sessionId, planId);
+      .get(
+        reason?.slice(0, 500) ?? null,
+        new Date().toISOString(),
+        sessionId,
+        planId,
+        current.status,
+        current.hash,
+      );
+    if (!row) throw new Error('Plan changed while rejecting; re-read it before rejecting');
+    return planFromRow(row);
   }
   /**
    * Resolves the plan that an execution run is allowed to follow. Both checks matter: the status

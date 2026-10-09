@@ -6,11 +6,32 @@ import { executionPolicy } from './execution-policy.ts';
 import { resolveSandboxConfig } from './sandbox-provider.ts';
 import type { ToolContext } from '../protocol/index.ts';
 import type { CodeWorkerData, CallRequest, WorkerMessage } from './code-worker.ts';
+import type { ChildProcess } from 'node:child_process';
+import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from './environment.ts';
 
 const FRAME_BYTES = 1_048_576;
 const TOTAL_BYTES = 8_388_608;
 const CALL_LIMIT = 2048;
 type Message = CallRequest | WorkerMessage;
+
+export function validateCodeReady(value: unknown): void {
+  const item = value as Record<string, unknown> | null;
+  if (
+    !item ||
+    Array.isArray(item) ||
+    item.type !== 'ready' ||
+    item.protocol !== PROGRAM_PROTOCOL ||
+    !Number.isSafeInteger(item.nodeMajor) ||
+    (item.nodeMajor as number) < PROGRAM_NODE_MAJOR
+  )
+    throw new Error('Invalid or incompatible program runner handshake');
+}
+
+interface ProgramProcess {
+  child: Pick<ChildProcess, 'stdin' | 'stdout' | 'stderr' | 'pid'>;
+  stop(): Promise<void>;
+  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+}
 
 /** Every byte from the program is untrusted, including messages that appear to come from our runner. */
 export function validateCodeMessage(
@@ -86,6 +107,15 @@ export async function startCodeProcess(data: CodeWorkerData, context: ToolContex
     '.',
     context.signal,
   );
+  return connectCodeProcess(data, running, context.signal);
+}
+
+/** Shared transport for owned runner processes. This does not choose or relax an execution backend. */
+export async function connectCodeProcess(
+  data: CodeWorkerData,
+  running: ProgramProcess,
+  signal: AbortSignal,
+) {
   const channel = new EventEmitter();
   channel.on('error', () => {});
   let stopping: Promise<void> | undefined;
@@ -95,17 +125,48 @@ export async function startCodeProcess(data: CodeWorkerData, context: ToolContex
   let stderr = '';
   const ids = new Set<number>();
   const names = new Set(data.names);
+  let ready = false;
+  let starting = true;
+  let scriptSent = false;
+  let delivering = false;
+  const pending: Message[] = [];
+  let deliveryError: Error | undefined;
+  let startupError: Error | undefined;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const handshake = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  // Failure can arrive before the await below has installed its handler.
+  void handshake.catch(() => {});
+  let rejectStartup!: (error: Error) => void;
+  const startupFailed = new Promise<never>((_resolve, reject) => {
+    rejectStartup = reject;
+  });
+  void startupFailed.catch(() => {});
+  const abort = () => fail(signal.reason ?? new Error('Program cancelled'));
   const terminate = () =>
     (stopping ??= (async () => {
+      signal.removeEventListener('abort', abort);
       await running.stop();
       await running.closed;
     })());
   const fail = (error: unknown) => {
-    channel.emit('error', error instanceof Error ? error : new Error(String(error)));
+    const failure = error instanceof Error ? error : new Error(String(error));
+    if (starting) {
+      startupError ??= failure;
+      rejectReady(failure);
+      rejectStartup(failure);
+    }
+    if (delivering) channel.emit('error', failure);
+    else deliveryError ??= failure;
     void terminate().catch(() => {});
   };
   running.child.stdout!.on('data', (chunk: Buffer) => {
     if (stopping) return;
+    if (ready && !scriptSent && chunk.length)
+      return fail(new Error('Program RPC before script start'));
     total += chunk.length;
     buffer = Buffer.concat([buffer, chunk]);
     if (total > TOTAL_BYTES || buffer.length > FRAME_BYTES)
@@ -117,9 +178,19 @@ export async function startCodeProcess(data: CodeWorkerData, context: ToolContex
       buffer = buffer.subarray(end + 1);
       try {
         if (receivedResult) throw new Error('Program RPC continued after its result');
-        const message = validateCodeMessage(JSON.parse(frame.toString('utf8')), names, ids);
+        const value: unknown = JSON.parse(frame.toString('utf8'));
+        if (!ready) {
+          validateCodeReady(value);
+          if (buffer.length) throw new Error('Program RPC before script start');
+          ready = true;
+          resolveReady();
+          continue;
+        }
+        if (!scriptSent) throw new Error('Program RPC before script start');
+        const message = validateCodeMessage(value, names, ids);
         if (message.type !== 'call') receivedResult = true;
-        channel.emit('message', message);
+        if (delivering) channel.emit('message', message);
+        else pending.push(message);
       } catch (error) {
         fail(error);
         break;
@@ -138,21 +209,58 @@ export async function startCodeProcess(data: CodeWorkerData, context: ToolContex
       fail(unknown);
     }
   }, fail);
-  const postMessage = (message: unknown) => {
-    if (stopping) return;
+  const sendMessage = async (message: unknown) => {
+    if (stopping) throw new Error('Program is stopping');
     const payload = JSON.stringify(message) + '\n';
     if (
       Buffer.byteLength(payload) > FRAME_BYTES ||
       running.child.stdin!.writableLength + Buffer.byteLength(payload) > 4 * FRAME_BYTES
     )
-      return fail(new Error('Program RPC input limit exceeded'));
-    running.child.stdin!.write(payload, (error) => {
-      if (error && !stopping) fail(error);
+      throw new Error('Program RPC input limit exceeded');
+    await new Promise<void>((resolve, reject) => {
+      running.child.stdin!.write(payload, (error) => (error ? reject(error) : resolve()));
     });
+  };
+  const postMessage = (message: unknown) => {
+    if (!stopping) void sendMessage(message).catch(fail);
   };
   running.child.stdin!.on('error', (error) => {
     if (!stopping) fail(error);
   });
-  postMessage({ type: 'start', data });
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  const timer = setTimeout(() => fail(new Error('Program runner handshake timed out')), 5000);
+  try {
+    await handshake;
+    if (startupError) throw startupError;
+    signal.throwIfAborted();
+    scriptSent = true;
+    await Promise.race([sendMessage({ type: 'start', data }), startupFailed]);
+    if (startupError) throw startupError;
+    signal.throwIfAborted();
+  } catch (error) {
+    try {
+      await terminate();
+    } catch (cleanup) {
+      const failure = new AggregateError([error, cleanup], 'Program startup and cleanup failed');
+      failure.name = 'ToolCleanupError';
+      throw failure;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+  starting = false;
+  // The caller subscribes after awaiting this function. Retain early replies/errors until then.
+  setImmediate(() => {
+    delivering = true;
+    if (deliveryError) channel.emit('error', deliveryError);
+    else
+      for (const message of pending) {
+        if (stopping) break;
+        channel.emit('message', message);
+      }
+    pending.length = 0;
+  });
   return Object.assign(channel, { postMessage, terminate, pid: running.child.pid });
 }

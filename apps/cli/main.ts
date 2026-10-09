@@ -9,6 +9,7 @@ import {
 } from '../../packages/storage/database-maintenance.ts';
 import { readPermissionPolicy } from '../../packages/core/permissions.ts';
 import { parseArgs } from '../shared/args.ts';
+import { CLI_COMMANDS, CLI_MAINTENANCE_COMMANDS } from '../shared/cli-commands.ts';
 import {
   openStore,
   sessionDatabasePath,
@@ -76,35 +77,10 @@ import {
 const help = `YuanTu Agent — independent coding agent (Node.js >=24)
 
 Usage:
-  npm run dev -- run "task" [options]
-  npm run dev -- resume <session-id> "follow-up" [options]
-  npm run dev -- sessions [--db path] [--json]
-  npm run dev -- db-backup --db <file> [--json]
-  npm run dev -- db-verify <file> [--json]
-  npm run dev -- db-restore <backup-file> --db <file> [--json]  (close Host/CLI first)
-  npm run dev -- db-recover --db <file> [--json]              (interrupted restore rollback)
-  npm run dev -- show <session-id> [--db path] [--json]
-  npm run dev -- task-create <session-id> <spec.json> [--db path]
-  npm run dev -- tasks <session-id> [--db path] [--json]
-  npm run dev -- task <session-id> <task-id> [--db path] [--json]
-  npm run dev -- task-attempts <session-id> <task-id> [--db path] [--json]
-  npm run dev -- task-steps <session-id> <task-id> [--db path] [--json]
-  npm run dev -- task-trigger <session-id> <task-id> <trigger.json|off> [--db path] [--json]
-  npm run dev -- task-schedule [--db path] [--json]
-  npm run dev -- task-approval <session-id> <task-id> <approval-id> <allow|deny> [--db path] [--json]
-  npm run dev -- task-verify <session-id> <task-id> [--db path] [--json]
-  npm run dev -- task-retry <session-id> <task-id> ["prompt"] [options]
-  npm run dev -- plan "task" [options]
-  npm run dev -- plan-show <session-id> [--db path] [--json]
-  npm run dev -- plan-execute <session-id> <plan-id> <hash> [options]
-  npm run dev -- resources [--workspace directory]
-  npm run dev -- env [--json]                Every YUANTU_* setting this program reads
-  npm run dev -- models [--json]
-  npm run dev -- mcp list [--workspace directory]
-  npm run dev -- mcp authorize <server-id> [--workspace directory]
-  npm run dev -- mcp revoke <server-id> [--workspace directory]
-  npm run dev -- credentials list
-  npm run dev -- credentials set <protocol>   (the key is read from standard input)
+${CLI_COMMANDS.map((command) => `  npm run dev -- ${command.usage}`).join('\n')}
+
+Maintenance (acts on the database file, not on a session):
+${CLI_MAINTENANCE_COMMANDS.map((command) => `  npm run dev -- ${command.usage}`).join('\n')}
 
 Options:
   --workspace <directory>    Existing project directory (default: cwd)
@@ -115,7 +91,7 @@ Options:
   --allow-command            Allow host shell commands without per-call prompts (not sandboxed)
   --json                     JSONL events and final result; noninteractive approval denies by default
   --image <path>             Attach a PNG/JPEG/GIF/WebP image (repeat up to 4 times)
-  --max-context-tokens <n>   Model context window (required for a run; read it from your endpoint with \`models\`)
+  --max-context-tokens <n>   Model context window; omit to let the budget be resolved automatically
   --auto-compact-tokens <n>  Compact before the configured context window fills
   --max-context-chars <n>    Additional context character guard (default: ${RUN_DEFAULTS.maxContextChars})
   --max-output-tokens <n>    Per-request output limit (default: ${RUN_DEFAULTS.maxOutputTokens})
@@ -156,7 +132,7 @@ The names above are the common ones; \`env\` lists every setting this program re
 value in this process, straight from the table the program uses.
 
 Ctrl+C cancels the model request or foreground command. Existing side effects remain.
-No API key is needed for help, sessions, show, resources, mcp or credentials.
+No API key is needed for help, maintenance, sessions, show, resources, env, models, mcp or credentials.
 MCP authorization happens outside a run: "mcp authorize" prints a browser URL and waits for the
 loopback callback, and tokens never touch .yuantu/mcp.json. Commands use cmd.exe on Windows.
 `;
@@ -457,6 +433,8 @@ async function main(): Promise<void> {
     // The same convergence for ordinary sessions, which is also what makes `sessions`, `--json` and delete
     // usable after a crash rather than showing a conversation that is stuck "in flight" forever.
     store.reconcileInterruptedRuns(resolveWorkspace(options.workspace ?? process.cwd()));
+    store.recoverInterruptedTasks(resolveWorkspace(options.workspace ?? process.cwd()));
+    store.recoverInterruptedStreams(resolveWorkspace(options.workspace ?? process.cwd()));
     if (command === 'plan-show') {
       if (args.length !== 1) throw new Error('Usage: plan-show <session-id>');
       const plan = store.latestPlan(store.get(args[0]!).id);

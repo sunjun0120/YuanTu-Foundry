@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry } from '../packages/tools/registry.ts';
+import { PermissionPolicy } from '../packages/core/permissions.ts';
 import { resolveSandboxConfig, setSandboxMode } from '../packages/tools/sandbox.ts';
 import {
   executionPolicy,
@@ -13,6 +14,229 @@ import {
 } from '../packages/tools/execution-environment.ts';
 
 const context = () => ({ signal: new AbortController().signal, approve: async () => true });
+
+test('timed out policy re-preparation cannot start a body or journal a new effect', async () => {
+  const registry = new ToolRegistry();
+  registry.deadlines = { defaultMs: 20 };
+  let selected = executionPolicy('sbx');
+  let prepared = 0,
+    executed = 0,
+    journaled = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fallback = setTimeout(release, 200);
+  registry.register({
+    name: 'slow_reprepare',
+    description: 'fixture',
+    permission: 'command',
+    inputSchema: { type: 'object' },
+    async prepare() {
+      if (++prepared === 2) await gate;
+      return {
+        execute: async () => {
+          executed++;
+          return { isError: false, content: 'executed' };
+        },
+      };
+    },
+    execute: async () => ({ isError: false, content: 'unused' }),
+  });
+  try {
+    const result = await registry.execute(
+      { id: 'slow', name: 'slow_reprepare', arguments: {} },
+      {
+        ...context(),
+        executionPolicy: selected,
+        executionPolicyForCall: () => selected,
+        approve: async () => {
+          selected = executionPolicy('host');
+          return true;
+        },
+        effectJournal: {
+          begin() {
+            journaled++;
+          },
+        },
+      },
+    );
+    assert.match(result.content, /TOOL_TIMEOUT/);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(executed, 0);
+    assert.equal(journaled, 0);
+  } finally {
+    clearTimeout(fallback);
+    release();
+    await registry.close();
+  }
+});
+
+for (const timing of ['approval resolution', 'wrapper next']) {
+  test(`permission revocation at ${timing} cannot start a pending body`, async () => {
+    const registry = new ToolRegistry();
+    const deny = new PermissionPolicy({ version: 1, rules: [{ kind: 'command', effect: 'deny' }] });
+    let policy = new PermissionPolicy({
+      version: 1,
+      rules: [{ kind: 'command', effect: 'allow' }],
+    });
+    let executed = false;
+    registry.register({
+      name: 'revoked_command',
+      description: 'fixture',
+      permission: 'command',
+      inputSchema: { type: 'object' },
+      execute: async () => {
+        executed = true;
+        return { isError: false, content: 'executed' };
+      },
+    });
+    if (timing === 'wrapper next')
+      registry.registerHooks({
+        aroundTool: async (_dispatch, next) => {
+          const pending = next();
+          policy = deny;
+          return pending;
+        },
+      });
+    try {
+      const result = await registry.execute(
+        { id: 'revoked', name: 'revoked_command', arguments: {} },
+        {
+          ...context(),
+          permissionPolicyForCall: () => policy,
+          approve: async (approval) => {
+            const allowed = policy.decide(approval) === 'allow';
+            if (timing === 'approval resolution') policy = deny;
+            return allowed;
+          },
+        },
+      );
+      assert.equal(result.isError, true);
+      assert.equal(executed, false);
+    } finally {
+      await registry.close();
+    }
+  });
+}
+
+test('live selection changes while a wrapper waits are applied before the tool body', async () => {
+  const registry = new ToolRegistry();
+  let selected = executionPolicy('host');
+  let policy = new PermissionPolicy({ version: 1, rules: [] });
+  let policyReads = 0;
+  registry.register({
+    name: 'waiting_policy',
+    description: 'inspect policy',
+    inputSchema: { type: 'object' },
+    execute: async (_args, ctx) => ({
+      isError: false,
+      content: `${ctx.executionPolicy?.mode}/${resolveSandboxConfig().mode}`,
+    }),
+  });
+  registry.registerHooks({
+    aroundTool: async (_dispatch, next) => {
+      selected = executionPolicy('sbx');
+      policy = new PermissionPolicy({ version: 1, rules: [{ kind: 'command', effect: 'deny' }] });
+      await Promise.resolve();
+      return next();
+    },
+  });
+  try {
+    const result = await registry.execute(
+      { id: 'waiting', name: 'waiting_policy', arguments: {} },
+      {
+        ...context(),
+        executionPolicy: selected,
+        executionPolicyForCall: () => selected,
+        permissionPolicyForCall: () => {
+          assert.ok(
+            ++policyReads < 20,
+            'a permissionless tool must not loop waiting for an obsolete approval policy',
+          );
+          return policy;
+        },
+      },
+    );
+    assert.equal(result.content, 'sbx/sbx');
+  } finally {
+    await registry.close();
+  }
+});
+
+test('permission tightening while a wrapper waits prevents an already approved body from starting', async () => {
+  const registry = new ToolRegistry();
+  let policy = new PermissionPolicy({ version: 1, rules: [{ kind: 'command', effect: 'allow' }] });
+  let executed = false;
+  registry.register({
+    name: 'waiting_command',
+    description: 'fixture command',
+    permission: 'command',
+    inputSchema: { type: 'object' },
+    execute: async () => {
+      executed = true;
+      return { isError: false, content: 'executed' };
+    },
+  });
+  registry.registerHooks({
+    aroundTool: async (_dispatch, next) => {
+      policy = new PermissionPolicy({ version: 1, rules: [{ kind: 'command', effect: 'deny' }] });
+      return next();
+    },
+  });
+  try {
+    const result = await registry.execute(
+      { id: 'tightened', name: 'waiting_command', arguments: {} },
+      {
+        ...context(),
+        permissionPolicyForCall: () => policy,
+        approve: async (approval) => policy.decide(approval) === 'allow',
+      },
+    );
+    assert.equal(result.isError, true);
+    assert.equal(executed, false);
+  } finally {
+    await registry.close();
+  }
+});
+
+test('a trusted live policy refreshes after approval and stays fixed once the tool body starts', async () => {
+  const registry = new ToolRegistry();
+  let selected = executionPolicy('sbx');
+  registry.register({
+    name: 'live_policy',
+    description: 'inspect live policy',
+    permission: 'command',
+    inputSchema: { type: 'object' },
+    async execute(_args, ctx) {
+      const before = `${ctx.executionPolicy?.mode}/${resolveSandboxConfig().mode}`;
+      selected = executionPolicy('docker');
+      await Promise.resolve();
+      return {
+        isError: false,
+        content: `${before}/${ctx.executionPolicy?.mode}/${resolveSandboxConfig().mode}`,
+      };
+    },
+  });
+  try {
+    const result = await registry.execute(
+      { id: 'live', name: 'live_policy', arguments: {} },
+      {
+        ...context(),
+        executionPolicy: selected,
+        executionPolicyForCall: () => selected,
+        approve: async () => {
+          selected = executionPolicy('host');
+          return true;
+        },
+      },
+    );
+    assert.equal(result.content, 'host/host/host/host');
+  } finally {
+    await registry.close();
+  }
+});
 
 test('mutating the caller policy while approval waits cannot change the dispatched policy', async () => {
   const registry = new ToolRegistry();

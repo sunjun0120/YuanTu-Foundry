@@ -11,6 +11,7 @@ module.exports = {
     'dist/apps/**/*',
     'dist/desktop/**/*',
     'dist/packages/**/*',
+    'dist/program-runner/**/*',
     'package.json',
     'LICENSE',
     '!dist/**/*.map',

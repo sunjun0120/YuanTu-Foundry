@@ -223,6 +223,12 @@ export function foldContextEnvelopes(
   return envelopes;
 }
 function envelopeOf(data: Record<string, unknown>): ContextEnvelope {
+  const corrupt = (detail: string): never => {
+    throw new Error(
+      `Session log event context.envelope has ${detail}; the envelope cannot be reconstructed, so the log is corrupt`,
+    );
+  };
+  if (!data || typeof data !== 'object' || Array.isArray(data)) corrupt('an invalid payload');
   const identity = (value: unknown): string | undefined =>
     typeof value === 'string' && value ? value : undefined;
   const systemHash = identity(data.systemHash);
@@ -232,25 +238,44 @@ function envelopeOf(data: Record<string, unknown>): ContextEnvelope {
     throw new Error(
       'Session log event context.envelope has no run, system hash or tool hash; the envelope cannot be reconstructed, so the log is corrupt',
     );
+  const count = (field: string): number => {
+    // Older records may omit measurements; a present value must remain a count rather than be coerced.
+    const value = data[field];
+    if (value === undefined) return 0;
+    if (!Number.isSafeInteger(value) || (value as number) < 0) corrupt(`an invalid ${field}`);
+    return value as number;
+  };
+  if (
+    data.tools !== undefined &&
+    (!Array.isArray(data.tools) ||
+      !data.tools.every(
+        (tool) =>
+          tool &&
+          typeof tool === 'object' &&
+          !Array.isArray(tool) &&
+          typeof tool.name === 'string' &&
+          typeof tool.description === 'string' &&
+          tool.inputSchema &&
+          typeof tool.inputSchema === 'object' &&
+          !Array.isArray(tool.inputSchema),
+      ))
+  )
+    corrupt('an invalid tool catalogue');
   return {
     runId,
-    round: Number(data.round ?? 0),
+    round: count('round'),
     model: typeof data.model === 'string' ? data.model : null,
-    maxOutputTokens: Number(data.maxOutputTokens ?? 0),
-    ...(data.maxContextTokens === undefined
-      ? {}
-      : { maxContextTokens: Number(data.maxContextTokens) }),
+    maxOutputTokens: count('maxOutputTokens'),
+    ...(data.maxContextTokens === undefined ? {} : { maxContextTokens: count('maxContextTokens') }),
     ...(identity(data.cacheKey) === undefined ? {} : { cacheKey: data.cacheKey as string }),
     systemHash,
-    systemBytes: Number(data.systemBytes ?? 0),
+    systemBytes: count('systemBytes'),
     ...(typeof data.system === 'string' ? { system: data.system } : {}),
     ...(data.systemTruncated === true ? { systemTruncated: true } : {}),
     toolsHash,
-    toolsBytes: Number(data.toolsBytes ?? 0),
-    toolsCount: Number(data.toolsCount ?? 0),
-    // Only the array-ness is checked here: the catalogue is this runtime's own shape, and the digest above is
-    // what identifies it. A payload that is not an array is treated as absent, which the fold then resolves by
-    // hash from a record that has it.
+    toolsBytes: count('toolsBytes'),
+    toolsCount: count('toolsCount'),
+    // Absent catalogues are valid legacy/deduplicated records; malformed present catalogues are corruption.
     ...(Array.isArray(data.tools) ? { tools: data.tools as ToolSpec[] } : {}),
   };
 }

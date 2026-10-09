@@ -256,7 +256,7 @@ export async function createAgent(
     });
   return new Agent({
     store,
-    executionEnvironment: withExecutionPolicy(policyForCall(), () => executionEnvironment()),
+    executionEnvironment: () => withExecutionPolicy(policyForCall(), () => executionEnvironment()),
     executionPolicy: policyForCall,
     modelInfo: modelInfoFor(config),
     supportsVision: config.supportsVision ?? true,

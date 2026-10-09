@@ -1,5 +1,5 @@
-﻿import type { Tool } from '../protocol/index.ts';
-import { verifyFileDelivery } from '../core/delivery.ts';
+import type { Tool } from '../protocol/index.ts';
+import { deliveryFormats, verifyFileDelivery } from '../core/delivery.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -16,26 +16,21 @@ export function deliveryTool(root: string): Tool {
     name: 'verify_file_delivery',
     isConcurrencySafe: parallelRead,
     description:
-      'Independently verify a file before claiming delivery. Checks a workspace file exists, is regular and nonempty, records size and SHA-256, and validates basic structure for supported formats. For visual layout or full document semantics, use a suitable renderer/parser as well. This is read-only.',
+      'Independently verify a file before claiming delivery. Checks a workspace file exists, is regular and nonempty, records size and SHA-256, and validates basic structure for the declared or detected format. For visual layout or full document semantics, use a suitable renderer/parser as well. This is read-only.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', minLength: 1, maxLength: 4096 },
         format: {
           type: 'string',
-          enum: [
-            'auto',
-            'binary',
-            'text',
-            'pdf',
-            'docx',
-            'xlsx',
-            'pptx',
-            'xls',
-            'png',
-            'jpeg',
-            'zip',
-          ],
+          /**
+           * The vocabulary comes from the verifier, not from a second copy of it.
+           *
+           * A hand-written list is how this schema offered `xls` while the verifier had no rule for its
+           * signature — the tool advertised a check it did not perform. Spreading the code's own tuple means
+           * adding a format to the verifier is what makes it selectable here.
+           */
+          enum: [...deliveryFormats],
         },
         minBytes: { type: 'integer', minimum: 1, maximum: 100000000 },
         sha256: { type: 'string', pattern: '^[a-fA-F0-9]{64}$' },

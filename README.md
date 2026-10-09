@@ -106,7 +106,7 @@ Windows x64 安装包通过 `npm.cmd run package:windows` 构建，产物位于 
 | 入口              | 职责                                                                 | 内部依赖                                                                  |
 | ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `apps/shared`     | CLI 与 Host 共用的装配层：沙箱默认值、容量解析、store、`createAgent` | core, protocol, providers, storage, tools                                 |
-| `apps/cli`        | 一次性命令行：17 个运行型命令 + `resources`/`models`/`mcp`           | shared, core, mcp, protocol, providers, resources, storage, tools         |
+| `apps/cli`        | 一次性命令行：命令词表与计数见[生成事实](#facts)                     | shared, core, mcp, protocol, providers, resources, storage, tools         |
 | `apps/agent-host` | 长驻 Host：JSONL(stdin 或 TCP) RPC 服务端 + 任务调度器               | shared, core, protocol, providers, resources, storage, tools              |
 | `apps/desktop`    | Electron 主进程 + preload + 渲染层；自持一个 Host 子进程             | carrier, client, core, mcp, office, protocol, providers, resources, tools |
 | `apps/web`        | 本机 Web 桥：静态页 + 单条 WebSocket + 一个 Host 子进程              | desktop（复用渲染层）, carrier                                            |
@@ -171,6 +171,8 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 下列工具由 `createTools()` 在空工作区下发，是本项目的稳定工具面；每项的审批列就是它声明的权限（`—` 表示不声明权限，也正因如此才出现在只读运行里）。
 
 ### 文件与编辑
+
+文件工具、搜索与仓库地图统一排除常见凭据名称：`.env` 及其变体、`.npmrc`、`.pypirc`、`.netrc`、`credentials`／`credentials.*`、`id_rsa`／`id_ed25519`，以及 `.pem`、`.p12`、`.pfx`、`.key` 文件。名称检查不区分大小写，覆盖嵌套目录；直接读取或修改这些路径也会拒绝。内部 `.yuantu/spill` 的输出读取豁免不会放开其后代的凭据路径。容器预检查复用凭据名称规则，并额外拒绝数据库文件；它保留 `.env.example` 占位文件例外，文件工具仍排除全部 `.env` 名称。名称规则不能识别藏在普通源码中的秘密。
 
 | 工具           | 行为                                                         | 审批 |
 | -------------- | ------------------------------------------------------------ | ---- |
@@ -269,6 +271,8 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 | `verify_file_delivery` | 校验类型、大小、SHA-256 与结构标记                             | —    |
 | `present`              | 把工作区文件声明为本次任务的交付物，供用户打开                 | —    |
 
+`office_*` 处理 DOCX/XLSX/PPTX，拒绝旧版 DOC/XLS/PPT。DOCX/PPTX 的默认 PDF 预览需要本机 Microsoft Office；XLSX 默认生成纯 JS 的 HTML 数据预览。显式选择 LibreOffice PDF 后端时需要另外安装 LibreOffice。`verify_file_delivery` 可检查旧格式的结构签名，这不代表 Office 工具支持创建、编辑或预览旧格式。
+
 ### 记忆与知识
 
 | 工具                                         | 行为                                    | 审批 |
@@ -366,6 +370,8 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 用 `--permission-policy <file>` 或 `YUANTU_PERMISSION_POLICY` 指定可信 JSON 规则。`deny` 优先于 `ask`，再优先于 `allow`；deny/ask 覆盖 `--allow-command` 与 `--allow-write`；不匹配则保留原审批行为。规则按 kind、精确工具名和**完整** arguments 对象匹配——arguments 不是命令前缀白名单。CLI 与 Host 用 `--allow-*` 与策略文件表达这四档；桌面把它们和沙箱捆成三档（仅可查看 = 只读、工作区内修改 = 逐项询问、完全权限 = 完全访问 + 宿主执行），只能整档选择。
 
 ### 命令沙箱
+
+桌面运行中也可以切换权限预设，新的选择立即作用于尚未执行的工具。等待授权的调用按新权限允许或拒绝，开始执行前再次核对执行环境；下一轮模型请求同步更新工具列表与环境说明。已经启动的命令、后台进程、终端和语言服务器保留创建时的执行环境。
 
 `YUANTU_SANDBOX` 取 `host`、`docker`、`sbx` 或 `windows`，镜像由 `YUANTU_SANDBOX_IMAGE` 指定。**CLI 与 Host 默认 `host`**：命令直接在主机的 shell 中运行，初始目录是工作区——**目录校验不是操作系统沙箱**，授权后的命令可以访问主机其他位置和网络。桌面默认 `sbx`，而 `YUANTU_SANDBOX` 在桌面上只表示**新会话从哪个模式开始**（不改写、不锁定）：某个会话在 chip 里换了档只影响它自己，新会话回到这个起点。切换是**活的**——沙箱模式在每次命令执行时读取，所以换档不重启载体进程、不打断会话，下一条命令就按新模式约束。模式属于会话（每个会话 id 各自记住自己的档位，窗口重开回到起点），因此两个会话可以一个在沙箱里、一个在宿主上。
 
@@ -518,23 +524,23 @@ JS 钩子必须由人显式指定模块路径（`--hooks <module>` 或 `YUANTU_H
 
 ### CLI
 
-`apps/cli/main.ts` 是单文件入口，17 个运行型命令（`run`、`resume`、`plan`、`plan-show`、`plan-execute`、`sessions`、`show`、`task-create`、`tasks`、`task`、`task-attempts`、`task-steps`、`task-trigger`、`task-schedule`、`task-approval`、`task-verify`、`task-retry`）加四个不需密钥的命令（`resources`、`models`、`mcp list|authorize|revoke`、`credentials set|list`）。交互模式下**进度全部走 stderr**，stdout 只留答复本身，因此它可以安全地接管道；`--json` 模式把事件、结果与计划都变成 JSONL。它明确拒绝 `--listen`：要对外服务请用 Agent Host。
+`apps/cli/main.ts` 是单文件入口。需要模型凭据的命令只有五个（`run`、`resume`、`plan`、`plan-execute`、`task-retry`），其余命令与维护命令都不需要；命令词表、计数与维护命令见[生成事实](#facts)，真源是 `apps/shared/cli-commands.ts`——帮助文本的 `Usage:` 段由那份清单渲染，`docs:check` 会核对上面这句里点名的命令，所以两者不可能各说一套。交互模式下**进度全部走 stderr**，stdout 只留答复本身，因此它可以安全地接管道；`--json` 模式把事件、结果与计划都变成 JSONL。它明确拒绝 `--listen`：要对外服务请用 Agent Host。
 
 CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*` 变量与取值不合法的已知变量都会被列出并拒绝启动**，拼错的名字给出最近似名建议，且一次报出全部问题。库代码（`packages/core`、`packages/client`）不做这项检查——嵌入方进程里可能有别的 `YUANTU_*` 变量，判断环境是否合法是宿主的决定。
 
 ### Agent Host
 
-长驻进程，在 stdin/stdout 或 TCP 上提供 JSONL JSON-RPC。报文只有四种形状：请求 `{id, method, params}`、成功 `{id, result}`、失败 `{id, error}`、事件 `{event}`；此外还有**没有 id 的 error**，表示「拒绝这条链路」而不是回答某个请求。方法共 46 个，按域分组：
+长驻进程，在 stdin/stdout 或 TCP 上提供 JSONL JSON-RPC。报文只有四种形状：请求 `{id, method, params}`、成功 `{id, result}`、失败 `{id, error}`、事件 `{event}`；此外还有**没有 id 的 error**，表示「拒绝这条链路」而不是回答某个请求。方法数与它的真源见[生成事实](#facts)：下表按域分组，每一行都必须与 `HostMethods` 的方法集合一致，`docs:check` 会逐个核对（多列、漏列、拼错都会失败）。
 
 | 域         | 方法                                                                                                                                                                                       |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 控制面     | `host.info`、`permission.update`、`invariants.list`                                                                                                                                        |
+| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`permission.update`、`invariants.list`                                                                                                        |
 | 会话       | `session.create`、`session.list`、`session.rename`、`session.delete`、`session.get`、`session.audit`、`session.events`                                                                     |
 | 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                            |
 | 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                     |
 | 计划       | `plan.get`、`plan.approve`、`plan.reject`                                                                                                                                                  |
 | 任务       | `task.create`、`task.get`、`task.list`、`task.update`、`task.attempts`、`task.steps`、`task.approval.respond`、`task.trigger`、`task.propose`、`task.confirm`、`task.verify`、`task.retry` |
-| 后台命令   | `background.list`、`background.poll`、`background.stop`、`background.clear`                                                                                                                |
+| 后台命令   | `background.list`、`background.state`、`background.policy`、`background.poll`、`background.stop`、`background.clear`                                                                       |
 | 资源与文件 | `resources.list`、`files.list`、`files.read`                                                                                                                                               |
 | 变更       | `changes.list`、`changes.undo`                                                                                                                                                             |
 | 会话附属   | `todos.get`、`deliverables.get`、`subagents.list`、`goal.get`                                                                                                                              |
@@ -564,6 +570,8 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 ### Web
 
 `npm run web` 先构建静态页，再启动一个**只绑回环**的桥：默认端口 `0`（由系统分配）与随机 token，访问地址形如 `http://127.0.0.1:<port>/?token=<token>`，WebSocket 走 `/ws?token=`，非回环来源一律 403。桥自身是 `spawnedCarrier`，页面与桌面共用同一套渲染层与同一个 `CarrierService`。第二标签页会被拒绝且不会踢掉已连接的页面。网页版刻意不提供壳专属能力（附件、MCP 设置、权限与沙箱设置、模型设置），这些请求会返回明确的拒绝文案。
+
+页面重连后，旧连接尚未完成的请求回复不会发给新页面。浏览器桥的连接握手默认等待 10 秒，普通命令及文件回复默认等待 120 秒；等待整轮运行、审批、规划、验证或压缩的命令遵循 Host 的完成与取消流程，默认不设总时长上限。嵌入方显式配置 `requestTimeoutMs` 时可限制所有请求。超时或连接丢失会提示执行结果可能未知，不自动重放命令；再次操作前应检查当前状态。修复与验收记录见 [当前项目审计修复](docs/audit-repairs-2026-10-08.md)。
 
 ---
 
@@ -687,9 +695,12 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | 会话 schema 版本 | v28 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 49 / 41 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 7 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 156 个 | `tests/*.test.ts` |
+| 行为测试文件 | 169 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
-| `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（描述文本与 schema 必须一致） |
+| CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
+| CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
+| Host JSON-RPC 方法 | 50 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->
 
@@ -698,6 +709,8 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 <a id="boundaries"></a>
 
 ## 已知边界
+
+- **命令沙箱与文件工具权限分别约束**：Docker/sbx 的命令执行只读，不代表文件编辑工具也只读。文件工具在宿主进程内按工作区路径、凭据保护和审批规则执行；显式只读文件策略会在准备、审批和写入前拒绝修改。桌面的“仅可查看”同时拒绝写工具，“工作区内修改”允许审批后的文件编辑。网络抓取和远程 HTTP/SSE MCP 也不由命令沙箱隔离。
 
 - **自动预算不是网关容量保证**：未发布容量的模型使用应用默认预算；可在模型设置或运行参数中手动覆盖，接口明确超限时有限压缩恢复。内置容量目录只覆盖它明确核对过的端点与模型。
 - **host 沙箱不是安全边界**：授权后的命令可以访问主机其他位置与网络；命令工具不适合不受信任的工作负载。权限策略作用于需要审批的操作，同样不能代替操作系统沙箱。
@@ -711,7 +724,7 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
-- **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host/Windows 执行后端，内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。VM 和 Node Permission Model 都不是恶意代码沙箱，直接效果仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。目前 docker/sbx 程序 runner 未完成运行时路径接线，会明确拒绝而不回退 host。
+- **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host/Windows 执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。VM 和 Node Permission Model 都不是恶意代码沙箱，直接效果仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。目前 docker/sbx 程序 runner 未完成运行时路径接线，会明确拒绝而不回退 host。独立 runner 构建产物及验收边界见 [部署说明](docs/program-runner-deployment.md)。
 - **CLI 不是 Host**：它不监听端口，`--listen` 会被明确拒绝。
 - **每日备份是桌面可选设置**：默认关闭，应用未运行时不生成；没有自动恢复。较新 schema 的库仍拒绝打开。桌面确认恢复或维护命令均复用离线校验与保全流程；恢复后主对话不自动续跑，已保存的定时/触发任务和目标唤醒仍按现有规则运行。
 - 环境检查只做在 CLI 与 Host，库代码不做——嵌入方进程里可能存在别的 `YUANTU_*` 变量。

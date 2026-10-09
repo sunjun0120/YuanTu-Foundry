@@ -148,9 +148,11 @@ test('a per-tool exemption turns the deadline off for that tool alone', async ()
 
 test('an aroundTool wrapper sees the timeout and a retry gets a fresh budget', async () => {
   let bodies = 0;
+  const signals: AbortSignal[] = [];
   const tools = new ToolRegistry();
   tools.register(
-    tool('flaky', () => {
+    tool('flaky', (_args, ctx) => {
+      signals.push(ctx.signal);
       bodies += 1;
       if (bodies === 1) return new Promise<ToolResult>(() => {});
       // Longer than a third of the budget and shorter than all of it: it only passes if the second attempt
@@ -182,6 +184,54 @@ test('an aroundTool wrapper sees the timeout and a retry gets a fresh budget', a
   assert.equal(caught.length, 1);
   assert.ok(caught[0] instanceof ToolTimeoutError);
   assert.equal(bodies, 2);
+  assert.equal(signals[0]!.aborted, true);
+  assert.equal(signals[1]!.aborted, false);
+  assert.notEqual(signals[0], signals[1]);
+});
+
+test('run cancellation still aborts the fresh signal of a timed-out tool retry', async () => {
+  const tools = new ToolRegistry();
+  const run = new AbortController();
+  let attempts = 0;
+  let retrySignal: AbortSignal | undefined;
+  let started!: () => void;
+  const retryStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const fallback = setTimeout(() => run.abort(new Error('probe timeout')), 2000);
+  tools.deadlines = { defaultMs: 20 };
+  tools.register(
+    tool('cancel_retry', (_args, ctx) => {
+      if (++attempts === 1) return new Promise<ToolResult>(() => {});
+      retrySignal = ctx.signal;
+      started();
+      return new Promise<ToolResult>((_resolve, reject) =>
+        ctx.signal.addEventListener('abort', () => reject(ctx.signal.reason), { once: true }),
+      );
+    }),
+  );
+  tools.registerExtension([], {
+    aroundTool: async (_dispatch, next) => {
+      try {
+        return await next();
+      } catch (error) {
+        if (error instanceof ToolTimeoutError) return next();
+        throw error;
+      }
+    },
+  });
+  try {
+    const result = tools.execute(call('cancel_retry'), { signal: run.signal, approve });
+    void result.catch(() => {});
+    await retryStarted;
+    assert.equal(retrySignal?.aborted, false);
+    run.abort(new Error('cancel retry'));
+    await assert.rejects(result, /cancel retry/);
+    assert.equal(retrySignal?.aborted, true);
+  } finally {
+    clearTimeout(fallback);
+    await tools.close();
+  }
 });
 
 test('cancelling the run is a cancellation, not a timeout', async () => {

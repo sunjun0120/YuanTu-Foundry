@@ -96,12 +96,105 @@ export function emptyStatistics(): SessionStatistics {
     decodeTokens: 0,
   };
 }
+const USAGE_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'cachedInputTokens',
+  'cacheWriteInputTokens',
+] as const;
+const TIMING_FIELDS = ['modelMs', 'toolMs', 'firstTokenMs', 'decodeMs'] as const;
+const COUNT_FIELDS = ['turns', 'steps', 'firstTokenCount', 'decodeTokens'] as const;
+const LEGACY_OPTIONAL_FIELDS = new Set<string>([
+  'turns',
+  'steps',
+  'decodeMs',
+  'decodeTokens',
+  'cacheWriteInputTokens',
+]);
+const recordOf = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+const validNumber = (value: unknown, integer = true): value is number =>
+  typeof value === 'number' &&
+  Number.isFinite(value) &&
+  value >= 0 &&
+  value <= Number.MAX_SAFE_INTEGER &&
+  (!integer || Number.isSafeInteger(value));
+
+/** Checkpoint readers must refuse invalid totals and replay the log instead of trusting poisoned cache data. */
+export function isSessionStatistics(value: unknown): value is SessionStatistics {
+  const record = recordOf(value);
+  if (!record) return false;
+  for (const key of [...USAGE_FIELDS, ...TIMING_FIELDS, ...COUNT_FIELDS]) {
+    if (record[key] === undefined && LEGACY_OPTIONAL_FIELDS.has(key)) continue;
+    if (!validNumber(record[key], !(TIMING_FIELDS as readonly string[]).includes(key)))
+      return false;
+  }
+  if (typeof record.cacheKnown !== 'boolean' || typeof record.timingKnown !== 'boolean')
+    return false;
+  for (const key of ['usageComplete', 'decodeKnown'])
+    if (record[key] !== undefined && typeof record[key] !== 'boolean') return false;
+  if (record.requestTiming !== undefined) {
+    const timing = recordOf(record.requestTiming);
+    if (!timing) return false;
+    for (const key of Object.keys(emptyRequestTiming()))
+      if (!validNumber(timing[key], !key.endsWith('Ms'))) return false;
+  }
+  return true;
+}
+
 export function addUsage(target: SessionStatistics, usage: Usage): void {
-  target.inputTokens += usage.inputTokens;
-  target.outputTokens += usage.outputTokens;
-  target.cachedInputTokens += usage.cachedInputTokens ?? 0;
-  target.cacheWriteInputTokens += usage.cacheWriteInputTokens ?? 0;
-  if (usage.inputTokens > 0 && usage.cachedInputTokens === undefined) target.cacheKnown = false;
+  const record = recordOf(usage) ?? {};
+  for (const key of USAGE_FIELDS) {
+    const value = record[key];
+    const optional = key === 'cachedInputTokens' || key === 'cacheWriteInputTokens';
+    if (value === undefined && optional) continue;
+    if (!validNumber(value)) {
+      target.usageComplete = false;
+      if (key === 'cachedInputTokens') target.cacheKnown = false;
+      continue;
+    }
+    const sum = target[key] + value;
+    target[key] = Math.min(sum, Number.MAX_SAFE_INTEGER);
+    if (!validNumber(sum)) target.usageComplete = false;
+  }
+  if (
+    validNumber(record.inputTokens) &&
+    record.inputTokens > 0 &&
+    record.cachedInputTokens === undefined
+  )
+    target.cacheKnown = false;
+}
+
+/** Preserve known measurements from partial legacy or malformed payloads without coercing unknown numbers. */
+export function normalizeStatistics(value: unknown): SessionStatistics {
+  const record = recordOf(value) ?? {};
+  const clean = emptyStatistics();
+  addUsage(clean, record as unknown as Usage);
+  clean.cacheKnown &&= record.cacheKnown === true;
+  clean.timingKnown = record.timingKnown === true;
+  clean.usageComplete &&= record.usageComplete === undefined || record.usageComplete === true;
+  for (const key of [...TIMING_FIELDS, ...COUNT_FIELDS]) {
+    if (record[key] === undefined && LEGACY_OPTIONAL_FIELDS.has(key)) continue;
+    if (validNumber(record[key], !(TIMING_FIELDS as readonly string[]).includes(key)))
+      clean[key] = record[key];
+    else clean.timingKnown = false;
+  }
+  if (record.decodeKnown !== undefined) clean.decodeKnown = record.decodeKnown === true;
+  if (record.decodeMs !== undefined && !validNumber(record.decodeMs, false))
+    clean.decodeKnown = false;
+  if (record.decodeTokens !== undefined && !validNumber(record.decodeTokens))
+    clean.decodeKnown = false;
+  if (record.requestTiming !== undefined) {
+    const timing = recordOf(record.requestTiming) ?? {};
+    clean.requestTiming = emptyRequestTiming();
+    for (const key of Object.keys(clean.requestTiming) as (keyof RequestTiming)[]) {
+      if (validNumber(timing[key], !key.endsWith('Ms'))) clean.requestTiming[key] = timing[key];
+      else clean.timingKnown = false;
+    }
+  }
+  return clean;
 }
 /**
  * Sum two totals.
@@ -111,12 +204,14 @@ export function addUsage(target: SessionStatistics, usage: Usage): void {
  * would poison every later total with `NaN` instead of reading as "this run closed no step we counted".
  */
 export function addStatistics(a: SessionStatistics, b: SessionStatistics): SessionStatistics {
+  a = normalizeStatistics(a);
+  b = normalizeStatistics(b);
   const requestTiming = a.requestTiming || b.requestTiming ? emptyRequestTiming() : undefined;
   if (requestTiming) {
     for (const key of Object.keys(requestTiming) as (keyof RequestTiming)[])
       requestTiming[key] = (a.requestTiming?.[key] ?? 0) + (b.requestTiming?.[key] ?? 0);
   }
-  return {
+  const total: SessionStatistics = {
     ...(requestTiming ? { requestTiming } : {}),
     turns: (a.turns ?? 0) + (b.turns ?? 0),
     steps: (a.steps ?? 0) + (b.steps ?? 0),
@@ -141,4 +236,17 @@ export function addStatistics(a: SessionStatistics, b: SessionStatistics): Sessi
         }
       : {}),
   };
+  for (const key of [...USAGE_FIELDS, ...TIMING_FIELDS, ...COUNT_FIELDS]) {
+    if (total[key] <= Number.MAX_SAFE_INTEGER) continue;
+    total[key] = Number.MAX_SAFE_INTEGER;
+    if ((USAGE_FIELDS as readonly string[]).includes(key)) total.usageComplete = false;
+    else total.timingKnown = false;
+  }
+  if (total.requestTiming)
+    for (const key of Object.keys(total.requestTiming) as (keyof RequestTiming)[])
+      if (total.requestTiming[key] > Number.MAX_SAFE_INTEGER) {
+        total.requestTiming[key] = Number.MAX_SAFE_INTEGER;
+        total.timingKnown = false;
+      }
+  return total;
 }

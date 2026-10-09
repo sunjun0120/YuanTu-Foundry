@@ -77,7 +77,7 @@ test('restore requires an owned intact snapshot and an offline database, preserv
   const view = await f.service.create(f.file);
   const id = view.backups[0]!.id;
   assert.throws(() => databaseBackupAction(f.file, 'restore', '../sessions.sqlite'));
-  assert.throws(() => databaseBackupAction(f.file, 'restore', id), /open|offline|use/i);
+  assert.throws(() => databaseBackupAction(f.file, 'restore', id), /active reader\/writer/i);
   f.store.append(f.session.id, { role: 'user', content: 'Preserve before restoration' });
   f.close();
   const result = databaseBackupAction(f.file, 'restore', id);

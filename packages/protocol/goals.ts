@@ -277,20 +277,27 @@ export function exhaustedGoalVerdict(goal: Goal, now: string): Goal | undefined 
   };
 }
 export function isGoal(value: unknown): value is Goal {
-  if (!value || typeof value !== 'object') return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const goal = value as Record<string, unknown>;
   return (
     typeof goal.objective === 'string' &&
-    goal.objective.length > 0 &&
+    goal.objective.trim().length > 0 &&
+    goal.objective.length <= GOAL_CEILINGS.objectiveChars &&
     (goal.status === 'active' ||
       goal.status === 'paused' ||
       goal.status === 'completed' ||
       goal.status === 'blocked') &&
     Number.isSafeInteger(goal.roundsStarted) &&
+    (goal.roundsStarted as number) >= 0 &&
+    (goal.roundsStarted as number) <= GOAL_CEILINGS.maxGoalRounds &&
     Number.isSafeInteger(goal.maxGoalRounds) &&
+    (goal.maxGoalRounds as number) > 0 &&
+    (goal.maxGoalRounds as number) <= GOAL_CEILINGS.maxGoalRounds &&
     typeof goal.createdAt === 'string' &&
     typeof goal.updatedAt === 'string' &&
-    (goal.blockedReason === undefined || typeof goal.blockedReason === 'string')
+    (goal.blockedReason === undefined ||
+      (typeof goal.blockedReason === 'string' &&
+        goal.blockedReason.length <= GOAL_CEILINGS.blockedReasonChars))
   );
 }
 /** One line for a tool result, a notice or a log line: the state first, because that decides what to do. */

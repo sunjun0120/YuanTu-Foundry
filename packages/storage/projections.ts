@@ -8,7 +8,13 @@ import { todoDiff } from '../protocol/todos.ts';
 import type { TodoChange } from '../protocol/todos.ts';
 import { applyStepEvent } from '../protocol/steps.ts';
 import type { StepRecord } from '../protocol/steps.ts';
-import { addStatistics, addUsage, emptyStatistics } from '../protocol/statistics.ts';
+import {
+  addStatistics,
+  addUsage,
+  emptyStatistics,
+  isSessionStatistics,
+  normalizeStatistics,
+} from '../protocol/statistics.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { Disposer } from '../tools/dispatch.ts';
 import { foldMessages } from './events.ts';
@@ -141,6 +147,24 @@ export interface StatisticsState {
   settledTimingKnown: boolean;
   pendingCompactions: Record<string, Usage>;
 }
+/** Persisted projections are derived caches; invalid state must be recomputed from the authoritative log. */
+export function isStatisticsState(value: unknown): value is StatisticsState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  if (!isSessionStatistics(state.statistics) || typeof state.settledTimingKnown !== 'boolean')
+    return false;
+  const pending = state.pendingCompactions;
+  if (!pending || typeof pending !== 'object' || Array.isArray(pending)) return false;
+  return Object.values(pending).every((usage) => {
+    if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return false;
+    const record = usage as Record<string, unknown>;
+    return ['inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheWriteInputTokens'].every(
+      (key) =>
+        (record[key] === undefined && key !== 'inputTokens' && key !== 'outputTokens') ||
+        (Number.isSafeInteger(record[key]) && (record[key] as number) >= 0),
+    );
+  });
+}
 export const statisticsProjection: SessionProjection<StatisticsState> = {
   name: 'statistics',
   description: 'Aggregated usage and timing across every finished run of the session.',
@@ -176,7 +200,7 @@ export const statisticsProjection: SessionProjection<StatisticsState> = {
       if (event.data.cacheKnown === false) compacted.cacheKnown = false;
       const runId = event.data.runId;
       if (typeof runId === 'string' && runId) {
-        const usage = event.data.usage as Usage;
+        const usage = compacted;
         const previous = Object.hasOwn(pendingCompactions, runId)
           ? pendingCompactions[runId]
           : undefined;
@@ -185,11 +209,22 @@ export const statisticsProjection: SessionProjection<StatisticsState> = {
           configurable: true,
           writable: true,
           value: {
-            inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
-            outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
-            cachedInputTokens: (previous?.cachedInputTokens ?? 0) + (usage.cachedInputTokens ?? 0),
-            cacheWriteInputTokens:
+            inputTokens: Math.min(
+              Number.MAX_SAFE_INTEGER,
+              (previous?.inputTokens ?? 0) + usage.inputTokens,
+            ),
+            outputTokens: Math.min(
+              Number.MAX_SAFE_INTEGER,
+              (previous?.outputTokens ?? 0) + usage.outputTokens,
+            ),
+            cachedInputTokens: Math.min(
+              Number.MAX_SAFE_INTEGER,
+              (previous?.cachedInputTokens ?? 0) + (usage.cachedInputTokens ?? 0),
+            ),
+            cacheWriteInputTokens: Math.min(
+              Number.MAX_SAFE_INTEGER,
               (previous?.cacheWriteInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
+            ),
           },
         });
       } else settledTimingKnown = false;
@@ -204,13 +239,15 @@ export const statisticsProjection: SessionProjection<StatisticsState> = {
       return finish();
     }
     if (event.type !== 'run.finished') return state;
-    const runStatistics = event.data.statistics as SessionStatistics | undefined;
+    const runStatistics =
+      event.data.statistics === undefined ? undefined : normalizeStatistics(event.data.statistics);
     const runId = String(event.data.runId ?? '');
     const pending = Object.hasOwn(pendingCompactions, runId)
       ? pendingCompactions[runId]
       : undefined;
     if (runStatistics) {
-      const counted = event.data.compactionUsage as Usage | undefined;
+      const counted = event.data.compactionUsage === undefined ? undefined : emptyStatistics();
+      if (counted) addUsage(counted, event.data.compactionUsage as Usage);
       settledTimingKnown &&= runStatistics.timingKnown;
       if (pending) {
         const matches =
@@ -222,10 +259,13 @@ export const statisticsProjection: SessionProjection<StatisticsState> = {
         delete pendingCompactions[runId];
       }
       statistics = addStatistics(
-        statistics,
+        // Pending summaries make the displayed total temporarily unknown. Keep that separate from
+        // settled uncertainty so a matching run can confirm them, while numeric overflow stays unknown.
+        { ...statistics, timingKnown: settledTimingKnown },
         counted
           ? {
               ...runStatistics,
+              usageComplete: runStatistics.usageComplete && counted.usageComplete,
               inputTokens: runStatistics.inputTokens - counted.inputTokens,
               outputTokens: runStatistics.outputTokens - counted.outputTokens,
               cachedInputTokens: runStatistics.cachedInputTokens - (counted.cachedInputTokens ?? 0),
@@ -234,6 +274,7 @@ export const statisticsProjection: SessionProjection<StatisticsState> = {
             }
           : runStatistics,
       );
+      settledTimingKnown &&= statistics.timingKnown;
       return finish();
     }
     const legacy = emptyStatistics();
@@ -470,17 +511,26 @@ export const turnTimingProjection: SessionProjection<TurnTiming> = {
   initial: () => ({ settledMs: 0, runningSince: null, runningRunId: null }),
   apply: (state, event) => {
     if (event.type === 'run.started') {
-      const runId = String(event.data.runId ?? '');
-      if (!runId) return state;
+      const runId = event.data.runId;
+      if (typeof runId !== 'string' || !runId) return state;
       // A start with no usable clock is not a span this fold can measure; the run is still not "open" for
       // timing purposes, which is the honest answer rather than a span measured from the epoch.
       const started = Date.parse(event.at);
       if (!Number.isFinite(started)) return state;
-      return { settledMs: state.settledMs, runningSince: started, runningRunId: runId };
+      // Repeating the same start keeps the original clock. A different run replaces an unclosed run at
+      // this boundary, settling the elapsed span so recovery cannot discard time already observed.
+      if (runId === state.runningRunId) return state;
+      return {
+        settledMs:
+          state.settledMs +
+          (state.runningSince === null ? 0 : Math.max(0, started - state.runningSince)),
+        runningSince: started,
+        runningRunId: runId,
+      };
     }
     if (event.type !== 'run.finished' && event.type !== 'run.interrupted') return state;
-    const runId = String(event.data.runId ?? '');
-    if (runId && runId !== state.runningRunId) return state;
+    const runId = event.data.runId;
+    if (typeof runId !== 'string' || !runId || runId !== state.runningRunId) return state;
     if (state.runningSince === null) return state;
     const ended = Date.parse(event.at);
     if (!Number.isFinite(ended)) return state;

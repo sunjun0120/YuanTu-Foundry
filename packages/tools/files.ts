@@ -16,6 +16,7 @@ import {
 import { loadInstructions } from '../resources/instructions.ts';
 import { FileObservations, type MutationGates } from './fs-observation.ts';
 import { workerExecArgv } from './environment.ts';
+import { isCredentialFileName } from './credential-paths.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -29,7 +30,9 @@ const parallelRead = (): true => true;
 
 const excluded = new Set(['.git', '.yuantu', 'node_modules', '.ssh', '.aws', '.azure', '.gnupg']);
 function hidden(name: string): boolean {
-  return excluded.has(name.toLowerCase()) || /^\.env(?:\.|$)/i.test(name);
+  return (
+    excluded.has(name.toLowerCase()) || /^\.env(?:\.|$)/i.test(name) || isCredentialFileName(name)
+  );
 }
 /**
  * True for the store's own spilled tool output, which lives under the internal `.yuantu` directory. Reads
@@ -74,7 +77,7 @@ export class Workspace {
     // page through output that did not fit in a result. Nothing else under `.yuantu` opens up, and `allowSpill`
     // is only ever passed by a read.
     const spill = allowSpill && parts[0] === '.yuantu' && parts[1] === 'spill';
-    if (!spill && parts.some(hidden))
+    if (parts.some((part, index) => hidden(part) && !(spill && index === 0)))
       throw new Error('Access to internal or credential paths is blocked');
     // Reject all links, including in-root links, to reduce ambiguity for mutation tools.
     let current = root;

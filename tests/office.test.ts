@@ -11,9 +11,10 @@ import {
   runOfficeAutomation,
 } from '../packages/office/automation.ts';
 import { readPptxSlides } from '../packages/office/read.ts';
-import { verifyFileDelivery } from '../packages/core/delivery.ts';
+import { verifyFileDelivery, deliveryFormats } from '../packages/core/delivery.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
+import { MAX_CREATED_SHEETS } from '../packages/office/spreadsheet.ts';
 import { deliveryTool } from '../packages/tools/delivery.ts';
 
 // ---- merged from office.test.ts ----
@@ -412,3 +413,86 @@ test('Agent verifies a delivered file without write approval and cannot escape w
   const missing = await run('missing.txt');
   assert.equal(missing.isError, true);
 });
+/**
+ * The legacy Office formats, verified rather than merely listed.
+ *
+ * The tool's schema offered `xls` while the verifier's rules had nothing for that extension, so the two
+ * disagreed about what "supported format" meant: the schema advertised a structural check the code did not
+ * perform, and `doc` / `ppt` — the formats templates usually arrive in — were accepted as `binary` with no
+ * structure test at all. Both directions are pinned here: a real compound file passes, and a file whose
+ * extension claims one but whose bytes are plain text fails.
+ */
+test('delivery verification covers the legacy Office formats, not just their extensions', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-delivery-legacy-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const ole = Buffer.concat([
+    Buffer.from([208, 207, 17, 224, 161, 177, 26, 225]),
+    Buffer.alloc(512, 7),
+  ]);
+  for (const extension of ['doc', 'xls', 'ppt']) {
+    await writeFile(path.join(root, `template.${extension}`), ole);
+    const evidence = await verifyFileDelivery(root, { path: `template.${extension}` });
+    assert.equal(evidence.format, extension);
+    assert.match(evidence.validation, /basic format structure verified/);
+    await writeFile(path.join(root, `fake.${extension}`), 'plain text, compound signature missing');
+    await assert.rejects(
+      verifyFileDelivery(root, { path: `fake.${extension}` }),
+      /compound-file signature/,
+    );
+  }
+  // The vocabulary the model is offered is the verifier's own list, so neither can grow without the other.
+  const schema = deliveryTool(root).inputSchema as {
+    properties?: { format?: { enum?: unknown } };
+  };
+  assert.deepEqual(schema.properties?.format?.enum, [...deliveryFormats]);
+});
+/**
+ * The schema and the engine promise the same workbook.
+ *
+ * `office_create` used to advertise more sheets than `runSpreadsheetOperation` would build, so a call in the
+ * gap validated at the tool boundary and failed in the engine — the one shape of limit that is worse than a
+ * smaller limit, because the tool description said the request was acceptable. One constant now feeds both,
+ * and this pins the two readers to it.
+ */
+test('office_create advertises exactly the workbook the engine builds', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-sheets-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tool = officeTools(root).find((item) => item.name === 'office_create')!;
+  const schema = tool.inputSchema as { properties?: { sheets?: { maxItems?: number } } };
+  const declared = schema.properties?.sheets?.maxItems;
+  assert.equal(declared, MAX_CREATED_SHEETS);
+  const sheet = (name: string) => ({ name, rows: [['value']] });
+  const atLimit = Array.from({ length: MAX_CREATED_SHEETS }, (_, index) => sheet(`S${index}`));
+  const create = (sheets: { name: string; rows: string[][] }[]) =>
+    runOfficeOperation(tool, { format: 'xlsx', path: 'book.xlsx', sheets });
+  await create(atLimit);
+  assert.ok((await readFile(path.join(root, 'book.xlsx'))).length > 0);
+  /**
+   * One over the limit is refused, whichever reader gets there first.
+   *
+   * The schema rejects it during validation and the engine has its own message for a request that reached it
+   * anyway, so the assertion accepts both: what the test is pinning is that the published bound really is the
+   * enforced one, not the wording of whichever layer happened to answer.
+   */
+  await assert.rejects(
+    create([...atLimit, sheet('extra')]),
+    new RegExp(`(1 to ${MAX_CREATED_SHEETS}|more than ${MAX_CREATED_SHEETS} items)`),
+  );
+});
+/** One `office_create` call through the tool's own execute, with the approval it needs already granted. */
+async function runOfficeOperation(
+  tool: ReturnType<typeof officeTools>[number],
+  args: Record<string, unknown>,
+): Promise<void> {
+  const registry = new ToolRegistry();
+  registry.register(tool);
+  const result = await registry.execute(
+    { id: 'create', name: tool.name, arguments: args },
+    {
+      signal: new AbortController().signal,
+      approve: async () => true,
+      fileJournal: { prepare: () => 'journal-id', applied() {} },
+    },
+  );
+  if (result.isError) throw new Error(result.content);
+}

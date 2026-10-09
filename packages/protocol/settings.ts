@@ -1,4 +1,5 @@
 import { DEFAULT_MAX_OUTPUT_TOKENS } from './limits.ts';
+import { assertPrunePolicyFits } from './prune-policy.ts';
 import { BUILTIN_PROTOCOLS } from './index.ts';
 import {
   PROMPT_CACHE_ALIASES,
@@ -682,5 +683,10 @@ export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefault
     const floor = name === 'toolResultKeepRecent' || name === 'maxModelRetries' ? 0 : 1;
     if (!Number.isSafeInteger(value) || value < floor) throw new Error(`Invalid ${name}`);
   }
+  assertPrunePolicyFits({
+    thresholdChars: resolved.toolResultPruneThresholdChars,
+    headChars: resolved.toolResultPruneHeadChars,
+    tailChars: resolved.toolResultPruneTailChars,
+  });
   return resolved;
 }

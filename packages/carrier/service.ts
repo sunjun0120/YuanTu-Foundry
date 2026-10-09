@@ -823,8 +823,8 @@ export class CarrierService {
           break;
         case 'sandbox':
           /**
-           * The visible session owns the choice. Other sessions keep their own selections, and a run pins the
-           * policy it starts with rather than consulting a mutable process-wide selection.
+           * The visible session owns the choice. Other sessions keep their own backend selections;
+           * pending tools refresh before execution and started bodies keep their snapshots.
            */
           await this.client.request('sandbox.set', {
             mode: command.mode,

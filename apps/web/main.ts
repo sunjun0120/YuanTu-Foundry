@@ -137,10 +137,14 @@ class PageLink {
   private readonly decoder = new FrameDecoder();
   private readonly assembler = new MessageAssembler();
   private readonly socket: Socket;
-  private readonly onRequest: (text: string) => void;
+  private readonly onRequest: (text: string, origin: PageLink) => void;
   private readonly onGone: (link: PageLink) => void;
   private closed = false;
-  constructor(socket: Socket, onRequest: (text: string) => void, onGone: (link: PageLink) => void) {
+  constructor(
+    socket: Socket,
+    onRequest: (text: string, origin: PageLink) => void,
+    onGone: (link: PageLink) => void,
+  ) {
     this.socket = socket;
     this.onRequest = onRequest;
     this.onGone = onGone;
@@ -158,7 +162,7 @@ class PageLink {
     try {
       for (const frame of this.decoder.push(chunk))
         for (const message of this.assembler.push(frame)) {
-          if (message.kind === 'text') this.onRequest(message.text);
+          if (message.kind === 'text') this.onRequest(message.text, this);
           else if (message.kind === 'ping') this.socket.write(encodePong(message.payload));
           else if (message.kind === 'close') {
             this.refuse(1000, 'the page closed the link');
@@ -216,18 +220,20 @@ export async function startBridge(options: Options): Promise<{
   carrier.subscribeSubAgentDelta((delta) => send({ kind: 'subagent-delta', delta }));
   carrier.subscribeStatisticsDelta((delta) => send({ kind: 'statistics-delta', delta }));
 
-  const onRequest = (text: string): void => {
+  const onRequest = (text: string, origin: PageLink): void => {
+    // Request IDs belong to a page connection. A reconnect may reuse them while dispatch is pending.
+    const reply = (frame: BridgeFrame): void => origin.write(frame);
     void (async () => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
       } catch {
-        send({ kind: 'refused', reason: 'a bridge frame must be JSON' });
+        reply({ kind: 'refused', reason: 'a bridge frame must be JSON' });
         return;
       }
       const request = parseBridgeRequest(parsed);
       if ('error' in request) {
-        send({ kind: 'refused', reason: request.error });
+        reply({ kind: 'refused', reason: request.error });
         return;
       }
       try {
@@ -236,7 +242,7 @@ export async function startBridge(options: Options): Promise<{
             throw new Error('The sandbox is fixed by the bridge launch configuration.');
           // `dispatch` owns the vocabulary: an unknown or malformed command throws there, and the page gets the
           // same sentence the desktop would have shown.
-          send({
+          reply({
             kind: 'reply',
             id: request.id,
             ok: true,
@@ -244,14 +250,14 @@ export async function startBridge(options: Options): Promise<{
           });
         } else {
           const command = request.command;
-          const reply =
+          const value =
             command.type === 'list'
               ? await carrier.listWorkspaceFiles(command.path ? { path: command.path } : {})
               : await carrier.readWorkspaceFile({ path: command.path });
-          send({ kind: 'reply', id: request.id, ok: true, value: reply });
+          reply({ kind: 'reply', id: request.id, ok: true, value });
         }
       } catch (error) {
-        send({ kind: 'reply', id: request.id, ok: false, error: carrier.safeError(error) });
+        reply({ kind: 'reply', id: request.id, ok: false, error: carrier.safeError(error) });
       }
     })();
   };

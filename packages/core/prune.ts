@@ -1,4 +1,5 @@
 import type { Message } from '../protocol/index.ts';
+import { assertPrunePolicyFits, pruneNotice } from '../protocol/prune-policy.ts';
 import { recentStart } from './shrink.ts';
 
 /**
@@ -16,7 +17,7 @@ import { recentStart } from './shrink.ts';
  * - **It costs no I/O and no model request.** Nothing is written and nothing is asked, so it works in a
  *   read-only workspace, on a full disk, and in a session whose spill directory is gone — the cases where a
  *   pointer to a file that cannot be created would have left the conversation unshortened.
- * - **It is bounded by construction, not by estimate.** {@link PRUNE_MARKER} is counted in the invariant that the
+ * - **It is bounded by construction, not by estimate.** The full explanatory notice is counted in the invariant that the
  *   head, the marker and the tail together fit the threshold, so one pass leaves the result *within* the budget
  *   rather than near it, and a second pass finds nothing to do.
  * - **It never deletes.** Only the `content` of a tool message is replaced, so the call/result pairing a provider
@@ -40,13 +41,12 @@ export interface PrunePolicy {
   tailChars: number;
 }
 /**
- * What replaces a dropped middle.
+ * Legacy short marker, retained as a public export.
  *
- * Counted as code points in {@link assertPrunePolicy}, because it sits between the head and the tail and the
- * three together are what has to fit the threshold. A marker that pushed the result back over the budget would
- * make the pass a way to spend context rather than to save it.
+ * Runtime pruning adds explanatory text and counts, so startup validation reserves the full notice's
+ * maximum length instead of using this shorter marker's length.
  */
-export const PRUNE_MARKER = '\n\n[... middle pruned ...]\n\n';
+export { PRUNE_MARKER } from '../protocol/prune-policy.ts';
 /** Marks a result this pass has already pruned, so projecting twice is a no-op rather than a second cut. */
 export const PRUNE_MARK = '[... middle pruned ...]';
 export interface PruneOutcome {
@@ -90,11 +90,7 @@ export function pruneContent(content: string, policy: PrunePolicy): string | nul
   if (removed <= 0) return null;
   const head = characters.slice(0, policy.headChars).join('');
   const tail = characters.slice(characters.length - policy.tailChars).join('');
-  return head + notice(removed, characters.length) + tail;
-}
-/** The line that replaces a dropped middle. It is model-visible, so it says what happened and where the copy is. */
-function notice(removed: number, total: number): string {
-  return `\n\n${PRUNE_MARK} ${removed} of ${total} characters removed to keep this conversation within budget; the full result is in the session transcript\n\n`;
+  return head + pruneNotice(removed, characters.length) + tail;
 }
 /**
  * Prune the old tool results in one pass.
@@ -153,12 +149,5 @@ export function protectedBoundary(messages: readonly Message[], keepRecent: numb
  * rewrites its own history every round.
  */
 export function assertPrunePolicy(policy: PrunePolicy): void {
-  const marker = codePointLength(PRUNE_MARKER);
-  const fits = policy.headChars + marker + policy.tailChars;
-  if (fits > policy.thresholdChars)
-    throw new Error(
-      `Prune policy keeps ${policy.headChars} head and ${policy.tailChars} tail characters plus a ` +
-        `${marker}-character marker, which does not fit its ${policy.thresholdChars}-character threshold; ` +
-        'the marker would push a pruned result back over the budget it was pruned for',
-    );
+  assertPrunePolicyFits(policy);
 }

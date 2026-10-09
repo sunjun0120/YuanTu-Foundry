@@ -15,6 +15,85 @@ import { waitForPage } from './page-wait.mjs';
 
 // ---- merged from desktop.smoke.mjs ----
 
+test(
+  'desktop switches to full access while a background command waits for approval',
+  { timeout: 60000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-live-permission-'));
+    const results = [];
+    const url = await httpFixture(t, (body, response) => {
+      const last = body.messages.at(-1);
+      const result = Array.isArray(last?.content)
+        ? last.content.find((block) => block.type === 'tool_result')
+        : undefined;
+      if (result) {
+        results.push(result);
+        sendFrames(response, frames('LIVE_PERMISSION_DONE'));
+      } else
+        sendFrames(
+          response,
+          frames('', [
+            {
+              id: 'pending-background',
+              name: 'start_command',
+              input: { command: 'echo LIVE_PERMISSION_COMMAND' },
+            },
+          ]),
+        );
+    });
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_SANDBOX: 'sbx',
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_BASE_URL: url,
+      YUANTU_MODEL: 'fixture',
+      YUANTU_API_KEY: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let app;
+    t.after(async () => {
+      await app?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(15000);
+    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await page.locator('#prompt').fill('run the background fixture');
+    await page.locator('#send').click();
+    await page.getByRole('button', { name: '允许一次', exact: true }).waitFor();
+    assert.match(await page.locator('#approvals').innerText(), /start_command/);
+    await page.locator('#permission-trigger').click();
+    await page.locator('#permission-menu [data-preset="unconfined"]').click();
+    await page.locator('#full-access-acknowledge').check();
+    await page.locator('#full-access-enable').click();
+    await page.getByText('LIVE_PERMISSION_DONE', { exact: true }).waitFor();
+    await waitForPage(page, async () => {
+      const snapshot = (await window.yuantu.invoke({ type: 'snapshot' })).state;
+      return snapshot.background.some(
+        (job) => job.status === 'completed' && job.output.includes('LIVE_PERMISSION_COMMAND'),
+      );
+    });
+    assert.notEqual(results[0]?.is_error, true, JSON.stringify(results[0]));
+    assert.equal(await page.locator('#approvals').innerText(), '');
+    assert.equal(await page.locator('#error').isVisible(), false);
+    assert.equal(
+      (await page.evaluate(() => window.yuantu.presets({ type: 'get' }))).view.current,
+      'unconfined',
+    );
+  },
+);
+
 for (const transition of ['Host recovery', 'model replacement']) {
   test(
     `desktop preserves read-only permissions after ${transition}`,
@@ -342,9 +421,7 @@ test(
     assert.match(await page.locator('#approvals').innerText(), /<script>window.injected/);
     assert.equal(await page.evaluate(() => window.injected), undefined);
     assert.equal(await page.locator('#permission-mode').isDisabled(), false);
-    // The execution policy is fixed during a run; settle this approval before switching presets.
-    await page.getByRole('button', { name: '允许一次', exact: true }).click();
-    await idle();
+    // Switching presets also settles this pending write under the newly confirmed policy.
     await page.locator('#permission-trigger').click();
     /**
      * Full access is the rung that stops asking, so it is also the one behind the host confirmation — the test
@@ -955,7 +1032,7 @@ test(
 test('background tasks live in a conditional header popover without workspace context', async () => {
   const [html, renderer, css] = await Promise.all([
     readFile('apps/desktop/index.html', 'utf8'),
-    readFile('apps/desktop/renderer.ts', 'utf8'),
+    readFile('apps/desktop/renderer-background.ts', 'utf8'),
     readFile('apps/desktop/layout.css', 'utf8'),
   ]);
   const header = html.match(/<main id="chat-page">[\s\S]*?<header>([\s\S]*?)<\/header>/)?.[1] ?? '';

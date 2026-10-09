@@ -1,3 +1,7 @@
+/** Owned broker protocol and deployment runtime floor. */
+export const PROGRAM_PROTOCOL = 1;
+export const PROGRAM_NODE_MAJOR = 24;
+
 const ALLOWED_ENVIRONMENT_NAMES = new Set([
   'PATH',
   'Path',

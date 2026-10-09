@@ -49,7 +49,11 @@ interface Timeline {
   inFlight: number;
   peak: number;
 }
-function timedTool(name: string, timeline: Timeline, options: { permission?: 'write' } = {}): Tool {
+function timedTool(
+  name: string,
+  timeline: Timeline,
+  options: { permission?: 'write'; gate?: (callId: string) => Promise<void> } = {},
+): Tool {
   return {
     name,
     ...(options.permission ? { permission: options.permission } : {}),
@@ -69,17 +73,19 @@ function timedTool(name: string, timeline: Timeline, options: { permission?: 'wr
       try {
         // A real tool stops on abort rather than holding the group open; that is what makes cancellation a
         // matter of seconds instead of the tool's own timeout.
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, args.ms);
-          context.signal.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(timer);
-              reject(context.signal.reason ?? new Error('aborted'));
-            },
-            { once: true },
-          );
-        });
+        if (options.gate) await options.gate(callId);
+        else
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, args.ms);
+            context.signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                reject(context.signal.reason ?? new Error('aborted'));
+              },
+              { once: true },
+            );
+          });
       } finally {
         timeline.inFlight--;
       }
@@ -138,13 +144,54 @@ test('independent reads overlap, and their results come back in the order the mo
       return reply();
     },
   };
-  const { store, session, agent, timeline } = await fixture(t, provider);
-  const begun = Date.now();
-  const result = await agent.run({ sessionId: session.id, prompt: 'Read three things' });
-  const elapsed = Date.now() - begun;
+  const { store, session, agent, timeline, tools } = await fixture(t, provider);
+  const releases = new Map<string, () => void>();
+  const waits = new Map(
+    ['slow', 'quick-a', 'quick-b'].map((id) => [
+      id,
+      new Promise<void>((resolve) => releases.set(id, resolve)),
+    ]),
+  );
+  let started = 0;
+  let allStarted!: () => void;
+  let rejectStarted!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    allStarted = resolve;
+    rejectStarted = reject;
+  });
+  for (const name of ['read_one', 'read_two', 'read_three'])
+    tools.replace(
+      timedTool(name, timeline, {
+        gate: async (id) => {
+          if (++started === 3) allStarted();
+          await waits.get(id);
+        },
+      }),
+    );
+  const running = agent.run({ sessionId: session.id, prompt: 'Read three things' });
+  const guard = setTimeout(
+    () => rejectStarted(new Error('reads did not start concurrently')),
+    5000,
+  );
+  try {
+    await ready;
+    assert.equal(timeline.peak, 3, 'all three reads started before any result was released');
+    releases.get('quick-a')!();
+    releases.get('quick-b')!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert(timeline.events.includes('end quick-a') && timeline.events.includes('end quick-b'));
+    assert(
+      !timeline.events.includes('end slow'),
+      'completion order deliberately differs from model order',
+    );
+  } finally {
+    clearTimeout(guard);
+    for (const release of releases.values()) release();
+    await running;
+  }
+  const result = await running;
   assert.equal(result.status, 'completed');
   assert.equal(timeline.peak, 3, 'all three reads were in flight together');
-  assert.ok(elapsed < 240, `overlapped rather than serialized: ${elapsed}ms`);
   // Output first, in write order, because the tools are known by name `read_*`; ids are the model's.
   assert.deepEqual(toolMessages(store, session.id), [
     'slow slept 120ms',

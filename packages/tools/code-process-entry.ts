@@ -1,6 +1,6 @@
 /** Ordinary Node broker; guest code never runs in the Agent Host process. */
 import { Worker } from 'node:worker_threads';
-import { guestResourceLimits } from './environment.ts';
+import { guestResourceLimits, PROGRAM_PROTOCOL } from './environment.ts';
 import type { CodeWorkerData } from './code-worker.ts';
 let worker: Worker | undefined;
 let buffer = '';
@@ -54,4 +54,10 @@ process.stdin.on('data', (chunk: string) => {
 });
 process.stdin.on('end', () => {
   void worker?.terminate();
+});
+// Host must validate this before sending any guest source or tool data.
+send({
+  type: 'ready',
+  protocol: PROGRAM_PROTOCOL,
+  nodeMajor: Number(process.versions.node.split('.')[0]),
 });

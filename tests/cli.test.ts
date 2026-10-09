@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ENVIRONMENT } from '../packages/protocol/settings.ts';
+import { CLI_COMMANDS, CLI_MAINTENANCE_COMMANDS } from '../apps/shared/cli-commands.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { runCli } from './process-fixture.ts';
+import { projectRoot, runCli } from './process-fixture.ts';
 
 test('CLI completes read/edit/test cycle through HTTP and can reopen its session without credentials', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-'));
@@ -795,4 +796,34 @@ test('the CLI lists every setting it reads, and never prints a credential', asyn
   const refused = await runCli(['env', 'extra']);
   assert.notEqual(refused.code, 0);
   assert.match(refused.stderr, /Usage: env/);
+});
+
+/**
+ * The help block and the command catalogue are one list, and every dispatched command is in it.
+ *
+ * The README described this program's command set by hand in two places, and both sentences were wrong in
+ * different ways; `scripts/docs-facts.mjs` now counts `apps/shared/cli-commands.ts`, so what is left to pin is
+ * that the rendered help really is that list (a usage string the parser would reject is a documentation bug
+ * the count cannot see) and that the parser dispatches nothing outside it.
+ */
+test('CLI help renders the command catalogue and dispatches nothing outside it', async () => {
+  const help = await runCli(['--help']);
+  assert.equal(help.code, 0, help.stderr);
+  const usage = help.stdout.slice(help.stdout.indexOf('Usage:'), help.stdout.indexOf('Options:'));
+  for (const command of [...CLI_COMMANDS, ...CLI_MAINTENANCE_COMMANDS])
+    assert.ok(
+      usage.includes(`npm run dev -- ${command.usage}`),
+      `help must render the usage line for ${command.name}`,
+    );
+  // The first word is what the parser compares: a `mcp list` entry dispatches on `mcp`, and an entry whose
+  // first word is missing from the help would be a command nobody could discover.
+  const source = await readFile(path.join(projectRoot, 'apps/cli/main.ts'), 'utf8');
+  const dispatched = new Set(
+    [...source.matchAll(/command === '([a-z][a-z0-9-]*)'/g)].map((match) => match[1]!),
+  );
+  const catalogue = new Set(
+    [...CLI_COMMANDS, ...CLI_MAINTENANCE_COMMANDS].map((command) => command.name.split(' ')[0]!),
+  );
+  const undocumented = [...dispatched].filter((name) => !catalogue.has(name));
+  assert.deepEqual(undocumented, [], 'a dispatched command must appear in the command catalogue');
 });

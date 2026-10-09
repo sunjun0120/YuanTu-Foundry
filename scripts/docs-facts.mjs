@@ -35,6 +35,11 @@ import {
   SubAgentCoordinator,
 } from '../packages/core/subagents.ts';
 import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
+import {
+  CLI_COMMANDS,
+  CLI_MAINTENANCE_COMMANDS,
+  countCliRunCommands,
+} from '../apps/shared/cli-commands.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => readFile(path.join(root, file), 'utf8');
@@ -51,6 +56,29 @@ async function schemaVersion() {
     store.close();
     await rm(directory, { recursive: true, force: true });
   }
+}
+/**
+ * The Host's method names, read from the interface that declares them.
+ *
+ * `HostMethods` is a type, so it is erased at runtime and nothing can enumerate it — which is how the README
+ * came to state a count that the declaration had already outgrown. The declaration is therefore read as text:
+ * one member is one line whose first two characters are spaces, and a method name is the leading quoted key.
+ * The `HostMethods` block is located by its declaration and closed by the first line that begins with `}`,
+ * which is what its own formatting guarantees (a member object is always indented further).
+ */
+function hostMethodNames(source) {
+  const names = [];
+  let inside = false;
+  for (const line of source.split(/\r?\n/)) {
+    if (!inside) {
+      if (line.startsWith('export interface HostMethods {')) inside = true;
+      continue;
+    }
+    if (line.startsWith('}')) break;
+    const match = /^ {2}'([^']+)':/.exec(line);
+    if (match) names.push(match[1]);
+  }
+  return names;
 }
 /**
  * The `collect_subagents` description, read from the tool the model actually receives: a description that
@@ -120,6 +148,18 @@ async function facts() {
       testFiles: tests.filter((name) => name.endsWith('.test.ts')).length,
       snapshotScenarios: snapshots.filter((name) => name.endsWith('.json')).length,
       collectWaitMax: SUBAGENT_CEILINGS.collectWaitMs,
+      /**
+       * The CLI's own vocabulary, counted where it is declared.
+       *
+       * The README described this program twice by hand and both sentences were wrong in different ways — one
+       * counted fewer commands than the help printed, the other omitted the maintenance family altogether —
+       * and no gate could notice, because the numbers existed only in the prose. `apps/shared/cli-commands.ts`
+       * is now the list the help renders, so these rows cannot describe a program that is not there.
+       */
+      cliTaskCommands: CLI_COMMANDS.length,
+      cliRunCommands: countCliRunCommands(),
+      cliMaintenanceCommands: CLI_MAINTENANCE_COMMANDS.length,
+      hostRpcMethods: hostMethodNames(await read(path.join('packages', 'protocol', 'rpc.ts'))),
     };
   } finally {
     terminals.closeAll();
@@ -141,7 +181,10 @@ function table(value) {
     `| 桌面冒烟套件 | ${value.desktopSmokeSuites} | \`smoke:desktop\` 的清单 |`,
     `| 行为测试文件 | ${value.testFiles} 个 | \`tests/*.test.ts\` |`,
     `| 整轮快照场景 | ${value.snapshotScenarios} 个 | \`tests/snapshots/*.json\`（\`npm run snapshot:update\` 重写） |`,
-    `| \`collect_subagents\` 的等待上限 | ${value.collectWaitMax} ms | \`SUBAGENT_CEILINGS.collectWaitMs\`（描述文本与 schema 必须一致） |`,
+    `| CLI 任务型命令 | ${value.cliTaskCommands} 个，其中 ${value.cliRunCommands} 个需要模型凭据 | \`CLI_COMMANDS\`（\`apps/shared/cli-commands.ts\`，帮助文本由它渲染） |`,
+    `| CLI 维护命令 | ${value.cliMaintenanceCommands} 个 | \`CLI_MAINTENANCE_COMMANDS\` |`,
+    `| Host JSON-RPC 方法 | ${value.hostRpcMethods.length} 个 | \`HostMethods\`（\`packages/protocol/rpc.ts\`） |`,
+    `| \`collect_subagents\` 的等待上限 | ${value.collectWaitMax} ms | \`SUBAGENT_CEILINGS.collectWaitMs\`（上限；默认值见 \`SUBAGENT_DEFAULTS.collectWaitMs\`，描述文本与 schema 必须一致） |`,
   ].join('\n');
 }
 const START = '<!-- facts:start -->';
@@ -297,6 +340,72 @@ async function check() {
     if (limit && !description.includes(String(limit)))
       problems.push(`collect_subagents 的描述没有写明它的等待上限 ${limit}`);
   }
+  problems.push(...hostMethodTableProblems(readme, value.hostRpcMethods));
+  problems.push(...cliRunSentenceProblems(readme));
+  return problems;
+}
+/**
+ * The sentence that names the commands needing a model, checked against the catalogue that decides it.
+ *
+ * The count in the facts table can be right while the sentence beside it names the wrong commands — that is
+ * the failure the original drift actually had (a list that had stopped matching the program, with no number
+ * written down to contradict it). So this reads the backticked names out of the sentence's own parenthesis
+ * and requires them, in order, to be the catalogue's `runs` entries.
+ */
+function cliRunSentenceProblems(readme) {
+  const sentence = readme.split(/\r?\n/).find((line) => line.includes('需要模型凭据的命令'));
+  if (!sentence) return ['README.md 找不到点名“需要模型凭据的命令”的那一句（措辞被改了吗？）'];
+  const quoted = sentence.match(/（([^）]*)）/);
+  const named = quoted
+    ? [...quoted[1].matchAll(/`([a-z][a-z0-9-]*)`/g)].map((match) => match[1])
+    : [];
+  const expected = [...CLI_COMMANDS, ...CLI_MAINTENANCE_COMMANDS]
+    .filter((command) => command.runs)
+    .map((command) => command.name);
+  return named.join('、') === expected.join('、')
+    ? []
+    : [
+        `README.md 点名的需凭据命令与 CLI_COMMANDS 不一致：文档写 ${named.join('、') || '(空)'}，代码是 ${expected.join('、')}`,
+      ];
+}
+/**
+ * The README's per-domain method table against the declaration it claims to mirror.
+ *
+ * Counting alone would have caught the drift that prompted this check, but not the likelier mistake: a row
+ * that lists one method twice or drops one it used to have, with the total unchanged because another row
+ * grew. So the comparison is the set — every method in `HostMethods` must appear in the table, and no name
+ * may appear twice.
+ *
+ * The scan is bounded by the section's own headings rather than by the whole file: a dotted name also appears
+ * in prose (`run.start`, `session.events`) and in the tools catalogue, so a file-wide grep would report drift
+ * that is not there. The table is the lines between those two headings that have a domain in the first cell.
+ */
+function hostMethodTableProblems(readme, declared) {
+  const lines = readme.split(/\r?\n/);
+  const from = lines.findIndex((line) => line.trim() === '### Agent Host');
+  const to = lines.findIndex((line, index) => index > from && line.startsWith('### '));
+  if (from === -1 || to === -1)
+    return ['README.md 找不到 Agent Host 一节，方法表无法核对（标题被改名了吗？）'];
+  const listed = [];
+  for (const line of lines.slice(from, to)) {
+    const row = /^\| *[^|`]+ *\|(.+)\|\s*$/.exec(line);
+    if (!row) continue;
+    for (const [, name] of row[1].matchAll(/`([a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+)`/g))
+      listed.push(name);
+  }
+  const known = new Set(declared);
+  const problems = [];
+  const seen = new Set();
+  for (const name of listed) {
+    if (seen.has(name))
+      problems.push(`README.md 的方法表重复列出 ${name}（HostMethods 每个方法只应出现一次）`);
+    else if (!known.has(name))
+      problems.push(`README.md 的方法表列出的 ${name} 不在 HostMethods 里`);
+    seen.add(name);
+  }
+  const missing = declared.filter((name) => !seen.has(name));
+  if (missing.length)
+    problems.push(`README.md 的方法表漏掉 HostMethods 里的：${missing.join('、')}`);
   return problems;
 }
 async function generate() {

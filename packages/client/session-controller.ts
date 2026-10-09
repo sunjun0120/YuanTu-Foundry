@@ -19,12 +19,14 @@ import type { AgentHostClient } from './host-client.ts';
 import { readDisplayHistory } from './display-history.ts';
 import type { InputMode, QueuedInput } from '../core/run-queue.ts';
 import { validateUserInput } from '../protocol/images.ts';
+import { isTodoItem } from '../protocol/index.ts';
 import { emptyStatistics, addStatistics, type SessionStatistics } from '../protocol/statistics.ts';
 import { todoDiff } from '../protocol/todos.ts';
 import type { TodoChange } from '../protocol/todos.ts';
-import { presentFiles } from '../protocol/deliverables.ts';
+import { isPresentedFile, presentFiles } from '../protocol/deliverables.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
 import type { Goal } from '../protocol/goals.ts';
+import { isGoal } from '../protocol/goals.ts';
 import type { ToolResultOutput } from '../protocol/tool-result.ts';
 import type { ContextBreakdown } from '../core/budget.ts';
 
@@ -39,8 +41,8 @@ import type { ContextBreakdown } from '../core/budget.ts';
  *
  * Live-only by design: `context.forecast` is a real-time event and is not in the durable log, so a reopened
  * window has no forecast to show. Making it survive a reload would mean adding it to the session's event types
- * *and* to `IGNORABLE_SESSION_EVENTS` so that older builds keep folding newer logs — a compatibility change
- * that the display half does not need.
+ * and deciding whether this build's `IGNORABLE_SESSION_EVENTS` may skip it. Older builds still refuse event
+ * types absent from their own allowlist, so that is a compatibility change the display half does not need.
  */
 export interface ContextBudgetView {
   /** Zero-based round this prediction was made for; the panel shows it one-based. */
@@ -1038,13 +1040,16 @@ export class SessionController {
           request: structuredClone(event.data.request as QuestionRequest),
         });
         break;
-      case 'todo.written':
+      case 'todo.written': {
         // The event carries the whole list, so the client never has to merge deltas or re-read the session
         // to find out what the model dropped. The change is computed against the list the previous write left
         // here — the same function the store's fold uses, so a reload and a live update say the same thing.
-        this.state.todoChange = todoDiff(this.state.todos, (event.data.todos as TodoItem[]) ?? []);
-        this.state.todos = structuredClone((event.data.todos as TodoItem[]) ?? []);
+        if (!Array.isArray(event.data.todos)) break;
+        const todos = event.data.todos.filter(isTodoItem);
+        this.state.todoChange = todoDiff(this.state.todos, todos);
+        this.state.todos = structuredClone(todos);
         break;
+      }
       case 'plan.proposed': {
         this.state.plan = event.data.plan as Plan;
         break;
@@ -1052,15 +1057,16 @@ export class SessionController {
       case 'deliverable.presented':
         // The fold, not a merge: the event carries the whole list this run has presented, and `presentFiles` is
         // the same function the store's projection uses, so a live window and a reloaded one agree.
+        if (!Array.isArray(event.data.files)) break;
         this.state.deliverables = presentFiles(
           this.state.deliverables,
-          event.data.files as PresentedFile[],
+          event.data.files.filter(isPresentedFile),
         );
         break;
       case 'goal.changed':
         // Every change — create, edit, pause, resume, complete, block, and the round a run is admitted to —
         // carries the whole goal, so the panel is a replacement and never a patch.
-        this.state.goal = structuredClone(event.data.goal as Goal);
+        if (isGoal(event.data.goal)) this.state.goal = structuredClone(event.data.goal);
         break;
       case 'plan.approved':
         // The approval is the human's answer, and the plan row is the durable record; the panel reads the same

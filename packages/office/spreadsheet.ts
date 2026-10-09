@@ -85,12 +85,22 @@ async function editWorkbook(
     await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }),
   );
 }
+/**
+ * How many sheets one `office_create` call may build, declared once because two readers ask.
+ *
+ * The engine refuses more, and the tool schema is what the model is offered: when the two numbers were typed
+ * separately the schema advertised 30 while the engine stopped at 20, so a call with 25 sheets validated and
+ * then failed — a request the tool could describe but never satisfy. The schema therefore derives its bound
+ * from this constant rather than repeating it, which is the same rule `RUN_DEFAULTS` and `ENVIRONMENT` follow.
+ */
+export const MAX_CREATED_SHEETS = 20;
 export async function runSpreadsheetOperation(
   operation: OfficeOperation & { format: 'xlsx' },
 ): Promise<void> {
   if (operation.operation === 'create') {
     const sheets = operation.sheets ?? [];
-    if (!sheets.length || sheets.length > 20) throw new Error('Provide 1 to 20 Excel sheets');
+    if (!sheets.length || sheets.length > MAX_CREATED_SHEETS)
+      throw new Error(`Provide 1 to ${MAX_CREATED_SHEETS} Excel sheets`);
     const book = XLSX.utils.book_new();
     for (const sheet of sheets) {
       if (!sheet.name || sheet.name.length > 31 || !sheet.rows.length || sheet.rows.length > 1000)

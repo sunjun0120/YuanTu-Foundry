@@ -8,6 +8,7 @@ import { verifyFileDelivery } from '../core/delivery.ts';
 import { loadInstructions } from '../resources/instructions.ts';
 import { runOfficeAutomation, type OfficeFormat, type OfficeOperation } from './automation.ts';
 import { readPptxSlides } from './read.ts';
+import { MAX_CREATED_SHEETS } from './spreadsheet.ts';
 import { libreOfficePreview, type OfficePreview } from './preview.ts';
 
 /**
@@ -310,7 +311,7 @@ export function officeTools(root: string, renderer: OfficePreview = libreOfficeP
         sheets: {
           type: 'array',
           minItems: 1,
-          maxItems: 30,
+          maxItems: MAX_CREATED_SHEETS,
           items: {
             type: 'object',
             properties: {

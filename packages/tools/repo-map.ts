@@ -1,6 +1,7 @@
 import { readdirSync, readSync, openSync, closeSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Tool, ToolContext } from '../protocol/index.ts';
+import { isCredentialFileName } from './credential-paths.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -189,7 +190,11 @@ export interface RepoMapOptions {
 }
 
 function isIgnored(name: string): boolean {
-  return IGNORED_DIRECTORIES.has(name) || name.startsWith('.env');
+  return (
+    IGNORED_DIRECTORIES.has(name.toLowerCase()) ||
+    /^\.env/i.test(name) ||
+    isCredentialFileName(name)
+  );
 }
 /** Reads at most `MAX_READ_BYTES` from a regular file, returning '' for anything unreadable. */
 function readHead(file: string): string | null {

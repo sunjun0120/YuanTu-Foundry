@@ -1,4 +1,5 @@
 import { Ajv } from 'ajv';
+import { isDeepStrictEqual } from 'node:util';
 import {
   executionPolicy,
   snapshotExecutionPolicy,
@@ -7,6 +8,7 @@ import {
 import { resolveSandboxConfig } from './sandbox-provider.ts';
 import type { ValidateFunction } from 'ajv';
 import { DeferredApprovalError } from '../protocol/failure.ts';
+import { validateImages } from '../protocol/images.ts';
 import { JobRegistry } from '../protocol/jobs.ts';
 import type { PermissionPolicyView } from '../protocol/permissions.ts';
 import { spillNotice } from './spill.ts';
@@ -489,7 +491,9 @@ export class ToolRegistry {
   async execute(call: ToolCall, context: ToolContext): Promise<ToolExecutionResult> {
     const config = resolveSandboxConfig();
     const fixed = snapshotExecutionPolicy(
-      context.executionPolicy ?? executionPolicy(config.mode, { image: config.image }),
+      context.executionPolicyForCall?.() ??
+        context.executionPolicy ??
+        executionPolicy(config.mode, { image: config.image }),
     );
     return withExecutionPolicy(fixed, () =>
       this.executeScoped(call, {
@@ -538,12 +542,26 @@ export class ToolRegistry {
       isError: true,
       content: error instanceof Error ? error.message : String(error),
     });
+    const normalizeImages = (result: ToolResult): ToolResult => {
+      if (result.images === undefined) return result;
+      try {
+        return { ...result, images: validateImages(result.images) };
+      } catch (error) {
+        return errorResult(
+          `Invalid tool result images: ${
+            error instanceof Error ? bounded(error.message, 256) : 'image validation failed'
+          }`,
+        );
+      }
+    };
     const materialize = (
       result: ToolResult,
       extra: { notice?: boolean; additionalContext?: string[] } = {},
     ): ToolExecutionResult => {
       invariant.enter(execution, 'result');
       completed = true;
+      // Post-execute policies may replace attachments, so validate the final persistence boundary too.
+      result = normalizeImages(result);
       /**
        * Output that does not fit is written somewhere the model can still read it, and the truncation notice
        * says where. Without a host-provided spill this is the plain truncation it always was.
@@ -631,20 +649,21 @@ export class ToolRegistry {
       context.signal.throwIfAborted();
 
       invariant.enter(execution, 'prepare');
-      const prepared = await entry.tool.prepare?.(call.arguments, scope);
+      let prepared = await entry.tool.prepare?.(call.arguments, scope);
       context.signal.throwIfAborted();
-
-      if (entry.tool.permission) {
-        invariant.enter(execution, 'approval');
-        const allowed = await context.approve(
-          {
+      const approval = entry.tool.permission
+        ? {
             kind: entry.tool.permission,
             description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}`,
             toolCall: call,
             ...(prepared?.change ? { change: prepared.change } : {}),
-          },
-          context.signal,
-        );
+          }
+        : undefined;
+
+      let approvedPolicy = context.permissionPolicyForCall?.();
+      if (entry.tool.permission) {
+        invariant.enter(execution, 'approval');
+        const allowed = await context.approve(approval!, context.signal);
         context.signal.throwIfAborted();
         if (!allowed)
           return materialize(
@@ -658,8 +677,58 @@ export class ToolRegistry {
           );
       }
 
+      let dispatchPolicy = context.executionPolicy!;
+      const refreshDispatch = async (dispatchSignal: AbortSignal) => {
+        dispatchSignal.throwIfAborted();
+        if (approval && context.permissionPolicyForCall?.() !== approvedPolicy) {
+          approvedPolicy = context.permissionPolicyForCall?.();
+          const decision = approvedPolicy?.decide(approval);
+          if (
+            decision === 'deny' ||
+            (decision !== 'allow' && !(await context.approve(approval, dispatchSignal)))
+          )
+            throw new Error('Permission denied by the current policy. No effect was executed.');
+          dispatchSignal.throwIfAborted();
+        }
+        const next = snapshotExecutionPolicy(
+          context.executionPolicyForCall?.() ?? context.executionPolicy!,
+        );
+        if (entry.tool.permission === 'write' && next.files === 'read-only')
+          throw new Error("File mutation is refused by this call's read-only execution policy");
+        if (prepared && !isDeepStrictEqual(next, dispatchPolicy)) {
+          const refreshed = await withExecutionPolicy(next, () =>
+            entry.tool.prepare!(call.arguments, {
+              ...scope,
+              signal: dispatchSignal,
+              executionPolicy: next,
+              executionPolicyForCall: undefined,
+              permissionPolicyForCall: undefined,
+            }),
+          );
+          dispatchSignal.throwIfAborted();
+          if (
+            !isDeepStrictEqual(refreshed?.change, prepared.change) ||
+            refreshed?.approvalDescription !== prepared.approvalDescription
+          )
+            throw new Error('Operation changed after approval; request a new tool call.');
+          if (
+            !isDeepStrictEqual(context.executionPolicyForCall?.() ?? next, next) ||
+            (approval && context.permissionPolicyForCall?.() !== approvedPolicy)
+          )
+            throw new Error(
+              'Execution policy changed during preparation; request a new tool call.',
+            );
+          prepared = refreshed;
+        }
+        dispatchPolicy = next;
+      };
+      const dispatchScope = {
+        ...scope,
+        executionPolicy: dispatchPolicy,
+        executionPolicyForCall: undefined,
+        permissionPolicyForCall: undefined,
+      };
       invariant.enter(execution, 'execute');
-      if (entry.tool.permission) context.effectJournal?.begin(call);
       let result: ToolResult;
       try {
         /**
@@ -671,57 +740,109 @@ export class ToolRegistry {
          * call's cancellation without rewriting the record of what was requested, and it is why the deadline below
          * reads the signal *the wrapper chain handed it* rather than the one this method created.
          */
-        const dispatched = this.createDispatch(execution, scope, callAbort);
+        const dispatched = this.createDispatch(execution, dispatchScope, callAbort);
         let bodyAttempts = 0;
-        result = await this.hooks.aroundTool(
-          dispatched,
-          (current) =>
-            this.runWithDeadline(
-              call.name,
-              current.abort,
-              async () => {
-                const attempt = ++bodyAttempts;
-                const startedAt = Date.now();
-                const executionClock = performance.now();
-                const observe = (phase: 'started' | 'finished') => {
-                  try {
-                    void Promise.resolve(
-                      context.onExecution?.({
-                        phase,
-                        attempt,
-                        startedAt,
-                        ...(phase === 'finished'
-                          ? {
-                              finishedAt: Date.now(),
-                              durationMs: Math.max(0, performance.now() - executionClock),
-                            }
-                          : {}),
-                      }),
-                    ).catch(() => {});
-                  } catch {
-                    /* Diagnostics cannot change tool effects. */
+        let ownedDeadlineExpired = false;
+        result = await withExecutionPolicy(dispatchPolicy, () =>
+          this.hooks.aroundTool(
+            dispatched,
+            (current) => {
+              const original = current;
+              if (
+                ownedDeadlineExpired &&
+                current.abort === callAbort &&
+                current.signal === callAbort.signal
+              ) {
+                const retryAbort = new AbortController();
+                current = current.withSignal(
+                  AbortSignal.any([context.signal, retryAbort.signal]),
+                  retryAbort,
+                );
+              }
+              return this.runWithDeadline(
+                call.name,
+                current.abort,
+                async () => {
+                  const dispatchSignal = AbortSignal.any([
+                    context.signal,
+                    current.signal,
+                    current.abort.signal,
+                  ]);
+                  // Wrappers may wait before next(). Refresh at the first body, then pin retries.
+                  if (!bodyAttempts) {
+                    for (;;) {
+                      await refreshDispatch(dispatchSignal);
+                      dispatchSignal.throwIfAborted();
+                      if (
+                        (!approval || context.permissionPolicyForCall?.() === approvedPolicy) &&
+                        isDeepStrictEqual(
+                          context.executionPolicyForCall?.() ?? dispatchPolicy,
+                          dispatchPolicy,
+                        )
+                      )
+                        break;
+                    }
                   }
-                };
-                observe('started');
-                try {
-                  return await (prepared
-                    ? prepared.execute({
-                        ...current.scope,
-                        executionPolicy: context.executionPolicy,
-                        workspaceRoot: context.workspaceRoot,
-                      })
-                    : entry.tool.execute(call.arguments, {
-                        ...current.scope,
-                        executionPolicy: context.executionPolicy,
-                        workspaceRoot: context.workspaceRoot,
-                      }));
-                } finally {
-                  observe('finished');
-                }
-              },
-              entry.tool.cancellationGraceMs,
-            ),
-          context.signal,
+                  dispatchSignal.throwIfAborted();
+                  if (!bodyAttempts && entry.tool.permission) context.effectJournal?.begin(call);
+                  const attempt = ++bodyAttempts;
+                  const startedAt = Date.now();
+                  const executionClock = performance.now();
+                  const observe = (phase: 'started' | 'finished') => {
+                    try {
+                      void Promise.resolve(
+                        context.onExecution?.({
+                          phase,
+                          attempt,
+                          startedAt,
+                          ...(phase === 'finished'
+                            ? {
+                                finishedAt: Date.now(),
+                                durationMs: Math.max(0, performance.now() - executionClock),
+                              }
+                            : {}),
+                        }),
+                      ).catch(() => {});
+                    } catch {
+                      /* Diagnostics cannot change tool effects. */
+                    }
+                  };
+                  observe('started');
+                  try {
+                    return await withExecutionPolicy(dispatchPolicy, () =>
+                      prepared
+                        ? prepared.execute({
+                            ...current.scope,
+                            executionPolicy: dispatchPolicy,
+                            executionPolicyForCall: undefined,
+                            permissionPolicyForCall: undefined,
+                            workspaceRoot: context.workspaceRoot,
+                          })
+                        : entry.tool.execute(call.arguments, {
+                            ...current.scope,
+                            executionPolicy: dispatchPolicy,
+                            executionPolicyForCall: undefined,
+                            permissionPolicyForCall: undefined,
+                            workspaceRoot: context.workspaceRoot,
+                          }),
+                    );
+                  } finally {
+                    observe('finished');
+                  }
+                },
+                entry.tool.cancellationGraceMs,
+              ).catch((error) => {
+                if (
+                  original.abort === callAbort &&
+                  error instanceof ToolTimeoutError &&
+                  current.abort.signal.reason === error
+                )
+                  ownedDeadlineExpired = true;
+                throw error;
+              });
+            },
+            context.signal,
+          ),
         );
       } catch (error) {
         if (
@@ -738,6 +859,8 @@ export class ToolRegistry {
 
       context.signal.throwIfAborted();
       invariant.enter(execution, 'post-execute');
+      // Invalid attachments are a failed tool result; observers and finalizers still run normally.
+      result = normalizeImages(result);
       const post = await this.hooks.postExecute(execution, result, context.signal);
 
       context.signal.throwIfAborted();

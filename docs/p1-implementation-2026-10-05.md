@@ -82,7 +82,7 @@ npm.cmd run dev -- db-recover --db 'E:\project\.yuantu\sessions.sqlite' --json
 
 `protocol/execution.ts` 分别声明文件工具效果、进程文件限制及网络限制；`localExecutionEnvironment` 提供不可变的真实工作区身份，文件 resolve/read/walk/write 和进程 prepare/start/stop/closed 共用路径解释。创建文件复用现有预览、审批与 journal；进程取消等待进程树及 backend 清理，取消准备会清理已创建资源。链接、路径穿越、外部 URI 和异平台绝对路径拒绝。
 
-注册表在每次调用开始复制并冻结执行策略，通过异步上下文供既有命令、Git、验证、MCP/LSP/终端限制读取；审批等待、嵌套工具和并发调用不会被全局默认值改变。包装器不能替换已固定的执行策略。Host 改为按 sessionId 选择 backend，活跃运行拒绝切换；Carrier 恢复选中会话的策略。旧 `setSandboxMode` 仅保留为独立库调用的兼容默认，产品 Host 不再用它管理会话。
+注册表在每次调用开始复制并冻结执行策略，通过异步上下文供既有命令、Git、验证、MCP/LSP/终端限制读取；嵌套工具和并发调用不会被全局默认值改变。后续运行中切换修复允许 Host 按 sessionId 更新 backend：等待审批或包装器的调用在实际执行前重新核对可信会话策略，已开始执行的工具保持快照；下一轮同步更新工具目录和环境说明。包装器不能替换执行策略。Carrier 恢复选中会话的策略。旧 `setSandboxMode` 仅保留为独立库调用的兼容默认，产品 Host 不再用它管理会话。
 
 Windows 实测复现旧共享 S-1-5-12 授权允许跨工作区写入，改为真实根路径派生的独立限制 SID 和直接 ACL 授予；原生 SID_AND_ATTRIBUTES 使用正确布局，TokenDefaultDacl 加入新对象身份。系统 TokenGroups 提取 logon SID；Node 初始化还需要 Everyone 与登录会话的系统对象访问。专项覆盖真实 Node argv、内外写入、已授权工作区间隔离及 ambient ACL 写入。
 

@@ -1,4 +1,4 @@
-﻿import { createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,7 +12,9 @@ export const deliveryFormats = [
   'docx',
   'xlsx',
   'pptx',
+  'doc',
   'xls',
+  'ppt',
   'png',
   'jpeg',
   'zip',
@@ -52,7 +54,10 @@ function detectedFormat(file: string): Exclude<DeliveryFormat, 'auto'> {
   )
     return 'text';
   if (ext === '.jpg' || ext === '.jpeg') return 'jpeg';
-  if (['.pdf', '.docx', '.xlsx', '.pptx', '.xls', '.png', '.zip'].includes(ext))
+  // The three legacy Office extensions are here so this verifier agrees with itself: `xls` was accepted while
+  // `doc` and `ppt` fell through to `binary`, which verified nothing beyond size and digest for the two
+  // formats a template often is. One signature test now covers all three (see below).
+  if (['.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt', '.png', '.zip'].includes(ext))
     return ext.slice(1) as Exclude<DeliveryFormat, 'auto'>;
   return 'binary';
 }
@@ -142,8 +147,8 @@ export async function verifyFileDelivery(
       throw new Error('Delivered XLSX is missing xl/workbook.xml');
     if (format === 'pptx' && !last.includes('ppt/presentation.xml'))
       throw new Error('Delivered PPTX is missing ppt/presentation.xml');
-    if (format === 'xls' && !starts([208, 207, 17, 224, 161, 177, 26, 225]))
-      throw new Error('Delivered XLS has an invalid compound-file signature');
+    if (['doc', 'xls', 'ppt'].includes(format) && !starts([208, 207, 17, 224, 161, 177, 26, 225]))
+      throw new Error(`Delivered ${format.toUpperCase()} has an invalid compound-file signature`);
     const digest = hash.digest('hex');
     if (spec.sha256 && digest.toLowerCase() !== spec.sha256.toLowerCase())
       throw new Error('Delivered file SHA-256 does not match');
