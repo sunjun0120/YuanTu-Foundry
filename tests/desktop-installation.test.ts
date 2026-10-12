@@ -8,6 +8,7 @@ test('installed desktop uses its bundled Node and stable profile workspace under
   const profile = path.resolve('C:/用户数据/YuanTu Agent');
   const result = desktopPaths({
     packaged: true,
+    platform: 'win32',
     resourcesPath: resources,
     mainDirectory: path.join(resources, 'app/dist/desktop'),
     userData: profile,

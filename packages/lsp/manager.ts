@@ -45,11 +45,10 @@ export class LspManager {
 
   static enabled(): boolean {
     const mode = resolveSandboxConfig().mode;
-    return mode === 'host' || mode === 'windows';
+    return ['host', 'native', 'windows', 'seatbelt'].includes(mode);
   }
   private assertEnabled(): void {
-    if (!LspManager.enabled())
-      throw new Error('Language server backend unsupported; disabled outside host or Windows mode');
+    if (!LspManager.enabled()) throw new Error('Language server backend unsupported');
   }
 
   async catalog(): Promise<{ servers: LspServerDefinition[]; problems: string[] }> {

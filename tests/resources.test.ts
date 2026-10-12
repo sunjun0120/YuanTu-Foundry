@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { discoverSkills, expandSkill } from '../packages/resources/skills.ts';
@@ -391,6 +391,52 @@ test('repo map output degrades within its budget instead of overflowing', async 
   assert.equal(formatRepoMap({ files: [], scannedFiles: 0, truncated: false }, 100), '');
 });
 
+test('repo map keeps file and head limits when gathering deeply nested sources', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-limits-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const nested = path.join(root, 'src', 'a', 'b', 'c');
+  await mkdir(nested, { recursive: true });
+  await writeFile(
+    path.join(nested, 'a.ts'),
+    'export class Head {}\n' + '// padding\n'.repeat(4_000) + '\nexport class BeyondHead {}\n',
+  );
+  await writeFile(path.join(nested, 'b.ts'), 'export class Second {}\n');
+  const limited = buildRepoMap(root, { maxFiles: 1 });
+  assert.equal(limited.scannedFiles, 1);
+  assert.equal(limited.truncated, true);
+  assert.deepEqual(
+    limited.files.map((file) => file.path),
+    ['src/a/b/c/a.ts'],
+  );
+  assert.deepEqual(
+    limited.files[0]!.symbols.map((symbol) => symbol.name),
+    ['Head'],
+  );
+  assert.match(repoMapContext(root), /class Second/);
+  assert.doesNotMatch(repoMapContext(root), /BeyondHead/);
+});
+
+test('prompt outline excludes credentials and linked source directories', async (t) => {
+  const root = await fixture2(t);
+  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-linked-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(path.join(outside, 'escaped.ts'), 'export class Escaped {}\n');
+  await symlink(
+    outside,
+    path.join(root, 'linked'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  await writeFile(path.join(root, 'credentials.ts'), 'export class Credential {}\n');
+  await mkdir(path.join(root, '.aws'));
+  await writeFile(path.join(root, '.aws', 'private.ts'), 'export class Private {}\n');
+  resetRepoMapCache();
+  const first = repoMapContext(root);
+  assert.match(first, /class Server/);
+  assert.doesNotMatch(first, /Escaped|Credential|Private/);
+  await writeFile(path.join(outside, 'escaped.ts'), 'export class ChangedOutside {}\n');
+  assert.equal(repoMapContext(root), first);
+});
+
 test('prompt outline is cached against a tree fingerprint and can be disabled', async (t) => {
   const root = await fixture2(t);
   resetRepoMapCache();
@@ -412,6 +458,63 @@ test('prompt outline is cached against a tree fingerprint and can be disabled', 
     else process.env.YUANTU_REPO_MAP = previous;
   }
 });
+
+test('prompt outline refreshes an existing deeply nested source declaration', async (t) => {
+  const root = await fixture2(t);
+  const nested = path.join(root, 'src', 'a', 'b', 'c');
+  await mkdir(nested, { recursive: true });
+  const source = path.join(nested, 'value.ts');
+  await writeFile(source, 'export function Before() {}\n');
+  await utimes(source, 1_000, 1_000);
+  resetRepoMapCache();
+  assert.match(repoMapContext(root), /function Before/);
+
+  await writeFile(source, 'export function After_() {}\n');
+  await utimes(source, 2_000, 2_000);
+  const refreshed = repoMapContext(root);
+  assert.match(refreshed, /src\/a\/b\/c\/value\.ts: function After_/);
+  assert.doesNotMatch(refreshed, /function Before/);
+});
+
+test('prompt outline notices edits even when the newest workspace mtime is unchanged', async (t) => {
+  const root = await fixture2(t);
+  const anchor = path.join(root, 'newest.ts');
+  await writeFile(anchor, 'export class Anchor {}\n');
+  const future = new Date('2100-01-01T00:00:00Z');
+  await utimes(anchor, future, future);
+  const source = path.join(root, 'src', 'app.ts');
+  await writeFile(source, 'export function Before() {}\n');
+  await utimes(source, 1_000, 1_000);
+  resetRepoMapCache();
+  assert.match(repoMapContext(root), /function Before/);
+
+  await writeFile(source, 'export function After_() {}\n');
+  await utimes(source, 2_000, 2_000);
+  const refreshed = repoMapContext(root);
+  assert.match(refreshed, /function After_/);
+  assert.doesNotMatch(refreshed, /function Before/);
+});
+
+for (const budgets of [
+  [4_000, 80],
+  [80, 4_000],
+]) {
+  test(`prompt outline honors a changed budget from ${budgets[0]} to ${budgets[1]}`, async (t) => {
+    const root = await fixture2(t);
+    await writeFile(
+      path.join(root, 'many.ts'),
+      Array.from({ length: 12 }, (_, index) => `export function Function_${index}() {}`).join('\n'),
+    );
+    resetRepoMapCache();
+    const outputs = budgets.map((budget) => repoMapContext(root, budget));
+    const tight = outputs[budgets.indexOf(80)]!;
+    const roomy = outputs[budgets.indexOf(4_000)]!;
+    assert.ok(tight.length <= 80 + 80, `expected a bounded outline, got ${tight.length}`);
+    assert.doesNotMatch(tight, /Function_0/);
+    assert.match(roomy, /Function_0/);
+    assert.notEqual(tight, roomy);
+  });
+}
 
 test('repo_map tool returns the outline, then searches symbols with a server fallback', async (t) => {
   const root = await fixture2(t);

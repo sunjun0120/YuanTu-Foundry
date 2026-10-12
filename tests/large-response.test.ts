@@ -266,3 +266,61 @@ test('desktop history reconstructs one reply larger than its transport page', as
   await controller.load(session.id);
   assert.equal(controller.snapshot.messages[0]?.content, reply);
 });
+
+test('a chunked first history page still carries the session steps a plain first page carries', async (t) => {
+  /**
+   * The session-level half of a history page — the statistics and the step record — describes the session, not the
+   * window of history that happens to be loaded, so it travels with the first page. A first page whose single
+   * message is too large to fit the transport bound is delivered as a `messageChunk`, and that branch attached the
+   * statistics while dropping the steps: the same page, answered by the same handler, promised two different
+   * shapes depending on how big its message was. A continuation chunk is the rest of a message this page already
+   * started, so it is not a first page and repeats neither field.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-chunked-steps-'));
+  const db = path.join(root, 'sessions.sqlite');
+  const store = new SessionStore(db);
+  const session = store.create(root);
+  const reply = 'S'.repeat(16_000_000);
+  store.append(session.id, { role: 'assistant', content: reply, toolCalls: [] });
+  store.recordEvent(session.id, 'step.started', { runId: 'run-chunk', step: 0 });
+  store.recordEvent(session.id, 'step.finished', { runId: 'run-chunk', step: 0, reason: 'final' });
+  store.close();
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath: path.resolve('apps/agent-host/main.ts'),
+    workspace: root,
+    db,
+    env: {
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_API_KEY: 'fixture',
+    },
+  });
+  t.after(async () => {
+    await client.stop();
+    await rm(root, { recursive: true, force: true });
+  });
+  await client.start();
+  const page = await client.request('session.get', {
+    sessionId: session.id,
+    view: 'display',
+    offset: 0,
+  });
+  assert.ok(page.messageChunk, 'the oversized first message is still delivered as a chunk');
+  assert.ok(page.statistics, 'the statistics travel with the first page');
+  assert.deepEqual(
+    page.steps?.map((record) => ({ step: record.step, reason: record.reason })),
+    [{ step: 0, reason: 'final' }],
+    'and so do the steps, whether or not the first page had to be chunked',
+  );
+  const rest = await client.request('session.get', {
+    sessionId: session.id,
+    view: 'display',
+    offset: 0,
+    chunkOffset: page.messageChunk.nextChunkOffset,
+  });
+  assert.ok(rest.messageChunk, 'the continuation is the same message');
+  assert.equal('steps' in rest, false, 'a continuation chunk is not a new first page');
+  assert.equal('statistics' in rest, false);
+});

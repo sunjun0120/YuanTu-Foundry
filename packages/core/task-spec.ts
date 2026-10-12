@@ -1,4 +1,5 @@
 import type { Acceptance, AcceptanceCheck, TaskStep } from '../protocol/index.ts';
+import { MAX_CHECKS } from './acceptance.ts';
 export interface TaskDraft {
   title: string;
   description: string;
@@ -60,11 +61,27 @@ export function normalizeAcceptanceCheck(check: unknown, ids: Set<string>): Acce
     };
   }
   if (kind === 'file-exact' || kind === 'file-contains') {
+    /**
+     * `maxBytes` is rebuilt here like every other optional field on this check.
+     *
+     * The branch used to return a literal with only `id`, `kind`, `path` and `expected`, so a byte limit an
+     * author set was dropped on the way in: the check silently compared against the 1 MB default, and the
+     * consumer's forward of the field could never be anything but undefined. The sibling branches rebuild every
+     * optional field, which is what made this one read as a deliberate omission rather than a mistake.
+     */
+    if (
+      value.maxBytes !== undefined &&
+      (!Number.isSafeInteger(value.maxBytes) ||
+        (value.maxBytes as number) < 1 ||
+        (value.maxBytes as number) > 100_000_000)
+    )
+      throw new Error('Invalid acceptance maximum bytes');
     return {
       id,
       kind,
       path: text(value.path, 'path', 4096),
       expected: text(value.expected, 'expected content', 20000, true, false),
+      ...(value.maxBytes === undefined ? {} : { maxBytes: value.maxBytes as number }),
     };
   }
   if (kind === 'file-delivery') {
@@ -120,7 +137,10 @@ export function normalizeAcceptanceCheck(check: unknown, ids: Set<string>): Acce
 }
 /** Validate a persisted acceptance list (empty allowed) including each executable check. */
 export function validateAcceptance(input: unknown): Acceptance[] {
-  if (!Array.isArray(input) || input.length > 100) throw new Error('Invalid task acceptance');
+  // The cap is the verifier's own number, not a second one: a task that could be stored but never verified was
+  // storable here and refused there, and every run of it failed with a message about the work.
+  if (!Array.isArray(input) || input.length > MAX_CHECKS)
+    throw new Error(`Invalid task acceptance: at most ${MAX_CHECKS} checks`);
   const ids = new Set<string>();
   return input.map((raw) => {
     const item = object(raw);

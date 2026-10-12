@@ -417,6 +417,78 @@ test('a compaction that would not shrink the conversation is refused and records
   );
 });
 
+test('a summary that is too large restores the surface it was meant to replace', async (t) => {
+  /**
+   * The surface a compaction failed to replace is still the surface.
+   *
+   * A summary that is bigger than the third of the character budget it is allowed to occupy is refused *after*
+   * the model's answer has been merged into the running summary — and the merged value is what every later step
+   * of this call reads. So the refusal used to hand back a view built from the summary it had just rejected: the
+   * oversized text stood in front of a conversation that was complete behind it, and the version the session
+   * actually had was nowhere in the request. Giving up has to put back what this round started with — the
+   * summary, the tail it covers and the forecast that describes it — or "history was preserved" is a claim the
+   * returned view contradicts.
+   */
+  const { root, store } = await fixture(t);
+  const session = store.create(root);
+  store.append(session.id, {
+    role: 'user',
+    content: 'The first question. ' + 'context '.repeat(400),
+  });
+  store.append(session.id, { role: 'assistant', content: 'The first answer.', toolCalls: [] });
+  // The surface this session already has: a compaction recorded earlier really did produce it.
+  store.applyCompaction(session.id, {
+    coveredMessages: 2,
+    summary: 'The user asked one question.',
+  });
+  await history(store, session.id, 2);
+  const before = store.messages(session.id);
+  const oversized = 'y'.repeat(40_000);
+  const result = await prepareContext({
+    store,
+    sessionId: session.id,
+    system: 'YuanTu',
+    tools: [],
+    limit: 100_000,
+    signal: new AbortController().signal,
+    maxOutputTokens: 128,
+    // A window large enough that the oversized summary still fits: the refusal being tested is the summary's own
+    // budget (`limit / 3`), not the size of the window.
+    maxContextTokens: 200_000,
+    summaryTimeoutMs: 1000,
+    provider: {
+      async complete(request) {
+        return isSummaryRequest(request) ? reply(oversized, 10, 4000) : reply('Continued.');
+      },
+    },
+    onUsage: () => {},
+    onCompaction: () => {},
+    forceCompact: true,
+    compactionFailure: 'send',
+  });
+  assert.equal(result.compacted, false, 'nothing replaced the surface');
+  assert.match(result.compactionProblem!, /too large/);
+  const replacements = result.messages.filter((message) =>
+    message.content.startsWith('<compacted-summary>'),
+  );
+  assert.equal(replacements.length, 1, 'the session keeps the one summary it had');
+  assert.match(replacements[0]!.content, /The user asked one question\./);
+  assert.ok(
+    !result.messages.some((message) => message.content.includes(oversized)),
+    'the refused summary is not sent to the model',
+  );
+  assert.deepEqual(
+    result.messages.slice(1).map((message) => message.content),
+    before.slice(2).map((message) => message.content),
+    'and the conversation behind it is the tail the recorded surface covers from, each message once',
+  );
+  assert.deepEqual(
+    store.contextSurface(session.id),
+    { generation: 1, coveredMessages: 2, summary: 'The user asked one question.' },
+    'the recorded surface is exactly what it was',
+  );
+});
+
 test('a surface op is a durable event, readable as such', async (t) => {
   const { root, store } = await fixture(t);
   const session = store.create(root);

@@ -336,7 +336,7 @@ test('a preset pairs a sandbox with an approval floor, and only the full-access 
   );
   assert.equal(
     PERMISSION_PRESETS.find((preset) => preset.id === DEFAULT_PRESET)?.sandbox,
-    'sbx',
+    'native',
     'a new session starts confined',
   );
   assert.equal(
@@ -350,9 +350,9 @@ test('a preset pairs a sandbox with an approval floor, and only the full-access 
     'the only preset that gives up isolation is the one whose point is that it stops asking',
   );
   assert.equal(
-    PERMISSION_PRESETS.filter((preset) => preset.sandbox === 'docker').length,
+    PERMISSION_PRESETS.filter((preset) => preset.sandbox === 'seatbelt').length,
     0,
-    'docker is a compatibility backend an operator names in the launch environment; a preset must not choose it',
+    'seatbelt is a compatibility backend an operator names in the launch environment; a preset must not choose it',
   );
   for (const preset of PERMISSION_PRESETS)
     assert.deepEqual(permissionPreset(preset.id), preset, `${preset.id} resolves to itself`);
@@ -363,8 +363,8 @@ test('a pair no preset declares reads as custom rather than as the nearest prese
     assert.equal(presetIdFor(preset.sandbox, preset.permission), preset.id);
   // The combination that motivated the feature: no isolation, but the approval floor still looks guarded.
   assert.equal(presetIdFor('host', 'ask'), null);
-  assert.equal(presetIdFor('docker', 'ask'), null);
-  assert.equal(presetIdFor('sbx', 'full-access'), null);
+  assert.equal(presetIdFor('seatbelt', 'ask'), null);
+  assert.equal(presetIdFor('native', 'full-access'), null);
   assert.throws(() => permissionPreset('trusted' as never), /Unknown permission preset: trusted/);
 });
 
@@ -385,7 +385,7 @@ test('a preset command is validated, including the host acknowledgement it must 
     { type: 'set' },
     { type: 'set', preset: 'trusted' },
     { type: 'set', preset: 'guarded', acknowledgeHost: 'yes' },
-    { type: 'set', preset: 'guarded', mode: 'sbx' },
+    { type: 'set', preset: 'guarded', mode: 'native' },
   ])
     assert.throws(() => parsePermissionPresetCommand(invalid), /Invalid permission preset request/);
   // The rule comes from the sandbox command's own parser, so the preset cannot be a way past the confirmation

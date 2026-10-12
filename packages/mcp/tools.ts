@@ -83,6 +83,26 @@ export async function closeWithin(close: () => Promise<unknown>, ms: number): Pr
 const REPORTABLE =
   /^(Missing MCP|Invalid MCP|Unknown MCP|Duplicate MCP|MCP authorization required|MCP server does not)/;
 
+/**
+ * A request this process refused on its own, without the connection being at fault.
+ *
+ * The distinction it carries is the one the failure path needs: an unknown tool, an argument that fails the
+ * tool's own schema, a capability the server never advertised, or a prompt argument of the wrong type are all
+ * answered from state already in hand — the handshake succeeded and the catalogue was read. Tearing the
+ * connection down for them threw away a working server over a typo, and the next call paid a full handshake to
+ * get it back.
+ *
+ * A type rather than a message prefix on purpose: whether the connection is safe to keep is a question about
+ * what failed, and reading the server's own words to decide it would let a remote error body claim the session
+ * was fine.
+ */
+class RequestRefused extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RequestRefused';
+  }
+}
+
 type Request =
   | { kind: 'catalog' }
   | { kind: 'tool'; name: string; args: Record<string, unknown> }
@@ -392,7 +412,9 @@ class Connection {
   }
   private capability(client: Client, name: 'resources' | 'prompts'): void {
     if (!client.getServerCapabilities()?.[name])
-      throw new Error(`MCP server does not advertise ${name}; it only exposes what it declares`);
+      throw new RequestRefused(
+        `MCP server does not advertise ${name}; it only exposes what it declares`,
+      );
   }
   private async perform(
     client: Client,
@@ -407,8 +429,8 @@ class Connection {
     }
     if (request.kind === 'tool') {
       const validate = this.validators.get(request.name);
-      if (!validate) throw new Error('Unknown MCP tool; list available tools first');
-      if (!validate(request.args)) throw new Error('Invalid MCP tool arguments');
+      if (!validate) throw new RequestRefused('Unknown MCP tool; list available tools first');
+      if (!validate(request.args)) throw new RequestRefused('Invalid MCP tool arguments');
       const result = await client.callTool(
         { name: request.name, arguments: request.args },
         undefined,
@@ -470,7 +492,7 @@ class Connection {
     const promptArguments: Record<string, string> = {};
     for (const [key, value] of Object.entries(request.args)) {
       if (typeof value !== 'string')
-        throw new Error('Invalid MCP prompt arguments; every value must be a string');
+        throw new RequestRefused('Invalid MCP prompt arguments; every value must be a string');
       promptArguments[key] = value;
     }
     const result = await client.getPrompt(
@@ -529,7 +551,20 @@ class Connection {
       this.retryAt = 0;
       return result;
     } catch (error) {
-      await this.close();
+      /**
+       * A request this process refused keeps the session; anything else gives it up.
+       *
+       * `perform` can fail for two unrelated reasons, and only one of them is about the connection. An unknown
+       * tool or an argument the schema rejects is an answer about the *request*, produced here from the
+       * catalogue already in hand — closing on it threw away a healthy server and made the next call pay the
+       * handshake again. Everything else (a transport that died, a catalogue that could not be read, a protocol
+       * the client cannot make sense of) is a reason to stop trusting this connection and start over.
+       *
+       * The backoff below is unchanged and still keyed on `connected`: only a failure that happened *before*
+       * the handshake answered counts as the server being down, so a refused request neither arms a cooldown
+       * nor clears one.
+       */
+      if (!(error instanceof RequestRefused)) await this.close();
       if (!connected) {
         this.failures += 1;
         this.retryAt =

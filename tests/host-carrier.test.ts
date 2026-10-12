@@ -172,6 +172,42 @@ test('the Host refuses an address it cannot parse before it serves anything', as
   assert.match(stderr, /--listen must be \[host:\]port/);
 });
 
+test('the host-less address the parser accepts is one the carrier can actually bind', async (t) => {
+  /**
+   * `--listen` is documented as `[host:]port`, and the parser accepted `:8080` while the carrier re-derived
+   * the port from the same string as `Number(':8080')` — `NaN` — which throws inside `listen()` and took the
+   * Host down. An omitted host means loopback; the point of this case is that "accepted on the command line"
+   * and "bindable" are now the same statement rather than two independently written ones.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-hostless-'));
+  const child = spawn(process.execPath, [hostPath, '--workspace', root, '--listen', ':0'], {
+    cwd: root,
+    env: { ...process.env, YUANTU_WORKFLOWS: 'false' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(async () => {
+    // The directory cannot go until the process really has: on Windows a killed child still holds its cwd
+    // briefly, and removing first fails with EBUSY rather than cleaning anything up. The liveness check comes
+    // first because a Host that died of a bad port — the case this test exists for — has no exit left to wait
+    // for, and waiting for one anyway hangs the teardown instead of reporting the failure.
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+      child.kill('SIGKILL');
+      await exited;
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout!.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
+  child.stderr!.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
+  for (let i = 0; i < 400 && !stdout.includes('listening on'); i++)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  // The chosen port is announced on stdout, so the line is the proof a socket was really bound — port 0 asks
+  // the OS, and a `NaN` port dies before the callback ever runs.
+  assert.match(stdout, /listening on 127\.0\.0\.1:\d+/, `stdout=${stdout} stderr=${stderr}`);
+});
+
 test('the framing helper is shared, bounded, and survives split characters', async () => {
   const lines: string[] = [];
   const errors: Error[] = [];

@@ -5,6 +5,7 @@ import type { SkillInfo } from '../resources/skills.ts';
 // Type-only, and the seam is the owner of this vocabulary: `sandbox-provider.ts` imports nothing from here, so
 // this is a name being borrowed rather than a dependency being taken.
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
+import type { FileEffect, NetworkEffect } from './execution.ts';
 export interface HostInfo {
   protocolVersion: 1;
   runtime: 'yuantu';
@@ -147,8 +148,8 @@ export interface HostMethods {
    * idle session cannot alter the policy of the active run. Existing processes retain their creation policy.
    */
   'sandbox.set': {
-    params: { mode: SandboxMode; sessionId?: string };
-    result: { mode: SandboxMode };
+    params: { mode: SandboxMode; sessionId?: string; files?: FileEffect; network?: NetworkEffect };
+    result: { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect };
   };
   'resources.list': {
     params: Record<string, never>;
@@ -185,7 +186,15 @@ export interface HostMethods {
    */
   'run.queue.get': {
     params: { sessionId: string };
-    result: { running: boolean; items: QueuedInput[] };
+    /**
+     * `runId` names the run holding the session, in the same answer that says it is held.
+     *
+     * A client that opens a session somebody is already running has to know which run it is now watching: the
+     * live frames carry their run's id, and a client without the id drops every one of them as somebody else's.
+     * It is optional because a Host that predates the field answers without it — the client then falls back to
+     * the `activeRun` of the session info it reads anyway.
+     */
+    result: { running: boolean; items: QueuedInput[]; runId?: string };
   };
   'run.queue.clear': { params: { sessionId: string }; result: { cleared: true } };
   'host.info': { params: { protocolVersions?: number[] }; result: HostInfo };
@@ -265,6 +274,16 @@ export interface HostMethods {
       phase?: 'plan';
       /** Execute the approved plan. Rejected unless its status and hash still match. */
       planId?: string;
+      /**
+       * Which trigger started this run, when a task's own trigger did.
+       *
+       * Declared because the Host reads it and records it on the task's attempt: the field was consumed on the
+       * wire while this interface did not mention it, so the contract could neither document nor validate it, and
+       * a client written from this declaration silently dropped every scheduled start's provenance.
+       */
+      trigger?: import('./index.ts').TaskTriggerSource;
+      /** Resume the task's deferred approval instead of starting its step over. */
+      resume?: boolean;
     };
     result: RunResult;
   };
@@ -379,7 +398,13 @@ export interface HostMethods {
     result: import('./index.ts').Task;
   };
   'task.verify': {
-    params: { sessionId: string; taskId: string };
+    /**
+     * `resumeApproval` names the deferred approval the verification is answering for.
+     *
+     * The Host reads it (`handlers/tasks.ts`) and this declaration did not carry it, which is the same gap as
+     * `run.start`'s `trigger`: a parameter the wire accepts and the contract denies.
+     */
+    params: { sessionId: string; taskId: string; resumeApproval?: boolean };
     result: { task: import('./index.ts').Task; attempt: import('./index.ts').TaskAttempt };
   };
   'task.retry': {

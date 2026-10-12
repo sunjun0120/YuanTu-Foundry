@@ -31,15 +31,10 @@ const MAX_DESCRIPTION_CHARS = 500;
 function normalize(value: unknown): { path: string; description?: string }[] {
   if (!Array.isArray(value) || !value.length || value.length > MAX_FILES)
     throw new Error(`files must be an array of 1 to ${MAX_FILES} entries`);
-  const seen = new Set<string>();
   return value.map((entry) => {
     const file = (entry ?? {}) as Record<string, unknown>;
     const path = typeof file.path === 'string' ? file.path.trim() : '';
     if (!path || path.length > MAX_PATH_CHARS) throw new Error('Every entry needs a valid path');
-    // Two entries for one path would present the same file twice, and the fold would keep the last one
-    // anyway: refusing says so instead of letting the list quietly disagree with the call.
-    if (seen.has(path)) throw new Error(`Path "${path}" is listed more than once`);
-    seen.add(path);
     if (file.description !== undefined && typeof file.description !== 'string')
       throw new Error('A description must be a string');
     const description =
@@ -101,11 +96,23 @@ export function presentTool(root: string): Tool {
         const request = normalize(args.files);
         const at = new Date().toISOString();
         const files: PresentedFile[] = [];
+        /**
+         * Two entries for one path would present the same file twice, and the fold would keep the last one
+         * anyway: refusing says so instead of letting the list quietly disagree with the call.
+         *
+         * The check is on the path `verifyFileDelivery` resolved, not on the argument as written — `a.txt` and
+         * `./a.txt` are one file, and the delivered list keys on the path — and it runs inside this loop, before
+         * anything is recorded, so a call that names one file twice presents nothing at all.
+         */
+        const seen = new Set<string>();
         for (const entry of request) {
           context.signal.throwIfAborted();
           // Verification first, for every file, before anything is recorded: a call that presents three
           // files must not leave two of them declared because the third was missing.
           const evidence = await verifyFileDelivery(root, { path: entry.path });
+          if (seen.has(evidence.path))
+            throw new Error(`Path "${evidence.path}" is listed more than once`);
+          seen.add(evidence.path);
           files.push({
             path: evidence.path,
             bytes: evidence.bytes,

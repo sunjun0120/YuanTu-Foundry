@@ -1,4 +1,5 @@
 import type { CommandRecord, JobControl, JobSnapshot } from '../protocol/jobs.ts';
+import { UnknownJobError } from '../protocol/jobs.ts';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { TOOL_DEADLINE_DEFAULTS, resolveToolDeadline, toolDeadlinePolicy } from './timeouts.ts';
 
@@ -230,7 +231,14 @@ export function jobTools(scope: string): Tool[] {
              *
              * The fallback is as narrow as `job_output`'s: an id this session never recorded still fails with the
              * registry's own error.
+             *
+             * It is also narrow in a second sense, and that is the point: only "the registry does not own this id"
+             * gets this answer. Every other failure is a real outcome *about this job* — above all a stop that
+             * finished the process but could not confirm its sandbox was cleaned up — and answering "already ended,
+             * there is nothing left to stop" for one of those told the model a job was stopped while its container
+             * might still have been running, with a record that said `cleanupConfirmed: true`.
              */
+            if (!(error instanceof UnknownJobError)) throw error;
             const recorded = context.commandJournal?.record(id);
             if (!recorded) throw error;
             const recalled = recallCommand(recorded);

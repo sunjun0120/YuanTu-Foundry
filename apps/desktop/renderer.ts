@@ -22,6 +22,7 @@ import { setupSessionList } from './renderer-session-list.ts';
 import { setupTranscript } from './renderer-transcript.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
+import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
 import { setupBackups } from './renderer-backups.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
@@ -666,6 +667,7 @@ new ResizeObserver(() => {
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
 setupGeneralSettings();
+setupSandboxInitialization();
 backupSettings = setupBackups(
   () =>
     Boolean(

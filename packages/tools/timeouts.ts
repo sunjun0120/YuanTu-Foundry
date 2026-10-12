@@ -53,14 +53,20 @@ export interface ToolDeadlinePolicy {
  * sandbox teardown that never returns, a child that ignores the kill — which is why its number is that budget
  * plus room to clean up.
  *
- * The two delegation tools are exempt for the third kind of reason, and it is the one the original table
+ * The delegation tools are exempt for the third kind of reason, and it is the one the original table
  * predicted: they are calls whose duration is set by *other agents' work*, not by this call. `delegate_task`
- * with the default `wait: true` resolves only when every task it admitted has settled, and `workflow` resolves
- * when the script returns — which for a script that fans out four investigations is four child runs deep. No
- * budget is both generous enough for that and short enough to catch a hang, and the two failure modes are not
- * equally bad: cutting a live delegation discards work that is still progressing and makes the parent delegate
- * the same ground again, while a genuinely stuck child is already bounded by its own run, by the run's end
+ * with the default `wait: true` resolves only when every task it admitted has settled, `send_message` with its
+ * own default resolves when that child's turn does, and `workflow` resolves when the script returns — which for
+ * a script that fans out four investigations is four child runs deep. No budget is both generous enough for
+ * that and short enough to catch a hang, and the two failure modes are not equally bad: cutting a live
+ * delegation discards work that is still progressing and makes the parent delegate the same ground again, while
+ * a genuinely stuck child is already bounded by its own run, by the run's end
  * (`SubAgentCoordinator.settle`) and by the user's Stop.
+ *
+ * Exempt from the *default* is the whole of the promise, and it is worth being precise about what is left: a
+ * deployment that states a budget for one of these names still gets it, and the call it cuts off now stops the
+ * children it admitted (`SubAgentCoordinator.delegate`) or the turn it started (`ChildActivation.run`) instead
+ * of leaving them running with nobody waiting for the answer.
  *
  * `workflow` owns a bound of its own, which is what makes its exemption honest rather than a hole: the tool takes
  * a `timeoutMs` argument, `0` means no deadline, and a `0` here only removes the *deployment's default* — a caller
@@ -79,6 +85,8 @@ export const TOOL_DEADLINE_DEFAULTS: Required<ToolDeadlinePolicy> = {
     ask_user_question: 0,
     run_command: 330_000,
     delegate_task: 0,
+    subagent_fork: 0,
+    send_message: 0,
     workflow: 0,
   },
 };

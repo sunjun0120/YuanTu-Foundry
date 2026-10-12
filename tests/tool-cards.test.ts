@@ -23,6 +23,7 @@ import type { Tool, ToolContext } from '../packages/protocol/index.ts';
 import { commandTool } from '../packages/tools/command.ts';
 import { fileTools } from '../packages/tools/files.ts';
 import { toolCardModel } from '../apps/desktop/tool-card-model.ts';
+import { toolCardView } from '../apps/desktop/tool-cards.ts';
 
 const context = (): ToolContext => ({
   signal: new AbortController().signal,
@@ -47,6 +48,96 @@ function modelOf(output: ToolResultOutput | undefined) {
   );
   return model;
 }
+
+/**
+ * The drawing half's DOM surface: `createElement`, `textContent`, `className`, `append`, and the children that
+ * were appended. `tool-cards.ts` uses nothing else, and a double that grew beyond that would be testing itself.
+ */
+class FakeNode {
+  readonly tagName: string;
+  readonly children: FakeNode[] = [];
+  textContent = '';
+  className = '';
+  constructor(tag: string) {
+    this.tagName = tag.toUpperCase();
+  }
+  append(...nodes: FakeNode[]): void {
+    this.children.push(...nodes);
+  }
+}
+function installDom(): { restore: () => void } {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const previous = { document: globals.document };
+  globals.document = { createElement: (tag: string) => new FakeNode(tag) };
+  return { restore: () => Object.assign(globals, previous) };
+}
+/** Every piece of text in the card, in document order — what a person actually reads. */
+function textOf(node: FakeNode): string {
+  return [node.textContent, ...node.children.map(textOf)].join(' ');
+}
+
+/**
+ * A read whose window starts past the end of the file.
+ *
+ * `read_file` reports the window the *reader* asked for: `startLine` is where they asked to start, `endLine` is
+ * `startLine - 1` because nothing was in it, and `totalLines` is the file's own count. Before this case was
+ * drawn as itself, the card formatted that pair like any other range and printed "第 5–4 行 / 共 2 行" — a range
+ * that counts backwards, next to a total that says the file is not empty, which between them say nothing true
+ * about either the file or the request.
+ */
+test('a window past the end of a file says the range is empty, not that the file is', async (t) => {
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'two.txt'), 'one\ntwo\n');
+  const result = await toolNamed(fileTools(root), 'read_file').execute(
+    { path: 'two.txt', start_line: 5 },
+    context(),
+  );
+  const model = modelOf(result.output);
+  assert.deepEqual(model, {
+    kind: 'file-read',
+    path: 'two.txt',
+    startLine: 5,
+    endLine: 4,
+    totalLines: 2,
+    text: '',
+    truncated: false,
+  });
+  const dom = installDom();
+  t.after(dom.restore);
+  const card = textOf(toolCardView(model) as unknown as FakeNode);
+  // The two facts the card has to keep apart: the *range* is empty, the *file* has two lines.
+  assert.match(card, /此范围没有内容/);
+  assert.match(card, /共 2 行/, 'the file’s own line count survives an empty window');
+  assert.doesNotMatch(card, /5–4/, 'a range that counts backwards is not a range');
+  assert.doesNotMatch(card, /空文件/, 'the file is not empty; the window is');
+});
+
+test('the other two file-read ranges still draw as themselves', async (t) => {
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'src.ts'), 'one\ntwo\nthree\nfour\n');
+  await writeFile(path.join(root, 'none.txt'), '');
+  const tools = fileTools(root);
+  const dom = installDom();
+  t.after(dom.restore);
+  // A real window: the range and the total, unchanged by the empty-window branch above it.
+  const window = modelOf(
+    (
+      await toolNamed(tools, 'read_file').execute(
+        { path: 'src.ts', start_line: 2, end_line: 3 },
+        context(),
+      )
+    ).output,
+  );
+  const windowCard = textOf(toolCardView(window) as unknown as FakeNode);
+  assert.match(windowCard, /第 2–3 行 \/ 共 4 行/);
+  assert.doesNotMatch(windowCard, /此范围没有内容/);
+  // A file with no lines at all is the one case where "empty file" is the truth — and it stays that.
+  const empty = modelOf(
+    (await toolNamed(tools, 'read_file').execute({ path: 'none.txt' }, context())).output,
+  );
+  assert.equal(empty.kind === 'file-read' && empty.totalLines, 0);
+  assert.match(textOf(toolCardView(empty) as unknown as FakeNode), /空文件/);
+});
 
 test('a file read becomes a card that says which lines it is', async (t) => {
   const root = await workspace(t);

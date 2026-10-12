@@ -188,9 +188,24 @@ async function selectedValidation(
     targeted: true,
   };
 }
+/**
+ * Undoes the escaping `node:test`'s TAP reporter applies to a test name.
+ *
+ * The reporter writes `\#` for `#` (the character that starts a TAP directive) and `\\` for a backslash, and
+ * nothing else — verified against the reporter's own output for `#`, `\`, `%`, quotes and leading/trailing
+ * hashes. Decoding has to happen before a name is used *as* a name: the escaped spelling was handed to the
+ * model, `exactTestPattern` then escaped the backslash a second time, and the resulting pattern matched no
+ * test at all — `--test-name-pattern` selected nothing, the run exited 0, and a failing test was reported as
+ * a pass. That is a fabricated pass in the one loop this tool exists to supply evidence for.
+ */
+function tapTestName(text: string): string {
+  return text.replace(/\\([\\#])/g, '$1');
+}
 function tapEvidence(output: string): { failedTests: string[]; counts: Record<string, number> } {
   const failedTests = [...output.matchAll(/^\s*not ok \d+ - (.+)$/gm)]
-    .map((match) => match[1]!.replace(/ #.*$/, '').trim())
+    // The directive is stripped first and on the *escaped* text: a real directive is ` #` with a plain space,
+    // while a literal `#` in a name always arrives as `\#`, so this cannot truncate a name that contains one.
+    .map((match) => tapTestName(match[1]!.replace(/ #.*$/, '')).trim())
     .filter(Boolean)
     .slice(0, 20);
   const counts: Record<string, number> = {};
@@ -324,6 +339,15 @@ async function execute(validation: Validation, ctx: ToolContext): Promise<ToolRe
       if (settled) return;
       settled = true;
       cleanup();
+      /**
+       * The async tail is the promise this call settles on, so its rejection has to reach the caller too.
+       *
+       * `validationContent` can refuse metadata that cannot be serialised within the result budget, and when this
+       * was a detached `void (async () => ...)()` that throw had nowhere to go: the promise never settled and the
+       * tool call hung until the run was cancelled, while the rejection surfaced only as an unhandled rejection
+       * that took the process down. Waiting for the kill and serialising the result are one settlement path, and
+       * `settled` above is what keeps it to one.
+       */
       void (async () => {
         if (killing) await killing;
         if (ctx.signal.aborted) return reject(ctx.signal.reason);
@@ -339,7 +363,7 @@ async function execute(validation: Validation, ctx: ToolContext): Promise<ToolRe
             ...(validation.targeted ? tapEvidence(output) : {}),
           }),
         });
-      })();
+      })().catch(reject);
     });
   });
 }

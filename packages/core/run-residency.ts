@@ -1,4 +1,4 @@
-import type { AgentEventType, Provider, Tool } from '../protocol/index.ts';
+import type { AgentEventType, Provider, Tool, ToolContext } from '../protocol/index.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { addUsage } from '../protocol/statistics.ts';
@@ -38,6 +38,34 @@ export interface ResidentToolOptions {
   nextMessageId: () => number;
 }
 
+/**
+ * Waits for a turn unless the caller's own cancellation arrives first.
+ *
+ * The distinction this exists for is between **stopping the wait** and **stopping the turn**. A caller that is
+ * merely waiting — `send_message` on a child that was started by somebody else — owns the wait and nothing
+ * else: its cancellation must end its own patience, not the child's work, because the child's turn was asked
+ * for by a different caller that is still entitled to the answer. Only a turn this call *started* has its
+ * signal tied to the call (see `ChildActivation.run`).
+ *
+ * The listener is removed in the `finally` so a wait that ended for any other reason leaves nothing behind;
+ * the abort branch's promise never settles afterwards, which is deliberate — nothing is waiting on it.
+ */
+async function waitUnlessCancelled<T>(value: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  let stop = () => {};
+  try {
+    return await Promise.race([
+      value,
+      new Promise<never>((_, reject) => {
+        stop = () => reject(signal.reason);
+        signal.addEventListener('abort', stop, { once: true });
+      }),
+    ]);
+  } finally {
+    signal.removeEventListener('abort', stop);
+  }
+}
+
 /** The `send_message` tool for one run's residency, returned rather than installed: the caller owns the registry. */
 export function createResidentMessageTool(options: ResidentToolOptions): Tool {
   const { store, parentSessionId, depth, residency, childTurns, statistics } = options;
@@ -61,6 +89,12 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
    * and nothing about the resumed turn would look wrong. A host that cannot serve the model this child was
    * delegated to says so instead of quietly answering on another one.
    *
+   * The model is passed on as the *task's* model and not only as the resolved provider, because those are two
+   * different statements: the provider is where the request goes, while the model is the identity the child's
+   * turn runs under — its `modelInfo`, which stamps every user turn it writes and is what a reader of the
+   * child's own session sees. Having only the first gave a resumed child that reached the right endpoint while
+   * its transcript still said it was the parent's model.
+   *
    * Nothing about spending is restored, because there was never a grant to restore: a child is bounded the
    * way its parent is — its own rounds, its own window, its own wall clock — and what a parent shares with
    * its children is the slots they occupy, not an allowance. The tokens a child has used are read from its
@@ -75,8 +109,15 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
         `This host cannot run a sub-agent on model "${logged.model}", which this child was delegated to; it was not resumed`,
       );
     const childSession = store.get(childSessionId);
+    /** The delegation's own descriptor, with the model only when it named one: an older record has none. */
+    const task = {
+      id: logged.id,
+      role: logged.role,
+      objective: logged.objective,
+      ...(logged.model ? { model: logged.model } : {}),
+    };
     const child = childTurns({
-      task: { id: logged.id, role: logged.role, objective: logged.objective },
+      task,
       childSession,
       depth,
       tag: { id: logged.id, role: logged.role, objective: logged.objective },
@@ -119,11 +160,26 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
       required: ['childSessionId', 'message'],
       additionalProperties: false,
     },
-    execute: async (args: Record<string, unknown>) => {
+    execute: async (args: Record<string, unknown>, context: ToolContext) => {
+      const signal = context.signal;
       try {
         const activation = own(String(args.childSessionId));
         const message = String(args.message);
         const wait = args.wait !== false;
+        /**
+         * The role this child was delegated with, taken from the delegation's own record.
+         *
+         * It used to be the literal `general` here, which made every follow-up announce itself as a general
+         * child whatever the delegation had said — and a child delegated as `explore` is a read-only reader, so
+         * the finished record, the settlement notice and the card all reported a role the child never had.
+         * `general` remains only as the fallback for a delegation recorded before the field existed.
+         *
+         * Read from the log, never from the message: `send_message` carries a question, and a follow-up that
+         * could name its own role would be a way to ask a read-only child to come back writable.
+         */
+        const role =
+          loggedChildren().findLast((entry) => entry.childSessionId === activation.childSessionId)
+            ?.role ?? 'general';
         /**
          * The acceptance is written down *before* the hand-off is attempted.
          *
@@ -150,7 +206,7 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
           options.emit('subagent.finished', {
             id: activation.id,
             sessionId: activation.childSessionId,
-            role: 'general',
+            role,
             objective: activation.objective,
             status: outcome.status,
             rounds: outcome.rounds,
@@ -160,14 +216,29 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
           });
           addUsage(statistics, outcome.usage);
         };
-        const delivery = await activation.deliver(message, { wait, id: messageId });
+        /**
+         * The hand-off is taken with `wait: false` even when this call *will* wait.
+         *
+         * `deliver`'s own waiting is unconditional — it resolves when the turn does — and that is exactly what
+         * this tool cannot use: the wait has to end when the call is cancelled, while the turn keeps running.
+         * Handing back the turn's promise is the half of the contract that is needed here, so the wait is done
+         * below, where the call's signal is in hand.
+         */
+        const delivery = await activation.deliver(message, { wait: false, id: messageId });
         // A child that is idle has no turn to fold into: the message becomes a turn of its own. The
         // promise is kept for the background path, where nothing awaits it here. A correction whose turn
         // promise is not visible would be the one case with no outcome to report, which the waiting path
         // below refuses to pretend about.
-        const turn = delivery.delivered
-          ? (delivery.done ?? (delivery.result ? Promise.resolve(delivery.result) : undefined))
-          : activation.run(message, false);
+        //
+        // Only a waiting call ties its own cancellation to that new turn. A `wait: false` hand-off returns as
+        // soon as the message is in the queue, and the call is then over: its signal must not be able to stop
+        // work that was deliberately handed off. The run's own end still stops it, through the delegation's
+        // signal rather than through this call.
+        const turn =
+          delivery.done ??
+          (delivery.delivered
+            ? undefined
+            : activation.run(message, false, wait ? signal : undefined));
         /**
          * The hand-off is recorded only if it actually happened.
          *
@@ -205,7 +276,9 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
               'Its answer is not in this result — read it with collect_subagents (or job_output on the child session) when it lands.',
           };
         }
-        const outcome = delivery.result ?? (turn ? await turn : undefined);
+        // The wait is the call's, the turn may not be: a correction folded into a turn somebody else started
+        // keeps running when this call is cancelled, and only the waiting ends.
+        const outcome = turn ? await waitUnlessCancelled(turn, signal) : undefined;
         if (!outcome)
           // Unreachable in practice (a delivered message always belongs to a turn whose promise the
           // residency holds), and said out loud rather than dressed up as an answer if it ever happens.

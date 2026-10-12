@@ -305,7 +305,7 @@ test('a page drives a real Host through the bridge: handshake, one turn, events'
 
   // The first frame after the handshake is the state, so a page shows the session without asking for it.
   await until(client, (seen) => seen.some((frame) => frame.kind === 'state'), 'the opening state');
-  for (const mode of ['host', 'sbx', 'docker', 'windows']) {
+  for (const mode of ['host', 'native', 'seatbelt', 'windows']) {
     const refused = await send({ type: 'sandbox', mode });
     assert.equal(refused.ok, false, `the page cannot override the launch sandbox with ${mode}`);
     assert.match(refused.error, /sandbox.*launch|沙箱.*启动/i);

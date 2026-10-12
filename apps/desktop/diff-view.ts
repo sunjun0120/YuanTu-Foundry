@@ -7,6 +7,24 @@ const labels: Record<FileChange['kind'], string> = {
   move: 'diff.move',
   batch: 'diff.batch',
 };
+export type DiffLineClass = 'diff-hunk' | 'diff-added' | 'diff-removed' | 'diff-context';
+/**
+ * What a unified-diff line is.
+ *
+ * Every content line carries a one-character marker, so an added line whose own text begins with `++` reads as
+ * `+++i;` — not the `+++ b/file` header — and matching the `+++` prefix alone drew it as unchanged context,
+ * inside the approval card where a person decides whether to allow the change. A header is the marker followed
+ * by the separator (`+++ b/f.txt`), and a file header can only appear before the first `@@`; inside a hunk,
+ * every `+`/`-` line is content, which is what tells a deleted `-- keep this comment` (drawn `--- keep this
+ * comment`) from the `--- a/f.txt` preamble that reads exactly the same by prefix.
+ */
+export function classifyDiffLine(line: string, inHunk = false): DiffLineClass {
+  if (line.startsWith('@@')) return 'diff-hunk';
+  if (!inHunk && (line.startsWith('+++ ') || line.startsWith('--- '))) return 'diff-context';
+  if (line.startsWith('+')) return 'diff-added';
+  if (line.startsWith('-')) return 'diff-removed';
+  return 'diff-context';
+}
 export function diffView(change: FileChange, expanded = false): HTMLElement {
   const root = document.createElement('details');
   root.className = 'file-diff';
@@ -28,15 +46,13 @@ export function diffView(change: FileChange, expanded = false): HTMLElement {
     root.append(notice);
   }
   const pre = document.createElement('pre');
+  // The file header only precedes the first hunk; after that, a `-`/`+` line is content whatever it spells.
+  let inHunk = false;
   for (const line of change.patch.split('\n')) {
     const row = document.createElement('span');
-    row.className = line.startsWith('@@')
-      ? 'diff-hunk'
-      : line.startsWith('+') && !line.startsWith('+++')
-        ? 'diff-added'
-        : line.startsWith('-') && !line.startsWith('---')
-          ? 'diff-removed'
-          : 'diff-context';
+    const lineClass = classifyDiffLine(line, inHunk);
+    if (lineClass === 'diff-hunk') inHunk = true;
+    row.className = lineClass;
     row.textContent = line + '\n';
     pre.append(row);
   }

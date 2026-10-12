@@ -2,9 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { PermissionPolicy, type PermissionPolicySource } from './permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
+import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
 
 export interface BackgroundAuthority {
   sandboxMode: SandboxMode;
+  sandboxFiles?: FileEffect;
+  sandboxNetwork?: NetworkEffect;
   permissionPolicy: PermissionPolicySource | null;
 }
 
@@ -17,10 +20,24 @@ export function backgroundAuthority(
     ?.data.authority;
   if (!source || typeof source !== 'object') return;
   const a = source as BackgroundAuthority;
-  if (!['host', 'windows', 'docker', 'sbx'].includes(a.sandboxMode)) return;
+  if (!['host', 'windows', 'native', 'seatbelt'].includes(a.sandboxMode)) return;
+  if (
+    a.sandboxFiles !== undefined &&
+    a.sandboxFiles !== 'read-only' &&
+    a.sandboxFiles !== 'workspace-write'
+  )
+    return;
+  if (
+    a.sandboxNetwork !== undefined &&
+    a.sandboxNetwork !== 'denied' &&
+    a.sandboxNetwork !== 'unrestricted'
+  )
+    return;
   try {
     return {
       sandboxMode: a.sandboxMode,
+      ...(a.sandboxNetwork ? { sandboxNetwork: a.sandboxNetwork } : {}),
+      ...(a.sandboxFiles !== undefined ? { sandboxFiles: a.sandboxFiles } : {}),
       permissionPolicy:
         a.permissionPolicy === null ? null : new PermissionPolicy(a.permissionPolicy).toJSON(),
     };

@@ -37,10 +37,26 @@ function hidden(name: string): boolean {
 /**
  * True for the store's own spilled tool output, which lives under the internal `.yuantu` directory. Reads
  * reach it, writes do not, and scoped instructions are never looked up inside it.
+ *
+ * The argument is the file's **resolved** workspace-relative path, never the argument as written: `./.yuantu/…`
+ * and `x/../.yuantu/…` name the same file, and reading the raw string made this exception depend on how the
+ * model spelled the path — the equivalent spellings then fell through to the instruction lookup, which refuses
+ * everything under `.yuantu`. The comparison stays exact-case, because the canonical path `Workspace.resolve`
+ * returns carries the on-disk spelling a case-insensitive filesystem hands back.
  */
-function isSpillPath(input: string): boolean {
-  const parts = input.split(/[\\/]+/).filter(Boolean);
+function isSpillIdentity(relative: string): boolean {
+  const parts = relative.split('/').filter(Boolean);
   return parts[0] === '.yuantu' && parts[1] === 'spill';
+}
+/**
+ * The workspace-relative spelling of an already-resolved file.
+ *
+ * Both sides are canonicalized: `Workspace.resolve` answers with a realpath, so comparing it to
+ * `workspace.root` as written would misname every file in a workspace that is itself reached through a link.
+ */
+async function canonicalRelative(workspace: Workspace, file: string): Promise<string> {
+  const relative = path.relative(await realpath(workspace.root), file);
+  return relative.split(path.sep).join('/');
 }
 function inside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
@@ -326,6 +342,16 @@ function shownMatches(rendered: readonly string[]): number {
   }
   return rendered.length;
 }
+/**
+ * Every RegExp metacharacter, escaped, so a literal query is matched as text.
+ *
+ * `literal` mode and `regex` mode share one matching strategy — the engine, with the same flags — and this is
+ * the only thing that separates them. Without it, a literal `a+b[0]` would be compiled as a pattern and would
+ * match `aab0` while missing `a+b[0]`, which is the opposite of what the caller asked for.
+ */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 function regexSearch(
   root: string,
   files: string[],
@@ -336,10 +362,13 @@ function regexSearch(
 ): Promise<{ matches: SearchMatch[]; limited: boolean }> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const workerUrl = new URL(
-      import.meta.url.endsWith('.ts') ? './search-worker.ts' : './search-worker.js',
-      import.meta.url,
-    );
+    const workerUrl =
+      typeof __dirname === 'string'
+        ? path.join(__dirname, '../packages/tools/search-worker.js')
+        : new URL(
+            import.meta.url.endsWith('.ts') ? './search-worker.ts' : './search-worker.js',
+            import.meta.url,
+          );
     const worker = new Worker(workerUrl, {
       execArgv: workerExecArgv(),
       workerData: {
@@ -438,14 +467,25 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
         const start = Number(args.start_line ?? 1),
           end = Number(args.end_line ?? start + 199);
         if (end < start) throw new Error('end_line must be >= start_line');
+        const input = String(args.path);
         // Reads reach the spill directory so output that was too large to return is still usable.
-        const split = (await workspace.read(String(args.path), 256_000, true)).split(/\r?\n/);
+        const split = (await workspace.read(input, 256_000, true)).split(/\r?\n/);
         // The model has now seen this file's bytes, which is what a later change to it will be checked against.
-        await observations.record(String(args.path));
-        // Scoped instructions live in the workspace, not in the internal directory a spill lives in.
-        const instructions = isSpillPath(String(args.path))
+        await observations.record(input);
+        /**
+         * The path in the payload is the resolved one, not the argument as written.
+         *
+         * `a/../b.txt`, `./b.txt` and `b.txt` are the same file, and a card that compared a `file-read` payload
+         * with a `search-results` hit by string equality would treat them as three — so both tools publish the
+         * workspace-relative spelling the walk produces, in the same forward-slash form.
+         */
+        const file = await workspace.resolve(input, false, true);
+        // Scoped instructions live in the workspace, not in the internal directory a spill lives in — and the
+        // question is which file this read opened, so it is answered from the resolved path rather than from the
+        // spelling of the argument (see `isSpillIdentity`). Resolving first is what makes that possible.
+        const instructions = isSpillIdentity(await canonicalRelative(workspace, file))
           ? ''
-          : await guidance(String(args.path));
+          : await guidance(input);
         /**
          * The split produces one more element than the file has lines when the file ends in a newline, and the
          * numbering the model reads has always shown that element (`5: ` on a four-line file). The payload drops
@@ -456,14 +496,6 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
         const shown = split.slice(start - 1, end);
         const slice = (split.at(-1) === '' ? split.slice(0, -1) : split).slice(start - 1, end);
         const text = slice.join('\n');
-        /**
-         * The path in the payload is the resolved one, not the argument as written.
-         *
-         * `a/../b.txt`, `./b.txt` and `b.txt` are the same file, and a card that compared a `file-read` payload
-         * with a `search-results` hit by string equality would treat them as three — so both tools publish the
-         * workspace-relative spelling the walk produces, in the same forward-slash form.
-         */
-        const file = await workspace.resolve(String(args.path), false, true);
         const language = languageOf(file);
         const body = text.slice(0, MAX_TOOL_OUTPUT);
         return {
@@ -614,6 +646,22 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
           for (const match of result.matches) add(match.path, match.line, match.text);
           limited = result.limited;
         } else {
+          /**
+           * Case-insensitive literals match through the same engine and the same flag as `regex` mode.
+           *
+           * The test used to be `line.toLocaleLowerCase().includes(query.toLocaleLowerCase())`, which is wrong
+           * twice over. It is locale-dependent and the engine's `i` flag is not, so the two modes of one tool
+           * could answer differently about the same file on a host whose locale folds differently — that is the
+           * risk this pair exists to remove rather than to move. And lowercasing is not the relation
+           * case-insensitive matching implements: `'İ'.toLocaleLowerCase()` is `i` plus a combining dot above,
+           * so a literal search for `i` counted a line containing `İ` as a hit while `new RegExp('i', 'i')` does
+           * not, and `literal` therefore disagreed with `regex` on any host at all.
+           *
+           * The query is escaped, so this remains a literal: `a+b[0]` matches that text and never `aab0`, and a
+           * query full of metacharacters is a query rather than a syntax error. Case-sensitive is the same
+           * expression without the flag, which is exact matching — asserted, not assumed.
+           */
+          const expression = new RegExp(escapeRegExp(query), sensitive ? '' : 'i');
           scan: for (const file of files) {
             ctx.signal.throwIfAborted();
             let text: string;
@@ -625,10 +673,7 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
             const lines = text.split(/\r?\n/);
             for (let i = 0; i < lines.length; i++) {
               const line = lines[i]!;
-              const matched = sensitive
-                ? line.includes(query)
-                : line.toLocaleLowerCase().includes(query.toLocaleLowerCase());
-              if (!matched) continue;
+              if (!expression.test(line)) continue;
               add(file, i + 1, line.slice(0, MAX_MATCH_TEXT), bounded(line, MAX_MATCH_TEXT));
               if (found.length >= limit) {
                 limited = true;

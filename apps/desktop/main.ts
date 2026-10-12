@@ -1,5 +1,11 @@
 import { MAX_DOCUMENT_BYTES, type AttachmentReply } from './attachment-contract.ts';
 import { SandboxEnvironment } from './sandbox-environment.ts';
+import {
+  WindowsSandboxSetup,
+  parseSandboxSetupCommand,
+  type SandboxSetupReply,
+  type SandboxSetupView,
+} from './sandbox-setup.ts';
 import { Worker } from 'node:worker_threads';
 import { McpSettingsStore } from './mcp-settings.ts';
 import { parseMcpCommand, type McpReply } from './mcp-contract.ts';
@@ -60,6 +66,7 @@ let sandboxEnvironment: SandboxEnvironment;
 let dailyBackups: DailyBackups;
 let backupTimer: NodeJS.Timeout | undefined;
 let backupRestoring: Promise<BackupReply> | undefined;
+let sandboxInitializing: Promise<SandboxSetupView> | undefined;
 const backupWorkers = new Set<Promise<BackupResult>>();
 /** One session's pair: where its commands run, and how much it may do without asking. */
 interface SessionChoice {
@@ -464,7 +471,7 @@ async function applyChoice(choice: SessionChoice): Promise<void> {
   live = { ...choice };
   /**
    * The availability of the backend is asked for *after* the switch and never awaited: the answer costs a
-   * process (`sbx`/`docker --version`), and what a person is waiting for is the switch — a chip that froze for a
+   * native enforcement probe, and what a person is waiting for is the switch — a chip that froze for a
    * second and a half before redrawing would be the interface paying for a footnote. The window is told when the
    * answer lands, which is what the push channel is for.
    */
@@ -546,6 +553,7 @@ app.on('before-quit', (event) => {
   settingsAbort.abort();
   void (async () => {
     try {
+      await sandboxInitializing?.catch(() => {});
       await backupRestoring?.catch(() => {});
       await dailyBackups?.drain();
       await Promise.allSettled([...backupWorkers]);
@@ -634,10 +642,6 @@ void app
       path.join(app.getPath('userData'), 'permission-policy.json'),
     );
     await permissionSettingsStore.load();
-    sandboxEnvironment = new SandboxEnvironment();
-    // Warmed for the default mode so the first paint of the chip can say whether that backend is usable; every
-    // other mode is probed when a session moves to it, and the answer is remembered.
-    void sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
     const runtime = desktopPaths({
       packaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
@@ -647,6 +651,21 @@ void app
       env: process.env,
       args: process.argv,
     });
+    sandboxEnvironment = new SandboxEnvironment(process.env, {
+      nodePath: runtime.nodePath,
+      workerPath: path.join(__dirname, 'sandbox-probe-worker.cjs'),
+    });
+    const sandboxSetup = new WindowsSandboxSetup({
+      platform: process.platform,
+      packaged: app.isPackaged,
+      nodePath: runtime.nodePath,
+      helperPath: path.resolve(
+        __dirname,
+        '../packages/tools/windows-sandbox/yuantu-appcontainer.exe',
+      ),
+    });
+    // Probe with standalone Node, not Electron's executable; remember each mode's answer.
+    void sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
     if (app.isPackaged && runtime.workspace === path.join(app.getPath('userData'), 'workspace'))
       mkdirSync(runtime.workspace, { recursive: true });
     const workspace = realpathSync(runtime.workspace);
@@ -933,6 +952,29 @@ void app
           return { ok: true, kind: 'settings', settings: uiSettingsStore.view };
         } catch (error) {
           return { ok: false, error: safeError(error) };
+        }
+      },
+    );
+    ipcMain.handle(
+      'yuantu:sandbox-setup',
+      async (event, input: unknown): Promise<SandboxSetupReply> => {
+        try {
+          assertSender(event);
+          const command = parseSandboxSetupCommand(input);
+          if (quitting) throw new Error(mainText('desktop.quitting'));
+          if (command.type === 'status') return { ok: true, view: await sandboxSetup.status() };
+          if (switching || !service || service.busy) throw new Error(mainText('settingsMain.busy'));
+          switching = true;
+          try {
+            sandboxInitializing = sandboxSetup.initialize();
+            return { ok: true, view: await sandboxInitializing };
+          } finally {
+            sandboxInitializing = undefined;
+            switching = false;
+          }
+        } catch (error) {
+          console.error('desktop: sandbox initialization request failed', safeError(error));
+          return { ok: false, error: mainText('sandboxSetup.failed') };
         }
       },
     );

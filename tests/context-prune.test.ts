@@ -202,6 +202,26 @@ test('a cut never splits a surrogate pair', () => {
   );
 });
 
+test('the characters pruning frees are counted in code points, not UTF-16 units', () => {
+  /**
+   * `prunedChars` is reported to the operator as the characters a result no longer costs the model, and the
+   * budget that decided the cut is stated in code points — `worthPruning` and `pruneContent` both go through
+   * `codePointLength`. Counting the saving with `.length` made the report a different unit from the decision:
+   * an emoji result that shed 8,000 characters was announced as 16,000 freed.
+   */
+  const content = '\u{1F600}'.repeat(50_000);
+  const outcome = pruneMessages(withOldResult(content), POLICY, 0);
+  assert.equal(outcome.pruned, 1);
+  const kept = outcome.messages[2]!;
+  assert.equal(kept.role, 'tool');
+  assert.ok(kept.content.includes(PRUNE_MARK));
+  const freed = codePointLength(content) - codePointLength(kept.content);
+  assert.equal(outcome.prunedChars, freed);
+  assert.ok(freed > 0, 'the fixture has to free something for the unit to matter');
+  // The UTF-16 difference is the wrong answer, and the fixture makes the two impossible to confuse.
+  assert.notEqual(outcome.prunedChars, content.length - kept.content.length);
+});
+
 test('an oversized result loses its middle for the model while the transcript keeps every character', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-prune-'));
   const store = new SessionStore(path.join(root, 'sessions.sqlite'));

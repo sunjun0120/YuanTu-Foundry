@@ -1,4 +1,5 @@
 import type { Agent } from '../../packages/core/agent.ts';
+import { underSessionPolicy } from './session-policy.ts';
 import type { BackgroundAuthority } from '../../packages/core/background-deliveries.ts';
 import type { PermissionPolicy } from '../../packages/core/permissions.ts';
 import { SubAgentResidency } from '../../packages/core/residency.ts';
@@ -11,6 +12,7 @@ import type {
 } from '../../packages/protocol/index.ts';
 import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import type { SandboxMode } from '../../packages/tools/sandbox.ts';
+import type { FileEffect, NetworkEffect } from '../../packages/protocol/execution.ts';
 import type { TaskEvent } from '../../packages/core/task-trigger.ts';
 import type { HostLaunch } from './cli.ts';
 import type { HostCarrier } from './carrier.ts';
@@ -89,8 +91,12 @@ export interface HostContext {
 
   /** The sandbox a session without its own override runs in; `sandbox.set` changes it. */
   defaultSandboxMode: SandboxMode;
+  defaultSandboxFiles: FileEffect;
+  defaultSandboxNetwork?: NetworkEffect;
   /** Per-session sandbox overrides. A session absent here still reads the process default. */
   sessionSandboxes: Map<string, SandboxMode>;
+  sessionSandboxFiles: Map<string, FileEffect>;
+  sessionSandboxNetwork: Map<string, NetworkEffect | undefined>;
   /** The process's permission policy, replaced wholesale by `permission.update`. */
   permissionPolicy: PermissionPolicy | undefined;
   /** Violations from the last run, so `invariants.list` can answer "does it currently hold?". */
@@ -190,7 +196,11 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     invariants: services.invariants,
     residency: new SubAgentResidency(),
     defaultSandboxMode: launchSandbox.mode,
+    defaultSandboxFiles: launchSandbox.files ?? 'workspace-write',
+    defaultSandboxNetwork: launchSandbox.network,
     sessionSandboxes: new Map<string, SandboxMode>(),
+    sessionSandboxFiles: new Map<string, FileEffect>(),
+    sessionSandboxNetwork: new Map<string, NetworkEffect | undefined>(),
     permissionPolicy,
     lastViolations: [],
     announced,
@@ -214,9 +224,8 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     announceSession: async (sessionId: string, resumed: boolean): Promise<void> => {
       if (announced.has(sessionId)) return;
       announced.add(sessionId);
-      const failures = await hooks.sessionStart(
-        { sessionId, workspace, resumed },
-        new AbortController().signal,
+      const failures = await underSessionPolicy(state, sessionId, () =>
+        hooks.sessionStart({ sessionId, workspace, resumed }, new AbortController().signal),
       );
       for (const failure of failures)
         process.stderr.write(`sessionStart hook failed: ${failure}\n`);

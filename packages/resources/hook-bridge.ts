@@ -2,7 +2,12 @@ import { spawn } from 'node:child_process';
 import type { HookRegistry, ExtensionHooks } from '../tools/hooks.ts';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
 import type { Disposer } from '../tools/dispatch.ts';
-import { prepareSandbox, resolveSandboxConfig, stopSandbox } from '../tools/sandbox.ts';
+import {
+  prepareSandbox,
+  resolveSandboxConfig,
+  stopSandbox,
+  markSandboxStarted,
+} from '../tools/sandbox.ts';
 import type { ClaudeHookEvent, HookDeclaration } from './hook-config.ts';
 import { hookMatcherMatches } from './hook-config.ts';
 /**
@@ -18,11 +23,8 @@ import { hookMatcherMatches } from './hook-config.ts';
  *
  *  - the environment is the same allow-list `run_command` gets (`toolEnvironment`), so a hook cannot read
  *    the model's API key or any other `YUANTU_*` value;
- *  - it runs through `prepareSandbox`, and the bridge **refuses to install at all** when the *hook* sandbox
- *    is anything but `host`: the containers create a container per command, which a per-event hook cannot pay
- *    for, and running the hook *outside* the sandbox that the rest of the run is confined to would be the worst
- *    of the three options. "The hook sandbox" is its own category (`YUANTU_SANDBOX_HOOK`), so an operator who
- *    wants confined commands *and* hooks has a way to say it: `YUANTU_SANDBOX=sbx YUANTU_SANDBOX_HOOK=host`;
+ *  - it runs through `prepareSandbox`, inheriting the call's execution policy; an explicit hook backend
+ *    override preserves the call's file/network requirements, and unsupported policies refuse execution;
  *  - a planning or read-only run does not run them, because that run's promise is that nothing outside the
  *    process is affected;
  *  - an operator can turn the whole thing off with `YUANTU_HOOK_BRIDGE=0`.
@@ -63,22 +65,23 @@ type Decided = Verdict & { context?: string };
 export function installHookBridge(options: HookBridgeOptions): Disposer[] {
   const { workspace, hooks, declarations, onFailure = () => {} } = options;
   if (!declarations.length) return [];
-  // Refused rather than silently skipped: an operator who declared hooks and selected a container sandbox for
-  // *hooks* has asked for two incompatible things, and only one of them can be honoured. Note the category: the
-  // container may well be right for commands, and `YUANTU_SANDBOX_HOOK=host` is how that combination is said.
-  const sandbox = resolveSandboxConfig(process.env, 'hook');
-  if (sandbox.mode !== 'host')
-    throw new Error(
-      `Hook config declares ${declarations.length} external hook(s), but YUANTU_SANDBOX_HOOK=${sandbox.mode} cannot run them: ` +
-        `a container is created per command, and running a hook outside it would escape the sandbox. ` +
-        `Use YUANTU_SANDBOX_HOOK=host to keep commands sandboxed with hooks on the host, ` +
-        `set YUANTU_SANDBOX=host, set YUANTU_HOOK_BRIDGE=0, or remove the hook declarations.`,
-    );
+  // Validate the category without creating a plan or granting workspace permissions at installation.
+  resolveSandboxConfig(process.env, 'hook');
   const events = new Set(declarations.map((declaration) => declaration.event));
   const disposers: Disposer[] = [];
-  for (const event of events) {
-    const forEvent = declarations.filter((declaration) => declaration.event === event);
-    disposers.push(hooks.register(hooksFor(event, forEvent, workspace, onFailure)));
+  try {
+    for (const event of events) {
+      const forEvent = declarations.filter((declaration) => declaration.event === event);
+      disposers.push(hooks.register(hooksFor(event, forEvent, workspace, onFailure)));
+    }
+  } catch (error) {
+    /**
+     * A registration that fails part-way through — the registration ceiling is the reachable case — must take
+     * back the ones it already made. `installOnce` deliberately does not record the key on failure, so the next
+     * attempt runs this function again, and leaving the earlier hooks registered would register them twice.
+     */
+    for (const dispose of disposers.reverse()) dispose();
+    throw error;
   }
   return disposers;
 }
@@ -271,13 +274,17 @@ async function runCommand(
   onFailure: HookFailureReporter,
 ): Promise<Decided> {
   if (signal.aborted) return { kind: 'allow' };
-  // `prepareSandbox` in host mode is the same plan `run_command` executes: the sanitised environment, the
-  // platform shell, and the quoting rules that go with it. Nothing here spawns a bare child process.
-  const plan = await prepareSandbox(workspace, workspace, declaration.command, undefined, {
-    mode: 'host',
-    image: 'host',
-  });
-  return new Promise<Decided>((resolve) => {
+  // Resolve the live policy for each event; never retry a failed native launch on the host.
+  const plan = await prepareSandbox(
+    workspace,
+    workspace,
+    declaration.command,
+    undefined,
+    resolveSandboxConfig(process.env, 'hook'),
+    'hook',
+  );
+  return new Promise<Decided>((resolve, reject) => {
+    markSandboxStarted(plan);
     const child = spawn(plan.executable, plan.args, {
       cwd: plan.cwd,
       env: plan.env,
@@ -292,6 +299,7 @@ async function runCommand(
       timedOut = false,
       settled = false,
       killing: Promise<void> | undefined;
+    let cleanupError: unknown;
     const collect = (chunk: Buffer, into: 'stdout' | 'stderr') => {
       if (into === 'stdout') stdout = (stdout + chunk.toString('utf8')).slice(0, HOOK_OUTPUT_LIMIT);
       else stderr = (stderr + chunk.toString('utf8')).slice(-4096);
@@ -300,7 +308,8 @@ async function runCommand(
     child.stderr.on('data', (chunk: Buffer) => collect(chunk, 'stderr'));
     const stop = () => {
       if (child.pid && !killing)
-        killing = stopSandbox(child, plan).catch(() => {
+        killing = stopSandbox(child, plan).catch((error) => {
+          cleanupError = error;
           child.kill();
         });
     };
@@ -316,7 +325,16 @@ async function runCommand(
       settled = true;
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
-      resolve(verdict);
+      void (async () => {
+        try {
+          await (killing ?? stopSandbox(child, plan));
+          if (cleanupError) throw cleanupError;
+          resolve(verdict);
+        } catch (error) {
+          onFailure(`${declaration.file}: hook cleanup failed: ${String(error)}`);
+          reject(error);
+        }
+      })();
     };
     child.on('error', (error) => {
       onFailure(`${declaration.file}: could not run hook: ${error.message}`);

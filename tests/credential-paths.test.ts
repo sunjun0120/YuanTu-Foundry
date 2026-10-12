@@ -6,7 +6,6 @@ import path from 'node:path';
 import { fileTools, Workspace } from '../packages/tools/files.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { buildRepoMap } from '../packages/tools/repo-map.ts';
-import { prepareSandbox } from '../packages/tools/sandbox.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
 
 const credentials = [
@@ -156,20 +155,8 @@ test('spill output access does not bypass credential protection for descendants'
   }
 });
 
-test('container preflight still refuses credential files while public keys and ordinary sources remain accessible', async (t) => {
+test('public keys and ordinary sources remain accessible while file tools reject credentials', async (t) => {
   const { root, tools } = await fixture(t);
-  for (const [index, name] of credentials.entries()) {
-    const directory = path.join(root, `case-${index}`);
-    await mkdir(directory);
-    await writeFile(path.join(directory, name), marker);
-    await assert.rejects(
-      prepareSandbox(directory, directory, 'echo audit', undefined, {
-        mode: 'docker',
-        image: 'node:24-bookworm-slim',
-      }),
-      /sensitive workspace file/i,
-    );
-  }
   for (const name of ['id_rsa.pub', 'ordinary.ts']) {
     await writeFile(path.join(root, name), 'PUBLIC_AUDIT_MARKER');
     const result = await tools.execute(
@@ -182,11 +169,6 @@ test('container preflight still refuses credential files while public keys and o
   const publicRoot = path.join(root, 'public');
   await mkdir(publicRoot);
   await writeFile(path.join(publicRoot, '.env.example'), 'PLACEHOLDER=example');
-  const plan = await prepareSandbox(publicRoot, publicRoot, 'echo audit', undefined, {
-    mode: 'docker',
-    image: 'node:24-bookworm-slim',
-  });
-  assert.equal(plan.backend, 'docker');
   const publicWorkspace = new Workspace(publicRoot);
   await assert.rejects(publicWorkspace.read('.env.example'), /credential paths/i);
   assert.deepEqual(await publicWorkspace.walk('.', context()), []);
@@ -201,12 +183,5 @@ test('container preflight still refuses credential files while public keys and o
     await mkdir(directory);
     await writeFile(path.join(directory, name), 'DATABASE_FIXTURE');
     assert.equal(await new Workspace(directory).read(name), 'DATABASE_FIXTURE');
-    await assert.rejects(
-      prepareSandbox(directory, directory, 'echo audit', undefined, {
-        mode: 'docker',
-        image: 'node:24-bookworm-slim',
-      }),
-      /sensitive workspace file/i,
-    );
   }
 });

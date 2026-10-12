@@ -35,11 +35,16 @@ export const runHandlers: Readonly<Record<string, Handler>> = {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
     const agent = ctx.active.get(sessionId)?.agent;
+    // The run identity travels in the same answer as the state it belongs to, so a client cannot be told "a run
+    // holds this session" and be left unable to recognise that run's frames. It is the same id the live frames
+    // carry: `beginRun` writes it to the session and the emitter stamps it on every event.
+    const activeRun = ctx.store.get(sessionId).activeRun;
+    const identity = activeRun ? { runId: activeRun } : {};
     // With no run holding the session there is no agent either, and the answer comes from the log: what
     // nobody ever delivered. Asking the store directly is what lets a reopened session show that at all.
     return agent
-      ? agent.inboxOf(sessionId)
-      : { running: false, items: ctx.store.pendingInputs(sessionId) };
+      ? { ...agent.inboxOf(sessionId), ...identity }
+      : { running: false, items: ctx.store.pendingInputs(sessionId), ...identity };
   },
   'run.queue.clear': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');

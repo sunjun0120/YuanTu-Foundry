@@ -17,12 +17,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createTools } from '../packages/tools/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
+import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
 import {
   NODE_PTY,
   nodePtyProvider,
   ptyProvider,
   registerPtyProvider,
   type PtyProcess,
+  type PtyProvider,
   type PtyRequest,
 } from '../packages/tools/pty-provider.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
@@ -63,6 +65,59 @@ class ScriptedProcess implements PtyProcess {
     this.exit?.({ exitCode });
   }
 }
+/**
+ * The other scripted terminal: one whose *backend* owns confirmed termination, and which records the signal it
+ * was asked to deliver.
+ *
+ * This is the shape the built-in backend has. `ScriptedProcess` above has only `kill`, so the manager's
+ * terminate branch is invisible to it — a signal dropped there never reaches the process and nothing fails.
+ * The backend that ends the OS process tree is the only one that can honour a named signal, so that is where
+ * "the caller asked for SIGTERM" has to be observable.
+ */
+class ConfirmingProcess implements PtyProcess {
+  pid = 4243;
+  readonly written: string[] = [];
+  /** What the backend was asked to deliver, including `undefined` for a plain terminate with no signal. */
+  readonly requested: (string | undefined)[] = [];
+  readonly killed: string[] = [];
+  readonly request: PtyRequest;
+  /** Set when this fake backend cannot deliver a signal, as a Windows console without signal delivery is. */
+  signalAvailable?: (signal: string) => string | null;
+  private data: ((chunk: string) => void) | undefined;
+  private exit: ((event: { exitCode: number | null }) => void) | undefined;
+  constructor(request: PtyRequest) {
+    this.request = request;
+  }
+  onData(listener: (chunk: string) => void): void {
+    this.data = listener;
+  }
+  onExit(listener: (event: { exitCode: number | null }) => void): void {
+    this.exit = listener;
+  }
+  write(data: string): void {
+    this.written.push(data);
+    this.emit(`echo: ${data}`);
+  }
+  kill(signal?: string): void {
+    if (signal) this.killed.push(signal);
+    this.emit('\n[exited]\n');
+    this.finish(0);
+  }
+  /** Confirmed termination, exactly like the built-in adapter: the OS process tree is the backend's to end. */
+  async terminate(signal?: NodeJS.Signals): Promise<void> {
+    this.requested.push(signal);
+    // A program that ignores a graceful signal is the one SIGKILL exists for: the request was delivered, the
+    // process is still there, and the terminal has to stay usable enough to be ended by force.
+    if (signal && signal === ignoredSignal) return;
+    this.finish(0);
+  }
+  emit(chunk: string): void {
+    this.data?.(chunk);
+  }
+  finish(exitCode: number | null): void {
+    this.exit?.({ exitCode });
+  }
+}
 /** Every spawn this provider was asked for, so a test can assert what was launched. */
 const spawned: ScriptedProcess[] = [];
 const scriptedProvider = {
@@ -78,18 +133,45 @@ const scriptedProvider = {
   },
 };
 registerPtyProvider(scriptedProvider);
+/** Every confirmed-termination spawn, so the signal path can be checked against the backend that owns it. */
+const confirming: ConfirmingProcess[] = [];
+/**
+ * What the confirming backend answers about one named signal: `null` means it delivers, a line means it cannot
+ * — the "answer, not exception" shape the provider seam already uses for availability.
+ */
+let signalRefusal: ((signal: string) => string | null) | undefined;
+/** A signal the fake program ignores, so a graceful request is delivered without ending the terminal. */
+let ignoredSignal: string | undefined;
+const confirmingProvider: PtyProvider = {
+  name: 'confirming',
+  description:
+    'A scripted terminal that confirms its own termination and records the signal it was given.',
+  async available() {
+    return null;
+  },
+  async spawn(request: PtyRequest) {
+    const child = new ConfirmingProcess(request);
+    if (signalRefusal) child.signalAvailable = signalRefusal;
+    confirming.push(child);
+    return child;
+  },
+};
+registerPtyProvider(confirmingProvider);
 /** The env is process-wide, so every test restores it before it can affect another file's process. */
-function useScriptedProvider(t: test.TestContext): void {
+function useProvider(t: test.TestContext, name = 'scripted'): void {
   const previous = process.env.YUANTU_PTY;
-  process.env.YUANTU_PTY = 'scripted';
+  process.env.YUANTU_PTY = name;
   t.after(() => {
     if (previous === undefined) delete process.env.YUANTU_PTY;
     else process.env.YUANTU_PTY = previous;
     spawned.length = 0;
+    confirming.length = 0;
+    signalRefusal = undefined;
+    ignoredSignal = undefined;
   });
 }
-async function setup(t: test.TestContext) {
-  useScriptedProvider(t);
+async function setup(t: test.TestContext, provider = 'scripted') {
+  useProvider(t, provider);
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-terminal-'));
   const terminals = new TerminalSessions(root);
   const tools = createTools(root, undefined, 'session-a', undefined, undefined, terminals);
@@ -243,6 +325,66 @@ test('SIGINT is typed as the interrupt character, and the other signals go to th
   // why the message is the argument error rather than the tool's own wording.
   assert.match(await fail('terminal_signal', { id, signal: 'SIGUSR1' }), /Invalid arguments/);
 });
+test('the signal a caller asks for reaches the backend that ends the terminal', async (t) => {
+  const { call, terminals } = await setup(t, 'confirming');
+  const started = async () => /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
+  // SIGTERM and SIGKILL end the process itself, so the backend that owns the OS process tree has to be told
+  // *which* signal: a terminator that is called with no argument ends the tree by force while the tool reports
+  // the signal it was asked for — the report and the effect disagree.
+  const term = await started();
+  assert.match(await call('terminal_signal', { id: term, signal: 'SIGTERM' }), /Sent SIGTERM/);
+  assert.deepEqual(confirming[0]!.requested, ['SIGTERM']);
+  assert.deepEqual(confirming[0]!.killed, []);
+  assert.equal(terminals.list('session-a')[0]!.status, 'exited');
+  const kill = await started();
+  assert.match(await call('terminal_signal', { id: kill, signal: 'SIGKILL' }), /Sent SIGKILL/);
+  assert.deepEqual(confirming[1]!.requested, ['SIGKILL']);
+  // SIGINT stays what it always was: the interrupt byte on the terminal, never a signal to the backend.
+  const interrupt = await started();
+  assert.match(await call('terminal_signal', { id: interrupt, signal: 'SIGINT' }), /Sent SIGINT/);
+  assert.equal(confirming[2]!.written.at(-1), '\x03');
+  assert.deepEqual(confirming[2]!.requested, []);
+  // Closing keeps the default: end the tree, no signal named.
+  const closed = await started();
+  assert.match(await call('terminal_close', { id: closed }), /closed/);
+  assert.deepEqual(confirming[3]!.requested, [undefined]);
+});
+test('a signal the backend cannot deliver is reported instead of claimed as sent', async (t) => {
+  signalRefusal = () => 'this platform has no signal delivery';
+  const { call, terminals } = await setup(t, 'confirming');
+  const id = /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
+  const report = await call('terminal_signal', { id, signal: 'SIGTERM' });
+  // A platform without signal delivery has to say so. Claiming "Sent SIGTERM" is a report about an effect that
+  // never happened, and it is the kind of report a caller plans around.
+  assert.match(report, /SIGTERM was not delivered/);
+  assert.match(report, /this platform has no signal delivery/);
+  assert.doesNotMatch(report, /Sent SIGTERM/);
+  // The refusal is a report, not a failure to clean up: the terminal is still ended and confirmed.
+  assert.deepEqual(confirming[0]!.requested, ['SIGTERM']);
+  assert.equal(terminals.list('session-a')[0]!.status, 'exited');
+});
+test('a terminal that ignores a graceful signal can still be ended by force', async (t) => {
+  ignoredSignal = 'SIGTERM';
+  const { call, terminals } = await setup(t, 'confirming');
+  const started = async () => /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
+  const graceful = await started();
+  terminals.signal(graceful, 'session-a', 'SIGTERM');
+  // The same graceful request twice is one request: the second adds nothing the first did not.
+  terminals.signal(graceful, 'session-a', 'SIGTERM');
+  assert.deepEqual(confirming[0]!.requested, ['SIGTERM']);
+  assert.equal(terminals.list('session-a')[0]!.status, 'running');
+  // SIGKILL is not a duplicate of a SIGTERM still in flight: it is the stop that was asked for next, and
+  // treating it as a repeat would leave a program that ignores SIGTERM impossible to end.
+  terminals.signal(graceful, 'session-a', 'SIGKILL');
+  assert.deepEqual(confirming[0]!.requested, ['SIGTERM', 'SIGKILL']);
+  assert.equal(terminals.list('session-a')[0]!.status, 'exited');
+  // Closing is the forcing answer too, for the same reason: the terminal ends up gone either way.
+  const closed = await started();
+  terminals.signal(closed, 'session-a', 'SIGTERM');
+  terminals.close(closed, 'session-a');
+  assert.deepEqual(confirming[1]!.requested, ['SIGTERM', undefined]);
+  assert.equal(terminals.list('session-a')[1]!.status, 'exited');
+});
 test('the number of live terminals is capped, and a closed one frees a slot', async (t) => {
   const { call, fail } = await setup(t);
   const opened: string[] = [];
@@ -252,15 +394,18 @@ test('the number of live terminals is capped, and a closed one frees a slot', as
   await call('terminal_close', { id: opened[0]! });
   assert.match(await call('terminal_open', {}), /started/);
 });
-test('terminal_open is refused where commands are confined to a sandbox', async (t) => {
+test('terminal_open refuses an unavailable native backend before PTY spawn', async (t) => {
   const { fail } = await setup(t);
   const previous = process.env.YUANTU_SANDBOX;
-  process.env.YUANTU_SANDBOX = 'docker';
+  process.env.YUANTU_SANDBOX = 'seatbelt';
+  const original = sandboxProvider('seatbelt');
+  registerSandboxProvider({ ...original, available: async () => 'fixture backend unavailable' });
   t.after(() => {
+    registerSandboxProvider(original);
     if (previous === undefined) delete process.env.YUANTU_SANDBOX;
     else process.env.YUANTU_SANDBOX = previous;
   });
-  assert.match(await fail('terminal_open', {}), /way around the docker sandbox/);
+  assert.match(await fail('terminal_open', {}), /fixture backend unavailable/);
   // Nothing was launched: the refusal happens before the manager reaches a provider.
   assert.equal(spawned.length, 0);
 });
@@ -412,6 +557,71 @@ test('a real terminal runs a command end to end', async (t) => {
     cursor = Number(/cursor (\d+)/.exec(result.content)![1]);
   }
   assert.match(seen, new RegExp(marker), `the shell must print what it was told: ${seen}`);
+  const closed = await close!.execute!({ id }, context);
+  assert.equal(closed.isError, false, closed.content);
+});
+
+test('a real terminal signal reports what this platform can actually deliver', async (t) => {
+  const unavailable = await nodePtyProvider.available();
+  if (unavailable) return t.skip(unavailable);
+  const previous = process.env.YUANTU_PTY;
+  delete process.env.YUANTU_PTY;
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-terminal-signal-'));
+  const terminals = new TerminalSessions(root);
+  t.after(async () => {
+    terminals.closeAll();
+    if (previous !== undefined) process.env.YUANTU_PTY = previous;
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const context: ToolContext = { signal: new AbortController().signal, approve: async () => true };
+  const [open, , read, , signal, close] = terminals.tools('real');
+  const source = [
+    "process.on('SIGTERM', () => { console.log('SIGTERM_CAUGHT'); process.exit(0); });",
+    "console.log('SIGNAL_READY');",
+    'setInterval(() => {}, 1000);',
+  ].join(' ');
+  const opened = await open!.execute!(
+    { command: process.execPath, args: ['-e', source], cwd: '.' },
+    context,
+  );
+  assert.equal(opened.isError, false, opened.content);
+  const id = /Terminal (\S+) started/.exec(opened.content)![1]!;
+  let seen = '';
+  let cursor = 0;
+  // The handler has to be installed before the signal, or the child dies from the default action and the test
+  // would pass for the wrong reason.
+  for (let attempt = 0; attempt < 20 && !seen.includes('SIGNAL_READY'); attempt++) {
+    const result = await read!.execute!({ id, cursor, wait_ms: 1000 }, context);
+    assert.equal(result.isError, false, result.content);
+    seen += result.content;
+    cursor = Number(/cursor (\d+)/.exec(result.content)![1]);
+  }
+  assert.match(
+    seen,
+    /SIGNAL_READY/,
+    `the terminal must be running before it is signalled: ${seen}`,
+  );
+  const sent = await signal!.execute!({ id, signal: 'SIGTERM' }, context);
+  assert.equal(sent.isError, false, sent.content);
+  if (process.platform === 'win32') {
+    // A Windows console has no POSIX signal delivery, so the honest answer names the limitation rather than
+    // promising a SIGTERM nobody received. The tree is still ended, and the tool waits for that.
+    assert.match(sent.content, /SIGTERM was not delivered/);
+    assert.doesNotMatch(sent.content, /Sent SIGTERM/);
+  } else {
+    assert.match(sent.content, /Sent SIGTERM/);
+    // POSIX is where the promise can be kept, and the proof is the program's own handler running.
+    let after = '';
+    for (let attempt = 0; attempt < 40 && !after.includes('SIGTERM_CAUGHT'); attempt++) {
+      const result = await read!.execute!({ id, cursor, wait_ms: 250 }, context);
+      assert.equal(result.isError, false, result.content);
+      after += result.content;
+      cursor = Number(/cursor (\d+)/.exec(result.content)![1]);
+      if (!after.includes('SIGTERM_CAUGHT'))
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.match(after, /SIGTERM_CAUGHT/, `SIGTERM must reach the program: ${after}`);
+  }
   const closed = await close!.execute!({ id }, context);
   assert.equal(closed.isError, false, closed.content);
 });

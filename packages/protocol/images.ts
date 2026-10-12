@@ -1,4 +1,8 @@
 import type { ImageAttachment, ImageReference, UserInput } from './index.ts';
+import { validatePng } from './image-png.ts';
+import { validateJpeg } from './image-jpeg.ts';
+import { validateGif } from './image-gif.ts';
+import { validateWebp } from './image-webp.ts';
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_INPUT_BYTES = 16 * 1024 * 1024;
 /**
@@ -64,6 +68,16 @@ export function validateImages(input: unknown): ImageAttachment[] {
     total += bytes;
     if (bytes > MAX_IMAGE_BYTES || total > 10 * 1024 * 1024)
       throw new Error('Image size exceeds 5MB per image or 10MB total');
+    const validators = {
+      'image/png': validatePng,
+      'image/jpeg': validateJpeg,
+      'image/gif': validateGif,
+      'image/webp': validateWebp,
+    };
+    const decoded = atob(data);
+    validators[mimeType as ImageAttachment['mimeType']](
+      Uint8Array.from(decoded, (character) => character.charCodeAt(0)),
+    );
     if (
       name !== undefined &&
       (typeof name !== 'string' || name.length > 256 || /[\x00-\x1f]/.test(name))

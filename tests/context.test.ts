@@ -639,8 +639,23 @@ test('overflow summaries retain project constraints and persist without deleting
   assert.ok(result.usage.inputTokens >= 10, 'summary usage is included');
 });
 
-test('summary failure preserves transcript and never continues with silently dropped history', async (t) => {
+test('a summary failure preserves the transcript and sends the round rather than dropping history', async (t) => {
+  /**
+   * The compaction failed; the round is still sent, and this expectation used to say otherwise.
+   *
+   * `compactionFailure: 'send'` is this run's own choice (see the option's rationale in `agent.ts`): the estimate
+   * that decided to compress is a character heuristic, the endpoint is the authority on whether a request fits,
+   * and a round that cannot produce a summary is sent as it stands with the reason attached so the provider's own
+   * verdict is what the user finally sees. That promise held only for compactions `prepareContext` refused by
+   * itself: a summary *request* that failed was awaited outside the code that knows how to give up on a
+   * compaction, so a provider error left as a failed run and the round was never sent at all. The assertion this
+   * test used to make — `status === 'failed'` — was that omission, not the contract: what it is really about, that
+   * no history is silently dropped, is asserted below and holds either way.
+   */
   const { store, session } = await setup(t);
+  const before = store.messages(session.id);
+  const events: AgentEvent[] = [];
+  const sent: ModelRequest[] = [];
   const agent = new Agent({
     store,
     tools: new ToolRegistry(),
@@ -648,10 +663,12 @@ test('summary failure preserves transcript and never continues with silently dro
     maxContextChars: 100000,
     maxContextTokens: SUMMARY_WINDOW_TOKENS,
     maxOutputTokens: 128,
+    onEvent: (event) => events.push(event),
     provider: {
       async complete(request) {
         if (isSummaryRequest(request)) throw new Error('summary unavailable');
-        return reply2('must not run');
+        sent.push(request);
+        return reply2('Answered without a summary.');
       },
     },
   });
@@ -659,9 +676,29 @@ test('summary failure preserves transcript and never continues with silently dro
     sessionId: session.id,
     prompt: 'Continue. ' + 'next '.repeat(140),
   });
-  assert.equal(result.status, 'failed');
-  assert.match(result.error!, /summary unavailable/);
-  assert.equal(store.messages(session.id).length, 5);
+  assert.equal(result.status, 'completed', result.error);
+  // The round really was sent, carrying every message the session had: nothing was dropped to make it fit and
+  // nothing was written in the summary's place.
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]!.messages.length, before.length + 1);
+  assert.equal(store.messages(session.id).length, before.length + 2);
+  assert.equal(store.contextSurface(session.id), null, 'no compaction was recorded');
+  assert.equal(
+    store.events(session.id).filter((event) => event.type === 'context.compacted').length,
+    0,
+  );
+  /**
+   * And the failure was announced once, on the live channel, with the reason: that is what a client clears the
+   * indicator it raised on `context.compacting` with, without being told the conversation was replaced.
+   */
+  const failed = events.filter((event) => event.type === 'context.compaction.failed');
+  assert.equal(failed.length, 1);
+  assert.match(String(failed[0]!.data.reason), /summary unavailable/);
+  assert.equal(
+    events.filter((event) => event.type === 'context.compacted').length,
+    0,
+    'a failed compaction is never announced as a completed one',
+  );
 });
 
 test('a long tool loop compacts completed steps within the active user turn', async (t) => {
@@ -1666,6 +1703,223 @@ test('a route correction sizes the retained tail in the tokens the endpoint bill
       `the ${label} tail stops at the first turn that reaches it (${measured(tail, factor)})`,
     );
   }
+});
+
+// ---- merged from the R04 audit: a compaction that fails is a compaction that did not happen ----
+
+/**
+ * A conversation that has to be compressed in more than one batch.
+ *
+ * Six turns of detail plus a trailing question: with the small window below, one summary request cannot carry the
+ * whole history, so `prepareContext` walks it in batches — which is what makes "the second batch failed" a
+ * reachable state rather than a hypothetical one.
+ */
+async function compactionFixture(t: test.TestContext) {
+  const { store, session } = await fixture(t);
+  for (let index = 0; index < 6; index++) {
+    store.append(session.id, { role: 'user', content: `Turn ${index}: ` + 'detail '.repeat(600) });
+    store.append(session.id, { role: 'assistant', content: 'Recorded.', toolCalls: [] });
+  }
+  store.append(session.id, { role: 'user', content: 'Continue.' });
+  return { store, session };
+}
+/**
+ * The request the tests below vary one thing at a time.
+ *
+ * `forceCompact` so the compaction runs whether or not the window demands it, and `compactionFailure: 'send'` in
+ * the callers that want the request back rather than a thrown failure — the two answers a caller may choose
+ * between, and the ones these tests are about.
+ */
+const compactionInput = (
+  store: SessionStore,
+  sessionId: string,
+): Parameters<typeof prepareContext>[0] => ({
+  store,
+  sessionId,
+  system: 'You are the fixture.',
+  tools: [],
+  // Replaced by every caller: a compaction these tests exercise always has an answer to summarize and a
+  // reporter to be observed through, and the shape the call takes is what the helper is holding constant.
+  provider: {
+    async complete() {
+      throw new Error('compactionInput: the caller must supply the summary provider');
+    },
+  },
+  limit: 100_000,
+  signal: new AbortController().signal,
+  maxOutputTokens: 1_024,
+  maxContextTokens: 4_000,
+  summaryTimeoutMs: 30_000,
+  forceCompact: true,
+  onUsage: () => {},
+  onCompaction: () => {},
+});
+
+test('a send fallback survives a summary failure and a summary timeout', async (t) => {
+  /**
+   * A summary request that fails is a compaction that did not happen — not a run that failed.
+   *
+   * Both halves of that promise were broken by the same omission: the summary request was awaited outside the
+   * function that knows how to give up on a compaction (`abandonCompaction`), so a provider that threw and a
+   * deadline that expired both travelled out of `prepareContext` as raw exceptions. A caller that had said
+   * `compactionFailure: 'send'` — "this request still fits, send it as it stands rather than failing the run" —
+   * never got the chance to say so, and the one place a run can recover from a failed compression was
+   * unreachable on the two most ordinary ways for one to fail.
+   */
+  const { store, session } = await compactionFixture(t);
+  const before = store.messages(session.id);
+  const states: string[] = [];
+  const failed = await prepareContext({
+    ...compactionInput(store, session.id),
+    compactionFailure: 'send',
+    provider: {
+      async complete() {
+        throw new Error('summary provider exploded');
+      },
+    },
+    onCompaction: (state) => states.push(state),
+  });
+  assert.deepEqual(
+    states,
+    ['started', 'failed'],
+    'the started compaction reported one failed terminal state',
+  );
+  assert.equal(failed.compacted, false, 'nothing was compressed');
+  assert.match(failed.compactionProblem!, /summary provider exploded/);
+  assert.equal(
+    store.events(session.id).filter((event) => event.type === 'context.compacted').length,
+    0,
+    'a failed compaction records no success',
+  );
+  assert.equal(store.contextSurface(session.id), null);
+  /**
+   * What comes back is the conversation as it stands: no summary stands in front of it, and every message is
+   * there exactly once. A view that had quietly dropped the tail, or replayed a half-built summary, would be a
+   * different conversation than the one the user had.
+   */
+  assert.deepEqual(
+    failed.messages.map((message) => message.content),
+    before.map((message) => message.content),
+  );
+
+  const timedStates: string[] = [];
+  const timedOut = await prepareContext({
+    ...compactionInput(store, session.id),
+    compactionFailure: 'send',
+    // A short deadline rather than the 120 s default: what is being tested is which answer a deadline produces,
+    // not how long the product waits for one.
+    summaryTimeoutMs: 50,
+    provider: {
+      // A provider that reports its own cancellation, the way the real adapters do: the shared deadline aborts
+      // the request, and the request's failure is what a caller sees.
+      complete: (request) =>
+        new Promise<never>((_resolve, reject) => {
+          request.signal.addEventListener('abort', () => reject(request.signal.reason), {
+            once: true,
+          });
+        }),
+    },
+    onCompaction: (state) => timedStates.push(state),
+  });
+  assert.deepEqual(timedStates, ['started', 'failed']);
+  assert.equal(timedOut.compacted, false);
+  assert.match(timedOut.compactionProblem!, /timeout/i);
+  assert.deepEqual(
+    timedOut.messages.map((message) => message.content),
+    before.map((message) => message.content),
+  );
+});
+
+test('a cancelled run reports its cancellation rather than a compaction problem', async (t) => {
+  /**
+   * The other side of the fallback: a person pressing Stop is not a compaction that failed.
+   *
+   * `compactionFailure: 'send'` exists so the request can go out without a summary. A cancelled run must not use
+   * it — sending the request is the one thing the user just said not to do — so the abort travels out with the
+   * caller's own reason and nothing is recorded against the conversation.
+   */
+  const { store, session } = await compactionFixture(t);
+  const controller = new AbortController();
+  const stopped = new Error('the operator stopped the run');
+  let inFlight: (request: ModelRequest) => void = () => {};
+  const started = new Promise<ModelRequest>((resolve) => {
+    inFlight = resolve;
+  });
+  const states: string[] = [];
+  const settlement = prepareContext({
+    ...compactionInput(store, session.id),
+    signal: controller.signal,
+    compactionFailure: 'send',
+    provider: {
+      complete: (request) => {
+        inFlight(request);
+        return new Promise<never>((_resolve, reject) => {
+          request.signal.addEventListener('abort', () => reject(request.signal.reason), {
+            once: true,
+          });
+        });
+      },
+    },
+    onCompaction: (state) => states.push(state),
+  });
+  await started; // The summary request is genuinely in flight before the run is cancelled.
+  controller.abort(stopped);
+  await assert.rejects(settlement, (error: unknown) => error === stopped);
+  assert.equal(store.contextSurface(session.id), null, 'the cancelled compaction recorded nothing');
+  assert.deepEqual(
+    states,
+    ['started'],
+    'a cancellation is not converted into a compaction failure',
+  );
+});
+
+test('a later summary batch that fails does not replay the summary it had already built', async (t) => {
+  /**
+   * A multi-batch compaction merges the conversation in pieces, and the running summary is replaced after each
+   * piece. Giving up after the second batch therefore has to *undo* the first: the summary being carried is the
+   * one the conversation already had, not the half-built replacement — otherwise the model is handed a summary of
+   * messages that are all still in the request behind it, every one of them twice.
+   */
+  const { store, session } = await compactionFixture(t);
+  const before = store.messages(session.id);
+  let calls = 0;
+  const states: string[] = [];
+  const result = await prepareContext({
+    ...compactionInput(store, session.id),
+    compactionFailure: 'send',
+    provider: {
+      async complete() {
+        calls++;
+        if (calls === 2) throw new Error('the second summary request failed');
+        return {
+          text: 'Batch one: the user asked about the fixture.',
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { inputTokens: 100, outputTokens: 40 },
+        };
+      },
+    },
+    onCompaction: (state) => states.push(state),
+  });
+  assert.ok(
+    calls >= 2,
+    `the fixture has to be compressed in batches, saw ${calls} summary request(s)`,
+  );
+  assert.deepEqual(states, ['started', 'failed']);
+  assert.equal(result.compacted, false);
+  assert.match(result.compactionProblem!, /second summary request failed/);
+  assert.equal(store.contextSurface(session.id), null);
+  assert.deepEqual(store.messages(session.id), before, 'the recorded history is untouched');
+  assert.equal(
+    result.messages.filter((message) => message.content.startsWith('<compacted-summary>')).length,
+    0,
+    'the half-built summary is not replayed in front of the messages it summarizes',
+  );
+  assert.deepEqual(
+    result.messages.map((message) => message.content),
+    before.map((message) => message.content),
+    'and every original message is still there exactly once',
+  );
 });
 
 test('the cache key changes when the cached prefix changes', async (t) => {

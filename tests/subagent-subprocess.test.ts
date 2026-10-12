@@ -13,6 +13,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import {
   readChildResult,
@@ -102,7 +105,79 @@ test('a write-capable task is refused, because the child cannot affect this work
   assert.equal(outcome.status, 'failed');
   assert.match(String(outcome.error), /runs the child in its own workspace/);
   assert.match(String(outcome.error), /write-capable task is refused/);
-  assert.match(String(outcome.error), /explore/);
+  assert.doesNotMatch(String(outcome.error), /ask for an `explore`/);
+  assert.match(String(outcome.error), /default provider/);
+});
+
+test('the refusal never recommends explore through a provider that cannot enforce its capabilities', async () => {
+  const provider = subprocessProvider({ script: 'unused', maxContextTokens: 128000 });
+  const registry = new SubAgentProviderRegistry();
+  registry.register(provider);
+  assert.throws(
+    () => registry.resolve(provider.name, { maxDepth: 2, toolFilter: ['read_file'] }),
+    /UNSUPPORTED_CAPABILITY/,
+  );
+  const declined = await provider.start(request({ role: 'general' }));
+  assert.doesNotMatch(declined.error ?? '', /ask for an `explore`/);
+});
+
+for (const stream of ['stdout', 'stderr', 'combined'] as const) {
+  test(`subprocess ${stream} over the byte budget cannot turn an early result into success`, async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-output-budget-'));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const script = path.join(directory, 'fixture.mjs');
+    const target =
+      stream === 'combined' ? '(index % 2 ? process.stdout : process.stderr)' : `process.${stream}`;
+    await writeFile(
+      script,
+      `
+      import fs from 'node:fs';
+      fs.writeFileSync(${JSON.stringify(path.join(directory, 'pid'))}, String(process.pid));
+      process.stdout.write(JSON.stringify({type:'result',result:{sessionId:'fixture',status:'completed',text:'early result'}})+'\\n');
+      const chunk=Buffer.alloc(65536, 120);
+      for(let index=0;index<130;index++)${target}.write(chunk);
+      setInterval(()=>{},1000);
+    `,
+    );
+    const result = await subprocessProvider({
+      script,
+      maxContextTokens: 128000,
+      timeoutMs: 10000,
+    }).start(request());
+    assert.equal(result.status, 'failed');
+    assert.match(result.error ?? '', /output.*8388608.*bytes/i);
+    assert.equal(result.report, undefined, 'an early result cannot hide excessive later output');
+    const { readFile } = await import('node:fs/promises');
+    const pid = Number(await readFile(path.join(directory, 'pid'), 'utf8'));
+    assert.throws(
+      () => process.kill(pid, 0),
+      'the output producer is gone before the call settles',
+    );
+  });
+}
+
+test('subprocess output exactly at its byte budget preserves a final Unicode result', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-output-boundary-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const script = path.join(directory, 'fixture.mjs');
+  const final =
+    '\n' +
+    JSON.stringify({
+      type: 'result',
+      result: { sessionId: 'fixture', status: 'completed', text: '边界输出' },
+    }) +
+    '\n';
+  await writeFile(
+    script,
+    `process.stderr.write(Buffer.alloc(8388608-${Buffer.byteLength(final)},120));process.stdout.write(${JSON.stringify(final)});`,
+  );
+  const result = await subprocessProvider({
+    script,
+    maxContextTokens: 128000,
+    timeoutMs: 5000,
+  }).start(request());
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, '边界输出');
 });
 
 test('a child that never answers is killed on its budget and says which budget it was', async (t) => {

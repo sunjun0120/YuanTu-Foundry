@@ -116,17 +116,32 @@ export function setupGeneralSettings(): { show(): void } {
     pending = true;
     status(t('general.saving'));
     update();
-    const reply = await window.yuantu.uiSettings({ type: 'save', settings: current() });
-    pending = false;
-    if (reply.ok && reply.kind === 'settings') {
-      fill(reply.settings);
-      status(t('general.saved'));
-    } else {
-      if (persisted) fill(persisted);
-      // A refusal, or an answer to a question this form did not ask: either way the form keeps what it had.
-      status(reply.ok ? t('ui.settingsRequestInvalid') : reply.error, true);
+    try {
+      const reply = await window.yuantu.uiSettings({ type: 'save', settings: current() });
+      if (reply.ok && reply.kind === 'settings') {
+        fill(reply.settings);
+        status(t('general.saved'));
+      } else {
+        if (persisted) fill(persisted);
+        // A refusal, or an answer to a question this form did not ask: either way the form keeps what it had.
+        status(reply.ok ? t('ui.settingsRequestInvalid') : reply.error, true);
+      }
+    } catch (error) {
+      /**
+       * A rejected promise is not a refusal: the answer never arrived, so there is nothing to adopt and nothing
+       * to undo — the edit stays in the form and one more click sends it again. What must not happen is what
+       * used to: `await` threw out of this listener with `pending` still true, which disabled every control
+       * behind the word "正在保存…" for the rest of the window's life.
+       */
+      status(
+        error instanceof Error && error.message ? error.message : t('ui.operationFailed'),
+        true,
+      );
+    } finally {
+      // On every path, including the one that threw: a save that never answers must not lock the form.
+      pending = false;
+      update();
     }
-    update();
   });
   void window.yuantu.uiSettings({ type: 'get' }).then((reply) => {
     if (reply.ok && reply.kind === 'settings') fill(reply.settings);

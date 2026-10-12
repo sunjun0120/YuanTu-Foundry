@@ -8,7 +8,7 @@
 # Some tests skip themselves, with a stated reason, when an external dependency
 # is absent — that is expected behaviour, not a failure:
 #   - the real-language-server section of tests/lsp.test.ts needs a real language server on PATH
-#   - Docker sandbox tests need a reachable Docker daemon
+#   - native sandbox kernel tests require their matching operating system
 #   - Office tests need a local Microsoft Office install
 #   - Chromium-dependent tests need Playwright's browser download
 name: CI
@@ -22,6 +22,10 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Linux runs the portable/host contract suite; product native backends target
+    # Windows and macOS and must not silently fall back on this runner.
+    env:
+      YUANTU_SANDBOX: host
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,6 +47,8 @@ jobs:
   bench:
     needs: check
     runs-on: ubuntu-latest
+    env:
+      YUANTU_SANDBOX: host
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,6 +64,8 @@ jobs:
   coverage:
     needs: check
     runs-on: ubuntu-latest
+    env:
+      YUANTU_SANDBOX: host
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,6 +87,32 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Windows platform regressions
-        run: node scripts/run-tests.mjs tests/sandbox-windows.test.ts tests/desktop-installation.test.ts tests/windows-install-safety.test.ts
+        run: node scripts/run-tests.mjs tests/sandbox-windows.test.ts tests/sandbox-windows-assets.test.ts tests/sandbox-windows-recovery.test.ts tests/restricted-consumers.test.ts tests/desktop-installation.test.ts tests/windows-install-safety.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Windows enhanced helper safety and refusal regressions
+        run: |
+          npm run build:windows-sandbox
+          cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml
+          node scripts/run-tests.mjs tests/sandbox-appcontainer.test.ts tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts
       - run: npm run build
       - run: npm run smoke:desktop
+
+  native-macos:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      # This job runs the actual Seatbelt kernel probes, rather than counting
+      # platform skips on Windows/Linux as macOS acceptance.
+      - name: macOS process and scratch ownership acceptance
+        run: node scripts/check-macos-sandbox.mjs
+      - name: macOS native sandbox regressions
+        run: node scripts/run-tests.mjs tests/sandbox-seatbelt.test.ts tests/native-sandbox-migration.test.ts tests/native-background-cleanup.test.ts tests/native-sandbox-lifecycle.test.ts tests/sandbox-providers.test.ts tests/restricted-consumers.test.ts tests/macos-packaging.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
+      # A local unsigned app checks bundled runtime preparation and packaging.
+      # Signing, notarization and both architecture releases remain separate gates.
+      - run: npm run package:macos:dir

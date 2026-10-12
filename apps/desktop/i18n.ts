@@ -199,6 +199,39 @@ const messages: Record<string, Pair> = {
     'Adjust the base size of chat and interface text.',
   ],
   'general.save': ['保存设置', 'Save settings'],
+  'sandboxSetup.title': ['Windows 增强隔离', 'Windows enhanced isolation'],
+  'sandboxSetup.note': [
+    '首次初始化需要 Windows 管理员确认。初始化后仍使用当前沙箱模式，增强模式需通过隔离验收后启用。',
+    'First initialization requires Windows administrator approval. Your current sandbox mode stays active; enhanced isolation requires further verification before activation.',
+  ],
+  'sandboxSetup.initialize': ['管理员初始化', 'Initialize as administrator'],
+  'sandboxSetup.refresh': ['检查状态', 'Check status'],
+  'sandboxSetup.pending': [
+    '正在处理，请完成 Windows 管理员确认…',
+    'Working; complete the Windows administrator prompt…',
+  ],
+  'sandboxSetup.checking': ['正在检查初始化条件…', 'Checking initialization requirements…'],
+  'sandboxSetup.ready': ['可以进行首次初始化。', 'Ready for first initialization.'],
+  'sandboxSetup.installed': [
+    '网络规则已初始化；增强沙箱尚未启用。',
+    'Network rules initialized; enhanced sandbox is not activated.',
+  ],
+  'sandboxSetup.development': [
+    '开发版本不提供管理员初始化，请使用受保护目录中的签名安装版本。',
+    'Administrator initialization requires a signed release in a protected installation directory.',
+  ],
+  'sandboxSetup.runtime': [
+    '当前版本的运行时尚不兼容增强隔离，请使用兼容的签名安装版本。',
+    'This runtime is not compatible with enhanced isolation. Use a compatible signed release.',
+  ],
+  'sandboxSetup.release': [
+    '安装位置或发布签名未通过检查，无法进行管理员初始化。',
+    'Installation location or release signature verification failed; initialization is unavailable.',
+  ],
+  'sandboxSetup.failed': [
+    '初始化未完成或状态检查失败。请确认管理员提示并重新检查状态。',
+    'Initialization did not complete or its status could not be verified. Check the administrator prompt and refresh the status.',
+  ],
   'settings.contextTokens': ['上下文窗口 Token', 'Context window tokens'],
   'settings.outputTokens': ['单次输出上限 Token', 'Maximum output tokens per request'],
   'settings.automaticBudget': ['自动（可手动指定）', 'Automatic (optional override)'],
@@ -320,6 +353,17 @@ const messages: Record<string, Pair> = {
   'ui.followUp': ['后续任务', 'Follow-up task'],
   'ui.toolCardLines': ['第 {start}–{end} 行 / 共 {total} 行', 'lines {start}–{end} of {total}'],
   'ui.toolCardEmptyFile': ['空文件', 'empty file'],
+  /**
+   * A read whose window starts past the end of the file.
+   *
+   * Its own string rather than `ui.toolCardEmptyFile`: the file is not empty — the requested range is, and the
+   * total is still the fact that says so. Reusing the empty-file text here would take a request that found
+   * nothing and turn it into a claim about the file.
+   */
+  'ui.toolCardEmptyRange': [
+    '此范围没有内容（共 {total} 行）',
+    'no content in this range ({total} lines)',
+  ],
   'ui.toolCardTruncated': ['已截断', 'truncated'],
   'ui.toolCardLiteral': ['字面匹配', 'literal'],
   'ui.toolCardRegex': ['正则匹配', 'regex'],

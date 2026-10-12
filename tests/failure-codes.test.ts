@@ -17,6 +17,7 @@ import { createTools } from '../packages/tools/index.ts';
 import { AnthropicProvider } from '../packages/providers/anthropic.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
+import { readSse } from '../packages/providers/sse.ts';
 import {
   ModelFailure,
   RunFailure,
@@ -208,6 +209,38 @@ test('a request that never reached the endpoint keeps its cause', async () => {
   // The message stays generic on purpose; the original error is the only place the socket detail lives, so
   // losing it would make this failure undebuggable.
   assert.ok((error as RunFailure).cause instanceof Error);
+});
+
+test('a caller’s cancel is reported as itself, not as a retryable transport failure', async () => {
+  /**
+   * The reader is the one place a Stop is seen from underneath: aborting the request errors the body, so the
+   * rejection arrives at the same place a lost socket does. Naming it `transport` there would turn "the person
+   * said stop" into a failure the step boundary is entitled to re-send, and the run would go back to the
+   * endpoint after it had been cancelled. The reason the caller gave is what has to come back, and it carries no
+   * code, which is what makes it terminal.
+   */
+  const controller = new AbortController();
+  const stopped = new Error('Stopped by the user');
+  const body = new ReadableStream<Uint8Array>({
+    start(stream) {
+      controller.signal.addEventListener('abort', () => stream.error(stopped), { once: true });
+    },
+  });
+  const pending = (async () => {
+    try {
+      for await (const _event of readSse(body, controller.signal)) {
+        // Nothing is expected from a cancelled stream.
+      }
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  })();
+  controller.abort(stopped);
+  const error = await pending;
+  assert.equal(error, stopped, 'the caller’s own reason comes back unwrapped');
+  assert.notEqual(failureCodeOf(error), 'transport');
+  assert.equal(failureCodeOf(error), undefined);
 });
 
 test('a configured total timeout fires, and is reported as a timeout rather than a generic failure', async (t) => {

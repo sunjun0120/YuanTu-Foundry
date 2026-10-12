@@ -53,6 +53,39 @@ const collect = (id: string): ModelResponse => ({
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits for a condition the test cannot await directly (a child that has only just been started). */
+async function until(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('the condition was never met');
+    await sleep(5);
+  }
+}
+/** A provider whose child runs until it is told to stop, collecting the signal it was handed. */
+function parkedProvider(childSignals: AbortSignal[]): SubAgentProviderRegistry {
+  const providers = new SubAgentProviderRegistry();
+  providers.register(
+    inProcessProvider({
+      capabilities: [...SUBAGENT_CAPABILITIES],
+      run: async ({ signal }) => {
+        childSignals.push(signal);
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return {
+          sessionId: 'child',
+          status: 'cancelled',
+          text: '',
+          rounds: 0,
+          toolCalls: 0,
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    }),
+  );
+  return providers;
+}
+const approveCall = { approve: async () => true };
 /** A child ends its run with this; the schema requires a summary and at least one evidenced finding. */
 const submitReport = (
   id: string,
@@ -446,6 +479,128 @@ test('cancellation wins when a child returns completed while its coordinator is 
   await coordinator.settle();
   assert.equal(coordinator.summaries[0]!.status, 'cancelled');
   assert.match(coordinator.summaries[0]!.error!, /Cancelled/);
+});
+
+test('a cancelled delegation call stops the children it admitted', async () => {
+  /**
+   * A cut-off call must not leave work behind that nobody is waiting for.
+   *
+   * The blocking delegation call is where a child spends its parent's money and the parent's turn: if the call
+   * itself is cancelled — the deployment put a budget on this tool, the request was aborted — the child that
+   * was admitted for that answer has to be told to stop too. Otherwise the model is told the call failed while
+   * the child keeps running and changing the workspace, and nobody will ever collect it.
+   */
+  const childSignals: AbortSignal[] = [];
+  const providers = parkedProvider(childSignals);
+  const coordinator = new SubAgentCoordinator({
+    // No stall watchdog: these children are meant to stay parked until somebody stops them, and an armed
+    // watchdog timer is deliberately not unref'd, so it would hold the test process open for its whole window.
+    options: resolveSubAgentOptions({ timeoutMs: 0 }),
+    signal: new AbortController().signal,
+    readOnly: false,
+    emit: () => {},
+    onUsage: () => {},
+    providers,
+    provider: 'in-process',
+    parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+  });
+  const callController = new AbortController();
+  const reason = new Error('the delegation call was cut off');
+  const pending = coordinator
+    .tool()
+    .execute(
+      { tasks: [{ objective: 'Sweep' }] },
+      { signal: callController.signal, ...approveCall },
+    );
+  await until(() => childSignals.length === 1);
+  callController.abort(reason);
+  const ended = await Promise.race([pending.then(() => true), sleep(2_000).then(() => false)]);
+  assert.equal(childSignals[0]!.aborted, true, 'the admitted child was told to stop');
+  assert.equal(childSignals[0]!.reason, reason, 'and with the reason the call was cancelled with');
+  assert.equal(ended, true, 'the call stopped waiting for children it had just stopped');
+});
+
+test('a handed-off delegation is not tied to the call that started it', async () => {
+  // `wait: false` returns on purpose, so the call is over — but the run that owns the child is not, and its end
+  // still stops the child. Tying the finished call to the handed-off work would make handing it off impossible.
+  const childSignals: AbortSignal[] = [];
+  const providers = parkedProvider(childSignals);
+  const runController = new AbortController();
+  const coordinator = new SubAgentCoordinator({
+    // Same reason as above: the child is parked on purpose, so the wall clock is not what ends it here.
+    options: resolveSubAgentOptions({ timeoutMs: 0 }),
+    signal: runController.signal,
+    readOnly: false,
+    emit: () => {},
+    onUsage: () => {},
+    providers,
+    provider: 'in-process',
+    parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+  });
+  const callController = new AbortController();
+  const handed = await coordinator
+    .tool()
+    .execute(
+      { wait: false, tasks: [{ objective: 'Sweep' }] },
+      { signal: callController.signal, ...approveCall },
+    );
+  assert.equal(handed.isError, false, handed.content);
+  assert.match(handed.content, /Started 1 sub-agent task/);
+  await until(() => childSignals.length === 1);
+  callController.abort(new Error('the call that handed this off is over'));
+  await sleep(50);
+  assert.equal(
+    childSignals[0]!.aborted,
+    false,
+    'a call that already returned must not stop work it handed off',
+  );
+  runController.abort(new Error('the run ended'));
+  await until(() => childSignals[0]!.aborted);
+  assert.equal(childSignals[0]!.aborted, true, 'the run’s own end still stops it');
+});
+
+test('the correction poll stops once the wait it was racing has been decided', async () => {
+  // `unref` only keeps a pending poll from holding the process open; it does not stop it. A race won by
+  // "settled" used to leave the poll calling `steerPending` every interval for the rest of the process's life.
+  let polls = 0;
+  const providers = new SubAgentProviderRegistry();
+  providers.register(
+    inProcessProvider({
+      capabilities: [...SUBAGENT_CAPABILITIES],
+      run: async () => ({
+        sessionId: 'child',
+        status: 'completed',
+        text: 'report',
+        rounds: 1,
+        toolCalls: 0,
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    }),
+  );
+  const coordinator = new SubAgentCoordinator({
+    options: resolveSubAgentOptions({}),
+    signal: new AbortController().signal,
+    readOnly: false,
+    steerPending: () => {
+      polls++;
+      return false;
+    },
+    emit: () => {},
+    onUsage: () => {},
+    providers,
+    provider: 'in-process',
+    parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+  });
+  const result = await coordinator
+    .tool()
+    .execute(
+      { tasks: [{ objective: 'Sweep' }] },
+      { signal: new AbortController().signal, ...approveCall },
+    );
+  assert.equal(result.isError, false, result.content);
+  const afterSettle = polls;
+  await sleep(700);
+  assert.equal(polls, afterSettle, 'the correction poll kept running after the wait was decided');
 });
 
 test('fan-out and per-run caps stop a run before it spends without limit', async (t) => {
@@ -1014,6 +1169,176 @@ test('a collected report is not delivered twice, and collecting nothing says so'
   // re-reading the same findings.
   assert.doesNotMatch(String(finished[2]!.data.content), /alpha report/);
   assert.match(String(finished[2]!.data.content), /No outstanding sub-agents/);
+});
+
+test('active collection accepts child session id', async () => {
+  /**
+   * A child has two names, and `collect_subagents` takes either.
+   *
+   * The delegation's task id is what the started notice quotes; the child's own session is what `job_output`
+   * and `send_message` address, and what the progress frames carry. A model holding one name and not the other
+   * must not have to guess which the tool wants — and it was guessing: `running` and `reports` were selected on
+   * the task id alone, so naming a child by its session answered "No outstanding sub-agents", and the wait did
+   * not wait either, because its pending filter read the same field.
+   */
+  const children: string[] = [];
+  let parkFirst!: () => void;
+  const firstParked = new Promise<void>((resolve) => {
+    parkFirst = resolve;
+  });
+  const providers = new SubAgentProviderRegistry();
+  providers.register(
+    inProcessProvider({
+      capabilities: [...SUBAGENT_CAPABILITIES],
+      run: async ({ started }) => {
+        const sessionId = `child-${children.length + 1}`;
+        children.push(sessionId);
+        started(sessionId);
+        // The first child parks so the test can look at a running task. The second waits behind the concurrency
+        // cap, which is what gives the empty-id case a real task that has no session of its own yet.
+        if (children.length === 1) await firstParked;
+        return {
+          sessionId,
+          status: 'completed',
+          text: `${sessionId} report`,
+          rounds: 1,
+          toolCalls: 0,
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    }),
+  );
+  const coordinator = new SubAgentCoordinator({
+    // No stall watchdog: the first child is parked on purpose, so the wall clock is not what ends it here.
+    options: resolveSubAgentOptions({ timeoutMs: 0, maxConcurrency: 1 }),
+    signal: new AbortController().signal,
+    readOnly: false,
+    emit: () => {},
+    onUsage: () => {},
+    providers,
+    provider: 'in-process',
+    parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+  });
+  const call = { signal: new AbortController().signal, approve: async () => true };
+  const collectIds = async (ids: string[], waitMs = 0): Promise<string> => {
+    const result = await coordinator.collectTool().execute({ ids, waitMs }, call);
+    assert.equal(result.isError, false, result.content);
+    return result.content;
+  };
+  const handed = await coordinator
+    .tool()
+    .execute(
+      { wait: false, tasks: [{ objective: 'Sweep alpha' }, { objective: 'Sweep beta' }] },
+      call,
+    );
+  assert.equal(handed.isError, false, handed.content);
+  await until(() => coordinator.summaries[0]!.sessionId !== '');
+  // `summaries` hands out copies, so the session of a task that starts later has to be read when it is asked
+  // about rather than destructured once here.
+  const taskId = coordinator.summaries[0]!.id;
+  const sessionOf = (index: number) => coordinator.summaries[index]!.sessionId;
+  assert.equal(sessionOf(0), 'child-1');
+  assert.equal(sessionOf(1), '', 'the second task is still queued behind the cap');
+
+  const byTask = await collectIds([taskId]);
+  assert.match(byTask, /Still running/);
+  assert.match(byTask, new RegExp(taskId));
+  assert.equal(await collectIds([sessionOf(0)]), byTask, 'the same child, named by its session');
+  const byBoth = await collectIds([taskId, sessionOf(0)]);
+  assert.equal(byBoth, byTask, 'naming one child twice still names one child');
+  assert.equal(byBoth.split(taskId).length - 1, 1);
+  // An id that names nothing selects nothing. The empty string is the case worth pinning: it is a legal value
+  // of the tool's `ids` items, and a matcher that compared it to a not-yet-started task's empty session would
+  // read it as "everything that has not started" — the opposite of narrowing.
+  assert.equal(await collectIds(['no-such-child']), 'No outstanding sub-agents.');
+  assert.equal(await collectIds(['']), 'No outstanding sub-agents.');
+  assert.equal(sessionOf(1), '', 'an id that names nothing must not have started anything');
+
+  // The wait reads the same field, so naming the child by its session waits for that child — and for it only.
+  const waitingStarted = Date.now();
+  const waiting = collectIds([sessionOf(0)], 700);
+  await sleep(100);
+  parkFirst();
+  const waited = await waiting;
+  assert.match(waited, /child-1 report/);
+  assert.ok(
+    Date.now() - waitingStarted >= 90,
+    'the collect waited for the child instead of returning at once',
+  );
+  assert.equal(
+    await collectIds([taskId, 'child-1']),
+    'No outstanding sub-agents.',
+    'a delivered report is not delivered again, in either spelling',
+  );
+  await until(() => children.length === 2);
+  assert.equal(sessionOf(1), 'child-2', 'the queued sibling started once a slot was free');
+});
+
+test('collection takes either name for a child that settled in an earlier run', async () => {
+  /**
+   * The durable settlement and the undelivered-message notice come from the parent's log, so they are the one
+   * collect answer that outlives the run that started the child. Both already accepted either spelling; this
+   * pins that they keep doing so through the single matcher every collect path now shares, that a child named
+   * twice is returned once, and that an id naming no child narrows to nothing instead of widening to
+   * everything the log holds.
+   */
+  const collected: string[] = [];
+  const coordinator = new SubAgentCoordinator({
+    options: resolveSubAgentOptions({}),
+    signal: new AbortController().signal,
+    readOnly: false,
+    emit: () => {},
+    onUsage: () => {},
+    providers: new SubAgentProviderRegistry(),
+    provider: 'in-process',
+    parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+    settlements: () => [
+      {
+        id: 'task-earlier',
+        childSessionId: 'child-earlier',
+        role: 'explore',
+        objective: 'Earlier sweep',
+        status: 'completed',
+        report: {
+          summary: 'Earlier summary',
+          findings: [{ statement: 'Earlier finding', evidence: 'earlier.ts:1' }],
+        },
+      },
+    ],
+    collected: (ids) => collected.push(...ids),
+    inbox: () => [
+      {
+        id: 'msg-1',
+        childId: 'task-earlier',
+        childSessionId: 'child-earlier',
+        message: 'also check the tests',
+        handed: false,
+      },
+    ],
+  });
+  const call = { signal: new AbortController().signal, approve: async () => true };
+  const collectIds = async (ids: string[]): Promise<string> => {
+    const result = await coordinator.collectTool().execute({ ids, waitMs: 0 }, call);
+    assert.equal(result.isError, false, result.content);
+    return result.content;
+  };
+  const byTask = await collectIds(['task-earlier']);
+  assert.match(byTask, /Earlier finding/);
+  assert.match(byTask, /also check the tests/);
+  assert.equal(
+    await collectIds(['child-earlier']),
+    byTask,
+    'the same settled child, by its session',
+  );
+  const byBoth = await collectIds(['task-earlier', 'child-earlier']);
+  assert.equal(byBoth, byTask, 'naming one child twice still names one child');
+  assert.equal(byBoth.split('Earlier finding').length - 1, 1);
+  assert.equal(byBoth.split('also check the tests').length - 1, 1);
+  // Both spellings are recorded as delivered, so the durable notice stops being announced under either name.
+  assert.deepEqual([...new Set(collected)].sort(), ['child-earlier', 'task-earlier']);
+  // Nothing named here is anything, and that must not be read as "everything".
+  assert.equal(await collectIds(['no-such-child']), 'No outstanding sub-agents.');
+  assert.equal(await collectIds(['']), 'No outstanding sub-agents.');
 });
 
 test('a steer is consumed while a background child is still running', async (t) => {

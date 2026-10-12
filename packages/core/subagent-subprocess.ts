@@ -2,8 +2,12 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { Usage } from '../protocol/index.ts';
 import type { SubAgentOutcome, SubAgentProvider } from './subagent-providers.ts';
+
+/** Combined stdout/stderr budget, measured before UTF-8 decoding. */
+const OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /**
  * A sub-agent provider that runs the child in a **separate process**.
@@ -138,8 +142,7 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
           usage: { inputTokens: 0, outputTokens: 0 },
           error:
             'This provider runs the child in its own workspace, so a write-capable task is refused rather than run ' +
-            'somewhere it cannot affect your files. Use the default provider for work that edits the workspace, or ' +
-            'ask for an `explore` task here.',
+            'somewhere it cannot affect your files. Use the default provider for work that edits the workspace.',
         };
       const workspace = await mkdtemp(path.join(tmpdir(), 'yuantu-subprocess-'));
       const prompt = request.task.context
@@ -187,11 +190,26 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
       );
       let stdout = '';
       let stderr = '';
+      const stdoutDecoder = new StringDecoder('utf8');
+      const stderrDecoder = new StringDecoder('utf8');
+      let outputBytes = 0;
+      let outputExceeded = false;
       let settled = false;
       /** Distinct from an abort: "you stopped me" and "you ran out of budget" are different facts to report. */
       let timedOut = false;
       const stop = (): void => {
         if (!settled) child.kill('SIGKILL');
+      };
+      const receive = (chunk: Buffer, stream: 'stdout' | 'stderr'): void => {
+        if (outputExceeded) return;
+        outputBytes += chunk.length;
+        if (outputBytes > OUTPUT_BYTES) {
+          outputExceeded = true;
+          stop();
+          return;
+        }
+        if (stream === 'stdout') stdout += stdoutDecoder.write(chunk);
+        else stderr += stderrDecoder.write(chunk);
       };
       request.signal.addEventListener('abort', stop, { once: true });
       const timer = setTimeout(() => {
@@ -200,13 +218,15 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
       }, timeoutMs);
       try {
         const code = await new Promise<number | null>((resolve, reject) => {
-          child.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
-          child.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
+          child.stdout?.on('data', (chunk: Buffer) => receive(chunk, 'stdout'));
+          child.stderr?.on('data', (chunk: Buffer) => receive(chunk, 'stderr'));
           child.once('error', reject);
           child.once('close', resolve);
         });
         settled = true;
-        const { result } = readChildResult(stdout);
+        stdout += stdoutDecoder.end();
+        stderr += stderrDecoder.end();
+        const { result } = outputExceeded ? { result: undefined } : readChildResult(stdout);
         const sessionId = result?.sessionId ?? '';
         /**
          * Cancellation is reported as cancellation, not as a failed child.
@@ -224,6 +244,16 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
             usage: { inputTokens: 0, outputTokens: 0 },
             error:
               'Cancelled: the call that started this child was aborted, which kills the process',
+          };
+        if (outputExceeded)
+          return {
+            sessionId: '',
+            status: 'failed' as const,
+            text: '',
+            rounds: 0,
+            toolCalls: 0,
+            usage: { inputTokens: 0, outputTokens: 0 },
+            error: `Subprocess output exceeded ${OUTPUT_BYTES} bytes; the child was stopped before its result could be accepted.`,
           };
         if (!result)
           return {

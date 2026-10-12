@@ -7,12 +7,22 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/tools/index.ts';
+import { SessionStore } from '../packages/storage/sqlite.ts';
+import { SubAgentResidency } from '../packages/core/residency.ts';
+import { subAgentJobProducer } from '../packages/core/subagent-jobs.ts';
+import { settlementNotices } from '../packages/core/settlements.ts';
 import { JobRegistry } from '../packages/protocol/jobs.ts';
-import type { JobKind, JobProducer, JobSnapshot } from '../packages/protocol/jobs.ts';
+import type {
+  CommandJournal,
+  JobKind,
+  JobProducer,
+  JobSnapshot,
+} from '../packages/protocol/jobs.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
 
 const snapshot = (over: Partial<JobSnapshot> & { id: string; kind: JobKind }): JobSnapshot => ({
@@ -51,6 +61,207 @@ const ctx = (jobs?: JobRegistry): ToolContext => ({
   approve: async () => true,
   ...(jobs ? { jobs } : {}),
 });
+
+async function runningChild(t: test.TestContext) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-job-wait-'));
+  const store = new SessionStore(path.join(directory, 'sessions.sqlite'));
+  const residency = new SubAgentResidency();
+  const parent = store.create(directory);
+  const child = store.create(directory);
+  const id = 'waiting-task';
+  store.recordEvent(parent.id, 'subagent.assigned', {
+    id,
+    childSessionId: child.id,
+    role: 'explore',
+    objective: 'Wait for fixture',
+  });
+  // An unread earlier turn remains a reminder while the child runs its follow-up.
+  store.recordEvent(parent.id, 'subagent.finished', {
+    id,
+    sessionId: child.id,
+    status: 'completed',
+  });
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const activation = residency.open({
+    id,
+    childSessionId: child.id,
+    parentSessionId: parent.id,
+    objective: 'Wait for fixture',
+    depth: 1,
+    turn: async () => {
+      await gate;
+      return {
+        usage: { inputTokens: 0, outputTokens: 0 },
+        text: 'done',
+        status: 'completed',
+        rounds: 1,
+        toolCalls: 0,
+      };
+    },
+  });
+  const turn = activation.run('follow-up', false);
+  t.after(async () => {
+    release();
+    await turn;
+    await residency.disposeAll();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  return {
+    store,
+    parent,
+    child,
+    producer: subAgentJobProducer({ store, residency }),
+  };
+}
+
+test('subagent output timeouts release their abort listeners across repeated waits', async (t) => {
+  const { store, parent, child, producer } = await runningChild(t);
+  const controller = new AbortController();
+  controller.signal.addEventListener('abort', () => {});
+  t.after(() => controller.abort());
+  const baseline = getEventListeners(controller.signal, 'abort').length;
+  const counts = [baseline];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await producer.output({
+      id: child.id,
+      scope: parent.id,
+      cursor: 0,
+      waitMs: 1,
+      signal: controller.signal,
+    });
+    assert.equal(result.status, 'running');
+    counts.push(getEventListeners(controller.signal, 'abort').length);
+  }
+  assert.deepEqual(counts, [baseline, baseline, baseline, baseline]);
+  assert.equal(settlementNotices(store, parent.id).length, 0, 'successful reads take delivery');
+});
+
+test('aborting subagent output rejects promptly and preserves its unread settlement', async (t) => {
+  const { store, parent, child, producer } = await runningChild(t);
+  const controller = new AbortController();
+  const baseline = getEventListeners(controller.signal, 'abort').length;
+  const pending = producer.output({
+    id: child.id,
+    scope: parent.id,
+    cursor: 0,
+    waitMs: 5000,
+    signal: controller.signal,
+  });
+  const reason = new Error('fixture cancelled output');
+  controller.abort(reason);
+  let outcome: unknown;
+  const observed = pending.catch((error: unknown) => {
+    outcome = error;
+  });
+  t.after(() => observed);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(outcome, reason, 'cancellation completes without waiting for the timeout');
+  await observed;
+  assert.equal(getEventListeners(controller.signal, 'abort').length, baseline);
+  assert.equal(settlementNotices(store, parent.id).length, 1);
+  assert.equal(
+    store.events(parent.id).filter((event) => event.type === 'subagent.collected').length,
+    0,
+  );
+});
+
+test('pre-aborted subagent output refuses without waiting or taking delivery', async (t) => {
+  const { store, parent, child, producer } = await runningChild(t);
+  const controller = new AbortController();
+  const reason = new Error('fixture already cancelled output');
+  controller.abort(reason);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = producer.output({
+    id: child.id,
+    scope: parent.id,
+    cursor: 0,
+    waitMs: 5000,
+    signal: controller.signal,
+  });
+  let outcome: unknown;
+  const observed = pending.catch((error: unknown) => {
+    outcome = error;
+  });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcome, reason, 'an already cancelled call does not start its wait');
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    assert.equal(settlementNotices(store, parent.id).length, 1);
+    assert.equal(
+      store.events(parent.id).filter((event) => event.type === 'subagent.collected').length,
+      0,
+    );
+  } finally {
+    t.mock.timers.tick(5000);
+    await observed;
+  }
+});
+
+for (const failure of ['cursor', 'messages', 'statistics'] as const) {
+  test(`failed subagent output at ${failure} preserves the unread settlement until retry`, async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-job-delivery-'));
+    const store = new SessionStore(path.join(directory, 'sessions.sqlite'));
+    const residency = new SubAgentResidency();
+    t.after(async () => {
+      await residency.disposeAll();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const parent = store.create(directory);
+    const child = store.create(directory);
+    store.recordEvent(parent.id, 'subagent.assigned', {
+      id: 'delivery-task',
+      childSessionId: child.id,
+      role: 'explore',
+      objective: 'Read fixture',
+    });
+    store.recordEvent(parent.id, 'subagent.finished', {
+      id: 'delivery-task',
+      sessionId: child.id,
+      status: 'completed',
+    });
+    const producer = subAgentJobProducer({ store, residency });
+    assert.equal(settlementNotices(store, parent.id).length, 1);
+    const mocked =
+      failure === 'cursor'
+        ? undefined
+        : t.mock.method(store, failure, () => {
+            throw new Error(`fixture ${failure} read failed`);
+          });
+    await assert.rejects(
+      producer.output({
+        id: child.id,
+        scope: parent.id,
+        cursor: failure === 'cursor' ? 1 : 0,
+        waitMs: 0,
+      }),
+      /cursor|read failed/,
+    );
+    mocked?.mock.restore();
+    assert.equal(
+      settlementNotices(store, parent.id).length,
+      1,
+      'a failed read has not delivered the result',
+    );
+    assert.equal(
+      store.events(parent.id).filter((event) => event.type === 'subagent.collected').length,
+      0,
+    );
+    assert.equal(
+      (await producer.output({ id: child.id, scope: parent.id, cursor: 0, waitMs: 0 })).id,
+      child.id,
+    );
+    assert.equal(
+      settlementNotices(store, parent.id).length,
+      0,
+      'successful retry records delivery',
+    );
+  });
+}
 test('the wait the schema advertises is the budget the call actually has', async (t) => {
   /**
    * The wait used to be capped at five seconds by a constant written into the schema, while the registry gave the
@@ -138,6 +349,55 @@ test('the registry refuses an ambiguous or unknown id instead of guessing', asyn
   assert.equal(unknown.isError, true);
   assert.match(unknown.content, /Unknown job "nobody"/);
   assert.match(unknown.content, /job_list/, 'the refusal has to say how to find a real id');
+});
+test('a stop that failed is reported as a failure, not as "already ended"', async (t) => {
+  /**
+   * The journal fallback exists for exactly one situation: an id this process no longer owns, whose record still
+   * says how it ended. Taking it for *every* failure swallowed the outcome that matters most — a stop that ended
+   * the process but could not confirm its sandbox had been cleaned up — and answered "already ended, there is
+   * nothing left to stop" while the container might still have been running.
+   */
+  const directory = await root(t);
+  const tools = createTools(directory, undefined, 'session-a');
+  t.after(() => tools.close());
+  const registry = new JobRegistry();
+  registry.register({
+    ...fake('command', [snapshot({ id: 'cmd-1', kind: 'command' })]),
+    kill: async () => {
+      const error = new Error('Background command cleanup failed; processes may still be running');
+      error.name = 'ToolCleanupError';
+      throw error;
+    },
+  });
+  // A record that exists and is already terminal: precisely the state the fallback used to answer "already ended"
+  // from, even though the stop it was answering for had just failed.
+  const journal: CommandJournal = {
+    started: () => {},
+    settled: () => {},
+    read: () => {},
+    record: (id) => ({
+      id,
+      sessionId: 'session-a',
+      command: 'npm test',
+      cwd: directory,
+      createdAt: '2026-09-30T00:00:00.000Z',
+      status: 'cancelled',
+      output: '',
+      outputChars: 0,
+    }),
+    records: () => [],
+  };
+  const stopped = await tools.execute(
+    { id: 'stop', name: 'job_kill', arguments: { id: 'cmd-1' } },
+    { ...ctx(registry), commandJournal: journal },
+  );
+  assert.equal(stopped.isError, true, stopped.content);
+  assert.match(stopped.content, /cleanup failed/i);
+  assert.doesNotMatch(
+    stopped.content,
+    /already ended/,
+    'a stop that failed is not a command that finished',
+  );
 });
 test('a second producer of the same kind is refused at registration', () => {
   const registry = new JobRegistry();

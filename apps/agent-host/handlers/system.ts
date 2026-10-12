@@ -1,5 +1,10 @@
+import { parseSandboxMode } from '../../../packages/tools/sandbox-mode.ts';
 import { PermissionPolicy } from '../../../packages/core/permissions.ts';
 import { negotiateHostVersion } from '../../../packages/protocol/host-wire.ts';
+import {
+  executionPolicy,
+  requireExecutionCapabilities,
+} from '../../../packages/tools/execution-policy.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
 
@@ -44,6 +49,14 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
        */
       'event-cursor',
       'session-events',
+      /**
+       * `sandbox.set` acknowledges the file and network policy it was given, not just the mode.
+       *
+       * Advertised because the carrier has to be able to tell this Host from one that ignores `files`/
+       * `network` and answers the mode alone — a client that treated such a reply as applied would cache a
+       * restriction that is not in force (see `CarrierService.applySelection`).
+       */
+      'execution-policy-files-network-v1',
     ],
   }),
   'runtime.ready': async (ctx, params) => {
@@ -57,22 +70,46 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
     violations: ctx.lastViolations,
   }),
   'sandbox.set': async (ctx, params) => {
-    const mode = params.mode;
-    if (mode !== 'host' && mode !== 'docker' && mode !== 'sbx' && mode !== 'windows')
-      throw new Error('Invalid sandbox mode; use host, docker, sbx, or windows');
+    const mode = parseSandboxMode(params.mode);
     if (params.sessionId !== undefined && typeof params.sessionId !== 'string')
       throw new Error('Invalid sandbox session identity');
+    if (
+      params.files !== undefined &&
+      params.files !== 'read-only' &&
+      params.files !== 'workspace-write'
+    )
+      throw new Error('Invalid file policy');
+    const files =
+      params.files ??
+      (typeof params.sessionId === 'string'
+        ? (ctx.sessionSandboxFiles.get(params.sessionId) ?? ctx.defaultSandboxFiles)
+        : ctx.defaultSandboxFiles);
+    if (files !== 'read-only' && files !== 'workspace-write')
+      throw new Error('Invalid file policy');
+    const network =
+      params.network ??
+      (typeof params.sessionId === 'string'
+        ? (ctx.sessionSandboxNetwork.get(params.sessionId) ?? ctx.defaultSandboxNetwork)
+        : ctx.defaultSandboxNetwork);
+    if (network !== undefined && network !== 'denied' && network !== 'unrestricted')
+      throw new Error('Invalid network policy');
+    const policy = executionPolicy(mode, { files, image: ctx.launchSandbox.image, network });
+    if (files === 'read-only') requireExecutionCapabilities(policy, { processFiles: 'read-only' });
     if (typeof params.sessionId === 'string') {
       ownedSession(ctx.store, ctx.workspace, params.sessionId);
       // Pending tools refresh the selection after approval; executing bodies keep their snapshot.
       ctx.sessionSandboxes.set(params.sessionId, mode);
+      ctx.sessionSandboxFiles.set(params.sessionId, files);
+      ctx.sessionSandboxNetwork.set(params.sessionId, network);
       ctx.captureAuthority(params.sessionId);
     } else {
       if (ctx.active.size)
         throw new Error('Wait for active runs before changing the default execution policy');
       ctx.defaultSandboxMode = mode;
+      ctx.defaultSandboxFiles = files;
+      ctx.defaultSandboxNetwork = network;
     }
-    return { mode };
+    return { mode, files, ...(network ? { network } : {}) };
   },
   'permission.update': async (ctx, params) => {
     const next = new PermissionPolicy(params.policy);

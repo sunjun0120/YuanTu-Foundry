@@ -176,13 +176,29 @@ export function initialRunAt(trigger: TaskTrigger, after: Date): string | undefi
  * timezone rather than a fixed offset so daylight-saving shifts move the wall-clock time with it.
  */
 export function nextDailyRun(atMinutes: number, after: Date): Date {
+  const hours = Math.floor(atMinutes / 60),
+    minutes = atMinutes % 60;
   const candidate = new Date(after);
-  candidate.setHours(Math.floor(atMinutes / 60), atMinutes % 60, 0, 0);
-  if (candidate.getTime() <= after.getTime()) {
+  candidate.setHours(hours, minutes, 0, 0);
+  /**
+   * A local time the clocks skip over is skipped, not rolled into.
+   *
+   * `setHours` cannot represent 02:30 on a spring-forward day, so it lands on 03:30 — a wall time the operator
+   * never chose, and a rule that fires at a time it does not name. The explicit-zone path has always skipped such
+   * a day (`calendar.ts`'s `wallClockInstant` answers nothing for it and `nextCalendarRun` moves on), so the same
+   * rule behaved two ways depending on whether a timezone was filled in — and `daily` is exactly the rule the
+   * desktop leaves the timezone off for. Asking whether the result really carries the requested wall time is what
+   * tells the two apart. The fold is left alone: a repeated hour exists, and `setHours` takes its first
+   * occurrence, which is the policy the zone-aware path documents for it too.
+   */
+  for (let days = 0; days < 370; days++) {
+    const named = candidate.getHours() === hours && candidate.getMinutes() === minutes;
+    if (named && candidate.getTime() > after.getTime()) return candidate;
     candidate.setDate(candidate.getDate() + 1);
-    candidate.setHours(Math.floor(atMinutes / 60), atMinutes % 60, 0, 0);
+    candidate.setHours(hours, minutes, 0, 0);
   }
-  return candidate;
+  // A year of days without the requested wall time means the clock never shows it, which is not a schedule.
+  throw Error('Daily rule has no next occurrence');
 }
 
 /**

@@ -1,5 +1,6 @@
 import { createInterface, type Interface } from 'node:readline';
 import { createServer, type Socket } from 'node:net';
+import { parseListen } from '../shared/args.ts';
 
 export interface HostCarrierOptions {
   /** `[host:]port` to serve on, or undefined to serve the protocol on stdin/stdout. */
@@ -99,9 +100,9 @@ export class HostCarrier {
    * exactly as it does on stdin EOF: a Host is owned by the carrier that started it.
    */
   private async accept(listen: string): Promise<Interface> {
-    const separator = listen.lastIndexOf(':');
-    const host = separator > 0 ? listen.slice(0, separator) : '127.0.0.1';
-    const port = Number(separator > 0 ? listen.slice(separator + 1) : listen);
+    // The same parse the command line validated with (see `parseListen`). Re-deriving it here is exactly what
+    // let the documented host-less `:8080` through the front door and into `Number(':8080')`.
+    const { host, port } = parseListen(listen);
     return await new Promise<Interface>((resolve, reject) => {
       this.server = createServer((candidate) => {
         if (this.socket) {

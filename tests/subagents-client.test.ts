@@ -226,6 +226,12 @@ test('reopening a session rebuilds the sub-agent cards from the stored run', asy
   // The list is the whole of what a reopen asks for: one call per thing the session view shows. It grew when
   // the deliveries and goal views were added to that view, which is why it is asserted in full rather than
   // checked for membership.
+  //
+  // `run.queue.get` is the newest of them and the only one that is not a view: a session can be reopened while a
+  // run is already working in it, and the answer says whether one holds the session, what it is holding, and
+  // which run it is — without that, the frames of that run arrive carrying an id the client never adopted and
+  // every one of them is dropped as somebody else's. It stays exactly one call: a load asks once, and the
+  // re-read the client performs when the run moved during the load is a `session.get`, not a second snapshot.
   assert.deepEqual(client.requests, [
     'session.get',
     'plan.get',
@@ -233,6 +239,7 @@ test('reopening a session rebuilds the sub-agent cards from the stored run', asy
     'todos.get',
     'deliverables.get',
     'goal.get',
+    'run.queue.get',
   ]);
   assert.deepEqual(
     session.snapshot.subagents.map((view) => [

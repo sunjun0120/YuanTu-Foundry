@@ -124,9 +124,22 @@ test('CLI creates and inspects durable task specifications without model credent
   assert.equal(failed.code, 1, failed.stderr);
   assert.equal(JSON.parse(failed.stdout).attempt.verification.passed, false);
   await writeFile(path.join(root, 'output.txt'), 'done');
-  const passed = await runCli(['task-verify', session.id, task.id, '--db', db, '--json']);
-  assert.equal(passed.code, 0, passed.stderr);
-  assert.equal(JSON.parse(passed.stdout).task.status, 'completed');
+  /**
+   * The checks pass and the task still does not complete, because nothing has ever run.
+   *
+   * That is the Host's rule for this same operation, and the CLI did not have it: `verified.passed` alone was
+   * enough here, so a task whose criteria are machine-checkable could be recorded as `completed` by a
+   * verification that never executed a step. This assertion used to require `completed` — which is precisely
+   * what pinned the divergence between the two front ends.
+   */
+  const checked = await runCli(['task-verify', session.id, task.id, '--db', db, '--json']);
+  assert.equal(checked.code, 1, checked.stderr);
+  assert.equal(
+    JSON.parse(checked.stdout).attempt.verification.passed,
+    true,
+    'the checks did pass; it is the completion that is withheld',
+  );
+  assert.equal(JSON.parse(checked.stdout).task.status, 'needs_review');
   const attempts = await runCli(['task-attempts', session.id, task.id, '--db', db, '--json']);
   assert.deepEqual(
     JSON.parse(attempts.stdout).map((attempt: { kind: string; status: string }) => [
@@ -135,9 +148,74 @@ test('CLI creates and inspects durable task specifications without model credent
     ]),
     [
       ['verify', 'needs_review'],
-      ['verify', 'completed'],
+      ['verify', 'needs_review'],
     ],
   );
+  /**
+   * With a run behind it the same passing verification completes the task.
+   *
+   * This half is what makes the gate a gate rather than a refusal: without it, an implementation that simply
+   * stopped ever reporting `completed` would satisfy the assertions above. `latestRunId` is read from the newest
+   * task attempt that carries a `run_id`, so seeding one is what puts a run on the record.
+   */
+  const seeded = new SessionStore(db);
+  const runId = seeded.beginRun(session.id);
+  const runAttempt = seeded.startTaskAttempt(session.id, task.id, { kind: 'run', runId });
+  seeded.finishTaskAttempt(session.id, task.id, runAttempt.id, {
+    status: 'completed',
+    resolvedEffectIds: [],
+    verification: { passed: true, checks: [], durationMs: 0 },
+    acceptance: [],
+    steps: [],
+  });
+  seeded.close();
+  const passed = await runCli(['task-verify', session.id, task.id, '--db', db, '--json']);
+  assert.equal(passed.code, 0, passed.stderr);
+  assert.equal(JSON.parse(passed.stdout).task.status, 'completed');
+});
+
+test('a manual retry is refused while a task approval is still pending', async (t) => {
+  /**
+   * The Host refuses this and the CLI did not. `run-start.ts` checks the task's pending approval before a manual
+   * retry, because that work is waiting on a person and retrying it starts a second attempt over the top of a
+   * decision nobody has made. The CLI builds its own agent and never passes through that handler — and the task id
+   * it does send cannot help, because the gate lives in the handler it does not use. It started exactly the run the
+   * Host defers, leaving the deferred approval to be consumed by whatever verification came next.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-retry-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const db = path.join(root, 'sessions.sqlite');
+  const store = new SessionStore(db);
+  const session = store.create(root);
+  const task = store.createTask(session.id, {
+    title: 'Waiting on a person',
+    trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
+  });
+  // An approval can only be deferred by an attempt that is in flight, so the fixture runs one to the point of
+  // asking and then leaves it waiting — which is exactly the state a retry has to respect.
+  const attempt = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  store.deferTaskApproval(session.id, task.id, {
+    kind: 'write',
+    description: 'write_file: approved.txt',
+    toolCall: {
+      id: 'write',
+      name: 'write_file',
+      arguments: { path: 'approved.txt', content: 'ok' },
+    },
+  });
+  store.finishTaskAttempt(session.id, task.id, attempt.id, { status: 'needs_review' });
+  store.close();
+
+  const refused = await runCli(['task-retry', session.id, task.id, '--db', db], {
+    // A retry starts a run, so it needs a provider before it can be refused. The fixture is never asked
+    // anything: the gate is what stops the command, and it stops it before the first request.
+    YUANTU_BASE_URL: await httpFixture(t, (_body, res) => sendFrames(res, frames('unused'))),
+    YUANTU_MODEL: 'fixture',
+    YUANTU_MAX_CONTEXT_TOKENS: '128000',
+    YUANTU_API_KEY: 'test',
+  });
+  assert.notEqual(refused.code, 0, 'the retry has to be refused, not run');
+  assert.match(refused.stderr, /pending task approval/i);
 });
 
 test('CLI reviews a persisted task approval without model credentials', async (t) => {

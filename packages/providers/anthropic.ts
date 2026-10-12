@@ -325,18 +325,32 @@ export class AnthropicProvider implements Provider {
     const toolCalls: ToolCall[] = [];
     let text = '';
     for (const [, block] of [...blocks.entries()].sort(([a], [b]) => a - b)) {
-      if (block.kind === 'text') text += block.text;
-      else if (finishReason !== 'length') {
-        let args = block.input ?? {};
-        if (block.json) {
-          try {
-            args = object(JSON.parse(block.json));
-          } catch {
-            throw new Error('Invalid JSON tool arguments');
-          }
-        }
-        toolCalls.push({ id: block.id!, name: block.name!, arguments: args });
+      if (block.kind === 'text') {
+        text += block.text;
+        continue;
       }
+      /**
+       * Only a `tool_use` block is a tool call.
+       *
+       * The branch used to be "anything that is not text", which quietly included the two block kinds this
+       * provider *asks* for when thinking is enabled: a `thinking` block carries no `id` and no `name`, so it
+       * was pushed as `{ id: undefined, name: undefined }` — and the `!` assertions below kept `tsc` from
+       * saying so, while the run later rejected the result as an invalid tool call. Reasoning has already
+       * travelled on its own channel through `onReasoning`, and a redacted block has no content at all, so
+       * neither contributes to `text` or to `toolCalls`.
+       */
+      if (block.kind !== 'tool_use') continue;
+      // A truncated call is not a call: its arguments are half a JSON document, so it is dropped as before.
+      if (finishReason === 'length') continue;
+      let args = block.input ?? {};
+      if (block.json) {
+        try {
+          args = object(JSON.parse(block.json));
+        } catch {
+          throw new Error('Invalid JSON tool arguments');
+        }
+      }
+      toolCalls.push({ id: block.id!, name: block.name!, arguments: args });
     }
     return {
       text,

@@ -14,6 +14,7 @@ import type {
   StatisticsDelta,
 } from '../client/session-controller.ts';
 export type { MessageDelta, SubAgentDelta, StatisticsDelta };
+import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
 import type { HostStatus } from '../client/host-client.ts';
 import type {
   SessionInfo,
@@ -30,6 +31,7 @@ import type {
 import type { ImageAttachment } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
+import { parseSandboxMode } from '../tools/sandbox-mode.ts';
 import { normalizeTaskDraft } from '../core/task-spec.ts';
 import { normalizeTaskTrigger } from '../core/task-trigger.ts';
 import { validateUserInput } from '../protocol/images.ts';
@@ -73,7 +75,7 @@ export type CarrierCommand =
    * how the caller answers it. Nothing restarts, which is the point: the desktop used to move the sandbox by
    * spawning a new Host, and that made a per-session choice cost a process.
    */
-  | { type: 'sandbox'; mode: SandboxMode }
+  | { type: 'sandbox'; mode: SandboxMode; files?: FileEffect; network?: NetworkEffect }
   | {
       type: 'taskSave';
       taskId: string;
@@ -186,7 +188,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     backgroundPolicy: ['type', 'policy', 'reset'],
     stopBackground: ['type', 'id', 'sessionId'],
     pollBackground: ['type', 'id', 'sessionId', 'cursor'],
-    sandbox: ['type', 'mode'],
+    sandbox: ['type', 'mode', 'files', 'network'],
     compact: ['type'],
     loadOlder: ['type'],
     taskSave: [
@@ -275,15 +277,31 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
   if (['load', 'approve', 'undo', 'rename', 'deleteSession'].includes(String(value.type))) {
     if (typeof value.id !== 'string' || !value.id.trim() || value.id.length > 256) return invalid();
   }
+  if (value.type === 'sandbox' && (value.mode === 'docker' || value.mode === 'sbx'))
+    parseSandboxMode(value.mode);
   // The vocabulary is the sandbox seam's, so an unknown backend is refused here rather than at the far end of
   // the wire — where the answer would be a Host that kept enforcing the old mode while the caller believed
   // otherwise.
   if (
     value.type === 'sandbox' &&
     value.mode !== 'host' &&
-    value.mode !== 'docker' &&
-    value.mode !== 'sbx' &&
+    value.mode !== 'native' &&
+    value.mode !== 'seatbelt' &&
     value.mode !== 'windows'
+  )
+    return invalid();
+  if (
+    value.type === 'sandbox' &&
+    value.files !== undefined &&
+    value.files !== 'read-only' &&
+    value.files !== 'workspace-write'
+  )
+    return invalid();
+  if (
+    value.type === 'sandbox' &&
+    value.network !== undefined &&
+    value.network !== 'denied' &&
+    value.network !== 'unrestricted'
   )
     return invalid();
   if (

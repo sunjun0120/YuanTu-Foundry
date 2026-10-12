@@ -16,10 +16,11 @@ import {
   RUN_DEFAULTS,
   assertEnvironment,
   environmentProblems,
+  promptCacheMode,
   resolveRunLimits,
 } from '../packages/protocol/settings.ts';
 import { readConfig } from '../packages/providers/config.ts';
-import { parseArgs } from '../apps/shared/args.ts';
+import { parseArgs, parseListen } from '../apps/shared/args.ts';
 import { projectRoot } from './process-fixture.ts';
 
 /** The CLI's own help output, rendered by the code rather than read from a file. */
@@ -236,4 +237,51 @@ test('every YUANTU_* name the project reads is registered', async () => {
     [],
     'a setting read anywhere in the project must be registered, or the environment check would refuse a key the code needs',
   );
+});
+
+test('the --listen rule is one function, and the host-less form means loopback', () => {
+  /**
+   * The rule used to exist twice — validated by `parseArgs`, re-derived by the Host carrier that binds it — and
+   * the two disagreed on the documented `[host:]port` spelling with the host omitted, which killed the Host at
+   * startup. These are the cases that pin the shared answer, including the one the carrier got wrong.
+   */
+  assert.deepEqual(parseListen(':8080'), { host: '127.0.0.1', port: 8080 });
+  assert.deepEqual(parseListen('0'), { host: '127.0.0.1', port: 0 });
+  assert.deepEqual(parseListen('127.0.0.1:0'), { host: '127.0.0.1', port: 0 });
+  assert.deepEqual(parseListen(' localhost:43120 '), { host: 'localhost', port: 43120 });
+  // The port is the part that is range-checked, and the whole value has to be the port: these are the shapes a
+  // dropped colon or a bad paste produces.
+  for (const bad of ['', ':', ':abc', 'not-a-port', '65536', 'host:', '1:2:3', '-1'])
+    assert.throws(
+      () => parseListen(bad),
+      /--listen must be \[host:\]port/,
+      `expected ${bad} to be refused`,
+    );
+  assert.throws(() => parseArgs(['--listen', 'not-a-port']), /--listen must be \[host:\]port/);
+  assert.equal(parseArgs(['--listen', ':0']).options.listen, ':0');
+});
+
+test('a cache mode inherited from Object.prototype is not a mode', () => {
+  /**
+   * The alias table is a plain object and the lookup was a bare subscript, so `Object.prototype` was in the chain.
+   * Lower-casing does not remove the two names that are already lower case: `constructor` resolved to the `Object`
+   * function and `__proto__` to an object, both truthy — so the environment check that exists to refuse a
+   * misspelling admitted one, and handed a function to code that expects a mode.
+   */
+  for (const inherited of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty'])
+    assert.equal(
+      promptCacheMode(inherited),
+      undefined,
+      `${inherited} is not a cache mode, it is a name off the prototype`,
+    );
+  // The real vocabulary still resolves, aliases included, so the guard did not narrow the setting itself.
+  assert.equal(promptCacheMode('blocks'), 'blocks');
+  assert.equal(promptCacheMode('key-only'), 'key-only');
+  assert.equal(promptCacheMode('off'), 'off');
+  assert.equal(promptCacheMode('auto'), 'auto');
+  assert.equal(promptCacheMode('  BLOCKS  '), 'blocks', 'trimmed and lower-cased as before');
+  assert.equal(promptCacheMode('nonsense'), undefined);
+  assert.equal(promptCacheMode(''), undefined);
+  // And the environment refuses the spelling rather than accepting it as a mode.
+  assert.throws(() => assertEnvironment({ YUANTU_PROMPT_CACHE: 'constructor' }));
 });

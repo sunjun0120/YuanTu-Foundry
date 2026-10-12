@@ -24,14 +24,83 @@ function stubFetch(payload: unknown, init: { status?: number; body?: string } = 
   const impl = (async (url: string | URL, options?: { headers?: Record<string, string> }) => {
     calls.push({ url: String(url), headers: options?.headers ?? {} });
     const status = init.status ?? 200;
+    const text = init.body ?? JSON.stringify(payload);
     return {
       ok: status >= 200 && status < 300,
       status,
       json: async () => payload,
-      text: async () => init.body ?? JSON.stringify(payload),
+      text: async () => text,
+      // A real `Response` always carries a body, and the probe reads a failed one as a stream so it can bound how
+      // much of the endpoint's answer it consumes. A stub without one would test a shape no endpoint sends.
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(text));
+          controller.close();
+        },
+      }),
     };
   }) as unknown as typeof fetch;
   return { impl, calls };
+}
+/**
+ * A fetch whose failed answer keeps producing frames.
+ *
+ * The stream closes at the end rather than running forever: 200 KiB is already past the bound the probe is
+ * allowed to read, and a bounded body makes a regression fail the byte assertions instead of hanging the suite.
+ * `text()` is present as well, so the fixture is a fair host for the unbounded read it replaced.
+ */
+function chunkedErrorFetch(frames: number, size = 1024) {
+  const frame = new Uint8Array(size).fill(0x65);
+  let pulled = 0;
+  let cancelled = false;
+  const impl = (async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= frames) {
+          controller.close();
+          return;
+        }
+        pulled += 1;
+        controller.enqueue(frame);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return {
+      ok: false,
+      status: 500,
+      body,
+      text: async () => {
+        const reader = body.getReader();
+        const decoder = new TextDecoder();
+        let out = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return out + decoder.decode();
+          out += decoder.decode(value, { stream: true });
+        }
+      },
+    };
+  }) as unknown as typeof fetch;
+  return { impl, observed: () => ({ pulled, cancelled }) };
+}
+/** A failed answer whose body opens and then says nothing at all. */
+function stalledErrorFetch(status = 503) {
+  let cancelled = false;
+  const impl = (async () => ({
+    ok: false,
+    status,
+    body: new ReadableStream<Uint8Array>({
+      // Never resolving keeps the stream from calling `pull` again in a hot loop, which is also what a socket
+      // that has gone quiet looks like from the reader's side.
+      pull: () => new Promise<void>(() => {}),
+      cancel: () => {
+        cancelled = true;
+      },
+    }),
+  })) as unknown as typeof fetch;
+  return { impl, observed: () => ({ cancelled }) };
 }
 
 test('the four catalogue envelopes all read, and only the ones this runtime knows', async () => {
@@ -168,4 +237,41 @@ test('a request that never reached the endpoint keeps its own failure', async ()
     () => discoverModels(config({ baseUrl: 'https://gateway.example' }), { fetch: impl }),
     /ENOTFOUND/,
   );
+});
+
+test('a failed probe reads a bounded slice of the error body and cancels the rest', async () => {
+  const { impl, observed } = chunkedErrorFetch(200);
+  await assert.rejects(
+    () => discoverModels(config(), { fetch: impl }),
+    (error: unknown) =>
+      error instanceof Error &&
+      /answered 500/.test(error.message) &&
+      /e{300}/.test(error.message) &&
+      !/e{400}/.test(error.message),
+  );
+  const { pulled, cancelled } = observed();
+  assert.equal(cancelled, true, 'the body is cancelled rather than left open');
+  assert.ok(pulled >= 16, 'the documented 16 KiB bound is actually read');
+  assert.ok(pulled < 200, 'the reader stopped before the end of a body it will not use');
+});
+
+test('a stalled error body is given up on instead of waited out', async () => {
+  const { impl, observed } = stalledErrorFetch();
+  const started = Date.now();
+  await assert.rejects(() => discoverModels(config(), { fetch: impl }), /answered 503/);
+  assert.ok(Date.now() - started < 30_000, 'the probe returned on its own deadline');
+  assert.equal(observed().cancelled, true, 'the stalled body is released');
+});
+
+test('a cancelled probe stops waiting for the error body it was reading', async () => {
+  const controller = new AbortController();
+  const { impl, observed } = stalledErrorFetch(500);
+  const probe = discoverModels(config(), { fetch: impl, signal: controller.signal });
+  const cancelled = setTimeout(() => controller.abort(new Error('operator cancelled')), 20);
+  try {
+    await assert.rejects(probe, /operator cancelled/);
+  } finally {
+    clearTimeout(cancelled);
+  }
+  assert.equal(observed().cancelled, true, 'a cancelled read still releases the body');
 });

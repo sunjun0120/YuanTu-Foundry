@@ -6,15 +6,51 @@ import { connectAcp } from '../../packages/sdk/acp.ts';
 import { parseArgs } from '../shared/args.ts';
 import { applySandboxDefaults, resolveWorkspace, safeError } from '../shared/runtime.ts';
 
+/**
+ * What this adapter's own `--help` prints.
+ *
+ * A constant, and this entry's own text rather than the shared CLI's, because it is the one thing this process
+ * writes to stdout outside the ACP wire: a carrier reading that stream has to be able to tell the two apart. It
+ * names the options *this* program honours — the shared parser accepts a whole kernel's worth of flags this entry
+ * never reads, and printing them as its own would advertise a deployment it does not have.
+ */
+const ACP_HELP = `YuanTu Agent ACP adapter: ACP v1 over stdio, no socket, text prompts only.
+
+Usage:
+  yuantu-acp [--workspace <directory>] [--db <file>] [--permission-policy <file>] [--hooks <module>]
+
+Options:
+  --workspace <directory>    Existing project directory this adapter's sessions belong to (default: cwd)
+  --db <file>                SQLite file the Host records sessions in (default: <workspace>/.yuantu/sessions.sqlite)
+  --permission-policy <file> Trusted JSON approval rules, forwarded to the Host
+  --hooks <module>           Trusted JS hooks module outside the workspace, forwarded to the Host
+  -h, --help                 Print this usage and exit 0
+
+Attachments are refused rather than dropped (the adapter declares text prompts only), and it accepts neither
+client MCP servers nor additional workspace roots. No other shared carrier option is part of its interface.
+`;
 async function main() {
   const { options } = parseArgs(process.argv.slice(2));
   /**
+   * `--help` is answered before anything it names is opened.
+   *
+   * The shared parser sets `options.help` for every entry point, and this one used to ignore it: asking this
+   * program *how to run it* started a stdio adapter and waited on a client that was never coming, which reads as
+   * work in progress rather than as an answer. The check sits above the workspace resolution and above the Host
+   * connection, so a `--workspace` that does not exist cannot fail a request for help — the same ordering the
+   * other carriers use.
+   */
+  if (options.help) {
+    process.stdout.write(ACP_HELP);
+    return;
+  }
+  /**
    * The same two lines the other carriers run before they build anything.
    *
-   * The entry's help is the shared one, so an operator reads `--db`, `--permission-policy` and `--hooks` as
-   * options of *this* program; they were parsed and then dropped, which turned "the sandbox I named" and
-   * "the policy file I passed" into silent no-ops. Refusing what this adapter cannot honour and forwarding
-   * what it can is the difference between a narrower adapter and a lying one.
+   * `--db`, `--permission-policy` and `--hooks` are advertised by this entry's own help, and they used to be
+   * parsed and then dropped, which turned "the sandbox I named" and "the policy file I passed" into silent
+   * no-ops. Refusing what this adapter cannot honour and forwarding what it can is the difference between a
+   * narrower adapter and a lying one.
    */
   applySandboxDefaults();
   const workspace = resolveWorkspace(options.workspace ?? process.cwd());

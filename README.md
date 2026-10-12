@@ -26,7 +26,6 @@ kind: 'project-readme'
 - [配置](#configuration)
 - [已知边界](#boundaries)
 - [开发](#development)
-- [文档索引](docs/README.md)
 
 ---
 
@@ -76,7 +75,7 @@ npm.cmd run host -- --workspace . --listen 127.0.0.1:0
 
 首次运行 Electron 可能需要下载对应二进制；终端依赖代理时可先设 `$env:NODE_USE_ENV_PROXY = '1'` 再执行 `node node_modules/electron/install.js`。`resources`、`models`、`mcp`、`sessions`、`show` 这些命令不需要 API 密钥。
 
-Windows x64 安装包通过 `npm.cmd run package:windows` 构建，产物位于 `dist/release`，附版本/schema 与 SHA-256 清单；程序、安装器与卸载器使用 `build` 中的图标。安装版自带 Node 运行时，不需要开发 Node/npm；卸载保留设置和工作区数据。安装、路径与数据保留验证及未签名发行边界见 [P1 实施记录](docs/p1-implementation-2026-10-05.md#dev-02windows-安装包与安装验证)。
+Windows x64 安装包通过 `npm.cmd run package:windows` 构建，产物位于 `dist/release`，附版本/schema 与 SHA-256 清单；程序、安装器与卸载器使用 `build` 中的图标。安装版自带 Node 运行时，不需要开发 Node/npm；卸载保留设置和工作区数据。安装、路径、数据保留及签名发行需要独立验收。
 
 ---
 
@@ -300,7 +299,7 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 | 会话查询 | 宿主提供了会话库                         | `search_sessions`、`read_session_events`、`search_session_events`、`trace_session`                                          |
 | 目标续跑 | 该运行自己拥有这份工作（根运行）         | `create_goal`、`get_goal`、`update_goal`                                                                                    |
 | 计划模式 | 计划阶段                                 | `submit_plan`、`exit_plan_mode`                                                                                             |
-| 工作流   | 宿主启用                                 | `workflow`（在独立 Node 进程中运行编排脚本，支持 host/Windows 后端）                                                        |
+| 工作流   | 宿主启用                                 | `workflow`（在独立 Node 进程中运行编排脚本，支持 host 与 Windows/macOS 原生后端）                                           |
 | 技能     | 工作区发现至少一个技能                   | `load_skill`                                                                                                                |
 | 持久任务 | 有任务尝试活动                           | `task_step`                                                                                                                 |
 | MCP      | 工作区配置了服务                         | `mcp_<服务名>_list_tools`、`_call_tool`、`_list_resources`、`_read_resource`、`_list_prompts`、`_get_prompt`                |
@@ -361,7 +360,7 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 ```
 
 - `--allow-write` 放行内置文件工具写入工作区。
-- `--allow-command` 放行**主机 shell 命令**，权限范围大于文件工具；它同时放行 `git_stage`、`git_commit`、`git_worktree_create`、`lsp_start` 与 `run_validation`，但**不放行** MCP 与浏览器工具。
+- `--allow-command` 放行所选执行后端中的 shell 命令，权限范围取决于该后端；它同时批准 Git、LSP 与验证工具的命令权限，但工具仍须满足后端约束；它**不放行** MCP 与浏览器工具。
 - 管道、非交互输入与 `--json` 模式下，未显式允许的写入和命令**默认拒绝**：CLI 在非 TTY 或 `--json` 时直接不提问。
 - `Ctrl+C` 取消模型请求、等待中的审批、等待中的提问与前台命令；已写入的文件不会自动回滚。
 
@@ -373,20 +372,17 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 桌面运行中也可以切换权限预设，新的选择立即作用于尚未执行的工具。等待授权的调用按新权限允许或拒绝，开始执行前再次核对执行环境；下一轮模型请求同步更新工具列表与环境说明。已经启动的命令、后台进程、终端和语言服务器保留创建时的执行环境。
 
-`YUANTU_SANDBOX` 取 `host`、`docker`、`sbx` 或 `windows`，镜像由 `YUANTU_SANDBOX_IMAGE` 指定。**CLI 与 Host 默认 `host`**：命令直接在主机的 shell 中运行，初始目录是工作区——**目录校验不是操作系统沙箱**，授权后的命令可以访问主机其他位置和网络。桌面默认 `sbx`，而 `YUANTU_SANDBOX` 在桌面上只表示**新会话从哪个模式开始**（不改写、不锁定）：某个会话在 chip 里换了档只影响它自己，新会话回到这个起点。切换是**活的**——沙箱模式在每次命令执行时读取，所以换档不重启载体进程、不打断会话，下一条命令就按新模式约束。模式属于会话（每个会话 id 各自记住自己的档位，窗口重开回到起点），因此两个会话可以一个在沙箱里、一个在宿主上。
+`YUANTU_SANDBOX` 接受 `native`、`windows`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用受限令牌，macOS 使用 Seatbelt；其他系统明确拒绝。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
-非 host 模式下，**会执行宿主程序的工具响亮地拒绝**，而不是静默降级成一条更弱的路径：
+文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径。因此 Windows 基础后端拒绝严格进程只读及断网请求。Windows 增强后端尚未实现，管理员初始化、专用账号和网络过滤的交付条件见 [增强后端设计](packages/tools/windows-sandbox/ENHANCED-DESIGN.md)。
 
-- **全部 8 个原生 Git 工具**（不只是写操作）——仓库过滤器、`diff.external`、hooks、alias 与 `core.hooksPath` 都能执行宿主程序，所以连 `git_status` 都不在容器里跑。
-- **终端与 LSP 的容器模式**——host 与 Windows 已接入统一执行环境，Windows 的部分写入限制同样作用于真实 PTY 和 LSP server；docker/sbx 明确拒绝，不回退宿主。进程保留创建策略，切换后只能查看或关闭，不能继续输入、发信号或发送 LSP 请求；重新启动后使用新策略。关闭等待进程及 backend 资源清理，已完成的终端输出保留。
-- **stdio MCP**（会 spawn 进程）；**远程 HTTP/SSE MCP 不受沙箱约束**。
-- **hook 桥**：`hook` 类别的沙箱不是 host 时直接拒绝装载，并提示用 `YUANTU_SANDBOX_HOOK=host` 让「命令被隔离、钩子在宿主」共存。
+命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
-这些工具**仍然注册**（`host` 是默认，装配时无法预知运行期会切到哪种模式），失败发生在调用时，报错文案按当前模式命名。`run_validation` 不在其列——它改走沙箱化的命令路径。网页抓取与浏览器工具也不受约束：沙箱只隔离命令执行，不隔离 agent 进程自己发的网络请求。
+全部原生 Git 工具与 stdio MCP 在非 `host` 模式仍明确拒绝：它们尚未接入原生进程启动器。远程 HTTP/SSE MCP、网页抓取和浏览器不受命令沙箱约束。显式 `host` 表示无操作系统隔离，命令可访问宿主其他位置和网络。macOS 取消按进程组执行，主动脱离进程组的子孙回收尚未解决；后台记录不会将其标为整棵进程树清理已确认。macOS 真机隔离与签名/公证验收仍需在 Mac 完成：打包走 `scripts/prepare-macos-package.mjs` 与 `npm run package:macos`，真机探针走 `npm run check:macos-sandbox`。
 
 ### 外部钩子桥
 
-工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。两条硬边界：命令钩子是**在 agent 进程树里执行任意代码**，不是沙箱；沙箱被设成容器模式时桥直接拒绝装载。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。
+工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。钩子命令通过所选沙箱执行；运行器故障不触发宿主重试。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。
 
 ---
 
@@ -394,7 +390,7 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 ## 会话、事件与投影
 
-默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面“设置 → 数据备份”还提供立即备份、可选每日备份和确认后恢复：每日备份默认关闭，应用打开时每 15 分钟检查，距最新快照超过 24 小时生成一份；最多保留 5 份、合计 512 MiB。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本并关闭本应用 Host；其他 Host/CLI 必须先关闭。维护命令与中断恢复见 [数据库备份与恢复](docs/p1-implementation-2026-10-05.md#dev-01会话数据库备份与恢复)，本轮桌面接线和验证见 [增量优化记录](docs/incremental-optimization-2026-10-07.md)。
+默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面“设置 → 数据备份”还提供立即备份、可选每日备份和确认后恢复：每日备份默认关闭，应用打开时每 15 分钟检查，距最新快照超过 24 小时生成一份；最多保留 5 份、合计 512 MiB。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本并关闭本应用 Host；其他 Host/CLI 必须先关闭。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
 
 桌面会话默认加载最近 100 条展示消息，可按“加载更早记录”每次向前加载 100 条；重用未变化的消息节点，保留阅读位置和操作组展开状态。此分页仅限制展示传输与渲染，模型仍读取完整会话记录。模型设置中的容量、自动压缩阈值和流空闲超时支持编辑；部分保存省略字段时保留旧值，显式清空恢复默认行为。
 
@@ -565,13 +561,13 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 输入区支持 `/` 唤起指令与技能面板，其中只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行，其余（切换模型、权限设置、新建会话、停止、刷新技能）走面板点击。设置页分通用、模型、MCP 三组。**权限与隔离是 composer 上的一枚 chip，三档**：仅可查看（沙箱内、只读）、工作区内修改（沙箱内、写入前询问，**新会话的默认**）、完全权限（宿主执行、不再询问，需要一次显式确认）。每档一次写入沙箱与批准两件事——不存在只改一半的路径——当前组合不是任何一档时 chip 显示「自定义」并说明它来自启动环境，而「自定义」只能被读出、不能被选中。档位**属于会话**：换了档只影响当前会话，新建会话回到默认，切回旧会话恢复它自己的档。菜单就是三行（盾牌图标 + 名称 + 当前项的对勾），**只在后端不可用时**多一行说明原因。界面文案由 zh/en 双语字典驱动，主进程的设置校验、失败对话框与回执用同一本字典（`apps/desktop/i18n.ts`，见下文的 `i18n:check`），`index.html` 里的静态中文在切换语言时经反向索引翻译并跟随新增节点；主题（跟随系统／浅色／深色）与三档字号写在根元素属性上。
 
-密钥用系统 `safeStorage` 加密（系统加密不可用时拒绝保存），配置文件（模型、界面、权限、沙箱）都在 Electron 的应用数据目录，MCP 凭据在 `mcp-oauth/`；每个接口分组最多 100 个模型。
+模型密钥用系统 `safeStorage` 加密（系统加密不可用时拒绝保存），配置文件（模型、界面、权限、沙箱）都在 Electron 的应用数据目录；每个接口分组最多 100 个模型。MCP OAuth 凭据在 `mcp-oauth/`，默认使用系统密钥库保存密钥并以 AES-256-GCM 加密，桌面与 Agent Host 共用同一份凭据；CLI 默认存于用户目录 `.yuantu/mcp-oauth/`。Linux 要求可用的 Secret Service。旧文件读取时原子迁移，密钥库不可用时拒绝读取或保存，不回退明文；删除本地凭据仍可执行。
 
 ### Web
 
 `npm run web` 先构建静态页，再启动一个**只绑回环**的桥：默认端口 `0`（由系统分配）与随机 token，访问地址形如 `http://127.0.0.1:<port>/?token=<token>`，WebSocket 走 `/ws?token=`，非回环来源一律 403。桥自身是 `spawnedCarrier`，页面与桌面共用同一套渲染层与同一个 `CarrierService`。第二标签页会被拒绝且不会踢掉已连接的页面。网页版刻意不提供壳专属能力（附件、MCP 设置、权限与沙箱设置、模型设置），这些请求会返回明确的拒绝文案。
 
-页面重连后，旧连接尚未完成的请求回复不会发给新页面。浏览器桥的连接握手默认等待 10 秒，普通命令及文件回复默认等待 120 秒；等待整轮运行、审批、规划、验证或压缩的命令遵循 Host 的完成与取消流程，默认不设总时长上限。嵌入方显式配置 `requestTimeoutMs` 时可限制所有请求。超时或连接丢失会提示执行结果可能未知，不自动重放命令；再次操作前应检查当前状态。修复与验收记录见 [当前项目审计修复](docs/audit-repairs-2026-10-08.md)。
+页面重连后，旧连接尚未完成的请求回复不会发给新页面。浏览器桥的连接握手默认等待 10 秒，普通命令及文件回复默认等待 120 秒；等待整轮运行、审批、规划、验证或压缩的命令遵循 Host 的完成与取消流程，默认不设总时长上限。嵌入方显式配置 `requestTimeoutMs` 时可限制所有请求。超时或连接丢失会提示执行结果可能未知，不自动重放命令；再次操作前应检查当前状态。
 
 ---
 
@@ -601,7 +597,7 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 <!-- settings:start -->
 
-**由代码算出**：共 62 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 63 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -625,10 +621,13 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | `YUANTU_TOOL_TIMEOUT_MS` | `0–3600000` | 单次工具调用的墙钟上限（毫秒，0 = 不设上限） |
 | `YUANTU_INVARIANT_TIMEOUT_MS` | `100–600000` | 单条运行时不变量检查的超时（毫秒） |
 | `YUANTU_WORKSPACE` | `string` | 工作区目录 |
-| `YUANTU_SANDBOX` | `host` / `docker` / `sbx` / `windows` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值） |
-| `YUANTU_SANDBOX_HOOK` | `host` / `docker` / `sbx` / `windows` | 钩子用的沙箱模式（默认跟随 YUANTU_SANDBOX；容器模式装不了钩子，所以只能显式写 host） |
-| `YUANTU_SANDBOX_IMAGE` | `string` | 沙箱镜像 |
+| `YUANTU_SANDBOX` | `host` / `native` / `windows` / `seatbelt` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值） |
+| `YUANTU_SANDBOX_HOOK` | `host` / `native` / `windows` / `seatbelt` | 钩子用的沙箱后端（默认继承当前调用的执行策略） |
+| `YUANTU_SANDBOX_FILES` | `read-only` / `workspace-write` | 工作区文件权限 |
+| `YUANTU_SANDBOX_NETWORK` | `denied` / `unrestricted` | 命令网络权限；不支持所需隔离时拒绝执行 |
 | `YUANTU_SANDBOX_SPEC` | `string` | （内部）沙箱启动器的单次命令载荷 |
+| `YUANTU_SANDBOX_ACL_SOURCE` | `string` | （内部）Host 快照的 ACL helper 载荷；不向客体传递 |
+| `YUANTU_SANDBOX_IMAGE` | `string` | 已停用：仅兼容旧配置，原生沙箱不读取镜像设置 |
 | `YUANTU_PTY` | `string` | 终端（terminal_* 工具）使用的 PTY 后端名，默认为内置的 node-pty |
 | `YUANTU_ALLOW_PRIVATE_NETWORK` | `0` / `1` | 是否允许访问私有网段 |
 | `YUANTU_FS_OBSERVATION` | `0` / `1` | 改动文件前是否要求本运行已读过该文件（默认开启，关闭则不检查） |
@@ -666,8 +665,6 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | `YUANTU_QA_DIR` | `string` | （测试）QA 产物目录 |
 | `YUANTU_QA_SCREENSHOT` | `string` | （测试）是否截图 |
 | `YUANTU_MCP_TEST_SECRET` | `string` | （测试）MCP 夹具密钥 |
-| `YUANTU_TEST_DOCKER` | `string` | （测试）Docker 沙箱可用性 |
-| `YUANTU_TEST_SBX` | `string` | （测试）sbx 沙箱可用性 |
 
 <!-- settings:end -->
 
@@ -688,14 +685,14 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 67 个 / 35.9 KB | `createTools().specs()` |
-| 工具（只读运行） | 34 个 / 17.6 KB | `specs({ readOnly: true })` |
-| 工具（折叠为 `run_code`） | 1 个 / 10.5 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
+| 工具（空工作区，全部） | 67 个 / 36.0 KB | `createTools().specs()` |
+| 工具（只读运行） | 34 个 / 17.7 KB | `specs({ readOnly: true })` |
+| 工具（折叠为 `run_code`） | 1 个 / 10.6 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 24 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v28 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 49 / 41 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 持久事件类型 / 实时事件类型 | 49 / 42 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 7 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 169 个 | `tests/*.test.ts` |
+| 行为测试文件 | 193 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -710,21 +707,21 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 ## 已知边界
 
-- **命令沙箱与文件工具权限分别约束**：Docker/sbx 的命令执行只读，不代表文件编辑工具也只读。文件工具在宿主进程内按工作区路径、凭据保护和审批规则执行；显式只读文件策略会在准备、审批和写入前拒绝修改。桌面的“仅可查看”同时拒绝写工具，“工作区内修改”允许审批后的文件编辑。网络抓取和远程 HTTP/SSE MCP 也不由命令沙箱隔离。
+- **命令沙箱与文件工具权限分别约束**：文件工具在宿主进程内按工作区路径、凭据保护和审批规则执行；显式只读文件策略会在准备、审批和写入前拒绝修改，命令后端也必须满足独立的文件与网络要求。桌面的“仅可查看”同时拒绝写工具，“工作区内修改”允许审批后的文件编辑。网络抓取和远程 HTTP/SSE MCP 不由命令沙箱隔离。
 
 - **自动预算不是网关容量保证**：未发布容量的模型使用应用默认预算；可在模型设置或运行参数中手动覆盖，接口明确超限时有限压缩恢复。内置容量目录只覆盖它明确核对过的端点与模型。
 - **host 沙箱不是安全边界**：授权后的命令可以访问主机其他位置与网络；命令工具不适合不受信任的工作负载。权限策略作用于需要审批的操作，同样不能代替操作系统沙箱。
 - **不提供 `push`、`amend`、`rebase`、`reset --hard`**：它们需要凭据、改写历史或丢弃工作成果，不能由模型顺带推断。
 - **文件工具不是并发安全边界**：它们拒绝工作区外路径与符号链接，但不对抗有意绕过它的进程。
-- **浏览器工具依赖可选的 `playwright`**；DOCX/PPTX 的创建、编辑与默认 PDF 预览依赖 Windows 和本机 Microsoft Office，XLSX 的读写及默认 HTML 数据预览使用纯 JS。`office_preview` 可显式选择 `backend: 'libreoffice'`，为三种格式生成 PDF；需要另行安装 LibreOffice，真实引擎、字体、版式和公式计算仍需独立验收，见 [P2 实施记录](docs/p2-implementation-2026-10-07.md)。
-- **语言服务器支持 host 与 Windows 执行后端**，docker/sbx 明确拒绝；服务器保留创建策略，切换后需要停止并重新启动才能继续请求。服务器不会自动重启，也没有空闲回收，必须显式 `lsp_start`。没有格式化工具，而语言服务器返回的 `WorkspaceEdit` 里除了文本编辑还可能带**建文件/改名/删文件类资源操作**——这些一律拒绝整份编辑，而不是只应用文本那一半（否则引用被改名而文件没动，调用方还会以为重命名成功了）。
+- **浏览器工具依赖可选的 `playwright`**；DOCX/PPTX 的创建、编辑与默认 PDF 预览依赖 Windows 和本机 Microsoft Office，XLSX 的读写及默认 HTML 数据预览使用纯 JS。`office_preview` 可显式选择 `backend: 'libreoffice'`，为三种格式生成 PDF；需要另行安装 LibreOffice，真实引擎、字体、版式和公式计算仍需独立验收。
+- **语言服务器支持 host 与 Windows/macOS 原生执行后端**；后端不可用或不能满足文件、网络要求时拒绝启动。服务器保留创建策略，切换后需要停止并重新启动才能继续请求。服务器不会自动重启，也没有空闲回收，必须显式 `lsp_start`。没有格式化工具，而语言服务器返回的 `WorkspaceEdit` 里除了文本编辑还可能带**建文件/改名/删文件类资源操作**——这些一律拒绝整份编辑，而不是只应用文本那一半（否则引用被改名而文件没动，调用方还会以为重命名成功了）。
 - **MCP 没有命令允许名单，也没有域名白名单**：约束是「HTTPS 或回环」加上来源白名单，stdio 传输额外要求 host 沙箱。运行时的授权请求不会自动弹浏览器，必须显式完成一次授权；远端返回的 schema、提示词与内容一律当作不可信数据。工具目录在连接建立时读取一次，此后只在服务器自己发出 `notifications/tools/list_changed` 时按需重读——用已经开着的连接重读，不重握手，也不因为收到通知就立刻发起请求。
 - **`verify_file_delivery` 校验的是结构而不是语义**：它核对大小、SHA-256 与魔数，不判断页数、能否被 Office 打开、版式或内容是否正确。
-- **Windows 沙箱只限制写入**：工作区外的读与网络不受限，越界写在系统调用层失败。
+- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝；管理员初始化的增强后端尚未实现。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
-- **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host/Windows 执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。VM 和 Node Permission Model 都不是恶意代码沙箱，直接效果仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。目前 docker/sbx 程序 runner 未完成运行时路径接线，会明确拒绝而不回退 host。独立 runner 构建产物及验收边界见 [部署说明](docs/program-runner-deployment.md)。
+- **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host 与 Windows/macOS 原生执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。VM 和 Node Permission Model 都不是恶意代码沙箱，直接效果仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。旧容器入口已移除，不能回退 host。独立 runner 的构建产物由 `scripts/build-program-runner.mjs` 生成，验收边界需在目标平台实测。
 - **CLI 不是 Host**：它不监听端口，`--listen` 会被明确拒绝。
 - **每日备份是桌面可选设置**：默认关闭，应用未运行时不生成；没有自动恢复。较新 schema 的库仍拒绝打开。桌面确认恢复或维护命令均复用离线校验与保全流程；恢复后主对话不自动续跑，已保存的定时/触发任务和目标唤醒仍按现有规则运行。
 - 环境检查只做在 CLI 与 Host，库代码不做——嵌入方进程里可能存在别的 `YUANTU_*` 变量。
@@ -749,10 +746,10 @@ npm.cmd run bench:check     # 确定性基准门禁
 npm.cmd run docs:generate   # 重写 README 的生成事实块
 ```
 
-开发验证的选测规则、日志、并发与增量类型检查见 [测试工作流](docs/testing-workflow.md)。`check:changed` 用于开发反馈，不替代阶段验收或发布前的完整门禁。
+开发选测规则见 [选测脚本](scripts/check-changed.mjs)，日志与并发处理见 [测试入口](scripts/run-tests.mjs)。`check:changed` 用于开发反馈，不替代阶段验收或发布前的完整门禁。
 
 `npm run check` 里的 `docs:check` 会**计算**文档引用的数字并与文档比较：它既重写生成事实块，也拒绝那些曾经为真、现在不再为真的说法（`scripts/docs-facts.mjs` 里逐条带原因登记）。因此本 README 里的计数一律以生成块为准，而不是手写。`references:check` 管另一半：文档、工作流与 `package.json` 脚本里指向本仓库的路径必须存在，markdown 链接的 `#anchor` 必须能解析（`scripts/check-references.mjs`），因此「引用了被删掉的文件」会在门禁里失败，而不是等到 CI 或读者发现。
 
 `i18n:check` 是语言门禁的另一半。渲染层的门禁是**真窗口冒烟**：切到 `en-US` 后遍历可见 DOM，任何还能看到的中文都算失败——这对渲染层是对的，因为它本来就以中文为源文本，由遍历器在渲染时翻译。主进程没有 DOM，它产出的校验文案、失败对话框与设置回执只会被递给可能已经切到英文的页面，所以这里改用静态规则：**人读的模块把词放进 `apps/desktop/i18n.ts`**，这些文件里再出现中文就失败（扫描前先剥掉注释，所以规则针对代码而不是注释；行号按原文给，注释吞掉换行的话报的位置就会漂）。规则本身是**目录扫描**而不是文件清单——`apps/desktop/**/*.ts` 默认全在门禁内，例外只有四条并各带理由（渲染层自己的模块与字典、`session-management.ts`、给模型的 `attachment-contract.ts`），且每条例外必须仍然匹配到文件：改名或被删就会失败，而不是悄悄少扫一个模块（`scripts/i18n-gate.mjs`）。guest worker 另有一条规则：`packages/tools/*worker*.ts` 的文案进的是模型与调用方的日志、不是带语言的人，所以要求是「保持英文」而不是「进字典」；桌面自己的 worker 属于界面进程，仍按界面规则。两个进程读同一本字典，因此设置页的标签和它自己的报错不会各说一种语言。
 
-CI 的 `check` job 直接跑 `npm run check`——聚合名是唯一入口，因此新增的门禁不可能只加进 `package.json` 而漏在 CI 里（`smoke:web` 就这样漏过）。CI 在 Linux 上跑检查、基准与覆盖率，Windows 上单独跑桌面冒烟。部分测试在外部依赖缺失时会**带原因自我跳过**（真实语言服务器、Docker 守护进程、本机 Office、Playwright 的 Chromium 下载），这是预期行为而不是失败。
+CI 的 `check` job 直接跑 `npm run check`——聚合名是唯一入口，因此新增的门禁不可能只加进 `package.json` 而漏在 CI 里（`smoke:web` 就这样漏过）。Linux 上的检查、基准与覆盖率明确选择 `host`，只验证通用契约；Windows 上单独跑原生后端回归与桌面冒烟，macOS job 配置了实际 Seatbelt 回归及当前架构的未签名应用打包。部分测试会因平台或外部依赖缺失而**带原因自我跳过**（macOS 内核隔离、真实语言服务器、本机 Office、Playwright 的 Chromium 下载）。跳过不能替代对应平台或依赖的验收；macOS job 也不代替签名、公证及两个架构的发行验收。

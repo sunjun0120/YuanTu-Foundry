@@ -253,6 +253,8 @@ export class SessionController {
   private active: Promise<RunResult> | null = null;
   private aborter: AbortController | null = null;
   private olderLoad: symbol | null = null;
+  /** Which session read is the current one; see `staleRead`. */
+  private loadGeneration = 0;
   constructor(client: AgentHostClient) {
     this.client = client;
     this.unsubscribe = client.subscribe((event) => this.onEvent(event));
@@ -380,15 +382,20 @@ export class SessionController {
       this.publish();
     }
   }
-  private async history(
-    sessionId: string,
-  ): Promise<{ messages: Message[]; statistics: SessionStatistics; historyStart: number }> {
+  private async history(sessionId: string): Promise<{
+    messages: Message[];
+    statistics: SessionStatistics;
+    historyStart: number;
+    /** The run the session had active when the transcript was read, when the Host says. */
+    activeRun: string | null | undefined;
+  }> {
     const tail = Math.max(100, this.state.sessionId === sessionId ? this.state.messages.length : 0);
     const history = await readDisplayHistory(this.client, sessionId, Infinity, 0, { tail });
     return {
       messages: history.messages,
       statistics: history.statistics ?? emptyStatistics(),
       historyStart: history.startOffset,
+      activeRun: history.activeRun,
     };
   }
   async loadOlder(): Promise<void> {
@@ -429,39 +436,122 @@ export class SessionController {
       this.publish();
     }
   }
+  /**
+   * Whether a step of a session read still belongs to the read that is current.
+   *
+   * A read is a sequence of requests, and every one of them is a place where the read can be overtaken: the
+   * controller can be disposed, and a later read of another session can begin. Either way the answer in hand
+   * describes a session this controller no longer shows, and writing it would put one session's history under
+   * another session's name. The generation is bumped by each read, so an older one's answers are simply dropped.
+   */
+  private staleRead(generation: number): boolean {
+    return this.disposed || generation !== this.loadGeneration;
+  }
+  /**
+   * What the Host says about the session's live run, in one answer.
+   *
+   * `runId` is the Host's own word for which run holds the session, and it is the identity the live frames carry.
+   * An older Host answers without it — and a Host that predates the method answers with an error — so the run
+   * named by the session info is the fallback. That fallback is deliberately the *only* other source: a Host
+   * that cannot say which run is running does not licence this client to apply whichever run's frame arrives.
+   */
+  private async runSnapshot(sessionId: string): Promise<{
+    running: boolean;
+    items: QueuedInput[];
+    runId: string | null;
+    /** Whether the Host answered the question at all; a Host that predates it cannot. */
+    answered: boolean;
+  }> {
+    let reply: unknown;
+    try {
+      reply = await this.client.request('run.queue.get', { sessionId });
+    } catch {
+      // No answer at all: nothing is known about a live run from this question, and the session info decides.
+      return { running: false, items: [], runId: null, answered: false };
+    }
+    // A reply that is not the answer's shape is no answer: a Host that will not say what it holds cannot be read
+    // as holding nothing, and it certainly cannot be read as naming a run.
+    if (!reply || typeof reply !== 'object')
+      return { running: false, items: [], runId: null, answered: false };
+    const answer = reply as { running?: unknown; items?: unknown; runId?: unknown };
+    const runId = typeof answer.runId === 'string' && answer.runId ? answer.runId : null;
+    return {
+      running: answer.running === true,
+      items: Array.isArray(answer.items) ? (answer.items as QueuedInput[]) : [],
+      runId,
+      answered: true,
+    };
+  }
   private async read(sessionId: string): Promise<void> {
+    const generation = ++this.loadGeneration;
     this.olderLoad = null;
-    const { messages, statistics, historyStart } = await this.history(sessionId);
-    if (this.disposed) return;
+    const { messages, statistics, historyStart, activeRun } = await this.history(sessionId);
+    if (this.staleRead(generation)) return;
     // The plan lives outside the message history, so it is fetched separately: a plan proposed in an
     // earlier run is still the plan awaiting a decision after a reload.
     const plan = await this.currentPlan(sessionId);
-    if (this.disposed) return;
+    if (this.staleRead(generation)) return;
     // Sub-agent cards are rebuilt from the stored run result: their events are progress, not history,
     // and nothing about a child survives in the parent's transcript but its report.
     const subagents = await this.historySubAgents(sessionId);
-    if (this.disposed) return;
+    if (this.staleRead(generation)) return;
     // The checklist is session state, not run state: it is written during a run but it is still the plan the
     // model is following after that run ends, so a reload has to bring it back.
     const checklist = await this.historyTodos(sessionId);
-    if (this.disposed) return;
+    if (this.staleRead(generation)) return;
     // The deliverables and the goal are session state in the same sense the checklist is: written during a run,
     // still true after it ends, and restored on reload from the log rather than from the run's result.
     const deliverables = await this.historyDeliverables(sessionId);
-    if (this.disposed) return;
+    if (this.staleRead(generation)) return;
     const goal = await this.historyGoal(sessionId);
-    if (this.disposed) return;
-    this.runId = null;
+    if (this.staleRead(generation)) return;
+    /**
+     * The live run is read *last*, after every other query has been answered.
+     *
+     * It is the one part of a session that moves while the read is running, and the read ends by asking for it
+     * so the identity this client adopts is the one the Host holds now rather than the one it held when the
+     * transcript was fetched.
+     */
+    const snapshot = await this.runSnapshot(sessionId);
+    if (this.staleRead(generation)) return;
+    /**
+     * A run that ended, or began, while those queries were in flight.
+     *
+     * The transcript read at the start cannot contain the turn of a run that finished after it: adopting the
+     * run's end without re-reading would leave a window showing a session that stopped mid-sentence. The
+     * history page says which run was active when it was read, so the two answers are compared — and when they
+     * disagree (or the run is gone) the transcript is read once more, which is what makes the state at the end
+     * of a read a state that was true at one moment.
+     */
+    const seenRun = activeRun ?? null;
+    /**
+     * Whether the session is running, and which run it is.
+     *
+     * The queue answer is the primary source because it is the one that knows about the live run. A Host that
+     * cannot answer it at all leaves the session info as the only witness — and a session info naming an active
+     * run is evidence that one holds the session, since that is what the field means and the Host clears it when
+     * a run ends. Where the Host names the run, that name wins: it is the identity the frames themselves carry.
+     */
+    const running = snapshot.answered ? snapshot.running : seenRun !== null;
+    const liveRun = running ? (snapshot.runId ?? seenRun) : null;
+    const moved = seenRun !== liveRun || (running && liveRun === null);
+    let transcript = { messages, statistics, historyStart };
+    if (moved) {
+      const reread = await this.history(sessionId);
+      if (this.staleRead(generation)) return;
+      transcript = reread;
+    }
+    this.runId = liveRun;
     this.state = {
-      queue: [],
+      queue: structuredClone(snapshot.items),
       compacting: false,
       budget: null,
       instructions: [],
       sessionId,
-      messages,
-      historyStart,
+      messages: transcript.messages,
+      historyStart: transcript.historyStart,
       messageRevision: this.state.messageRevision + 1,
-      statistics,
+      statistics: transcript.statistics,
       statisticsActivity: null,
       liveMessage: null,
       subagents,
@@ -470,14 +560,21 @@ export class SessionController {
       plan,
       deliverables,
       goal,
-      running: false,
+      running,
       loading: this.state.loading,
-      status: 'idle',
+      status: running ? 'running' : 'idle',
       tools: [],
       approvals: [],
       questions: [],
       error: null,
     };
+    /**
+     * Live frames report a run's own cumulative usage, so the session's stored statistics are what they are added
+     * to. A client that watched the run from its start set this when `run.started` arrived; one that opened the
+     * session in the middle of it has to set it here, or the first frame it applies would be added to the last
+     * session's numbers. The store's statistics count finished runs, so this is the same base either way.
+     */
+    if (running) this.statisticsBase = structuredClone(transcript.statistics);
     // A re-read ends level with the log, and saying so is what keeps the check in `catchUp` honest: a client
     // that only ever watched frames would consider itself behind after every reload, and re-read forever.
     await this.noteCursor(sessionId);
@@ -842,6 +939,7 @@ export class SessionController {
     this.listeners.clear();
     this.deltaListeners.clear();
     this.subagentDeltaListeners.clear();
+    this.statisticsDeltaListeners.clear();
   }
   private clearLive(): void {
     this.state.statisticsActivity = null;
@@ -889,7 +987,18 @@ export class SessionController {
       return;
     }
     if (!this.state.running) return;
-    if (event.runId !== this.runId) return;
+    /**
+     * A frame is applied only when it belongs to the run this client is watching.
+     *
+     * The one exception is the end of a run whose identity the client never learned: a Host too old to name the
+     * run it holds leaves a session that is running with no id to compare against, and refusing its `run.finished`
+     * would leave the window saying "running" for as long as it stayed open. Ending is safe to apply without the
+     * identity — it clears the live state and re-reads the transcript from the log, which is authoritative
+     * whatever the frame's run turned out to be — where applying a *turn* from an unidentified run would mix
+     * another run's words into this session's transcript.
+     */
+    if (event.runId !== this.runId && !(this.runId === null && event.type === 'run.finished'))
+      return;
     if (event.data.statistics) {
       this.state.statistics = addStatistics(
         this.statisticsBase,
@@ -913,6 +1022,15 @@ export class SessionController {
         });
         return;
       case 'context.compacted':
+        this.state.compacting = false;
+        break;
+      /**
+       * A compaction that failed leaves the previous summary in force: the run carries on with the context it
+       * had, and the failure carries the reason (and the count that summary covered) but no usage. So the only
+       * thing the client owes it is to stop saying the window is being compacted — there is no new summary to
+       * fetch and no transcript to change.
+       */
+      case 'context.compaction.failed':
         this.state.compacting = false;
         break;
       case 'context.forecast':

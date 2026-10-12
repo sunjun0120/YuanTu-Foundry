@@ -15,6 +15,14 @@ export async function readDisplayHistory(
   truncated: boolean;
   nextOffset: number;
   startOffset: number;
+  /**
+   * The run the session had active when its transcript was read, when the Host says.
+   *
+   * It travels with the history because it is part of the same answer — a reader that learns the transcript
+   * and the run identity from two different moments can put a run's beginning next to another run's middle.
+   * `undefined` for a Host that answers without session info; `null` for a session nobody is running.
+   */
+  activeRun?: string | null;
 }> {
   const messages: Message[] = [];
   const parts: string[] = [];
@@ -24,6 +32,7 @@ export async function readDisplayHistory(
   let endOffset = window.endOffset;
   let chunkOffset: number | undefined;
   let statistics: SessionStatistics | undefined;
+  let activeRun: string | null | undefined;
   for (;;) {
     const page = await client.request('session.get', {
       sessionId,
@@ -43,6 +52,7 @@ export async function readDisplayHistory(
       if (window.tail !== undefined && page.totalMessages !== undefined)
         endOffset = page.totalMessages;
       statistics = page.statistics;
+      activeRun = page.session?.activeRun;
       first = false;
     }
     const previousCount = messages.length;
@@ -82,6 +92,7 @@ export async function readDisplayHistory(
         messages: messages.slice(0, maxMessages),
         startOffset: resolvedStart,
         statistics,
+        activeRun,
         truncated: unreadInPage || page.nextOffset !== undefined,
         nextOffset: unreadInPage
           ? offset + (maxMessages - previousCount)
@@ -93,6 +104,7 @@ export async function readDisplayHistory(
         messages,
         startOffset: resolvedStart,
         statistics,
+        activeRun,
         truncated: false,
         nextOffset: offset + (page.messageChunk ? 1 : page.messages.length),
       };

@@ -11,10 +11,16 @@ import {
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
  *
- * They only read — a path argument chooses what is read, never whether anything is written — so the promise
- * is the same for every argument and is stated once here instead of once per tool. A tool that can write, or
- * that mutates state this run owns (the checklist, a job, the language server session), does not get this
- * name: it stays exclusive, which is what an absent classifier means.
+ * The name is a promise that the tool never writes, and it is granted per tool rather than per module because
+ * only one of the tools here can make it. `list_memories` reads the markdown memory files and the pinned
+ * document list. `recall_knowledge` cannot: a search refreshes the pinned documents first, and a document whose
+ * digest changed is re-indexed in a write transaction. That is this package's own index rather than the user's
+ * workspace, so nothing about it needs approval — `index_document` is the tool that pulls a project file into
+ * the index and declares a permission for it — but it is still a write, and two of these at once would put two
+ * writers on one index. So it makes no promise and stays exclusive.
+ *
+ * A tool that can write, or that mutates state this run owns (the checklist, a job, the language server
+ * session), does not get this name either: it stays exclusive, which is what an absent classifier means.
  */
 const parallelRead = (): true => true;
 
@@ -35,7 +41,6 @@ export function knowledgeTools(root: string): { tools: Tool[]; close: () => Prom
     tools: [
       {
         name: 'recall_knowledge',
-        isConcurrencySafe: parallelRead,
         description:
           'Search durable memories and indexed project documents. Use when earlier user preferences, decisions, or project documentation may matter. Results include sources. If no result is found, do not invent one.',
         inputSchema: {

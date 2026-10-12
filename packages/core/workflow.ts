@@ -407,6 +407,11 @@ export function workflowTool(deps: WorkflowDeps): Tool {
  * itself failed. A workflow whose children all answered needs no inventory of them — the answers are in the
  * returned value, and the model wrote the calls — but a workflow that failed, or that quietly caught a failing
  * child, is exactly the case where "which step, and what did it say" is the whole question.
+ *
+ * "Did not complete" includes a call that was still running when the script returned, which is what a script that
+ * does not `await` its `agent(...)` produces. Its `status` is still undefined at that point, and the filter used to
+ * require a status — so the one call whose outcome nobody knows was dropped from both the count and the list, and a
+ * run whose child later failed was reported as a clean success. `agentLine` already renders exactly this state.
  */
 function workflowResult(
   message: WorkerMessage,
@@ -418,7 +423,7 @@ function workflowResult(
   if (message.type === 'error') parts.push(`workflow${label} failed: ${message.message}`, '');
   else parts.push(message.value.trim() ? message.value : '(the workflow returned no value)');
   if (message.logs.length) parts.push('', '[log]', ...message.logs);
-  const failed = run.calls.filter((call) => call.status && call.status !== 'completed');
+  const failed = run.calls.filter((call) => call.status !== 'completed');
   const summary = workflowSummary(run, elapsedMs);
   if (message.type === 'error') {
     const shown = run.calls.slice(0, WORKFLOW_CEILINGS.maxTraceEntries);
@@ -444,7 +449,8 @@ function workflowSummary(
     const key = call.phase ?? '(no phase)';
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  const failed = run.calls.filter((call) => call.status && call.status !== 'completed').length;
+  // A still-running call counts here for the same reason it is listed above: nobody knows how it ended.
+  const failed = run.calls.filter((call) => call.status !== 'completed').length;
   return (
     `${run.calls.length} sub-agent call(s) in ${Math.round(elapsedMs)}ms` +
     (failed ? `, ${failed} did not complete` : '') +

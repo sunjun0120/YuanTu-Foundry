@@ -1,0 +1,29 @@
+# Historical Windows broker design
+
+This is the earlier reviewed SYSTEM broker design, not an installed sandbox. The current prototype uses AppContainer and a release-signed native WFP initializer; see [current implementation and acceptance boundaries](README.md). It is not registered as a public mode. Selecting `windows-elevated` still fails closed. The basic Low integrity backend remains a partial write boundary: ambient Low integrity Everyone grants, unrestricted reads, and unrestricted network remain possible.
+
+## First administrator initialization
+
+Ship a signed native installer and broker, verify the publisher certificate and expected binary hash before elevation, and install into an Administrator/SYSTEM-owned protected Program Files directory. A script from a user-writable checkout cannot become the elevated trusted implementation merely by passing its own hash. Bind the binary identity, protocol version, file format, and manifest in the signed release.
+
+Create a dedicated local account with a cryptographically random password. It must be absent from Administrators and remote access groups, denied interactive/remote-interactive logon, and granted only the batch logon needed by the broker. A separate random account per concurrent isolation identity avoids live workspace leases sharing access through one user SID. Persist credentials only in a SYSTEM-owned file encrypted with machine DPAPI; that file's protected ACL must exclude the desktop user and sandbox identities. Machine DPAPI alone does not prevent another machine user from decrypting a readable blob. Neither passwords nor decrypted blobs may enter CLI arguments, environment, diagnostics, or journals.
+
+Provision a SYSTEM broker service with an explicit service ACL. Use a local named pipe with remote clients rejected, an explicit caller SID allowlist, bounded versioned request frames, and kernel pipe-client PID/token checks. Authenticate the caller independently of JSON identity fields. The broker must never expose generic elevated command execution. It derives trusted workspace grants and policy itself, refuses roots outside its registered allowlist, refuses root/ancestor reparse points, and pins filesystem object handles through authorization and ACL operations.
+
+Administrator initialization must be journaled transactionally: original descriptors and account/service/WFP identities precede each mutation. Rollback deletes only objects created by this install transaction. Recovery refuses ambiguous ownership, changed descriptors, or active leases. Uninstall is explicit and refuses active jobs. No initialization was run on the current computer.
+
+## Runner and enforcement
+
+The broker performs batch `LogonUserW` for the dedicated user, creates a restricted primary token, lowers it to Low integrity, supplies an allowlisted environment without host credentials, and creates anonymous stdin/stdout/stderr pipes with an explicit handle inheritance list. `CreateProcessAsUserW` starts suspended, the broker assigns a Job Object with kill-on-close and no breakaway, then resumes. Cancellation, timeout, client disconnect, and broker shutdown terminate the job and wait for its entire child tree before restoring grants. The runner streams actual stdio without serializing command strings into PowerShell source.
+
+Use an independent scratch capability and the account SID in protected ACLs, journal pre-existing ACL and integrity labels, deny Everyone `FILE_DELETE_CHILD` on every lowered writable directory, and retain unrelated ACEs. Read-only carries no workspace write capability; scratch remains writable. Protected/system-owned paths are not silently relabeled. Host home files readable to ordinary Users remain a read exposure unless access is explicitly isolated by a stronger token/AppContainer or directory ACL boundary. An ordinary second Windows user by itself is not an unrestricted-read confidentiality boundary.
+
+Denied network requires persistent Windows Filtering Platform filters bound to the sandbox user/token identity at IPv4/IPv6 ALE connect and listen/resource-assignment layers, including UDP and loopback, with no executable-name bypass. Validate the Windows version and filter schema. A PowerShell firewall rule targeting one shell path does not constrain `node`, Python, renamed programs, or child processes. Do not advertise denied network from such a rule. Verify filter provider/sublayer ownership, active policy, tamper permissions, and running Firewall/BFE services before launch; require a denied-network live probe before declaring availability.
+
+## Required acceptance before registration
+
+An administrator in a disposable Windows VM installs the signed broker, checks protected asset ACLs and DPAPI secret access, and exercises these properties through the actual application: workspace read/write, read-only downgrade after a write run, foreign workspace/scratch write and deletion refusal, descendant output and cancellation, no surviving process tree, arbitrary child-program IPv4/IPv6 TCP/UDP/loopback denial, no command/secret injection, caller impersonation refusal, link refusal during grant/restore, concurrent isolation, crash/restart recovery, uninstall rollback, and changed-ACL conflict handling. Repeat on the supported Windows versions. Provider availability must run probes under the real isolated identity, not inspect a marker file.
+
+## Current blockers
+
+The repository currently has no signed SYSTEM broker/service, native cross-user stdio/job runner, WFP identity policy owner, or release signing chain. Implementing account creation alone would leave both process lifetime and arbitrary-program network enforcement incomplete. Administrator acceptance is intentionally outside this session's authorized operations. These missing mechanisms prevent registering an honest working enhanced backend; a dry-run setup plan or status stub would not satisfy them.

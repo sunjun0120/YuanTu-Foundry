@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { open, lstat, rename, unlink } from 'node:fs/promises';
+import { open, lstat, rename, unlink, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { applyPatch, formatPatch, structuredPatch } from 'diff';
 import type {
@@ -142,12 +142,18 @@ async function writeSnapshot(workspace: Workspace, snapshot: FileSnapshot): Prom
     file,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
   );
+  // `O_CREAT` has already made the path exist, so an incomplete write has to take it back with it: otherwise
+  // the caller is told the operation had no effect while an empty file sits there, and every retry is refused
+  // because the file now exists. Same window and same reasoning as the create path in `file-change.ts`.
+  let written = false;
   try {
     await writeAll(handle, after);
     await handle.truncate(after.length);
     await handle.sync();
+    written = true;
   } finally {
     await handle.close();
+    if (!written) await rm(file, { force: true }).catch(() => undefined);
   }
 }
 
@@ -326,22 +332,31 @@ export async function prepareBatchEdit(
 ): Promise<PreparedTool> {
   context.signal.throwIfAborted();
   const edits = args.edits as { path: string; old_text: string; new_text: string }[];
+  /**
+   * The key is the file a step resolves to, not the argument it was written with.
+   *
+   * Two spellings of one file — `a.txt` and `./a.txt` — are one state. Keyed on the raw argument, the second
+   * spelling took its own `before` snapshot from disk, so it matched its `old_text` against the *original* text
+   * instead of the text the previous step produced, and a chain of two steps on one file failed at the second.
+   * The observation gate already normalizes the same way (`fs-observation.ts`), so this is the identity the rest
+   * of the pipeline uses rather than a second opinion about it.
+   */
   const states = new Map<string, { file: string; before: Buffer; text: string }>();
   for (const edit of edits) {
-    let state = states.get(edit.path);
+    const file = await workspace.resolve(edit.path);
+    let state = states.get(file);
     if (!state) {
-      const file = await workspace.resolve(edit.path);
-      const instructions = await gates.instructions(edit.path);
+      const instructions = await gates.instructions(file);
       if (instructions)
         throw new Error(
           'Read the applicable project instructions before retrying this change:\n' + instructions,
         );
-      // Per path, and before any replacement is attempted: a batch that touches one unread file is refused as a
+      // Per file, and before any replacement is attempted: a batch that touches one unread file is refused as a
       // whole, naming the file, rather than applying its other steps and failing partway.
-      await gates.observations.assertRead(edit.path);
+      await gates.observations.assertRead(file);
       const before = await readMutationBytes(file);
       state = { file, before, text: before.toString('utf8') };
-      states.set(edit.path, state);
+      states.set(file, state);
     }
     const index = state.text.indexOf(edit.old_text);
     if (index < 0 || state.text.indexOf(edit.old_text, index + 1) >= 0)

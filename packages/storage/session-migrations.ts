@@ -3,6 +3,7 @@ import type { Message, RunResult, SubAgentSummary, Usage } from '../protocol/ind
 import { redactSecrets } from '../core/errors.ts';
 import { createDatabaseBackup, type BackupPolicy } from './database-maintenance.ts';
 import { messageEventType } from './events.ts';
+import { createCurrentSessionSchema } from './session-current-schema.ts';
 import {
   APPLICATION_ID,
   APPLICATION_NAME,
@@ -83,10 +84,46 @@ export class SessionMigrations {
         );
       }
     }
+    this.port.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+    /**
+     * A file with no tables at all is not a version of this schema — it is the absence of one.
+     *
+     * The distinction is the whole point of this branch. Every migration step below describes a *change*, and a
+     * change applied to nothing is not a no-op: the step that gave projection checkpoints their fold identity
+     * dropped the table the statements below had just created and printed `dropped projection_checkpoints`, so a
+     * brand-new database announced that it had discarded data. A file that holds no table of ours (and, because
+     * the identity check above already ran, no table of anybody else's either) has nothing to carry forward.
+     *
+     * The test is "no tables", not "version 0": a database written before this build stamped versions is also
+     * version 0 and *does* have data, and it must still walk the chain.
+     */
+    const empty = version === 0 && this.userTables().length === 0;
+    if (empty) {
+      /**
+       * The new-database entry: the current schema, the identity and the version, in one transaction.
+       *
+       * No migration step runs and no backup is taken, because there is nothing to migrate and nothing to lose.
+       * The shape this produces is the shape a migrated database reaches — that equality is what the parity
+       * regression in `tests/schema-migrations.test.ts` asserts, and it is the only thing keeping these two
+       * entries honest about being the same schema.
+       */
+      this.port.transaction(() => {
+        createCurrentSessionSchema(this.port.db);
+        this.claimApplication();
+        this.port.db.exec(`PRAGMA user_version=${SCHEMA_VERSION}`);
+      });
+      return;
+    }
+    /**
+     * The upgrade path, unchanged: the base shape every historical version shares, then the derived columns, the
+     * search index and the data steps that bring a file written by an older build forward.
+     *
+     * It stays as it is on purpose. A database that already exists cannot be re-created with the statements in
+     * `./session-current-schema.ts` — `CREATE TABLE IF NOT EXISTS` would skip the tables it already has and the
+     * columns it is missing would never appear — so the current shape has to be reached by *adding* to what is
+     * there. The two entries are compared, not merged.
+     */
     this.port.db.exec(`
-      PRAGMA busy_timeout=5000;
-      PRAGMA journal_mode=WAL;
-      PRAGMA foreign_keys=ON;
       -- The file's own answer to "whose database is this", read before any of our tables are interpreted.
       -- A row rather than PRAGMA application_id, which this runtime's SQLite binding applies to the connection
       -- only and never writes to the header (see APPLICATION_ID).
@@ -378,16 +415,27 @@ export class SessionMigrations {
     }
   }
 
-  /** Tables in this file that this build does not create — the evidence that the file is somebody else's. */
-  private foreignTables(): string[] {
-    const ours = new Set<string>(SCHEMA_TABLES);
+  /**
+   * Every table in this file that is not one of SQLite's own, in name order.
+   *
+   * Two questions are answered from it: whether the file holds anything at all (the difference between a brand
+   * new database and one written before this build stamped versions), and whether what it holds is ours. Both
+   * read `sqlite_master` directly, because at the top of `initialize` the only query that can be trusted is one
+   * that answers for a foreign file as readily as for ours.
+   */
+  private userTables(): string[] {
     return this.port.db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
       )
       .all()
-      .map((row) => String(row.name))
-      .filter((name) => !ours.has(name));
+      .map((row) => String(row.name));
+  }
+
+  /** Tables in this file that this build does not create — the evidence that the file is somebody else's. */
+  private foreignTables(): string[] {
+    const ours = new Set<string>(SCHEMA_TABLES);
+    return this.userTables().filter((name) => !ours.has(name));
   }
 
   /** The refusal, in one place so every path names the file and the evidence the same way. */
@@ -771,7 +819,23 @@ export class SessionMigrations {
     );
     const at = new Date().toISOString();
     for (const row of rows) {
-      const message = JSON.parse(String(row.body)) as Message;
+      let message: Message;
+      try {
+        message = JSON.parse(String(row.body)) as Message;
+      } catch {
+        /**
+         * A body that no longer parses is skipped, and this is the difference between one lost message and a
+         * lost workspace.
+         *
+         * The whole upgrade runs in a single transaction that writes `PRAGMA user_version` at its end, so a
+         * throw here rolls the version back too: the next open re-runs this same migration and fails
+         * identically, for every session in the database, not only the one with the damaged row. The sibling
+         * backfills already take this position — `migrateSubAgentCards` drops an unparseable result and the
+         * FTS rebuild leaves such a body unsearchable — and the row is left untouched in `messages`, so the
+         * cost is a message missing from the *folded* log, which a later repair can still recover.
+         */
+        continue;
+      }
       insert.run(String(row.sessionId), messageEventType(message), JSON.stringify({ message }), at);
     }
     // Runs and compaction checkpoints are durable facts too, and a projection that folds the log would
@@ -790,16 +854,27 @@ export class SessionMigrations {
         String(row.startedAt),
       );
       if (row.result === null) continue;
-      const result = JSON.parse(String(row.result)) as RunResult;
+      /**
+       * Guarded for the same reason as the message loop above: one damaged result must not make the database
+       * unopenable. The run still *finishes* — `status` is its own column and leaving the run open would make
+       * an upgraded session report a turn that never ended, which the abandoned-run reconciliation would then
+       * try to settle — but the fields that exist only inside the result are dropped when it cannot be read.
+       */
+      let result: RunResult | undefined;
+      try {
+        result = JSON.parse(String(row.result)) as RunResult;
+      } catch {
+        /* Contributing no usage, statistics or error is the whole of the loss. */
+      }
       insert.run(
         String(row.sessionId),
         'run.finished',
         JSON.stringify({
           runId: String(row.id),
           status: String(row.status),
-          usage: result.usage,
-          ...(result.statistics ? { statistics: result.statistics } : {}),
-          ...(result.error ? { error: redactSecrets(result.error).slice(0, 600) } : {}),
+          ...(result?.usage ? { usage: result.usage } : {}),
+          ...(result?.statistics ? { statistics: result.statistics } : {}),
+          ...(result?.error ? { error: redactSecrets(result.error).slice(0, 600) } : {}),
         }),
         String(row.startedAt),
       );

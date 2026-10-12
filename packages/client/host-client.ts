@@ -74,6 +74,14 @@ const eventTypes = new Set<string>(AGENT_EVENT_TYPES);
 export class AgentHostClient {
   private options: HostClientOptions;
   private transport: HostTransport | null = null;
+  /**
+   * The link a failure has spent, kept only so shutdown can still reach it.
+   *
+   * `recoverable` reads `transport`, so a failed link has to leave that field empty — but `close()` needs the
+   * transport to end it and to await the child's exit, and a caller that stops the client right after a
+   * failure would otherwise return before the process is gone and leave its workspace locked on Windows.
+   */
+  private spent: HostTransport | null = null;
   private previousPid: number | undefined;
   private currentStatus: HostStatus = 'stopped';
   private pending = new HostRequests();
@@ -230,6 +238,7 @@ export class AgentHostClient {
     const generation = ++this.generation;
     const transport = this.openTransport(generation);
     this.transport = transport;
+    this.spent = null;
     this.previousPid = transport.pid;
     try {
       // Host startup includes loading the runtime and workspace; a short ordinary RPC deadline
@@ -314,9 +323,22 @@ export class AgentHostClient {
   }
   private fail(error: Error): void {
     if (this.currentStatus === 'stopping') return;
-    this.setStatus('failed');
+    /**
+     * The link is spent *before* the status changes, and the order is the whole of the fix.
+     *
+     * `recoverable` requires `this.transport === null`, and `setStatus` notifies its listeners synchronously —
+     * the carrier's only recovery check runs inside that notification. Releasing the transport afterwards meant
+     * every failure reaching here was judged unrecoverable: the carrier saw a live transport, returned, and
+     * nothing re-evaluates the flag, so the one-shot Host restart ran for process exits only. The exit path has
+     * always done it in this order for the same reason.
+     */
+    const transport = this.transport;
+    this.transport = null;
+    this.info = null;
+    if (transport) this.spent = transport;
     this.rejectPending(error);
-    this.transport?.end();
+    this.setStatus('failed');
+    transport?.end();
   }
   private rejectPending(error: Error): void {
     this.pending.rejectAll(error);
@@ -483,11 +505,14 @@ export class AgentHostClient {
     return this.stopping;
   }
   private async close(): Promise<void> {
-    const transport = this.transport;
+    // A spent link is still a process to wait for: see `spent`. Without this fallback, stopping right after a
+    // failure would report 'stopped' while the Host was still exiting.
+    const transport = this.transport ?? this.spent;
     if (!transport) {
       this.setStatus('stopped');
       return;
     }
+    this.spent = null;
     this.setStatus('stopping');
     transport.end();
     let timer: NodeJS.Timeout | undefined;

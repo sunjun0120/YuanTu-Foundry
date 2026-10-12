@@ -9,9 +9,14 @@ export function desktopPaths(options: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   args: string[];
+  platform?: NodeJS.Platform;
 }): { nodePath: string; hostPath: string; workspace: string } {
   const nodePath = options.packaged
-    ? path.join(options.resourcesPath, 'runtime', 'node.exe')
+    ? path.join(
+        options.resourcesPath,
+        'runtime',
+        (options.platform ?? process.platform) === 'win32' ? 'node.exe' : 'node',
+      )
     : options.env.YUANTU_NODE_PATH;
   if (!nodePath || !path.isAbsolute(nodePath))
     throw new Error(

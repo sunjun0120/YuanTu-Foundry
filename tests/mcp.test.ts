@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { statSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/tools/index.ts';
@@ -22,6 +24,276 @@ import { McpSettingsStore } from '../apps/desktop/mcp-settings.ts';
 import { parseMcpCommand } from '../apps/desktop/mcp-contract.ts';
 
 // ---- merged from mcp.test.ts ----
+
+// Independent test keys keep OAuth protocol fixtures portable and out of the user's OS vault.
+function testCipher() {
+  const key = randomBytes(32);
+  return {
+    encrypt(text: string) {
+      const nonce = randomBytes(12);
+      const cipher = createCipheriv('aes-256-gcm', key, nonce);
+      const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+      return Buffer.concat([nonce, cipher.getAuthTag(), encrypted]);
+    },
+    decrypt(bytes: Buffer) {
+      const cipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
+      cipher.setAuthTag(bytes.subarray(12, 28));
+      return Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString('utf8');
+    },
+  };
+}
+
+test(
+  'MCP default OS cipher protects tokens and is shared by independent Node processes',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-default-cipher-'));
+    t.after(async () => {
+      // Delete only the random vault entry created by this isolated fake-token fixture.
+      try {
+        const id = (await readFile(path.join(directory, '.secret-key-id'), 'utf8')).trim();
+        const scope = createHash('sha256')
+          .update(realpathSync(directory).toLowerCase())
+          .digest('hex');
+        const { Entry } = await import('@napi-rs/keyring');
+        new Entry('YuanTu MCP OAuth:' + scope, id).deletePassword();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+    const server = 'https://example.com/default-cipher';
+    const file = path.join(
+      directory,
+      createHash('sha256').update(server).digest('hex') + '.protected.json',
+    );
+    const record = {
+      version: 1 as const,
+      tokens: {
+        access_token: 'default-fixture-access',
+        refresh_token: 'default-fixture-refresh',
+        token_type: 'Bearer',
+      },
+    };
+    const store = new McpOAuthTokenStore({ directory });
+    await store.write(server, record);
+    const raw = await readFile(file, 'utf8');
+    assert.equal(raw.includes(record.tokens.access_token), false);
+    assert.equal(raw.includes(record.tokens.refresh_token), false);
+    assert.deepEqual(new McpOAuthTokenStore({ directory }).readSync(server), record);
+    const output = execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '--eval',
+        "const { McpOAuthTokenStore } = await import(process.argv[1]); const record = new McpOAuthTokenStore({directory:process.argv[2]}).readSync(process.argv[3]); if(record.tokens?.access_token !== 'default-fixture-access' || record.tokens?.refresh_token !== 'default-fixture-refresh') throw new Error('round-trip failed'); process.stdout.write('OK');",
+        pathToFileURL(path.resolve('packages/mcp/oauth.ts')).href,
+        directory,
+        server,
+      ],
+      { encoding: 'utf8', timeout: 15_000 },
+    );
+    assert.equal(output, 'OK');
+    await rm(file);
+    await writeFile(
+      file.replace('.protected.json', '.json'),
+      JSON.stringify({ version: 1, payload: record }),
+    );
+    assert.deepEqual(new McpOAuthTokenStore({ directory }).readSync(server), record);
+    assert.equal((await readFile(file, 'utf8')).includes(record.tokens.access_token), false);
+    const envelope = JSON.parse(await readFile(file, 'utf8'));
+    const encrypted = Buffer.from(envelope.payload, 'base64');
+    encrypted[encrypted.length - 1] = encrypted[encrypted.length - 1]! ^ 1;
+    await writeFile(file, JSON.stringify({ ...envelope, payload: encrypted.toString('base64') }));
+    assert.throws(() => new McpOAuthTokenStore({ directory }).readSync(server));
+  },
+);
+
+test('MCP credential reads migrate plaintext atomically with the supplied cipher', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-migration-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const server = 'https://example.com/migration';
+  const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
+  const record = {
+    version: 1 as const,
+    tokens: {
+      access_token: 'migration-fixture-access',
+      refresh_token: 'migration-fixture-refresh',
+      token_type: 'Bearer',
+    },
+  };
+  const cipher = testCipher();
+  const protectedFile = file.replace('.json', '.protected.json');
+  for (const original of [
+    record,
+    { version: 1, payload: record },
+    { version: 1, payload: cipher.encrypt(JSON.stringify(record)).toString('base64') },
+  ]) {
+    await rm(protectedFile, { force: true });
+    await writeFile(file, JSON.stringify(original));
+    const store = new McpOAuthTokenStore({ directory, cipher });
+    assert.deepEqual(store.readSync(server), record);
+    const raw = await readFile(protectedFile, 'utf8');
+    await assert.rejects(readFile(file), { code: 'ENOENT' });
+    assert.equal(raw.includes(record.tokens.access_token), false);
+    assert.equal(raw.includes(record.tokens.refresh_token), false);
+    assert.equal(typeof JSON.parse(raw).payload, 'string');
+    assert.deepEqual(new McpOAuthTokenStore({ directory, cipher }).readSync(server), record);
+  }
+});
+
+test('MCP plaintext migration never overwrites credentials refreshed by another store', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-migration-race-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const server = 'https://example.com/migration-race';
+  const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
+  await writeFile(
+    file,
+    JSON.stringify({ version: 1, tokens: { access_token: 'old-fixture', token_type: 'Bearer' } }),
+  );
+  const cipher = testCipher();
+  const newer = {
+    version: 1 as const,
+    tokens: { access_token: 'new-fixture', token_type: 'Bearer' },
+  };
+  const writer = new McpOAuthTokenStore({ directory, cipher });
+  let pending: Promise<void> | undefined;
+  const migrating = new McpOAuthTokenStore({
+    directory,
+    cipher: {
+      decrypt: cipher.decrypt,
+      encrypt(text) {
+        pending = writer.write(server, newer);
+        return cipher.encrypt(text);
+      },
+    },
+  });
+  assert.deepEqual(migrating.readSync(server), newer);
+  await pending;
+  assert.deepEqual(writer.readSync(server), newer);
+});
+
+test('MCP credential migration fails closed and preserves the original file', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-migration-failure-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const server = 'https://example.com/migration';
+  const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
+  const original = JSON.stringify({
+    version: 1,
+    tokens: { access_token: 'fixture', token_type: 'Bearer' },
+  });
+  await writeFile(file, original);
+  const store = new McpOAuthTokenStore({
+    directory,
+    cipher: {
+      encrypt() {
+        throw new Error('secure storage unavailable');
+      },
+      decrypt() {
+        throw new Error('secure storage unavailable');
+      },
+    },
+  });
+  assert.throws(() => store.readSync(server), /secure storage unavailable/);
+  assert.equal(await readFile(file, 'utf8'), original);
+  await assert.rejects(store.write(server, { version: 1 }), /secure storage unavailable/);
+  assert.equal(await readFile(file, 'utf8'), original);
+});
+
+test('MCP damaged protected entries never fall back and removal cannot resurrect legacy tokens', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-legacy-removal-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const server = 'https://example.com/legacy-removal';
+  const legacy = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
+  const protectedFile = legacy.replace('.json', '.protected.json');
+  const raw = JSON.stringify({
+    version: 1,
+    tokens: { access_token: 'old-fixture', token_type: 'Bearer' },
+  });
+  const store = new McpOAuthTokenStore({ directory, cipher: testCipher() });
+  await writeFile(legacy, raw);
+  await writeFile(protectedFile, '{ invalid');
+  assert.throws(() => store.readSync(server), /Invalid MCP credential file/);
+  assert.equal(await readFile(legacy, 'utf8'), raw);
+  await writeFile(protectedFile, raw);
+  assert.throws(() => store.readSync(server), /Invalid encrypted MCP credential file/);
+  for (const malformed of [
+    { version: 99, revoked: true },
+    { version: 1, revoked: true, tokens: {} },
+    { version: 1, revoked: 'true' },
+  ]) {
+    await writeFile(protectedFile, JSON.stringify(malformed));
+    assert.throws(() => store.readSync(server), /Invalid encrypted MCP credential file/);
+  }
+  await store.remove(server);
+  assert.deepEqual(store.readSync(server), { version: 1 });
+  await assert.rejects(readFile(legacy), { code: 'ENOENT' });
+  assert.deepEqual(JSON.parse(await readFile(protectedFile, 'utf8')), {
+    version: 1,
+    revoked: true,
+  });
+  const restored = {
+    version: 1 as const,
+    tokens: { access_token: 'reauthorized-fixture', token_type: 'Bearer' },
+  };
+  await store.write(server, restored);
+  assert.deepEqual(store.readSync(server), restored);
+});
+
+test('MCP credential removal succeeds without a working system-vault cipher', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-unavailable-removal-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const server = 'https://example.com/unavailable-removal';
+  const working = new McpOAuthTokenStore({ directory, cipher: testCipher() });
+  await working.write(server, {
+    version: 1,
+    tokens: { access_token: 'fixture', token_type: 'Bearer' },
+  });
+  const unavailable = new McpOAuthTokenStore({
+    directory,
+    cipher: {
+      encrypt() {
+        throw new Error('vault unavailable');
+      },
+      decrypt() {
+        throw new Error('vault unavailable');
+      },
+    },
+  });
+  await unavailable.remove(server);
+  assert.deepEqual(unavailable.readSync(server), { version: 1 });
+});
+
+test('MCP removal during plaintext migration cannot restore revoked credentials', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-revoke-race-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const server = 'https://example.com/revoke-race';
+  const legacy = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
+  await writeFile(
+    legacy,
+    JSON.stringify({
+      version: 1,
+      tokens: { access_token: 'revoked-fixture', token_type: 'Bearer' },
+    }),
+  );
+  const cipher = testCipher();
+  const remover = new McpOAuthTokenStore({ directory, cipher });
+  let pending: Promise<void> | undefined;
+  const migrating = new McpOAuthTokenStore({
+    directory,
+    cipher: {
+      decrypt: cipher.decrypt,
+      encrypt(text) {
+        pending = remover.remove(server);
+        return cipher.encrypt(text);
+      },
+    },
+  });
+  assert.deepEqual(migrating.readSync(server), { version: 1 });
+  await pending;
+  assert.deepEqual(remover.readSync(server), { version: 1 });
+});
 
 async function setup(t: test.TestContext, servers: Record<string, unknown>) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-'));
@@ -132,6 +404,113 @@ test('stdio MCP discovers tools, validates arguments, calls and closes its proce
   const pid = Number(await readFile(path.join(root, 'pid.txt'), 'utf8'));
   await tools.close();
   assert.throws(() => process.kill(pid, 0));
+});
+/** Waits for a killed fixture to be gone, so "the server really exited" is an answer rather than a guess. */
+async function waitForExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+test('invalid tool parameters keep an established mcp session', async (t) => {
+  /**
+   * A request this process refused itself says nothing about the connection: the handshake succeeded and the
+   * catalogue is in hand, so one argument that fails the tool's own schema must not throw the server away. The
+   * catch that reports every failure closed the connection unconditionally, so the next call paid a whole new
+   * handshake — and a model that mistyped a schema could spend a run's budget re-handshaking a healthy server.
+   *
+   * The counter is the server's own record of the conversation, because only it can tell a reused session from a
+   * rebuilt one. The second half is the guard on the fix: "never close" would be as wrong as "always close", so
+   * a server that really exits still has to be handshaked again.
+   */
+  const root = await setup(t, {});
+  const marker = path.join(root, 'handshakes.txt');
+  await writeFile(
+    path.join(root, '.yuantu/mcp.json'),
+    JSON.stringify({
+      servers: {
+        local: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: [fixture, 'pid.txt'],
+          env: { MCP_HANDSHAKE_MARKER: marker },
+        },
+      },
+    }),
+  );
+  const tools = createTools(root);
+  (t as test.TestContext & { mcpCleanups: (() => Promise<void>)[] }).mcpCleanups.push(() =>
+    tools.close(),
+  );
+  const count = async (method: string): Promise<number> =>
+    (await readFile(marker, 'utf8').catch(() => '')).split('\n').filter((line) => line === method)
+      .length;
+
+  const established = await tools.execute(
+    { id: 'list', name: 'mcp_local_list_tools', arguments: {} },
+    ctx(),
+  );
+  assert.equal(established.isError, false, established.content);
+  assert.equal(await count('initialize'), 1);
+
+  const refused = await tools.execute(
+    {
+      id: 'bad',
+      name: 'mcp_local_call_tool',
+      arguments: { name: 'echo', arguments: { text: 12 } },
+    },
+    ctx(),
+  );
+  assert.equal(refused.isError, true);
+  assert.match(refused.content, /argument/i);
+
+  const accepted = await tools.execute(
+    {
+      id: 'good',
+      name: 'mcp_local_call_tool',
+      arguments: { name: 'echo', arguments: { text: 'still here' } },
+    },
+    ctx(),
+  );
+  assert.equal(accepted.isError, false, accepted.content);
+  assert.match(accepted.content, /still here/);
+  assert.equal(
+    await count('initialize'),
+    1,
+    'the session that refused the bad argument answered the good one',
+  );
+  assert.equal(await count('tools/list'), 1, 'and its catalogue was not read again');
+
+  // A server that is really gone is a different question, and it still has to be reconnected to.
+  const pid = Number(await readFile(path.join(root, 'pid.txt'), 'utf8'));
+  process.kill(pid, 'SIGKILL');
+  assert.equal(await waitForExit(pid), true, 'the fixture is gone, not merely detached');
+  // The call that discovers the dead transport cannot succeed; the point is that the one after it reconnects.
+  await tools.execute(
+    {
+      id: 'dead',
+      name: 'mcp_local_call_tool',
+      arguments: { name: 'echo', arguments: { text: 'x' } },
+    },
+    ctx(),
+  );
+  const reconnected = await tools.execute(
+    {
+      id: 'again',
+      name: 'mcp_local_call_tool',
+      arguments: { name: 'echo', arguments: { text: 'back' } },
+    },
+    ctx(),
+  );
+  assert.equal(reconnected.isError, false, reconnected.content);
+  assert.match(reconnected.content, /back/);
+  assert.equal(await count('initialize'), 2, 'a server that really exited is handshaked again');
 });
 test('a server that just failed is not handshaked again on the next call', async (t) => {
   /**
@@ -775,7 +1154,7 @@ test('MCP OAuth completes discovery, registration, authorization and token excha
   const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-cred-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new McpOAuthTokenStore({ directory });
+  const store = new McpOAuthTokenStore({ directory, cipher: testCipher() });
   const config = parseMcpConfigs(
     root,
     JSON.stringify({
@@ -809,7 +1188,7 @@ test('MCP OAuth completes discovery, registration, authorization and token excha
   if (process.platform !== 'win32') {
     const file = path.join(
       directory,
-      createHash('sha256').update(fixtureSet.mcpUrl).digest('hex') + '.json',
+      createHash('sha256').update(fixtureSet.mcpUrl).digest('hex') + '.protected.json',
     );
     assert.equal(statSync(file).mode & 0o777, 0o600);
   }
@@ -838,7 +1217,7 @@ test('MCP OAuth servers require authorization instead of opening a browser mid-r
   const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-cred-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new McpOAuthTokenStore({ directory });
+  const store = new McpOAuthTokenStore({ directory, cipher: testCipher() });
   const config = parseMcpConfigs(
     root,
     JSON.stringify({
@@ -864,7 +1243,7 @@ test('MCP OAuth rejects a tampered authorization response state', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-cred-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new McpOAuthTokenStore({ directory });
+  const store = new McpOAuthTokenStore({ directory, cipher: testCipher() });
   const config = parseMcpConfigs(
     root,
     JSON.stringify({
@@ -908,7 +1287,8 @@ test('MCP rejects every request to a host other than the configured server', asy
 test('MCP credential store fails closed on damaged or oversized entries', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-cred-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new McpOAuthTokenStore({ directory });
+  const cipher = testCipher();
+  const store = new McpOAuthTokenStore({ directory, cipher });
   const server = 'https://example.com/mcp';
   assert.deepEqual(store.readSync(server), { version: 1 });
   await store.write(server, {
@@ -916,10 +1296,16 @@ test('MCP credential store fails closed on damaged or oversized entries', async 
     tokens: { access_token: 'token-value', token_type: 'Bearer' },
   });
   assert.equal(store.readSync(server).tokens?.access_token, 'token-value');
-  const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
+  const file = path.join(
+    directory,
+    createHash('sha256').update(server).digest('hex') + '.protected.json',
+  );
   await writeFile(file, '{ not json');
   assert.throws(() => store.readSync(server), /Invalid MCP credential file/);
-  await writeFile(file, JSON.stringify({ payload: { version: 99 } }));
+  await writeFile(
+    file,
+    JSON.stringify({ payload: cipher.encrypt(JSON.stringify({ version: 99 })).toString('base64') }),
+  );
   assert.throws(() => store.readSync(server), /Unsupported MCP credential file version/);
   await writeFile(file, JSON.stringify({ version: 1, payload: 'x'.repeat(70_000) }));
   assert.throws(() => store.readSync(server), /exceeds 64KB/);
@@ -937,7 +1323,7 @@ async function setup2(t: test.TestContext) {
   const credentials = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-credentials-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   t.after(() => rm(credentials, { recursive: true, force: true }));
-  const tokens = new McpOAuthTokenStore({ directory: credentials });
+  const tokens = new McpOAuthTokenStore({ directory: credentials, cipher: testCipher() });
   return { root, credentials, tokens, store: new McpSettingsStore(root, tokens) };
 }
 test('MCP settings save and delete preserve other servers and reject stale revisions', async (t) => {
@@ -1091,7 +1477,7 @@ test('MCP OAuth settings round-trip and reject plaintext client secrets', async 
   );
 });
 test('MCP authorization status follows the credential store and revoke clears it', async (t) => {
-  const { credentials, tokens, store } = await setup2(t);
+  const { tokens, store } = await setup2(t);
   const saved = store.save(
     {
       id: 'remote',
@@ -1113,7 +1499,7 @@ test('MCP authorization status follows the credential store and revoke clears it
   assert.ok(row.expiresAt);
   assert.deepEqual(row.scopes, ['read']);
   assert.equal(JSON.stringify(authorized).includes('access-secret'), false);
-  const reopened = new McpSettingsStore(store.view().workspace, credentials);
+  const reopened = new McpSettingsStore(store.view().workspace, tokens);
   assert.equal(reopened.view().servers[0]!.authorized, true);
   const revoked = await store.revoke('remote', authorized.revision);
   assert.equal(revoked.servers[0]!.authorized, false);

@@ -116,6 +116,44 @@ function scan(
   const events = store.events(sessionId, 0, MAX_SCAN_EVENTS + 1);
   return { events: events.slice(0, MAX_SCAN_EVENTS), complete: events.length <= MAX_SCAN_EVENTS };
 }
+/**
+ * One page of a log under a type filter, and whether the walk stopped before the end.
+ *
+ * Reading `limit + 1` events and filtering them answers "are there more" only when nothing was dropped. With
+ * `types` set the store's next events are mostly other types, the filtered page comes out short, and the page
+ * would announce the end of a log it never reached. So the walk continues until the page is full, the log ends,
+ * or the same bound a search uses is spent — and spending it is reported as "more may remain" from a cursor,
+ * never as an ending. Without a filter the first read already fills or ends the page, so this stays one query.
+ */
+function readEventPage(
+  store: SessionStore,
+  sessionId: string,
+  after: number,
+  limit: number,
+  types: Set<string> | null,
+): { shown: SessionEvent[]; more: boolean; cursor: number } {
+  const matched: SessionEvent[] = [];
+  let cursor = after;
+  let scanned = 0;
+  while (matched.length <= limit && scanned < MAX_SCAN_EVENTS) {
+    const want = Math.min(limit + 1 - matched.length, MAX_SCAN_EVENTS - scanned);
+    const chunk = store.events(sessionId, cursor, want);
+    if (!chunk.length) break;
+    for (const event of chunk) {
+      cursor = event.seq;
+      if (!types || types.has(event.type)) matched.push(event);
+    }
+    scanned += chunk.length;
+    // A short chunk is the end of the log: nothing recorded after it can match, so the page is complete.
+    if (chunk.length < want)
+      return { shown: matched.slice(0, limit), more: matched.length > limit, cursor };
+  }
+  return {
+    shown: matched.slice(0, limit),
+    more: matched.length > limit || scanned >= MAX_SCAN_EVENTS,
+    cursor,
+  };
+}
 function searchTool(deps: SessionQueryDeps): Tool {
   return {
     name: SEARCH_SESSIONS,
@@ -273,12 +311,10 @@ function readEventsTool(deps: SessionQueryDeps): Tool {
           : 50;
         const types = readTypes(args.types);
         if (typeof types === 'string') return { isError: true, content: types };
-        // One extra event answers "are there more" exactly, without a count over the whole log.
-        const page = deps.store
-          .events(sessionId, requestedAfter, limit + 1)
-          .filter((event) => !types || types.has(event.type));
-        const more = page.length > limit;
-        const shown = more ? page.slice(0, limit) : page;
+        // A page is a bounded walk, not one filtered read: a filter drops the store's next events, and the short
+        // result would read as the end of a log that continues.
+        const page = readEventPage(deps.store, sessionId, requestedAfter, limit, types);
+        const { shown, more } = page;
         const lines: string[] = [
           `session ${session.id} · ${session.title?.trim() || '(untitled)'} · from seq ${requestedAfter}`,
           `${shown.length} event(s) shown${types ? ` (filtered to ${[...types].join(', ')})` : ''}`,
@@ -297,11 +333,16 @@ function readEventsTool(deps: SessionQueryDeps): Tool {
           emitted++;
           lines.push(line);
         }
-        const last = shown[emitted - 1]?.seq ?? requestedAfter;
+        // The cursor is the last event *shown*, so a page cut by the character budget resumes without skipping
+        // anything; only an empty page — a narrow filter over a long stretch — has to advance by the walk's own
+        // position, which is what keeps the cursor from standing still.
+        const last = shown[emitted - 1]?.seq ?? (shown.length ? requestedAfter : page.cursor);
         if (more || emitted < shown.length)
           lines.push(
             '',
-            `more remain — call ${READ_SESSION_EVENTS}({ sessionId: "${session.id}", afterSeq: ${last} })`,
+            `more remain — call ${READ_SESSION_EVENTS}({ sessionId: "${session.id}", afterSeq: ${last}${
+              types ? `, types: ${JSON.stringify([...types])}` : ''
+            } })`,
           );
         else lines.push('', 'that is the end of the log.');
         return { isError: false, content: lines.join('\n') };
@@ -390,7 +431,7 @@ function searchEventsTool(deps: SessionQueryDeps): Tool {
         else if (more || !complete)
           lines.push(
             '',
-            `more may remain — call ${SEARCH_SESSION_EVENTS}({ sessionId: "${session.id}", query: ${JSON.stringify(args.query)}, afterSeq: ${shown.at(-1)!.seq} })`,
+            `more may remain — call ${SEARCH_SESSION_EVENTS}({ sessionId: "${session.id}", query: ${JSON.stringify(args.query)}, afterSeq: ${shown.at(-1)!.seq}${types ? `, types: ${JSON.stringify([...types])}` : ''} })`,
           );
         return { isError: false, content: lines.join('\n') };
       } catch (error) {
@@ -404,7 +445,8 @@ interface TracedRun {
   runId: string;
   steps: number;
   tools: Map<string, number>;
-  failures: string[];
+  /** Each failure's rendered line, and whether the excerpt it carries was cut short. */
+  failures: { text: string; truncated: boolean }[];
   subagents: string[];
   status?: string;
   error?: string;
@@ -486,8 +528,13 @@ function traceTool(deps: SessionQueryDeps): Tool {
             const message = data.message as Message | undefined;
             if (message?.role !== 'tool' || !message.isError) continue;
             const name = names.get(message.toolCallId) ?? 'a tool';
-            const detail = String(message.content).replace(/\s+/g, ' ').slice(0, MAX_HIT_CHARS);
-            current.failures.push(`${name}: ${detail}`);
+            const flat = String(message.content).replace(/\s+/g, ' ');
+            // Whether the excerpt was cut is decided here, on its own length. The rendered line also carries the
+            // tool name, and measuring that instead announced a cut on failures whose text was whole.
+            current.failures.push({
+              text: `${name}: ${flat.slice(0, MAX_HIT_CHARS)}`,
+              truncated: flat.length > MAX_HIT_CHARS,
+            });
             continue;
           }
           if (event.type === 'subagent.assigned') {
@@ -546,7 +593,7 @@ function traceTool(deps: SessionQueryDeps): Tool {
             );
           for (const objective of run.subagents) lines.push(`  delegated: ${objective}`);
           for (const failure of run.failures)
-            lines.push(`  failed: ${failure}${failure.length >= MAX_HIT_CHARS ? '…' : ''}`);
+            lines.push(`  failed: ${failure.text}${failure.truncated ? '…' : ''}`);
           if (run.interrupted) lines.push('  interrupted: the process that owned it disappeared');
           if (run.error) lines.push(`  error: ${run.error}`);
           if (run.code) lines.push(`  failure code: ${run.code}`);

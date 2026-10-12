@@ -85,6 +85,26 @@ function stringList(value: unknown, field: string): string[] | undefined {
     throw new Error(`${field} must be an array of strings`);
   return value.map((item) => String(item));
 }
+/**
+ * The one place an extension is normalized, so that matching has a single spelling to reason about.
+ *
+ * `languageForFile` lowercases the *file name* and compares suffixes, so a configured `.R` or `.F90` was
+ * compared as `'main.r'.endsWith('.R')` — never true — and a server declared with an uppercase extension could
+ * not be selected by any file name at all. Normalizing here, where a definition becomes trusted, rather than in
+ * the matcher, keeps the comparison a plain suffix test and keeps the catalog the single authority on what
+ * matches what: every definition `resolveServers` returns has been through this, so `languageForFile` can be
+ * read as a pure function of the catalog it is given.
+ *
+ * Order is preserved (`map`, not a set): among extensions of equal length the earlier one wins, so two entries
+ * that normalize to the same string keep the priority their configuration gave them instead of acquiring a new
+ * one.
+ */
+function normalize(definition: LspServerDefinition): LspServerDefinition {
+  return {
+    ...definition,
+    extensions: definition.extensions.map((extension) => extension.toLowerCase()),
+  };
+}
 function validate(definition: LspServerDefinition): LspServerDefinition {
   if (!definition.command.trim() || definition.command.includes('\0'))
     throw new Error('command must be a non-empty string');
@@ -95,7 +115,7 @@ function validate(definition: LspServerDefinition): LspServerDefinition {
   for (const extension of definition.extensions)
     if (!extension.startsWith('.') || extension.length < 2 || extension.includes('/'))
       throw new Error(`invalid extension: ${extension}`);
-  return definition;
+  return normalize(definition);
 }
 
 /**
@@ -106,7 +126,7 @@ export async function resolveServers(
   root: string,
 ): Promise<{ servers: LspServerDefinition[]; problems: string[] }> {
   const servers = new Map<string, LspServerDefinition>(
-    BUILT_IN_SERVERS.map((server) => [server.language, { ...server }]),
+    BUILT_IN_SERVERS.map((server) => [server.language, normalize(server)]),
   );
   const problems: string[] = [];
   let raw: string | undefined;
@@ -172,7 +192,16 @@ export async function resolveServers(
   return { servers: [...servers.values()], problems };
 }
 
-/** Longest matching extension wins, so `.d.ts` beats `.ts`. */
+/**
+ * Longest matching extension wins, so `.d.ts` beats `.ts`. Among extensions of equal length the earlier entry in
+ * the catalog wins, and within one entry the extension listed first does — `languageForFile` replaces its best
+ * match only on a *longer* one, so ties keep the order the configuration established.
+ *
+ * Extensions arrive already normalized, because `resolveServers` is where a definition becomes trusted and
+ * where the case of its extensions is settled; the file name is lowercased here, and the two halves of the
+ * comparison then have the same spelling. A suffix that no configured extension matches still resolves to
+ * nothing, so this selects a server for a file a server was declared for and nothing more.
+ */
 export function languageForFile(
   file: string,
   servers: readonly LspServerDefinition[],

@@ -63,14 +63,24 @@ function stream(text: string, className: string): HTMLElement {
 export function toolCardView(model: ToolCardModel): HTMLElement {
   if (model.kind === 'file-read') {
     const card = node('div', '', 'tool-card tool-card-file');
+    /**
+     * Three answers, in the order the payload makes them sayable.
+     *
+     * A file with no lines is empty (`ui.toolCardEmptyFile`). A *window* with no lines is a different fact —
+     * `endLine` is `startLine - 1` exactly when the reader asked to start past the end — and formatting that
+     * pair like any other range printed `第 5–4 行 / 共 2 行`: a countdown beside a total that says the file is
+     * not empty. Neither sentence is true of the other case, so neither string is reused for it.
+     */
     const range =
       model.totalLines === 0
         ? t('ui.toolCardEmptyFile')
-        : format(t('ui.toolCardLines'), {
-            start: model.startLine,
-            end: model.endLine,
-            total: model.totalLines,
-          });
+        : model.endLine < model.startLine
+          ? format(t('ui.toolCardEmptyRange'), { total: model.totalLines })
+          : format(t('ui.toolCardLines'), {
+              start: model.startLine,
+              end: model.endLine,
+              total: model.totalLines,
+            });
     card.append(
       head(
         node('code', model.path, 'tool-card-path'),

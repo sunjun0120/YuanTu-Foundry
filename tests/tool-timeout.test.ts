@@ -276,6 +276,54 @@ test('a pending deadline does not keep the process alive', async () => {
   assert.match(stdout, /hanging call launched/);
 });
 
+test('the delegation control tools are exempt by default but still obey a stated budget', async () => {
+  /**
+   * Every delegation-shaped tool waits on *other agents' work*, so the shipped table names all of them, not just
+   * the blocking `delegate_task`: `subagent_fork` is the same call with a different seed, and `send_message`
+   * waits for a child's turn. A default budget on any of them cuts off work that is progressing and makes the
+   * parent repeat it.
+   *
+   * That exemption covers the *default* only. A deployment that states a number for one of these names still
+   * gets it — and such a call now stops the child it was waiting for instead of leaving it running unwatched.
+   */
+  for (const name of ['delegate_task', 'subagent_fork', 'send_message'])
+    assert.equal(
+      resolveToolDeadline(name, TOOL_DEADLINE_DEFAULTS),
+      undefined,
+      `${name} has no deadline in the shipped table`,
+    );
+
+  // Exempt from the default: with a 20 ms default in force, the shipped override of 0 lets a call that takes
+  // 80 ms finish. Without the override this very call would be cut off.
+  const shipped = new ToolRegistry();
+  shipped.register(
+    tool('send_message', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return { isError: false, content: 'answered' };
+    }),
+  );
+  shipped.deadlines = { ...TOOL_DEADLINE_DEFAULTS, defaultMs: 20 };
+  const exempt = await shipped.execute(call('send_message'), {
+    signal: new AbortController().signal,
+    approve,
+  });
+  assert.equal(exempt.isError, false, exempt.content);
+  assert.equal(exempt.content, 'answered');
+
+  // And a stated budget is not ignored: the same tool under an explicit override is told to stop.
+  const strict = new ToolRegistry();
+  const seen: { reason?: unknown; aborted?: boolean } = {};
+  strict.register(cooperative('subagent_fork', seen));
+  strict.deadlines = { defaultMs: 600_000, overrides: { subagent_fork: 20 } };
+  const cut = await strict.execute(call('subagent_fork'), {
+    signal: new AbortController().signal,
+    approve,
+  });
+  assert.equal(cut.isError, true);
+  assert.match(cut.content, new RegExp(`^${TOOL_TIMEOUT_MARKER}:`));
+  assert.equal(seen.aborted, true, 'the tool was told to stop, not merely abandoned');
+});
+
 test('the policy travels to a delegated run, which runs the same tools', async () => {
   const tools = new ToolRegistry();
   tools.register(cooperative('delegated', {}));

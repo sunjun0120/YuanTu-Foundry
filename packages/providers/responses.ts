@@ -20,6 +20,31 @@ function tokens(value: unknown): number {
     throw new Error('Invalid Responses token usage');
   return value;
 }
+/**
+ * The completed assistant text an incomplete terminal event carries that the stream had not already delivered.
+ *
+ * Only `status: 'completed'` messages are read: an item the endpoint itself marked unfinished is the case the
+ * incomplete path exists to *not* act on. The result is added only when it continues what was streamed, because
+ * text that disagrees is a different answer, and merging two of them would invent a third — the visible
+ * truncation is the lesser problem.
+ */
+function incompleteText(terminal: Record<string, unknown>, streamed: string): string {
+  if (!Array.isArray(terminal.output)) return '';
+  let text = '';
+  for (const raw of terminal.output) {
+    const item = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined;
+    if (!item || item.type !== 'message' || item.status !== 'completed') continue;
+    if (item.role !== 'assistant' || !Array.isArray(item.content)) continue;
+    for (const rawPart of item.content) {
+      const part =
+        rawPart && typeof rawPart === 'object' ? (rawPart as Record<string, unknown>) : undefined;
+      if (part?.type === 'output_text' && typeof part.text === 'string') text += part.text;
+    }
+  }
+  if (!text || text === streamed) return '';
+  if (!streamed) return text;
+  return text.startsWith(streamed) ? text.slice(streamed.length) : '';
+}
 export class ResponsesProvider implements Provider {
   private config: ProviderConfig;
   private endpoint: string;
@@ -43,6 +68,18 @@ export class ResponsesProvider implements Provider {
   }
   async complete(request: ModelRequest): Promise<ModelResponse> {
     request.signal.throwIfAborted();
+    /**
+     * The model this round is actually aimed at, resolved once.
+     *
+     * A round may name its own model (`request.model`) and the connection names a default; those are two
+     * different models in the same conversation as soon as a policy re-aims a round. The opaque reasoning a
+     * Responses endpoint hands back under `store: false` belongs to the model that produced it, so the identity
+     * the state is *replayed* against has to be the identity it was *filed* under — otherwise the blob from one
+     * model travels into another one's request, and the endpoint is asked to continue reasoning it never
+     * generated. Resolving here keeps the three uses (the wire, the replay test, the state we return) equal by
+     * construction rather than by three copies of the same expression.
+     */
+    const effectiveModel = request.model ?? this.config.model;
     const cache = cacheFields(this.config, request.cacheKey, 'openai-responses');
     const input: Record<string, unknown>[] = [];
     for (const message of request.messages) {
@@ -74,7 +111,7 @@ export class ResponsesProvider implements Provider {
         const state = message.providerState;
         if (
           state?.protocol === 'openai-responses' &&
-          state.model === this.config.model &&
+          state.model === effectiveModel &&
           state.endpoint === this.endpoint
         ) {
           input.push(...state.output);
@@ -117,7 +154,7 @@ export class ResponsesProvider implements Provider {
             authorization: 'Bearer ' + this.config.apiKey,
           },
           body: JSON.stringify({
-            model: request.model ?? this.config.model,
+            model: effectiveModel,
             // Same level, nested under `reasoning`. `include: ['reasoning.encrypted_content']` above is already
             // unconditional, which is what makes reasoning usable with `store: false`.
             ...(request.reasoningEffort && request.reasoningEffort !== 'none'
@@ -215,7 +252,16 @@ export class ResponsesProvider implements Provider {
         ? { cacheWriteInputTokens: tokens(inputDetails.cache_write_tokens) }
         : {}),
     };
-    if (incomplete) return { text: streamed, toolCalls: [], finishReason: 'length', usage };
+    // An incomplete answer stopped early; it did not produce nothing. The terminal event still carries the output
+    // the endpoint had produced, and a stream cut before it delivered its deltas — or before it delivered all of
+    // them — leaves the only copy of that text there. Returning just the deltas answered with less than the
+    // endpoint had already decided on. Tool calls are still not executed and unfinished reasoning is still not
+    // replayed: only completed assistant text the stream had not already delivered is added.
+    if (incomplete) {
+      const missing = incompleteText(terminal, streamed);
+      if (missing) request.onText(missing);
+      return { text: streamed + missing, toolCalls: [], finishReason: 'length', usage };
+    }
     if (!Array.isArray(terminal.output) || terminal.output.length > 256)
       throw new Error('Invalid Responses output');
     const output = terminal.output.map(object),
@@ -264,7 +310,7 @@ export class ResponsesProvider implements Provider {
       usage,
       providerState: {
         protocol: 'openai-responses',
-        model: this.config.model,
+        model: effectiveModel,
         endpoint: this.endpoint,
         output,
       },

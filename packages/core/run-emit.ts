@@ -11,7 +11,7 @@ import type { SessionStore } from '../storage/sqlite.ts';
  * reason this is a module rather than a call to `options.onEvent` at each site — a frame that skipped one of
  * them would be a frame the client shows, the watchdog ignores, or the invariant never sees.
  *
- * The state object is shared with the run loop on purpose: `toolStarted`, `statistics` and the child token map
+ * The state object is shared with the run loop on purpose: `toolCalls`, `statistics` and the child token map
  * are *the run's* counters, read and written by the loop as well, so this file owns the emission rule and the
  * loop keeps owning the numbers.
  */
@@ -26,8 +26,18 @@ export interface RunEmission {
   statistics: SessionStatistics;
   /** Every event type this run emitted, which is what the protocol invariant checks at the end. */
   emittedTypes: Set<string>;
-  /** When the tool now running started, or `undefined` while none is. */
-  toolStarted: number | undefined;
+  /**
+   * The tool calls the run is still waiting on, by call id.
+   *
+   * A set rather than a count because the finish of one call says nothing about its siblings: two reads that
+   * overlap are both in flight after the first of them answers, and the wall clock the run spends waiting is not
+   * over until the last one does.
+   */
+  toolCalls: Map<string, number>;
+  /** When the current uninterrupted stretch of "waiting on at least one tool" began, or `undefined` while none is. */
+  toolSpanStarted: number | undefined;
+  /** Epoch ms the current stretch began, for the activity frame a client draws, which is not a duration. */
+  toolActivityStartedAt: number | undefined;
   /**
    * The output tokens each child had reported as of its last `subagent.progress` frame.
    *
@@ -53,6 +63,39 @@ export interface RunEmitOptions {
 
 /** The run's emitter, as its owner stores and passes it. */
 export type RunEmit = (type: AgentEvent['type'], data: Record<string, unknown>) => void;
+
+/**
+ * The call id a tool frame carries, from whichever field that frame's shape uses.
+ *
+ * `tool.started` announces a `call` (the protocol's own object, id included) and `tool.finished` answers with a
+ * `callId`. Both are read here rather than at the two call sites so a finish is paired with the start it belongs
+ * to by identity and not by order.
+ */
+function toolCallId(data: Record<string, unknown>, field: 'call' | 'callId'): string | undefined {
+  if (field === 'callId') return typeof data.callId === 'string' ? data.callId : undefined;
+  const call = data.call;
+  if (!call || typeof call !== 'object') return undefined;
+  const id = (call as { id?: unknown }).id;
+  return typeof id === 'string' ? id : undefined;
+}
+/** Close the open stretch, charging the wall clock it covered. Idempotent: a closed span adds nothing. */
+function closeToolSpan(state: RunEmission, now = performance.now()): void {
+  if (state.toolSpanStarted === undefined) return;
+  state.statistics.toolMs += Math.max(0, now - state.toolSpanStarted);
+  state.toolSpanStarted = undefined;
+  state.toolActivityStartedAt = undefined;
+}
+/**
+ * Settle whatever the run was still waiting on when it ended.
+ *
+ * A cancelled or failed run never sees the finish of the call that was in flight, and the wall time a person
+ * spent waiting on it must not vanish from the totals. Called once from the run's teardown: the second call finds
+ * no open span and adds nothing, which is what keeps a settlement from being charged twice.
+ */
+export function settleOpenToolSpans(state: RunEmission, now = performance.now()): void {
+  state.toolCalls.clear();
+  closeToolSpan(state, now);
+}
 
 /**
  * The run's emitter. Each call stamps identity, folds in timing and activity, and never throws.
@@ -98,16 +141,43 @@ export function createRunEmit(options: RunEmitOptions): RunEmit {
         }
       }
     }
-    if (type === 'tool.started') state.toolStarted = performance.now();
-    if (type === 'tool.finished' && state.toolStarted !== undefined) {
-      state.statistics.toolMs += performance.now() - state.toolStarted;
-      state.toolStarted = undefined;
+    /**
+     * The run's tool wall clock, kept as a union of spans rather than as a start time.
+     *
+     * The statistic answers "how long did this run spend waiting on tools", so what it accumulates is the wall
+     * clock during which *at least one* call was in flight. A single scalar could not say that: it was overwritten
+     * by every `tool.started` and cleared by the first `tool.finished`, so a second call that was still running
+     * when its sibling answered was never charged at all, and the total came out as the shortest call instead of
+     * the union. Tracking the open calls makes the answer independent of the order the finishes arrive in: the
+     * clock opens with the first call and closes with the last, and a finish that matches nothing (a duplicate, or
+     * a call this emitter never saw start) is ignored rather than subtracted.
+     */
+    if (type === 'tool.started') {
+      const id = toolCallId(data, 'call') ?? '';
+      if (!state.toolCalls.has(id)) {
+        const now = performance.now();
+        state.toolCalls.set(id, now);
+        if (state.toolSpanStarted === undefined) {
+          state.toolSpanStarted = now;
+          state.toolActivityStartedAt = Date.now();
+        }
+      }
+    } else if (type === 'tool.finished') {
+      const id = toolCallId(data, 'callId') ?? '';
+      if (state.toolCalls.delete(id) && state.toolCalls.size === 0) closeToolSpan(state);
     }
     if (type === 'tool.started' || type === 'tool.finished') {
+      /**
+       * Activity follows the same clock: a run is "running a tool" while any call is open, so the frame that ends
+       * one of two overlapping reads is not the end of the run's tool work. The epoch timestamp is carried
+       * unchanged for the whole stretch, because a panel draws it as "since when", not as a duration.
+       */
+      const startedAt = state.toolActivityStartedAt;
       data = {
         ...data,
         statistics: { ...state.statistics },
-        activity: type === 'tool.started' ? { kind: 'tool', startedAt: Date.now() } : null,
+        activity:
+          state.toolCalls.size > 0 && startedAt !== undefined ? { kind: 'tool', startedAt } : null,
       };
     }
     // Observers retain event snapshots; nested counters must not change after emission.

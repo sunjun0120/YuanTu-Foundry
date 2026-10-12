@@ -259,7 +259,7 @@ test('concurrent store opens migrate one legacy database without duplicate colum
 
 /** A real base64 PNG, so the fixture body genuinely carries an image payload. */
 const PNG =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 test('session search uses the text projection and never indexes image payloads', async (t) => {
   // Regression: `list()` ran json_extract + instr over every message body — the same blob that holds

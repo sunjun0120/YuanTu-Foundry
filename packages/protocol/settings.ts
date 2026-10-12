@@ -308,23 +308,39 @@ export const ENVIRONMENT = {
   YUANTU_WORKSPACE: { kind: 'string', description: '工作区目录' },
   YUANTU_SANDBOX: {
     kind: 'enum',
-    values: ['host', 'docker', 'sbx', 'windows'],
+    values: ['host', 'native', 'windows', 'seatbelt'],
     description:
       '命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值）',
   },
   YUANTU_SANDBOX_HOOK: {
     kind: 'enum',
-    values: ['host', 'docker', 'sbx', 'windows'],
-    description:
-      '钩子用的沙箱模式（默认跟随 YUANTU_SANDBOX；容器模式装不了钩子，所以只能显式写 host）',
+    values: ['host', 'native', 'windows', 'seatbelt'],
+    description: '钩子用的沙箱后端（默认继承当前调用的执行策略）',
   },
-  YUANTU_SANDBOX_IMAGE: { kind: 'string', description: '沙箱镜像' },
+  YUANTU_SANDBOX_FILES: {
+    kind: 'enum',
+    values: ['read-only', 'workspace-write'],
+    description: '工作区文件权限',
+  },
+  YUANTU_SANDBOX_NETWORK: {
+    kind: 'enum',
+    values: ['denied', 'unrestricted'],
+    description: '命令网络权限；不支持所需隔离时拒绝执行',
+  },
   // Internal, and registered for the same reason the test keys below are: the check has to know every YUANTU_*
   // name the project itself uses. This one never reaches a user's environment — the Windows launcher is handed
   // its per-command payload (command line, cwd, environment block) in this variable instead of in the
   // PowerShell script text, because a script whose text changes per command is re-scanned by the platform on
   // every command, which measured 2.1s against 0.43s for a script whose text never changes.
   YUANTU_SANDBOX_SPEC: { kind: 'string', description: '（内部）沙箱启动器的单次命令载荷' },
+  YUANTU_SANDBOX_ACL_SOURCE: {
+    kind: 'string',
+    description: '（内部）Host 快照的 ACL helper 载荷；不向客体传递',
+  },
+  YUANTU_SANDBOX_IMAGE: {
+    kind: 'string',
+    description: '已停用：仅兼容旧配置，原生沙箱不读取镜像设置',
+  },
   YUANTU_PTY: {
     kind: 'string',
     description: '终端（terminal_* 工具）使用的 PTY 后端名，默认为内置的 node-pty',
@@ -446,8 +462,6 @@ export const ENVIRONMENT = {
   YUANTU_QA_DIR: { kind: 'string', description: '（测试）QA 产物目录' },
   YUANTU_QA_SCREENSHOT: { kind: 'string', description: '（测试）是否截图' },
   YUANTU_MCP_TEST_SECRET: { kind: 'string', description: '（测试）MCP 夹具密钥' },
-  YUANTU_TEST_DOCKER: { kind: 'string', description: '（测试）Docker 沙箱可用性' },
-  YUANTU_TEST_SBX: { kind: 'string', description: '（测试）sbx 沙箱可用性' },
 } as const satisfies Record<string, EnvironmentSpec>;
 export type EnvironmentKey = keyof typeof ENVIRONMENT;
 /**
@@ -461,7 +475,19 @@ export type EnvironmentKey = keyof typeof ENVIRONMENT;
 export function promptCacheMode(value: unknown): PromptCacheMode | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const text = String(value).trim().toLowerCase();
-  return PROMPT_CACHE_ALIASES[text] ?? PROMPT_CACHE_MODES.find((mode) => mode === text);
+  /**
+   * `Object.hasOwn`, because the alias table is a plain object and this lookup used to be a bare subscript.
+   *
+   * That put `Object.prototype` in the chain, and lower-casing does not remove the two names that are already
+   * lower case: `constructor` resolved to the `Object` function and `__proto__` to an object, both truthy. The
+   * environment check that exists to refuse a misspelling therefore *admitted* one, and handed a function to code
+   * that expects a mode — `cacheFields` compares it and falls into a branch no in-domain value can reach.
+   * `Object.hasOwn` answers about the table, which is the only thing that was ever meant.
+   */
+  const alias = Object.hasOwn(PROMPT_CACHE_ALIASES, text)
+    ? (PROMPT_CACHE_ALIASES as Record<string, PromptCacheMode | undefined>)[text]
+    : undefined;
+  return alias ?? PROMPT_CACHE_MODES.find((mode) => mode === text);
 }
 /** What `auto` resolves to, and therefore what a connection that says nothing gets. */
 export function defaultPromptCacheMode(protocol: string): PromptCacheMode {

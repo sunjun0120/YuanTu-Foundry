@@ -15,6 +15,7 @@ import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/tools/index.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
+import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { RunFailure, type FailureCode } from '../packages/protocol/failure.ts';
 import {
   RETRY_MAX_WAIT_MS,
@@ -308,6 +309,85 @@ test('a stream that broke before showing anything is re-sent, and one that showe
   // The text the user saw is what the run reports: an interrupted stream is preserved, never re-sent.
   assert.equal(result.text, 'Half an answer');
   assert.equal(result.code, 'timeout');
+});
+
+test('a connection lost mid-answer is re-sent while nothing was shown, and not once text has been', async (t) => {
+  /**
+   * The gap this closes is *where* the break was observed. `fetch` answered and the stream started, so the
+   * transport's own retry could not see the connection die, and the step boundary could not classify the
+   * reader's rejection: it was anonymous, and an anonymous failure is never re-sent. A socket that closes
+   * mid-answer and an endpoint that answers with no stream are the same kind of event, so they now get the same
+   * code — and the same guard, because text the user has already seen is what a retry would show twice.
+   *
+   * The fixture writes real bytes before cutting the connection: the failure has to land in the reader, or this
+   * would only be re-testing the pre-response path that was already named.
+   */
+  const completed = (text: string) => ({
+    type: 'response.completed',
+    response: {
+      status: 'completed',
+      output: [
+        {
+          type: 'message',
+          id: 'msg',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text, annotations: [] }],
+        },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+  });
+  let silentCalls = 0;
+  const silentUrl = await httpFixture(t, (_body, res) => {
+    silentCalls++;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (silentCalls === 1) {
+      // Something on the wire, so the response reaches the caller and the break happens inside the stream.
+      res.write(': keep-alive\n\n');
+      setTimeout(() => res.destroy(), 20);
+      return;
+    }
+    res.end('data: ' + JSON.stringify(completed('Recovered')) + '\n\n');
+  });
+  const silent = await fixture(
+    t,
+    new ResponsesProvider({ apiKey: 'k', model: 'm', baseUrl: silentUrl }),
+    { maxModelRetries: 1 },
+  );
+  const recovered = await silent.agent.run({ sessionId: silent.session.id, prompt: 'Go' });
+  assert.equal(recovered.status, 'completed', recovered.error ?? '');
+  assert.equal(recovered.text, 'Recovered');
+  assert.equal(silentCalls, 2, 'the connection that died before an answer was replaced');
+  assert.deepEqual(
+    silent.retries().map((data) => data.code),
+    ['transport'],
+  );
+
+  let shownCalls = 0;
+  const shownUrl = await httpFixture(t, (_body, res) => {
+    shownCalls++;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(
+      'data: ' +
+        JSON.stringify({ type: 'response.output_text.delta', delta: 'Half an answer' }) +
+        '\n\n',
+    );
+    setTimeout(() => res.destroy(), 20);
+  });
+  const shown = await fixture(
+    t,
+    new ResponsesProvider({ apiKey: 'k', model: 'm', baseUrl: shownUrl }),
+    {
+      maxModelRetries: 2,
+    },
+  );
+  const interrupted = await shown.agent.run({ sessionId: shown.session.id, prompt: 'Go' });
+  assert.equal(shownCalls, 1, 'a turn the user has already seen the start of is never re-sent');
+  assert.deepEqual(shown.retries().length, 0);
+  // The failure is still named, and the visible deltas are what the run reports.
+  assert.equal(interrupted.code, 'transport');
+  assert.equal(interrupted.text, 'Half an answer');
 });
 
 test('a round that streamed only reasoning is still re-sent, and its reasoning is taken back', async (t) => {

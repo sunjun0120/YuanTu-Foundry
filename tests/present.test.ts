@@ -147,6 +147,55 @@ test('the same path listed twice in one call is refused rather than presented tw
   assert.equal(result.isError, true);
   assert.match(result.content, /more than once/);
 });
+test('present rejects canonical aliases atomically', async (t) => {
+  /**
+   * Two spellings of one file — `a.txt` and `./a.txt` — are one deliverable, and the fold in
+   * `protocol/deliverables.ts` keys on the path, so a second entry either duplicates the panel row or quietly
+   * replaces the first. The check therefore runs on the path `verifyFileDelivery` resolved, not on the argument
+   * as written, and it runs before anything is recorded: a call that names one file twice presents nothing.
+   */
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'a.txt'), 'a\n');
+  const tools = createTools(root);
+  t.after(() => tools.close());
+  const written: PresentedFile[][] = [];
+  const result = await tools.execute(
+    call('present', { files: [{ path: 'a.txt', description: 'the file' }, { path: './a.txt' }] }),
+    context({
+      read: () => [],
+      write: (files) => {
+        written.push([...files]);
+      },
+    }),
+  );
+  assert.equal(result.isError, true, result.content);
+  assert.match(result.content, /more than once/);
+  assert.deepEqual(written, [], 'a duplicate must not be declared and only then refused');
+});
+test('a distinct file reached through a normal spelling is still presented', async (t) => {
+  // The alias rule is about identity, not about spelling: two *different* files are still two deliverables.
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'a.txt'), 'a\n');
+  await writeFile(path.join(root, 'b.txt'), 'b\n');
+  const tools = createTools(root);
+  t.after(() => tools.close());
+  const written: PresentedFile[][] = [];
+  const result = await tools.execute(
+    call('present', { files: [{ path: 'a.txt' }, { path: './b.txt' }] }),
+    context({
+      read: () => [],
+      write: (files) => {
+        written.push([...files]);
+      },
+    }),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.deepEqual(
+    written[0]?.map((file) => file.path),
+    ['a.txt', 'b.txt'],
+    'the declared paths are the verified, canonical ones',
+  );
+});
 test('a run with no deliverable seam is told so instead of failing silently', async (t) => {
   const root = await workspace(t);
   await writeFile(path.join(root, 'file.txt'), 'content\n');

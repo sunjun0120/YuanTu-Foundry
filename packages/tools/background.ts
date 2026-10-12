@@ -1,4 +1,4 @@
-import { cleanupSandbox, type SandboxPlan } from './sandbox.ts';
+import { cleanupSandbox, markSandboxStarted, type SandboxPlan } from './sandbox.ts';
 import { localExecutionEnvironment, executionPolicy } from './execution-environment.ts';
 import { resolveSandboxConfig } from './sandbox.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -9,6 +9,8 @@ import type { Tool, ToolContext } from '../protocol/index.ts';
 import { Workspace } from './files.ts';
 import { killTree } from './process.ts';
 import { toolEnvironment } from './environment.ts';
+import { snapshotExecutionPolicy } from './execution-policy.ts';
+import type { ExecutionPolicy } from '../protocol/execution.ts';
 /**
  * How much of a command's output is kept once the process is gone.
  *
@@ -20,6 +22,7 @@ import { toolEnvironment } from './environment.ts';
 const SETTLED_TAIL = 3000;
 interface Job {
   plan: SandboxPlan;
+  policy: ExecutionPolicy;
   id: string;
   scope: string;
   command: string;
@@ -35,6 +38,9 @@ interface Job {
   offset: number;
   done: Promise<void>;
   cleanupFailed: boolean;
+  processClosed?: boolean;
+  cleanup?: Promise<void>;
+  finalStatus?: string;
   inputs: Map<string, { resolve: () => void; reject: (e: Error) => void }>;
   /** Set the first time the outcome is recorded, so a second `close` cannot write it twice. */
   settled?: boolean;
@@ -90,7 +96,7 @@ export class BackgroundCommands {
       id: job.id,
       sessionId: job.scope,
       status: job.status,
-      cleanupConfirmed: !job.cleanupFailed,
+      cleanupConfirmed: !job.cleanupFailed && job.plan.processTree !== 'process-group',
       exitCode: job.exitCode,
       finishedAt: job.finishedAt ?? new Date().toISOString(),
       output: job.output.slice(-SETTLED_TAIL),
@@ -168,7 +174,7 @@ export class BackgroundCommands {
     for (const [id, job] of this.jobs) {
       if (
         (scope === undefined || job.scope === scope) &&
-        !['starting', 'running'].includes(job.status)
+        !['starting', 'running', 'finishing'].includes(job.status)
       ) {
         this.jobs.delete(id);
         cleared++;
@@ -182,7 +188,7 @@ export class BackgroundCommands {
     const config = resolveSandboxConfig();
     const environment = await localExecutionEnvironment(
       this.root,
-      ctx.executionPolicy ?? executionPolicy(config.mode, { image: config.image }),
+      ctx.executionPolicy ?? executionPolicy(config.mode, config),
     );
     const plan = await environment.processes.prepare(
       String(args.command),
@@ -190,13 +196,29 @@ export class BackgroundCommands {
       undefined,
       ctx.signal,
     );
-    ctx.signal.throwIfAborted();
+    /**
+     * The plan is real before the job is, so both refusals below have to hand it back.
+     *
+     * `prepare` can acquire a workspace permission lease and create private scratch. Refusals before
+     * registration must release the original plan immediately.
+     */
+    try {
+      ctx.signal.throwIfAborted();
+    } catch (error) {
+      await cleanupSandbox(plan).catch(() => undefined);
+      throw error;
+    }
     if (
-      [...this.jobs.values()].filter((j) => ['starting', 'running'].includes(j.status)).length >= 8
-    )
+      [...this.jobs.values()].filter((j) => ['starting', 'running', 'finishing'].includes(j.status))
+        .length >= 8
+    ) {
+      await cleanupSandbox(plan).catch(() => undefined);
       throw new Error('Background command limit is 8');
+    }
     while (this.jobs.size >= 32) {
-      const old = [...this.jobs.values()].find((j) => !['starting', 'running'].includes(j.status));
+      const old = [...this.jobs.values()].find(
+        (j) => !['starting', 'running', 'finishing'].includes(j.status),
+      );
       if (!old) break;
       this.jobs.delete(old.id);
     }
@@ -213,6 +235,7 @@ export class BackgroundCommands {
     });
     const job: Job = {
       plan,
+      policy: environment.policy,
       id: randomUUID(),
       scope,
       command: String(args.command),
@@ -255,6 +278,7 @@ export class BackgroundCommands {
         code: number | null;
         stopped: boolean;
         failed: boolean;
+        processClosed: boolean;
         id: string;
         error: boolean;
       };
@@ -273,7 +297,9 @@ export class BackgroundCommands {
         job.offset = job.total - job.output.length;
       }
       if (msg.type === 'exit') {
-        job.status = msg.failed ? 'failed' : msg.stopped ? 'cancelled' : 'completed';
+        job.finalStatus = msg.failed ? 'failed' : msg.stopped ? 'cancelled' : 'completed';
+        job.status = 'finishing';
+        job.processClosed = msg.processClosed === true;
         job.exitCode = msg.code;
         job.finishedAt = new Date().toISOString();
       }
@@ -291,18 +317,24 @@ export class BackgroundCommands {
       ready();
     });
     worker.on('close', () => {
-      if (['starting', 'running'].includes(job.status)) job.status = 'failed';
       job.finishedAt ??= new Date().toISOString();
       for (const pending of job.inputs.values())
         pending.reject(new Error('Command exited before stdin acknowledgement'));
       job.inputs.clear();
-      // The last word on this command, and the one place its outcome can be recorded: the worker is gone, so
-      // the status above is final. Recorded here rather than in the `exit` message because a worker killed
-      // outright never sends one — and "it failed" is exactly the fact that has to survive that.
-      this.settle(job);
       ready();
-      ended();
+      job.status = 'finishing';
+      // A worker's serialized plan does not own permission leases. Only this Host can release them.
+      // If it vanished without confirming termination, preserve resources and report uncertainty.
+      void this.cleanup(job).then(() => {
+        job.status = job.cleanupFailed ? 'failed' : (job.finalStatus ?? 'failed');
+        try {
+          this.settle(job);
+        } finally {
+          ended();
+        }
+      });
     });
+    markSandboxStarted(plan);
     worker.send(
       {
         type: 'start',
@@ -322,6 +354,19 @@ export class BackgroundCommands {
       throw error;
     }
   }
+  private cleanup(job: Job): Promise<void> {
+    return (job.cleanup ??= (async () => {
+      if (!job.processClosed || job.cleanupFailed) {
+        job.cleanupFailed = true;
+        return;
+      }
+      try {
+        await cleanupSandbox(job.plan);
+      } catch {
+        job.cleanupFailed = true;
+      }
+    })());
+  }
   private async stop(job: Job): Promise<void> {
     if (['starting', 'running'].includes(job.status)) {
       if (job.worker.connected) job.worker.send({ type: 'stop' }, () => {});
@@ -331,13 +376,10 @@ export class BackgroundCommands {
         await wait(job.done, 1000);
         job.cleanupFailed = true;
       }
-    } else await wait(job.done, 1000);
-    try {
-      await cleanupSandbox(job.plan);
-    } catch {
-      job.cleanupFailed = true;
-    }
+    } else await wait(job.done, 8000);
+    await this.cleanup(job);
     if (job.cleanupFailed) {
+      this.settle(job);
       const error = new Error('Background command cleanup failed; processes may still be running');
       error.name = 'ToolCleanupError';
       throw error;
@@ -395,6 +437,14 @@ export class BackgroundCommands {
         async (args, ctx) => {
           const job = this.get(String(args.id), scope);
           ctx.signal.throwIfAborted();
+          const config = resolveSandboxConfig();
+          const current = snapshotExecutionPolicy(
+            ctx.executionPolicy ?? executionPolicy(config.mode, config),
+          );
+          if (JSON.stringify(current) !== JSON.stringify(job.policy))
+            throw new Error(
+              'Background command creation policy differs from this call; stop it and start a new command',
+            );
           if (job.status !== 'running' || !job.worker.connected)
             throw new Error('Command is not running');
           const requestId = randomUUID();

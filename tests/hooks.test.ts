@@ -220,6 +220,33 @@ test('hook validation derives from one list, so lifecycle hooks are accepted', (
   );
 });
 
+test('a contribution that failed to install does not poison its key for every later run', () => {
+  /**
+   * The key used to be recorded *before* the contribution ran, which made every failure permanent. The reachable
+   * one is the hook bridge refusing a container sandbox for hooks: after that refusal the key stayed set, so every
+   * later `createTools` for the workspace skipped hook installation silently — the registry outlives each run, so
+   * "later" means the rest of the host's life, with nothing to notice it by.
+   */
+  const registry = new HookRegistry();
+  let attempts = 0;
+  const install = (): (() => void)[] => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('hook sandbox refuses this configuration');
+    return [() => {}];
+  };
+  assert.throws(
+    () => registry.installOnce('hook-bridge:/w', install),
+    /refuses this configuration/,
+  );
+  // The second attempt is the whole point: the key is free again, so a caller that fixed its settings can land
+  // the contribution it was refused before.
+  assert.doesNotThrow(() => registry.installOnce('hook-bridge:/w', install));
+  assert.equal(attempts, 2);
+  // And once it does land it stays once: a third call must not install it again.
+  registry.installOnce('hook-bridge:/w', install);
+  assert.equal(attempts, 2, 'an installed contribution is not installed a second time');
+});
+
 test('prompt hook can refuse a run before any row or provider call exists', async (t) => {
   let calls = 0;
   const hooks = new HookRegistry();
@@ -465,6 +492,68 @@ test('hooks module is named explicitly and must live outside the workspace', asy
   );
   // No module means no hooks, which is the default for every existing caller.
   assert.equal((await loadHookRegistry(undefined, workspace)).size, 0);
+});
+
+test('a workspace path spelled with a dotdot name is still inside the workspace', async (t) => {
+  /**
+   * The rule is "a hooks module must live outside the workspace", and the check that enforced it asked a prefix
+   * question: does the relative path start with `..`? Every path that *leaves* the workspace does start that way,
+   * but so does a directory *inside* it whose name begins with two dots — `..hooks/hooks.mjs` relative to the
+   * workspace is `..hooks/hooks.mjs`, which the check read as "outside" and loaded. A repository that ships a
+   * `..hooks/` directory therefore chose the code this flag runs, which is the exact scenario the rule exists for.
+   *
+   * The escape is `..` exactly, or `..` followed by a separator. The remaining cases are here because the two
+   * edit-easy ways to break this are to over-refuse (a genuine sibling or a parent directory) or to forget that a
+   * path on another drive is absolute and has no relative form at all.
+   */
+  const base = await mkdtemp(path.join(tmpdir(), 'yuantu-hooks-boundary-'));
+  t.after(async () => rm(base, { recursive: true, force: true }));
+  const workspace = path.join(base, 'workspace');
+  const dotted = path.join(workspace, '..hooks');
+  const parentDir = path.join(base, 'shared');
+  await mkdir(workspace, { recursive: true });
+  await mkdir(dotted, { recursive: true });
+  await mkdir(parentDir, { recursive: true });
+  const source = 'export const hooks = { stop: () => undefined };\n';
+  const dottedModule = path.join(dotted, 'hooks.mjs');
+  await writeFile(dottedModule, source);
+
+  await assert.rejects(
+    loadHookRegistry(dottedModule, workspace),
+    /inside the workspace; hooks are trusted code and must live outside it/,
+    'a directory inside the workspace named "..hooks" is inside the workspace',
+  );
+  await assert.rejects(
+    loadHookRegistry(path.join(workspace, '..hooks.mjs'), workspace),
+    /inside the workspace; hooks are trusted code and must live outside it/,
+    'and so is a file whose name begins with two dots',
+  );
+  // The workspace root itself is inside the workspace: it is not an escape, however empty its relative path is.
+  await assert.rejects(
+    loadHookRegistry(workspace, workspace),
+    /inside the workspace; hooks are trusted code and must live outside it/,
+    'the workspace root is the workspace',
+  );
+  // A real parent directory is outside it, and that is what the flag is for.
+  const parentModule = path.join(parentDir, 'hooks.mjs');
+  await writeFile(parentModule, source);
+  assert.equal((await loadHookRegistry(parentModule, workspace)).size, 1);
+  /**
+   * And another drive has no relative path from this one: `path.relative` answers with an absolute path, which is
+   * outside the workspace by definition rather than by prefix. Nothing is loaded from it — the point is *which*
+   * refusal comes back, so the module deliberately does not exist.
+   */
+  const crossDrive = process.platform === 'win32' ? 'Z:\\yuantu\\hooks.mjs' : '/yuantu/hooks.mjs';
+  const failure: unknown = await loadHookRegistry(crossDrive, workspace).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.match(String(failure), /Cannot load hooks module/);
+  assert.doesNotMatch(
+    String(failure),
+    /inside the workspace/,
+    'a path on another drive is outside the workspace',
+  );
 });
 
 test('the CLI accepts a hooks module by flag and by environment', () => {

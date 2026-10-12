@@ -31,6 +31,25 @@ const FILE_MODE = 0o600;
 /** Bounded so a runaway tool cannot fill the disk with one output: the rest is cut and said to be cut. */
 const MAX_SPILL_BYTES = 8_000_000;
 /**
+ * The longest prefix of `content` that fits in `maxBytes` UTF-8 bytes.
+ *
+ * The cap above is stated in bytes, and the cut used to be `content.slice(0, MAX_SPILL_BYTES)`, which counts
+ * UTF-16 code units. For the CJK logs this exists for that is off by a factor of three — 8,000,000 characters
+ * were written as 24,000,000 bytes, so a file the notice calls "8MB" was 24MB on disk — and a cut landing on an
+ * odd code unit leaves half a surrogate pair, which every encoder then has to render as a replacement glyph at
+ * the end of the capture.
+ *
+ * The text is encoded once and the cut is pulled back off any continuation byte (`10xxxxxx`), so the answer is
+ * always a prefix that re-encodes to exactly the bytes it was measured at, and no further than `maxBytes`.
+ */
+function truncateUtf8(content: string, maxBytes: number): string {
+  const bytes = Buffer.from(content, 'utf8');
+  if (bytes.length <= maxBytes) return content;
+  let end = maxBytes;
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+/**
  * How many spilled files one session keeps. Old ones are the least useful — the transcript already told the
  * model where they were and what they said — so the directory is trimmed rather than left to grow.
  */
@@ -58,10 +77,7 @@ export function spillOutput(input: {
 }): SpilledOutput | null {
   const directory = path.join(input.workspace, SPILL_DIRECTORY, input.sessionId);
   const file = path.join(directory, spillName(input.tool));
-  const text =
-    input.content.length > MAX_SPILL_BYTES
-      ? input.content.slice(0, MAX_SPILL_BYTES)
-      : input.content;
+  const text = truncateUtf8(input.content, MAX_SPILL_BYTES);
   mkdirSync(directory, { recursive: true, mode: DIRECTORY_MODE });
   // `wx` rather than `w`: the name carries a timestamp and a UUID, so a file already being there means
   // something else put it there, and clobbering it is not this function's business. The pipeline treats a

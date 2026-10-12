@@ -7,6 +7,7 @@ import { RunFailure, failureCodeOf } from '../packages/protocol/failure.ts';
 import { httpFixture, sendFrames, frames } from './http-fixture.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
+import { readSse } from '../packages/providers/sse.ts';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import type { MessageDelta, SessionSnapshot } from '../packages/client/session-controller.ts';
 import { projectRoot } from './process-fixture.ts';
+import { largePng } from './image-fixture.ts';
 import { createProvider, registerProvider } from '../packages/providers/index.ts';
 import { cacheFields } from '../packages/providers/cache.ts';
 import type { ProviderConfig } from '../packages/providers/config.ts';
@@ -139,6 +141,58 @@ test('adapter assembles fragmented tool JSON and unicode text before returning a
     { id: 'call-1', name: 'read_file', arguments: { path: '你好.ts' } },
   ]);
   assert.deepEqual(result.usage, { inputTokens: 20, outputTokens: 10 });
+});
+test('thinking blocks are reasoning rather than tool calls, beside a real call', async (t) => {
+  /**
+   * With `thinking: {type: 'enabled'}` the API streams `thinking` (and `redacted_thinking`) blocks next to the
+   * answer, and those blocks carry no `id` and no `name`. The assembly step used to read "not text" as "a tool
+   * call", so a thinking block was pushed as `{ id: undefined, name: undefined }` and the run then rejected the
+   * whole response as an invalid tool call — which made extended thinking unusable in the one configuration it
+   * exists for. The blocks are also the reason the `!` assertions below them were unsound.
+   */
+  const url = await httpFixture(t, (_body, res) => {
+    const events = frames('', [{ id: 'call-1', name: 'read_file', input: { path: 'a.ts' } }]);
+    // The two reasoning kinds interleave with the call, which is how a reasoning model emits them.
+    const tail = events.splice(-2);
+    events.push(
+      { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'thinking_delta', thinking: 'weighing the options' },
+      },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'signature_delta', signature: 'sig' },
+      },
+      { type: 'content_block_stop', index: 1 },
+      {
+        type: 'content_block_start',
+        index: 2,
+        content_block: { type: 'redacted_thinking', data: 'opaque' },
+      },
+      { type: 'content_block_stop', index: 2 },
+      ...tail,
+    );
+    sendFrames(res, events);
+  });
+  const provider = new AnthropicProvider({ apiKey: 'test', model: 'fixture-model', baseUrl: url });
+  let reasoning = '';
+  const result = await provider.complete({
+    ...request(),
+    onReasoning: (text) => {
+      reasoning += text;
+    },
+  });
+  assert.equal(reasoning, 'weighing the options', 'the reasoning still travels on its own channel');
+  assert.equal(result.text, '', 'reasoning is not the answer');
+  assert.deepEqual(
+    result.toolCalls,
+    [{ id: 'call-1', name: 'read_file', arguments: { path: 'a.ts' } }],
+    'exactly the tool_use block is a call, with the identity the API gave it',
+  );
+  assert.equal(result.finishReason, 'tool_calls');
 });
 test('adapter serializes matching tool results and user followup into legal content blocks', async (t) => {
   const url = await httpFixture(t, (body, res) => {
@@ -834,9 +888,232 @@ for (const mode of ['missing', 'failed', 'usage', 'incomplete', 'invalid-json'])
     }
   });
 
+/**
+ * An incomplete answer is an answer that stopped early, not one with nothing in it.
+ *
+ * Its terminal event still carries the output the endpoint had produced. A stream cut before it delivered its
+ * deltas — or before it delivered all of them — leaves the only copy of that text in the terminal event, and
+ * returning just the deltas answers with less than the endpoint had already decided on. Tool calls are still
+ * never executed from an incomplete answer, and unfinished reasoning is still not replayed.
+ */
+test('an incomplete answer keeps the text its terminal event carried', async (t) => {
+  const url = await httpFixture(t, (_body, res) => {
+    // No deltas at all: the terminal event is the only record of the partial answer.
+    events(res, [terminal([message], 'incomplete')]);
+  });
+  const provider = new ResponsesProvider({ apiKey: 'fixture', model: 'fixture', baseUrl: url });
+  const seen: string[] = [];
+  const result = await provider.complete({ ...request3(), onText: (delta) => seen.push(delta) });
+  assert.equal(result.finishReason, 'length');
+  assert.deepEqual(result.toolCalls, [], 'an incomplete answer never executes tool calls');
+  assert.equal(
+    result.text,
+    'Hello',
+    'the endpoint had produced this text, so returning none of it is a loss',
+  );
+  assert.deepEqual(seen, ['Hello'], 'the recovered text is announced, not only returned');
+});
+test('an incomplete answer adds only what the stream had not already delivered', async (t) => {
+  const url = await httpFixture(t, (_body, res) => {
+    events(res, [
+      { type: 'response.output_text.delta', delta: 'Hel' },
+      { type: 'response.output_text.delta', delta: 'lo' },
+      terminal([message], 'incomplete'),
+    ]);
+  });
+  const provider = new ResponsesProvider({ apiKey: 'fixture', model: 'fixture', baseUrl: url });
+  const seen: string[] = [];
+  const result = await provider.complete({ ...request3(), onText: (delta) => seen.push(delta) });
+  assert.equal(result.text, 'Hello', 'text that was already streamed is not repeated');
+  assert.deepEqual(seen, ['Hel', 'lo'], 'nothing is re-announced');
+});
+test('an incomplete answer the terminal event contradicts keeps what was streamed', async (t) => {
+  const url = await httpFixture(t, (_body, res) => {
+    events(res, [
+      { type: 'response.output_text.delta', delta: 'streamed' },
+      terminal(
+        [{ ...message, content: [{ type: 'output_text', text: 'different', annotations: [] }] }],
+        'incomplete',
+      ),
+    ]);
+  });
+  const provider = new ResponsesProvider({ apiKey: 'fixture', model: 'fixture', baseUrl: url });
+  const result = await provider.complete(request3());
+  assert.equal(result.text, 'streamed', 'two disagreeing answers are not merged into a third');
+});
+
+test('an sse read that fails before its first frame is a transport failure', async () => {
+  /**
+   * The reader is where a lost connection surfaces: `fetch` has answered and the stream has started, but the
+   * body rejects while it is being read. That rejection used to be anonymous, and the step boundary fail-closes
+   * on a failure it cannot name — so the same broken connection was retryable when it broke before the response
+   * and terminal when it broke inside it.
+   *
+   * Only the *reader* is classified here. A frame that is not JSON and this file's own idle bound are failures
+   * of their own, and folding either into `transport` would make a bad endpoint look like bad weather.
+   */
+  const drain = async (
+    stream: ReadableStream<Uint8Array>,
+    signal: AbortSignal,
+    idleTimeoutMs?: number,
+  ): Promise<unknown> => {
+    try {
+      for await (const _event of readSse(stream, signal, false, idleTimeoutMs)) {
+        // Drained for its failure, not its events.
+      }
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  };
+  const io = new TypeError('terminated');
+  const failed = await drain(
+    new ReadableStream<Uint8Array>({ start: (controller) => controller.error(io) }),
+    new AbortController().signal,
+  );
+  assert.equal(failureCodeOf(failed), 'transport');
+  // The socket error is the only place the detail lives, so it travels as the cause.
+  assert.equal((failed as RunFailure).cause, io);
+
+  const malformed = await drain(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {broken\n\n'));
+        controller.close();
+      },
+    }),
+    new AbortController().signal,
+  );
+  assert.match(String((malformed as Error).message), /Invalid JSON in model stream/);
+  assert.equal(
+    failureCodeOf(malformed),
+    undefined,
+    'an endpoint speaking badly is not a connection failure',
+  );
+
+  const stalled = await drain(
+    new ReadableStream<Uint8Array>({ start() {} }),
+    new AbortController().signal,
+    30,
+  );
+  assert.equal(failureCodeOf(stalled), 'timeout', 'the idle bound keeps the code it raised');
+});
+
+test('responses replay follows the effective request model', async (t) => {
+  /**
+   * A round may be aimed at a model the connection does not name (`request.model`), and the opaque reasoning a
+   * Responses endpoint hands back is *that model's* state: `store: false` plus `encrypted_content` is what makes
+   * a stateless continuation possible at all. So the identity the state is filed under and the identity the
+   * replay is checked against have to be the same one — the effective model, not the configured one. When they
+   * disagreed, a blob from model B was replayed into a request for model A.
+   */
+  const bodies: Record<string, any>[] = [];
+  const reasoning = {
+    id: 'rs',
+    type: 'reasoning',
+    summary: [],
+    encrypted_content: 'opaque-effective',
+  };
+  const fn = {
+    id: 'fc',
+    type: 'function_call',
+    call_id: 'call1',
+    name: 'read_file',
+    arguments: '{"path":"a.txt"}',
+    status: 'completed',
+  };
+  const url = await httpFixture(t, (body, res) => {
+    events(res, [
+      ...(bodies.length === 0
+        ? [
+            { type: 'response.output_text.delta', delta: 'Hel' },
+            { type: 'response.output_text.delta', delta: 'lo' },
+          ]
+        : []),
+      terminal([reasoning, message, fn]),
+    ]);
+    bodies.push(body);
+  });
+  const provider = new ResponsesProvider({ apiKey: 'fixture', model: 'model-a', baseUrl: url });
+  const ask = (override?: string) => ({ ...request3(), ...(override ? { model: override } : {}) });
+  const continueWith = (
+    state: ModelRequest['messages'][number],
+    prompt: string,
+    override?: string,
+  ) => ({
+    ...ask(override),
+    messages: [...request3().messages, state, { role: 'user' as const, content: prompt }],
+  });
+
+  // Round 1 is aimed at model B through the request override, not through the connection's own model.
+  const first = await provider.complete(ask('model-b'));
+  assert.equal(bodies[0]!.model, 'model-b', 'the override is what the wire is asked for');
+  assert.equal(
+    first.providerState?.model,
+    'model-b',
+    'the state is filed under the model that actually served the round',
+  );
+  assert.equal(first.providerState?.endpoint, url + '/v1/responses');
+
+  const answered = {
+    role: 'assistant' as const,
+    content: first.text,
+    toolCalls: first.toolCalls,
+    providerState: first.providerState,
+  };
+
+  // Round 2 goes back to the connection's own model A: B's blob must not travel with it.
+  const second = await provider.complete(continueWith(answered, 'and now as A'));
+  assert.equal(bodies[1]!.model, 'model-a');
+  assert.ok(
+    !JSON.stringify(bodies[1]).includes('opaque-effective'),
+    'a state filed under B is not replayed into a request for A',
+  );
+  assert.equal(second.providerState?.model, 'model-a');
+
+  // Round 3 asks for B again, which is exactly the model the state belongs to.
+  await provider.complete(continueWith(answered, 'and now as B', 'model-b'));
+  assert.equal(bodies[2]!.model, 'model-b');
+  assert.ok(
+    JSON.stringify(bodies[2]).includes('opaque-effective'),
+    'the state is replayed to the model it was filed under',
+  );
+  // Whole items, not a reconstruction: the reasoning blob and the call the model made both continue as they were.
+  assert.deepEqual(bodies[2]!.input.slice(1, 3), [reasoning, message]);
+  assert.deepEqual(bodies[2]!.input[3], fn);
+
+  // Round 4 carries A's own state (round 2's answer) and no override, so an unaimed round still replays.
+  await provider.complete(
+    continueWith({ ...answered, providerState: second.providerState }, 'A again'),
+  );
+  assert.equal(bodies[3]!.model, 'model-a');
+  assert.ok(
+    JSON.stringify(bodies[3]).includes('opaque-effective'),
+    'a request with no override still replays the state its own configured model produced',
+  );
+
+  // The endpoint check is untouched: a state from somewhere else is refused however the model matches.
+  await provider.complete(
+    continueWith(
+      {
+        ...answered,
+        providerState: {
+          ...first.providerState!,
+          endpoint: 'https://other.example/v1/responses',
+        },
+      },
+      'a different endpoint',
+    ),
+  );
+  assert.ok(
+    !JSON.stringify(bodies[4]).includes('opaque-effective'),
+    'a state from another endpoint is not replayed',
+  );
+});
+
 test('Responses encodes images and excludes opaque state from another endpoint or model', async (t) => {
   const png =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5u8AAAAASUVORK5CYII=';
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
   const url = await httpFixture(t, (body, res, _headers, route) => {
     assert.equal(route, '/v1/responses');
     assert.equal(body.input[0].content[1].type, 'input_image');
@@ -932,15 +1209,9 @@ function streamingEvents(): Record<string, unknown>[] {
 const token = (index: number) => `t${index} `;
 const expectedText = Array.from({ length: TOKENS }, (_, i) => token(i)).join('');
 
-/** A real base64 PNG, padded to ~1MB so an attached image dominates a snapshot's size. */
+/** A valid PNG with metadata making an attached image dominate a snapshot's size. */
 function largePngBase64(): string {
-  const png =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
-  const core = png.replace(/=+$/, '');
-  const target = 1_400_000;
-  assert.ok(core.length < target);
-  const padded = core + 'A'.repeat(target - core.length);
-  return padded.slice(0, padded.length - (padded.length % 4));
+  return largePng(1_050_000).toString('base64');
 }
 
 test('streamed tokens arrive as incremental deltas, never as full snapshots', async (t) => {
@@ -1025,7 +1296,7 @@ test('streamed tokens arrive as incremental deltas, never as full snapshots', as
 // ---- merged from openai-images.test.ts ----
 
 const png =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5u8AAAAASUVORK5CYII=';
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const image = { mimeType: 'image/png' as const, data: png, name: 'pixel.png' };
 const request4 = (): ModelRequest => ({
   system: 'test',

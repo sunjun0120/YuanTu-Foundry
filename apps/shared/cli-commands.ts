@@ -99,11 +99,6 @@ export const CLI_MAINTENANCE_COMMANDS: readonly CliCommand[] = [
     runs: false,
   },
 ];
-/** Every word the parser will dispatch, maintenance included. */
-export const CLI_COMMAND_NAMES: readonly string[] = [
-  ...CLI_COMMANDS.map((command) => command.name),
-  ...CLI_MAINTENANCE_COMMANDS.map((command) => command.name),
-];
 /** How many commands a run needs a model for. */
 export const countCliRunCommands = (): number =>
   CLI_COMMANDS.filter((command) => command.runs).length +

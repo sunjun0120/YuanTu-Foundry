@@ -157,22 +157,23 @@ export function subAgentJobProducer(options: {
         );
     },
     output: async (job) => {
+      job.signal?.throwIfAborted();
       const child = resident(job.id, job.scope);
       // Waiting only means something for a child that is still working: a cold child has nothing in flight.
       if (child && job.waitMs > 0 && child.status === 'running') {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, Math.min(job.waitMs, 5000));
-          job.signal?.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(timer);
-              resolve();
-            },
-            { once: true },
-          );
+          const finish = () => {
+            clearTimeout(timer);
+            job.signal?.removeEventListener('abort', finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, Math.min(job.waitMs, 5000));
+          job.signal?.addEventListener('abort', finish, { once: true });
         });
       }
       job.signal?.throwIfAborted();
+      // Cursor validation and every transcript/statistics read must succeed before taking delivery.
+      const snapshot = read(job.id, job.scope, job.cursor);
       /**
        * Reading the transcript *is* taking delivery.
        *
@@ -183,7 +184,7 @@ export function subAgentJobProducer(options: {
        */
       if (resident(job.id, job.scope) ?? durable(job.id, job.scope))
         store.recordEvent(job.scope, 'subagent.collected', { ids: [job.id] });
-      return read(job.id, job.scope, job.cursor);
+      return snapshot;
     },
     kill: async (job) => {
       const child = resident(job.id, job.scope);

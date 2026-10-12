@@ -183,7 +183,17 @@ export async function startRun(
     // process free of background timers whose only purpose is bookkeeping.
     ctx.residency.reapIdle();
     if (!ctx.sessionSandboxes.has(sessionId))
-      ctx.sessionSandboxes.set(sessionId, ctx.defaultSandboxMode);
+      ctx.sessionSandboxes.set(sessionId, wake?.authority.sandboxMode ?? ctx.defaultSandboxMode);
+    if (!ctx.sessionSandboxFiles.has(sessionId))
+      ctx.sessionSandboxFiles.set(
+        sessionId,
+        wake ? (wake.authority.sandboxFiles ?? 'workspace-write') : ctx.defaultSandboxFiles,
+      );
+    if (!ctx.sessionSandboxNetwork.has(sessionId))
+      ctx.sessionSandboxNetwork.set(
+        sessionId,
+        wake ? wake.authority.sandboxNetwork : ctx.defaultSandboxNetwork,
+      );
     const agent = await createAgent(
       ctx.store,
       ctx.workspace,
@@ -206,6 +216,12 @@ export async function startRun(
             ctx.defaultSandboxMode,
           {
             image: ctx.launchSandbox.image,
+            network: wake
+              ? wake.authority.sandboxNetwork
+              : ctx.sessionSandboxNetwork.get(sessionId),
+            files: wake
+              ? (wake.authority.sandboxFiles ?? 'workspace-write')
+              : (ctx.sessionSandboxFiles.get(sessionId) ?? ctx.defaultSandboxFiles),
           },
         ),
       controller.signal,

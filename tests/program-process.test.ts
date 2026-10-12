@@ -144,7 +144,14 @@ test('program disconnect preserves known results and waits for an in-flight tool
   );
 });
 
-test('unsupported program backend refuses without host execution', async (t) => {
+test('unavailable native program backend refuses without host execution', async (t) => {
+  const { sandboxProvider, registerSandboxProvider } = await import('../packages/tools/sandbox.ts');
+  const original = sandboxProvider('seatbelt');
+  registerSandboxProvider({
+    ...original,
+    available: async () => 'Native program runner unavailable',
+  });
+  t.after(() => registerSandboxProvider(original));
   const { tools, context, catalog, root } = await fixture(t);
   const result = await tools.execute(
     {
@@ -154,10 +161,10 @@ test('unsupported program backend refuses without host execution', async (t) => 
         code: "await tools.write_file({path:'escaped.txt',content:'escaped'}); return 'ran';",
       },
     },
-    { ...context, executionPolicy: executionPolicy('docker'), catalog },
+    { ...context, executionPolicy: executionPolicy('seatbelt'), catalog },
   );
   assert.equal(result.isError, true);
-  assert.match(result.content, /does not support the program runner/);
+  assert.match(result.content, /Native program runner unavailable/);
   await assert.rejects(readFile(path.join(root, 'escaped.txt')), /ENOENT/);
 });
 
@@ -334,37 +341,6 @@ test('a disconnected workflow waits for its child and refuses automatic continua
     (error) => error instanceof Error && error.name === 'ToolCleanupError',
   );
   assert.equal(cleaned, true);
-});
-
-test('PTC with an unsupported backend refuses before spending a model round', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-program-unsupported-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  const tools = createTools(root);
-  tools.toolMode = 'ptc';
-  t.after(async () => {
-    store.close();
-    await tools.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
-  let requests = 0;
-  const agent = new Agent({
-    store,
-    tools,
-    approve: async () => true,
-    executionPolicy: () => executionPolicy('docker'),
-    provider: {
-      async complete() {
-        requests++;
-        throw new Error('No model call should occur');
-      },
-    },
-  });
-  const result = await agent.run({ sessionId: session.id, prompt: 'Read' });
-  assert.equal(result.status, 'failed');
-  assert.equal(result.code, 'unsupported');
-  assert.match(result.error ?? '', /select native tool mode/);
-  assert.equal(requests, 0);
 });
 
 test('a tool wrapper cannot replace the program workspace identity', async (t) => {

@@ -327,6 +327,100 @@ test('every call still walks the whole pipeline, and every stage trace is comple
   assert.deepEqual(finishedIds, ['a', 'b']);
 });
 
+test('overlapping calls contribute the wall clock union of their spans', async (t) => {
+  /**
+   * A guard, not the failure: it passed before the fix too, and that is a property of the emit order rather than a
+   * sign the accounting was right.
+   *
+   * The statistic answers "how long did this run wait on tools", so two calls that overlap cost the *union* of
+   * their spans: 30 ms and 60 ms at the same time is 60 ms of waiting, not 90. Until the accounting tracked calls
+   * by identity it was a single scalar — the time the last `tool.started` arrived — which is exactly why this run
+   * cannot show the defect: the loop announces the whole group's starts up front and emits every finish of the
+   * group together once the group resolves, so the first finish *is* the last one here and the scalar happened to
+   * land on the union. What this test still holds is that the union is what a run reports: not the sum of two
+   * spans, and not the short call's span with the long one dropped.
+   */
+  let round = 0;
+  const provider: Provider = {
+    async complete() {
+      round++;
+      if (round === 1) return calls(['short', 'read_one', 30], ['long', 'read_two', 60]);
+      return reply();
+    },
+  };
+  const { agent, session, timeline } = await fixture(t, provider);
+  const result = await agent.run({ sessionId: session.id, prompt: 'Read two things at once' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(timeline.peak, 2, 'the fixture has to overlap for this to say anything');
+  assert.ok(
+    result.statistics!.toolMs >= 55,
+    `the union of a 30 ms and a 60 ms call is about 60 ms, saw ${result.statistics!.toolMs}`,
+  );
+  assert.ok(
+    result.statistics!.toolMs < 150,
+    `and it is not the sum of the two spans, saw ${result.statistics!.toolMs}`,
+  );
+});
+
+test('calls that do not overlap still add up, one span each', async (t) => {
+  // The other half of the union, and a guard besides: two 30 ms calls that never run at the same time are 60 ms of
+  // waiting, and the fix must not turn the overlap rule into "the longest call wins".
+  let round = 0;
+  const provider: Provider = {
+    async complete() {
+      round++;
+      if (round === 1) return calls(['a', 'read_one', 30], ['b', 'read_two', 30]);
+      return reply();
+    },
+  };
+  const { agent, session, timeline } = await fixture(t, provider, { maxParallelToolCalls: 1 });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Read one after the other' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(timeline.peak, 1, 'the cap serialized them');
+  assert.ok(
+    result.statistics!.toolMs >= 55,
+    `two 30 ms spans back to back are about 60 ms, saw ${result.statistics!.toolMs}`,
+  );
+  assert.ok(result.statistics!.toolMs < 150, 'and neither of them was counted twice');
+});
+
+test('a cancelled run charges the tool span it was still waiting on, exactly once', async (t) => {
+  /**
+   * A cancelled call never produces a `tool.finished`, so the span it opened is settled by the run's own
+   * teardown. That settlement has two ways to be wrong and both are asserted here: charging nothing (the wall
+   * time a person spent waiting disappears) and charging twice (the run's total grows by a span that was already
+   * closed, which is how a summary of runs stops adding up). Like the union test above this is a guard — the
+   * scalar settled the one open call here too — and it is kept because the settled span is the part of the
+   * accounting a run can still get wrong after the union rule is in place.
+   */
+  let round = 0;
+  const provider: Provider = {
+    async complete() {
+      round++;
+      if (round === 1) return calls(['stuck', 'read_two', 5_000]);
+      return reply();
+    },
+  };
+  const { agent, session } = await fixture(t, provider);
+  const controller = new AbortController();
+  const cancelledAt = setTimeout(() => controller.abort(), 100);
+  t.after(() => clearTimeout(cancelledAt));
+  const result = await agent.run({
+    sessionId: session.id,
+    prompt: 'One stuck call',
+    signal: controller.signal,
+  });
+  assert.equal(result.status, 'cancelled');
+  assert.ok(
+    result.statistics!.toolMs >= 80,
+    `the span the run was waiting on is charged, saw ${result.statistics!.toolMs}`,
+  );
+  assert.ok(
+    result.statistics!.toolMs < 1_000,
+    `and only once: a 5 s tool cancelled after 100 ms is not 5 s, saw ${result.statistics!.toolMs}`,
+  );
+});
+
 test('a tool that declares nothing never overlaps its own siblings', async (t) => {
   let round = 0;
   const provider: Provider = {

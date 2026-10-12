@@ -252,6 +252,82 @@ test('a database written before the log existed is backfilled on open', async (t
   assert.equal(again.events('old').length, count, 'the backfill does not run twice');
 });
 
+test('a damaged row is skipped rather than bricking every session in the database', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-log-damaged-'));
+  const file = path.join(root, 'sessions.sqlite');
+  /**
+   * The failure this guards against is not "one message is lost" but "the database never opens again".
+   *
+   * The upgrade is a single transaction that stamps `PRAGMA user_version` at its end, so a row that throws
+   * while being backfilled rolls the version back with it: every later open re-runs the same migration and
+   * fails the same way, for *every* session in the file rather than only the damaged one. A write that was cut
+   * short is exactly how a body like this arrives, so the row is skipped and the rest of the upgrade lands.
+   */
+  const legacy = new DatabaseSync(file);
+  const now = new Date().toISOString();
+  legacy.exec(`
+    CREATE TABLE sessions(id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at TEXT NOT NULL, active_run TEXT);
+    CREATE TABLE messages(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, body TEXT NOT NULL, search_text TEXT NOT NULL DEFAULT '');
+    CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_pid INTEGER NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL, result TEXT);
+    PRAGMA user_version=13;
+  `);
+  legacy
+    .prepare('INSERT INTO sessions(id,workspace,created_at) VALUES(?,?,?)')
+    .run('old', root, now);
+  const insert = legacy.prepare('INSERT INTO messages(session_id,body,search_text) VALUES(?,?,?)');
+  const history: Message[] = [
+    { role: 'user', content: 'legacy question' },
+    { role: 'assistant', content: 'legacy answer', toolCalls: [] },
+  ];
+  insert.run('old', JSON.stringify(history[0]), '');
+  insert.run('old', '{"role":"assistant","content":', '');
+  insert.run('old', JSON.stringify(history[1]), '');
+  legacy
+    .prepare(
+      'INSERT INTO runs(id,session_id,owner_pid,status,started_at,result) VALUES(?,?,?,?,?,?)',
+    )
+    .run('run-1', 'old', process.pid, 'completed', now, '{"usage":');
+  legacy.close();
+  const read = <T>(sql: string, ...params: (string | number)[]): T | undefined => {
+    const db = new DatabaseSync(file);
+    try {
+      return db.prepare(sql).get(...params) as T | undefined;
+    } finally {
+      db.close();
+    }
+  };
+
+  const store = new SessionStore(file);
+  const opened: SessionStore[] = [store];
+  t.after(async () => {
+    for (const handle of opened) handle.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  assert.deepEqual(
+    store.messages('old'),
+    history,
+    'the readable messages are still the transcript',
+  );
+  assert.deepEqual(
+    eventTypes(store, 'old'),
+    ['message.user', 'message.assistant', 'run.started', 'run.finished'],
+    'the run still closes: a status column is not part of the result that could not be read',
+  );
+  assert.equal(
+    Number(read<{ user_version: number }>('PRAGMA user_version')?.user_version),
+    SCHEMA_VERSION,
+    'the version advances, which is what stops the next open from re-running the upgrade',
+  );
+  assert.equal(
+    Number(read<{ n: number }>('SELECT count(*) AS n FROM messages WHERE session_id=?', 'old')?.n),
+    3,
+    'the damaged row is left where it was, so a later repair can still find it',
+  );
+  const again = new SessionStore(file);
+  opened.push(again);
+  assert.deepEqual(again.messages('old'), history, 'the second open is not another migration');
+});
+
 test('settling an interrupted run records the uncertainty inside the same log', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-log-interrupted-'));
   const file = path.join(root, 'sessions.sqlite');

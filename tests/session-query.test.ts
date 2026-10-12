@@ -340,6 +340,47 @@ test('a read can be narrowed by event type, and an unknown type is refused', asy
   assert.match(unknown.content, /Known types: /);
 });
 
+test('a filtered page says more remain when the log continues past what it skipped', async (t) => {
+  const { store, session, tools, context } = await fixture(t);
+  store.recordEvent(session.id, 'message.user', {
+    message: { role: 'user', content: 'first kept' },
+  });
+  // Unrelated types fill more than one raw page, so the store's next `limit + 1` events are not the next matches.
+  for (let step = 0; step < 4; step += 1)
+    store.recordEvent(session.id, 'step.finished', { step, reason: 'tool' });
+  store.recordEvent(session.id, 'message.user', {
+    message: { role: 'user', content: 'second kept' },
+  });
+  const read = toolNamed(tools, READ_SESSION_EVENTS);
+  const first = await read.execute!(
+    { sessionId: session.id, types: ['message.user'], limit: 1 },
+    context,
+  );
+  assert.equal(first.isError, false);
+  assert.match(first.content, /first kept/);
+  assert.ok(!first.content.includes('second kept'), 'one match fits the page');
+  assert.ok(
+    !first.content.includes('that is the end of the log'),
+    'the log continues, so the page must not announce its end',
+  );
+  assert.match(first.content, /more remain/);
+  assert.match(
+    first.content,
+    /types: \["message\.user"\]/,
+    'the cursor keeps the filter it was read with',
+  );
+  const cursor = Number(/afterSeq: (\d+)/.exec(first.content)![1]);
+  const second = await read.execute!(
+    { sessionId: session.id, types: ['message.user'], afterSeq: cursor },
+    context,
+  );
+  assert.match(
+    second.content,
+    /second kept/,
+    'continuing from the cursor reaches the skipped match',
+  );
+});
+
 test('a session from another workspace is refused by name, and an unknown one is an error', async (t) => {
   const { root, store, tools, context } = await fixture(t);
   const elsewhere = record(store, path.join(root, 'other-workspace'), 'not mine', ['secret']);
@@ -446,6 +487,38 @@ test('trace_session outlines each run: rounds, tools, failures and how it ended'
   assert.match(trace.content, /failure code: PROVIDER_ERROR/);
   assert.match(trace.content, /run r2 — 0 round\(s\), 0 tool call\(s\), still open or cut off/);
   assert.match(trace.content, /error: provider refused/);
+});
+test('a trace failure announces a cut only when the excerpt itself was cut', async (t) => {
+  const { store, session, tools, context } = await fixture(t);
+  store.recordEvent(session.id, 'run.started', { runId: 'r1' });
+  const recorded = [
+    { id: 'c1', name: 'read_file', content: 'E'.repeat(300) },
+    // A long tool name used to push the composed line past the limit on its own, with nothing cut at all.
+    { id: 'c2', name: 'x'.repeat(300), content: 'boom' },
+    { id: 'c3', name: 'read_file', content: 'F'.repeat(301) },
+  ];
+  for (const failure of recorded) {
+    store.recordEvent(session.id, 'message.assistant', {
+      message: {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: failure.id, name: failure.name, arguments: {} }],
+      },
+    });
+    store.recordEvent(session.id, 'message.tool', {
+      message: { role: 'tool', toolCallId: failure.id, content: failure.content, isError: true },
+    });
+  }
+  const trace = await toolNamed(tools, TRACE_SESSION).execute!({}, context);
+  assert.equal(trace.isError, false);
+  const lines = trace.content.split('\n').filter((line) => line.startsWith('  failed: '));
+  assert.equal(lines.length, 3);
+  assert.ok(!lines[0]!.endsWith('…'), 'an excerpt of exactly the limit was not cut');
+  assert.ok(
+    !lines[1]!.endsWith('…'),
+    'a short excerpt is not cut by the tool name printed above it',
+  );
+  assert.ok(lines[2]!.endsWith('…'), 'an excerpt past the limit announces its cut');
 });
 test('trace_session keeps the newest runs when a session has more than the limit', async (t) => {
   const { store, session, tools, context } = await fixture(t);

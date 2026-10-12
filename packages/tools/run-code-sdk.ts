@@ -14,7 +14,7 @@ export const BASE_DESCRIPTION = [
   'permission-checked and, where the tool requires it, approved exactly as if you had asked for it directly — and',
   'a call that fails throws, so catch the failures you expect. The injected API is tools and console; the',
   'program runs in a separate Node process under the selected backend, not a complete malicious-code sandbox.',
-  'Only host and Windows program backends are supported; docker/sbx refuses without host fallback.',
+  'Programs use the selected native operating-system sandbox or explicit host backend; unavailable policies refuse without host fallback.',
   'It cannot call run_code again, and cannot see pictures a tool returns (call that tool',
   'directly for those). Console output is returned with the answer, and a failure reports the calls that were',
   'made. Prefer a program for mechanical multi-step work — read several files, filter, aggregate, compare — and',

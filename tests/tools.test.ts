@@ -3,12 +3,25 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createTools } from '../packages/tools/index.ts';
 import { toolEnvironment, workerExecArgv } from '../packages/tools/environment.ts';
+import { projectRoot } from './process-fixture.ts';
 
 const execFileAsync = promisify(execFile);
+
+/** Run the body with the host execution mode in force, restoring whatever the environment had. */
+async function inHostMode<T>(body: () => Promise<T>): Promise<T> {
+  const previous = process.env.YUANTU_SANDBOX;
+  process.env.YUANTU_SANDBOX = 'host';
+  try {
+    return await body();
+  } finally {
+    if (previous === undefined) delete process.env.YUANTU_SANDBOX;
+    else process.env.YUANTU_SANDBOX = previous;
+  }
+}
 
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tools-'));
@@ -471,6 +484,55 @@ for (const testScript of ['node --test tests/*.test.mjs', 'node scripts/run-test
   });
 }
 
+test('a test name containing a hash survives the failed-case rerun', async (t) => {
+  /**
+   * `node:test` writes `\#` for a `#` in a TAP test name, and the escaped spelling used to be handed to the
+   * model as though it were the name. The pattern built from it matched no test at all, so the rerun selected
+   * nothing, exited 0 and reported a pass — a fabricated pass in the one loop this tool exists to supply
+   * evidence for. The marker file is what tells the two outcomes apart: the counts and the exit code are
+   * identical whether the test ran and passed or never ran at all.
+   */
+  const { root, tools } = await fixture(t);
+  await mkdir(path.join(root, 'tests'));
+  await writeFile(
+    path.join(root, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node --test tests/*.test.mjs' } }),
+  );
+  const file = path.join(root, 'tests', 'hash.test.mjs');
+  const body = (outcome: string) =>
+    "import test from 'node:test'; import { writeFileSync } from 'node:fs';\n" +
+    `test('issue #42 is fixed', () => { ${outcome} });\n`;
+  await writeFile(file, body("throw new Error('not yet');"));
+  const first = await tools.execute(
+    call('run_validation', { id: 'npm:test', files: ['tests/hash.test.mjs'] }),
+    ctx(),
+  );
+  assert.equal(first.isError, true);
+  const firstResult = JSON.parse(first.content);
+  assert.equal(firstResult.counts.fail, 1);
+  assert.deepEqual(
+    firstResult.failedTests,
+    ['issue #42 is fixed'],
+    "the name offered back is the test's name, not the reporter's escaping of it",
+  );
+
+  await writeFile(file, body("writeFileSync('fixed.marker', 'ran');"));
+  const retried = await tools.execute(
+    call('run_validation', {
+      id: 'npm:test',
+      files: ['tests/hash.test.mjs'],
+      failed_test_names: firstResult.failedTests,
+    }),
+    ctx(),
+  );
+  assert.equal(retried.isError, false, retried.content);
+  assert.equal(
+    await readFile(path.join(root, 'fixed.marker'), 'utf8'),
+    'ran',
+    'the named test really ran: exit 0 alone would also mean the pattern matched nothing',
+  );
+});
+
 test('targeted validation shows a sandbox-local Node command before approval', async (t) => {
   const { root, tools } = await fixture(t);
   await mkdir(path.join(root, 'tests'));
@@ -483,7 +545,7 @@ test('targeted validation shows a sandbox-local Node command before approval', a
     "import test from 'node:test'; test('ok', () => {});",
   );
   const previous = process.env.YUANTU_SANDBOX;
-  process.env.YUANTU_SANDBOX = 'docker';
+  process.env.YUANTU_SANDBOX = 'seatbelt';
   try {
     let description = '';
     const result = await tools.execute(
@@ -517,6 +579,89 @@ test('validation keeps structured evidence parseable when output is long', async
   assert.equal(evidence.exitCode, 0);
   assert.equal(evidence.outputTruncated, true);
   assert.ok(evidence.output.length < 24000);
+});
+
+test('validation metadata overflow rejects through the tool promise', async (t) => {
+  /**
+   * Evidence that cannot be serialised must come back *through* the promise the caller is awaiting. It used to be
+   * thrown inside a detached `void (async () => ...)()` in the child's close callback, so the caller's promise
+   * never settled and the only trace was an unhandled rejection that killed the process — the tool call appeared
+   * to hang while the failure had already happened.
+   *
+   * The probe runs in its own process because an unhandled rejection must not be carried by the main suite, and it
+   * reports through a marker file because a process killed by that rejection still has to leave evidence.
+   */
+  const { root } = await fixture(t);
+  await inHostMode(async () => {
+    const marker = path.join(root, 'overflow.marker');
+    const child = spawn(
+      process.execPath,
+      [path.join(projectRoot, 'tests/validation-error-worker.ts'), marker],
+      { cwd: projectRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const timer = setTimeout(() => child.kill(), 30_000);
+    const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+    clearTimeout(timer);
+    const outcome = await readFile(marker, 'utf8').catch(() => '(no marker)');
+    assert.equal(code, 0, `probe exited ${code} with ${outcome}: ${stderr}`);
+    assert.equal(outcome, 'caught=true', `probe wrote ${outcome}; stdout: ${stdout}`);
+    assert.doesNotMatch(stderr, /unhandled/i);
+    assert.match(stdout, /probe finished/);
+  });
+});
+
+test('a targeted validation stays parseable and a cancellation keeps its reason', async (t) => {
+  const { root, tools } = await fixture(t);
+  await inHostMode(async () => {
+    await mkdir(path.join(root, 'tests'));
+    await writeFile(
+      path.join(root, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node --test tests/*.test.mjs' } }),
+    );
+    await writeFile(
+      path.join(root, 'tests', 'ok.test.mjs'),
+      "import test from 'node:test';\ntest('ok', () => {});\n",
+    );
+    const result = await tools.execute(
+      call('run_validation', { id: 'npm:test', files: ['tests/ok.test.mjs'] }),
+      ctx(),
+    );
+    assert.equal(result.isError, false, result.content);
+    const evidence = JSON.parse(result.content);
+    assert.equal(evidence.exitCode, 0);
+    assert.equal(evidence.counts.pass, 1);
+
+    await writeFile(
+      path.join(root, 'tests', 'slow.test.mjs'),
+      "import test from 'node:test';\ntest('slow', async () => { await new Promise((resolve) => setTimeout(resolve, 3000)); });\n",
+    );
+    const controller = new AbortController();
+    const reason = new Error('the user stopped the run');
+    const timer = setTimeout(() => controller.abort(reason), 150);
+    t.after(() => clearTimeout(timer));
+    await assert.rejects(
+      tools.execute(call('run_validation', { id: 'npm:test', files: ['tests/slow.test.mjs'] }), {
+        ...ctx(),
+        signal: controller.signal,
+      }),
+      (error: unknown) => {
+        assert.equal(
+          error,
+          reason,
+          'the caller sees its own cancellation reason, not a wrapped one',
+        );
+        return true;
+      },
+    );
+  });
 });
 
 test('targeted validation refuses escaping and unsupported test files before approval', async (t) => {

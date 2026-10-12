@@ -1746,9 +1746,31 @@ export class SessionStore implements PlanRepository {
         )
         .all(workspace ?? null, workspace ?? null)
         .filter((row) => deadOwner(row.ownerPid));
-      for (const row of rows)
-        this.settleAbandonedRun(String(row.sessionId), String(row.runId), RUN_INTERRUPTED_REASON);
-      return rows.length;
+      /** How many were actually converged: a session that threw above is not one of them. */
+      let converged = 0;
+      for (const row of rows) {
+        /**
+         * One session at a time, and one failure at a time.
+         *
+         * `settleAbandonedRun` is not read-only housekeeping: it answers the run's unresolved tool calls and
+         * parses the session's event log, so a session this build cannot fold — a blob that is gone, an event
+         * type it refuses by design — throws from inside here. Letting that escape did two things at once: it
+         * rolled back the convergence already performed for the *other* sessions, and it propagated to the
+         * caller, which is Host startup. One unreadable conversation therefore left every session in the
+         * workspace unusable and stopped the Host from opening at all. The session that cannot be converged is
+         * named and skipped, and the rest still become deletable, renameable and continuable.
+         */
+        try {
+          this.settleAbandonedRun(String(row.sessionId), String(row.runId), RUN_INTERRUPTED_REASON);
+          converged += 1;
+        } catch (error) {
+          console.error(
+            `[session log] could not converge interrupted run ${String(row.runId)} in session ` +
+              `${String(row.sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return converged;
     });
   }
   /** Save a bounded-frequency recovery point while a provider is streaming visible text. */

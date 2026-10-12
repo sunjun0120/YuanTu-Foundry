@@ -493,7 +493,7 @@ export class ToolRegistry {
     const fixed = snapshotExecutionPolicy(
       context.executionPolicyForCall?.() ??
         context.executionPolicy ??
-        executionPolicy(config.mode, { image: config.image }),
+        executionPolicy(config.mode, config),
     );
     return withExecutionPolicy(fixed, () =>
       this.executeScoped(call, {

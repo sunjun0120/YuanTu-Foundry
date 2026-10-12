@@ -3,3 +3,4 @@ dist/
 artifacts/
 package-lock.json
 .yuantu/
+packages/tools/windows-sandbox/appcontainer/target/

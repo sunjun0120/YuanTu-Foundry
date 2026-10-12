@@ -1,4 +1,5 @@
 import { createChildTurns } from './run-child-turns.ts';
+import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
 import { goalNoticeText, taskDefinitionText, skillsCatalogue } from './agent-notices.ts';
 import { createRunPromptSections } from './run-prompt.ts';
 import { admitVisibleBackground } from './background-deliveries.ts';
@@ -63,7 +64,7 @@ import { estimateMessageTokens } from './budget.ts';
 import { TokenCalibration, calibrationRoute } from './calibration.ts';
 import { emptyStatistics, emptyRequestTiming, addUsage } from '../protocol/statistics.ts';
 import { RunQueue, queuedInput, type InputMode, type QueuedInput } from './run-queue.ts';
-import { createRunEmit, type RunEmission } from './run-emit.ts';
+import { createRunEmit, settleOpenToolSpans, type RunEmission } from './run-emit.ts';
 import { createRunInteraction } from './run-interaction.ts';
 import { createProviderMeasurement } from './run-provider.ts';
 import { createSubAgentProviders } from './run-subagents.ts';
@@ -522,9 +523,11 @@ export class Agent {
     // Prompt hooks run before the run row is opened, so a refused prompt leaves no run or attempt
     // behind. A hook that itself fails stops the run: these hooks exist to police or shape the
     // request, and silently continuing would drop that enforcement.
-    const submitted = await tools.extensions.promptSubmit(
-      { sessionId: input.sessionId, prompt: input.prompt, readOnly },
-      signal,
+    const submitted = await underExecutionPolicy(executionPolicy, () =>
+      tools.extensions.promptSubmit(
+        { sessionId: input.sessionId, prompt: input.prompt, readOnly },
+        signal,
+      ),
     );
     if (submitted.failures.length)
       throw new Error(
@@ -793,14 +796,16 @@ export class Agent {
      * One emitter for the run: identity, timing, activity and the child-stall signal, in one place.
      *
      * The counters it shares with this loop are grouped here so the module that owns the emission rule can
-     * read and write *this run's* numbers without owning them: `toolStarted` is opened and closed by the
-     * emitter's tool frames while the loop reads the same slot to charge a tool that was still running when
-     * the run ended, `statistics` is folded by both, and the child token map is the stall watchdog's memory.
+     * read and write *this run's* numbers without owning them: `toolCalls` is opened and closed by the emitter's
+     * tool frames while the loop settles whatever was still open when the run ended, `statistics` is folded by
+     * both, and the child token map is the stall watchdog's memory.
      */
     const emission: RunEmission = {
       statistics,
       emittedTypes,
-      toolStarted: undefined,
+      toolCalls: new Map<string, number>(),
+      toolSpanStarted: undefined,
+      toolActivityStartedAt: undefined,
       childOutputTokens,
       coordinator: undefined,
     };
@@ -965,8 +970,10 @@ export class Agent {
             data = { ...data, durationMs: timing.settledMs, runningSince: timing.runningSince };
           }
         }
-        emit(type, data);
-        if (type !== 'subagent.finished') return;
+        if (type !== 'subagent.finished') {
+          emit(type, data);
+          return;
+        }
         store.recordEvent(input.sessionId, 'subagent.finished', {
           runId,
           childRunId: data.sessionId
@@ -984,6 +991,7 @@ export class Agent {
           ...(data.report ? { report: data.report } : {}),
           ...(data.error ? { error: redactSecrets(String(data.error)).slice(0, 600) } : {}),
         });
+        emit(type, data);
       };
       /**
        * Everything a child needs to run turns on a session that already exists.
@@ -1293,15 +1301,6 @@ export class Agent {
          */
         catalog: tools.specs({ readOnly, ...(policy ? { policy } : {}), mode: 'native' }),
       });
-      if (
-        tools.toolMode === 'ptc' &&
-        executionPolicy &&
-        (executionPolicy.mode === 'docker' || executionPolicy.mode === 'sbx')
-      )
-        throw new RunFailure(
-          'unsupported',
-          'PTC programs do not support this backend yet; select native tool mode. No host fallback is allowed.',
-        );
       let { specs, catalog: catalogSpecs } = buildCatalog();
       const expanded = expandSkill(store.get(input.sessionId).workspace, input.prompt);
       store.append(input.sessionId, {
@@ -1645,8 +1644,27 @@ export class Agent {
               usage.cacheWriteInputTokens =
                 (usage.cacheWriteInputTokens ?? 0) + response.usage.cacheWriteInputTokens;
           },
-          onCompaction: (state, coveredMessages, summaryUsage) => {
+          onCompaction: (state, coveredMessages, summaryUsage, reason) => {
             if (state === 'finished' && summaryUsage) addUsage(committedSummaryUsage, summaryUsage);
+            /**
+             * A failed compression is announced as one, and never as a completed one.
+             *
+             * The two states were the whole vocabulary, so a compression that could not be performed had to be
+             * reported as either "started" forever or "compacted" — and the run only reaches here after deciding
+             * what to do about it, which is why the news is live rather than durable: the session log records
+             * compressions that happened, and this one did not. `context.compacted` must not be emitted for it
+             * either: a reader that treats it as "the conversation was replaced" would be told a surface exists
+             * that the store does not have. `summaryUsage` is deliberately not committed: tokens a failed
+             * attempt spent are real, but they bought no summary, and `committedSummaryUsage` is what the
+             * session's aggregates claim was *stored*.
+             */
+            if (state === 'failed') {
+              emit('context.compaction.failed', {
+                ...(coveredMessages === undefined ? {} : { coveredMessages }),
+                ...(reason === undefined ? {} : { reason }),
+              });
+              return;
+            }
             emit(state === 'started' ? 'context.compacting' : 'context.compacted', {
               coveredMessages,
             });
@@ -2755,13 +2773,12 @@ export class Agent {
       }
       error = redactSecrets(error);
     } finally {
-      // A tool still running when the run ends is charged here: the emitter opens `toolStarted` on
-      // `tool.started` and closes it on `tool.finished`, and a run that is cancelled or that throws never sees the
-      // finish — so without this the wall time a person spent waiting on that tool would vanish from the totals.
-      if (emission.toolStarted !== undefined) {
-        statistics.toolMs += performance.now() - emission.toolStarted;
-        emission.toolStarted = undefined;
-      }
+      // A tool still running when the run ends is charged here: the emitter opens a span on the first
+      // `tool.started` and closes it when the last `tool.finished` arrives, and a run that is cancelled or that
+      // throws never sees that finish — so without this the wall time a person spent waiting on those tools
+      // would vanish from the totals. The settlement takes whatever is open and closes it once, so a second call
+      // adds nothing.
+      settleOpenToolSpans(emission);
       // A background sub-agent must not outlive the run that started it: this run's row is about to be
       // finalised (so its usage could no longer be attributed) and the tool registry it borrowed is
       // about to be closed. Cancel first, then await, so the guarantee does not depend on timing.
@@ -2835,16 +2852,18 @@ export class Agent {
       // Stop hooks observe the finished run and can only annotate it. The effects already happened
       // and the result is about to be persisted, so a reason here is reported, never a veto.
       try {
-        const stopped = await tools.extensions.stop(
-          {
-            sessionId: input.sessionId,
-            runId,
-            status,
-            text,
-            readOnly,
-            ...(error ? { error } : {}),
-          },
-          signal,
+        const stopped = await underExecutionPolicy(this.options.executionPolicy?.(), () =>
+          tools.extensions.stop(
+            {
+              sessionId: input.sessionId,
+              runId,
+              status,
+              text,
+              readOnly,
+              ...(error ? { error } : {}),
+            },
+            signal,
+          ),
         );
         const notices = [
           ...stopped.reasons,

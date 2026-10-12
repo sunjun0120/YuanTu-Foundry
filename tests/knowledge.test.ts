@@ -1,9 +1,12 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, writeFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { KnowledgeStore } from '../packages/knowledge/store.ts';
+import { writeFileSync } from 'node:fs';
+import { riskWorker } from './risk-concurrency.ts';
 import { knowledgeTools } from '../packages/knowledge/tools.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { memoryContext } from '../packages/knowledge/context.ts';
@@ -21,6 +24,83 @@ import {
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { Message, ModelRequest } from '../packages/protocol/index.ts';
+
+test('concurrent pins competing for the last document slot preserve the quota and whole indexes', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-knowledge-quota-race-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'knowledge.sqlite');
+  const store = new KnowledgeStore(file);
+  try {
+    for (let i = 0; i < 65; i++) {
+      await writeFile(path.join(root, `doc-${i}.md`), `document marker${i}`);
+      if (i < 63) store.pinDocument(root, `doc-${i}.md`);
+    }
+  } finally {
+    store.close();
+  }
+  const first = riskWorker('knowledge', file, root, 'doc-63.md', path.join(root, 'first'));
+  let second: ReturnType<typeof riskWorker> | undefined;
+  try {
+    await first.ready();
+    second = riskWorker('knowledge', file, root, 'doc-64.md', path.join(root, 'second'));
+    await second.ready();
+    await first.release();
+    assert.deepEqual(await first.result, { ok: true });
+    await second.release();
+    const rejected = await second.result;
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error ?? '', /64/);
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      assert.equal(db.prepare('SELECT count(*) AS n FROM knowledge_documents').get()?.n, 64);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM knowledge_items').get()?.n, 64);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM knowledge_fts').get()?.n, 64);
+      assert.equal(
+        db.prepare('SELECT count(*) AS n FROM knowledge_documents WHERE path=?').get('doc-64.md')
+          ?.n,
+        0,
+      );
+      assert.equal(db.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await Promise.all([first.stop(), second?.stop()]);
+  }
+});
+
+test('a file rewrite between reading and committing is refreshed as a complete snapshot', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-knowledge-refresh-race-'));
+  const file = path.join(root, 'knowledge.sqlite');
+  const document = path.join(root, 'selected.md');
+  await writeFile(document, 'oldsnapshot');
+  const store = new KnowledgeStore(file);
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const exec = DatabaseSync.prototype.exec;
+  let rewritten = false;
+  t.mock.method(DatabaseSync.prototype, 'exec', function (this: DatabaseSync, sql: string) {
+    if (sql === 'BEGIN IMMEDIATE' && !rewritten) {
+      rewritten = true;
+      writeFileSync(document, 'newsnapshot');
+    }
+    return exec.call(this, sql);
+  });
+  store.pinDocument(root, 'selected.md');
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    assert.equal(db.prepare('SELECT content FROM knowledge_items').get()?.content, 'oldsnapshot');
+    assert.equal(store.search(root, 'newsnapshot')[0]?.content, 'newsnapshot');
+    assert.deepEqual(store.search(root, 'oldsnapshot'), []);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM knowledge_fts').get()?.n, 1);
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    db.close();
+  }
+});
 
 // ---- merged from knowledge.test.ts ----
 
@@ -445,4 +525,207 @@ test('recall matches memory text case-insensitively across both scopes', async (
     ['global'],
   );
   assert.deepEqual(searchMemories(root, '   ', globalDir), []);
+});
+
+/**
+ * What the store asks the database to do, counted at the driver.
+ *
+ * The claims below are about *SQL*, not about returned values: how many statements a search prepares, and
+ * whether refreshing unchanged documents opens a write transaction. Neither is visible in a result, and
+ * neither can be inferred from a stopwatch. Counting at `DatabaseSync.prototype` sees every statement whichever
+ * private field holds the connection, and it is restored before the test returns.
+ */
+function countSql<T>(body: () => T): { value: T; statements: number; writeTransactions: number } {
+  const proto = DatabaseSync.prototype as unknown as {
+    exec: (sql: string, ...rest: unknown[]) => unknown;
+    prepare: (sql: string, ...rest: unknown[]) => unknown;
+  };
+  const exec = proto.exec;
+  const prepare = proto.prepare;
+  let statements = 0;
+  let writeTransactions = 0;
+  proto.exec = function (this: unknown, sql: string, ...rest: unknown[]): unknown {
+    // `BEGIN IMMEDIATE`, not `BEGIN`: the store asks for the write lock up front, and a deferred read
+    // transaction is not what is being claimed here.
+    if (/^\s*BEGIN\s+IMMEDIATE/i.test(String(sql))) writeTransactions++;
+    return Reflect.apply(exec, this, [sql, ...rest]);
+  };
+  proto.prepare = function (this: unknown, sql: string, ...rest: unknown[]): unknown {
+    statements++;
+    return Reflect.apply(prepare, this, [sql, ...rest]);
+  };
+  try {
+    return { value: body(), statements, writeTransactions };
+  } finally {
+    proto.exec = exec;
+    proto.prepare = prepare;
+  }
+}
+/** A store whose database file is isolated from the user's real one, plus its workspace root. */
+async function documentFixture(
+  t: test.TestContext,
+): Promise<{ root: string; store: KnowledgeStore }> {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-refresh-'));
+  const store = new KnowledgeStore(path.join(root, 'knowledge.sqlite'));
+  // One hook, in this order: the connection has to close before its file can be removed, and two hooks would
+  // let the removal run first.
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  return { root, store };
+}
+/** Pins the documents named `doc-N.md` for `from <= N < to`, each carrying the word `alpha`. */
+async function pinDocuments(
+  root: string,
+  store: KnowledgeStore,
+  from: number,
+  to: number,
+): Promise<void> {
+  for (let index = from; index < to; index += 1) {
+    await writeFile(path.join(root, `doc-${index}.md`), `Document number ${index} carries alpha.`);
+    store.pinDocument(root, `doc-${index}.md`);
+  }
+}
+
+test('an unchanged document refresh is linear and starts no write transaction', async (t) => {
+  /**
+   * Search refreshes the index, so a search *can* write — but only when a document actually changed. The old
+   * shape refreshed by calling `pinDocument` for every pinned document, and `pinDocument` opened
+   * `BEGIN IMMEDIATE` before it looked at the digest, so a search over N unchanged documents took N write
+   * locks and, on the unchanged path, ran the whole `listDocuments` query once per document as well: quadratic
+   * statements in a read-only request, each one holding the database's single writer.
+   *
+   * The measurement is 3, 32 and 64 documents because linearity is what is claimed; a single size cannot tell
+   * a linear count from a quadratic one. The counts are reported rather than turned into a latency claim —
+   * these are SQL round trips, and nothing here measures elapsed time.
+   */
+  const { root, store } = await documentFixture(t);
+  await pinDocuments(root, store, 0, 3);
+  store.search(root, 'alpha');
+  const three = countSql(() => store.search(root, 'alpha'));
+  await pinDocuments(root, store, 3, 32);
+  store.search(root, 'alpha');
+  const thirtyTwo = countSql(() => store.search(root, 'alpha'));
+  await pinDocuments(root, store, 32, 64);
+  store.search(root, 'alpha');
+  const sixtyFour = countSql(() => store.search(root, 'alpha'));
+  assert.deepEqual(
+    [store.listDocuments(root).length, store.search(root, 'alpha').length],
+    [64, 8],
+    'the measurement really ran over 64 pinned documents',
+  );
+  for (const [size, measured] of [
+    [3, three],
+    [32, thirtyTwo],
+    [64, sixtyFour],
+  ] as const)
+    t.diagnostic(
+      `${size} unchanged documents: ${measured.statements} statements, ${measured.writeTransactions} write transactions`,
+    );
+
+  assert.equal(three.value.length, 3, 'every pinned document is still found');
+  assert.equal(sixtyFour.value.length, 8, 'the result limit still bounds the answer');
+  for (const [size, measured] of [
+    [3, three],
+    [32, thirtyTwo],
+    [64, sixtyFour],
+  ] as const)
+    assert.equal(
+      measured.writeTransactions,
+      0,
+      `${size} unchanged documents must not take the write lock: refreshing is not writing`,
+    );
+  /**
+   * The marginal cost of one more document, which is what "linear" means here: one digest probe and one chunk
+   * count, so at most three statements. A per-document `listDocuments` — let alone the transaction it used to
+   * sit inside — makes this number grow with the document count instead, which the second bound states as the
+   * absolute budget it is.
+   */
+  const marginal = (sixtyFour.statements - thirtyTwo.statements) / (64 - 32);
+  const marginal32 = (thirtyTwo.statements - three.statements) / (32 - 3);
+  t.diagnostic(`marginal statements per document: ${marginal32} at 3→32, ${marginal} at 32→64`);
+  assert.ok(
+    marginal <= 3 && marginal32 <= 3,
+    `one more unchanged document may cost at most a constant: ${marginal32} and ${marginal} statements`,
+  );
+  assert.ok(
+    sixtyFour.statements <= 4 * (64 + 2),
+    `and the whole refresh stays within a linear budget: 64 documents took ${sixtyFour.statements}`,
+  );
+});
+
+test('listDocuments answers from one query instead of one per document', async (t) => {
+  // The other half of the quadratic shape: `listDocuments` counted chunks by asking once per document, and
+  // `list_memories` calls it directly. One aggregate is not a micro-optimisation here — it is the difference
+  // between N+1 round trips and one.
+  const { root, store } = await documentFixture(t);
+  await pinDocuments(root, store, 0, 40);
+  const listed = countSql(() => store.listDocuments(root));
+  assert.equal(listed.statements, 1, 'one aggregate query, not one query per pinned document');
+  assert.equal(listed.value.length, 40);
+  assert.ok(
+    listed.value.every((document) => document.chunks === 1),
+    'and it still reports the chunk count each document actually has',
+  );
+  assert.deepEqual(
+    listed.value.map((document) => document.path),
+    [...listed.value.map((document) => document.path)].sort(),
+    'still ordered by path',
+  );
+});
+
+test('a changed document is re-indexed in one write transaction, and nothing else is rewritten', async (t) => {
+  // The other side of "unchanged is free": a real change must still land, atomically, and must replace the old
+  // content rather than adding to it.
+  const { root, store } = await documentFixture(t);
+  await pinDocuments(root, store, 0, 5);
+  assert.equal(store.search(root, 'alpha').length, 5);
+  await writeFile(path.join(root, 'doc-2.md'), 'Document number 2 was rewritten to carry zeta.');
+  const changed = countSql(() => store.search(root, 'zeta'));
+  assert.equal(
+    changed.writeTransactions,
+    1,
+    'one document changed, so exactly one write transaction — not one per pinned document',
+  );
+  assert.equal(changed.value[0]?.source, 'doc-2.md');
+  assert.equal(store.search(root, 'alpha').length, 4, 'the old content left the index with it');
+  assert.equal(store.listDocuments(root).length, 5, 'and the document is still pinned');
+});
+
+test('a document that cannot be re-read keeps its index entry; a deleted one is unpinned', async (t) => {
+  /**
+   * A failed re-read is not a deletion. `resourceText` refuses a transient non-UTF-8 write and a file that
+   * briefly grew past the read limit exactly as it refuses a missing file, so the refresh has to distinguish
+   * them itself — otherwise an editor's half-written save permanently discards a document, silently, with no
+   * error the user could act on.
+   */
+  const { root, store } = await documentFixture(t);
+  await writeFile(path.join(root, 'kept.md'), 'keeper alpha');
+  await writeFile(path.join(root, 'lost.md'), 'lost beta');
+  store.pinDocument(root, 'kept.md');
+  store.pinDocument(root, 'lost.md');
+
+  await writeFile(path.join(root, 'kept.md'), Buffer.from([0xff, 0xfe, 0x00, 0x41]));
+  assert.equal(
+    store.search(root, 'keeper')[0]?.source,
+    'kept.md',
+    'the last good content still answers',
+  );
+  assert.equal(store.listDocuments(root).length, 2, 'a non-UTF-8 write does not unpin');
+
+  await writeFile(path.join(root, 'kept.md'), 'x'.repeat(40 * 1024));
+  assert.equal(
+    store.search(root, 'keeper')[0]?.source,
+    'kept.md',
+    'nor does growing past the read limit',
+  );
+  assert.equal(store.listDocuments(root).length, 2);
+
+  await rm(path.join(root, 'lost.md'));
+  assert.deepEqual(store.search(root, 'beta'), [], 'a missing file is genuinely gone');
+  assert.deepEqual(
+    store.listDocuments(root).map((document) => document.path),
+    ['kept.md'],
+  );
 });

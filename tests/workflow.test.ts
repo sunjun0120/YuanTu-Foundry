@@ -125,6 +125,39 @@ test('parallel resolves a failing child to null and keeps the others', async () 
   assert.match(result.content, /bad → failed: it broke/);
 });
 
+test('a call still in flight when the script returns is reported, not dropped', async () => {
+  /**
+   * A script that does not `await` its `agent(...)` returns while the call is still running, so the call has no
+   * status when the result text is composed. The failure filter required a status, which dropped exactly the call
+   * whose outcome nobody knows — from the count and from the list alike.
+   *
+   * The child here settles *during* the teardown that follows, so its outcome is known by the time anything looks
+   * for unsettled children and the composed text is what the model receives. That is the window the drop was
+   * reachable in: composing the text without the call, and then having the unknown-outcome guard satisfied anyway.
+   * The child fails, so the composed text and the truth differ in the way that matters.
+   */
+  const stub = stubAgents(async (prompt) => {
+    if (prompt === 'slow') {
+      // Long enough that the script has returned and the text is composed; short enough to settle inside teardown.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { status: 'failed', sessionId: 's', answer: '', rounds: 0, error: 'it broke' };
+    }
+    return completion(`ok:${prompt}`);
+  });
+  const tool = workflowTool({ runAgent: stub.runAgent });
+  const result = await tool.execute!(
+    { code: ["agent('slow');", 'return "done";'].join('\n') },
+    context(stub.signal),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.match(
+    result.content,
+    /\[agents\] 1 sub-agent call\(s\) in \d+ms, 1 did not complete/,
+    'a call nobody has heard from is not a call that completed',
+  );
+  assert.match(result.content, /slow → failed/, 'and it is named, with what is known about it');
+});
+
 test('pipeline runs each item through the stages in order, with no barrier between stages', async () => {
   const stub = stubAgents((prompt) => completion(prompt));
   const tool = workflowTool({ runAgent: stub.runAgent });

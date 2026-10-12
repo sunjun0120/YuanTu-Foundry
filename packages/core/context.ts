@@ -209,13 +209,13 @@ export interface PreparedContext {
    * the numbers the decision was actually made from, rather than a recomputation that may differ.
    */
   forecast: RequestForecast;
-  /** Tool results this round presents in a shortened form. */
+  /** Tool results shortened by this call's view passes, including a view later superseded by compaction. */
   shortened: number;
-  /** Characters those results no longer cost the model. */
+  /** Characters removed by those passes; not additive with the durable compaction's surface savings. */
   freedChars: number;
   /** Tool results this round drops the middle of, keeping their head and their tail. */
   pruned: number;
-  /** Characters those dropped middles no longer cost the model. */
+  /** Characters removed by pruning passes; not additive with durable compaction savings. */
   prunedChars: number;
   /** True when this call compressed the conversation. */
   compacted: boolean;
@@ -309,7 +309,12 @@ export async function prepareContext(input: {
    */
   runId?: string;
   onUsage: (response: ModelResponse) => void;
-  onCompaction: (state: 'started' | 'finished', covered?: number, usage?: Usage) => void;
+  onCompaction: (
+    state: 'started' | 'finished' | 'failed',
+    covered?: number,
+    usage?: Usage,
+    reason?: string,
+  ) => void;
   forceCompact?: boolean;
   /**
    * How many compressions this call has already paid for, when the convergence retry re-enters.
@@ -516,6 +521,31 @@ export async function prepareContext(input: {
   let freedChars = 0;
   let pruned = 0;
   let prunedChars = 0;
+  /** What the summary requests of this call cost, so a checkpoint records it instead of the cost vanishing. */
+  const compactionUsage: Usage = { inputTokens: 0, outputTokens: 0 };
+  /**
+   * Whether this call is inside a compaction it announced, and whether it has announced how that ended.
+   *
+   * `compactionStarted` is what makes a failure reportable: the two refusals that happen before a summary
+   * request is ever made — a tail with nothing left to compress, a window the conversation cannot fit — are
+   * verdicts *about* the request rather than compactions that failed, and reporting them as failures would name
+   * a compression that never began. `compactionSettled` is the other half of the pair: an announced compaction
+   * ends exactly once, as a success or as a failure, and the paths that give up are reachable more than once in
+   * one call (the batch loop can refuse at several points) while the hand-off to a retry has already reported
+   * its own success.
+   */
+  let compactionStarted = false;
+  let compactionSettled = false;
+  const settleCompaction = (
+    state: 'finished' | 'failed',
+    coveredMessages?: number,
+    usage?: Usage,
+    reason?: string,
+  ): void => {
+    if (!compactionStarted || compactionSettled) return;
+    compactionSettled = true;
+    input.onCompaction(state, coveredMessages, usage, reason);
+  };
   /**
    * The compaction did not happen: throw, or hand back the request as it stands.
    *
@@ -527,6 +557,21 @@ export async function prepareContext(input: {
    */
   const abandonCompaction = (failure: Error): PreparedContext => {
     /**
+     * The surface this call started from, put back before anything is decided on it.
+     *
+     * A multi-batch compaction merges the conversation in pieces and replaces the running summary after each
+     * one, so giving up after the second batch used to hand back a view built from the summary it had just
+     * refused: the model was given a summary of messages that were all still in the request behind it, each of
+     * them twice, while the version the session actually has was nowhere in it. Nothing is written to the store
+     * on any of these paths, so the view has to describe what the store holds — the summary this call began
+     * with, the tail it covers from, and a forecast recomputed for the two together (the summary is part of the
+     * request, so restoring a different one is a different size).
+     */
+    summary = previousSummary;
+    rawOutput = undefined;
+    const restored = forecastOf(visible);
+    settleCompaction('failed', previouslyCovered, compactionUsage, failure.message);
+    /**
      * The operator's own character cap is not an estimate about the endpoint.
      *
      * `--max-context-chars` is a number somebody configured deliberately, so a request over it is refused whatever
@@ -537,7 +582,7 @@ export async function prepareContext(input: {
     return {
       system: input.system,
       messages: withSummary(visible, summary),
-      forecast,
+      forecast: restored,
       shortened,
       freedChars,
       pruned,
@@ -546,6 +591,18 @@ export async function prepareContext(input: {
       compactionProblem: failure.message,
       ...policyNote,
     };
+  };
+  /**
+   * The shared summary deadline ran out.
+   *
+   * Not a run cancellation, and not a compaction: a summary that took too long is exactly the failure a caller
+   * that chose `compactionFailure: 'send'` wants to answer by sending the request without one. A run the caller
+   * cancelled is the opposite — the request must *not* go out — so the two are separated here rather than at the
+   * `AbortSignal.any` that cannot tell them apart.
+   */
+  const summaryDeadline = (): PreparedContext => {
+    if (input.signal.aborted) throw input.signal.reason;
+    return abandonCompaction(new Error('Context summary timeout; history was preserved'));
   };
   /**
    * Make the conversation smaller before deciding whether it has to be compressed.
@@ -671,10 +728,25 @@ export async function prepareContext(input: {
   if (!input.forceCompact && retained === undefined)
     while (boundary >= covered && history[boundary]?.role !== 'user') boundary--;
   const overhead = input.system.length + JSON.stringify(input.tools).length;
+  // Boundary selection is synchronous and precedes every summary/calibration update. Reuse a
+  // boundary's view and prediction here; after summarizing, forecast the changed request anew.
+  const boundaryViews = new Map<number, { messages: Message[]; forecast?: RequestForecast }>();
+  const boundaryView = (cut: number) => {
+    let view = boundaryViews.get(cut);
+    if (!view) {
+      view = { messages: contextTail(history, cut) };
+      boundaryViews.set(cut, view);
+    }
+    return view;
+  };
+  const boundaryForecast = (cut: number) => {
+    const view = boundaryView(cut);
+    return (view.forecast ??= forecastOf(view.messages));
+  };
   if (
     boundary <= covered ||
-    overhead + contextMessageSize(contextTail(history, boundary)) > limit ||
-    !fits(contextTail(history, boundary), forecastOf(contextTail(history, boundary)))
+    overhead + contextMessageSize(boundaryView(boundary).messages) > limit ||
+    !fits(boundaryView(boundary).messages, boundaryForecast(boundary))
   ) {
     // A single long task can compact completed tool steps too. Keep its original
     // user request and prefer retaining the newest complete step when possible.
@@ -683,14 +755,14 @@ export async function prepareContext(input: {
         (cut) =>
           cut > covered &&
           cut > 0 &&
-          overhead + contextMessageSize(contextTail(history, cut)) < limit * 0.65 &&
-          fits(contextTail(history, cut), forecastOf(contextTail(history, cut))),
+          overhead + contextMessageSize(boundaryView(cut).messages) < limit * 0.65 &&
+          fits(boundaryView(cut).messages, boundaryForecast(cut)),
       ) ?? -1;
   }
   if (boundary < 1 || (boundary === history.length && history.length === 1))
     return abandonCompaction(turnFailure());
-  const tail = contextTail(history, boundary);
-  const tailForecast = forecastOf(tail);
+  const tail = boundaryView(boundary).messages;
+  const tailForecast = boundaryForecast(boundary);
   if (!fits(tail, tailForecast)) {
     // Compression is not always the last word: a tail can still be over the ceiling while every message in it
     // is recent. Shortening what is eligible is strictly better than failing a run that has already paid for
@@ -699,11 +771,12 @@ export async function prepareContext(input: {
     if (applied.shortened) {
       shortened += applied.shortened;
       freedChars += applied.freed;
-      if (fits(applied.messages, forecastOf(applied.messages)))
+      const appliedForecast = forecastOf(applied.messages);
+      if (fits(applied.messages, appliedForecast))
         return {
           system: input.system,
           messages: withSummary(applied.messages, summary),
-          forecast: forecastOf(applied.messages),
+          forecast: appliedForecast,
           shortened,
           freedChars,
           pruned,
@@ -722,11 +795,12 @@ export async function prepareContext(input: {
     if (dropped.pruned) {
       pruned += dropped.pruned;
       prunedChars += dropped.prunedChars;
-      if (fits(dropped.messages, forecastOf(dropped.messages)))
+      const droppedForecast = forecastOf(dropped.messages);
+      if (fits(dropped.messages, droppedForecast))
         return {
           system: input.system,
           messages: withSummary(dropped.messages, summary),
-          forecast: forecastOf(dropped.messages),
+          forecast: droppedForecast,
           shortened,
           freedChars,
           pruned,
@@ -748,12 +822,23 @@ export async function prepareContext(input: {
    * the store; this is only where the acquire happens.
    */
   store.claimCompaction(sessionId, input.runId);
+  /**
+   * Whether this invocation has handed its lock to its own retry.
+   *
+   * The retry re-enters `prepareContext`, and the first thing that function does — synchronously, before any
+   * `await` — is take the lock again at the claim above. That happens *before* this invocation's `finally`
+   * runs, because `return f()` finishes `f`'s synchronous prologue and only then processes the return; so the
+   * unconditional release below used to clear the claim the retry had just made, and the retry went on to spend
+   * two summary requests with no lock at all. The guarantee the lock exists for — this is the one write that
+   * must not race another writer — therefore did not hold on the most expensive path. The retry releases it in
+   * its own `finally`, so this one has to stay out of the way.
+   */
+  let handedOff = false;
   try {
+    compactionStarted = true;
     input.onCompaction('started');
     // Summarize complete old user turns in bounded batches. Persist only after every
     // batch succeeds, so cancellation and errors cannot silently discard history.
-    /** What the summary requests cost, so the checkpoint records it instead of the cost vanishing. */
-    const compactionUsage: Usage = { inputTokens: 0, outputTokens: 0 };
     let summaryCacheKnown = true;
     const summarySignal = AbortSignal.any([
       input.signal,
@@ -790,7 +875,7 @@ export async function prepareContext(input: {
         );
       let response: ModelResponse;
       for (;;) {
-        summarySignal.throwIfAborted();
+        if (summarySignal.aborted) return summaryDeadline();
         const transcript = summaryTranscript(batch, summary);
         /**
          * The prompt this summary request carries, held once.
@@ -815,18 +900,37 @@ export async function prepareContext(input: {
           ...(factors() ? { factors: factors()! } : { factor: messageWeight() }),
         });
         const summaryCacheKey = input.cacheKeyFor?.(summarySystem, input.tools);
-        response = await input.provider.complete({
-          // The main request's own prefix, replayed: same system, same tool schemas in the same order, same batch
-          // bytes. Only the instruction at the end is new, which is what the cache is allowed to miss.
-          system: summarySystem,
-          messages: transcript,
-          tools: input.tools,
-          ...(summaryCacheKey === undefined ? {} : { cacheKey: summaryCacheKey }),
-          maxOutputTokens: summaryForecast.outputTokens,
-          signal: summarySignal,
-          onText: () => {},
-        });
-        summarySignal.throwIfAborted();
+        try {
+          response = await input.provider.complete({
+            // The main request's own prefix, replayed: same system, same tool schemas in the same order, same batch
+            // bytes. Only the instruction at the end is new, which is what the cache is allowed to miss.
+            system: summarySystem,
+            messages: transcript,
+            tools: input.tools,
+            ...(summaryCacheKey === undefined ? {} : { cacheKey: summaryCacheKey }),
+            maxOutputTokens: summaryForecast.outputTokens,
+            signal: summarySignal,
+            onText: () => {},
+          });
+        } catch (error) {
+          /**
+           * A summary request that failed is a compaction that did not happen, so the answer is the caller's own
+           * (`compactionFailure`): throw, or hand the request back as it stands. Letting the provider's failure
+           * out of here instead made the two most ordinary ways for a compression to fail — a request that was
+           * refused and a request that took too long — the only two the run could not recover from. A *cancelled*
+           * run is not a failed compaction: the caller asked for the work to stop, and sending the request anyway
+           * because a summary could not be written would answer Stop with a request.
+           */
+          if (input.signal.aborted) throw error;
+          /**
+           * The deadline is this call's own fact, and it is named as such: an adapter that reports its
+           * cancellation says only that a request was aborted, not that a summary could not be written or that
+           * the conversation was kept.
+           */
+          if (summarySignal.aborted) return summaryDeadline();
+          return abandonCompaction(error instanceof Error ? error : new Error(String(error)));
+        }
+        if (summarySignal.aborted) return summaryDeadline();
         compactionUsage.inputTokens += response.usage.inputTokens;
         compactionUsage.outputTokens += response.usage.outputTokens;
         if (response.usage.inputTokens > 0 && response.usage.cachedInputTokens === undefined)
@@ -948,7 +1052,7 @@ export async function prepareContext(input: {
       maxTokens: summaryOutputBudget(),
       ...(rawOutput === undefined ? {} : { rawOutput }),
     });
-    input.onCompaction('finished', covered, compactionUsage);
+    settleCompaction('finished', covered, compactionUsage);
     /**
      * Compress again when the conversation is still above the threshold and the policy allows another attempt.
      *
@@ -959,8 +1063,10 @@ export async function prepareContext(input: {
      * (a person's `/compact`, an overflow recovery) never re-enters: it is already the most aggressive shape.
      *
      * The lock is released before the re-entry, which takes it again for its own summary: a lock held across
-     * the recursive call would make the second attempt refuse itself. The `finally` below releases it a second
-     * time on that path, which is a no-op by construction — only the run that holds the lock can release it.
+     * the recursive call would make the second attempt refuse itself. The `finally` below must then leave that
+     * second claim alone — it is the retry's for the whole of its summary, and `handedOff` is what says so. The
+     * comment here used to call the second release "a no-op by construction, because only the run that holds the
+     * lock can release it": the release does match, because it is the *same* run, which is exactly the problem.
      */
     const attempt = input.compactionAttempt ?? 0;
     if (
@@ -969,6 +1075,7 @@ export async function prepareContext(input: {
       finalForecast.inputTokens >= spec.thresholdTokens &&
       attempt < spec.compactionRetries
     ) {
+      handedOff = true;
       store.releaseCompaction(sessionId, input.runId);
       return prepareContext({ ...input, compactionAttempt: attempt + 1 });
     }
@@ -987,8 +1094,9 @@ export async function prepareContext(input: {
     /**
      * The lock is released on every exit, including the ones that throw: a run that gave up on a summary must
      * not leave the session looking like a compaction is still in flight, because the next attempt would then
-     * be refused on its behalf.
+     * be refused on its behalf. The one exit that does not release is the hand-off to a retry, whose own claim
+     * this invocation would otherwise clear (`handedOff`).
      */
-    store.releaseCompaction(sessionId, input.runId);
+    if (!handedOff) store.releaseCompaction(sessionId, input.runId);
   }
 }

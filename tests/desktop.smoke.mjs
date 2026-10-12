@@ -45,7 +45,7 @@ test(
       ...process.env,
       YUANTU_WORKSPACE: root,
       YUANTU_NODE_PATH: process.execPath,
-      YUANTU_SANDBOX: 'sbx',
+      YUANTU_SANDBOX: 'native',
       YUANTU_PROTOCOL: 'anthropic',
       YUANTU_BASE_URL: url,
       YUANTU_MODEL: 'fixture',
@@ -1765,7 +1765,7 @@ test(
     );
     await writeFile(path.join(root, 'AGENTS.md'), 'Use concise Chinese.');
     const png =
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5u8AAAAASUVORK5CYII=';
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     let calls = 0;
     let continueSteer;
     let steerReady;

@@ -43,6 +43,6 @@ asyncio.run(main())
 
 模型配置沿用 Host 环境变量和工作区设置；密钥在本机设置，勿写入示例。事件流必须由一个消费者与运行并行读取，以处理审批；队列默认上限 1024，满时明确失败，不能无限缓存。帧 UTF-8 严格解码，输入 16 MB、输出帧默认 64 MB。
 
-取消用 `await client.cancel(session_id)`，再等待原 `run` 的终态。取消 Python run task 也会发送取消并等待收尾。Host v1 错误／分页／恢复语义见 [契约](../../docs/host-sdk.md)。`HostError` 保留 code、method 和 outcome_unknown；超时／断线不会自动重放。关闭异常明确报告清理未确认；正常退出使用 async with 或 finally 等待 close。应用被操作系统强杀时不保证能运行 Python finally。
+取消用 `await client.cancel(session_id)`，再等待原 `run` 的终态。取消 Python run task 也会发送取消并等待收尾。Host v1 错误／分页／恢复语义见 `packages/protocol/` 的契约实现。`HostError` 保留 code、method 和 outcome_unknown；超时／断线不会自动重放。关闭异常明确报告清理未确认；正常退出使用 async with 或 finally 等待 close。应用被操作系统强杀时不保证能运行 Python finally。
 
 SDK 保存收到的事件 seq 于 `client.cursors`；重连由应用显式重建 client，使用 `session.events` 查询缺失记录。完整历史继续存在 Host 数据库，Python 不维护另一份模型视图。

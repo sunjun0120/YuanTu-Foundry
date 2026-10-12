@@ -1,4 +1,5 @@
-import { readdirSync, readSync, openSync, closeSync, statSync } from 'node:fs';
+import { readdirSync, readSync, openSync, closeSync, statSync, lstatSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { isCredentialFileName } from './credential-paths.ts';
@@ -240,12 +241,32 @@ function outline(text: string, rules: OutlineRule[], limit: number): RepoSymbol[
  * the agent is not allowed to read.
  */
 export function buildRepoMap(root: string, options: RepoMapOptions = {}): RepoMap {
-  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
-  const perFile = options.symbolsPerFile ?? DEFAULT_SYMBOLS_PER_FILE;
-  const files: RepoFile[] = [];
-  let scannedFiles = 0;
+  return outlineRepoFiles(scanRepoFiles(root, options.maxFiles ?? DEFAULT_MAX_FILES), options);
+}
+
+interface RepoScan {
+  files: { absolute: string; relative: string; rules: OutlineRule[] }[];
+  key: string;
+  truncated: boolean;
+}
+
+/** The cache and builder inspect the same bounded set of source files, without reading their contents. */
+function scanRepoFiles(root: string, maxFiles: number): RepoScan {
+  const files: RepoScan['files'] = [];
+  const fingerprint = createHash('sha256');
+  const maxDirectories = Math.max(DEFAULT_MAX_FILES, maxFiles) * 4;
+  let directories = 0;
+  let stopped = false;
   let truncated = false;
-  const walk = (directory: string, relative: string): void => {
+  const walk = (directory: string, relative: string, depth: number): void => {
+    if (stopped) return;
+    // Empty or unsupported-only trees must not make a per-round freshness check unbounded.
+    if (depth > 64 || directories >= maxDirectories) {
+      truncated = true;
+      if (directories >= maxDirectories) stopped = true;
+      return;
+    }
+    directories++;
     let entries;
     try {
       entries = readdirSync(directory, { withFileTypes: true });
@@ -253,30 +274,57 @@ export function buildRepoMap(root: string, options: RepoMapOptions = {}): RepoMa
       return;
     }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (stopped) return;
       if (entry.isSymbolicLink() || isIgnored(entry.name)) continue;
       const child = path.join(directory, entry.name);
       const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        walk(child, childRelative);
+        walk(child, childRelative, depth + 1);
         continue;
       }
       if (!entry.isFile()) continue;
       const rules = OUTLINE_RULES[path.extname(entry.name).toLowerCase()];
       if (!rules) continue;
-      if (scannedFiles >= maxFiles) {
+      if (files.length >= maxFiles) {
         truncated = true;
+        stopped = true;
         return;
       }
-      scannedFiles++;
-      const head = readHead(child);
-      if (head === null) continue;
-      const symbols = outline(head, rules, perFile);
-      if (symbols.length) files.push({ path: childRelative, symbols });
+      try {
+        const stats = lstatSync(child);
+        if (!stats.isFile()) continue;
+        fingerprint.update(
+          JSON.stringify([
+            childRelative,
+            stats.size,
+            stats.mtimeMs,
+            stats.ctimeMs,
+            stats.ino,
+            stats.mode,
+          ]),
+        );
+      } catch {
+        fingerprint.update(JSON.stringify([childRelative, 'unreadable']));
+      }
+      files.push({ absolute: child, relative: childRelative, rules });
     }
   };
-  walk(root, '');
+  walk(root, '', 0);
+  fingerprint.update(String(truncated));
+  return { files, key: fingerprint.digest('hex'), truncated };
+}
+
+function outlineRepoFiles(scan: RepoScan, options: RepoMapOptions = {}): RepoMap {
+  const perFile = options.symbolsPerFile ?? DEFAULT_SYMBOLS_PER_FILE;
+  const files: RepoFile[] = [];
+  for (const file of scan.files) {
+    const head = readHead(file.absolute);
+    if (head === null) continue;
+    const symbols = outline(head, file.rules, perFile);
+    if (symbols.length) files.push({ path: file.relative, symbols });
+  }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  return { files, scannedFiles, truncated };
+  return { files, scannedFiles: scan.files.length, truncated: scan.truncated };
 }
 /**
  * Renders the map within a character budget, degrading instead of overflowing: symbols first, then
@@ -310,55 +358,29 @@ export function formatRepoMap(map: RepoMap, budgetChars = REPO_MAP_PROMPT_BUDGET
  * The outline as the conversation is told it, cached per workspace.
  *
  * Rebuilding on every call would re-read hundreds of file heads for text that changes only when the tree
- * changes, so the result is memoised against a cheap fingerprint: the newest mtime and the file count of the
- * directories involved. That memo is what makes it affordable to ask once per round — which is what the caller
- * does, since the outline is announced into the conversation rather than placed in the system prompt
+ * changes, so the map is memoised against the paths and metadata of the bounded source-file inventory.
+ * Unchanged calls only inspect metadata; changed calls re-read file heads. That memo makes it affordable to
+ * ask once per round, since the caller announces the outline into the conversation rather than the system prompt
  * (`packages/core/runtime-context.ts`) and the announcement has to notice the round that changed the tree.
  * `YUANTU_REPO_MAP=off` disables it entirely for callers that would rather spend those tokens elsewhere.
  */
-const cache = new Map<string, { key: string; text: string }>();
+const cache = new Map<string, { key: string; map: RepoMap; budgetChars: number; text: string }>();
 export function repoMapEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.YUANTU_REPO_MAP !== 'off';
 }
 export function repoMapContext(root: string, budgetChars = REPO_MAP_PROMPT_BUDGET): string {
   if (!repoMapEnabled()) return '';
-  const key = repoMapFingerprint(root);
+  const scan = scanRepoFiles(root, DEFAULT_MAX_FILES);
   const cached = cache.get(root);
-  if (cached && cached.key === key) return cached.text;
-  const text = formatRepoMap(buildRepoMap(root), budgetChars);
-  cache.set(root, { key, text });
+  if (cached && cached.key === scan.key && cached.budgetChars === budgetChars) return cached.text;
+  const map = cached?.key === scan.key ? cached.map : outlineRepoFiles(scan);
+  const text = formatRepoMap(map, budgetChars);
+  cache.set(root, { key: scan.key, map, budgetChars, text });
   return text;
 }
 export function resetRepoMapCache(): void {
   cache.clear();
 }
-/** A cheap "has the tree changed" signal: newest mtime over the top two directory levels. */
-function repoMapFingerprint(root: string): string {
-  let newest = 0;
-  let count = 0;
-  const visit = (directory: string, depth: number): void => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (isIgnored(entry.name)) continue;
-      count++;
-      try {
-        newest = Math.max(newest, statSync(path.join(directory, entry.name)).mtimeMs);
-      } catch {
-        /* A file that vanished mid-walk still changes the fingerprint via the count. */
-      }
-      if (depth < 2 && entry.isDirectory() && !entry.isSymbolicLink())
-        visit(path.join(directory, entry.name), depth + 1);
-    }
-  };
-  visit(root, 0);
-  return `${count}:${newest}`;
-}
-
 /** Symbol search backed by an already-running language server, when one exists. */
 export type WorkspaceSymbolSearch = (
   query: string,

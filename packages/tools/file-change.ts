@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { open, lstat } from 'node:fs/promises';
+import { open, lstat, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { structuredPatch, formatPatch } from 'diff';
 import type { FileChange, PreparedTool, ToolContext } from '../protocol/index.ts';
@@ -143,12 +143,25 @@ export async function prepareFileChange(
         file,
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
       );
+      /**
+       * Whether the intended bytes are all on disk yet.
+       *
+       * `O_CREAT` above means the file exists from that call onwards, so anything that throws before the write
+       * finishes — an abort landing in this window, a resolve that refuses, a full disk — used to leave an
+       * empty or half-written file behind while the tool reported that it had changed nothing. That leftover
+       * then blocked the retry (`File already exists; use edit_file`) and its journal row reconciled to
+       * `conflict`, which undo refuses. Only the window *before* the write completes is rolled back: past it
+       * the file is what the caller asked for, and a later failure (the observation gate, say) must not delete
+       * a write that really happened.
+       */
+      let written = false;
       try {
         ctx.signal.throwIfAborted();
         await workspace.resolve(input);
         await writeAll(handle, next);
         await handle.truncate(next.length);
         await handle.sync();
+        written = true;
         if (journalId) ctx.fileJournal!.applied(journalId);
         // The model wrote these bytes, so it has in effect seen the file it just created.
         await gates.observations.settle({ written: [input] });
@@ -159,6 +172,9 @@ export async function prepareFileChange(
         };
       } finally {
         await handle.close();
+        // Closed first: Windows cannot remove a file that is still open. The removal is best-effort because it
+        // runs on the failure path, and a cleanup that throws there would replace the real error with its own.
+        if (!written) await rm(file, { force: true }).catch(() => undefined);
       }
     },
   };

@@ -799,6 +799,18 @@ export const AGENT_EVENT_TYPES = [
   'context.compacting',
   'context.compacted',
   /**
+   * The compression could not be performed, and the live answer to "is a compaction still running?".
+   *
+   * Live rather than durable, exactly like the two above it: what the run does about a failed compression is
+   * decided in the moment (a caller that said `compactionFailure: 'send'` sends the request as it stands, one
+   * that said `'throw'` fails the round), and what the *conversation* kept is already the session log's own
+   * record — there is no durable compaction, so there is nothing durable to announce. A client that knows the
+   * type clears the indicator it raised on `context.compacting`; a client that predates it never learns about
+   * the frame at all (an unknown event type is ignored, and `run.finished` is what has always cleared that
+   * state), which is why this is an addition rather than a change to `context.compacted`.
+   */
+  'context.compaction.failed',
+  /**
    * The budget prediction the round was decided on: what the next request is expected to cost, what the run
    * has left, and what was done to the conversation first (shortened results, a compression). Live only — it
    * is one line per request, and the log already records the compressions themselves.

@@ -329,6 +329,7 @@ test('approving an acceptance command resumes verification without repeating the
     hostPath: path.join(projectRoot, 'apps/agent-host/main.ts'),
     workspace: root,
     env: {
+      YUANTU_SANDBOX: 'host',
       YUANTU_BASE_URL: url,
       YUANTU_MODEL: 'fixture',
       YUANTU_MAX_CONTEXT_TOKENS: '128000',
@@ -367,7 +368,7 @@ test('approving an acceptance command resumes verification without repeating the
     if (resumed.status === 'completed' && !resumed.pendingApproval) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  assert.equal(resumed?.status, 'completed');
+  assert.equal(resumed?.status, 'completed', resumed?.lastTriggerError);
   assert.equal(await readFile(path.join(root, 'verified.txt'), 'utf8'), 'ok');
   assert.equal(requests, 1);
 });

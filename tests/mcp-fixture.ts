@@ -1,8 +1,25 @@
 import { createInterface } from 'node:readline';
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 const flags = process.argv.slice(2).filter((value) => value.startsWith('--'));
 const stateFile = process.argv.slice(2).find((value) => !value.startsWith('--'));
 if (stateFile) writeFileSync(stateFile, String(process.pid));
+/**
+ * When set, every handshake and catalogue read is appended here, one line per request.
+ *
+ * Whether a session survived is invisible from the client's side — a torn-down connection and a reused one
+ * answer the same way — so a test that is about *which* conversation happened has to hear the sequence from the
+ * server. The line is written before the answer, exactly as the `refresh` notification is, so a client holding
+ * the result already has the record of it.
+ */
+const HANDSHAKE_MARKER = process.env.MCP_HANDSHAKE_MARKER;
+function markHandshake(method: string): void {
+  if (!HANDSHAKE_MARKER) return;
+  try {
+    appendFileSync(HANDSHAKE_MARKER, `${method}\n`);
+  } catch {
+    // A test aid must never be the reason a server misbehaves.
+  }
+}
 /** `--tools-only` advertises no resources or prompts so capability gating can be tested. */
 const toolsOnly = flags.includes('--tools-only');
 const capabilities = toolsOnly
@@ -24,6 +41,8 @@ const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on('line', (line) => {
   const request = JSON.parse(line);
   if (request.id === undefined) return;
+  if (request.method === 'initialize' || request.method === 'tools/list')
+    markHandshake(request.method);
   if (request.method === 'tools/call' && request.params?.name === 'refresh') {
     refreshed = true;
     process.stdout.write(

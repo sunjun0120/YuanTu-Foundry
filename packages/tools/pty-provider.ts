@@ -37,8 +37,21 @@ export interface PtyProcess {
   resize?(columns: number, rows: number): void;
   /** Ends the terminal. `signal` is a name like `SIGINT`; backends that cannot send one may kill instead. */
   kill(signal?: string): void;
-  /** Await termination of the owned OS process tree. Optional for in-memory adapters. */
-  terminate?(): Promise<void>;
+  /**
+   * Await termination of the owned OS process tree, delivering `signal` when the backend can.
+   *
+   * A named signal is a *request*: POSIX delivers it to the terminal's process group, while a Windows console
+   * has no signal delivery and has to end the tree by force. `signalAvailable` is where an adapter says which
+   * of those it is, so the terminal tools report the substitution instead of claiming a signal they never sent.
+   * Optional for in-memory adapters, which omit it and keep the historical behaviour: end the tree, no signal.
+   */
+  terminate?(signal?: NodeJS.Signals): Promise<void>;
+  /**
+   * Whether this backend can deliver one named signal, as the reason it cannot — or `null` when it can. The
+   * same "answer, not exception" shape as `PtyProvider.available()`. A backend without this member owns the
+   * name it is handed in `kill`/`terminate`, which is what an in-memory test adapter does.
+   */
+  signalAvailable?(signal: string): string | null;
 }
 export interface PtyRequest {
   /** The program to run. A terminal with no shell is a terminal nobody can type in. */
@@ -77,6 +90,15 @@ export function ptyProviders(): PtyProvider[] {
 }
 /** The built-in backend's name. Also the default, because it is the only one that ships. */
 export const NODE_PTY = 'node-pty';
+/**
+ * What the built-in backend answers about a named signal on Windows.
+ *
+ * ConPTY has no POSIX signal delivery: there is no SIGTERM to catch and no SIGKILL distinct from ending the
+ * process. The only way to end the terminal is to end its process tree by force, and the terminal tools say so
+ * rather than report a signal that was never sent.
+ */
+const WINDOWS_NO_SIGNAL_DELIVERY =
+  'a Windows console has no POSIX signal delivery, so the process tree had to be ended by force (taskkill /T /F)';
 /**
  * The built-in backend: `@lydell/node-pty`, an optional dependency with prebuilt binaries.
  *
@@ -127,8 +149,14 @@ export const nodePtyProvider: PtyProvider = {
     }
     return {
       pid: child.pid,
-      terminate: async () => {
+      terminate: async (signal) => {
         if (exited) return;
+        if (signal && process.platform !== 'win32') {
+          // The named signal goes to the terminal's process group — the same tree the forced path reaches — so
+          // "SIGTERM" means the tree is asked to end rather than killed outright.
+          await killTree(child.pid, signal);
+          return;
+        }
         try {
           await killTree(child.pid);
         } catch (error) {
@@ -136,6 +164,7 @@ export const nodePtyProvider: PtyProvider = {
         }
         if (!exited) child.kill();
       },
+      signalAvailable: () => (process.platform === 'win32' ? WINDOWS_NO_SIGNAL_DELIVERY : null),
       onData: (listener) => child.onData(listener),
       onExit: (listener) => child.onExit(({ exitCode, signal }) => listener({ exitCode, signal })),
       write: (data) => child.write(data),

@@ -19,6 +19,7 @@ import { prepareContext } from '../packages/core/context.ts';
 import { estimateInputTokens } from '../packages/core/budget.ts';
 import { forecastRequest, windowPressure } from '../packages/core/forecast.ts';
 import { COMPACTION_DEFAULTS } from '../packages/core/compaction-policy.ts';
+import { TokenCalibration } from '../packages/core/calibration.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
@@ -52,6 +53,61 @@ async function store(
   });
   return { root, store: database, id: database.create(root).id };
 }
+
+test('compaction predicts an unchanged tail once and refreshes after summary and calibration changes', async (t) => {
+  const { store: database, id } = await store(t);
+  for (const message of transcript(3, 1000)) database.append(id, message);
+  database.append(id, user('Continue.'));
+  const calibration = new TokenCalibration();
+  let summaryStarted = false;
+  let forecastsBeforeSummary = 0;
+  const tools = Object.assign([], {
+    toJSON() {
+      if (!summaryStarted && new Error().stack?.includes('forecastOf')) forecastsBeforeSummary++;
+      return [];
+    },
+  });
+  const result = await prepareContext({
+    store: database,
+    sessionId: id,
+    system: 'Fixture',
+    tools,
+    calibration,
+    provider: {
+      async complete() {
+        summaryStarted = true;
+        calibration.observe(100, 200);
+        return reply('Constraints retained.');
+      },
+    },
+    limit: 1_000_000,
+    signal: new AbortController().signal,
+    maxOutputTokens: 1024,
+    maxContextTokens: 128_000,
+    summaryTimeoutMs: 1000,
+    forceCompact: true,
+    onUsage: () => {},
+    onCompaction: () => {},
+  });
+  assert.equal(result.compacted, true);
+  assert.equal(
+    forecastsBeforeSummary,
+    2,
+    'one original-view prediction and one retained-tail prediction',
+  );
+  assert.deepEqual(
+    result.forecast,
+    forecastRequest({
+      system: 'Fixture',
+      messages: result.messages,
+      tools,
+      factors: calibration.parts,
+      maxOutputTokens: 1024,
+      maxContextTokens: 128_000,
+    }),
+  );
+  assert.match(result.messages[0]?.content ?? '', /Constraints retained/);
+});
 
 test('the forecast reports what the request costs and the room the window leaves, together', () => {
   const messages = transcript(4);
@@ -339,6 +395,88 @@ test('compression converges: a retry is allowed, and then it stops', async (t) =
   );
   assert.ok(calls.length >= 1, 'it did compress');
   assert.equal(prepared.compacted, true);
+});
+
+test('the retry holds the compaction lock while its own summary is in flight', async (t) => {
+  /**
+   * The retry re-enters `prepareContext`, whose first synchronous act — before any `await` — is to take the lock
+   * again. It then *issues* its summary request, and issuing it is what suspends the retry; that suspension is
+   * where the outer invocation's `finally` runs, and the unconditional release there used to clear the claim the
+   * retry had just made. The retry's summary was therefore in flight with no lock held, so "the one write that
+   * must not race another writer" did not hold on the most expensive path and a second writer was no longer
+   * refused.
+   *
+   * The lock is sampled *while the request is outstanding*, not when it is issued: `provider.complete()` runs
+   * synchronously up to its first `await`, so a sample taken at entry reads the lock before the outer release
+   * has happened and sees a defect that is really there as absent. The first two versions of this test failed
+   * exactly that way — one never reached the retry at all, the other sampled too early.
+   */
+  const { store: database, id } = await store(t);
+  for (const message of transcript(6, 5000)) database.append(id, message);
+  // A tail far larger than the retention budget, so one compression cannot get the conversation under the
+  // threshold and the policy pays for the retry. The window still has room for it, or the round refuses first.
+  database.append(id, user(`Huge ${'z'.repeat(120_000)}`));
+  // The lock only exists inside a run: `claimCompaction` returns immediately when the session has no lease
+  // (`sqlite.ts:1875`), so the fixture has to hold one for the question to be askable at all.
+  const runId = database.beginRun(id);
+  const log: string[] = [];
+  const claim = database.claimCompaction.bind(database);
+  const release = database.releaseCompaction.bind(database);
+  database.claimCompaction = (sessionId: string, run?: string) => {
+    log.push('claim');
+    return claim(sessionId, run);
+  };
+  database.releaseCompaction = (sessionId: string, run?: string) => {
+    log.push('release');
+    return release(sessionId, run);
+  };
+  /** The lock as the acquire/release history leaves it, which is the only reader that cannot be fooled by timing. */
+  const lockedNow = (): boolean => {
+    let locked = false;
+    for (const event of log)
+      locked = event === 'claim' ? true : event === 'release' ? false : locked;
+    return locked;
+  };
+  const inFlight: boolean[] = [];
+  const prepared = await prepareContext({
+    store: database,
+    sessionId: id,
+    runId,
+    system: 'YuanTu',
+    tools: [],
+    provider: {
+      async complete() {
+        // Past the first suspension, which is where the outer invocation's `finally` has run by now.
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        inFlight.push(lockedNow());
+        return reply('Merged summary.');
+      },
+    },
+    limit: 10_000_000,
+    signal: new AbortController().signal,
+    maxOutputTokens: 8_000,
+    maxContextTokens: 100_000,
+    shrinkPercent: 100,
+    summaryTimeoutMs: 1_000,
+    onUsage: () => {},
+    onCompaction: () => {},
+  });
+  assert.equal(prepared.compacted, true);
+  const history = log.join(', ');
+  /**
+   * A retry is the only thing that claims a second time — batching sends more summaries under the one claim — so
+   * this is what says the fixture reached the branch at all, rather than measuring the wrong path politely.
+   */
+  assert.ok(
+    log.filter((event) => event === 'claim').length >= 2,
+    `the fixture has to produce a retry or this test asserts nothing: ${history}`,
+  );
+  assert.deepEqual(
+    inFlight,
+    inFlight.map(() => true),
+    `every summary is under the lock for as long as it is in flight: ${history}`,
+  );
+  assert.equal(lockedNow(), false, `the lock is handed back once compaction is over: ${history}`);
 });
 
 test('a conversation that fits is sent as it is, with no summary request', async (t) => {

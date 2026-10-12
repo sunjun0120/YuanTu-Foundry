@@ -2,10 +2,10 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import {
   lstatSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   renameSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -22,8 +22,9 @@ import type {
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { resolveOAuthEnvironment, type McpConfig, type McpOAuthConfig } from './config.ts';
+import { createMcpSecretCipher } from './secret-cipher.ts';
 
-/** Optional at-rest protection supplied by embedders that own a platform key (for example Electron safeStorage). */
+/** At-rest protection; embedders can override the default OS-keyring-backed cipher. */
 export interface SecretCipher {
   encrypt(text: string): Buffer;
   decrypt(bytes: Buffer): string;
@@ -150,7 +151,7 @@ function sanitizeRecord(value: unknown): McpOAuthRecord {
  */
 export class McpOAuthTokenStore {
   private readonly directory: string;
-  private readonly cipher?: SecretCipher;
+  private readonly cipher: SecretCipher;
   constructor(
     options: { directory?: string; cipher?: SecretCipher; env?: NodeJS.ProcessEnv } = {},
   ) {
@@ -162,41 +163,77 @@ export class McpOAuthTokenStore {
     } else {
       this.directory = defaultMcpOAuthDirectory(options.env ?? process.env);
     }
-    this.cipher = options.cipher;
+    this.cipher = options.cipher ?? createMcpSecretCipher(this.directory);
   }
   get location(): string {
     return this.directory;
   }
-  private fileFor(serverUrl: string): string {
+  private fileFor(serverUrl: string, legacy = false): string {
     return path.join(
       this.directory,
-      createHash('sha256').update(serverUrl).digest('hex') + '.json',
+      createHash('sha256').update(serverUrl).digest('hex') + (legacy ? '.json' : '.protected.json'),
     );
   }
   private decode(raw: string): McpOAuthRecord {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed && typeof parsed === 'object' && typeof parsed.payload === 'string') {
-      if (!this.cipher)
-        throw new Error('MCP credential file is encrypted but no decryptor is available');
       return sanitizeRecord(JSON.parse(this.cipher.decrypt(Buffer.from(parsed.payload, 'base64'))));
     }
     const payload = parsed && typeof parsed === 'object' ? (parsed.payload ?? parsed) : parsed;
     return sanitizeRecord(payload);
   }
-  readSync(serverUrl: string): McpOAuthRecord {
-    const file = this.fileFor(serverUrl);
+  private readEntry(file: string): string | undefined {
     let stat;
     try {
       stat = lstatSync(file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1 };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw error;
     }
     if (stat.isSymbolicLink() || !stat.isFile())
       throw new Error('MCP credential entry must be a regular file');
     if (stat.size > MAX_RECORD_BYTES) throw new Error('MCP credential entry exceeds 64KB');
+    return readFileSync(file, 'utf8');
+  }
+  private removeLegacy(serverUrl: string): void {
+    const file = this.fileFor(serverUrl, true);
     try {
-      return this.decode(readFileSync(file, 'utf8'));
+      const stat = lstatSync(file);
+      if (stat.isSymbolicLink() || !stat.isFile())
+        throw new Error('MCP credential entry must be a regular file');
+      unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  readSync(serverUrl: string): McpOAuthRecord {
+    checkedDirectory(this.directory, false);
+    try {
+      const protectedRaw = this.readEntry(this.fileFor(serverUrl));
+      if (protectedRaw !== undefined) {
+        const envelope = JSON.parse(protectedRaw) as Record<string, unknown> | null;
+        // A strict, secret-free tombstone blocks an already-started legacy migration
+        // from resurrecting credentials after another process removes them.
+        if (
+          envelope?.version === 1 &&
+          envelope.revoked === true &&
+          Object.keys(envelope).length === 2
+        ) {
+          this.removeLegacy(serverUrl);
+          return { version: 1 };
+        }
+        if (typeof envelope?.payload !== 'string')
+          throw new Error('Invalid encrypted MCP credential file');
+        const record = this.decode(protectedRaw);
+        this.removeLegacy(serverUrl);
+        return record;
+      }
+      const legacyRaw = this.readEntry(this.fileFor(serverUrl, true));
+      if (legacyRaw === undefined) return { version: 1 };
+      // Publish only if absent: another process may have refreshed credentials while
+      // the old entry was being decrypted/encrypted. Always return the protected winner.
+      this.writeSync(serverUrl, this.decode(legacyRaw), true);
+      return this.readSync(serverUrl);
     } catch (error) {
       if (error instanceof SyntaxError) throw new Error('Invalid MCP credential file');
       throw error;
@@ -206,6 +243,18 @@ export class McpOAuthTokenStore {
     return this.readSync(serverUrl);
   }
   async write(serverUrl: string, record: McpOAuthRecord): Promise<void> {
+    this.writeSync(serverUrl, record);
+  }
+  private writeSync(serverUrl: string, record: McpOAuthRecord, migrating = false): void {
+    checkedDirectory(this.directory, true);
+    const payload = JSON.stringify(sanitizeRecord(record));
+    const body = JSON.stringify({
+      version: 1,
+      payload: this.cipher.encrypt(payload).toString('base64'),
+    });
+    this.publishBody(serverUrl, body, migrating);
+  }
+  private publishBody(serverUrl: string, body: string, migrating = false): void {
     const directory = checkedDirectory(this.directory, true);
     const file = this.fileFor(serverUrl);
     try {
@@ -215,10 +264,6 @@ export class McpOAuthTokenStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    const payload = JSON.stringify(sanitizeRecord(record));
-    const body = this.cipher
-      ? JSON.stringify({ version: 1, payload: this.cipher.encrypt(payload).toString('base64') })
-      : JSON.stringify({ version: 1, payload: JSON.parse(payload) });
     if (Buffer.byteLength(body, 'utf8') > MAX_RECORD_BYTES)
       throw new Error('MCP credential entry exceeds 64KB');
     const temporary = path.join(directory, '.' + path.basename(file) + '.' + randomUUID() + '.tmp');
@@ -226,7 +271,16 @@ export class McpOAuthTokenStore {
       throw new Error('MCP credential path is outside its directory');
     try {
       writeFileSync(temporary, body, { flag: 'wx', mode: 0o600 });
-      renameSync(temporary, file);
+      if (migrating) {
+        try {
+          linkSync(temporary, file);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      } else {
+        renameSync(temporary, file);
+        this.removeLegacy(serverUrl);
+      }
     } finally {
       try {
         unlinkSync(temporary);
@@ -236,12 +290,9 @@ export class McpOAuthTokenStore {
     }
   }
   async remove(serverUrl: string): Promise<void> {
-    const file = this.fileFor(serverUrl);
-    try {
-      rmSync(file, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+    // No key access is needed to forget credentials. Keep the tombstone until a later
+    // intentional write replaces it; removing both paths would let an in-flight migration win.
+    this.publishBody(serverUrl, JSON.stringify({ version: 1, revoked: true }));
   }
 }
 

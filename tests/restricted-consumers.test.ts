@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile, stat, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/tools/index.ts';
@@ -13,8 +13,13 @@ import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sand
 import type { ToolContext } from '../packages/protocol/index.ts';
 
 const windows = { skip: process.platform !== 'win32', timeout: 60000 };
+const native = {
+  skip: process.platform !== 'win32' && process.platform !== 'darwin',
+  timeout: 60000,
+};
 const fixture = path.resolve('tests/lsp-fixture.ts');
-const context = (mode: 'host' | 'windows' | 'docker' = 'windows'): ToolContext => ({
+const nativeMode = process.platform === 'darwin' ? 'seatbelt' : 'windows';
+const context = (mode: 'host' | 'windows' | 'seatbelt' = nativeMode): ToolContext => ({
   signal: new AbortController().signal,
   approve: async () => true,
   executionPolicy: executionPolicy(mode),
@@ -63,7 +68,7 @@ function own(root: string, cleanup: () => unknown | Promise<unknown>) {
   resources.get(root)!.push(cleanup);
 }
 async function workspace(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-restricted-consumer-'));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), 'yuantu-restricted-consumer-')));
   resources.set(root, []);
   t.after(async () => {
     for (const cleanup of resources.get(root)!) await cleanup();
@@ -120,17 +125,19 @@ test(
 );
 
 test(
-  'a Windows language server shares file paths and approved multi-file edits',
-  windows,
+  'a native language server shares file paths and approved multi-file edits',
+  native,
   async (t) => {
     const root = await workspace(t);
     const outside = await workspace(t);
     await mkdir(path.join(root, '.yuantu'));
     const marker = path.join(root, 'lifecycle');
     const wrapper = path.join(root, 'server.mjs');
+    const localFixture = path.join(root, 'lsp-fixture.ts');
+    await writeFile(localFixture, await readFile(fixture));
     await writeFile(
       wrapper,
-      `import fs from 'node:fs';import {pathToFileURL} from 'node:url';let denied=false;try{fs.writeFileSync(${JSON.stringify(path.join(outside, 'denied.txt'))},'outside')}catch{denied=true}fs.writeFileSync('server-probe.json',JSON.stringify({denied,cwd:process.cwd(),pid:process.pid,marker:process.env.FAKE_LSP_LIFECYCLE_MARKER}));await import(pathToFileURL(${JSON.stringify(fixture)}).href);`,
+      `import fs from 'node:fs';import {pathToFileURL} from 'node:url';let denied=false;try{fs.writeFileSync(${JSON.stringify(path.join(outside, 'denied.txt'))},'outside')}catch{denied=true}fs.writeFileSync('server-probe.json',JSON.stringify({denied,cwd:process.cwd(),pid:process.pid,marker:process.env.FAKE_LSP_LIFECYCLE_MARKER}));await import(pathToFileURL(${JSON.stringify(localFixture)}).href);`,
     );
     await writeFile(
       path.join(root, '.yuantu/lsp.json'),
@@ -256,6 +263,9 @@ test(
 );
 
 test('unsupported LSP backends stay refused without launching a process', async (t) => {
+  const original = sandboxProvider('seatbelt');
+  registerSandboxProvider({ ...original, available: async () => 'fixture backend unavailable' });
+  t.after(() => registerSandboxProvider(original));
   const root = await workspace(t);
   await mkdir(path.join(root, '.yuantu'));
   await writeFile(
@@ -266,10 +276,10 @@ test('unsupported LSP backends stay refused without launching a process', async 
   );
   const manager = new LspManager(root);
   own(root, () => manager.close());
-  await withExecutionPolicy(executionPolicy('docker'), async () => {
+  await withExecutionPolicy(executionPolicy('seatbelt'), async () => {
     await assert.rejects(
       manager.start('fake', new AbortController().signal),
-      /unsupported|disabled outside host/,
+      /fixture backend unavailable/,
     );
     assert.deepEqual(manager.runningLanguages(), []);
   });

@@ -8,7 +8,54 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { listeningHost, connectClient } from './listening-host-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
-import { setBackgroundPolicy } from '../packages/core/background-deliveries.ts';
+import {
+  setBackgroundPolicy,
+  backgroundAuthority,
+} from '../packages/core/background-deliveries.ts';
+
+test('a cold automatic wake retains its read-only authority after a permission update', async (t) => {
+  const url = await httpFixture(t, (_body, response) => sendFrames(response, frames('done')));
+  let id = '';
+  const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url }, (file) => {
+    const store = new SessionStore(file);
+    id = store.create(hostRoot(file)).id;
+    store.recordEvent(id, 'command.started', { id: 'finished' });
+    store.recordEvent(id, 'command.settled', { id: 'finished', status: 'completed' });
+    setBackgroundPolicy(
+      store,
+      id,
+      { mode: 'auto', paused: false, maxWakeups: 1, maxRunMs: 2000 },
+      false,
+      {
+        sandboxMode: 'seatbelt',
+        sandboxFiles: 'read-only',
+        sandboxNetwork: 'denied',
+        permissionPolicy: null,
+      },
+    );
+    store.close();
+  });
+  const { client } = await connectClient(host.port);
+  t.after(() => client.stop().catch(() => {}));
+  await client.start();
+  await until(
+    async () =>
+      (await client.request('background.state', { sessionId: id })).deliveries[0]?.state ===
+      'processed',
+  );
+  await client.request('permission.update', {
+    sessionId: id,
+    policy: { version: 1, rules: [{ kind: 'write', effect: 'allow' }] },
+  });
+  const store = new SessionStore(host.dbPath);
+  try {
+    assert.equal(backgroundAuthority(store, id)?.sandboxFiles, 'read-only');
+    assert.equal(backgroundAuthority(store, id)?.sandboxMode, 'seatbelt');
+    assert.equal(backgroundAuthority(store, id)?.sandboxNetwork, 'denied');
+  } finally {
+    store.close();
+  }
+});
 
 async function until(check: () => Promise<boolean>, ms = 5000) {
   const end = Date.now() + ms;

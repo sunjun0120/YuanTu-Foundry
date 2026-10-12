@@ -22,6 +22,7 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/tools/index.ts';
 import type { ModelResponse, ModelRequest, Provider } from '../packages/protocol/index.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
+import { SubAgentCoordinator, resolveSubAgentOptions } from '../packages/core/subagents.ts';
 
 // ---- merged from subagent-providers.test.ts ----
 
@@ -58,6 +59,151 @@ const outcome = (overrides: Partial<SubAgentOutcome> = {}): SubAgentOutcome => (
   toolCalls: 0,
   usage: { inputTokens: 1, outputTokens: 1 },
   ...overrides,
+});
+
+for (const wait of [true, false]) {
+  for (const seam of ['usage', 'finished'] as const) {
+    test(`settlement failure at ${seam} is visible with wait=${wait}`, async () => {
+      let starts = 0;
+      const providers = new SubAgentProviderRegistry();
+      providers.register(
+        inProcessProvider({
+          capabilities: [...SUBAGENT_CAPABILITIES],
+          run: async () => {
+            starts++;
+            return outcome();
+          },
+        }),
+      );
+      const coordinator = new SubAgentCoordinator({
+        options: resolveSubAgentOptions({}),
+        signal: new AbortController().signal,
+        readOnly: false,
+        emit: (type) => {
+          if (seam === 'finished' && type === 'subagent.finished')
+            throw new Error('completion record refused');
+        },
+        onUsage: () => {
+          if (seam === 'usage') throw new Error('usage record refused');
+        },
+        providers,
+        provider: 'in-process',
+        parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+      });
+      const context = { signal: new AbortController().signal, approve: async () => true };
+      const result = await coordinator
+        .tool()
+        .execute({ tasks: [{ objective: 'Investigate' }], wait }, context);
+      const collected = wait
+        ? result
+        : await coordinator.collectTool().execute({ waitMs: 1000 }, context);
+      assert.equal(starts, 1, 'a bookkeeping failure must not repeat the model work');
+      assert.equal(coordinator.summaries[0]?.status, 'failed');
+      assert.match(collected.content, /settlement failed.*record refused/i);
+      assert.doesNotMatch(collected.content, /Status: completed/i);
+      await coordinator.settle();
+    });
+  }
+}
+
+test('a refused durable completion cannot emit a completed card', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settlement-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const child = store.create(root);
+  const record = store.recordEvent.bind(store);
+  store.recordEvent = (...args) => {
+    if (args[1] === 'subagent.finished') throw new Error('completion record refused');
+    return record(...args);
+  };
+  let starts = 0;
+  let turns = 0;
+  const events: Array<Record<string, unknown>> = [];
+  const agent = new Agent({
+    store,
+    provider: {
+      async complete() {
+        return ++turns === 1 ? delegateCall([{ objective: 'Investigate' }]) : reply();
+      },
+    },
+    tools: new ToolRegistry(),
+    approve: async () => true,
+    subagents: { enabled: true },
+    subagentProvider: 'settlement-fixture',
+    subagentProviders: [
+      inProcessProvider({
+        name: 'settlement-fixture',
+        capabilities: [...SUBAGENT_CAPABILITIES],
+        run: async () => {
+          starts++;
+          return outcome({ sessionId: child.id });
+        },
+      }),
+    ],
+    onEvent: (event) => {
+      if (event.type === 'subagent.finished') events.push(event.data);
+    },
+  });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Delegate' });
+  assert.equal(starts, 1);
+  assert.equal(result.subagents?.[0]?.status, 'failed');
+  assert.match(toolText(store, session.id), /settlement failed.*completion record refused/i);
+  assert.equal(
+    events.some((event) => event.status === 'completed'),
+    false,
+  );
+});
+
+test('a provider with a child in another store reports unsupported settlement instead of success', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-foreign-child-'));
+  const store = new SessionStore(path.join(root, 'parent.sqlite'));
+  const foreign = new SessionStore(path.join(root, 'foreign.sqlite'));
+  t.after(async () => {
+    store.close();
+    foreign.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const child = foreign.create(root);
+  let starts = 0;
+  let turns = 0;
+  const agent = new Agent({
+    store,
+    tools: new ToolRegistry(),
+    approve: async () => true,
+    provider: {
+      async complete() {
+        return ++turns === 1 ? delegateCall([{ objective: 'Investigate' }]) : reply();
+      },
+    },
+    subagents: { enabled: true },
+    subagentProvider: 'foreign-fixture',
+    subagentProviders: [
+      inProcessProvider({
+        name: 'foreign-fixture',
+        capabilities: [...SUBAGENT_CAPABILITIES],
+        run: async () => {
+          starts++;
+          return outcome({ sessionId: child.id });
+        },
+      }),
+    ],
+  });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Delegate' });
+  assert.equal(starts, 1);
+  assert.equal(result.subagents?.[0]?.status, 'failed');
+  assert.match(result.subagents?.[0]?.error ?? '', /settlement failed.*Session not found/i);
+  assert.equal(foreign.get(child.id).id, child.id, 'the foreign child remains intact');
+  assert.equal(
+    store
+      .events(session.id)
+      .some((event) => event.type === 'subagent.finished' && event.data.status === 'completed'),
+    false,
+  );
 });
 /** A provider that records what it was asked for, so the test can assert the request arrived intact. */
 function recordingProvider(

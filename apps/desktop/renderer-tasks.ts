@@ -76,6 +76,75 @@ function triggerSummary(task: Task): string {
     );
   return eventLabel(trigger.on) + paused;
 }
+/**
+ * What a person has ticked but not yet confirmed.
+ *
+ * The ticks are a draft, not display state: they used to be a `Set` created inside one pass of the card loop,
+ * so any rebuild of the list — a new step checkpoint, a new attempt, a language switch — silently cleared them
+ * and left the confirm button looking clickable while it did nothing. They are kept here instead, keyed by
+ * session and task, and reused only while the run and the acceptance definition are the same: an index into a
+ * different list of criteria means something else, so a different run or a redefined criterion starts empty.
+ */
+interface ConfirmDraft {
+  runId: string;
+  definitionKey: string;
+  indices: Set<number>;
+}
+/**
+ * The identity of an acceptance list, excluding `met`.
+ *
+ * `met` is deliberately absent: confirming is what flips it, and a definition that changed identity the moment
+ * it was confirmed would throw away the very draft the confirmation is reporting on.
+ */
+export function acceptanceDefinitionKey(acceptance: readonly Acceptance[]): string {
+  return JSON.stringify(
+    acceptance.map((item) => {
+      const check = item.check;
+      return check
+        ? [
+            item.description,
+            check.kind,
+            check.path ?? null,
+            check.expected ?? null,
+            check.command ?? null,
+            check.args ?? null,
+            check.cwd ?? null,
+            check.expectation ?? null,
+          ]
+        : [item.description, null];
+    }),
+  );
+}
+export class TaskConfirmDrafts {
+  private readonly drafts = new Map<string, ConfirmDraft>();
+  private static key(sessionKey: string, taskId: string): string {
+    return `${sessionKey}\u0000${taskId}`;
+  }
+  /** The live selection for this task, reset whenever the run or the definition it indexes has changed. */
+  selection(sessionKey: string, task: Task): Set<number> {
+    const key = TaskConfirmDrafts.key(sessionKey, task.id);
+    const runId = task.latestRunId ?? '';
+    const definitionKey = acceptanceDefinitionKey(task.acceptance);
+    const existing = this.drafts.get(key);
+    if (!existing || existing.runId !== runId || existing.definitionKey !== definitionKey) {
+      const fresh: ConfirmDraft = { runId, definitionKey, indices: new Set() };
+      this.drafts.set(key, fresh);
+      return fresh.indices;
+    }
+    // A criterion that is now met, or gone, cannot be confirmed again; the index would point elsewhere.
+    for (const index of [...existing.indices])
+      if (index >= task.acceptance.length || task.acceptance[index]!.met)
+        existing.indices.delete(index);
+    return existing.indices;
+  }
+  /** Keep only this session's live tasks: another session's ticks, or a deleted task's, are not a draft. */
+  retain(sessionKey: string, taskIds: Iterable<string>): void {
+    const prefix = `${sessionKey}\u0000`;
+    const live = new Set(taskIds);
+    for (const key of [...this.drafts.keys()])
+      if (!key.startsWith(prefix) || !live.has(key.slice(prefix.length))) this.drafts.delete(key);
+  }
+}
 interface ScheduleDraft {
   kind: 'none' | TaskTrigger['kind'];
   enabled: boolean;
@@ -98,6 +167,8 @@ export function setupTasks(send: (command: CarrierCommand) => Promise<CarrierSna
     session = '';
   let edit: { task: Task; form: HTMLFormElement; revision: string } | undefined;
   let schedule: { taskId: string; form: HTMLFormElement; revision: string } | undefined;
+  // The unconfirmed ticks belong to the session and task, not to the frame that drew them.
+  const drafts = new TaskConfirmDrafts();
   const button = (parent: HTMLElement, label: string, action: () => void, disabled = false) => {
     const b = el('button', label, 'secondary');
     b.type = 'button';
@@ -721,6 +792,11 @@ export function setupTasks(send: (command: CarrierCommand) => Promise<CarrierSna
       session = nextSession;
       key = '';
     }
+    // Drafts follow the live session's tasks: a switched session or a deleted task leaves nothing behind.
+    drafts.retain(
+      session,
+      (next?.tasks ?? []).map((task) => task.id),
+    );
     document.getElementById('tasks-panel')!.hidden = !next?.tasks.length;
     const newKey = JSON.stringify([next?.tasks, next?.taskAttempts, next?.taskSteps, locale()]);
     if (edit || schedule) {
@@ -830,20 +906,28 @@ export function setupTasks(send: (command: CarrierCommand) => Promise<CarrierSna
       const steps = el('ol', '', 'task-steps');
       task.steps.forEach((step) => steps.append(el('li', `${step.status} · ${step.description}`)));
       card.append(steps);
-      const indices = new Set<number>();
+      const indices = drafts.selection(session, task);
       const manual = task.acceptance.some((a) => !a.check);
       const canConfirm =
         !!task.latestRunId &&
         !!task.verification &&
         !['pending', 'in_progress'].includes(task.status);
+      // Declared before the rows so each row's listener can update the one button below them.
+      let confirm: HTMLButtonElement | undefined;
       task.acceptance.forEach((item, index) => {
         const row = el('label', '', 'task-acceptance-row');
         if (!item.check && canConfirm && !item.met) {
           const input = el('input');
           input.type = 'checkbox';
           input.disabled = busy;
+          input.checked = indices.has(index);
           input.addEventListener('change', () => {
             input.checked ? indices.add(index) : indices.delete(index);
+            const empty = indices.size === 0;
+            if (confirm) {
+              confirm.disabled = busy || empty;
+              confirm.dataset.unavailable = String(empty);
+            }
           });
           row.append(input);
         }
@@ -875,16 +959,27 @@ export function setupTasks(send: (command: CarrierCommand) => Promise<CarrierSna
       else action('重试', 'Retry', { type: 'taskRetry', taskId: task.id });
       action('重新制定计划', 'Regenerate plan', { type: 'taskPropose', taskId: task.id });
       action('验收', 'Verify', { type: 'taskVerify', taskId: task.id }, !task.latestRunId);
-      if (manual && canConfirm)
-        button(actions, tr('确认勾选的人工结果', 'Confirm selected manual results'), () => {
-          if (indices.size)
+      if (manual && canConfirm) {
+        const empty = indices.size === 0;
+        confirm = button(
+          actions,
+          tr('确认勾选的人工结果', 'Confirm selected manual results'),
+          () => {
+            if (!indices.size) return;
             void send({
               type: 'taskConfirm',
               taskId: task.id,
               indices: [...indices],
               expectedUpdatedAt: task.updatedAt,
+            }).then((result) => {
+              // A stale `updatedAt` is refused by the Host's own gate; re-reading is the answer either way.
+              if (result) render(result, false);
             });
-        });
+          },
+          empty,
+        );
+        confirm.dataset.unavailable = String(empty);
+      }
       action('历史', 'History', { type: 'taskHistory', taskId: task.id });
       stepJournal(card, next?.taskSteps[task.id] ?? []);
       const attempts = next?.taskAttempts[task.id] ?? [];

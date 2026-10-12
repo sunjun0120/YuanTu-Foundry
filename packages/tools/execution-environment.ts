@@ -4,9 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { ToolRegistry } from './registry.ts';
 import type { ToolContext } from '../protocol/index.ts';
-import { prepareSandbox, sandboxProvider, cleanupSandbox, stopSandbox } from './sandbox.ts';
+import {
+  prepareSandbox,
+  sandboxProvider,
+  cleanupSandbox,
+  stopSandbox,
+  markSandboxStarted,
+} from './sandbox.ts';
 import type { ExecutionPolicy, ExecutionCapabilities } from '../protocol/execution.ts';
-import { snapshotExecutionPolicy } from './execution-policy.ts';
+import { snapshotExecutionPolicy, requireExecutionCapabilities } from './execution-policy.ts';
 export {
   executionPolicy,
   withExecutionPolicy,
@@ -26,9 +32,13 @@ export async function localExecutionEnvironment(root: string, policy: ExecutionP
     env?: NodeJS.ProcessEnv,
   ) => {
     signal?.throwIfAborted();
+    requireExecutionCapabilities(fixed, {});
+    if (fixed.files === 'read-only')
+      requireExecutionCapabilities(fixed, { processFiles: 'read-only' });
     const working = await workspace.resolve(cwd);
     const unavailable = await sandboxProvider(fixed.mode).available();
     if (unavailable) throw new Error(unavailable);
+    requireExecutionCapabilities(fixed, {});
     signal?.throwIfAborted();
     const plan = await prepareSandbox(
       canonical,
@@ -38,6 +48,8 @@ export async function localExecutionEnvironment(root: string, policy: ExecutionP
       {
         mode: fixed.mode,
         image: fixed.image,
+        files: fixed.files,
+        network: fixed.requestedNetwork,
       },
       'command',
       env,
@@ -91,6 +103,7 @@ export async function localExecutionEnvironment(root: string, policy: ExecutionP
         const plan = await prepare(program, cwd, argv, signal, env);
         let child: ReturnType<typeof spawn>;
         try {
+          markSandboxStarted(plan);
           child = spawn(plan.executable, plan.args, {
             cwd: plan.cwd,
             env: plan.env,
@@ -120,7 +133,7 @@ export async function localExecutionEnvironment(root: string, policy: ExecutionP
               signal?.removeEventListener('abort', abort);
               void (async () => {
                 if (stopping) await stopping;
-                await cleanupSandbox(plan);
+                await stopSandbox(child, plan);
                 if (spawnError) throw spawnError;
                 return { code, signal: exitSignal };
               })().then(resolve, reject);

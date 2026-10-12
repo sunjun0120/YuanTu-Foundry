@@ -53,7 +53,7 @@ export interface PruneOutcome {
   messages: Message[];
   /** How many results this pass pruned. */
   pruned: number;
-  /** Characters the model no longer has to carry: what was removed, minus what the markers added. */
+  /** Code points the model no longer has to carry: what was removed, minus what the markers added. */
   prunedChars: number;
 }
 /**
@@ -120,7 +120,9 @@ export function pruneMessages(
     if (content === null) continue;
     outcome[index] = { ...message, content };
     pruned += 1;
-    prunedChars += message.content.length - content.length;
+    // The same unit the budget was stated in: `worthPruning` decided on code points, so the saving it reports
+    // is counted in code points too. `.length` would announce an emoji result as freeing twice what it did.
+    prunedChars += codePointLength(message.content) - codePointLength(content);
   }
   return { messages: outcome, pruned, prunedChars };
 }

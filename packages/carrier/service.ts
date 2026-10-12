@@ -13,6 +13,7 @@ import type { HostMethods } from '../protocol/rpc.ts';
 import { initialTaskDraft, normalizeTaskDraft } from '../core/task-spec.ts';
 import type { PermissionPolicySource } from '../core/permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
+import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
 import { parseCarrierCommand, type CarrierSnapshot, type SubAgentTranscript } from './contract.ts';
 /**
  * How many times the carrier restarts a Host that died on its own, and the pause between tries.
@@ -25,6 +26,46 @@ import { parseCarrierCommand, type CarrierSnapshot, type SubAgentTranscript } fr
  */
 const HOST_RECOVERY_ATTEMPTS = 3;
 const HOST_RECOVERY_DELAY_MS = 250;
+/**
+ * The capability a Host advertises when `sandbox.set` acknowledges the file and network policy it was given.
+ *
+ * A reply's `mode` used to be the whole promise: the carrier cached `files`/`network` from the *request* when
+ * the answer did not carry them, which turns "an older Host ignored this" into "the restriction is in force".
+ * A Host that can say so advertises this, and only then is a strict selection (one that names files or network)
+ * worth sending — let alone worth believing.
+ */
+const EXECUTION_POLICY_CAPABILITY = 'execution-policy-files-network-v1';
+/**
+ * Commands that put the Host to work under a sandbox policy.
+ *
+ * Refused while the visible session's policy is unconfirmed: work handed over then would run under whatever
+ * the Host happens to have, which is exactly the state a person cannot reason about. Re-selecting the sandbox
+ * is deliberately not in this set, because that is how the state is left.
+ */
+const EXECUTION_COMMANDS = new Set<string>([
+  'send',
+  'enqueue',
+  'taskStart',
+  'taskRetry',
+  'taskVerify',
+  'taskPropose',
+  'goal',
+  'plan',
+  'planExecute',
+  'approve',
+  'taskApproval',
+  'questionAnswer',
+  'undo',
+  'compact',
+]);
+/** One selection, as the error text names it: what a person chose versus what came back. */
+function describeSelection(selection: { mode: string; files?: string; network?: string }): string {
+  return [
+    `mode=${selection.mode}`,
+    ...(selection.files === undefined ? [] : [`files=${selection.files}`]),
+    ...(selection.network === undefined ? [] : [`network=${selection.network}`]),
+  ].join(' ');
+}
 /** How many 100-message history pages the sub-agent viewer will load before it stops. */
 const SUBAGENT_TRANSCRIPT_PAGES = 2;
 
@@ -95,7 +136,17 @@ export class CarrierService {
   private ready = false;
   /** Live settings belong to this carrier and must survive a supervised Host restart. */
   private permissionPolicy: PermissionPolicySource | undefined;
-  private sandboxMode: SandboxMode | undefined;
+  private sandboxSelections = new Map<
+    string,
+    { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect }
+  >();
+  /**
+   * Sessions whose last strict selection was never confirmed by the Host.
+   *
+   * A Host that answered something other than what was asked may have applied part of it, so the policy is not
+   * a fact this carrier can name; execution for that session waits until a selection is confirmed.
+   */
+  private unconfirmedPolicies = new Set<string>();
   private startupStage: CarrierSnapshot['startupStage'] = 'starting';
   private error: string | null = null;
   private recovery: CarrierSnapshot['recovery'] = null;
@@ -204,6 +255,80 @@ export class CarrierService {
     const sessionId = this.controller.snapshot.sessionId;
     await this.client.request('permission.update', { policy, ...(sessionId ? { sessionId } : {}) });
     this.permissionPolicy = structuredClone(policy);
+  }
+  /**
+   * Send one sandbox selection, and keep only what the Host confirmed.
+   *
+   * The reply is the only evidence that a policy is in force — the request is not evidence at all, because a
+   * Host that predates the capability ignores `files`/`network` and answers the mode alone. So a strict
+   * selection (one that names files or network) is refused before it is sent unless the Host advertises that it
+   * can acknowledge those fields, and afterwards every field that was asked for has to come back identical. A
+   * reply that says something else means the Host may have applied part of it: the session is recorded as
+   * unconfirmed and execution under it is refused until a selection is confirmed, rather than caching the
+   * request and carrying on with a policy nobody can name.
+   */
+  private async applySelection(
+    selection: { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect },
+    target: { key: string; sessionId?: string },
+  ): Promise<void> {
+    const strict = selection.files !== undefined || selection.network !== undefined;
+    if (strict && !this.client.supports(EXECUTION_POLICY_CAPABILITY))
+      throw new Error(
+        'Agent Host 不确认文件/网络执行策略（缺少 execution-policy-files-network-v1）；请升级 Agent Host 后重新选择该档位。',
+      );
+    const answer = await this.client.request('sandbox.set', {
+      mode: selection.mode,
+      ...(selection.files === undefined ? {} : { files: selection.files }),
+      ...(selection.network === undefined ? {} : { network: selection.network }),
+      ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+    });
+    const confirmed = this.confirmedSelection(
+      answer,
+      selection,
+      this.sandboxSelections.get(target.key),
+    );
+    if (!confirmed) {
+      this.unconfirmedPolicies.add(target.key);
+      throw new Error(
+        `Agent Host 未按请求确认执行策略（请求 ${describeSelection(selection)}，回执 ${describeSelection(answer)}）；策略状态未知，在重新确认前不再执行。`,
+      );
+    }
+    this.unconfirmedPolicies.delete(target.key);
+    this.sandboxSelections.set(target.key, confirmed);
+  }
+  /**
+   * The selection the Host actually acknowledged, or `undefined` when it acknowledged something else.
+   *
+   * Only fields the reply carries are taken from it; a field the request did not name keeps whatever was last
+   * confirmed, and is never invented from the request that was just sent.
+   */
+  private confirmedSelection(
+    answer: HostMethods['sandbox.set']['result'],
+    requested: { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect },
+    previous: { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect } | undefined,
+  ): { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect } | undefined {
+    if (!answer || answer.mode !== requested.mode) return undefined;
+    if (requested.files !== undefined && answer.files !== requested.files) return undefined;
+    if (requested.network !== undefined && answer.network !== requested.network) return undefined;
+    if (
+      answer.files !== undefined &&
+      answer.files !== 'read-only' &&
+      answer.files !== 'workspace-write'
+    )
+      return undefined;
+    if (
+      answer.network !== undefined &&
+      answer.network !== 'denied' &&
+      answer.network !== 'unrestricted'
+    )
+      return undefined;
+    const files = answer.files ?? previous?.files;
+    const network = answer.network ?? previous?.network;
+    return {
+      mode: answer.mode,
+      ...(files === undefined ? {} : { files }),
+      ...(network === undefined ? {} : { network }),
+    };
   }
   /**
    * The workspace's files, asked of the Host on the shell's behalf.
@@ -609,22 +734,43 @@ export class CarrierService {
           continue;
         }
         try {
+          /**
+           * A cached selection outlives the Host, but the session it belongs to may not: another client can
+           * delete it while this carrier is down. Replaying one whose session is gone used to throw out of the
+           * whole recovery — three attempts, and a window that never came back. The live session list is the
+           * authority, it is read before anything is applied, and only selections whose session still exists
+           * are replayed; the default selection (`''`) belongs to no session and is always kept. A list that
+           * fails is a failed recovery, not an empty one.
+           */
+          const known = await this.client.request('session.list', {});
+          const live = new Set(known.map((session) => session.id));
+          for (const key of [...this.sandboxSelections.keys()])
+            if (key && !live.has(key)) this.sandboxSelections.delete(key);
+          for (const key of [...this.unconfirmedPolicies])
+            if (key && !live.has(key)) this.unconfirmedPolicies.delete(key);
+          // The session this carrier had open goes through the same test: a deleted one is not retried, the
+          // ordinary fallback (the first live session, or a new one) is used instead.
+          const open = sessionId !== null && live.has(sessionId) ? sessionId : undefined;
           // Restore enforcement before loading sessions or announcing readiness. Launch defaults may be
           // less restrictive than the session's current policy.
-          if (this.sandboxMode !== undefined)
-            await this.client.request('sandbox.set', {
-              mode: this.sandboxMode,
-              ...(sessionId ? { sessionId } : {}),
+          const defaultSandbox = this.sandboxSelections.get('');
+          if (defaultSandbox) await this.applySelection(defaultSandbox, { key: '' });
+          for (const [selectedSession, selection] of [...this.sandboxSelections]) {
+            if (!selectedSession) continue;
+            await this.applySelection(selection, {
+              key: selectedSession,
+              sessionId: selectedSession,
             });
+          }
           if (this.permissionPolicy !== undefined)
             await this.client.request('permission.update', {
               policy: this.permissionPolicy,
-              ...(sessionId ? { sessionId } : {}),
+              ...(open ? { sessionId: open } : {}),
             });
           // The same order the launch path uses, so a recovered window is in the state a fresh one would be.
           await this.refresh();
           this.resources = await this.client.request('resources.list', {});
-          if (sessionId) await this.controller.load(sessionId);
+          if (open) await this.controller.load(open);
           else if (this.sessions[0]) await this.controller.load(this.sessions[0].id);
           else await this.controller.create();
           await this.refresh();
@@ -697,6 +843,13 @@ export class CarrierService {
         this.recovering
           ? 'Agent Host 正在自动重启，请稍候。'
           : 'Agent Host is not ready; restart the desktop',
+      );
+    if (
+      EXECUTION_COMMANDS.has(command.type) &&
+      this.unconfirmedPolicies.has(this.controller.snapshot.sessionId ?? '')
+    )
+      throw new Error(
+        '执行策略尚未确认：上次沙箱选择未获 Agent Host 确认，请重新选择档位并确认后再运行。',
       );
     // Any action counts as seeing the notice: it is there to explain a window that came back by itself, not to
     // stay on screen until the app is restarted again.
@@ -783,6 +936,9 @@ export class CarrierService {
           break;
         case 'deleteSession': {
           await this.client.request('session.delete', { sessionId: command.id });
+          this.sandboxSelections.delete(command.id);
+          // The unconfirmed marker goes with it: both describe a session that no longer exists.
+          this.unconfirmedPolicies.delete(command.id);
           this.sessionQuery = '';
           // A transcript belongs to the session that opened it; leaving it up would show one
           // conversation's child while another is on screen.
@@ -821,19 +977,28 @@ export class CarrierService {
         case 'loadOlder':
           await this.controller.loadOlder();
           break;
-        case 'sandbox':
+        case 'sandbox': {
           /**
            * The visible session owns the choice. Other sessions keep their own backend selections;
            * pending tools refresh before execution and started bodies keep their snapshots.
+           *
+           * Nothing is cached from the request: `applySelection` keeps what the Host confirmed and refuses a
+           * strict selection that a Host without the capability cannot acknowledge.
            */
-          await this.client.request('sandbox.set', {
-            mode: command.mode,
-            ...(this.controller.snapshot.sessionId
-              ? { sessionId: this.controller.snapshot.sessionId }
-              : {}),
-          });
-          this.sandboxMode = command.mode;
+          const selectedSession = this.controller.snapshot.sessionId;
+          await this.applySelection(
+            {
+              mode: command.mode,
+              ...(command.files === undefined ? {} : { files: command.files }),
+              ...(command.network === undefined ? {} : { network: command.network }),
+            },
+            {
+              key: selectedSession ?? '',
+              ...(selectedSession ? { sessionId: selectedSession } : {}),
+            },
+          );
           break;
+        }
         case 'send':
           if (!this.snapshot.configured)
             throw new Error('请打开“模型设置”，填写接口地址、模型 ID 和 API 密钥。');

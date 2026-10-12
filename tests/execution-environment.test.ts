@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { PermissionPolicy } from '../packages/core/permissions.ts';
-import { resolveSandboxConfig, setSandboxMode } from '../packages/tools/sandbox.ts';
+import {
+  resolveSandboxConfig,
+  setSandboxMode,
+  sandboxProvider,
+  registerSandboxProvider,
+} from '../packages/tools/sandbox.ts';
 import {
   executionPolicy,
   withExecutionPolicy,
@@ -15,10 +20,133 @@ import {
 
 const context = () => ({ signal: new AbortController().signal, approve: async () => true });
 
+test('a prepared environment refuses a replacement that weakens its captured network policy', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-replaced-environment-'));
+  const original = sandboxProvider('seatbelt');
+  const environment = await localExecutionEnvironment(root, executionPolicy('seatbelt'));
+  let preparations = 0;
+  registerSandboxProvider({
+    ...original,
+    capabilities: () => ({
+      processFiles: 'unrestricted',
+      network: 'unrestricted',
+      pathKind: 'local',
+      links: 'refused',
+    }),
+    available: async () => null,
+    prepare: async (request) => {
+      preparations++;
+      return original.prepare(request);
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  await assert.rejects(environment.processes.prepare('echo denied'), /declared policy/);
+  assert.equal(preparations, 0);
+});
+
+test('a replaced backend must not inherit the built-in filesystem and network claims', () => {
+  const original = sandboxProvider('seatbelt');
+  const previous = executionPolicy('seatbelt');
+  registerSandboxProvider({
+    ...original,
+    capabilities: () => ({
+      processFiles: 'unrestricted',
+      network: 'unrestricted',
+      pathKind: 'local',
+      links: 'refused',
+    }),
+  });
+  try {
+    const selected = executionPolicy('seatbelt');
+    assert.equal(selected.processFiles, 'unrestricted');
+    assert.equal(selected.network, 'unrestricted');
+    assert.throws(() => requireExecutionCapabilities(selected, { network: 'denied' }), /network/);
+    assert.throws(() => requireExecutionCapabilities(previous, {}), /declared policy/);
+  } finally {
+    registerSandboxProvider(original);
+  }
+});
+
+test('a legacy replacement without capability declarations cannot claim Seatbelt isolation', () => {
+  const original = sandboxProvider('seatbelt');
+  const replacement = { ...original };
+  delete replacement.capabilities;
+  registerSandboxProvider(replacement);
+  try {
+    assert.throws(
+      () => requireExecutionCapabilities(executionPolicy('seatbelt'), { network: 'denied' }),
+      /network/,
+    );
+  } finally {
+    registerSandboxProvider(original);
+  }
+});
+
+test('a read-only process policy reaches the selected provider instead of losing its file mode', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-readonly-config-'));
+  const original = sandboxProvider('seatbelt');
+  let files: unknown;
+  registerSandboxProvider({
+    ...original,
+    available: async () => null,
+    prepare: async (request) => {
+      files = request.config.files;
+      return {
+        executable: 'fixture',
+        args: [],
+        cwd: request.cwd,
+        env: {},
+        windowsVerbatimArguments: false,
+        backend: 'seatbelt',
+      };
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const environment = await localExecutionEnvironment(
+    root,
+    executionPolicy('seatbelt', { files: 'read-only' }),
+  );
+  await environment.processes.prepare('fixture');
+  assert.equal(files, 'read-only');
+});
+
+test('an unsupported read-only process policy is refused before preparation or effects', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-readonly-refusal-'));
+  const original = sandboxProvider('host');
+  let prepared = 0;
+  registerSandboxProvider({
+    ...original,
+    prepare: async (request) => {
+      prepared++;
+      return original.prepare(request);
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const environment = await localExecutionEnvironment(
+    root,
+    executionPolicy('host', { files: 'read-only' }),
+  );
+  await assert.rejects(
+    environment.processes.prepare('echo escaped > escaped.txt'),
+    /filesystem|read.only/i,
+  );
+  assert.equal(prepared, 0);
+  await assert.rejects(environment.files.read('escaped.txt'), { code: 'ENOENT' });
+});
+
 test('timed out policy re-preparation cannot start a body or journal a new effect', async () => {
   const registry = new ToolRegistry();
   registry.deadlines = { defaultMs: 20 };
-  let selected = executionPolicy('sbx');
+  let selected = executionPolicy('native');
   let prepared = 0,
     executed = 0,
     journaled = 0;
@@ -137,7 +265,7 @@ test('live selection changes while a wrapper waits are applied before the tool b
   });
   registry.registerHooks({
     aroundTool: async (_dispatch, next) => {
-      selected = executionPolicy('sbx');
+      selected = executionPolicy('native');
       policy = new PermissionPolicy({ version: 1, rules: [{ kind: 'command', effect: 'deny' }] });
       await Promise.resolve();
       return next();
@@ -159,7 +287,7 @@ test('live selection changes while a wrapper waits are applied before the tool b
         },
       },
     );
-    assert.equal(result.content, 'sbx/sbx');
+    assert.equal(result.content, 'native/native');
   } finally {
     await registry.close();
   }
@@ -203,7 +331,7 @@ test('permission tightening while a wrapper waits prevents an already approved b
 
 test('a trusted live policy refreshes after approval and stays fixed once the tool body starts', async () => {
   const registry = new ToolRegistry();
-  let selected = executionPolicy('sbx');
+  let selected = executionPolicy('native');
   registry.register({
     name: 'live_policy',
     description: 'inspect live policy',
@@ -211,7 +339,7 @@ test('a trusted live policy refreshes after approval and stays fixed once the to
     inputSchema: { type: 'object' },
     async execute(_args, ctx) {
       const before = `${ctx.executionPolicy?.mode}/${resolveSandboxConfig().mode}`;
-      selected = executionPolicy('docker');
+      selected = executionPolicy('seatbelt');
       await Promise.resolve();
       return {
         isError: false,
@@ -290,7 +418,7 @@ test('concurrent tool calls pin separate backend policies across awaits and glob
       { id: 'b', name: 'mode', arguments: {} },
       { ...context(), executionPolicy: executionPolicy('windows') },
     );
-    setSandboxMode('docker');
+    setSandboxMode('seatbelt');
     assert.deepEqual(
       (await Promise.all([host, windows])).map((r) => r.content),
       ['host/host', 'windows/windows'],
@@ -357,10 +485,12 @@ test('capability checks separate process filesystem confinement from network and
   );
   assert.throws(
     () =>
-      requireExecutionCapabilities(executionPolicy('docker'), { processFiles: 'workspace-write' }),
+      requireExecutionCapabilities(executionPolicy('seatbelt', { files: 'read-only' }), {
+        processFiles: 'workspace-write',
+      }),
     /filesystem/,
   );
-  requireExecutionCapabilities(executionPolicy('docker'), {
+  requireExecutionCapabilities(executionPolicy('seatbelt', { files: 'read-only' }), {
     processFiles: 'read-only',
     network: 'denied',
   });
@@ -390,12 +520,12 @@ test('local file and process contracts resolve one workspace identity and reject
 });
 
 test('nested async scopes restore the parent policy and preserve explicit hook selection', async () => {
-  await withExecutionPolicy(executionPolicy('docker'), async () => {
-    assert.equal(resolveSandboxConfig().mode, 'docker');
+  await withExecutionPolicy(executionPolicy('seatbelt'), async () => {
+    assert.equal(resolveSandboxConfig().mode, 'seatbelt');
     await withExecutionPolicy(executionPolicy('host'), async () =>
       assert.equal(resolveSandboxConfig().mode, 'host'),
     );
-    assert.equal(resolveSandboxConfig().mode, 'docker');
+    assert.equal(resolveSandboxConfig().mode, 'seatbelt');
     assert.equal(resolveSandboxConfig({ YUANTU_SANDBOX_HOOK: 'host' }, 'hook').mode, 'host');
   });
 });

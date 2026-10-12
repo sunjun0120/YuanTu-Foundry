@@ -133,6 +133,62 @@ function entries(payload: unknown): { key: string; entry: Record<string, unknown
     'The model list is not a shape this runtime recognises (expected an array, `data`, or `models`)',
   );
 }
+/** How much of a failed probe's body is read, and how long that read may take. */
+const MAX_ERROR_BODY_BYTES = 16_384;
+const ERROR_BODY_TIMEOUT_MS = 5_000;
+/**
+ * The endpoint's own explanation of a failed probe, bounded in both bytes and time.
+ *
+ * `response.text()` is the obvious way to read this and the wrong one: a gateway that answers 500 with an endless
+ * body — or that opens a body and then says nothing — leaves the probe waiting on a request that has already
+ * failed, and a connection probe is exactly the code that must not hang. The reader takes at most
+ * `MAX_ERROR_BODY_BYTES`, gives up after `ERROR_BODY_TIMEOUT_MS`, and cancels the body either way so the socket is
+ * not left open. An operator's own abort is re-raised rather than replaced: a cancellation is a decision, and
+ * reporting it as a status code would hide it.
+ */
+async function readDiscoveryError(response: Response, signal?: AbortSignal): Promise<string> {
+  const body = response.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let bytes = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('the endpoint stopped sending its error body')),
+      ERROR_BODY_TIMEOUT_MS,
+    );
+  });
+  const aborted = signal
+    ? new Promise<never>((_, reject) => {
+        const fail = () => reject(signal.reason ?? new Error('cancelled'));
+        if (signal.aborted) fail();
+        else signal.addEventListener('abort', fail, { once: true });
+      })
+    : undefined;
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([
+        reader.read(),
+        stalled,
+        ...(aborted ? [aborted] : []),
+      ]);
+      if (done) break;
+      if (!value) continue;
+      bytes += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+      if (bytes >= MAX_ERROR_BODY_BYTES) break;
+    }
+    return text + decoder.decode();
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason ?? error;
+    return text + decoder.decode();
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    await reader.cancel().catch(() => undefined);
+  }
+}
 /**
  * Read one connection's catalogue.
  *
@@ -152,7 +208,7 @@ export async function discoverModels(
     ...(options.signal ? { signal: options.signal } : {}),
   });
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
+    const body = await readDiscoveryError(response, options.signal);
     throw new Error(
       `The endpoint answered ${response.status} for its model list${body.trim() ? `: ${body.trim().slice(0, 300)}` : ''}`,
     );

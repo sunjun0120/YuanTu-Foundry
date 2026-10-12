@@ -23,7 +23,7 @@ async function fixture(t: test.TestContext) {
 test('explicit read-only file policy prevents a real file write before approval in every backend', async (t) => {
   const { root, tools } = await fixture(t);
   let approvals = 0;
-  for (const mode of ['host', 'windows', 'docker', 'sbx'] as const) {
+  for (const mode of ['host', 'windows', 'seatbelt', 'native'] as const) {
     const file = `${mode}.txt`;
     const result = await tools.execute(
       { id: mode, name: 'write_file', arguments: { path: file, content: 'fixture' } },
@@ -46,7 +46,7 @@ test('explicit read-only file policy prevents a real file write before approval 
 test('container command restrictions leave approved workspace file edits available and denied edits have no effect', async (t) => {
   const { root, tools } = await fixture(t);
   let approvals = 0;
-  for (const mode of ['docker', 'sbx'] as const) {
+  for (const mode of ['seatbelt', 'native'] as const) {
     for (const allowed of [false, true]) {
       const file = `${mode}-${allowed}.txt`;
       const result = await tools.execute(

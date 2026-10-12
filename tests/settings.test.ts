@@ -826,7 +826,7 @@ test('UI settings persist across reload and malformed files fall back to default
 
 test('desktop sandbox host selection requires explicit acknowledgement', () => {
   assert.throws(() => parseSandboxSettingsCommand({ type: 'set', mode: 'host' }), /confirm/i);
-  assert.throws(() => parseSandboxSettingsCommand({ type: 'set', mode: 'docker', extra: true }));
+  assert.throws(() => parseSandboxSettingsCommand({ type: 'set', mode: 'seatbelt', extra: true }));
   assert.throws(
     () => parseSandboxSettingsCommand({ type: 'get' }),
     /sandbox settings request/i,
@@ -838,7 +838,7 @@ test('desktop sandbox host selection requires explicit acknowledgement', () => {
   );
 });
 test('the launch environment names the mode a new session starts in, and nothing else', () => {
-  assert.equal(defaultSandboxMode({}), 'sbx', 'a desktop that was told nothing starts confined');
+  assert.equal(defaultSandboxMode({}), 'native', 'a desktop that was told nothing starts confined');
   assert.equal(defaultSandboxMode({ YUANTU_SANDBOX: 'host' }), 'host');
   assert.equal(defaultSandboxMode({ YUANTU_SANDBOX: 'windows' }), 'windows');
   assert.throws(() => defaultSandboxMode({ YUANTU_SANDBOX: 'other' }), /YUANTU_SANDBOX/);
@@ -850,12 +850,12 @@ test('the launch environment names the mode a new session starts in, and nothing
   const environment = new SandboxEnvironment({ YUANTU_SANDBOX: 'host' });
   assert.equal(environment.defaultMode, 'host');
   assert.equal(environment.environment().YUANTU_SANDBOX, 'host');
-  assert.equal(new SandboxEnvironment({}).environment().YUANTU_SANDBOX, 'sbx');
+  assert.equal(new SandboxEnvironment({}).environment().YUANTU_SANDBOX, 'native');
 });
 test('a backend nobody has probed reads as unknown rather than as usable', async () => {
   const environment = new SandboxEnvironment({ YUANTU_SANDBOX: 'host' });
-  assert.equal(environment.known('docker'), false, 'nobody has asked about docker');
-  assert.equal(environment.cached('docker'), null);
+  assert.equal(environment.known('seatbelt'), false, 'nobody has asked about seatbelt');
+  assert.equal(environment.cached('seatbelt'), null);
   assert.equal(await environment.probe('host'), null, 'the host backend always can');
   assert.equal(environment.known('host'), true, 'and now somebody has asked');
   assert.equal(
@@ -922,16 +922,23 @@ test('permission mode defaults to ask and persists only fixed policies', async (
 
 // ---- merged from sandbox-availability.test.ts ----
 
-test('a desktop with no usable sbx reports why, without changing where sessions start', async () => {
+test('a desktop with no usable native reports why, without changing where sessions start', async () => {
   /**
-   * The probe is an operator's answer, not a policy: an sbx that cannot run here is reported, and the mode a
-   * new session starts in stays `sbx` — the fail-closed default. The old store *did* have a fail-closed path
+   * The probe is an operator's answer, not a policy: an native that cannot run here is reported, and the mode a
+   * new session starts in stays `native` — the fail-closed default. The old store *did* have a fail-closed path
    * (it rewrote a file); there is no file to rewrite now, which is the point of the mode being per session.
    */
-  const environment = new SandboxEnvironment({ PATH: '', Path: '' });
-  assert.equal(environment.defaultMode, 'sbx');
-  assert.match((await environment.probe('sbx')) ?? '', /sbx.*unavailable/i);
-  assert.match(environment.cached('sbx') ?? '', /sbx.*unavailable/i);
+  const { sandboxProvider, registerSandboxProvider } = await import('../packages/tools/sandbox.ts');
+  const original = sandboxProvider('native');
+  registerSandboxProvider({ ...original, available: async () => 'Native fixture unavailable' });
+  try {
+    const environment = new SandboxEnvironment({});
+    assert.equal(environment.defaultMode, 'native');
+    assert.match((await environment.probe('native')) ?? '', /native.*unavailable/i);
+    assert.match(environment.cached('native') ?? '', /native.*unavailable/i);
+  } finally {
+    registerSandboxProvider(original);
+  }
 });
 
 // ---- merged from i18n.test.ts ----

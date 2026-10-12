@@ -18,7 +18,6 @@ test(
     const { buildProgramRunner } = await import(script);
     await buildProgramRunner(root);
     assert.deepEqual((await readdir(root)).sort(), [
-      'Dockerfile',
       'code-process-entry.js',
       'code-worker.js',
       'manifest.json',
@@ -37,10 +36,7 @@ test(
       assert.equal(createHash('sha256').update(bytes).digest('hex'), digest);
       if (file.endsWith('.js')) assert.doesNotMatch(bytes.toString(), /from ['"]\.\.?\//);
     }
-    const dockerfile = await readFile(path.join(root, 'Dockerfile'), 'utf8');
-    assert.match(dockerfile, /ARG RUNNER_BASE\r?\nFROM \$\{RUNNER_BASE\}/);
-    assert.match(dockerfile, /USER 65534:65534/);
-    assert.doesNotMatch(dockerfile, /COPY \. |allow-fs-write|allow-net/);
+    await assert.rejects(readFile(path.join(root, 'Dockerfile')), { code: 'ENOENT' });
     // Local bundle acceptance only: this test does not claim a container or its isolation was exercised.
     const child = spawn(
       process.execPath,

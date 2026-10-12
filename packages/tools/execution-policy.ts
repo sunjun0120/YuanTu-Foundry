@@ -1,35 +1,26 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { declaredExecutionCapabilities } from './execution-capabilities.ts';
 import type {
   ExecutionPolicy,
   ExecutionMode,
   ExecutionCapabilities,
   FileEffect,
+  NetworkEffect,
 } from '../protocol/execution.ts';
+import { parseSandboxMode } from './sandbox-mode.ts';
 
 const calls = new AsyncLocalStorage<ExecutionPolicy>();
-const capabilities: Record<ExecutionMode, ExecutionCapabilities> = {
-  host: {
-    processFiles: 'unrestricted',
-    network: 'unrestricted',
-    pathKind: 'local',
-    links: 'refused',
-  },
-  windows: {
-    processFiles: 'workspace-write-partial',
-    network: 'unrestricted',
-    pathKind: 'local',
-    links: 'refused',
-  },
-  docker: { processFiles: 'read-only', network: 'denied', pathKind: 'local', links: 'refused' },
-  sbx: { processFiles: 'read-only', network: 'denied', pathKind: 'local', links: 'refused' },
-};
 export function executionPolicy(
   mode: ExecutionMode,
-  options: { files?: FileEffect; image?: string } = {},
+  options: {
+    files?: FileEffect;
+    image?: string;
+    network?: NetworkEffect;
+    requestedNetwork?: NetworkEffect;
+  } = {},
 ): ExecutionPolicy {
-  const supported = capabilities[mode];
-  if (!supported) throw new Error('Unknown execution backend');
-  const image = options.image ?? 'node:24-bookworm-slim';
+  parseSandboxMode(mode);
+  const image = options.image ?? 'native';
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(image))
     throw new Error('Invalid sandbox image');
   if (
@@ -38,19 +29,36 @@ export function executionPolicy(
     options.files !== 'workspace-write'
   )
     throw new Error('Invalid file policy');
+  const network = options.requestedNetwork ?? options.network;
+  if (network !== undefined && network !== 'denied' && network !== 'unrestricted')
+    throw new Error('Invalid network policy');
+  const supported = declaredExecutionCapabilities({
+    mode,
+    image,
+    files: options.files ?? 'workspace-write',
+    network,
+  });
+  if (network && supported.network !== network)
+    throw new Error('Backend network capability does not satisfy this policy');
   return Object.freeze({
     mode,
     image,
     files: options.files ?? 'workspace-write',
     processFiles: supported.processFiles,
     network: supported.network,
+    ...(network ? { requestedNetwork: network } : {}),
   });
 }
 export function requireExecutionCapabilities(
   policy: ExecutionPolicy,
   required: Partial<Pick<ExecutionCapabilities, 'processFiles' | 'network'>>,
 ): void {
-  const actual = capabilities[policy.mode];
+  const actual = declaredExecutionCapabilities({
+    mode: policy.mode,
+    image: policy.image,
+    files: policy.files,
+    network: policy.requestedNetwork,
+  });
   if (!actual || policy.processFiles !== actual.processFiles || policy.network !== actual.network)
     throw new Error('Execution backend cannot enforce the declared policy');
   if (required.processFiles && required.processFiles !== actual.processFiles)
@@ -60,11 +68,15 @@ export function requireExecutionCapabilities(
 }
 export function snapshotExecutionPolicy(policy: ExecutionPolicy): ExecutionPolicy {
   requireExecutionCapabilities(policy, {});
-  return executionPolicy(policy.mode, policy);
+  return executionPolicy(policy.mode, {
+    files: policy.files,
+    image: policy.image,
+    requestedNetwork: policy.requestedNetwork,
+  });
 }
 export function currentExecutionPolicy(): ExecutionPolicy | undefined {
   return calls.getStore();
 }
-export function withExecutionPolicy<T>(policy: ExecutionPolicy, action: () => T): T {
-  return calls.run(snapshotExecutionPolicy(policy), action);
+export function withExecutionPolicy<T>(policy: ExecutionPolicy | undefined, action: () => T): T {
+  return policy ? calls.run(snapshotExecutionPolicy(policy), action) : action();
 }

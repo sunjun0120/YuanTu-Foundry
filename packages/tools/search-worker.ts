@@ -23,6 +23,14 @@ interface Match {
 }
 
 const input = workerData as SearchInput;
+/**
+ * The query as a pattern, which is the only thing `regex` mode ever sends here.
+ *
+ * This expression must stay `new RegExp(pattern, sensitive ? '' : 'i')`: `./files.ts` matches both of its modes
+ * through this same expression — escaping the query first when the mode is `literal` — so the `i` flag is the
+ * one case-insensitive rule the two share. The flag is not locale-aware and lowercasing is, which is exactly
+ * how the two modes came to disagree about one file on some hosts; a fold added on either side would reopen it.
+ */
 const expression = new RegExp(input.query, input.sensitive ? '' : 'i');
 const matches: Match[] = [];
 let limited = false;

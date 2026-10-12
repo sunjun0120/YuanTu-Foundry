@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeTaskDraft, initialTaskDraft } from '../packages/core/task-spec.ts';
+import {
+  normalizeTaskDraft,
+  initialTaskDraft,
+  validateAcceptance,
+} from '../packages/core/task-spec.ts';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,10 +24,99 @@ import {
   normalizeTaskTrigger,
   triggerSource,
 } from '../packages/core/task-trigger.ts';
-import { capturePathSnapshot, verifyAcceptance } from '../packages/core/acceptance.ts';
+import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
+import { nextCalendarRun } from '../packages/core/calendar.ts';
 import type { AcceptanceSpec } from '../packages/core/acceptance.ts';
 
 // ---- merged from task-spec.test.ts ----
+
+test('the stored form of a task cannot promise more than the verifier can run', () => {
+  /**
+   * `validateAcceptance` is the list the *write* paths use, and it allowed 100 entries while `verifyAcceptance`
+   * refuses more than 64. A task could therefore be created, stored, and then never verified: every run of it
+   * ended as a failed attempt with a message about the work, when the definition was what could not run. The two
+   * numbers are one number now, and it is the verifier's.
+   */
+  const build = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      description: `check ${index}`,
+      met: false,
+      check: { id: `c${index}`, kind: 'file-contains', path: 'out.txt', expected: 'ok' },
+    }));
+  assert.equal(
+    validateAcceptance(build(MAX_CHECKS)).length,
+    MAX_CHECKS,
+    'the limit itself has to be storable',
+  );
+  assert.throws(
+    () => validateAcceptance(build(MAX_CHECKS + 1)),
+    new RegExp(`at most ${MAX_CHECKS}`),
+    'one over the limit is refused where the task is written, not where it is run',
+  );
+});
+
+test('a daily rule fires at the wall time it names, even on the day the clocks skip it', (t) => {
+  /**
+   * `setHours` cannot represent 02:30 on a spring-forward day, so it lands on 03:30 — a wall time the operator
+   * never chose, for a rule that still claims to fire at 02:30. The explicit-zone path has always skipped such a
+   * day (`calendar.ts`'s `wallClockInstant` answers nothing for it and `nextCalendarRun` moves on), so one rule
+   * behaved two ways depending on whether a timezone was filled in — and `daily` is exactly the rule the desktop
+   * leaves the timezone off for.
+   *
+   * The two spellings are asserted against each other, because that agreement is the property; a pair of
+   * hard-coded instants would pin today's arithmetic rather than the rule.
+   */
+  const previous = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  t.after(() => {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  });
+  // 2026-03-08 is the US spring-forward day: local 02:00 jumps to 03:00, so 02:30 does not exist on it.
+  const after = new Date('2026-03-08T00:00:00-05:00');
+  const host = nextDailyRun(150, after);
+  assert.deepEqual(
+    [host.getHours(), host.getMinutes()],
+    [2, 30],
+    `the rule fires at the time it names, not the one the gap pushed it to: ${host.toString()}`,
+  );
+  assert.equal(
+    host.toISOString(),
+    nextCalendarRun(150, 'America/New_York', after).toISOString(),
+    'and the host-local path agrees with the zone-aware one',
+  );
+  // An ordinary day is untouched by the change.
+  const ordinary = nextDailyRun(150, new Date('2026-03-10T00:00:00-04:00'));
+  assert.deepEqual([ordinary.getHours(), ordinary.getMinutes()], [2, 30]);
+});
+
+test('a check byte limit survives being stored', () => {
+  /**
+   * The `file-exact`/`file-contains` branch rebuilt a literal with only id/kind/path/expected, so an author's
+   * `maxBytes` was dropped on the way in — and the consumer's forward of that field could never be anything but
+   * undefined. The check silently compared against the 1 MB default, which is how a check written to fail an
+   * oversized file passed instead.
+   */
+  const [stored] = validateAcceptance([
+    {
+      description: 'the file stays small',
+      met: false,
+      check: { id: 'a', kind: 'file-exact', path: 'out.txt', expected: 'ok', maxBytes: 4096 },
+    },
+  ]);
+  assert.equal(stored!.check?.maxBytes, 4096);
+  assert.throws(
+    () =>
+      validateAcceptance([
+        {
+          description: 'a limit that is not one',
+          met: false,
+          check: { id: 'a', kind: 'file-exact', path: 'out.txt', expected: 'ok', maxBytes: 0 },
+        },
+      ]),
+    /maximum bytes/,
+  );
+});
 
 test('task drafts have explicit pending steps and manual acceptance', () => {
   const draft = initialTaskDraft('plan', 'Implement a settings toggle');

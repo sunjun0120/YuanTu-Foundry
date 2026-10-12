@@ -74,6 +74,24 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
       const { providerState: _providerState, ...visible } = message;
       return visible;
     };
+    /**
+     * The half of a page that describes the *session* rather than the window of history in it: the statistics
+     * and the run's step boundaries.
+     *
+     * Both travel with the first page, like the offset and the total, because a reader asking for the newest
+     * window still has to be told how the session got there. Two pages answer "first" and both mean it: the
+     * ordinary first page (`offset === 0`), and a tail page, which is the first page a tail reader sees. A
+     * continuation chunk is neither — it is the rest of a message a page already started — so it repeats
+     * neither field, and the chunk branch of the oversized-message case below attaches exactly this, which is
+     * what keeps one page from promising two different shapes depending on how big its message was.
+     */
+    const sessionState =
+      (offset === 0 || params.tail !== undefined) && params.chunkOffset === undefined
+        ? {
+            statistics: ctx.store.statistics(id),
+            steps: ctx.store.stateOf<readonly StepRecord[]>('steps', id),
+          }
+        : {};
     let end = offset,
       bytes = 0;
     while (end < endOffset && end - offset < 100) {
@@ -95,9 +113,7 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
           messages: [],
           offset,
           totalMessages: endOffset,
-          ...(offset === 0 || params.tail !== undefined
-            ? { statistics: ctx.store.statistics(id) }
-            : {}),
+          ...sessionState,
           messageChunk: {
             index: offset,
             part: serialized.slice(start, next),
@@ -117,14 +133,7 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
       messages: history.slice(offset, end).map(displayMessage),
       offset,
       totalMessages: endOffset,
-      ...(offset === 0 || params.tail !== undefined
-        ? { statistics: ctx.store.statistics(id) }
-        : {}),
-      // The step record travels with the first page, like the statistics: it describes the session, not the
-      // window of history that happens to be loaded.
-      ...(offset === 0 || params.tail !== undefined
-        ? { steps: ctx.store.stateOf<readonly StepRecord[]>('steps', id) }
-        : {}),
+      ...sessionState,
       ...(end < endOffset ? { nextOffset: end } : {}),
     };
   },

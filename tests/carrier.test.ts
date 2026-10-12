@@ -16,7 +16,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -147,7 +147,7 @@ test(
       hostPath: path.join(projectRoot, 'apps', 'agent-host', 'main.ts'),
       workspace: root,
       env: {
-        YUANTU_SANDBOX: 'sbx',
+        YUANTU_SANDBOX: 'native',
         YUANTU_SESSION_TITLES: 'false',
         YUANTU_PROTOCOL: 'anthropic',
         YUANTU_MODEL: 'fixture',
@@ -229,7 +229,572 @@ test('a carrier that does not own the Host reports the break instead of restarti
   assert.match(carrier.snapshot.error ?? '', /连接已断开/);
 });
 
+test(
+  'recovery restores each session file policy instead of applying the last selection to the visible session',
+  { timeout: 30000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-file-recovery-'));
+    const results: Array<{ is_error?: boolean; content: unknown }> = [];
+    const url = await httpFixture(t, (body, response) => {
+      const last = body.messages.at(-1);
+      const result = Array.isArray(last?.content)
+        ? last.content.find((block: { type: string }) => block.type === 'tool_result')
+        : undefined;
+      if (result) {
+        results.push(result);
+        sendFrames(response, frames('done'));
+      } else
+        sendFrames(
+          response,
+          frames('', [
+            {
+              id: 'write',
+              name: 'write_file',
+              input: { path: results.length ? 'b.txt' : 'a.txt', content: 'written' },
+            },
+          ]),
+        );
+    });
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: path.join(projectRoot, 'apps', 'agent-host', 'main.ts'),
+      workspace: root,
+      env: {
+        YUANTU_SANDBOX: 'host',
+        YUANTU_SESSION_TITLES: 'false',
+        YUANTU_PROTOCOL: 'anthropic',
+        YUANTU_MODEL: 'fixture',
+        YUANTU_API_KEY: 'fixture',
+        YUANTU_MAX_CONTEXT_TOKENS: '128000',
+        YUANTU_BASE_URL: url,
+      },
+    });
+    t.after(async () => {
+      await carrier.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    await carrier.start();
+    const a = carrier.snapshot.session.sessionId!;
+    await carrier.dispatch({
+      type: 'sandbox',
+      mode: 'seatbelt',
+      files: 'read-only',
+      network: 'denied',
+    });
+    await carrier.dispatch({ type: 'create' });
+    const b = carrier.snapshot.session.sessionId!;
+    assert.notEqual(a, b);
+    await carrier.dispatch({
+      type: 'sandbox',
+      mode: 'host',
+      files: 'workspace-write',
+      network: 'unrestricted',
+    });
+    await carrier.updatePermissionPolicy({
+      version: 1,
+      rules: [{ kind: 'write', effect: 'allow' }],
+    });
+    await carrier.dispatch({ type: 'load', id: a });
+    const pid = carrier.snapshot.hostPid!;
+    process.kill(pid, 'SIGKILL');
+    await waitFor(
+      () =>
+        carrier.snapshot.ready &&
+        carrier.snapshot.hostPid !== pid &&
+        carrier.snapshot.recovery !== null,
+      'policy recovery',
+    );
+    await carrier.dispatch({ type: 'send', prompt: 'write a file' });
+    assert.equal(
+      results[0]?.is_error,
+      true,
+      'session A must retain read-only after session B was selected',
+    );
+    await carrier.dispatch({ type: 'load', id: b });
+    await carrier.dispatch({ type: 'send', prompt: 'write a file' });
+    assert.equal(results[1]?.is_error, false, 'session B must retain workspace-write');
+  },
+);
+
+/**
+ * A Host that is only what the cross-version policy and external-deletion cases need.
+ *
+ * The capability and the reply are the subject here, so the Host has to be able to be *older* than this
+ * carrier: it advertises `execution-policy-files-network-v1` only when told to, and answers `sandbox.set` with
+ * the mode alone when it does not — which is what a Host that ignores `files`/`network` really does. It is a
+ * real child process over the same stdio/JSONL seam the desktop uses, because "a Host from before the
+ * capability" and "a session another client deleted" are facts about a process and its store, not branches in
+ * a stub. Its sessions and its reply style live in a file the test rewrites, so a deletion can happen while
+ * the Host is down.
+ */
+const FAKE_HOST = `
+const fs = require('node:fs');
+
+const root = process.cwd();
+const statePath = process.env.FAKE_HOST_STATE;
+const logPath = process.env.FAKE_HOST_LOG;
+const strict = process.env.FAKE_HOST_STRICT === '1';
+const capabilities = ['runtime.ready', 'sessions', 'session-management', 'streaming', 'message-turns', 'approval', 'cancel', 'images', 'steer', 'follow-up', 'context-summary', 'resources', 'session-pages', 'tasks', 'task-attempts', 'task-verify', 'task-retry', 'background-jobs', 'plan-approval', 'subagents'];
+if (strict) capabilities.push('execution-policy-files-network-v1');
+
+function read() {
+  try {
+    return JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  } catch (error) {
+    return { sessions: [], selections: {}, reply: 'echo' };
+  }
+}
+function write(state) {
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+}
+function note(entry) {
+  fs.appendFileSync(logPath, JSON.stringify(entry) + '\\n');
+}
+function known(id) {
+  const found = (read().sessions || []).find(function (session) { return session.id === id; });
+  if (!found) throw new Error('Unknown session: ' + id);
+  return found;
+}
+function sandboxSet(params) {
+  note({ method: 'sandbox.set', params: params });
+  const state = read();
+  if (state.deleteOnSandbox) {
+    state.sessions = state.sessions.filter(function (session) { return session.id !== state.deleteOnSandbox; });
+    delete state.deleteOnSandbox;
+    write(state);
+  }
+  if (state.sandboxError) throw new Error(state.sandboxError);
+  if (params.sessionId !== undefined) known(params.sessionId);
+  const key = params.sessionId === undefined ? '' : params.sessionId;
+  const previous = (state.selections || {})[key] || {};
+  const applied = {
+    mode: params.mode,
+    files: params.files === undefined ? previous.files : params.files,
+    network: params.network === undefined ? previous.network : params.network,
+  };
+  state.selections = state.selections || {};
+  state.selections[key] = applied;
+  write(state);
+  if (!strict) return { mode: params.mode };
+  if (state.reply === 'mismatch') return { mode: params.mode, files: 'workspace-write' };
+  const answer = { mode: params.mode };
+  if (applied.files !== undefined) answer.files = applied.files;
+  if (applied.network !== undefined) answer.network = applied.network;
+  return answer;
+}
+let created = 0;
+function dispatch(method, params) {
+  switch (method) {
+    case 'host.info':
+      return { protocolVersion: 1, runtime: 'yuantu', workspace: root, capabilities: capabilities };
+    case 'session.list':
+      return read().sessions || [];
+    case 'session.create': {
+      created += 1;
+      const state = read();
+      const session = { id: 'session-new-' + process.pid + '-' + created, title: 'New session', workspace: root, createdAt: new Date().toISOString(), activeRun: null };
+      state.sessions = (state.sessions || []).concat([session]);
+      write(state);
+      return session;
+    }
+    case 'session.get':
+      known(params.sessionId);
+      return { messages: [] };
+    case 'changes.list':
+      return [];
+    case 'session.audit':
+      return { entries: [], nextSeq: 0 };
+    case 'task.list':
+      return [];
+    case 'background.list':
+      return [];
+    case 'background.state':
+      return { policy: { mode: 'notify', paused: false, maxWakeups: 3, maxRunMs: 60000, epoch: 'fixture', used: 0 }, deliveries: [] };
+    case 'resources.list':
+      return { instructions: [], skills: [], extensions: [] };
+    case 'runtime.ready':
+      return { ready: true };
+    case 'sandbox.set':
+      return sandboxSet(params);
+    case 'permission.update':
+      return { applied: true, resolvedApprovals: 0 };
+    default:
+      throw new Error('Unsupported method: ' + method);
+  }
+}
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', function (chunk) {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf('\\n')) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    let packet;
+    try {
+      packet = JSON.parse(line);
+    } catch (error) {
+      continue;
+    }
+    let answer;
+    try {
+      answer = { id: packet.id, result: dispatch(packet.method, packet.params || {}) };
+    } catch (error) {
+      answer = { id: packet.id, error: { message: error instanceof Error ? error.message : String(error), code: 'FAKE_HOST_ERROR' } };
+    }
+    process.stdout.write(JSON.stringify(answer) + '\\n');
+  }
+});
+`;
+interface FakeHostOptions {
+  strict?: boolean;
+  reply?: 'echo' | 'mismatch';
+  sessions?: string[];
+}
+/** A controllable Host in a temp workspace, plus the handles a test needs to steer and read it. */
+async function fakeHost(root: string, options: FakeHostOptions = {}) {
+  const statePath = path.join(root, 'fake-host-state.json');
+  const logPath = path.join(root, 'fake-host-requests.jsonl');
+  const script = path.join(root, 'fake-host.cjs');
+  const current = { sessions: options.sessions ?? [], reply: options.reply ?? 'echo' };
+  const flush = () =>
+    writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          sessions: current.sessions.map((id) => ({
+            id,
+            title: id,
+            workspace: root,
+            createdAt: '2026-10-10T00:00:00.000Z',
+            activeRun: null,
+          })),
+          selections: {},
+          reply: current.reply,
+        },
+        null,
+        2,
+      ),
+    );
+  await writeFile(script, FAKE_HOST);
+  await writeFile(logPath, '');
+  await flush();
+  const requests = async (): Promise<Array<{ method: string; params: Record<string, unknown> }>> =>
+    (await readFile(logPath, 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
+  return {
+    script,
+    env: {
+      FAKE_HOST_STATE: statePath,
+      FAKE_HOST_LOG: logPath,
+      FAKE_HOST_STRICT: options.strict ? '1' : '0',
+    },
+    requests,
+    /** What another client's deletion looks like to a Host: the session is no longer in its list. */
+    setSessions: async (sessions: string[]) => {
+      current.sessions = sessions;
+      await flush();
+    },
+    setReply: async (reply: 'echo' | 'mismatch') => {
+      current.reply = reply;
+      await flush();
+    },
+    failReplay: async (change: { deleteOnSandbox?: string; sandboxError?: string }) => {
+      const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+      await writeFile(statePath, JSON.stringify({ ...state, ...change }));
+    },
+  };
+}
+
+for (const failure of ['deleted', 'policy'] as const) {
+  test(
+    `recovery distinguishes ${failure} failure after listing sessions`,
+    { timeout: 30_000 },
+    async (t) => {
+      const root = await mkdtemp(path.join(tmpdir(), 'yuantu-recovery-race-'));
+      const host = await fakeHost(root, { strict: true, sessions: ['session-a'] });
+      const carrier = spawnedCarrier({
+        nodePath: process.execPath,
+        hostPath: host.script,
+        workspace: root,
+        env: host.env,
+      });
+      t.after(async () => {
+        await carrier.stop();
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      });
+      await carrier.start();
+      await carrier.dispatch({
+        type: 'sandbox',
+        mode: 'host',
+        files: 'read-only',
+        network: 'denied',
+      });
+      await host.failReplay(
+        failure === 'deleted'
+          ? { deleteOnSandbox: 'session-a' }
+          : { sandboxError: 'active policy refused' },
+      );
+      const pid = carrier.snapshot.hostPid!;
+      process.kill(pid, 'SIGKILL');
+      await waitFor(
+        () =>
+          (carrier.snapshot.ready &&
+            carrier.snapshot.hostPid !== pid &&
+            carrier.snapshot.recovery !== null) ||
+          carrier.snapshot.startupStage === 'failed',
+        'recovery after a replay race',
+      );
+      if (failure === 'deleted') {
+        assert.equal(carrier.snapshot.ready, true, carrier.snapshot.error ?? '');
+        assert.equal(
+          carrier.snapshot.recovery?.attempts,
+          2,
+          'the next attempt re-lists and discards the deleted selection',
+        );
+        assert.notEqual(carrier.snapshot.session.sessionId, 'session-a');
+      } else {
+        assert.equal(
+          carrier.snapshot.ready,
+          false,
+          'a live session policy failure must block readiness',
+        );
+        assert.match(carrier.snapshot.error ?? '', /active policy refused/);
+        await assert.rejects(carrier.dispatch({ type: 'send', prompt: 'must not execute' }));
+      }
+    },
+  );
+}
+
+test(
+  'a Host that cannot acknowledge files and network never has a restrictive policy cached',
+  { timeout: 30_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-legacy-policy-'));
+    const host = await fakeHost(root, { strict: false, sessions: ['session-a'] });
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: host.script,
+      workspace: root,
+      env: host.env,
+    });
+    t.after(async () => {
+      await carrier.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    await carrier.start();
+    assert.equal(carrier.snapshot.session.sessionId, 'session-a');
+    const sent = async () =>
+      (await host.requests()).filter((entry) => entry.method === 'sandbox.set');
+    // A mode-only choice is all a Host from before the capability can confirm, and that keeps working.
+    await carrier.dispatch({ type: 'sandbox', mode: 'host' });
+    assert.equal((await sent()).length, 1);
+    // A restrictive selection is refused *before* it is sent: this Host would answer the mode alone, and the
+    // carrier must not turn that into "read-only is in force".
+    await assert.rejects(
+      carrier.dispatch({
+        type: 'sandbox',
+        mode: 'seatbelt',
+        files: 'read-only',
+        network: 'denied',
+      }),
+      /execution-policy-files-network-v1/,
+    );
+    assert.equal(
+      (await sent()).length,
+      1,
+      'a Host that ignores the fields is never asked for them',
+    );
+    // And nothing unconfirmed is cached: the restart replays what the Host actually confirmed, and nothing else.
+    const pid = carrier.snapshot.hostPid!;
+    process.kill(pid, 'SIGKILL');
+    await waitFor(
+      () =>
+        carrier.snapshot.ready &&
+        carrier.snapshot.hostPid !== pid &&
+        carrier.snapshot.recovery !== null,
+      'recovery after a refused strict policy',
+    );
+    const replays = await sent();
+    assert.equal(replays.length, 2);
+    assert.equal(replays[1]!.params.mode, 'host');
+    assert.equal('files' in replays[1]!.params, false);
+    assert.equal('network' in replays[1]!.params, false);
+  },
+);
+
+test(
+  'a Host that answers a different policy leaves the selection unconfirmed and stops execution',
+  { timeout: 30_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-policy-mismatch-'));
+    const host = await fakeHost(root, { strict: true, sessions: ['session-a'] });
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: host.script,
+      workspace: root,
+      env: host.env,
+    });
+    t.after(async () => {
+      await carrier.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    await carrier.start();
+    // A Host that does acknowledge the fields is believed, and this is the state everything below departs from.
+    await carrier.dispatch({ type: 'sandbox', mode: 'host', files: 'workspace-write' });
+    await host.setReply('mismatch');
+    await assert.rejects(
+      carrier.dispatch({ type: 'sandbox', mode: 'seatbelt', files: 'read-only' }),
+      /策略状态未知/,
+    );
+    // The Host may have applied part of it, so work is refused rather than run under a policy nobody can name.
+    await assert.rejects(
+      carrier.dispatch({ type: 'taskVerify', taskId: 'task-1' }),
+      /执行策略尚未确认/,
+    );
+    await host.setReply('echo');
+    await carrier.dispatch({ type: 'sandbox', mode: 'host', files: 'read-only' });
+    // A confirmed selection clears the state, so the same command reaches the Host again.
+    await assert.rejects(
+      carrier.dispatch({ type: 'taskVerify', taskId: 'task-1' }),
+      (error: unknown) => {
+        assert.doesNotMatch(String(error), /执行策略尚未确认/);
+        return true;
+      },
+    );
+  },
+);
+
+test(
+  'recovery drops a sandbox selection whose session another client deleted',
+  { timeout: 30_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-deleted-session-'));
+    const host = await fakeHost(root, { strict: true, sessions: ['session-a', 'session-b'] });
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: host.script,
+      workspace: root,
+      env: host.env,
+    });
+    t.after(async () => {
+      await carrier.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    await carrier.start();
+    // Two sessions with two different strict policies, which is what makes a wrong replay visible.
+    await carrier.dispatch({
+      type: 'sandbox',
+      mode: 'seatbelt',
+      files: 'read-only',
+      network: 'denied',
+    });
+    await carrier.dispatch({ type: 'load', id: 'session-b' });
+    await carrier.dispatch({
+      type: 'sandbox',
+      mode: 'host',
+      files: 'workspace-write',
+      network: 'unrestricted',
+    });
+    await carrier.dispatch({ type: 'load', id: 'session-a' });
+    const before = (await host.requests()).length;
+    // Another client deletes B while this carrier is down. Its cached selection is now about a session that
+    // does not exist, and replaying it used to fail every recovery attempt.
+    await host.setSessions(['session-a']);
+    const pid = carrier.snapshot.hostPid!;
+    process.kill(pid, 'SIGKILL');
+    await waitFor(
+      () =>
+        (carrier.snapshot.ready &&
+          carrier.snapshot.hostPid !== pid &&
+          carrier.snapshot.recovery !== null) ||
+        carrier.snapshot.startupStage === 'failed',
+      'recovery with an externally deleted session',
+    );
+    assert.equal(
+      carrier.snapshot.ready,
+      true,
+      `recovery must survive an externally deleted session: ${carrier.snapshot.error ?? ''}`,
+    );
+    assert.equal(
+      carrier.snapshot.recovery?.attempts,
+      1,
+      'the deleted session must not cost an attempt',
+    );
+    const replays = (await host.requests())
+      .slice(before)
+      .filter((entry) => entry.method === 'sandbox.set');
+    assert.deepEqual(
+      replays.map((entry) => entry.params.sessionId),
+      ['session-a'],
+      'only the session that still exists is replayed',
+    );
+    assert.equal(
+      replays[0]!.params.files,
+      'read-only',
+      "A's policy must not be widened by the recovery",
+    );
+    assert.equal(replays[0]!.params.network, 'denied');
+  },
+);
+
+test(
+  'recovery starts over when the session it had open was deleted too',
+  { timeout: 30_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-deleted-open-'));
+    const host = await fakeHost(root, { strict: true, sessions: ['session-a'] });
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: host.script,
+      workspace: root,
+      env: host.env,
+    });
+    t.after(async () => {
+      await carrier.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    await carrier.start();
+    await carrier.dispatch({ type: 'sandbox', mode: 'seatbelt', files: 'read-only' });
+    const before = (await host.requests()).length;
+    await host.setSessions([]);
+    const pid = carrier.snapshot.hostPid!;
+    process.kill(pid, 'SIGKILL');
+    await waitFor(
+      () =>
+        (carrier.snapshot.ready &&
+          carrier.snapshot.hostPid !== pid &&
+          carrier.snapshot.recovery !== null) ||
+        carrier.snapshot.startupStage === 'failed',
+      'recovery with no sessions left',
+    );
+    assert.equal(
+      carrier.snapshot.ready,
+      true,
+      `recovery must fall back to a new session: ${carrier.snapshot.error ?? ''}`,
+    );
+    assert.equal(carrier.snapshot.recovery?.attempts, 1);
+    const replayed = (await host.requests())
+      .slice(before)
+      .filter((entry) => entry.method === 'sandbox.set');
+    assert.deepEqual(replayed, [], 'a deleted session is never retried');
+    assert.notEqual(carrier.snapshot.session.sessionId, 'session-a');
+  },
+);
+
 test('one parser validates the vocabulary every carrier sends', () => {
+  assert.deepEqual(parseCarrierCommand({ type: 'sandbox', mode: 'native', files: 'read-only' }), {
+    type: 'sandbox',
+    mode: 'native',
+    files: 'read-only',
+  });
+  assert.throws(
+    () => parseCarrierCommand({ type: 'sandbox', mode: 'native', files: 'invalid' }),
+    /Invalid carrier command/,
+  );
   assert.deepEqual(parseCarrierCommand({ type: 'cancel' }), { type: 'cancel' });
   assert.deepEqual(parseCarrierCommand({ type: 'copyText', text: 'hi' }), {
     type: 'copyText',

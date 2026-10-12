@@ -476,6 +476,20 @@
             <button id="general-settings-save" type="submit" class="primary">保存设置</button>
           </div>
         </form>
+        <section id="sandbox-setup-section" aria-labelledby="sandbox-setup-title" hidden>
+          <h3 id="sandbox-setup-title">Windows 增强隔离</h3>
+          <p id="sandbox-setup-note"></p>
+          <p
+            id="sandbox-setup-feedback"
+            class="settings-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <div class="settings-actions">
+            <button id="sandbox-setup-initialize" type="button" class="secondary" disabled></button>
+            <button id="sandbox-setup-refresh" type="button" class="secondary"></button>
+          </div>
+        </section>
       </section>
       <section
         id="model-settings-content"

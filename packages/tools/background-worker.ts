@@ -1,4 +1,4 @@
-import { stopSandbox, cleanupSandbox, type SandboxPlan } from './sandbox.ts';
+import { stopSandboxProcess, markSandboxStarted, type SandboxPlan } from './sandbox.ts';
 import { BufferedOutput } from './background-output.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 let plan: SandboxPlan;
@@ -6,6 +6,7 @@ let child: ChildProcessWithoutNullStreams | undefined;
 let stopped = false,
   finished = false;
 let killing: Promise<void> | undefined;
+let cleanupFailed = false;
 let deadline: ReturnType<typeof setTimeout> | undefined;
 const send = (data: unknown) => {
   if (process.connected) process.send!(data, () => {});
@@ -20,7 +21,8 @@ interval.unref();
 const stop = () => {
   stopped = true;
   if (child?.pid && !finished && !killing)
-    killing = stopSandbox(child, plan).catch(() => {
+    killing = stopSandboxProcess(child).catch(() => {
+      cleanupFailed = true;
       send({ type: 'cleanup-error' });
       child?.kill();
     });
@@ -31,16 +33,17 @@ const finish = async (code: number | null, signal: string | null, failed = false
   clearTimeout(deadline);
   clearInterval(interval);
   await killing;
-  if (child?.pid && !killing) {
+  if (child && !killing) {
     try {
-      await cleanupSandbox(plan);
+      await stopSandboxProcess(child);
     } catch {
-      send({ type: 'cleanup-error' });
+      cleanupFailed = true;
       failed = true;
+      send({ type: 'cleanup-error' });
     }
   }
   await output.drain();
-  send({ type: 'exit', code, signal, stopped, failed });
+  send({ type: 'exit', code, signal, stopped, failed, processClosed: !cleanupFailed });
   if (process.connected) process.disconnect();
 };
 process.on('disconnect', stop);
@@ -74,6 +77,7 @@ process.on('message', (raw: unknown) => {
   }
   if (msg.type !== 'start' || child) return;
   plan = msg.plan;
+  markSandboxStarted(plan);
   child = spawn(plan.executable, plan.args, {
     cwd: plan.cwd,
     env: plan.env,

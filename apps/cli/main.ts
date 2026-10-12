@@ -683,7 +683,15 @@ async function main(): Promise<void> {
               ? [acceptanceEffects.get(check.id)].filter((id): id is string => Boolean(id))
               : [],
           ),
-          status: verified.passed ? 'completed' : 'needs_review',
+          /**
+           * Completion is withheld until something has actually run — the Host's rule, which the CLI did not have.
+           *
+           * `verified.passed` alone was enough here, so a task whose checks are machine-checkable could be
+           * promoted to `completed` by a verification that never executed a step: `passed` is true for those
+           * checks without any run, and the CLI asked for no run gate at all. Same operation, two verdicts, and
+           * the CLI's was the one that recorded work nobody had done.
+           */
+          status: verified.passed && task.latestRunId ? 'completed' : 'needs_review',
           verification: verified.evidence,
           ...(verified.error ? { error: verified.error } : {}),
           acceptance: verified.acceptance,
@@ -911,6 +919,24 @@ async function main(): Promise<void> {
       sessionId = session.id;
       if (existing) previousPlan = store.todos(session.id);
       const retryTaskId = command === 'task-retry' ? args[1]! : undefined;
+      /**
+       * The gate a manual retry has to pass, which the Host applies and the CLI did not.
+       *
+       * `run-start.ts` refuses a manual retry while the task's approval is pending and not rejected: that work is
+       * waiting on a person, and retrying it starts a second attempt over the top of a decision nobody has made.
+       * The CLI builds its own agent and has its own run path, so it never reached that handler — and the task id
+       * it does pass (below) cannot help, because the gate lives in the handler the CLI does not use. It started
+       * exactly the run the Host defers, and the deferred approval was then left for whatever verification came
+       * next to consume.
+       *
+       * An unattended start is exempt in the Host because the clock is not a person deciding; `task-retry` is a
+       * person asking, so the exemption has nothing to cover here.
+       */
+      if (retryTaskId) {
+        const pending = store.getTask(session.id, retryTaskId).pendingApproval;
+        if (pending && pending.state !== 'rejected')
+          throw new Error('Review the pending task approval before a manual retry');
+      }
       /**
        * `plan-execute` re-checks the approval the same way the Host does — one implementation of the
        * gate, in the store — before anything runs. `plan` is the read-only planning phase, and it

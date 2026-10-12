@@ -4,8 +4,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { prepareContext } from '../packages/core/context.ts';
+import { contextMessageSize } from '../packages/protocol/images.ts';
+import { shortenMessages } from '../packages/core/shrink.ts';
+import { forecastRequest } from '../packages/core/forecast.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import type { ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
+import type { Message, ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -53,6 +56,79 @@ const reply = (truncated = false): ModelResponse => ({
     visibleChars: truncated ? 0 : 44,
     toolArgumentChars: 0,
   },
+});
+
+test('shortening work and durable compaction savings have separate accounting boundaries', async (t) => {
+  const { store, session, input } = await fixture(t);
+  const large = 'fulltooloutput '.repeat(1000);
+  const messages: Message[] = [
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'old', name: 'read_file', arguments: {} }],
+    },
+    { role: 'tool', toolCallId: 'old', content: large, isError: false },
+    { role: 'assistant', content: 'Read.', toolCalls: [] },
+    { role: 'user', content: 'Next.' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'new', name: 'read_file', arguments: {} }],
+    },
+    { role: 'tool', toolCallId: 'new', content: 'recent', isError: false },
+    { role: 'assistant', content: 'Read.', toolCalls: [] },
+    { role: 'user', content: 'Continue.' },
+  ];
+  for (const message of messages) store.append(session.id, message);
+  const original = store.messages(session.id);
+  const shrink = {
+    policy: { keepRecent: 0, tokens: 100 },
+    spill: () => ({ path: 'full-output.txt', bytes: large.length, lines: 1 }),
+    measure: (text: string) => text.length,
+  };
+  const shortened = shortenMessages(original, shrink.policy, shrink.spill, shrink.measure);
+  let summarizedFullOutput = false;
+  const result = await prepareContext({
+    ...input,
+    maxContextTokens: 128_000,
+    shrinkPercent: 1,
+    shrink,
+    provider: {
+      async complete(request) {
+        summarizedFullOutput ||= request.messages.some((message) =>
+          message.content.includes(large),
+        );
+        return reply();
+      },
+    },
+  });
+  assert.equal(result.compacted, true);
+  assert.equal(shortened.shortened, 1, 'the pre-pass must actually shorten a result');
+  assert.equal(result.shortened, shortened.shortened);
+  assert.equal(result.freedChars, shortened.freedChars);
+  assert.equal(summarizedFullOutput, true, 'the summary uses the complete durable history');
+  const surface = store.contextSurface(session.id)!;
+  const operation = store.surfaceHistory(session.id).at(-1)!;
+  assert.equal(operation.replacedChars, contextMessageSize(original));
+  assert.equal(
+    operation.surfaceChars,
+    surface.summary.length + contextMessageSize(original.slice(surface.coveredMessages)),
+  );
+  assert.deepEqual(
+    store.messages(session.id),
+    original,
+    'neither operation truncates the human history',
+  );
+  assert.deepEqual(
+    result.forecast,
+    forecastRequest({
+      system: input.system,
+      messages: result.messages,
+      tools: input.tools,
+      maxOutputTokens: input.maxOutputTokens,
+      maxContextTokens: 128_000,
+    }),
+  );
 });
 
 test('summary batching reserves useful output before filling the input window', async (t) => {

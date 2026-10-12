@@ -1,4 +1,4 @@
-import { stopSandbox, cleanupSandbox } from './sandbox.ts';
+import { stopSandbox, cleanupSandbox, markSandboxStarted } from './sandbox.ts';
 import { spawn } from 'node:child_process';
 import type { Tool } from '../protocol/index.ts';
 import { toolOutput } from '../protocol/tool-result.ts';
@@ -65,7 +65,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
     permission: 'command',
     output: RUN_COMMAND_OUTPUT,
     description:
-      'Run an approved shell command. Docker mode uses Linux /bin/sh, no network and a read-only workspace; host mode is NOT sandboxed. Use foreground commands, no detached/background jobs. Reports actual stdout, stderr and exit code.',
+      'Run an approved shell command using the selected execution backend and its file/network policy. Native isolation is platform-dependent; host mode is unrestricted. Use foreground commands, no detached/background jobs. Reports actual stdout, stderr and exit code.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -83,17 +83,30 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
       const config = resolveSandboxConfig();
       const environment = await localExecutionEnvironment(
         root,
-        ctx.executionPolicy ?? executionPolicy(config.mode, { image: config.image }),
+        ctx.executionPolicy ?? executionPolicy(config.mode, config),
       );
+      ctx.signal.throwIfAborted();
       const plan = await environment.processes.prepare(
         invocation?.command ?? command,
         cwd,
         invocation?.argv,
         ctx.signal,
       );
-      ctx.signal.throwIfAborted();
+      /**
+       * An abort arriving between the plan and the spawn still has a plan to release.
+       *
+       * `prepare` is not a dry run: a native backend has already acquired scratch and may hold workspace ACL
+       * grants. Nothing downstream runs when this throws, so this is the only place the plan can be handed back.
+       */
+      try {
+        ctx.signal.throwIfAborted();
+      } catch (error) {
+        await cleanupSandbox(plan).catch(() => undefined);
+        throw error;
+      }
       const startedAt = performance.now();
       return new Promise((resolve, reject) => {
+        markSandboxStarted(plan);
         const child = spawn(plan.executable, plan.args, {
           cwd: plan.cwd,
           env: plan.env,
@@ -163,7 +176,16 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
           if (!settled) {
             settled = true;
             cleanup();
-            reject(error);
+            /**
+             * A spawn that never produced a process still produced the plan, and the `close` handler below
+             * returns immediately once `settled` is set — so this is the only place that can release it. Without
+             * it every failed spawn (a missing executable, a refusal) leaked the container and, on a copying
+             * backend, a whole copy of the workspace, with nothing left to reclaim either. The cleanup is awaited
+             * so the caller is not told the attempt is over while it is still being torn down.
+             */
+            void cleanupSandbox(plan)
+              .catch(() => undefined)
+              .then(() => reject(error));
           }
         });
         child.on('close', (code, signal) => {
@@ -172,7 +194,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
           cleanup();
           void (async () => {
             if (killing) await killing;
-            else await cleanupSandbox(plan);
+            else await stopSandbox(child, plan);
             if (cleanupError) {
               reject(cleanupError);
               return;

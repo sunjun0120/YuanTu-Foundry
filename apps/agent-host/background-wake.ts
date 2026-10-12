@@ -36,14 +36,21 @@ export interface BackgroundWake {
 export function createBackgroundWake(ctx: HostContext): BackgroundWake {
   const currentAuthority = (sessionId: string): BackgroundAuthority => ({
     sandboxMode: ctx.sessionSandboxes.get(sessionId) ?? ctx.defaultSandboxMode,
+    sandboxFiles: ctx.sessionSandboxFiles.get(sessionId) ?? ctx.defaultSandboxFiles,
+    sandboxNetwork: ctx.sessionSandboxNetwork.get(sessionId) ?? ctx.defaultSandboxNetwork,
     permissionPolicy: ctx.permissionPolicy?.toJSON() ?? null,
   });
   const captureAuthority = (sessionId: string, permissionOnly = false) => {
     const { mode, paused, maxWakeups, maxRunMs } = backgroundState(ctx.store, sessionId).policy;
     const authority = currentAuthority(sessionId);
-    if (permissionOnly && !ctx.sessionSandboxes.has(sessionId))
-      authority.sandboxMode =
-        backgroundAuthority(ctx.store, sessionId)?.sandboxMode ?? authority.sandboxMode;
+    if (permissionOnly && !ctx.sessionSandboxes.has(sessionId)) {
+      const previous = backgroundAuthority(ctx.store, sessionId);
+      authority.sandboxMode = previous?.sandboxMode ?? authority.sandboxMode;
+      authority.sandboxNetwork = previous ? previous.sandboxNetwork : authority.sandboxNetwork;
+      authority.sandboxFiles = previous
+        ? (previous.sandboxFiles ?? 'workspace-write')
+        : authority.sandboxFiles;
+    }
     setBackgroundPolicy(
       ctx.store,
       sessionId,

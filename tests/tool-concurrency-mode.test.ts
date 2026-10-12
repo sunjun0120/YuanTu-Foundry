@@ -137,7 +137,6 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
     'office_inspect',
     'read_file',
     'read_image',
-    'recall_knowledge',
     'repo_map',
     'search_files',
     'verify_file_delivery',
@@ -172,6 +171,10 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
     'lsp_diagnostics',
     'lsp_rename',
     'lsp_apply_code_action',
+    // Not a writer of the workspace — it declares no permission because it never touches a project file — but a
+    // search refreshes the index before it ranks anything, and a refresh that finds a changed document writes
+    // it. So "pure search" is not a promise this tool can make, and it does not make it.
+    'recall_knowledge',
   ]);
   const shipped = new Set(specs.map((spec) => spec.name));
   for (const spec of specs)
@@ -184,4 +187,31 @@ test('the shipped read-only tools opt in, and nothing that writes does', async (
   // A guard against a typo in the list above quietly weakening this test.
   const missing = [...forbidden].filter((name) => !shipped.has(name));
   assert.deepEqual(missing, [], 'every tool named here is a tool this build actually ships');
+});
+
+test('recall knowledge with refresh is scheduled exclusively', async (t) => {
+  /**
+   * The scheduling decision itself, not the tool's name in a list: the registry is what the run loop asks, and
+   * this is what it answers. `recall_knowledge` used to opt in to the parallel set on the grounds that a path
+   * argument chooses what is read rather than whether anything is written — true of `read_file`, and false
+   * here, because `search()` refreshes the pinned documents first and a changed document is re-indexed in a
+   * write transaction. Two of these at once would put two writers on one index.
+   *
+   * Nothing about elapsed time is claimed: the refresh is what makes it exclusive, and it is the declaration
+   * — not a measurement — that the scheduler reads.
+   */
+  const tools = await registry(t);
+  const spec = tools.specs().find((entry) => entry.name === 'recall_knowledge');
+  assert.ok(spec, 'the tool under test is one this build ships');
+  // `executionMode` is what the run loop asks and what it gets. Reaching past it for the tool object would
+  // test the declaration rather than the scheduler's reading of it, and `specs()` deliberately carries
+  // schemas, not tool internals.
+  assert.equal(
+    tools.executionMode({
+      id: 'probe',
+      name: 'recall_knowledge',
+      arguments: { query: 'anything' },
+    }),
+    'exclusive',
+  );
 });

@@ -25,7 +25,19 @@ export async function loadHookRegistry(
   if (workspace) {
     const root = path.resolve(workspace);
     const relative = path.relative(root, target);
-    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative))
+    /**
+     * Whether the resolved module is inside the workspace.
+     *
+     * Asked as an escape rather than as a prefix: what leaves the root is `..` exactly, or `..` followed by a
+     * separator. A bare `startsWith('..')` also matches a directory *inside* the workspace whose name begins with
+     * two dots — `..hooks/hooks.mjs` — which read as "outside" and was loaded, so a repository shipping a
+     * `..hooks/` directory chose the code this flag runs. The empty relative path is the workspace root itself,
+     * which is inside it; and a path on another drive has no relative form at all (`path.relative` answers with an
+     * absolute path), which is outside by definition.
+     */
+    const outside =
+      path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`);
+    if (relative === '' || !outside)
       throw new Error(
         `Hooks module ${spec} is inside the workspace; hooks are trusted code and must live outside it`,
       );

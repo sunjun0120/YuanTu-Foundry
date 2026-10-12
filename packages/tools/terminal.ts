@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { killTree } from './process.ts';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveSandboxConfig } from './sandbox-provider.ts';
+import { markSandboxStarted } from './sandbox.ts';
 import { ptyProvider, type PtyProcess } from './pty-provider.ts';
 import { Workspace } from './files.ts';
 import { localExecutionEnvironment } from './execution-environment.ts';
@@ -82,6 +84,8 @@ interface Terminal {
   policy: ExecutionPolicy;
   closed: Promise<void>;
   stopping?: Promise<void>;
+  /** The signal the stop in flight was asked for, if any: a graceful request can be escalated, a forced end cannot. */
+  stoppingSignal?: string;
   status: 'running' | 'exited';
   exitCode: number | null;
   output: string;
@@ -180,7 +184,7 @@ export class TerminalSessions {
       context.executionPolicy ?? currentExecutionPolicy() ?? executionPolicy(config.mode, config),
     );
     const mode = policy.mode;
-    if (mode !== 'host' && mode !== 'windows')
+    if (!['host', 'native', 'windows', 'seatbelt'].includes(mode))
       throw new Error(
         `Terminals run a shell on the host, which would be a way around the ${mode} sandbox this run's commands are confined to. Use run_command or start_command instead, or set YUANTU_SANDBOX=host to run unconfined.`,
       );
@@ -236,6 +240,7 @@ export class TerminalSessions {
       );
       let child: PtyProcess;
       try {
+        markSandboxStarted(plan);
         child = await provider.spawn({
           file: plan.executable,
           args: plan.args,
@@ -251,7 +256,11 @@ export class TerminalSessions {
       let exited!: () => void;
       const closed = new Promise<void>((resolve) => {
         exited = resolve;
-      }).then(() => environment.processes.cleanup(plan));
+      }).then(async () => {
+        if (plan.processTree === 'process-group' && process.platform !== 'win32')
+          await killTree(child.pid);
+        await environment.processes.cleanup(plan);
+      });
       void closed.catch(() => {});
       const terminal: Terminal = {
         id: randomUUID(),
@@ -330,7 +339,9 @@ export class TerminalSessions {
    * `SIGINT` is written to the terminal as the interrupt character rather than signalled, because that is what
    * the key does and it is the only version that works everywhere: on POSIX the line discipline turns it into
    * a signal for the foreground job (not for the shell, which is what `kill` would reach), and on Windows
-   * ConPTY there is no signal delivery at all, only this byte. The other two signals go to the process.
+   * ConPTY there is no signal delivery at all, only this byte. The other two signals go to the process tree,
+   * and they are a request rather than a promise: a platform that cannot deliver one says so instead of letting
+   * the caller believe the process was asked to stop.
    */
   signal(id: string, scope: string, signal: TerminalSignal): TerminalSnapshot {
     // Validated here as well as in the schema: this is a public seam method, and `kill('SIGUSR1')` on a backend
@@ -373,11 +384,22 @@ export class TerminalSessions {
         'Terminal creation policy differs from this call; close it and open a new terminal',
       );
   }
+  /**
+   * Stop a terminal.
+   *
+   * A stop already in flight is not repeated: two concurrent terminations of the same process tree race for no
+   * reason. It can be *replaced* by a stronger one, though, because a graceful request is not a guarantee — a
+   * program that ignores SIGTERM is exactly what SIGKILL, a close or a host shutdown is for, and treating that
+   * as a repeat would leave a process nobody can end.
+   */
   private beginStop(terminal: Terminal, signal?: string): void {
-    if (terminal.stopping) return;
+    if (terminal.stopping && stopStrength(signal) <= stopStrength(terminal.stoppingSignal)) return;
+    terminal.stoppingSignal = signal;
     try {
       if (terminal.process.terminate) {
-        terminal.stopping = terminal.process.terminate();
+        // The backend that owns the OS process tree is the only one that can honour a named signal, so the name
+        // goes with the request. `close` and cancellation pass none: they want the terminal gone, not asked.
+        terminal.stopping = terminal.process.terminate(signal as NodeJS.Signals | undefined);
       } else {
         terminal.process.kill(signal);
         terminal.stopping = Promise.resolve();
@@ -462,7 +484,7 @@ export class TerminalSessions {
       name: 'terminal_open',
       permission: 'command',
       description:
-        'Open an interactive terminal: a real pseudo-terminal on the host, for programs that need one — a REPL, a debugger, an interactive rebase, a prompt waiting for an answer. It stays open across steps and across runs of this session until you close it, so use it instead of run_command when the program expects to be talked to. Without `command` it is the platform shell. Read with terminal_read, type with terminal_send, interrupt with terminal_signal. Available with host or Windows execution backends; containers remain unsupported. The terminal keeps its creation policy and cannot be steered after a policy switch.',
+        'Open an interactive pseudo-terminal through the selected execution backend, for a REPL, debugger or program expecting input. It stays open across steps and runs until closed. Without `command` it uses the platform shell. Read with terminal_read, type with terminal_send and interrupt with terminal_signal. Native availability and policy checks apply. The terminal keeps its creation policy and cannot be steered after a policy switch.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -619,7 +641,7 @@ export class TerminalSessions {
       name: 'terminal_signal',
       permission: 'command',
       description:
-        'Interrupt or end what a terminal is running: SIGINT is the interrupt key (Ctrl-C), SIGTERM and SIGKILL end the process itself. Use SIGINT to stop a running command and get the prompt back, and SIGKILL only when the program ignores everything else. It does not close the terminal.',
+        'Interrupt or end what a terminal is running: SIGINT is the interrupt key (Ctrl-C), SIGTERM and SIGKILL end the process itself. Use SIGINT to stop a running command and get the prompt back, and SIGKILL only when the program ignores everything else. It does not close the terminal. Ending a process is a request the platform may not be able to keep: a Windows console has no signal delivery, so there the process tree is ended by force and the result says so instead of claiming the signal was sent.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -643,9 +665,14 @@ export class TerminalSessions {
           if (signal !== 'SIGINT') await this.join(this.get(id, scope));
           const terminal = this.get(id, scope);
           const snapshot = this.snapshot(terminal, terminal.total);
+          // A signal is a request, and a backend that cannot deliver one has to be reported as such: the
+          // terminal was ended either way, so saying "Sent SIGTERM" would describe an effect nobody observed.
+          const undeliverable = terminal.process.signalAvailable?.(signal) ?? null;
           return {
             isError: false,
-            content: `Sent ${signal} to terminal ${snapshot.id} (${snapshot.status}). Read what it printed with terminal_read.`,
+            content: undeliverable
+              ? `${signal} was not delivered to terminal ${snapshot.id} (${snapshot.status}): ${undeliverable}. Read what it printed with terminal_read.`
+              : `Sent ${signal} to terminal ${snapshot.id} (${snapshot.status}). Read what it printed with terminal_read.`,
           };
         } catch (error) {
           if (error instanceof Error && error.name === 'ToolCleanupError') throw error;
@@ -681,6 +708,13 @@ export class TerminalSessions {
       },
     };
   }
+}
+/**
+ * How final a stop request is. A graceful signal asks the program to end and may be ignored, so a later
+ * stronger stop has to replace it; a forced end has nothing stronger behind it, and a second copy is a repeat.
+ */
+function stopStrength(signal?: string): number {
+  return signal === 'SIGTERM' || signal === 'SIGINT' ? 1 : 2;
 }
 function clampDimension(value: unknown, fallback: number): number {
   const size = Number(value);

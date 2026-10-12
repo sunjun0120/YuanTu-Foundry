@@ -143,7 +143,18 @@ export function createSubAgentProviders(
         started(childSession.id);
         const tag: SubAgentTag = { id: task.id, role: task.role, objective: task.objective };
         const child = childTurns({
-          task,
+          /**
+           * The task carries the model, and not only the resolved provider.
+           *
+           * Those are two different statements. `childProvider` above is *where the request goes*; the task's
+           * model is the identity the turn runs under — `createChildTurns` turns it into the child's
+           * `modelInfo`, which stamps every user turn the child writes and is what a reader of its session
+           * sees. The provider-facing `task` this closure was handed has no model by design (a task describes
+           * the work; the model is a request option), so without this the model was dropped here and the
+           * `modelInfo` override in `run-child-turns.ts` could never fire: a child delegated to another model
+           * reached the right endpoint while its own transcript still named its parent's.
+           */
+          task: { ...task, ...(model ? { model } : {}) },
           childSession,
           depth,
           tag,

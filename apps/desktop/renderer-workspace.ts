@@ -425,21 +425,47 @@ export function setupWorkspace() {
   }
 
   /**
+   * Which read of each directory is the current one.
+   *
+   * The workspace counter and the refresh round decide whether an answer still belongs to *this* tree; this
+   * decides whether it is still the answer that was *asked for last* about that directory. Both are needed: the
+   * same directory can be read twice inside one round — expand, collapse, expand again while the first is still
+   * unanswered — and the earlier answer describes a state that no longer exists by the time it arrives.
+   */
+  const listingTokens = new Map<string, number>();
+
+  /**
    * Read one directory and paint what it holds.
    *
-   * The answer is dropped when the workspace or the generation moved on while it was in flight; a listing
-   * that arrived late would otherwise be added to the cache under a path that now means something else.
+   * The answer is dropped when the workspace, the refresh round or the directory's own latest request moved on
+   * while it was in flight; a listing that arrived late would otherwise be added to the cache under a path that
+   * now means something else.
+   *
+   * Both failure shapes end in the same place. A refusal (`{ok:false}`) has always been drawn from `failures`;
+   * a **rejected promise** — the IPC channel throwing rather than answering — used to escape this function into
+   * a `void` call site, so the directory stayed on "正在读取…" for as long as the window lived, with nothing said
+   * and nothing to click. It is caught here and written into the same map, which is what the tree already draws.
    */
   async function loadDirectory(path: string): Promise<void> {
     const at = generation;
     const round = listingRound;
-    const reply = await window.yuantu.files(path ? { type: 'list', path } : { type: 'list' });
-    if (at !== generation || round !== listingRound) return;
-    if (reply.ok && 'listing' in reply) {
-      listings.set(path, reply.listing);
-      failures.delete(path);
-    } else if (!reply.ok) {
-      failures.set(path, reply.error);
+    const token = (listingTokens.get(path) ?? 0) + 1;
+    listingTokens.set(path, token);
+    /** Is this answer still the one this tree is waiting for? */
+    const current = () =>
+      at === generation && round === listingRound && listingTokens.get(path) === token;
+    try {
+      const reply = await window.yuantu.files(path ? { type: 'list', path } : { type: 'list' });
+      if (!current()) return;
+      if (reply.ok && 'listing' in reply) {
+        listings.set(path, reply.listing);
+        failures.delete(path);
+      } else if (!reply.ok) {
+        failures.set(path, reply.error);
+      }
+    } catch (error) {
+      if (!current()) return;
+      failures.set(path, error instanceof Error ? error.message : String(error));
     }
     if (open) paintTree();
   }
@@ -525,6 +551,8 @@ export function setupWorkspace() {
     listingRound++;
     listings.clear();
     failures.clear();
+    // A new round re-reads every open directory, so no request from the previous one is anybody's latest.
+    listingTokens.clear();
     paintTree();
     if (open) for (const path of expanded) void loadDirectory(path);
     // The open preview is re-read as well: the tree is most often refreshed to see what the agent just wrote,
@@ -678,6 +706,7 @@ export function setupWorkspace() {
       generation++;
       listings.clear();
       failures.clear();
+      listingTokens.clear();
       expanded.clear();
       expanded.add('');
       selected = null;

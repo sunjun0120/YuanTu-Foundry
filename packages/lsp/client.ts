@@ -91,7 +91,10 @@ export class LspClient {
    * where the difference exists.
    */
   private openUris = new Map<string, string>();
-  private published = new Map<string, { generation: number; diagnostics: LspDiagnostic[] }>();
+  private published = new Map<
+    string,
+    { generation: number; diagnostics: LspDiagnostic[]; version?: number }
+  >();
   private waiters = new Map<string, Set<() => void>>();
   private stderr = '';
   private failure?: string;
@@ -159,7 +162,7 @@ export class LspClient {
     if (this.child)
       throw new Error(`Language server is not running: ${this.lastError ?? 'stopped'}`);
     signal.throwIfAborted();
-    if (this.policy.mode !== 'host' && this.policy.mode !== 'windows')
+    if (!['host', 'native', 'windows', 'seatbelt'].includes(this.policy.mode))
       throw new Error('Language server backend unsupported; disabled outside host or Windows mode');
     const environment = await localExecutionEnvironment(this.root, this.policy);
     signal.throwIfAborted();
@@ -184,6 +187,21 @@ export class LspClient {
     this.child = child;
     this.failure = undefined;
     this.stderr = '';
+    /**
+     * The new process is neither being stopped nor waiting on a previous process's cleanup.
+     *
+     * `stopping` and `cleanup` describe *the* process this client owned, and neither was cleared when a new one
+     * was adopted. A client started again after a Stop therefore came up with `running` false — so every
+     * request refused it as "not running" while a server was in fact serving — and with the previous process's
+     * cleanup promise already resolved, so the next Stop awaited that promise and returned without touching the
+     * process that was actually running.
+     *
+     * Clearing both here is safe because `start()` refuses to run while `child` is set: the process this
+     * bookkeeping belonged to has been released (or was never adopted) before this line is reached.
+     */
+    this.stopping = false;
+    this.cleanup = undefined;
+    this.stopPromise = undefined;
     child.stdout?.on('data', (chunk: Buffer) => this.receive(chunk));
     child.stderr?.on('data', (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString('utf8')).slice(-MAX_STDERR_BYTES);
@@ -434,13 +452,40 @@ export class LspClient {
     if (!params || typeof params.uri !== 'string') return;
     const key = uriToKey(params.uri);
     const file = uriToPath(params.uri) ?? params.uri;
+    /**
+     * A publication about a version the client has already moved past is not an answer about the text it is
+     * waiting on.
+     *
+     * Servers analyse asynchronously, so an analysis of an older revision can finish — and be published —
+     * after one of a newer revision. `published` kept whatever arrived last, which meant a stale error
+     * replaced a fresh clean result and a wait for "the diagnostics of the text I just sent" was answered by
+     * an analysis of the text before it. The comparison is made against the version this client last *sent*
+     * and against the last version it *accepted*, because either can be the newer of the two facts.
+     *
+     * Both sides of the comparison belong to one document lifecycle: `releaseBeyond` drops the sent version
+     * and the published entry together when a document is closed, so a re-opened document starts clean rather
+     * than being judged by a version from before it was opened. A server that reports no version has nothing to
+     * be compared against, and its diagnostics are accepted — silence about the version is not a claim to be
+     * stale.
+     */
+    const version = typeof params.version === 'number' ? params.version : undefined;
+    if (version !== undefined) {
+      const sent = this.versions.get(key);
+      const accepted = this.published.get(key)?.version;
+      if ((sent !== undefined && version < sent) || (accepted !== undefined && version < accepted))
+        return;
+    }
     const diagnostics = (Array.isArray(params.diagnostics) ? params.diagnostics : [])
       .slice(0, MAX_DIAGNOSTICS_PER_FILE)
       .flatMap((item) => {
         const diagnostic = toDiagnostic(file, item);
         return diagnostic ? [diagnostic] : [];
       });
-    this.published.set(key, { generation: this.generations.get(key) ?? 0, diagnostics });
+    this.published.set(key, {
+      generation: this.generations.get(key) ?? 0,
+      diagnostics,
+      ...(version === undefined ? {} : { version }),
+    });
     for (const resolve of this.waiters.get(key) ?? []) resolve();
     this.waiters.delete(key);
   }
@@ -463,8 +508,7 @@ export class LspClient {
      * killed instead. `stopping` is left alone so the `close` handler still reports an unexpected exit — which is
      * what this is — except that `failure` is already set, so the first, specific reason is the one that stands.
      */
-    this.cleanup ??= this.releaseProcess();
-    void this.cleanup.catch(() => {});
+    this.release().catch(() => {});
   }
   private assertRunning(): void {
     this.assertPolicy();
@@ -493,7 +537,11 @@ export class LspClient {
     signal.throwIfAborted();
     const uri = pathToUri(file);
     const key = uriToKey(uri);
-    if (!force && this.sentText.get(key) === text) return key;
+    if (!force && this.sentText.get(key) === text) {
+      this.sentText.delete(key);
+      this.sentText.set(key, text);
+      return key;
+    }
     const version = (this.versions.get(key) ?? 0) + 1;
     this.versions.set(key, version);
     this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
@@ -506,6 +554,7 @@ export class LspClient {
       this.notify('textDocument/didOpen', {
         textDocument: { uri, languageId: this.definition.language, version, text },
       });
+    this.sentText.delete(key);
     this.sentText.set(key, text);
     this.openUris.set(key, uri);
     this.releaseBeyond();
@@ -514,7 +563,7 @@ export class LspClient {
   /**
    * Close the documents that have fallen out of the working set.
    *
-   * A `Map` iterates in insertion order and re-setting a key moves it to the end, so the first key is the least
+   * A `Map` iterates in insertion order; deleting before re-inserting moves a touched key to the end, so the first key is the least
    * recently synchronised document — which is the one to close. Closing is what lets the server drop the file;
    * forgetting it here is what makes a later query open it again instead of sending a change for a document the
    * server no longer has.
@@ -621,6 +670,26 @@ export class LspClient {
     };
   }
 
+  /**
+   * Start — or reuse — the one cleanup this client needs, remembering only a cleanup that is still true.
+   *
+   * `releaseProcess` is idempotent for a process that is already gone, but it is not infallible: a server whose
+   * child processes hold its pipes leaves a process that has exited without ever being *closed*, and the wait
+   * for that ends in `ToolCleanupError`. Caching *that* rejection made the failure permanent — every later Stop
+   * awaited the same rejected promise without running anything, so a client whose cleanup was unconfirmed once
+   * could never release its workspace or start again. A cleanup that succeeded stays cached, because it is a
+   * fact about a process that is gone and re-running it would be work with nothing to do.
+   *
+   * Ownership is deliberately not given up on the way: `releaseProcess` clears `child`/`managed` only after the
+   * close has been confirmed, so a failed cleanup leaves the handle on the process it could not account for.
+   */
+  private release(): Promise<void> {
+    const cleanup = (this.cleanup ??= this.releaseProcess().catch((error: unknown) => {
+      if (this.cleanup === cleanup) this.cleanup = undefined;
+      throw error;
+    }));
+    return cleanup;
+  }
   private async releaseProcess(): Promise<void> {
     const managed = this.managed;
     if (!managed) return;
@@ -642,8 +711,21 @@ export class LspClient {
     }
     this.child = undefined;
   }
+  /**
+   * One stop at a time, shared by every caller while it is in flight — and not one outcome for the life of the
+   * client.
+   *
+   * The promise was cached forever, so a stop that failed was the answer to every later stop as well: a
+   * cleanup the client could not confirm became a client that could never be stopped or started again. A
+   * settled stop is not remembered here because `release()` already remembers the only part of it that is a
+   * fact; running `stopOnce` again is cheap and, when the previous attempt failed, is exactly what has to
+   * happen.
+   */
   stop(): Promise<void> {
-    return (this.stopPromise ??= this.stopOnce());
+    const stopping = (this.stopPromise ??= this.stopOnce().finally(() => {
+      if (this.stopPromise === stopping) this.stopPromise = undefined;
+    }));
+    return stopping;
   }
   private async stopOnce(): Promise<void> {
     this.stopping = true;
@@ -669,8 +751,7 @@ export class LspClient {
       ]);
       clearTimeout(timer);
     }
-    this.cleanup ??= this.releaseProcess();
-    await this.cleanup;
+    await this.release();
   }
 }
 

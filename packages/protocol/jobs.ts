@@ -118,6 +118,19 @@ export interface CommandJournal {
  * `packages/core` because both the kernel and the tool registry own one: the registry that runs a child's
  * tools has to answer for that child's own jobs, not the parent's.
  */
+/**
+ * No producer in this process owns that job id.
+ *
+ * A type rather than a message, because its callers have to tell this apart from a stop that *failed*: the first
+ * is the case the command journal is allowed to answer for, and the second is a real outcome that has to be
+ * reported as one. Deciding that by matching the prose would tie behaviour to wording.
+ */
+export class UnknownJobError extends Error {
+  constructor(id: string) {
+    super(`Unknown job "${id}"; call job_list to see this session's jobs`);
+    this.name = 'UnknownJobError';
+  }
+}
 export class JobRegistry implements JobControl {
   private producers: JobProducer[] = [];
   /**
@@ -152,8 +165,7 @@ export class JobRegistry implements JobControl {
   private owner(id: string, scope: string): JobProducer {
     const owners = this.producers.filter((producer) => producer.owns({ id, scope }));
     if (owners.length > 1) throw new Error(`Job id "${id}" is claimed by more than one producer`);
-    if (!owners.length)
-      throw new Error(`Unknown job "${id}"; call job_list to see this session's jobs`);
+    if (!owners.length) throw new UnknownJobError(id);
     return owners[0]!;
   }
   output(job: JobScope & { cursor: number; waitMs: number }): Promise<JobSnapshot> {

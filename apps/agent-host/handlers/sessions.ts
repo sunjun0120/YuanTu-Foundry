@@ -1,4 +1,5 @@
 import { undoFileChange } from '../../../packages/tools/file-undo.ts';
+import { underSessionPolicy } from '../session-policy.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
 
@@ -124,15 +125,17 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
         process.stderr.write(
           `invariant violated on session close: ${violation.name} (${violation.owner}): ${violation.detail}\n`,
         );
-      ctx.store.delete(id);
       if (ctx.announced.delete(id)) {
-        const failures = await ctx.hooks.sessionEnd(
-          { sessionId: id, reason: 'delete' },
-          new AbortController().signal,
+        const failures = await underSessionPolicy(ctx, id, () =>
+          ctx.hooks.sessionEnd({ sessionId: id, reason: 'delete' }, new AbortController().signal),
         );
         for (const failure of failures)
           process.stderr.write(`sessionEnd hook failed: ${failure}\n`);
       }
+      ctx.store.delete(id);
+      ctx.sessionSandboxes.delete(id);
+      ctx.sessionSandboxFiles.delete(id);
+      ctx.sessionSandboxNetwork.delete(id);
       return { deleted: true };
     } finally {
       ctx.restoring = false;

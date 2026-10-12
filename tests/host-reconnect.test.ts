@@ -89,6 +89,63 @@ test('a run left by a dead Host is settled, recorded and made usable at startup'
   store.delete(session.id);
 });
 
+test('one unreadable session does not stop the rest from being converged, or the Host from starting', async (t) => {
+  /**
+   * `settleAbandonedRun` hydrates the transcript and reads the log, so a session this build cannot fold throws
+   * from inside the startup convergence. It used to throw out of one looping transaction, which did two things
+   * at once: it rolled back the convergence already performed for the *other* sessions, and it propagated to the
+   * caller — Host startup — so a single damaged conversation left every session in the workspace unusable and
+   * stopped the Host from opening at all.
+   */
+  const { root, file, store } = await store_(t);
+  const healthy = store.create(root);
+  const damaged = store.create(root);
+  const healthyRun = store.beginRun(healthy.id);
+  const damagedRun = store.beginRun(damaged.id);
+  for (const id of [healthy.id, damaged.id]) store.append(id, { role: 'user', content: 'start' });
+  orphan(file, healthyRun);
+  orphan(file, damagedRun);
+  // A log entry that no longer parses is the cheapest stand-in for "this build cannot read this session": the
+  // same throw arrives from a missing attachment blob or an event type a newer build wrote. It has to be the
+  // event data rather than a `messages` row, because the transcript is folded from the log — the write-through
+  // table is not what the convergence reads.
+  const raw = new DatabaseSync(file);
+  raw.prepare('UPDATE session_events SET data=? WHERE session_id=?').run('{"message":', damaged.id);
+  raw.close();
+  assert.throws(
+    () => store.messages(damaged.id),
+    'the damage has to be real for this test to mean anything',
+  );
+
+  const reported: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void reported.push(args.join(' '));
+  try {
+    assert.equal(
+      store.reconcileInterruptedRuns(root),
+      1,
+      'the readable session is still converged',
+    );
+  } finally {
+    console.error = original;
+  }
+  assert.equal(
+    store.get(healthy.id).activeRun,
+    null,
+    'and it is usable: the other session no longer rolls its convergence back',
+  );
+  assert.match(
+    reported.join('\n'),
+    new RegExp(damaged.id),
+    'the session that could not be converged is named rather than swallowed',
+  );
+  assert.throws(
+    () => store.delete(damaged.id),
+    /running or interrupted/,
+    'the unreadable session is left exactly as it was, not half-settled',
+  );
+});
+
 test('a plan its interrupted run never finished is abandoned rather than left planning', async (t) => {
   /**
    * The durable row exists so a crash leaves a record rather than nothing — but a record that keeps saying

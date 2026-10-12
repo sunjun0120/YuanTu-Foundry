@@ -6,6 +6,8 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import type { ResidentTurnResult } from '../packages/core/residency.ts';
+import { createResidentMessageTool } from '../packages/core/run-residency.ts';
+import type { ChildTurns } from '../packages/core/run-subagents.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { subagentInboxProjection } from '../packages/storage/projections.ts';
 import type { PendingSubagentMessage } from '../packages/storage/projections.ts';
@@ -815,5 +817,409 @@ test('a full child queue is refused loudly instead of being recorded as handed o
   assert.ok(
     inbox().some((entry) => entry.id === refusedId && !entry.handed),
     'the refused message is still pending as "send it again" — nothing upgraded its state behind the refusal',
+  );
+});
+
+// ---- whose cancellation is whose ----
+
+const idle = (text = 'done'): ResidentTurnResult => ({
+  usage: { inputTokens: 1, outputTokens: 1 },
+  text,
+  status: 'completed',
+  rounds: 1,
+  toolCalls: 0,
+});
+/** A `send_message` tool over a residency the test drives directly, so the child is whatever it says it is. */
+async function residentTool(t: test.TestContext) {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-inbox-signal-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const residency = new SubAgentResidency();
+  t.after(() => residency.disposeAll());
+  const tool = createResidentMessageTool({
+    store,
+    parentSessionId: session.id,
+    depth: 0,
+    residency,
+    // Every child in these tests is already loaded, so the cold-resume path is never reached; a thrower says so
+    // rather than quietly building a child from a log that has none.
+    childTurns: (() => {
+      throw new Error('this fixture only drives already-loaded children');
+    }) as unknown as ChildTurns,
+    emit: () => {},
+    statistics: store.statistics(session.id),
+    nextMessageId: () => 1,
+  });
+  return { root, store, session, residency, tool };
+}
+/** The result of a call, or a statement that it had not returned by the deadline. */
+async function within<T>(
+  value: Promise<T>,
+  ms = 1_500,
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  return Promise.race([
+    value.then((settled) => ({ ok: true as const, value: settled })),
+    new Promise<{ ok: false }>((resolve) => setTimeout(() => resolve({ ok: false }), ms)),
+  ]);
+}
+const approve = async () => true;
+
+test('a call that starts a resident turn cancels that turn when the call is cancelled', async (t) => {
+  /**
+   * A waiting call owns the turn it asked for. Without this the call is cut off (a budget, a cancelled request)
+   * and the child keeps working on a question nobody is waiting for the answer to — the caller sees a failure
+   * while the child keeps spending.
+   */
+  const { residency, session, tool } = await residentTool(t);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let turns = 0;
+  let turnAborted = false;
+  const child = residency.open({
+    id: 'watch',
+    childSessionId: 'child-watch',
+    parentSessionId: session.id,
+    objective: 'Watch the tree',
+    depth: 1,
+    turn: async (_prompt, signal) => {
+      turns++;
+      await new Promise<void>((resolve) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            turnAborted = true;
+            resolve();
+          },
+          { once: true },
+        );
+        void gate.then(resolve);
+      });
+      return { ...idle('stopped'), status: signal.aborted ? 'cancelled' : 'completed' };
+    },
+  });
+  t.after(() => {
+    release();
+    return child.dispose();
+  });
+  const controller = new AbortController();
+  const reason = new Error('the send_message call was cancelled');
+  const pending = tool.execute(
+    { childSessionId: 'child-watch', message: 'check the config' },
+    { signal: controller.signal, approve },
+  );
+  await until(() => turns === 1);
+  controller.abort(reason);
+  const settled = await within(pending);
+  assert.ok(settled.ok, 'the call never returned after it was cancelled');
+  assert.equal(turnAborted, true, 'the turn this call started observed the call’s cancellation');
+  assert.equal(settled.value.isError, true);
+  assert.match(settled.value.content, /the send_message call was cancelled/);
+  assert.equal(
+    child.status,
+    'idle',
+    'and the activation is still usable afterwards: only that turn was cancelled',
+  );
+});
+
+test('cancelling a wait does not stop the resident turn another caller started', async (t) => {
+  /**
+   * The other half of the same rule: a `send_message` folded into a turn that is already running did not start
+   * that turn, so cancelling this call may end this call's patience and nothing else. The parent that started
+   * the turn is still entitled to its answer, and a wait that killed it would be a correction turning into an
+   * interruption — the exact confusion the residency's `deliver`/`interrupt` split exists to prevent.
+   */
+  const { residency, session, tool } = await residentTool(t);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let turnSignal: AbortSignal | undefined;
+  const child = residency.open({
+    id: 'busy',
+    childSessionId: 'child-busy',
+    parentSessionId: session.id,
+    objective: 'Sweep the tree',
+    depth: 1,
+    turn: async (_prompt, signal, _reportRequired, handle) => {
+      turnSignal = signal;
+      handle?.attach(() => true);
+      await gate;
+      return idle('swept');
+    },
+  });
+  t.after(() => {
+    release();
+    return child.dispose();
+  });
+  const running = child.run('work', false);
+  const controller = new AbortController();
+  const pending = tool.execute(
+    { childSessionId: 'child-busy', message: 'also check the config' },
+    { signal: controller.signal, approve },
+  );
+  await until(() => Boolean(turnSignal));
+  controller.abort(new Error('this waiting call was cancelled'));
+  const settled = await within(pending);
+  assert.ok(settled.ok, 'the cancelled wait did not end');
+  assert.equal(settled.value.isError, true);
+  assert.equal(
+    turnSignal!.aborted,
+    false,
+    'the child’s turn belongs to the caller that started it, not to this wait',
+  );
+  release();
+  assert.equal((await running).status, 'completed', 'and that caller still gets its answer');
+});
+
+// ---- the child this process never started ----
+
+/**
+ * A child resumed in another process comes back as *that* child.
+ *
+ * A residency lives in memory, so after a restart every child is "gone" — while its session, its transcript and
+ * the delegation that named it are all on disk. `subagent.assigned` is that record, and it is the authority for
+ * what the resumed turn is: the model the delegation chose and the role it was given. Nothing the *message*
+ * says can change either, and that is the point of reading them from the log rather than from the call — a
+ * follow-up is a question addressed to a child, not a new delegation of one.
+ *
+ * Two failures this pins, and they are separate: a child that lost its model answers on its parent's (the turn
+ * still runs, the transcript still looks right, and only the bill says otherwise), and a child whose finished
+ * event says `general` hands its parent a role it was never given.
+ */
+test('cold resident continuation keeps the model and role its delegation assigned', async (t) => {
+  const { root, store } = await fixture(t);
+  const session = store.create(root);
+  let childSessionId = '';
+  let phase: 'delegate' | 'continue' = 'delegate';
+  let round = 0;
+  /** What each child turn was offered, in order: the delegation's turn, then the resumed one's. */
+  const childOffers: string[][] = [];
+  /** A child turn that reached the *parent's* provider, which is what a lost model would send there. */
+  const strayed: string[] = [];
+  const childProvider: Provider = {
+    async complete(request) {
+      childOffers.push(request.tools.map((tool) => tool.name));
+      return request.tools.some((tool) => tool.name === 'submit_report')
+        ? report('swept the tree')
+        : reply('the follow-up answer');
+    },
+  };
+  const parentProvider: Provider = {
+    async complete(request) {
+      if (isChild(request)) {
+        strayed.push(String(request.messages.at(-1)?.content ?? ''));
+        return reply('answered by the wrong provider');
+      }
+      round++;
+      if (phase === 'delegate')
+        return round === 1
+          ? toolCall('delegate-1', 'delegate_task', {
+              tasks: [{ objective: 'Sweep the tree', role: 'explore', model: 'child-model' }],
+            })
+          : reply('Delegated');
+      return round === 1
+        ? toolCall('send-1', 'send_message', { childSessionId, message: 'what did you find?' })
+        : reply('Done');
+    },
+  };
+  /**
+   * One tool the role keeps and one it does not, so "still read-only" is a claim with two outcomes rather than
+   * an assertion that an empty registry is still empty. `readOnly` is what hides a tool that declares a
+   * permission, and the role — read from the durable assignment — is what decides it.
+   */
+  const childTools = () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'read_file',
+      description: 'read fixture',
+      inputSchema: { type: 'object' },
+      execute: async () => ({ isError: false, content: 'read' }),
+    });
+    registry.register({
+      name: 'write_file',
+      description: 'write fixture',
+      permission: 'write',
+      inputSchema: { type: 'object' },
+      execute: async () => ({ isError: false, content: 'written' }),
+    });
+    return registry;
+  };
+  const runParent = (residency: SubAgentResidency) =>
+    new Agent({
+      store,
+      provider: parentProvider,
+      tools: new ToolRegistry(),
+      approve: async () => true,
+      // The parent's own model, which is what a child that lost its assignment would answer on.
+      modelInfo: { model: 'parent-model', protocol: 'openai' },
+      subagents: { enabled: true },
+      subagentResidency: residency,
+      // This host can serve the child's model and says so, which is what makes "the request went to the
+      // child's provider" an observation rather than an assumption.
+      subagentProviderFor: (model) => (model === 'child-model' ? childProvider : undefined),
+      childTools,
+    }).run({ sessionId: session.id, prompt: 'Delegate a sweep' });
+
+  // ---- the process that delegated ----
+  const first = new SubAgentResidency();
+  assert.equal((await runParent(first)).status, 'completed');
+  childSessionId = first.list()[0]!.childSessionId;
+  assert.equal(
+    store.events(session.id).find((event) => event.type === 'subagent.assigned')!.data.model,
+    'child-model',
+    'the delegation is recorded with the model it named',
+  );
+  await first.disposeAll();
+
+  // ---- the process that never saw it ----
+  phase = 'continue';
+  round = 0;
+  const second = new SubAgentResidency();
+  t.after(() => second.disposeAll());
+  assert.deepEqual(second.list(), [], 'the continuation starts with no loaded children');
+  assert.equal((await runParent(second)).status, 'completed');
+
+  assert.equal(childOffers.length, 2, 'the delegation and the follow-up each ran one child turn');
+  assert.deepEqual(
+    strayed,
+    [],
+    'both turns ran on the provider the child’s model resolved to, not on the parent’s',
+  );
+  const followUp = childOffers[1]!;
+  /**
+   * What the kernel held as the turn's model, read where it is written down.
+   *
+   * Not the `llm.request` rows: those record a *transition*, so a child whose model never changed from the
+   * configured one has none at all, and an empty list would have looked like agreement. Every user turn is
+   * stamped with the identity it was run under in the child's own transcript, which is both the durable record
+   * and the thing a reader of that session sees.
+   *
+   * *Both* turns, not only the resumed one: the delegation's own turn is the same child, and a child whose
+   * identity changes part-way through its own transcript is harder to explain than one that never had it.
+   */
+  const models = store
+    .messages(childSessionId)
+    .filter((message) => message.role === 'user')
+    .map((message) => message.modelInfo?.model);
+  t.diagnostic(`models the child's turns ran under: ${JSON.stringify(models)}`);
+  assert.deepEqual(
+    models,
+    ['child-model', 'child-model'],
+    'the delegation’s own turn and the resumed one both ran under the model the delegation named',
+  );
+  const finished = store.events(session.id).filter((event) => event.type === 'subagent.finished');
+  t.diagnostic(
+    `roles the finished records carry: ${JSON.stringify(finished.map((event) => event.data.role))}`,
+  );
+  assert.equal(finished.length, 2, 'both turns are recorded as outcomes');
+  assert.equal(
+    finished.at(-1)!.data.role,
+    'explore',
+    'and the assignment’s role is what the resumed turn finishes as',
+  );
+  // The role is a *permission* as well as a name: an `explore` child that came back writable would be a
+  // follow-up question turned into a grant.
+  assert.ok(
+    followUp.includes('read_file'),
+    `the resumed turn keeps the tools its role allows: ${followUp.join(', ')}`,
+  );
+  assert.ok(
+    !followUp.includes('write_file'),
+    `and is not offered the ones it does not: ${followUp.join(', ')}`,
+  );
+});
+
+/**
+ * A delegation that named no model resumes on the host's own, rather than being refused for it.
+ *
+ * `model` is optional on a task and absent entirely from a `subagent.assigned` record written before the field
+ * existed, so a resumed turn that *required* one would refuse children that were delegated perfectly legally —
+ * the failure mode a fallback exists to prevent. The role is a separate statement and survives on its own:
+ * nothing about a missing model makes an `explore` child a general one.
+ */
+test('a delegation that recorded no model resumes without one, and keeps its role', async (t) => {
+  const { root, store } = await fixture(t);
+  const session = store.create(root);
+  let childSessionId = '';
+  let phase: 'delegate' | 'continue' = 'delegate';
+  let round = 0;
+  /** A model resolution is what this path must *not* need: asking for one would fail the child. */
+  const resolved: string[] = [];
+  /** The child's answer, served by the parent's own provider because that is what it inherits. */
+  const served = (request: ModelRequest): ModelResponse =>
+    request.tools.some((tool) => tool.name === 'submit_report')
+      ? report('swept the tree')
+      : reply('the follow-up answer');
+  const provider: Provider = {
+    async complete(request) {
+      if (isChild(request)) return served(request);
+      round++;
+      if (phase === 'delegate')
+        return round === 1
+          ? toolCall('delegate-1', 'delegate_task', {
+              tasks: [{ objective: 'Sweep the tree', role: 'explore' }],
+            })
+          : reply('Delegated');
+      return round === 1
+        ? toolCall('send-1', 'send_message', { childSessionId, message: 'what did you find?' })
+        : reply('Done');
+    },
+  };
+  const runParent = (residency: SubAgentResidency) =>
+    new Agent({
+      store,
+      provider,
+      tools: new ToolRegistry(),
+      approve: async () => true,
+      modelInfo: { model: 'parent-model', protocol: 'openai' },
+      subagents: { enabled: true },
+      subagentResidency: residency,
+      subagentProviderFor: (model) => {
+        resolved.push(model);
+        return undefined;
+      },
+      childTools: () => new ToolRegistry(),
+    }).run({ sessionId: session.id, prompt: 'Delegate a sweep' });
+
+  const first = new SubAgentResidency();
+  assert.equal((await runParent(first)).status, 'completed');
+  childSessionId = first.list()[0]!.childSessionId;
+  assert.deepEqual(
+    store.events(session.id).find((event) => event.type === 'subagent.assigned')!.data.model,
+    undefined,
+    'the assignment really carries no model, which is the case under test',
+  );
+  await first.disposeAll();
+
+  phase = 'continue';
+  round = 0;
+  const second = new SubAgentResidency();
+  t.after(() => second.disposeAll());
+  const result = await runParent(second);
+  assert.equal(result.status, 'completed', result.error);
+  assert.deepEqual(
+    resolved,
+    [],
+    'nothing was resolved because there was nothing to resolve, and nothing was refused either',
+  );
+  assert.ok(
+    store
+      .messages(childSessionId)
+      .some((message) => message.role === 'assistant' && message.content.includes('follow-up')),
+    'the resumed turn ran on the host’s own model',
+  );
+  assert.equal(
+    store
+      .events(session.id)
+      .filter((event) => event.type === 'subagent.finished')
+      .at(-1)!.data.role,
+    'explore',
+    'a role is not carried by a model, so it is still the one the delegation gave',
   );
 });

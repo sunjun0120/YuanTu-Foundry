@@ -75,12 +75,7 @@ export function validateCodeMessage(
 export async function startCodeProcess(data: CodeWorkerData, context: ToolContext) {
   context.signal.throwIfAborted();
   const config = resolveSandboxConfig();
-  const policy = context.executionPolicy ?? executionPolicy(config.mode, { image: config.image });
-  // Container paths need a separately installed runner image. Refuse before any process or tool is started.
-  if (policy.mode === 'docker' || policy.mode === 'sbx')
-    throw new Error(
-      `${policy.mode} does not support the program runner yet; no host fallback is allowed`,
-    );
+  const policy = context.executionPolicy ?? executionPolicy(config.mode, config);
   if (policy.mode !== 'host' && !context.workspaceRoot)
     throw new Error('Restricted programs require a workspace identity');
   const root = context.workspaceRoot ?? process.cwd();

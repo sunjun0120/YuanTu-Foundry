@@ -114,8 +114,17 @@ export class HookRegistry {
    */
   installOnce(key: string, install: () => Disposer[]): void {
     if (this.installed.has(key)) return;
+    /**
+     * The key is recorded only once the contribution is really installed, and the order is the point.
+     *
+     * Marking it first made every failure permanent: the hook bridge refuses a container sandbox for hooks, and
+     * after that refusal the key stayed set, so every later `createTools` for the workspace skipped hook
+     * installation silently — for the whole lifetime of the host-owned registry, which outlives the run. A
+     * contribution that failed is one a caller may legitimately try again, with settings that now allow it.
+     */
+    const disposers = install();
+    this.disposers.push(...disposers);
     this.installed.add(key);
-    this.disposers.push(...install());
   }
   /** Validates without registering, so a rejected extension cannot leave partial state behind. */
   validate(hooks: ExtensionHooks): ExtensionHooks {

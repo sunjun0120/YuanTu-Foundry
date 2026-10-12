@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -63,6 +63,286 @@ const reason = windows
   ? false
   : `the Windows backend is not available here: ${unavailable ?? 'not Windows'}`;
 
+test('workspace hardlinks cannot relabel an outside file', { skip: reason }, async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-hardlink-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'workspace');
+  await mkdir(workspace);
+  const outside = path.join(root, 'outside.txt');
+  await writeFile(outside, 'keep');
+  await link(outside, path.join(workspace, 'alias.txt'));
+  let plan: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+  let rejected: unknown;
+  try {
+    plan = await prepareSandbox(workspace, workspace, 'exit 0', undefined, config);
+  } catch (error) {
+    rejected = error;
+  } finally {
+    if (plan) await cleanupSandbox(plan);
+  }
+  assert.match(String(rejected), /hard.?link/i);
+  assert.equal(await readFile(outside, 'utf8'), 'keep');
+  for (const name of ['.git', '.yuantu', '.agents', '.codex', '.aws', '.ssh', '.gnupg'])
+    await assert.rejects(stat(path.join(workspace, name)), { code: 'ENOENT' });
+});
+
+test(
+  'a Low integrity launcher cache is refused before trusted code loads',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-low-cache-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const workspace = path.join(root, 'workspace'),
+      temporary = path.join(root, 'temp');
+    await mkdir(workspace);
+    await mkdir(temporary);
+    await promisify(execFile)('icacls.exe', [temporary, '/grant', '*S-1-1-0:(OI)(CI)M', '/Q']);
+    await promisify(execFile)('icacls.exe', [temporary, '/setintegritylevel', '(OI)(CI)L', '/Q']);
+    const previousTemp = process.env.TEMP,
+      previousTmp = process.env.TMP;
+    let plan: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    let rejected: unknown;
+    try {
+      process.env.TEMP = temporary;
+      process.env.TMP = temporary;
+      try {
+        plan = await prepareSandbox(workspace, workspace, 'exit 0', undefined, config);
+      } catch (error) {
+        rejected = error;
+      }
+    } finally {
+      if (previousTemp === undefined) delete process.env.TEMP;
+      else process.env.TEMP = previousTemp;
+      if (previousTmp === undefined) delete process.env.TMP;
+      else process.env.TMP = previousTmp;
+      if (plan) await cleanupSandbox(plan);
+    }
+    assert.match(String(rejected), /launcher cache.*Low|Low.*launcher cache/i);
+  },
+);
+
+test(
+  'workspace roots containing trusted launcher assets are refused before ACL changes',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-control-root-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const temporary = path.join(root, 'temp');
+    await mkdir(temporary);
+    const previousTemp = process.env.TEMP,
+      previousTmp = process.env.TMP;
+    let plan: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    let rejected: unknown;
+    try {
+      process.env.TEMP = temporary;
+      process.env.TMP = temporary;
+      try {
+        plan = await prepareSandbox(root, root, 'exit 0', undefined, config);
+      } catch (error) {
+        rejected = error;
+      }
+    } finally {
+      if (previousTemp === undefined) delete process.env.TEMP;
+      else process.env.TEMP = previousTemp;
+      if (previousTmp === undefined) delete process.env.TMP;
+      else process.env.TMP = previousTmp;
+      if (plan) await cleanupSandbox(plan);
+    }
+    assert.match(String(rejected), /workspace.*trusted.*control|trusted.*control.*workspace/i);
+    for (const name of ['.git', '.yuantu', '.agents', '.codex', '.aws', '.ssh', '.gnupg'])
+      await assert.rejects(stat(path.join(root, name)), { code: 'ENOENT' });
+  },
+);
+
+test('missing trusted metadata paths cannot be created by a guest', { skip: reason }, async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-missing-metadata-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const names = ['.git', '.yuantu', '.agents', '.codex', '.aws', '.ssh', '.gnupg'];
+  const plan = await prepareSandbox(
+    root,
+    root,
+    process.execPath,
+    [
+      '-e',
+      'const fs=require("node:fs");for(const p of process.argv.slice(1)){try{fs.mkdirSync(p,{recursive:true});fs.writeFileSync(p+"/evil.txt","escaped")}catch{}}',
+      ...names,
+    ],
+    config,
+  );
+  try {
+    assert.equal((await execute(plan)).code, 0);
+    for (const name of names)
+      await assert.rejects(stat(path.join(root, name, 'evil.txt')), { code: 'ENOENT' });
+  } finally {
+    await cleanupSandbox(plan);
+  }
+  for (const name of names) await assert.rejects(stat(path.join(root, name)), { code: 'ENOENT' });
+});
+
+test('another Host cannot lease a nested workspace concurrently', { skip: reason }, async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-host-lock-'));
+  const nested = path.join(root, 'nested');
+  await mkdir(nested);
+  const alternateTemp = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-host-temp-'));
+  const plan = await prepareSandbox(root, root, 'exit 0', undefined, config);
+  t.after(async () => {
+    await cleanupSandbox(plan);
+    await rm(root, { recursive: true, force: true });
+    await rm(alternateTemp, { recursive: true, force: true });
+  });
+  const module = new URL('../packages/tools/sandbox.ts', import.meta.url).href;
+  const script = `const {prepareSandbox,cleanupSandbox}=await import(${JSON.stringify(module)});try{const p=await prepareSandbox(${JSON.stringify(nested)},${JSON.stringify(nested)},'exit 0',undefined,{mode:'windows',image:'native'});await cleanupSandbox(p);console.log('UNSAFE_ALLOWED')}catch(e){console.log(String(e))}`;
+  const result = await promisify(execFile)(
+    process.execPath,
+    ['--input-type=module', '-e', script],
+    { timeout: 30000, env: { ...process.env, TEMP: alternateTemp, TMP: alternateTemp } },
+  );
+  assert.doesNotMatch(result.stdout, /UNSAFE_ALLOWED/);
+  assert.match(result.stdout, /another process|leased|recovery/i);
+});
+
+test(
+  'launcher exit terminates detached descendants before cleanup',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-job-'));
+    let pid: number | undefined;
+    let plan: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    t.after(async () => {
+      if (pid) {
+        await promisify(execFile)('taskkill.exe', ['/pid', String(pid), '/t', '/f']).catch(
+          () => {},
+        );
+      }
+      if (plan) await cleanupSandbox(plan);
+      await rm(root, { recursive: true, force: true });
+    });
+    const childSource =
+      'require("node:fs").writeFileSync("child-ready.txt",String(process.pid));setInterval(()=>{},1000)';
+    const parentSource = `const fs=require('node:fs');const deadline=Date.now()+5000;const timer=setInterval(()=>{if(fs.existsSync('child-ready.txt')){clearInterval(timer);process.stdout.write(fs.readFileSync('child-ready.txt','utf8'))}else if(Date.now()>deadline){throw new Error('Child never started')}},10);`;
+    const command = `start "" /b "${process.execPath}" -e "${childSource.replaceAll('"', "'")}" > nul 2>&1 & "${process.execPath}" -e "${parentSource}"`;
+    plan = await prepareSandbox(root, root, command, undefined, config);
+    const running = execute(plan);
+    const startedDeadline = Date.now() + 10000;
+    while (Date.now() < startedDeadline) {
+      const marker = await readFile(path.join(root, 'child-ready.txt'), 'utf8').catch(() => '');
+      if (marker) {
+        pid = Number(marker);
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(pid, 'the actual START child started');
+    const result = await Promise.race([
+      running,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('Launcher left a descendant holding output handles')),
+          5000,
+        );
+        timer.unref();
+      }),
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    pid = Number(result.stdout.trim());
+    assert.ok(Number.isInteger(pid) && pid > 0, 'fixture reported the actual detached child PID');
+    const deadline = Date.now() + 5000;
+    let alive = true;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        alive = false;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(alive, false, 'the launcher must terminate the entire job before ACL restoration');
+  },
+);
+
+test(
+  "two concurrent plans for one workspace cannot write each other's private scratch",
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-scratch-'));
+    let first: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    let second: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    t.after(async () => {
+      if (first) await cleanupSandbox(first);
+      if (second) await cleanupSandbox(second);
+      await rm(root, { recursive: true, force: true });
+    });
+    first = await prepareSandbox(root, root, 'echo own > "%TEMP%\\own.txt"', undefined, config);
+    second = await prepareSandbox(
+      root,
+      root,
+      `echo escaped > "${path.join(first.cleanupPath!, 'foreign.txt')}"`,
+      undefined,
+      config,
+    );
+    const own = await execute(first);
+    assert.equal(own.code, 0, own.stderr);
+    assert.match(await readFile(path.join(first.cleanupPath!, 'own.txt'), 'utf8'), /own/);
+    const foreign = await execute(second);
+    assert.notEqual(
+      foreign.code,
+      0,
+      'a sibling workspace identity must not authorise this scratch',
+    );
+    await assert.rejects(stat(path.join(first.cleanupPath!, 'foreign.txt')), { code: 'ENOENT' });
+  },
+);
+
+test(
+  'private scratch refuses sibling writes even when TEMP inherits an Everyone write grant',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-ambient-scratch-'));
+    const temporary = path.join(root, 'temp');
+    const workspace = path.join(root, 'workspace');
+    await mkdir(temporary);
+    await mkdir(workspace);
+    await promisify(execFile)('icacls.exe', [temporary, '/grant', '*S-1-1-0:(OI)(CI)M']);
+    let first: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    let second: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
+    t.after(async () => {
+      if (first) await cleanupSandbox(first);
+      if (second) await cleanupSandbox(second);
+      await rm(root, { recursive: true, force: true });
+    });
+    const previous = process.env.TEMP;
+    try {
+      process.env.TEMP = temporary;
+      first = await prepareSandbox(
+        workspace,
+        workspace,
+        'echo own > "%TEMP%\\own.txt"',
+        undefined,
+        config,
+      );
+      second = await prepareSandbox(
+        workspace,
+        workspace,
+        `echo escaped > "${path.join(first.cleanupPath!, 'foreign.txt')}"`,
+        undefined,
+        config,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.TEMP;
+      else process.env.TEMP = previous;
+    }
+    const own = await execute(first!);
+    assert.equal(own.code, 0, own.stderr);
+    assert.notEqual(
+      (await execute(second!)).code,
+      0,
+      'ambient TEMP grants must not reach another plan scratch',
+    );
+    await assert.rejects(stat(path.join(first!.cleanupPath!, 'foreign.txt')), { code: 'ENOENT' });
+  },
+);
+
 test(
   'a workspace cannot write another workspace that previously received a sandbox grant',
   { skip: reason },
@@ -108,20 +388,14 @@ test('the shipped default picks this backend on Windows, and never overrides a c
   const untouched: NodeJS.ProcessEnv = {};
   applySandboxDefaults(untouched);
   if (process.platform === 'win32') {
-    assert.equal(untouched.YUANTU_SANDBOX, 'windows');
-    // Hooks are pinned to the host in the same breath: they are operator-authored code outside the workspace,
-    // and a token (or container) per event is not worth paying for the bridge.
-    assert.equal(untouched.YUANTU_SANDBOX_HOOK, 'host');
+    assert.equal(untouched.YUANTU_SANDBOX, 'native');
+    assert.equal(untouched.YUANTU_SANDBOX_HOOK, undefined);
   } else {
-    assert.equal(
-      untouched.YUANTU_SANDBOX,
-      undefined,
-      'no local backend exists on this platform, so the library default stands rather than guessing at Docker',
-    );
+    assert.equal(untouched.YUANTU_SANDBOX, 'native');
   }
-  const chosen: NodeJS.ProcessEnv = { YUANTU_SANDBOX: 'docker' };
+  const chosen: NodeJS.ProcessEnv = { YUANTU_SANDBOX: 'host' };
   applySandboxDefaults(chosen);
-  assert.deepEqual(chosen, { YUANTU_SANDBOX: 'docker' });
+  assert.deepEqual(chosen, { YUANTU_SANDBOX: 'host' });
 });
 test('a cwd outside the workspace is refused before anything runs', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-'));
@@ -145,6 +419,34 @@ test(
     }
   },
 );
+
+test('workspace grants cannot modify trusted metadata directories', { skip: reason }, async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-metadata-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const names = ['.git', '.yuantu', '.agents', '.codex', '.aws', '.ssh', '.gnupg'];
+  for (const name of names) {
+    await mkdir(path.join(root, name));
+    await writeFile(path.join(root, name, 'trusted.txt'), 'keep');
+  }
+  const plan = await prepareSandbox(
+    root,
+    root,
+    process.execPath,
+    [
+      '-e',
+      'const fs=require("node:fs");for(const dir of process.argv.slice(1)){try{fs.writeFileSync(dir+"/trusted.txt","escaped")}catch{}}',
+      ...names,
+    ],
+    config,
+  );
+  try {
+    await execute(plan);
+    for (const name of names)
+      assert.equal(await readFile(path.join(root, name, 'trusted.txt'), 'utf8'), 'keep');
+  } finally {
+    await cleanupSandbox(plan);
+  }
+});
 test(
   'writing inside the workspace works and writing outside it does not',
   { skip: reason },
@@ -180,7 +482,11 @@ test(
     );
     const existingResult = await execute(existingPlan);
     await cleanupSandbox(existingPlan);
-    assert.equal(existingResult.code, 0, 'a file that predates the sandbox is writable too');
+    assert.equal(
+      existingResult.code,
+      0,
+      `a file that predates the sandbox is writable too: ${existingResult.stderr}`,
+    );
     assert.equal((await readFile(path.join(root, 'existing.txt'), 'utf8')).trim(), 'changed');
 
     const escapePlan = await prepareSandbox(
@@ -303,7 +609,7 @@ test('an unavailable backend reports itself rather than falling back to the host
   }
   assert.ok(unavailable, 'on this platform the backend cannot run and must say so');
   // The message names a way out rather than leaving the operator to guess.
-  assert.match(unavailable, /docker|sbx|host/);
+  assert.match(unavailable, /refused|no command was started/);
   await assert.rejects(
     prepareSandbox(os.tmpdir(), os.tmpdir(), 'echo hi', undefined, config),
     new RegExp(unavailable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
@@ -318,7 +624,7 @@ test('workspace write identities are stable and distinct; the legacy shared SID 
 });
 
 test(
-  'ambient Everyone write ACLs remain a declared partial boundary',
+  'Low integrity prevents writes through medium-integrity ambient Everyone grants',
   { skip: reason },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-ambient-'));
@@ -337,10 +643,224 @@ test(
       config,
     );
     try {
-      assert.equal((await execute(plan)).code, 0);
-      assert.equal((await readFile(outside, 'utf8')).trim(), 'ambient');
+      assert.notEqual((await execute(plan)).code, 0);
+      await assert.rejects(stat(outside), { code: 'ENOENT' });
     } finally {
       await cleanupSandbox(plan);
     }
+  },
+);
+
+test(
+  'ambient Low integrity Everyone grants remain a declared partial boundary',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-low-ambient-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const workspace = path.join(root, 'workspace'),
+      ambient = path.join(root, 'ambient');
+    await mkdir(workspace);
+    await mkdir(ambient);
+    await promisify(execFile)('icacls.exe', [ambient, '/grant', '*S-1-1-0:(OI)(CI)M', '/Q']);
+    await promisify(execFile)('icacls.exe', [ambient, '/setintegritylevel', '(OI)(CI)L', '/Q']);
+    const file = path.join(ambient, 'outside.txt');
+    const plan = await prepareSandbox(
+      workspace,
+      workspace,
+      `echo partial> "${file}"`,
+      undefined,
+      config,
+    );
+    try {
+      assert.equal((await execute(plan)).code, 0);
+      assert.match(await readFile(file, 'utf8'), /partial/);
+    } finally {
+      await cleanupSandbox(plan);
+    }
+  },
+);
+
+test(
+  'a Low-integrity child cannot delete a foreign workspace file through its parent',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-delete-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const a = path.join(root, 'a'),
+      b = path.join(root, 'b');
+    await mkdir(a);
+    await mkdir(b);
+    const victim = path.join(a, 'victim.txt');
+    await writeFile(victim, 'keep');
+    const first = await prepareSandbox(a, a, 'exit 0', undefined, config);
+    const second = await prepareSandbox(b, b, `del /q "${victim}"`, undefined, config);
+    try {
+      await execute(second);
+      assert.equal(await readFile(victim, 'utf8'), 'keep');
+    } finally {
+      await cleanupSandbox(second);
+      await cleanupSandbox(first);
+    }
+  },
+);
+
+test('launcher works when temp path contains an apostrophe', { skip: reason }, async (t) => {
+  // A *new* process, because `windowsSandboxAvailable` memoises its answer per process and this suite has
+  // already asked it about the real temp directory. Reusing that cached verdict here would answer for a path
+  // that is not the one under test, which is exactly the cold-start case a launcher-cache path can break.
+  //
+  // The apostrophe is a real one: `os.tmpdir()` is where the compiled launcher and its C# source live, and
+  // both paths are carried into the bootstrap as PowerShell single-quoted string literals. A single quote
+  // that is not doubled ends the literal early, so the script stops being a script. The space and the CJK
+  // characters ride along to show the escape is the only thing that had to be right: only the quote is a
+  // metacharacter inside a single-quoted PowerShell literal, and the rest must survive untouched.
+  //
+  // They belong in the *temp* path, which is what this test is about. A CJK *workspace* root is a separate
+  // defect outside this change: `acl.ps1` writes its recovery journal as UTF-8 and reads it back with
+  // `Get-Content -Raw` and no `-Encoding`, so Windows PowerShell decodes it as ANSI and the restore step
+  // rejects its own journal with "ACL recovery root mismatch".
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-apostrophe-'));
+  const temporary = path.join(root, "O'Brien 临时 temp");
+  const workspace = path.join(root, 'workspace');
+  const outside = path.join(root, "O'Brien escape.txt");
+  await mkdir(temporary);
+  await mkdir(workspace);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const module = new URL('../packages/tools/sandbox.ts', import.meta.url).href;
+  // The probe's marker is deliberately *not* spelled like a setting: it is one line on the child's stdout, and
+  // `tests/environment.test.ts` scans every file for `YUANTU_*` names to check each one is a registered setting.
+  const script = `
+const { checkSandboxAvailability, prepareSandbox, cleanupSandbox } = await import(${JSON.stringify(module)});
+const { spawn } = await import('node:child_process');
+const { stat } = await import('node:fs/promises');
+const run = (plan) => new Promise((resolve) => {
+  const child = spawn(plan.executable, plan.args, {
+    cwd: plan.cwd,
+    env: plan.env,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', (chunk) => (stdout += chunk));
+  child.stderr.on('data', (chunk) => (stderr += chunk));
+  child.once('error', (error) => resolve({ code: null, stdout, stderr: stderr + error.message }));
+  child.once('close', (code) => resolve({ code, stdout, stderr }));
+});
+const report = { temp: process.env.TEMP };
+report.probe = await checkSandboxAvailability('windows');
+if (report.probe === null) {
+  const config = { mode: 'windows', image: 'native' };
+  const inside = await prepareSandbox(${JSON.stringify(workspace)}, ${JSON.stringify(workspace)}, 'echo apostrophe-ok', undefined, config);
+  const insideResult = await run(inside);
+  await cleanupSandbox(inside);
+  report.inside = { code: insideResult.code, stdout: insideResult.stdout, stderr: insideResult.stderr };
+  const escape = await prepareSandbox(${JSON.stringify(workspace)}, ${JSON.stringify(workspace)}, 'echo escaped> "' + ${JSON.stringify(outside)} + '"', undefined, config);
+  const escapeResult = await run(escape);
+  await cleanupSandbox(escape);
+  report.escape = { code: escapeResult.code, stderr: escapeResult.stderr };
+  report.escapeWrote = await stat(${JSON.stringify(outside)}).then(() => true, () => false);
+}
+console.log('SANDBOX_PROBE_REPORT' + JSON.stringify(report));
+`;
+  const result = await promisify(execFile)(
+    process.execPath,
+    ['--input-type=module', '-e', script],
+    {
+      timeout: 240000,
+      env: { ...process.env, TEMP: temporary, TMP: temporary, TMPDIR: temporary },
+    },
+  ).catch((error: { stdout?: string; stderr?: string }) => ({
+    stdout: error.stdout ?? '',
+    stderr: error.stderr ?? '',
+  }));
+  const line = result.stdout
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith('SANDBOX_PROBE_REPORT'));
+  assert.ok(line, `the probe process reported nothing: ${result.stdout}${result.stderr}`);
+  const report = JSON.parse(line.slice('SANDBOX_PROBE_REPORT'.length)) as {
+    temp: string;
+    probe: string | null;
+    inside: { code: number | null; stdout: string; stderr: string };
+    escape: { code: number | null; stderr: string };
+    escapeWrote: boolean;
+  };
+  assert.equal(report.temp, temporary, 'the child really ran with its temp state under that path');
+  assert.equal(
+    report.probe,
+    null,
+    `the launcher must start from an apostrophe path: ${report.probe}`,
+  );
+  assert.equal(report.inside.code, 0, report.inside.stderr);
+  assert.match(report.inside.stdout, /apostrophe-ok/);
+  assert.notEqual(report.escape.code, 0, 'a write outside the workspace is still refused');
+  assert.equal(report.escapeWrote, false, 'and the file is not there afterwards');
+});
+
+test(
+  'cleanup restores workspace security including existing children',
+  { skip: reason },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-restore-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const child = path.join(root, 'existing.txt');
+    await writeFile(child, 'original');
+    const acl = async (file: string) =>
+      (await promisify(execFile)('icacls.exe', [file])).stdout.replace(/\r/g, '');
+    const beforeRoot = await acl(root),
+      beforeChild = await acl(child);
+    const plan = await prepareSandbox(root, root, 'echo ok> created.txt', undefined, config);
+    try {
+      assert.equal((await execute(plan)).code, 0);
+    } finally {
+      await cleanupSandbox(plan);
+    }
+    assert.equal(await acl(root), beforeRoot);
+    assert.equal(await acl(child), beforeChild);
+    assert.match(await acl(path.join(root, 'created.txt')), /Medium Mandatory Level/);
+  },
+);
+
+test(
+  'cleanup restores a workspace whose path contains CJK characters',
+  { skip: reason },
+  async (t) => {
+    /**
+     * The recovery journal is written as UTF-8 bytes without a BOM, and the restore half used to read it with
+     * `Get-Content -Raw` and no `-Encoding`. Windows PowerShell decodes with the ANSI code page, so a workspace
+     * whose path contains CJK characters came back as different text and the restore rejected its own journal
+     * with "ACL recovery root mismatch".
+     *
+     * That failure is quiet in the destructive direction: the workspace keeps the sandbox ACL, and the retained
+     * lock and journal then make *every* later sandbox run in this state directory fail with "leased by another
+     * process or needs recovery" until an operator clears them by hand — which is how unrelated suites (the
+     * Host-program and Host-workflow tests) began failing on a tree that had not changed. It is the journal's
+     * `root` field that carries the path, so the CJK has to be in the *workspace* and not merely in the temp
+     * path above the workspace: that case is covered by the apostrophe test, which is deliberately ASCII-rooted.
+     */
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-临时-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const workspace = path.join(root, 'workspace-工作区');
+    await mkdir(workspace);
+    const child = path.join(workspace, '已有.txt');
+    await writeFile(child, 'original');
+    const acl = async (file: string) =>
+      (await promisify(execFile)('icacls.exe', [file])).stdout.replace(/\r/g, '');
+    const beforeRoot = await acl(workspace),
+      beforeChild = await acl(child);
+    const plan = await prepareSandbox(
+      workspace,
+      workspace,
+      'echo ok> created.txt',
+      undefined,
+      config,
+    );
+    try {
+      assert.equal((await execute(plan)).code, 0);
+    } finally {
+      await cleanupSandbox(plan);
+    }
+    assert.equal(await acl(workspace), beforeRoot);
+    assert.equal(await acl(child), beforeChild);
   },
 );

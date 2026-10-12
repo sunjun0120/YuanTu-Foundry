@@ -56,47 +56,30 @@ export function executionEnvironment(): string {
   const mode = resolveSandboxConfig().mode;
   const web =
     ' Web search, page fetch and browser tools run in the Host process behind their own approval, independently of this command sandbox.';
-  if (mode === 'sbx')
+  if (mode !== 'host') {
+    const backend =
+      mode === 'native'
+        ? process.platform === 'win32'
+          ? 'windows'
+          : process.platform === 'darwin'
+            ? 'seatbelt'
+            : 'unavailable'
+        : mode;
     return (
-      'Command environment: Docker Sandboxes Linux /bin/sh. Commands receive a sanitized read-only workspace snapshot with network denied. Native Git and stdio MCP are unavailable. If sbx cannot start, report the blocker; never switch to host execution.' +
+      (backend === 'windows'
+        ? 'Command environment: Windows native restricted-token sandbox, real workspace and private scratch. Filesystem enforcement is partial; reads and network are unconfined. Required unsupported policies fail closed.'
+        : backend === 'seatbelt'
+          ? 'Command environment: macOS native Seatbelt sandbox, /bin/sh, real workspace and private scratch. File and network access follow the selected policy. Unsupported policies fail closed.'
+          : 'Command environment: native sandbox unavailable on this platform; command execution must fail closed.') +
       web
     );
-  if (mode === 'docker')
-    return (
-      'Command environment: Docker Engine Linux /bin/sh. Workspace is /workspace and read-only, network disabled, only /tmp writable. Native Git and stdio MCP are unavailable. If Docker or the local image is unavailable, report the blocker; never switch to host execution.' +
-      web
-    );
-  if (mode === 'windows')
-    return (
-      'Command environment: Windows write-restricted token over the host shell (cmd.exe), with a workspace-specific restricting SID and private scratch directory. Ordinary outside writes are refused, but ambient Everyone ACL grants remain writable; this is a partial filesystem boundary, with reads and network unconfined. The workspace is the real one. Native Git tools and stdio MCP remain disabled. If stricter filesystem or network confinement is required or this backend cannot start, report the blocker; never switch to host execution.' +
-      web
-    );
+  }
   return `Command environment: host ${process.platform}, shell ${process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'}. Host commands are not OS-sandboxed; permissions still apply.${web}`;
 }
-/**
- * The sandbox a shipped app starts from when the operator has not chosen one.
- *
- * The default used to be `host` for everything — no isolation at all, chosen by nobody, visible only to someone
- * who went looking for `YUANTU_SANDBOX`. That is the one default a sandbox must not have: the safe state is not
- * the convenient one, and "we have no local backend on this platform" is a fact to report, not a licence to run
- * unconfined. So the two programs a person actually starts pick the local backend on the platform that has one
- * (Windows), and leave the library default alone for embedders and tests, where `host` is a deliberate choice
- * rather than an accident.
- *
- * Nowhere else does anything local exist: macOS and Linux would need their own backend (`seatbelt`, `bwrap`,
- * `landlock`), and defaulting those to `docker` would refuse every command on machines that do not have Docker
- * installed — a regression dressed as a security fix. Their default therefore stays as it was.
- *
- * The hook category is pinned to the host in the same breath. A hook is one command per event and every
- * isolating backend either cannot host one (the containers) or is not worth a token per event; leaving it to
- * inherit `YUANTU_SANDBOX` would make the bridge refuse to install and silently disable the operator's hooks,
- * which is a worse failure than running them on the host, where they already ran.
- */
+
+/** Shipped apps select native isolation; an unavailable backend never selects host implicitly. */
 export function applySandboxDefaults(env: NodeJS.ProcessEnv = process.env): void {
-  if (env.YUANTU_SANDBOX !== undefined || env.YUANTU_SANDBOX_HOOK !== undefined) return;
-  if (process.platform !== 'win32') return;
-  env.YUANTU_SANDBOX = 'windows';
-  env.YUANTU_SANDBOX_HOOK = 'host';
+  env.YUANTU_SANDBOX ??= 'native';
 }
 export function resolveWorkspace(input: string): string {
   const root = realpathSync(path.resolve(input));
@@ -252,7 +235,7 @@ export async function createAgent(
     executionPolicy ??
     (() => {
       const config = resolveSandboxConfig();
-      return callExecutionPolicy(config.mode, { image: config.image });
+      return callExecutionPolicy(config.mode, config);
     });
   return new Agent({
     store,

@@ -16,11 +16,13 @@ import {
   applyTextEdits,
   encodeMessage,
   offsetAt,
+  pathToUri,
   toDisplayRange,
   toProtocolPosition,
 } from '../packages/lsp/protocol.ts';
 import { findExecutable, languageForFile, resolveServers } from '../packages/lsp/servers.ts';
 import { LspClient } from '../packages/lsp/client.ts';
+import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
 
 // ---- merged from lsp.test.ts ----
 
@@ -208,6 +210,60 @@ test('the server catalog merges .yuantu/lsp.json and can disable built-ins', asy
   assert.equal(languageForFile(path.join(root, 'a.txt'), servers), undefined);
 });
 
+test('configured uppercase extension resolves its server', async (t) => {
+  /**
+   * Extensions are matched against a lowercased file name, so a configured `.R` or `.F90` never matched
+   * anything: the comparison was `file.toLowerCase().endsWith('.R')`, which no name can satisfy. The catalog
+   * is the one place a definition becomes trusted, so that is where the extension is normalized — and the
+   * matcher keeps comparing suffixes exactly as it did.
+   *
+   * The order rule is deliberately unchanged: `languageForFile` replaces the best match only on a *longer*
+   * extension, so among equal-length extensions the earlier entry in the catalog wins. Normalizing `.R` and
+   * `.r` into the same string therefore cannot reorder two servers into a third rule — the first declared
+   * one answers, which is what the resolved catalog's own order says.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspcase-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, '.yuantu'), { recursive: true });
+  await writeFile(
+    path.join(root, '.yuantu', 'lsp.json'),
+    JSON.stringify({
+      servers: {
+        fortran: { command: 'fortran-ls', args: ['--stdio'], extensions: ['.R', '.F90'] },
+        rlang: { command: 'r-ls', args: [], extensions: ['.r'] },
+        notes: { command: 'notes-ls', args: [], extensions: ['.notes'] },
+      },
+    }),
+  );
+  const { servers, problems } = await resolveServers(root);
+  assert.deepEqual(problems, [], 'a catalog of valid entries reports nothing');
+  const language = (name: string) => languageForFile(path.join(root, name), servers)?.language;
+
+  // A configured `.F90`/`.R` is matched by either spelling of the file name, because the file name was
+  // already the lowercased half — the configured extension was the half that never was.
+  assert.equal(language('solver.F90'), 'fortran');
+  assert.equal(language('solver.f90'), 'fortran');
+  assert.equal(language('main.R'), 'fortran');
+  assert.equal(language('main.r'), 'fortran');
+  // What the catalog publishes is what it matches: the configured spelling is uppercase, the comparison is not.
+  assert.deepEqual(servers.find((server) => server.language === 'fortran')?.extensions, [
+    '.r',
+    '.f90',
+  ]);
+
+  // Two servers whose extensions normalize to the same string keep the existing rule: catalog order decides.
+  const order = servers.map((server) => server.language);
+  assert.ok(order.indexOf('fortran') < order.indexOf('rlang'));
+  assert.equal(language('main.r'), 'fortran', 'the earlier declaration is the one that answers');
+
+  // Normalizing a suffix is not the same as claiming every file: the built-ins still win their own
+  // extensions, an unknown suffix still resolves to nothing, and a `.r` server does not swallow `.rs`.
+  assert.equal(language('main.ts'), 'typescript');
+  assert.equal(language('main.notes'), 'notes');
+  assert.equal(language('main.unknown'), undefined);
+  assert.equal(language('lib.rs'), 'rust');
+});
+
 test('a malformed .yuantu/lsp.json is reported and the built-in catalog still works', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspbad-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -349,18 +405,30 @@ test('the diagnostics wait is bounded when a server never publishes', async (t) 
   assert.ok(Date.now() - started < 5_000, 'the wait must not outlive the requested timeout');
 });
 
-test('language servers refuse unsupported container backends', async (t) => {
+test('language servers refuse unavailable native backends before launch', async (t) => {
   const previous = process.env.YUANTU_SANDBOX;
-  process.env.YUANTU_SANDBOX = 'docker';
+  const original = sandboxProvider('seatbelt');
+  let preparations = 0;
+  registerSandboxProvider({
+    ...original,
+    available: async () => 'fixture backend unavailable',
+    prepare: async (request) => {
+      preparations++;
+      return original.prepare(request);
+    },
+  });
+  process.env.YUANTU_SANDBOX = 'seatbelt';
   try {
     const { root, tools } = await workspace(t);
     await writeFile(path.join(root, 'main.fake'), 'const TARGET = 1;\n');
     const started = await tools.execute(call('lsp_start', { language: 'fake' }), ctx());
     assert.equal(started.isError, true);
-    assert.match(started.content, /backend unsupported/);
+    assert.match(started.content, /fixture backend unavailable/);
+    assert.equal(preparations, 0);
     const servers = await tools.execute(call('lsp_servers', {}), ctx());
-    assert.match(servers.content, /"available": false/);
+    assert.match(servers.content, /"running": false/);
   } finally {
+    registerSandboxProvider(original);
     if (previous === undefined) delete process.env.YUANTU_SANDBOX;
     else process.env.YUANTU_SANDBOX = previous;
   }
@@ -556,6 +624,162 @@ test('a server whose output cannot be decoded is killed instead of left holding 
   await assert.rejects(readFile(`${marker}.exited`), { code: 'ENOENT' });
 });
 
+test('out of order versioned diagnostics do not replace fresh results', async (t) => {
+  /**
+   * A server analyses asynchronously, so a publication for an older version can arrive *after* one for a newer
+   * version. `published` kept whatever came last, so the stale error replaced the fresh clean result — and a
+   * wait for "the diagnostics of the text I just sent" was answered by an analysis of the text before it.
+   *
+   * The stale frame is held back until the next request, so the ordering is the fixture's to decide rather than
+   * this test's to race: the answer to the hover below is written to stdout after it.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspstale-'));
+  const file = path.join(root, 'main.fake');
+  await writeFile(file, 'const TARGET = 1;\n');
+  const client = new LspClient(
+    {
+      command: process.execPath,
+      args: [FIXTURE, '--stale-diagnostics'],
+      language: 'fake',
+      extensions: ['.fake'],
+    },
+    root,
+  );
+  t.after(async () => {
+    await client.stop().catch(() => undefined);
+    await rm(root, { recursive: true, force: true, maxRetries: 10 });
+  });
+  await client.start(new AbortController().signal);
+  const signal = new AbortController().signal;
+  // Two synchronisations, so the fresh result is at a version the stale one is below (2 against 1).
+  await client.sync(file, signal);
+  await writeFile(file, 'const TARGET = 2;\n');
+  await client.sync(file, signal);
+
+  const fresh = await client.diagnostics(file, signal);
+  assert.deepEqual(fresh.diagnostics, [], 'the text as sent has no diagnostics');
+  await client.send(
+    'textDocument/hover',
+    { textDocument: { uri: pathToUri(file) }, position: { line: 0, character: 6 } },
+    signal,
+  );
+  assert.deepEqual(
+    client.cachedDiagnostics(file),
+    [],
+    'a publication for an older version does not replace a newer result',
+  );
+});
+
+test('diagnostics are still reported by a server that versions nothing', async (t) => {
+  // The version check is a comparison, not a requirement: a server that reports no version has nothing to be
+  // compared against, and dropping its diagnostics would turn "this server is old" into "this file is clean".
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspnover-'));
+  const file = path.join(root, 'main.fake');
+  await writeFile(file, 'const BADTOKEN = 1;\n');
+  const client = new LspClient(
+    {
+      command: process.execPath,
+      args: [FIXTURE, '--no-version'],
+      language: 'fake',
+      extensions: ['.fake'],
+    },
+    root,
+  );
+  t.after(async () => {
+    await client.stop().catch(() => undefined);
+    await rm(root, { recursive: true, force: true, maxRetries: 10 });
+  });
+  await client.start(new AbortController().signal);
+  const result = await client.diagnostics(file, new AbortController().signal);
+  assert.equal(result.settled, true);
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0]!.message, /BADTOKEN/);
+});
+
+test('a cleanup that could not be confirmed is retried instead of being remembered as failed', async (t) => {
+  /**
+   * `stopPromise` was cached for the life of the client, so a stop that failed was the answer to every later
+   * stop too — and `cleanup` was cached the same way, so even clearing the first would have replayed the same
+   * rejection without running anything. A cleanup that could not be confirmed means a process may still be
+   * running: the client has to keep ownership of it (no second server over the top) and the next Stop has to
+   * genuinely try again rather than be handed the old failure.
+   *
+   * The fixture leaves a descendant holding its stdout, so this process exits without ever being *closed* —
+   * `managed.closed` is what the client waits on, and it does not fire while the pipe is held.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspcleanup-'));
+  const marker = path.join(root, 'holder.pid');
+  const client = new LspClient(
+    {
+      command: process.execPath,
+      args: [FIXTURE, '--hold-stdio'],
+      language: 'fake',
+      extensions: ['.fake'],
+      env: { FAKE_LSP_HOLD_MARKER: marker },
+    },
+    root,
+  );
+  let holder: number | undefined;
+  /**
+   * Every holder the fixture has left behind so far.
+   *
+   * The marker is append-only, because the test starts a second server after the retry: a teardown that knew
+   * only the first pid would leave the second holding a pipe, and the file would then sit waiting for a
+   * descendant nobody released (and `rm` would fail on the directory that descendant has as its working
+   * directory).
+   */
+  const readHolders = async (): Promise<number[]> =>
+    (await readFile(marker, 'utf8').catch(() => ''))
+      .split('\n')
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+  /**
+   * The holder is a grandchild spawned through its own launcher, so its pid lands in the marker a moment
+   * *after* the server answers the handshake — waiting for it is what keeps the teardown from racing the
+   * launcher it is supposed to release.
+   */
+  const waitForNewHolder = async (known: number): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if ((await readHolders()).some((pid) => pid !== known)) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error('the restarted server never left a holder behind');
+  };
+  const releaseHolders = async (): Promise<void> => {
+    const pids = await readHolders();
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* Already gone. */
+      }
+    }
+    for (const pid of pids) await waitForExit(pid);
+  };
+  t.after(async () => {
+    await releaseHolders();
+    await client.stop().catch(() => undefined);
+    await rm(root, { recursive: true, force: true, maxRetries: 10 });
+  });
+  await client.start(new AbortController().signal);
+  await waitForFile(marker);
+  holder = (await readHolders())[0]!;
+
+  await assert.rejects(client.stop(), /cleanup is unconfirmed/i);
+  // Ownership is kept, so a new server may not be started over a process nobody has confirmed dead.
+  await assert.rejects(client.start(new AbortController().signal), /not running/i);
+
+  // Whatever held the cleanup back is gone now, so the same Stop has to run it again and confirm it.
+  process.kill(holder, 'SIGKILL');
+  assert.equal(await waitForExit(holder), true, 'the holder is gone, not merely detached');
+  await client.stop();
+  // And only a confirmed cleanup makes the client usable again.
+  await client.start(new AbortController().signal);
+  await waitForNewHolder(holder);
+  assert.equal(client.running, true);
+});
+
 test('the open-document working set is bounded, and a refresh is a change rather than a second open', async (t) => {
   /**
    * Two defects in the same bookkeeping, told apart by what the *server* was sent rather than by what the client
@@ -624,23 +848,43 @@ test('the open-document working set is bounded, and a refresh is a change rather
   assert.equal(client.documents, 32, 'the working set holds the documents that were synchronised');
   const opened = await waitFor((lines) => linesFor(lines, 'didOpen', files[31]!) === 1);
   assert.equal(linesFor(opened, 'didClose', files[0]!), 0, 'and nothing has fallen out yet');
+  await writeFile(files[0]!, 'const TARGET0 = 42;\n');
+  await client.sync(files[0]!, signal);
+  await waitFor((lines) => linesFor(lines, 'didChange', files[0]!) === 1);
+  await client.sync(files[1]!, signal);
   /**
    * The thirty-third is one too many: the oldest document is closed rather than forgotten, so the server releases
    * it too — which is the difference between a bounded cache and a leak that only this process cannot see.
    */
   await client.sync(files[32]!, signal);
   assert.equal(client.documents, 32);
-  const afterEviction = await waitFor((lines) => linesFor(lines, 'didClose', files[0]!) === 1);
-  assert.equal(linesFor(afterEviction, 'didClose', files[1]!), 0, 'and only the oldest');
+  const afterEviction = await waitFor((lines) =>
+    [0, 1, 2].some((index) => linesFor(lines, 'didClose', files[index]!) > 0),
+  );
+  assert.equal(
+    linesFor(afterEviction, 'didClose', files[0]!),
+    0,
+    'the recently synchronised document stays open',
+  );
+  assert.equal(
+    linesFor(afterEviction, 'didClose', files[1]!),
+    0,
+    'an unchanged document touched by sync also stays open',
+  );
+  assert.equal(
+    linesFor(afterEviction, 'didClose', files[2]!),
+    1,
+    'the least recently synchronised document closes',
+  );
   /**
    * And re-synchronising it opens it again rather than sending a change: the server no longer has the document,
    * so a `didChange` would be a violation, and this is what the client's own bookkeeping decides.
    */
-  await writeFile(files[0]!, 'const TARGET0 = 99;\n');
-  await client.sync(files[0]!, signal);
-  const afterReopen = await waitFor((lines) => linesFor(lines, 'didOpen', files[0]!) === 2);
+  await writeFile(files[2]!, 'const TARGET2 = 99;\n');
+  await client.sync(files[2]!, signal);
+  const afterReopen = await waitFor((lines) => linesFor(lines, 'didOpen', files[2]!) === 2);
   assert.equal(
-    linesFor(afterReopen, 'didChange', files[0]!),
+    linesFor(afterReopen, 'didChange', files[2]!),
     0,
     'not changed: the server had closed it',
   );

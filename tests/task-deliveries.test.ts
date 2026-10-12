@@ -63,6 +63,43 @@ test('a delivery is owed until every task in it has run', async (t) => {
   assert.deepEqual(pendingTaskDeliveries(store, sessionId), []);
 });
 
+test('a task that is gone does not cost the group its record', async (t) => {
+  /**
+   * `recordTaskDelivery` looked every task up with `getTask`, which throws for an id that is gone — and it did that
+   * *before* the "record nothing" guard, so one task deleted between the tick and the record meant no `task.due` was
+   * written for any task in the group: the tasks that were genuinely owed showed nothing in the desktop's "waiting
+   * since", and nothing was logged to say why. The caller already expects a task deleted mid-tick; it just could not
+   * see it happen.
+   */
+  const { root, store } = await fixture(t);
+  const { sessionId, task: kept } = dueNow(store, root, 'Kept');
+  const dueAt = kept.nextRunAt!;
+  assert.equal(
+    recordTaskDelivery(store, sessionId, {
+      dueAt,
+      reason: 'busy',
+      tasks: [
+        { id: kept.id, title: kept.title },
+        { id: 'deleted-mid-tick', title: 'Removed while the Host was busy' },
+      ],
+      recordedAt: new Date().toISOString(),
+    }),
+    true,
+    'the group is still recordable: one of its tasks is simply gone',
+  );
+  const [delivery] = recorded(store, sessionId);
+  assert.ok(delivery, 'the record was written for the tasks that are still there');
+  assert.deepEqual(
+    (delivery.data.tasks as { id: string }[]).map((entry) => entry.id).sort(),
+    ['deleted-mid-tick', kept.id].sort(),
+  );
+  // Still owed, so the kept task can be reported as waiting on the next look.
+  assert.deepEqual(
+    pendingTaskDeliveries(store, sessionId).map((entry) => entry.dueAt),
+    [dueAt],
+  );
+});
+
 test('a busy Host writes one line per session and look, and only one', async (t) => {
   const { root, store } = await fixture(t);
   const sessionId = store.create(root).id;

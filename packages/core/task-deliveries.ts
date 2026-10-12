@@ -48,12 +48,22 @@ export function recordTaskDelivery(
   sessionId: string,
   delivery: TaskDelivery,
 ): boolean {
+  /**
+   * A task deleted since the tick is not a reason to lose the whole group's record.
+   *
+   * `getTask` throws for an id that is gone, and it was called here — before the "record nothing" guard below. So
+   * one deleted task meant no `task.due` was recorded for *any* task in the group: the desktop's "waiting since"
+   * stayed empty for the tasks that were genuinely owed, and nothing was logged to say why. The caller already
+   * expects this case (a task deleted mid-tick must not take the scheduler down); it simply could not see it. A row
+   * that is gone contributes no revision and no next run, which is exactly what the fallbacks are for.
+   */
+  const known = new Map(store.listTasks(sessionId).map((task) => [task.id, task]));
   const savedTasks = delivery.tasks.map((task) => {
-    const current = store.getTask(sessionId, task.id);
+    const current = known.get(task.id);
     return {
       ...task,
-      ruleRevision: task.ruleRevision ?? current.triggerRevision ?? 'legacy',
-      scheduledAt: task.scheduledAt ?? current.nextRunAt ?? delivery.dueAt,
+      ruleRevision: task.ruleRevision ?? current?.triggerRevision ?? 'legacy',
+      scheduledAt: task.scheduledAt ?? current?.nextRunAt ?? delivery.dueAt,
     };
   });
   const identity = (task: TaskDelivery['tasks'][number]) =>

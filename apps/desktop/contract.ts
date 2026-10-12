@@ -20,6 +20,7 @@ import type {
 } from '../../packages/carrier/contract.ts';
 import type { SettingsCommand, SettingsReply } from './settings-contract.ts';
 import type { UiSettingsCommand, UiSettingsReply } from './ui-settings.ts';
+import type { SandboxSetupCommand, SandboxSetupReply } from './sandbox-setup.ts';
 import type {
   PermissionPresetCommand,
   PermissionPresetReply,
@@ -61,6 +62,8 @@ export interface DesktopBridge {
    */
   subscribePresets(listener: (view: PermissionPresetView) => void): () => void;
   uiSettings(command: UiSettingsCommand): Promise<UiSettingsReply>;
+  /** Native Windows maintenance is absent in the browser bridge. */
+  sandboxSetup?(command: SandboxSetupCommand): Promise<SandboxSetupReply>;
   settings(command: SettingsCommand): Promise<SettingsReply>;
   /**
    * The shell's carrier-command channel. The renderer sends the same validated vocabulary it always did; the

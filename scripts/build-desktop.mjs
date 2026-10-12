@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { mkdir, copyFile, writeFile } from 'node:fs/promises';
 import { SCHEMA_VERSION } from '../packages/storage/sqlite.ts';
+import { commonJsModuleUrl } from './commonjs-module-url.mjs';
 
 await mkdir('dist/desktop', { recursive: true });
 await build({
@@ -10,6 +11,7 @@ await build({
     'apps/desktop/preload.ts',
     'apps/desktop/mcp-test-worker.ts',
     'apps/desktop/database-backup-worker.ts',
+    'apps/desktop/sandbox-probe-worker.ts',
   ],
   outdir: 'dist/desktop',
   outExtension: { '.js': '.cjs' },
@@ -17,7 +19,8 @@ await build({
   platform: 'node',
   format: 'cjs',
   target: 'node24',
-  external: ['electron', 'pdfjs-dist/*'],
+  ...commonJsModuleUrl,
+  external: ['electron', 'pdfjs-dist/*', '@napi-rs/keyring'],
   sourcemap: true,
 });
 await build({
@@ -42,6 +45,7 @@ await build({
   platform: 'node',
   format: 'cjs',
   target: 'node24',
+  ...commonJsModuleUrl,
 });
 await copyFile('package.json', 'dist/desktop/package-version.json');
 await writeFile('dist/desktop/release.json', JSON.stringify({ maxSchemaVersion: SCHEMA_VERSION }));

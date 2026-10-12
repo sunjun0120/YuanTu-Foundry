@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { mkdir, readdir, lstat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, lstat, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const expected = new Set([
   'Dockerfile',
 ]);
 
-/** Build deployable runner files only; never build/pull an image or start a service. */
+/** Build the native program runner. Legacy generated container recipes are removed from this output. */
 export async function buildProgramRunner(output) {
   const directory = path.resolve(output);
   await mkdir(directory, { recursive: true });
@@ -56,24 +56,11 @@ export async function buildProgramRunner(output) {
     ),
   };
   files.set('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n'));
-  files.set(
-    'Dockerfile',
-    Buffer.from(`ARG RUNNER_BASE
-FROM \${RUNNER_BASE}
-LABEL io.yuantu.program-runner.protocol="${PROGRAM_PROTOCOL}"
-WORKDIR /opt/yuantu-runner
-COPY code-process-entry.js code-worker.js package.json manifest.json ./
-RUN node -e "if (Number(process.versions.node.split('.')[0]) < ${PROGRAM_NODE_MAJOR}) process.exit(1)"
-USER 65534:65534
-ENTRYPOINT ["node", "--permission", "--allow-worker", "--disable-warning=SecurityWarning", "--allow-fs-read=/opt/yuantu-runner/code-process-entry.js", "--allow-fs-read=/opt/yuantu-runner/code-worker.js", "/opt/yuantu-runner/code-process-entry.js"]
-`),
-  );
+  await rm(path.join(directory, 'Dockerfile'), { force: true });
   for (const [name, bytes] of files) await writeFile(path.join(directory, name), bytes);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await buildProgramRunner(path.join(project, 'dist/program-runner'));
-  process.stdout.write(
-    'Built standalone program runner (protocol 1; container activation unchanged).\n',
-  );
+  process.stdout.write('Built standalone native program runner (protocol 1).\n');
 }

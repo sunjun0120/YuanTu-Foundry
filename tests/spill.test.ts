@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -214,6 +214,109 @@ test('the model can read a spilled output back with read_file', async (t) => {
   assert.equal(database.isError, true);
 });
 
+test('spill reads accept equivalent workspace paths', async (t) => {
+  /**
+   * The spill exception is about *which file* is being read, not how the argument was spelled.
+   *
+   * It was decided by cutting the raw argument on separators, so `./.yuantu/spill/...` and
+   * `x/../.yuantu/spill/...` — the same file by every other rule in the workspace — were not recognized as
+   * spills. They fell through to the scoped-instruction lookup, which refuses everything under `.yuantu`
+   * ("Instruction target is an excluded directory"), so a spilled output was readable at exactly one
+   * spelling. The identity now comes from the resolved path; the exception still covers only `.yuantu/spill`,
+   * still only for reads, and never the credential names below it.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-alias-'));
+  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-alias-outside-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+  const tools = createTools(root);
+  const body = 'spilled output body';
+  const spilled = spillOutput({
+    workspace: root,
+    sessionId: 's1',
+    tool: 'run_command',
+    content: body,
+  })!;
+  assert.ok(spilled.path.startsWith('.yuantu/spill/'), spilled.path);
+  const spellings = [spilled.path, `./${spilled.path}`, `x/../${spilled.path}`];
+  // Windows accepts either separator; on POSIX a backslash is an ordinary character in a file name, so this
+  // one spelling only exists there.
+  if (process.platform === 'win32') spellings.push(spilled.path.split('/').join('\\'));
+  for (const spelling of spellings) {
+    const read = await tools.execute(
+      { id: 'r', name: 'read_file', arguments: { path: spelling } },
+      context(),
+    );
+    assert.equal(read.isError, false, `${spelling}: ${read.content}`);
+    assert.match(read.content, new RegExp(body));
+    // One file, one identity in the payload: a card and a later change tool must agree about which file it is.
+    assert.equal((read.output!.value as { path: string }).path, spilled.path, spelling);
+  }
+  /**
+   * The exception is keyed on the canonical spelling, not on a case-folded one.
+   *
+   * `Workspace.resolve` compares the parts of the path as written against the excluded directory names and
+   * case-folds only for the *credential* test, so `.YUANTU/spill/...` is refused there (or does not exist on a
+   * case-sensitive filesystem) — which is what keeps this exemption narrow. A blanket `toLowerCase` here would
+   * have opened the internal directory on every case-insensitive platform.
+   */
+  const cased = await tools.execute(
+    {
+      id: 'C',
+      name: 'read_file',
+      arguments: { path: spilled.path.replace('.yuantu', '.YUANTU') },
+    },
+    context(),
+  );
+  assert.equal(cased.isError, true, cased.content);
+  // The exception is the spill directory's identity, not a licence for everything below it: a credential name
+  // nested under the spill directory is still refused at every spelling.
+  await mkdir(path.join(root, '.yuantu', 'spill', 'credentials.json'));
+  const nestedCredential = path.join(root, '.yuantu', 'spill', 'credentials.json', 'hidden.txt');
+  await writeFile(nestedCredential, 'CREDENTIAL_MARKER');
+  for (const spelling of [
+    '.yuantu/spill/credentials.json/hidden.txt',
+    './.yuantu/spill/credentials.json/hidden.txt',
+  ]) {
+    const denied = await tools.execute(
+      { id: 'c', name: 'read_file', arguments: { path: spelling } },
+      context(),
+    );
+    assert.equal(denied.isError, true, spelling);
+    assert.ok(!denied.content.includes('CREDENTIAL_MARKER'), spelling);
+  }
+  // A directory link under the spill directory is still a link, and is still followed nowhere.
+  await writeFile(path.join(outside, 'secret.txt'), 'OUTSIDE_SECRET');
+  await symlink(
+    outside,
+    path.join(root, '.yuantu', 'spill', 'linked'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  const linked = await tools.execute(
+    { id: 'l', name: 'read_file', arguments: { path: './.yuantu/spill/linked/secret.txt' } },
+    context(),
+  );
+  assert.equal(linked.isError, true);
+  assert.ok(!linked.content.includes('OUTSIDE_SECRET'));
+  // Leaving the workspace is still refused, however the argument is spelled.
+  for (const spelling of ['../outside.txt', './.yuantu/spill/../../../outside.txt']) {
+    const escaped = await tools.execute(
+      { id: 'o', name: 'read_file', arguments: { path: spelling } },
+      context(),
+    );
+    assert.equal(escaped.isError, true, spelling);
+  }
+  // The read exception never opened the write path, and the file it names is untouched.
+  const written = await tools.execute(
+    { id: 'w', name: 'write_file', arguments: { path: `./${spilled.path}`, content: 'tampered' } },
+    context(),
+  );
+  assert.equal(written.isError, true);
+  assert.equal(await readFile(path.join(root, spilled.path), 'utf8'), body);
+});
+
 test('a spill that cannot be written falls back to plain truncation', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-fail-'));
   t.after(async () => {
@@ -291,4 +394,45 @@ test('a run spills through its own session, and the transcript points at the fil
     relative,
   );
   assert.equal(await readFile(path.join(root, relative), 'utf8'), long);
+});
+
+test('spill caps actual utf8 bytes without broken characters', async (t) => {
+  /**
+   * The cap is stated in bytes and the cut used to be made with `content.slice(0, MAX_SPILL_BYTES)`, which counts
+   * UTF-16 code units: 8,000,000 Chinese characters became a 24,000,000-byte file, and a cut on an odd code unit
+   * left half a surrogate pair behind. Both halves are asserted here — what lands on disk is within the byte cap,
+   * and what it holds still decodes as whole characters of the content it came from.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-bytes-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const limit = 8_000_000;
+  const cases = [
+    { name: 'ascii', content: 'a'.repeat(limit + 1), cut: true },
+    { name: 'cjk', content: '中'.repeat(limit + 1), cut: true },
+    // Four bytes per character, so this one crosses the cap by a single character.
+    { name: 'emoji', content: '\u{1F600}'.repeat(limit / 4 + 1), cut: true },
+    // Exactly the cap in whole characters: nothing is cut, so nothing may be lost to a boundary rule.
+    { name: 'exact', content: '\u{1F600}'.repeat(limit / 4), cut: false },
+  ];
+  for (const item of cases) {
+    const spilled = spillOutput({
+      workspace: root,
+      sessionId: 's1',
+      tool: item.name,
+      content: item.content,
+    })!;
+    const file = path.join(root, spilled.path);
+    const size = (await stat(file)).size;
+    assert.ok(size <= limit, `${item.name}: ${size} bytes on disk is over the ${limit}-byte cap`);
+    assert.equal(spilled.bytes, size, `${item.name}: the reported size is the file's`);
+    const text = await readFile(file, 'utf8');
+    // A cut inside a character decodes back as U+FFFD, which is the corruption this rules out.
+    assert.ok(!text.includes('\uFFFD'), `${item.name}: the cut broke a character`);
+    assert.ok(
+      item.content.startsWith(text),
+      `${item.name}: what was kept is a prefix of the content`,
+    );
+    if (item.cut) assert.ok(text.length < item.content.length, `${item.name}: over the cap is cut`);
+    else assert.equal(text, item.content, `${item.name}: exactly the cap is left whole`);
+  }
 });

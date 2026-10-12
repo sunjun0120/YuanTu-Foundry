@@ -452,7 +452,7 @@ test('text-only connections reject new and historical images before provider req
   );
   const image = {
     mimeType: 'image/png' as const,
-    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5u8AAAAASUVORK5CYII=',
+    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   };
   await assert.rejects(
     ctx.agent.run({ sessionId: ctx.session.id, prompt: 'inspect', images: [image] }),
@@ -864,7 +864,7 @@ test('queued image metadata does not duplicate base64 data into queue events', a
   await ready;
   const image = {
     mimeType: 'image/png' as const,
-    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5u8AAAAASUVORK5CYII=',
+    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   };
   agent.enqueue(session.id, { prompt: 'image later', images: [image] }, 'follow-up');
   assert.doesNotMatch(JSON.stringify(events.filter((e) => e.type === 'input.queued')), /iVBOR/);

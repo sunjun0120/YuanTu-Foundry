@@ -175,6 +175,52 @@ async function setup(t: test.TestContext) {
     },
   };
 }
+
+test('a create that fails before its bytes land takes the file back with it', async (t) => {
+  /**
+   * `O_CREAT` makes the path exist before anything is written, so a failure inside that window used to leave an
+   * empty file behind while the tool reported that it had changed nothing. The leftover is the real trap:
+   * `write_file` refuses an existing path with "File already exists; use edit_file", so the caller is blocked
+   * from retrying the very file it never created. The journal is prepared inside that window, which is what
+   * makes the abort below land exactly where the defect was.
+   */
+  const { root } = await setup(t);
+  const controller = new AbortController();
+  const tools = createTools(root);
+  // A cancellation unwinds as a thrown abort rather than an `isError` result, so that is what is expected here.
+  await assert.rejects(
+    tools.execute(
+      { id: 'call', name: 'write_file', arguments: { path: 'new.txt', content: 'hello' } },
+      {
+        signal: controller.signal,
+        approve: async () => true,
+        fileJournal: {
+          prepare: () => {
+            controller.abort();
+            return 'journal-id';
+          },
+          applied: () =>
+            assert.fail('an operation that never wrote must not be recorded as applied'),
+        },
+      },
+    ),
+    (error: unknown) => {
+      assert.equal((error as Error).name, 'AbortError', String(error));
+      return true;
+    },
+  );
+  assert.ok(
+    !(await readdir(root)).includes('new.txt'),
+    'the file must not survive a write that never landed',
+  );
+  // The retry is the consequence that matters, so it is asserted rather than inferred.
+  const retried = await tools.execute(
+    { id: 'call', name: 'write_file', arguments: { path: 'new.txt', content: 'hello' } },
+    { signal: new AbortController().signal, approve: async () => true },
+  );
+  assert.equal(retried.isError, false, retried.content);
+  assert.equal(await readFile(path.join(root, 'new.txt'), 'utf8'), 'hello');
+});
 test('file snapshots survive restart and undo edits only once with visible history', async (t) => {
   const ctx = await setup(t);
   await writeFile(path.join(ctx.root, 'a.txt'), 'original');
@@ -307,6 +353,43 @@ test('grouped move and batch snapshots survive restart and undo in reverse', asy
   await assert.rejects(readFile(path.join(ctx.root, 'moved.txt')), { code: 'ENOENT' });
 });
 
+test('batch edits canonical aliases in sequence', async (t) => {
+  /**
+   * A batch step is about the file it resolves to, not the spelling it was written with. Keying the accumulated
+   * text on the raw argument made `a.txt` and `./a.txt` two independent states: the second one took its own
+   * `before` snapshot from disk, so it matched against the *original* text and a chain like `hello→world` then
+   * `world→done` failed at the second step — "old_text must match exactly once" — for two steps that are one
+   * edit to one file.
+   */
+  const ctx = await setup(t);
+  await writeFile(path.join(ctx.root, 'a.txt'), 'hello');
+  const edited = await ctx.edit('batch_edit', {
+    edits: [
+      { path: 'a.txt', old_text: 'hello', new_text: 'world' },
+      { path: './a.txt', old_text: 'world', new_text: 'done' },
+    ],
+  });
+  assert.equal(edited.isError, false, edited.content);
+  assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'done');
+  // One file is one change and one snapshot, not one per spelling.
+  assert.equal(edited.change?.changes?.length, 1);
+  assert.equal(edited.change?.changes?.[0]?.path, 'a.txt');
+  ctx.reopen();
+  assert.equal(ctx.store.fileChangeSnapshots(ctx.session.id, edited.change!.id!).length, 1);
+
+  // A later step that cannot match leaves the whole call unapplied: the first replacement is not written
+  // because the second could not be computed.
+  const failed = await ctx.edit('batch_edit', {
+    edits: [
+      { path: 'a.txt', old_text: 'done', new_text: 'final' },
+      { path: './a.txt', old_text: 'absent', new_text: 'anything' },
+    ],
+  });
+  assert.equal(failed.isError, true, failed.content);
+  assert.match(failed.content, /old_text must match exactly once/);
+  assert.equal(await readFile(path.join(ctx.root, 'a.txt'), 'utf8'), 'done');
+});
+
 test('an interrupted grouped undo resumes after restart from exact before/after states', async (t) => {
   const ctx = await setup(t);
   await writeFile(path.join(ctx.root, 'a.txt'), 'one');
@@ -433,4 +516,109 @@ test('workspace walk stays bounded and skips credentials across a synthetic 600-
   assert.equal(files[0], 'module-00/file-00.ts');
   assert.ok(files.includes('module-11/file-49.ts'));
   assert.ok(files.every((file) => !file.includes('.env')));
+});
+
+test('case insensitive literal search agrees with escaped regex independent of locale', async (t) => {
+  /**
+   * `literal` and `regex` are two spellings of one search, so they must agree about the same file.
+   *
+   * They did not. The literal path tested `line.toLocaleLowerCase().includes(query.toLocaleLowerCase())` while
+   * `regex` mode uses the engine's `i` flag, and lowercasing is neither the same relation as case-insensitive
+   * matching nor locale-independent: `'İ'.toLocaleLowerCase()` is `i` followed by a combining dot above, so a
+   * literal search for `i` counted a line containing `İ` as a hit while `new RegExp('i', 'i')` does not. The
+   * Turkish `I`/`ı` pair is the same defect with the locale as the deciding factor instead of the character —
+   * which is why this is a differential test over both modes rather than a table of expected foldings: the
+   * question is whether the two modes still answer identically, on any host.
+   */
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-locale-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  /**
+   * One line per case, so a match set names exactly which characters a mode folded.
+   *
+   * The last four are the "a literal is not a pattern" guards: as a regex, `a+b[0]` matches `aab0` and not
+   * `a+b[0]`, and `[bracket]` / `a(b` are patterns that match other text or are not valid at all.
+   */
+  await writeFile(
+    path.join(root, 'locale.txt'),
+    [
+      'I',
+      'i',
+      'İ',
+      'ı',
+      '中文',
+      'a+b[0]',
+      'S',
+      'ſ',
+      'a(b',
+      '[bracket]',
+      'back\\slash',
+      'aab0',
+    ].join('\n') + '\n',
+  );
+  const tools = createTools(root);
+  const context = { signal: new AbortController().signal, approve: async () => true };
+  const matches = async (mode: string, query: string, caseMode: string): Promise<number[]> => {
+    const result = await tools.execute(
+      { id: 'search', name: 'search_files', arguments: { query, mode, case: caseMode } },
+      context,
+    );
+    assert.equal(result.isError, false, `${mode}/${caseMode}/${query}: ${result.content}`);
+    const payload = result.output!.value as { matches: { line: number }[] };
+    return payload.matches.map((match) => match.line).sort((left, right) => left - right);
+  };
+  // The escape the two modes must agree about; the tool's own copy is private, so the test states the rule.
+  const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const query of [
+    'I',
+    'i',
+    'İ',
+    'ı',
+    '中文',
+    'a+b[0]',
+    'S',
+    'ſ',
+    'a(b',
+    '[bracket]',
+    'back\\slash',
+  ]) {
+    for (const caseMode of ['insensitive', 'sensitive']) {
+      assert.deepEqual(
+        await matches('literal', query, caseMode),
+        await matches('regex', escaped(query), caseMode),
+        `literal and escaped regex must agree for ${JSON.stringify(query)} (${caseMode})`,
+      );
+    }
+  }
+  // The regression, named: `İ` is the character that folds to `i` plus a combining mark, and `i` is the query
+  // that used to match it. The `i` flag does not, and that is what both modes answer now.
+  assert.deepEqual(await matches('literal', 'i', 'insensitive'), [1, 2]);
+  assert.deepEqual(await matches('literal', 'I', 'insensitive'), [1, 2]);
+  assert.deepEqual(await matches('literal', 'İ', 'insensitive'), [3]);
+  assert.deepEqual(await matches('literal', 'ı', 'insensitive'), [4]);
+  assert.deepEqual(await matches('literal', '中文', 'insensitive'), [5]);
+  // The default stays case-sensitive and exact: no folding of any kind, including the folds above.
+  assert.deepEqual(await matches('literal', 'I', 'sensitive'), [1]);
+  assert.deepEqual(await matches('literal', 'i', 'sensitive'), [2]);
+  assert.deepEqual(await matches('literal', 'İ', 'sensitive'), [3]);
+  assert.deepEqual(await matches('literal', 'ı', 'sensitive'), [4]);
+  assert.deepEqual(await matches('literal', 'ſ', 'sensitive'), [8]);
+  // A literal is text, never a pattern: `a+b[0]` matches that line and not `aab0`, and a query full of
+  // metacharacters is a query, not a syntax error.
+  assert.deepEqual(await matches('literal', 'a+b[0]', 'sensitive'), [6]);
+  assert.deepEqual(await matches('literal', 'a+b[0]', 'insensitive'), [6]);
+  assert.deepEqual(await matches('literal', 'a(b', 'insensitive'), [9]);
+  assert.deepEqual(await matches('literal', '[bracket]', 'insensitive'), [10]);
+  assert.deepEqual(await matches('literal', 'back\\slash', 'insensitive'), [11]);
+  // ...while the same text sent as a pattern really is one, which is what makes the guard above meaningful.
+  assert.deepEqual(await matches('regex', 'a+b[0]', 'sensitive'), [12]);
+  assert.deepEqual(await matches('regex', '^\\[bracket\\]$', 'sensitive'), [10]);
+  // The same text unescaped is a character class, which is what `literal` mode must never become: it matches
+  // every line holding a `b`, `r`, `a`, `c`, `k`, `e` or `t`, not the one line holding the text.
+  assert.deepEqual(await matches('regex', '[bracket]', 'sensitive'), [6, 9, 10, 11, 12]);
+  const invalid = await tools.execute(
+    { id: 'search', name: 'search_files', arguments: { query: 'a(b', mode: 'regex' } },
+    context,
+  );
+  assert.equal(invalid.isError, true);
+  assert.match(invalid.content, /Invalid regular expression/);
 });

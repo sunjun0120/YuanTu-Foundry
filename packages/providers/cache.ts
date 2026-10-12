@@ -1,6 +1,6 @@
 import type { ToolSpec } from '../protocol/index.ts';
 import { defaultPromptCacheMode, promptCacheMode } from '../protocol/settings.ts';
-import { routeSupports, type PromptCacheMode } from '../protocol/cache-modes.ts';
+import type { PromptCacheMode } from '../protocol/cache-modes.ts';
 import type { ProviderConfig } from './config.ts';
 
 /**
@@ -83,16 +83,18 @@ export function cacheFields(
    * The identifier, decided by the mode and then by the route.
    *
    * An explicit `key-only` always carries it — that is the instruction, and the route's silence is not a reason to
-   * drop it. `auto` carries it when the route declares it caches by key, which is how an OpenAI connection gets
-   * the request it has always sent. `blocks` never carries it: that policy identifies its prefix by position, and
-   * the two identifiers are alternatives rather than companions.
+   * drop it. `blocks` never carries it: that policy identifies its prefix by position, and the two identifiers are
+   * alternatives rather than companions.
+   *
+   * The tail this replaced asked the route a second time whether it caches by key, which was unreachable:
+   * `cacheMode` resolves `auto` against the route before returning, and `promptCacheEnabled` above has already
+   * excluded `off`. What is left is kept as the fail-closed answer rather than folded into the `blocks` case, so a
+   * mode outside this vocabulary still sends no cache fields instead of guessing at a breakpoint policy.
    */
   const mode = cacheMode(config, route);
   if (mode === 'key-only') return { blocks: false, key: cacheKey, toolBreakpoint: false };
-  if (mode === 'blocks') return { blocks: true, key: undefined, toolBreakpoint: true };
-  if (routeSupports(route ?? config.protocol ?? 'anthropic', 'prompt-cache-key'))
-    return { blocks: false, key: cacheKey, toolBreakpoint: false };
-  return { blocks: false, key: undefined, toolBreakpoint: false };
+  if (mode !== 'blocks') return { blocks: false, key: undefined, toolBreakpoint: false };
+  return { blocks: true, key: undefined, toolBreakpoint: true };
 }
 
 const ephemeral = { type: 'ephemeral' as const };

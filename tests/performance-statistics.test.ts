@@ -10,6 +10,7 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { AgentEvent, ModelResponse } from '../packages/protocol/index.ts';
 import { isSummaryRequest } from './summary-request.ts';
 import { addStatistics, emptyStatistics } from '../packages/protocol/statistics.ts';
+import { createRunEmit, type RunEmission } from '../packages/core/run-emit.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 
 async function fixture(t: test.TestContext) {
@@ -274,4 +275,70 @@ test('a failed provider request records its span without changing legacy modelMs
   assert.equal(finished.length, 1);
   assert.equal(finished[0]!.data.durationMs, timing.providerMs);
   assert.deepEqual(store.statistics(session.id), result.statistics);
+});
+
+test('at the emission seam, the tool wall clock is a union of spans and repeats or strays change nothing', async (t) => {
+  /**
+   * A test of the emission seam, not of a run: frames are fed to the emitter directly.
+   *
+   * The rule it pins is `toolMs` is the wall clock during which the run was waiting on *at least one* tool.
+   * Driven by frames because the interesting shapes are hard to schedule and easy to state — a finish that arrives
+   * before its sibling's, a finish for a call that never started, and the same finish twice. None of them may
+   * produce a negative span or be charged twice, and a call that opens while another is still running must not
+   * start a second clock: that is how the total came out as the shortest call instead of the union.
+   *
+   * Interleaved finishes are not reachable from today's single emitter — the loop announces a whole group's
+   * `tool.started` up front and emits its `tool.finished` frames together once the group resolves — so this is
+   * *not* a claim that a run shows the defect, and the plan's probe numbers are not a real-run observation. The
+   * emitter's rule was wrong regardless, and this is where it can be witnessed; a second producer of tool frames
+   * is what would make it reachable from a run.
+   *
+   * The schedule is the plan's probe shape — A over [0, 140] and B over [60, 100], so the union is 140 ms while
+   * the old single scalar reported 40 ms (it was overwritten by B's start and cleared by B's finish). The
+   * assertions are bounds rather than the exact `50` the plan names: `performance.now()` is not one of the clocks
+   * Node's `mock.timers` can fake, and injecting a clock into the emitter to make it exact would widen an API the
+   * plan did not authorize. What the bounds have to do is tell 140 from 40, with room for a scheduler that runs
+   * late; the duplicate and unmatched cases below assert exact equality because they need no clock at all.
+   */
+  const { store, session } = await fixture(t);
+  const statistics = emptyStatistics();
+  const state: RunEmission = {
+    statistics,
+    emittedTypes: new Set<string>(),
+    toolCalls: new Map<string, number>(),
+    toolSpanStarted: undefined,
+    toolActivityStartedAt: undefined,
+    childOutputTokens: new Map<string, number>(),
+  };
+  const emit = createRunEmit({ store, sessionId: session.id, runId: 'fixture-run', state });
+  emit('tool.started', { call: { id: 'a', name: 'read_one', arguments: {} } });
+  await delay(60);
+  emit('tool.started', { call: { id: 'b', name: 'read_two', arguments: {} } });
+  await delay(40);
+  // `b` finishes first, while `a` is still running: the run is still waiting, so nothing may be charged yet.
+  emit('tool.finished', { callId: 'b', isError: false, content: 'b' });
+  assert.ok(
+    statistics.toolMs < 20,
+    `a span is not charged while another call is still running, saw ${statistics.toolMs}`,
+  );
+  await delay(40);
+  emit('tool.finished', { callId: 'a', isError: false, content: 'a' });
+  const union = statistics.toolMs;
+  assert.ok(union >= 120, `the union of the two spans is about 140 ms, saw ${union}`);
+  assert.ok(
+    union < 400,
+    `and it is not counted twice, nor carried past the last finish, saw ${union}`,
+  );
+  // A finish nobody opened, and the same finish again: neither may move the total, and neither may go negative.
+  emit('tool.finished', { callId: 'ghost', isError: false, content: 'ghost' });
+  emit('tool.finished', { callId: 'a', isError: false, content: 'a' });
+  assert.equal(statistics.toolMs, union, 'a repeated or unmatched finish changes nothing');
+  // A later call that overlaps nothing is its own span, so disjoint spans add up.
+  emit('tool.started', { call: { id: 'c', name: 'read_three', arguments: {} } });
+  await delay(40);
+  emit('tool.finished', { callId: 'c', isError: false, content: 'c' });
+  assert.ok(
+    statistics.toolMs >= union + 25,
+    `a serial span adds to the union, saw ${statistics.toolMs} after ${union}`,
+  );
 });

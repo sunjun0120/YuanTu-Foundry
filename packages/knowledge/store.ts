@@ -126,18 +126,35 @@ export class KnowledgeStore {
    * searchable, which is why reads still understand kind='memory'.
    */
   listDocuments(root: string): PinnedDocument[] {
+    /**
+     * One query, not N+1.
+     *
+     * Counting chunks used to be a second query per document, so a list whose entire job is "these are the
+     * pinned documents" cost one round trip per row — and `list_memories` calls it on every listing, while
+     * `refreshDocuments` calls it before every search. The count comes from a join with a group by instead.
+     */
     return this.db
-      .prepare('SELECT path,updated_at,id FROM knowledge_documents WHERE scope=? ORDER BY path')
+      .prepare(
+        `SELECT d.path AS path, d.updated_at AS updated_at, count(i.rowid) AS chunks
+           FROM knowledge_documents d
+           LEFT JOIN knowledge_items i ON i.document_id = d.id
+          WHERE d.scope=?
+          GROUP BY d.id
+          ORDER BY d.path`,
+      )
       .all(canonical(root))
       .map((row) => ({
         path: String(row.path),
         updatedAt: String(row.updated_at),
-        chunks: Number(
-          this.db
-            .prepare('SELECT count(*) AS n FROM knowledge_items WHERE document_id=?')
-            .get(String(row.id))!.n,
-        ),
+        chunks: Number(row.chunks),
       }));
+  }
+  /** How many chunks one pinned document holds, without listing every document to find out. */
+  private chunkCount(id: string): number {
+    return Number(
+      this.db.prepare('SELECT count(*) AS n FROM knowledge_items WHERE document_id=?').get(id)?.n ??
+        0,
+    );
   }
   pinDocument(root: string, relative: string): PinnedDocument {
     const scope = canonical(root),
@@ -147,11 +164,30 @@ export class KnowledgeStore {
     const digest = createHash('sha256').update(content).digest('hex');
     const id = idFor(scope, file),
       now = new Date().toISOString();
+    /**
+     * The unchanged case is decided *before* the write transaction, and that ordering is the point.
+     *
+     * `search` refreshes every pinned document before it ranks anything, so this runs once per document per
+     * query. Reading the digest first and returning here costs one SELECT. Opening `BEGIN IMMEDIATE` first
+     * costs the database's single writer, once per document, for a search that changed nothing — and the
+     * previous version then answered from `listDocuments`, which was one further query per document on top.
+     *
+     * The digest is re-read inside the transaction rather than trusted from here: another process may have
+     * indexed this same content while this one was reading the file, and the file may have been rewritten in
+     * between — in which case the write below is still correct, and the re-check only avoids doing it twice.
+     */
+    const stored = this.db
+      .prepare('SELECT digest,updated_at FROM knowledge_documents WHERE id=? AND scope=?')
+      .get(id, scope);
+    if (stored?.digest === digest)
+      return { path: file, updatedAt: String(stored.updated_at), chunks: this.chunkCount(id) };
     return this.transaction(() => {
-      const existing = this.db.prepare('SELECT digest FROM knowledge_documents WHERE id=?').get(id);
-      if (existing?.digest === digest)
-        return this.listDocuments(scope).find((value) => value.path === file)!;
-      if (!existing) {
+      const current = this.db
+        .prepare('SELECT digest,updated_at FROM knowledge_documents WHERE id=? AND scope=?')
+        .get(id, scope);
+      if (current?.digest === digest)
+        return { path: file, updatedAt: String(current.updated_at), chunks: this.chunkCount(id) };
+      if (!current) {
         const count = this.db
           .prepare('SELECT count(*) AS n FROM knowledge_documents WHERE scope=?')
           .get(scope)!.n as number;

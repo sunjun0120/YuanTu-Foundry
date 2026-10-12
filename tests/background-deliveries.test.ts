@@ -10,7 +10,40 @@ import {
   setBackgroundPolicy,
   admitBackground,
   finishBackground,
+  backgroundAuthority,
 } from '../packages/core/background-deliveries.ts';
+
+test('background authority retains its file policy across reopen and rejects corrupt policies', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'yuantu-authority-files-'));
+  const file = path.join(root, 'sessions.sqlite');
+  let store = new SessionStore(file);
+  try {
+    const id = store.create(root).id;
+    setBackgroundPolicy(
+      store,
+      id,
+      { mode: 'auto', paused: false, maxWakeups: 1, maxRunMs: 1000 },
+      false,
+      {
+        sandboxMode: 'seatbelt',
+        sandboxFiles: 'read-only',
+        sandboxNetwork: 'denied',
+        permissionPolicy: null,
+      },
+    );
+    store.close();
+    store = new SessionStore(file);
+    assert.equal(backgroundAuthority(store, id)?.sandboxFiles, 'read-only');
+    assert.equal(backgroundAuthority(store, id)?.sandboxNetwork, 'denied');
+    store.recordEvent(id, 'background.policy', {
+      authority: { sandboxMode: 'native', sandboxFiles: 'invalid', permissionPolicy: null },
+    });
+    assert.equal(backgroundAuthority(store, id), undefined);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('durable completion identities, collection, admission and budget survive projection rebuilds', () => {
   const store = new SessionStore(':memory:');

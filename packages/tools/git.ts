@@ -5,6 +5,8 @@ import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import type { PreparedTool, Tool, ToolContext } from '../protocol/index.ts';
 import { bounded, MAX_TOOL_OUTPUT } from './registry.ts';
 import { killTree } from './process.ts';
+import { localExecutionEnvironment } from './execution-environment.ts';
+import { currentExecutionPolicy, executionPolicy } from './execution-policy.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -78,6 +80,15 @@ export function gitCommandLine(safeDirectory: string): string[] {
   ];
 }
 
+class GitCommandError extends Error {
+  readonly exitCode: number | null;
+  constructor(message: string, exitCode: number | null) {
+    super(message);
+    this.name = 'GitCommandError';
+    this.exitCode = exitCode;
+  }
+}
+
 async function git(
   root: string,
   args: readonly string[],
@@ -85,21 +96,28 @@ async function git(
   options: { includeGlobal?: boolean; safeDirectory?: string } = {},
 ): Promise<string> {
   signal.throwIfAborted();
-  if (resolveSandboxConfig().mode !== 'host')
-    // Named by the mode rather than "Docker mode": the same guard covers every isolating backend, and telling a
-    // Windows operator that Docker is why their Git is gone would send them looking for the wrong thing.
-    throw new Error(
-      `Native Git tools are disabled in ${resolveSandboxConfig().mode} mode because repository filters can execute host programs`,
-    );
+  const config = resolveSandboxConfig();
+  const argv = [...gitCommandLine(options.safeDirectory ?? root), ...args];
+  const managed =
+    config.mode === 'host'
+      ? undefined
+      : await (
+          await localExecutionEnvironment(
+            root,
+            currentExecutionPolicy() ?? executionPolicy(config.mode, config),
+          )
+        ).processes.start('git', argv, '.', signal, gitEnvironment(false));
   return new Promise((resolve, reject) => {
-    const child = spawn('git', [...gitCommandLine(options.safeDirectory ?? root), ...args], {
-      cwd: root,
-      env: gitEnvironment(options.includeGlobal === true),
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const child =
+      managed?.child ??
+      spawn('git', argv, {
+        cwd: root,
+        env: gitEnvironment(options.includeGlobal === true),
+        shell: false,
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
     const chunks: Buffer[] = [];
     let captured = 0;
     let truncated = false;
@@ -116,13 +134,16 @@ async function git(
       captured += kept.length;
       if (kept.length < chunk.length) truncated = true;
     };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
+    child.stdout!.on('data', collect);
+    child.stderr!.on('data', collect);
     const stop = () => {
       if (child.pid && !killing)
-        killing = killTree(child.pid).catch(() => {
-          child.kill();
-        });
+        killing = managed
+          ? managed.stop()
+          : killTree(child.pid).catch(() => {
+              child.kill();
+            });
+      void killing?.catch(() => {});
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -135,11 +156,9 @@ async function git(
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
     };
+    let spawnError: Error | undefined;
     child.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
+      spawnError = error;
     });
     child.once('close', (code) => {
       if (settled) return;
@@ -147,15 +166,25 @@ async function git(
       cleanup();
       void (async () => {
         if (killing) await killing;
+        if (managed) await managed.closed;
+        if (spawnError) throw spawnError;
         if (signal.aborted) return reject(signal.reason);
         const output =
           Buffer.concat(chunks).toString('utf8') + (truncated ? '\n[output truncated]' : '');
         if (timedOut) return reject(new Error(`Git command timed out after ${GIT_TIMEOUT_MS}ms`));
-        if (code !== 0) return reject(new Error(bounded(output || `git exited with code ${code}`)));
+        if (code !== 0)
+          return reject(
+            new GitCommandError(bounded(output || `git exited with code ${code}`), code),
+          );
         resolve(bounded(output));
-      })();
+      })().catch(reject);
     });
   });
+}
+
+function requireMetadataWrites(): void {
+  if (resolveSandboxConfig().mode !== 'host')
+    throw new Error('Git writes to protected repository metadata require explicit host mode');
 }
 
 function contained(parent: string, target: string): boolean {
@@ -277,6 +306,7 @@ async function prepareStage(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<PreparedTool> {
+  requireMetadataWrites();
   const repository = await repositoryRoot(root, context.signal);
   const paths = safePaths(args.paths);
   if (!paths.length) throw new Error('paths must list at least one repository-relative path');
@@ -314,6 +344,7 @@ async function prepareCommit(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<PreparedTool> {
+  requireMetadataWrites();
   const repository = await repositoryRoot(root, context.signal);
   const message = commitMessage(args.message);
   const staged = await stagedPaths(repository, context.signal);
@@ -376,6 +407,7 @@ async function prepareWorktreeCreate(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<PreparedTool> {
+  requireMetadataWrites();
   const repository = await repositoryRoot(root, context.signal);
   if (
     repository !== (await realpath(root)) ||
@@ -529,8 +561,9 @@ export function gitTools(root: string): Tool[] {
           throw new Error('count must be an integer from 1 to 50');
         try {
           await git(repository, ['rev-parse', '--verify', 'HEAD'], context.signal);
-        } catch {
+        } catch (error) {
           context.signal.throwIfAborted();
+          if (!(error instanceof GitCommandError) || error.exitCode !== 128) throw error;
           return { isError: false, content: 'No commits' };
         }
         const format = args.verbose === true ? '--format=%h %ad %s%n%b' : '--format=%h %ad %s';

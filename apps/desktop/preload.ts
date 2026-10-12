@@ -21,6 +21,7 @@ const bridge: DesktopBridge = {
     return () => ipcRenderer.removeListener('yuantu:presets-view', receive);
   },
   uiSettings: (command) => ipcRenderer.invoke('yuantu:ui-settings', command),
+  sandboxSetup: (command) => ipcRenderer.invoke('yuantu:sandbox-setup', command),
   settings: (command) => ipcRenderer.invoke('yuantu:settings', command),
   invoke: (command) => ipcRenderer.invoke('yuantu:command', command),
   subscribe(listener) {

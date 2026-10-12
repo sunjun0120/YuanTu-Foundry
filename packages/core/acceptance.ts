@@ -1,5 +1,10 @@
 import { verifyFileDelivery, type FileDeliverySpec } from './delivery.ts';
-import { prepareSandbox, stopSandbox, cleanupSandbox } from '../tools/sandbox.ts';
+import {
+  prepareSandbox,
+  stopSandbox,
+  cleanupSandbox,
+  markSandboxStarted,
+} from '../tools/sandbox.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -12,7 +17,15 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_OUTPUT_BYTES = 24_000;
 const MAX_OUTPUT_BYTES = 64_000;
 const MAX_TIMEOUT_MS = 300_000;
-const MAX_CHECKS = 64;
+/**
+ * How many executable checks one task may carry.
+ *
+ * Exported because it is the same number on both sides of the task's life: the verifier refuses more than this,
+ * so the validator that *stores* a task has to refuse them too. It used to be 64 here and 100 there, which let a
+ * task be persisted that every single run then failed with "Acceptance checks exceed limit of 64" — a failure
+ * that blames the work when the definition is what is wrong.
+ */
+export const MAX_CHECKS = 64;
 const DEFAULT_FILE_BYTES = 1_000_000;
 const MAX_FILE_BYTES = 4_000_000;
 const MAX_SNAPSHOT_ENTRIES = 2_000;
@@ -296,16 +309,29 @@ async function runCommand(
   );
   signal?.throwIfAborted();
   const plan = await prepareSandbox(root, cwd.target, spec.command, args);
-  signal?.throwIfAborted();
+  try {
+    signal?.throwIfAborted();
+  } catch (error) {
+    await cleanupSandbox(plan);
+    throw error;
+  }
   return new Promise((resolve, reject) => {
-    const child = spawn(plan.executable, plan.args, {
-      cwd: cwd.target,
-      env: plan.env,
-      shell: false,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      markSandboxStarted(plan);
+      child = spawn(plan.executable, plan.args, {
+        cwd: plan.cwd,
+        env: plan.env,
+        shell: false,
+        windowsHide: true,
+        windowsVerbatimArguments: plan.windowsVerbatimArguments,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      void cleanupSandbox(plan).then(() => reject(error), reject);
+      return;
+    }
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const output = { captured: 0, truncated: false };
@@ -313,17 +339,18 @@ async function runCommand(
     let settled = false;
     let killing: Promise<void> | undefined;
     let cleanupError: unknown;
+    let spawnError: Error | undefined;
     const collect = (chunks: Buffer[]) => (chunk: Buffer) =>
       captureChunk(chunks, chunk, output, maxOutputBytes);
-    child.stdout.on('data', collect(stdout));
-    child.stderr.on('data', collect(stderr));
+    child.stdout!.on('data', collect(stdout));
+    child.stderr!.on('data', collect(stderr));
     const stop = () => {
       if (child.pid && !killing)
         killing = stopSandbox(child, plan).catch((error) => {
           cleanupError = error;
           child.kill();
-          child.stdout.destroy();
-          child.stderr.destroy();
+          child.stdout!.destroy();
+          child.stderr!.destroy();
         });
     };
     const timer = setTimeout(() => {
@@ -338,10 +365,9 @@ async function runCommand(
       signal?.removeEventListener('abort', abort);
     };
     child.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
+      // Node emits close after a spawn error. Keep ownership until that boundary
+      // and await cleanup instead of leaving a prepared native resource behind.
+      spawnError = error;
     });
     child.once('close', (exitCode, closeSignal) => {
       if (settled) return;
@@ -349,8 +375,9 @@ async function runCommand(
       cleanup();
       void (async () => {
         if (killing) await killing;
-        else await cleanupSandbox(plan);
+        else await stopSandbox(child, plan);
         if (cleanupError) throw cleanupError;
+        if (spawnError) throw spawnError;
         if (signal?.aborted)
           return reject(signal.reason ?? new Error('Acceptance verification cancelled'));
         resolve({

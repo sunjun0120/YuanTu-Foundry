@@ -192,7 +192,16 @@ export function setupStatistics() {
     if (promptTokens === 0) return null;
     const cacheReadTokens = stats.cachedInputTokens;
     const missed = promptTokens - cacheReadTokens;
-    if (missed === 0) return '100';
+    /**
+     * Nothing is missing from a total smaller than its own part, and the loop below must not be able to run forever.
+     *
+     * `gap` is multiplied by ten until it passes a positive bound, so a negative `missed` — a cache-read bucket
+     * larger than the billed input, which `isSessionStatistics` accepts because it validates each field on its own
+     * and cannot see a relationship between two of them — drove it further negative on every pass. That ran
+     * synchronously on the paint path, with no timer and no yield, so the window stopped painting for good. This
+     * is the guard the shape needs: above 100% there is no percentage to print, and "100" is the closest true one.
+     */
+    if (missed <= 0) return '100';
     const rounded = Math.round((cacheReadTokens / promptTokens) * 100);
     if (rounded < 100) return String(rounded);
     // Rounding already said "full" while a token is missing, so print enough nines to show the miss.
@@ -221,7 +230,9 @@ export function setupStatistics() {
    * bucket counted a cache write as "uncached input" and made the row disagree with `缓存命中` beside it.
    */
   function uncachedInputTokens(stats: SessionStatistics): number {
-    return stats.inputTokens - stats.cachedInputTokens - stats.cacheWriteInputTokens;
+    // Clamped for the same reason the percentage above is guarded: the fields are validated one at a time, so a
+    // relationship between them can be impossible, and "-1200 uncached" is not a count of anything.
+    return Math.max(0, stats.inputTokens - stats.cachedInputTokens - stats.cacheWriteInputTokens);
   }
   function render() {
     const stats = current?.statistics ?? emptyStatistics();

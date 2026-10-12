@@ -1,4 +1,4 @@
-import { RunFailure } from '../protocol/failure.ts';
+import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 export async function* readSse(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
@@ -27,6 +27,28 @@ export async function* readSse(
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
         chunk = await Promise.race([reader.read(), idle]);
+      } catch (error) {
+        /**
+         * A read that rejects is one of two things, and they are not interchangeable.
+         *
+         * The idle bound above is ours and already named, so it keeps its code. Everything else that arrives
+         * here is the connection: `fetch` answered, the stream started, and the body failed while being read —
+         * a closed socket, a cut connection, a gateway that went away. That is the same event the adapters
+         * already name when a stream ends without its terminal event, and leaving it anonymous made it
+         * invisible to the retry policy, which fail-closes on a failure it cannot classify.
+         *
+         * A cancellation is deliberately *not* classified: aborting the request errors the body, so a Stop
+         * arrives here too, and `throwIfAborted` reports the reason the caller gave rather than a wrapper that
+         * would look like weather worth re-sending. A named failure is never re-wrapped either — the code it
+         * carries is the answer.
+         */
+        if (failureCodeOf(error) !== undefined) throw error;
+        signal.throwIfAborted();
+        throw new RunFailure(
+          'transport',
+          'Model stream interrupted; check endpoint and network configuration',
+          { cause: error },
+        );
       } finally {
         clearTimeout(timer);
       }

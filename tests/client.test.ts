@@ -8,12 +8,14 @@ import { fileChangeAction, undoConfirmKey } from '../packages/client/change-acti
 import { translate } from '../apps/desktop/i18n.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { largePng } from './image-fixture.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import type { SessionSnapshot, StatisticsDelta } from '../packages/client/session-controller.ts';
-import type { AgentEvent, RunResult } from '../packages/protocol/index.ts';
+import type { AgentEvent, Message, RunResult } from '../packages/protocol/index.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createProvider } from '../packages/providers/index.ts';
+import type { HostTransport } from '../packages/client/host-transport.ts';
 
 test('rejected send removes an optimistic message absent from durable history', async (t) => {
   const client = {
@@ -242,6 +244,36 @@ test('malformed stdout rejects without leaking Host text or credentials', async 
     return true;
   });
 });
+test('a failed link is released before its status is announced, so it reads as recoverable', async (t) => {
+  /**
+   * The carrier's only recovery check runs *inside* the status notification and asks `recoverable`, which
+   * requires the transport to be gone. Spending the transport after the notification made every failure that
+   * arrives through `fail()` — malformed frames, a dropped stdin, an invalid reply id — look unrecoverable:
+   * the carrier saw a live transport, returned, and nothing re-evaluates the flag, so the one-shot Host
+   * restart ran for process exits only. `pid` is the observable form of that field.
+   */
+  const { client } = await setup(
+    t,
+    { FIXTURE_MODE: 'malformed', YUANTU_API_KEY: 'secret-fixture-key' },
+    { hostPath: path.join(projectRoot, 'tests/faulty-host.ts') },
+  );
+  await client.start();
+  assert.ok(client.pid, 'a spawned Host has a process a restart could replace');
+  const during: { status: string; recoverable: boolean; pid: number | undefined }[] = [];
+  const unsubscribe = client.subscribeStatus((status) =>
+    during.push({ status, recoverable: client.recoverable, pid: client.pid }),
+  );
+  t.after(unsubscribe);
+  await assert.rejects(client.request('session.create', {}), /Invalid JSONL/);
+  const failed = during.find((entry) => entry.status === 'failed');
+  assert.ok(failed, 'the failure has to be announced at all');
+  assert.equal(
+    failed.pid,
+    undefined,
+    'the transport is released before the listener runs, which is the field `recoverable` reads',
+  );
+  assert.equal(failed.recoverable, true, 'so the carrier is told a new Host may be started');
+});
 
 test('request timeout rejects once and the connection remains usable', async (t) => {
   const { client } = await setup(
@@ -388,8 +420,7 @@ async function setup2(t: test.TestContext, url: string) {
 test('controller reloads image history larger than a single transport frame', async (t) => {
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('Image received')));
   const { controller, client } = await setup2(t, url);
-  const bytes = Buffer.alloc(4 * 1024 * 1024);
-  Buffer.from('89504e470d0a1a0a', 'hex').copy(bytes);
+  const bytes = largePng(4 * 1024 * 1024);
   const images = [{ mimeType: 'image/png' as const, data: bytes.toString('base64') }];
   for (let i = 0; i < 3; i++) {
     const sent = await controller.send('Inspect image ' + i, images);
@@ -484,7 +515,7 @@ test('controller sends images and steers a pending Host approval without stale w
   let step = 0;
   const image = {
     mimeType: 'image/png' as const,
-    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5u8AAAAASUVORK5CYII=',
+    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   };
   const url = await httpFixture(t, (body, res) => {
     if (step++ === 0) {
@@ -954,6 +985,121 @@ test('a live statistics update travels on its own channel instead of republishin
   assert.ok(publishes > before, 'the end of a run is structural and still publishes a snapshot');
 });
 
+test('an event type this build does not know is ignored without costing the link', async (t) => {
+  /**
+   * The compatibility boundary that a new *live* event type has to cross.
+   *
+   * `context.compaction.failed` is emitted by a Host that reports a compression it could not perform, and a
+   * client that predates the type must survive hearing it: the frame is structurally valid, so dropping it is a
+   * decision the client makes (its delivery allow-list) rather than a failure it reports. The mark it carries
+   * still moves — what the client has *received* is what its cursor means, whether or not a consumer could use
+   * it — and its state is still cleared by `run.finished`, which is what an older client has always relied on.
+   * Both halves are asserted here against an in-memory link, so neither depends on a Host process being started.
+   */
+  const lines = new Set<(line: string) => void>();
+  const exits = new Set<(exit: { code: number | null; signal: NodeJS.Signals | null }) => void>();
+  const deliver = (line: string) => {
+    for (const listener of lines) listener(line);
+  };
+  const transport: HostTransport = {
+    label: 'in-memory test pair',
+    pid: undefined,
+    writable: true,
+    send(line) {
+      const request = JSON.parse(line) as { id: string; method: string };
+      const result =
+        request.method === 'host.info'
+          ? {
+              protocolVersion: 1,
+              runtime: 'yuantu',
+              workspace: projectRoot,
+              capabilities: ['sessions'],
+            }
+          : [];
+      queueMicrotask(() => deliver(JSON.stringify({ id: request.id, result })));
+      return true;
+    },
+    onLine(listener) {
+      lines.add(listener);
+      return () => lines.delete(listener);
+    },
+    onDiagnostic: () => () => {},
+    onError: () => () => {},
+    onExit(listener) {
+      exits.add(listener);
+      return () => exits.delete(listener);
+    },
+    // A link with no process behind it still has to be closeable: `stop()` waits for the exit it asked for, and
+    // an in-memory pair that never reports one would make the *cleanup* the test's failure rather than the
+    // compatibility behaviour it is asserting.
+    end() {
+      for (const listener of exits) listener({ code: 0, signal: null });
+    },
+    kill: () => {},
+  };
+  const client = new AgentHostClient({ transport, requestTimeoutMs: 5000 });
+  t.after(() => client.stop());
+  await client.start();
+  assert.equal(client.status, 'ready');
+  const seen: string[] = [];
+  client.subscribe((event) => seen.push(event.type));
+  // A frame from a Host newer than this build — the shape `context.compaction.failed` has for a client that
+  // predates it. `context.compaction.deferred` is deliberately a name no build emits: the promise is about
+  // unknown types, not about one particular one.
+  deliver(
+    JSON.stringify({
+      event: {
+        type: 'context.compaction.deferred',
+        sessionId: 's1',
+        runId: 'r1',
+        seq: 4,
+        data: { reason: 'from a newer Host' },
+      },
+    }),
+  );
+  deliver(
+    JSON.stringify({
+      event: {
+        type: 'run.finished',
+        sessionId: 's1',
+        runId: 'r1',
+        seq: 5,
+        data: {
+          result: {
+            runId: 'r1',
+            sessionId: 's1',
+            status: 'completed',
+            text: 'done',
+            usage: { inputTokens: 1, outputTokens: 1 },
+          },
+        },
+      },
+    }),
+  );
+  assert.deepEqual(
+    seen,
+    ['run.finished'],
+    'the unknown frame is dropped rather than delivered or fatal',
+  );
+  assert.equal(client.cursorOf('s1'), 5, 'but the position it carried is still recorded');
+  assert.equal(client.status, 'ready', 'and the link survives it');
+  assert.deepEqual(await client.request('session.list', {}), [], 'so the next request still works');
+  // The type itself is live for this build: the allow-list is derived from the protocol rather than hand-written,
+  // so a client that knows the type hands it to its listeners instead of ignoring it.
+  deliver(
+    JSON.stringify({
+      event: {
+        type: 'context.compaction.failed',
+        sessionId: 's1',
+        runId: 'r1',
+        seq: 6,
+        data: { reason: 'the summary provider failed' },
+      },
+    }),
+  );
+  assert.deepEqual(seen, ['run.finished', 'context.compaction.failed']);
+});
+
 test('live statistics events reach client subscribers instead of being filtered out', async (t) => {
   // Regression: the client kept its own hand-written event allow-list and omitted
   // statistics.updated, so the Host emitted the event on every provider request while the live
@@ -991,4 +1137,495 @@ test('live statistics events reach client subscribers instead of being filtered 
     `expected a live statistics event, saw: ${types.join(', ') || '(none)'}`,
   );
   assert.ok(types.includes('run.started') && types.includes('run.finished'));
+});
+
+// ---- the controller over a scripted Host ----
+//
+// A real Host (above) pins the end-to-end contract; these pin the reading of it, which is the part that has no
+// honest way to be produced on demand: a session that is already running when a client opens it, a run that ends
+// in the middle of that read, and the frames a client is willing to apply afterwards.
+
+interface ScriptedHost {
+  client: AgentHostClient;
+  requests: { method: string; params: Record<string, unknown> }[];
+  /** Deliver one frame the way the transport would. */
+  emit: (event: {
+    type: string;
+    runId?: string;
+    sessionId?: string;
+    data?: Record<string, unknown>;
+  }) => void;
+}
+
+function scriptedHost(
+  options: {
+    messages?: Message[] | ((call: number) => Message[]);
+    /** What `session.get` says the session's active run is: the only identity an old Host offers. */
+    activeRun?: string | null | ((call: number) => string | null);
+    /** Answers `run.queue.get`, per call, so a test can change the answer mid-read. */
+    inbox?: (call: number) => { running: boolean; items: unknown[]; runId?: string };
+    /** Methods this Host does not have, as one that predates them answers. */
+    missing?: string[];
+    /** Hold one request open, so a test can make a second read overtake the first. */
+    before?: (method: string, call: number) => Promise<void> | undefined;
+  } = {},
+): ScriptedHost {
+  const listeners = new Set<(event: AgentEvent) => void>();
+  const requests: { method: string; params: Record<string, unknown> }[] = [];
+  let inboxCalls = 0;
+  let historyCalls = 0;
+  const client = {
+    status: 'ready',
+    supports: () => false,
+    cursorOf: () => 0,
+    noteCursor: () => {},
+    subscribe: (listener: (event: AgentEvent) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeStatus: () => () => {},
+    async request(method: string, params: Record<string, unknown>) {
+      // The call index is counted before anything can hold the request: a held request still owns its place in
+      // the sequence, and a later one must not be handed the same number.
+      const call =
+        method === 'session.get' ? historyCalls++ : method === 'run.queue.get' ? inboxCalls++ : 0;
+      const held = options.before?.(method, call);
+      if (held) await held;
+      requests.push({ method, params });
+      if (options.missing?.includes(method)) throw new Error(`${method} is not available`);
+      if (method === 'session.get') {
+        const messages =
+          typeof options.messages === 'function'
+            ? options.messages(call)
+            : (options.messages ?? []);
+        const activeRun =
+          typeof options.activeRun === 'function'
+            ? options.activeRun(call)
+            : (options.activeRun ?? null);
+        return {
+          messages,
+          offset: 0,
+          totalMessages: messages.length,
+          session: {
+            id: String(params.sessionId),
+            workspace: '.',
+            createdAt: '',
+            activeRun,
+          },
+        };
+      }
+      if (method === 'run.queue.get') {
+        const answer = options.inbox?.(call) ?? { running: false, items: [] };
+        // An old Host answers the queue question without naming the run it holds: the field simply is not there.
+        return answer.runId === undefined
+          ? { running: answer.running, items: answer.items }
+          : { running: answer.running, items: answer.items, runId: answer.runId };
+      }
+      if (method === 'plan.get') return null;
+      if (method === 'subagents.list') return [];
+      if (method === 'todos.get') return { todos: [], change: null };
+      if (method === 'deliverables.get') return [];
+      if (method === 'goal.get') return null;
+      throw new Error(`Unexpected method: ${method}`);
+    },
+    async run() {
+      throw new Error('Unexpected run');
+    },
+  };
+  return {
+    client: client as unknown as AgentHostClient,
+    requests,
+    emit: (event) => {
+      const frame = {
+        sessionId: 'session-1',
+        runId: 'run-A',
+        seq: 1,
+        data: {},
+        ...event,
+      } as AgentEvent;
+      for (const listener of [...listeners]) listener(frame);
+    },
+  };
+}
+
+test('dispose leaves no listener collection behind', async () => {
+  // `dispose` is a teardown: the window is gone, and every closure it registered has to go with it. Three of the
+  // four channels were cleared and the statistics one was not, so a disposed controller kept a subscriber — and
+  // through it whatever that subscriber closed over — alive for as long as anything held the controller.
+  const host = scriptedHost();
+  const controller = new SessionController(host.client);
+  await controller.load('session-1');
+  controller.subscribe(() => {});
+  controller.subscribeDelta(() => {});
+  controller.subscribeSubAgentDelta(() => {});
+  controller.subscribeStatisticsDelta(() => {});
+  const collections = [
+    'listeners',
+    'deltaListeners',
+    'subagentDeltaListeners',
+    'statisticsDeltaListeners',
+  ];
+  const held = () =>
+    collections.map(
+      (name) => (controller as unknown as Record<string, Set<unknown>>)[name]?.size ?? -1,
+    );
+  assert.deepEqual(held(), [1, 1, 1, 1], 'each channel holds the subscriber it was given');
+  controller.dispose();
+  assert.deepEqual(held(), [0, 0, 0, 0], 'and dispose releases all four of them');
+});
+
+test('a compaction that failed stops the session saying it is compacting', async (t) => {
+  // A compaction that fails leaves the *old* summary in force: the run continues on the context it had, with no
+  // new summary and no usage to count. What the client has to do about it is stop claiming the window is being
+  // compacted — and nothing else: there is no summary to fetch and no transcript to change.
+  const host = scriptedHost();
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  host.emit({ type: 'run.started' });
+  host.emit({ type: 'context.compacting' });
+  assert.equal(controller.snapshot.compacting, true);
+  const reads = host.requests.length;
+  host.emit({
+    type: 'context.compaction.failed',
+    data: { coveredMessages: 12, reason: 'the summary provider failed' },
+  });
+  assert.equal(
+    controller.snapshot.compacting,
+    false,
+    'a failed compaction is not still compacting',
+  );
+  assert.equal(controller.snapshot.running, true, 'and the run it belongs to is still running');
+  assert.equal(host.requests.length, reads, 'the failure asks the Host for nothing');
+});
+
+const queued = (prompt: string) => ({
+  id: `queued-${prompt}`,
+  mode: 'follow-up' as const,
+  prompt,
+  createdAt: '2026-10-10T00:00:00.000Z',
+  imageCount: 0,
+});
+
+test('a read that is overtaken does not write its answers over the newer one', async (t) => {
+  // A read is a sequence of requests, and a slower one can finish after a later read has already shown the
+  // session. Without a generation check the older answers win by arriving last, which is one session's history
+  // written under another's name — the reason every step of a read checks that it is still the current one.
+  let open!: () => void;
+  const held = new Promise<void>((resolve) => (open = resolve));
+  const host = scriptedHost({
+    // Each history read answers with the next word, so which read won is visible in the transcript.
+    messages: (call): Message[] => [
+      { role: 'user', content: ['seed', 'stale', 'fresh'][call] ?? 'later' },
+    ],
+    before: (method, call) => (method === 'session.get' && call === 1 ? held : undefined),
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  const overtaken = controller.load('session-1');
+  await Promise.resolve();
+  // The second read is the one a carrier makes to catch up, and it finishes first.
+  await controller.catchUp();
+  assert.deepEqual(
+    controller.snapshot.messages.map((message) => message.content),
+    ['fresh'],
+  );
+  open();
+  await overtaken;
+  assert.deepEqual(
+    controller.snapshot.messages.map((message) => message.content),
+    ['fresh'],
+    'the overtaken read drops its answers instead of writing them over the newer ones',
+  );
+});
+
+test('a session opened while a run is live adopts that run and applies its frames', async (t) => {
+  // The hardcoded read: a reloaded session was always `running: false`, `queue: []`, `runId: null`, so every
+  // frame of the run that was actually in flight failed the identity check and was thrown away — the window
+  // showed a still session while somebody was working in it.
+  const host = scriptedHost({
+    inbox: () => ({ running: true, items: [queued('one'), queued('two')], runId: 'run-A' }),
+    activeRun: 'run-A',
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  const opened = controller.snapshot;
+  assert.equal(opened.running, true, 'a session with a live run is not read as idle');
+  assert.equal(opened.status, 'running');
+  assert.deepEqual(
+    opened.queue.map((item) => item.prompt),
+    ['one', 'two'],
+    'the input the run is holding is part of the session',
+  );
+  // The frames of that run are applied rather than dropped for want of an identity.
+  host.emit({
+    type: 'tool.started',
+    data: { call: { id: 'tool-1', name: 'read_file', args: {} } },
+  });
+  assert.equal(controller.snapshot.tools.length, 1);
+  host.emit({ type: 'message.started', data: { messageId: 'm1' } });
+  host.emit({ type: 'message.delta', data: { messageId: 'm1', text: 'hello' } });
+  host.emit({
+    type: 'message.finished',
+    data: { messageId: 'm1', message: { role: 'assistant', content: 'hello' } },
+  });
+  assert.deepEqual(
+    controller.snapshot.messages.map((message) => message.content),
+    ['hello'],
+  );
+  // A frame from another run is still refused: adopting one identity does not mean accepting every one.
+  host.emit({ type: 'message.started', runId: 'run-B', data: { messageId: 'm2' } });
+  assert.equal(controller.snapshot.liveMessage, null, 'another run may not start a message here');
+  host.emit({
+    type: 'run.finished',
+    data: {
+      result: {
+        runId: 'run-A',
+        sessionId: 'session-1',
+        status: 'completed',
+        text: 'hello',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+    },
+  });
+  assert.equal(controller.snapshot.running, false, 'the run that was adopted also ends here');
+});
+
+test('a session that is not running still brings back the input nobody delivered', async (t) => {
+  // The other half of the same read: with no run holding the queue, the inbox is what nobody ever delivered —
+  // the follow-up a process died holding. It is still the session's input, and a reopened window has to show it.
+  const host = scriptedHost({
+    inbox: () => ({ running: false, items: [queued('never sent')] }),
+    activeRun: null,
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  assert.equal(controller.snapshot.running, false);
+  assert.deepEqual(
+    controller.snapshot.queue.map((item) => item.prompt),
+    ['never sent'],
+  );
+});
+
+test('a run that ends while the session is loading is read back as history', async (t) => {
+  // The race the read has to survive: the transcript is fetched while the run is live and the run is gone by the
+  // time the read asks about it. Adopting the end without re-reading would leave a window showing a session that
+  // stopped in the middle of the very run that just ended.
+  const host = scriptedHost({
+    inbox: () => ({ running: false, items: [] }),
+    activeRun: (call) => (call === 0 ? 'run-A' : null),
+    messages: (call): Message[] =>
+      call === 0
+        ? [{ role: 'user', content: 'start' }]
+        : [
+            { role: 'user', content: 'start' },
+            { role: 'assistant', content: 'finished while you were reading', toolCalls: [] },
+          ],
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  assert.equal(
+    controller.snapshot.running,
+    false,
+    'the run the transcript was read under had ended',
+  );
+  assert.deepEqual(
+    controller.snapshot.messages.map((message) => message.content),
+    ['start', 'finished while you were reading'],
+    'and its turn is in the transcript, not lost with it',
+  );
+});
+
+test('the running state of one session does not follow the controller to the next', async (t) => {
+  let which = 'running';
+  const host = scriptedHost({
+    inbox: () =>
+      which === 'running'
+        ? { running: true, items: [queued('one')], runId: 'run-A' }
+        : { running: false, items: [] },
+    activeRun: () => (which === 'running' ? 'run-A' : null),
+    messages: () => (which === 'running' ? [] : [{ role: 'user', content: 'second session' }]),
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  assert.equal(controller.snapshot.running, true);
+  assert.equal(controller.snapshot.queue.length, 1);
+  host.emit({
+    type: 'run.finished',
+    data: {
+      result: {
+        runId: 'run-A',
+        sessionId: 'session-1',
+        status: 'completed',
+        text: '',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      },
+    },
+  });
+  // `run.finished` announces the end and then re-reads the transcript; the next load can only start once that
+  // read has released the controller.
+  await new Promise<void>((resolve) => {
+    const off = controller.subscribe((state) => {
+      if (!state.running && !state.loading) {
+        off();
+        resolve();
+      }
+    });
+  });
+  assert.equal(controller.snapshot.running, false, 'the run that was adopted also ends here');
+  which = 'idle';
+  await controller.load('session-2');
+  const second = controller.snapshot;
+  assert.equal(second.running, false, 'the session that is loaded is the one that is shown');
+  assert.deepEqual(second.queue, [], 'the first session’s queue is not part of it');
+  assert.deepEqual(
+    second.messages.map((message) => message.content),
+    ['second session'],
+  );
+  // A frame of the run left behind belongs to a session this controller no longer shows.
+  host.emit({ type: 'run.started', sessionId: 'session-1', runId: 'run-A' });
+  assert.equal(
+    controller.snapshot.running,
+    false,
+    'and it cannot make the shown session look busy',
+  );
+});
+
+test('a Host that does not name its run is read from the session info, and trusted with nothing else', async (t) => {
+  // An older Host answers the queue question without naming the run it holds. The session info is then the only
+  // identity available, and it is adopted — but only it: a Host that cannot say which run is running is not
+  // licence to apply whichever run's frame happens to arrive.
+  const host = scriptedHost({
+    inbox: () => ({ running: true, items: [queued('one')] }),
+    activeRun: 'run-A',
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  assert.equal(controller.snapshot.running, true);
+  host.emit({ type: 'message.started', data: { messageId: 'm1' } });
+  host.emit({ type: 'message.delta', data: { messageId: 'm1', text: 'ok' } });
+  assert.equal(controller.snapshot.liveMessage?.text, 'ok');
+  host.emit({
+    type: 'message.delta',
+    runId: 'run-Z',
+    data: { messageId: 'm1', text: 'wrong run' },
+  });
+  assert.equal(controller.snapshot.liveMessage?.text, 'ok', 'another run’s text is not applied');
+});
+
+test('a Host without the queue question at all is still read from the session info', async (t) => {
+  // The method itself is what an old Host does not have. The session info is read on every load anyway, so the
+  // identity survives the missing method; without one either way the session stays idle, which is the boundary.
+  const named = scriptedHost({ missing: ['run.queue.get'], activeRun: 'run-A' });
+  const controller = new SessionController(named.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  assert.equal(controller.snapshot.running, true, 'the session info names the run');
+  named.emit({ type: 'message.started', data: { messageId: 'm1' } });
+  assert.notEqual(controller.snapshot.liveMessage, null, 'so that run’s frames are applied');
+  const unnamed = scriptedHost({ missing: ['run.queue.get'] });
+  const idle = new SessionController(unnamed.client);
+  t.after(() => idle.dispose());
+  await idle.load('session-1');
+  assert.equal(idle.snapshot.running, false, 'with no identity anywhere the session reads as idle');
+});
+
+test('a session read while a run is live restores the run, its queue and its frames', async (t) => {
+  // End to end against a real Host: the provider's answer is held open, which is what keeps the run in flight
+  // while a second reader opens the session. Before this fix the reader saw an idle session, and every frame of
+  // the run it was actually watching — the text, the tools, the end — was dropped on arrival.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let answers = 0;
+  const url = await httpFixture(t, async (body, res) => {
+    // A probe is not part of the conversation and must not be held: only the run's own stream is.
+    if (!body || body.stream !== true) {
+      sendFrames(res, frames(''));
+      return;
+    }
+    const turn = answers++;
+    if (turn === 0) {
+      // The first answer is held open, which is what keeps the run in flight while the session is read.
+      await held;
+      sendFrames(res, frames('first'));
+      return;
+    }
+    sendFrames(res, frames(turn === 1 ? 'second' : 'third'));
+  });
+  const { client } = await setup(t, {
+    YUANTU_MODEL: 'fixture',
+    YUANTU_API_KEY: 'test',
+    YUANTU_BASE_URL: url,
+    // The naming call is a real model request and would take the answer this test is holding open. `'0'` is not
+    // the value that switches it off — `parseSetting` reads it as a number, so the naming call still runs.
+    YUANTU_SESSION_TITLES: 'false',
+  });
+  await client.start();
+  const session = await client.request('session.create', {});
+  const started = new Promise<void>((resolve) => {
+    const off = client.subscribe((event) => {
+      if (event.type === 'run.started') {
+        off();
+        resolve();
+      }
+    });
+  });
+  const running = client.run(session.id, 'hold this open');
+  await started;
+  await client.request('run.enqueue', {
+    sessionId: session.id,
+    mode: 'follow-up',
+    prompt: 'queued one',
+  });
+  await client.request('run.enqueue', {
+    sessionId: session.id,
+    mode: 'follow-up',
+    prompt: 'queued two',
+  });
+  const inbox = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(inbox.running, true);
+  assert.equal(inbox.items.length, 2);
+  const active = (await client.request('session.get', { sessionId: session.id })).session.activeRun;
+  assert.ok(active, 'a running session names its run');
+  assert.equal(inbox.runId, active, 'and the queue names the same one');
+  const controller = new SessionController(client);
+  t.after(() => controller.dispose());
+  await controller.load(session.id);
+  assert.equal(
+    controller.snapshot.running,
+    true,
+    'the session is running while a run is in flight',
+  );
+  assert.deepEqual(
+    controller.snapshot.queue.map((item) => item.prompt),
+    ['queued one', 'queued two'],
+  );
+  const settled = new Promise<void>((resolve) => {
+    const off = controller.subscribe((state) => {
+      // `run.finished` announces the end before the transcript is re-read: waiting for `loading` to clear is
+      // waiting for the read that brings the finished run's own turn back into the state.
+      if (!state.running && !state.loading && state.status === 'completed') {
+        off();
+        resolve();
+      }
+    });
+  });
+  release();
+  assert.equal((await running).status, 'completed');
+  await settled;
+  const done = controller.snapshot;
+  assert.equal(done.queue.length, 0, 'the queued input was delivered, not left behind');
+  assert.deepEqual(
+    done.messages
+      .filter((message) => message.role === 'assistant')
+      .map((message) => message.content),
+    ['first', 'second', 'third'],
+    'the frames of the run it adopted are in the transcript',
+  );
 });

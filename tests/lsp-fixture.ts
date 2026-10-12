@@ -14,6 +14,7 @@
  * rustup proxy does when its component is missing.
  */
 import { appendFileSync, writeSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 
 if (process.argv.includes('--crash-on-start')) {
   // writeSync keeps this on fd 2 so it cannot be lost to process.exit.
@@ -36,6 +37,45 @@ const NEVER_ANSWER = process.argv.includes('--never-answer');
  * fails here, which is the path where the server must not be left running.
  */
 const MALFORMED_OUTPUT = process.argv.includes('--malformed-output');
+/**
+ * Publish twice for every synchronised document: the real diagnostics at the version the client sent, and then
+ * an *error* set at a version the client has already moved past.
+ *
+ * Out-of-order publication is something a real server does — an analysis that started before the last edit
+ * finishes after it — and the stale set is held back until the next request so a test can sequence it: the
+ * stale frame is written to stdout *before* that request's own answer, and a transport reads its lines in
+ * order, so a client holding the answer has already handled the stale publication.
+ */
+const STALE_DIAGNOSTICS = process.argv.includes('--stale-diagnostics');
+/**
+ * Report diagnostics without a document version at all. A server that never versions its publications is
+ * allowed to exist, and its diagnostics must still be reported rather than silently dropped by a version check.
+ */
+const NO_VERSION = process.argv.includes('--no-version');
+/**
+ * Leave a descendant behind that holds this process's stdout open, so the process exits without ever being
+ * "closed".
+ *
+ * `managed.closed` — the client's only proof that a cleanup happened — is Node's child `close` event, which
+ * waits for the stdio pipes to be released, not merely for the process to exit. A server whose child processes
+ * inherit its pipes is a cleanup the client cannot confirm, and this is what makes a failed stop reproducible:
+ * the process really is gone, and the ownership of it cannot be given up yet.
+ *
+ * The holder is started through a short-lived launcher that exits immediately, so it is *not* in this process's
+ * tree: a tree termination that quietly took it along would remove the very condition under test. Its pid is
+ * written to `FAKE_LSP_HOLD_MARKER` (when set) so a test can release it on purpose and watch the same stop
+ * succeed on a second attempt.
+ */
+if (process.argv.includes('--hold-stdio')) {
+  const holder = 'setTimeout(() => {}, 30000)';
+  const launcher = [
+    "const { spawn } = require('node:child_process');",
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(holder)}], { stdio: 'inherit', detached: true });`,
+    'child.unref();',
+    "if (process.env.FAKE_LSP_HOLD_MARKER) require('node:fs').appendFileSync(process.env.FAKE_LSP_HOLD_MARKER, String(child.pid) + '\\n');",
+  ].join('');
+  spawn(process.execPath, ['-e', launcher], { stdio: 'inherit', detached: true }).unref();
+}
 /**
  * When set, the server records that `shutdown` and `exit` actually arrived. A test uses this to
  * prove the client performed the graceful handshake instead of skipping it and killing the tree.
@@ -126,12 +166,45 @@ function diagnosticsFor(text: string): unknown[] {
   });
   return diagnostics;
 }
+/** The diagnostic set a document with no `BADTOKEN` produces, which is what a fresh result looks like. */
 function publish(uri: string, text: string, version: unknown): void {
   send({
     jsonrpc: '2.0',
     method: 'textDocument/publishDiagnostics',
-    params: { uri, version, diagnostics: diagnosticsFor(text) },
+    params: {
+      uri,
+      ...(NO_VERSION ? {} : { version }),
+      diagnostics: diagnosticsFor(text),
+    },
   });
+}
+/**
+ * The publication a document that has moved on should refuse: an error at a version below the one the client
+ * last sent, held until the next request so the ordering is the server's to control.
+ */
+let stale: { uri: string; version: number } | undefined;
+function publishStale(uri: string, version: unknown): void {
+  send({
+    jsonrpc: '2.0',
+    method: 'textDocument/publishDiagnostics',
+    params: {
+      uri,
+      version,
+      diagnostics: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+          severity: 1,
+          source: 'fake-ls',
+          message: 'stale analysis for an older version',
+        },
+      ],
+    },
+  });
+}
+/** Arm the stale publication for a document whose real one has just gone out. */
+function armStale(uri: string, version: unknown): void {
+  if (!STALE_DIAGNOSTICS || typeof version !== 'number') return;
+  stale = { uri, version: Math.max(0, version - 1) };
 }
 function sibling(uri: string, name: string): string {
   return `${uri.slice(0, uri.lastIndexOf('/') + 1)}${name}`;
@@ -218,6 +291,7 @@ function handle(message: Incoming): void {
       if (String(document.text).includes('CRASH')) process.exit(1);
       if (String(document.text).includes('NODIAGNOSTICS')) return;
       publish(document.uri, document.text, document.version);
+      armStale(document.uri, document.version);
       return;
     }
     case 'textDocument/didChange': {
@@ -227,6 +301,7 @@ function handle(message: Incoming): void {
       documents.set(uri, text);
       if (String(text).includes('NODIAGNOSTICS')) return;
       publish(uri, text, params.textDocument.version);
+      armStale(uri, params.textDocument.version);
       return;
     }
     case 'textDocument/didClose': {
@@ -263,6 +338,11 @@ function handle(message: Incoming): void {
       });
       return;
     case 'textDocument/hover':
+      // The stale publication goes out *before* this answer, so a client holding the answer has handled it.
+      if (stale) {
+        publishStale(stale.uri, stale.version);
+        stale = undefined;
+      }
       send({
         jsonrpc: '2.0',
         id: message.id,

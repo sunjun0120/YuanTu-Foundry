@@ -976,7 +976,7 @@ test(
     await page.waitForFunction(
       () => document.querySelector('#permission-mode').value === 'guarded',
     );
-    assert.equal((await pair(page)).view.sandbox.mode, 'sbx');
+    assert.equal((await pair(page)).view.sandbox.mode, 'native');
   },
 );
 

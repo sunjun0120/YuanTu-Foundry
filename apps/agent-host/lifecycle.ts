@@ -1,7 +1,11 @@
 import { parseSetting } from '../../packages/protocol/settings.ts';
+import { underSessionPolicy } from './session-policy.ts';
 import { safeError } from '../shared/runtime.ts';
 import { settleInteraction } from './approvals.ts';
 import type { HostContext } from './state.ts';
+
+/** The one resident release started by shutdown, observed immediately and awaited before store close. */
+const residentCleanup = new WeakMap<HostContext, Promise<void>>();
 
 /**
  * Stopping the Host: idempotent, and in the one order that does not lose work.
@@ -24,7 +28,11 @@ export function createShutdown(ctx: HostContext): () => void {
     settleInteraction(ctx);
     // Unloading happens after the runs above were aborted: an activation's in-flight turn is stopped by its
     // own run's abort, and disposal then waits for it to unwind before releasing that child's tools.
-    void ctx.residency.disposeAll().catch(() => undefined);
+    const cleanup = Promise.resolve().then(() => ctx.residency.disposeAll());
+    residentCleanup.set(ctx, cleanup);
+    void cleanup.catch((error: unknown) =>
+      process.stderr.write(`Resident cleanup failed: ${safeError(error)}\n`),
+    );
     ctx.carrier.close();
   };
 }
@@ -64,6 +72,15 @@ export function installSignals(shutdown: () => void): () => void {
 export async function serveHost(ctx: HostContext): Promise<void> {
   const shutdown = createShutdown(ctx);
   const removeSignals = installSignals(shutdown);
+  const failures: unknown[] = [];
+  let residentFailed = false;
+  const release = async (action: () => unknown): Promise<void> => {
+    try {
+      await action();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
   try {
     // Started only once the read loop is live, so a trigger that fires immediately can dispatch
     // through the same path as any other request.
@@ -80,35 +97,44 @@ export async function serveHost(ctx: HostContext): Promise<void> {
       ctx.tasks.add(task);
       void task.finally(() => ctx.tasks.delete(task));
     }
+  } catch (error) {
+    failures.push(error);
   } finally {
-    shutdown();
+    await release(shutdown);
     await Promise.allSettled([...ctx.tasks]);
     removeSignals();
+    // A failed release must not skip the remaining resources, but it must not turn shutdown into success.
+    await residentCleanup.get(ctx)?.catch((error: unknown) => {
+      residentFailed = true;
+      failures.push(error);
+    });
     // Every still-announced session ends with the host, so a hook can flush state it opened.
     for (const sessionId of ctx.announced) {
-      const failures = await ctx.hooks
-        .sessionEnd({ sessionId, reason: 'shutdown' }, new AbortController().signal)
+      const failures = await Promise.resolve()
+        .then(() =>
+          underSessionPolicy(ctx, sessionId, () =>
+            ctx.hooks.sessionEnd({ sessionId, reason: 'shutdown' }, new AbortController().signal),
+          ),
+        )
         .catch((error: unknown) => [safeError(error)]);
       for (const failure of failures) process.stderr.write(`sessionEnd hook failed: ${failure}\n`);
       // The last chance to check a promise about a session, before the store that holds its log closes.
-      const violations = await ctx.invariants.run('session-close', { sessionId });
-      for (const violation of violations)
-        process.stderr.write(
-          `invariant violated on session close: ${violation.name} (${violation.owner}): ${violation.detail}\n`,
-        );
+      await release(async () => {
+        const violations = await ctx.invariants.run('session-close', { sessionId });
+        for (const violation of violations)
+          process.stderr.write(
+            `invariant violated on session close: ${violation.name} (${violation.owner}): ${violation.detail}\n`,
+          );
+      });
     }
     ctx.announced.clear();
-    try {
-      // Terminals first: a pty holds a process, and closing it is what releases the shell, whatever the
-      // background commands are still doing.
-      try {
-        await ctx.terminals.closeAllAndWait();
-      } finally {
-        await ctx.background.close();
-      }
-    } finally {
-      ctx.store.close();
-      await ctx.hooks.close().catch(() => undefined);
-    }
+    // Every release is attempted, in order, even when another resource refuses to close.
+    await release(() => ctx.terminals.closeAllAndWait());
+    await release(() => ctx.background.close());
+    await release(() => ctx.store.close());
+    await release(() => ctx.hooks.close());
   }
+  if (failures.length === 1 && !residentFailed) throw failures[0];
+  if (failures.length)
+    throw new AggregateError(failures, 'Host shutdown failed', { cause: failures[0] });
 }

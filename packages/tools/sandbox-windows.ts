@@ -2,13 +2,15 @@
  * Windows write-restricted token with a stable workspace-specific restricting SID. Grants for another
  * workspace, including legacy RESTRICTED grants, cannot satisfy this workspace's write check.
  *
- * The restricting list also carries Everyone and the native logon SID: Node DLL initialization requires
- * these system-object identities. Ambient write ACLs naming them remain effective, so this backend declares
+ * The token runs at Low integrity. The restricting list also carries Everyone and the native logon SID:
+ * Node DLL initialization requires these system-object identities. Ambient Low-integrity write ACLs naming them remain effective, so this backend declares
  * a partial filesystem boundary. Strict workspace-only, read-only process or denied-network requirements
  * must select a backend that can enforce them. Reads and network are unrestricted.
  *
- * The default DACL adds the workspace identity for newly created process objects and pipes; outside directory
- * ACLs are untouched. File-tool paths remain bounded by Workspace independently of this process policy.
+ * Workspace ACLs and labels are journaled before modification, leased across concurrent plans, and restored
+ * after the final cleanup. An exclusive disk lock refuses cross-process overlap; crash journals require
+ * explicit reconciliation. Everyone FILE_DELETE_CHILD is denied on lowered writable directories.
+ * File-tool paths remain bounded by Workspace independently of this process policy.
  *
  * The command is handed to the launcher as a base64 JSON payload and never interpolated into the PowerShell
  * text that starts it: the script below contains the payload, not the command, so no command can escape into
@@ -16,11 +18,15 @@
  * carry through a shell in the first place.
  */
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rm, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
+import { WINDOWS_CAPABILITIES } from './execution-capabilities.ts';
 import {
   insideWorkspace,
   type SandboxPlan,
@@ -93,6 +99,33 @@ public static class YuantuSandbox
     [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
     [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateJobObjectW(IntPtr attributes, IntPtr name);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int kind, ref JOB_LIMITS limits, uint length);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool QueryInformationJobObject(IntPtr job, int kind, out JOB_ACCOUNTING accounting, uint length, IntPtr returned);
+    [StructLayout(LayoutKind.Sequential)] struct BASIC_LIMITS {
+        public long PerProcessTime, PerJobTime;
+        public uint Flags;
+        public UIntPtr MinimumWorkingSet, MaximumWorkingSet;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint Priority, Scheduling;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct IO_COUNTERS {
+        public ulong ReadOperations, WriteOperations, OtherOperations, ReadBytes, WriteBytes, OtherBytes;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct JOB_LIMITS {
+        public BASIC_LIMITS Basic;
+        public IO_COUNTERS Io;
+        public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct JOB_ACCOUNTING {
+        public long UserTime, KernelTime, PeriodUserTime, PeriodKernelTime;
+        public uint PageFaults, TotalProcesses, ActiveProcesses, TerminatedProcesses;
+    }
 
     const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
     const uint TOKEN_DUPLICATE = 0x0002;
@@ -101,14 +134,20 @@ public static class YuantuSandbox
     const uint CREATE_UNICODE_ENVIRONMENT = 0x400;
     const int STARTF_USESTDHANDLES = 0x100;
 
-    public static int Run(string commandLine, string directory, string[] environment, string restrictingSid, uint flags)
+    public static int Run(string commandLine, string directory, string[] environment, string[] restrictingSids, uint flags)
     {
         IntPtr current;
         if (!OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle, TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, out current))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken");
-        IntPtr sid;
-        if (!ConvertStringSidToSidW(restrictingSid, out sid))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "ConvertStringSidToSid");
+        if (restrictingSids == null || restrictingSids.Length == 0)
+            throw new InvalidOperationException("Missing sandbox identities");
+        var restricting = new List<SID_AND_ATTRIBUTES>();
+        foreach (string identity in restrictingSids) {
+            IntPtr sid;
+            if (!ConvertStringSidToSidW(identity, out sid))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "ConvertStringSidToSid");
+            restricting.Add(new SID_AND_ATTRIBUTES { sid = sid });
+        }
         IntPtr world;
         if (!ConvertStringSidToSidW("S-1-1-0", out world))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "ConvertStringSidToSid world");
@@ -119,9 +158,12 @@ public static class YuantuSandbox
         IntPtr restricted;
         // A restricted version of our own token needs no SeAssignPrimaryTokenPrivilege; anything else would mean
         // this backend required elevation to drop privileges, which is the wrong way round.
-        if (!CreateRestrictedToken(current, flags, 0, IntPtr.Zero, 0, IntPtr.Zero, 3, new SID_AND_ATTRIBUTES[] { new SID_AND_ATTRIBUTES { sid = sid }, new SID_AND_ATTRIBUTES { sid = world }, new SID_AND_ATTRIBUTES { sid = logon } }, out restricted))
+        restricting.Add(new SID_AND_ATTRIBUTES { sid = world });
+        restricting.Add(new SID_AND_ATTRIBUTES { sid = logon });
+        if (!CreateRestrictedToken(current, flags, 0, IntPtr.Zero, 0, IntPtr.Zero, (uint)restricting.Count, restricting.ToArray(), out restricted))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateRestrictedToken");
-        GrantDefaultDacl(restricted, restrictingSid);
+        SetLowIntegrity(restricted);
+        foreach (string identity in restrictingSids) GrantDefaultDacl(restricted, identity);
         IntPtr block = EnvironmentBlock(environment);
         var startup = new STARTUPINFO();
         startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
@@ -131,19 +173,63 @@ public static class YuantuSandbox
         startup.hStdInput = GetStdHandle(-10);
         startup.hStdOutput = GetStdHandle(-11);
         startup.hStdError = GetStdHandle(-12);
-        PROCESS_INFORMATION info;
-        if (!CreateProcessAsUserW(restricted, null, commandLine, IntPtr.Zero, IntPtr.Zero, true, CREATE_UNICODE_ENVIRONMENT, block, directory, ref startup, out info))
+        IntPtr job = CreateJobObjectW(IntPtr.Zero, IntPtr.Zero);
+        if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Create sandbox job");
+        PROCESS_INFORMATION info = new PROCESS_INFORMATION();
+        try {
+        var limits = new JOB_LIMITS();
+        limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE; breakaway is never permitted.
+        if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(JOB_LIMITS))))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Set sandbox job limits");
+        // The child cannot create descendants before it belongs to our job.
+        if (!CreateProcessAsUserW(restricted, null, commandLine, IntPtr.Zero, IntPtr.Zero, true, CREATE_UNICODE_ENVIRONMENT | 0x4, block, directory, ref startup, out info))
             // The number and the system's own sentence, because this is the one failure a caller cannot diagnose
             // from anything else: "CreateProcessAsUser" alone says neither what went wrong nor which of the two
             // ways in (shell text vs program+argv) was taken.
             throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser " + new Win32Exception(Marshal.GetLastWin32Error()).Message);
+        if (!AssignProcessToJobObject(job, info.hProcess)) {
+            int error = Marshal.GetLastWin32Error();
+            TerminateProcess(info.hProcess, 1);
+            throw new Win32Exception(error, "Assign sandbox job");
+        }
+        if (ResumeThread(info.hThread) == 0xFFFFFFFF)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Resume sandbox process");
         WaitForSingleObject(info.hProcess, 0xFFFFFFFF);
         uint code;
-        GetExitCodeProcess(info.hProcess, out code);
-        CloseHandle(info.hThread);
-        CloseHandle(info.hProcess);
+        if (!GetExitCodeProcess(info.hProcess, out code)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (!TerminateJobObject(job, 0)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Terminate sandbox descendants");
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true) {
+            JOB_ACCOUNTING accounting;
+            if (!QueryInformationJobObject(job, 1, out accounting, (uint)Marshal.SizeOf(typeof(JOB_ACCOUNTING)), IntPtr.Zero))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Confirm sandbox job termination");
+            if (accounting.ActiveProcesses == 0) break;
+            if (DateTime.UtcNow >= deadline) throw new InvalidOperationException("Sandbox descendants did not terminate");
+            System.Threading.Thread.Sleep(10);
+        }
         return (int)code;
+        } finally {
+            CloseHandle(job);
+            if (info.hThread != IntPtr.Zero) CloseHandle(info.hThread);
+            if (info.hProcess != IntPtr.Zero) CloseHandle(info.hProcess);
+            Marshal.FreeHGlobal(block);
+            CloseHandle(restricted);
+            CloseHandle(current);
+        }
     }
+
+    static void SetLowIntegrity(IntPtr token)
+    {
+        IntPtr sid;
+        if (!ConvertStringSidToSidW("S-1-16-4096", out sid)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Low integrity SID");
+        IntPtr label = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SID_AND_ATTRIBUTES)) + 12);
+        try {
+            Marshal.StructureToPtr(new SID_AND_ATTRIBUTES { sid = sid, attributes = 0x20 }, label, false);
+            if (!SetTokenInformation(token, 25, label, (uint)(Marshal.SizeOf(typeof(SID_AND_ATTRIBUTES)) + 12)))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "TokenIntegrityLevel Low");
+        } finally { Marshal.FreeHGlobal(label); LocalFree(sid); }
+    }
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr pointer);
 
     // New pipes, events and process objects must remain usable by this token's own restricting identity.
     // This changes defaults for newly created objects, never the ACL of an outside directory.
@@ -232,8 +318,8 @@ function launcherSourcePath(dll: string): string {
  */
 async function writeLauncherSource(dll: string): Promise<string> {
   const file = launcherSourcePath(dll);
-  const existing = await stat(file).then(
-    (info) => info.size === Buffer.byteLength(launcherSource, 'utf8'),
+  const existing = await readFile(file, 'utf8').then(
+    (text) => text === launcherSource,
     () => false,
   );
   if (!existing) {
@@ -260,6 +346,18 @@ function encode(text: string): string {
 /** The name the per-command payload travels in. A name of ours, so the child's own environment stays clean. */
 const SPEC_VARIABLE = 'YUANTU_SANDBOX_SPEC';
 /**
+ * One path as a *complete* PowerShell single-quoted literal, delimiters included.
+ *
+ * Single quotes are the right delimiter — nothing inside them is expanded — but the literal ends at the first
+ * `'`, and a temp directory like `C:\Users\O'Brien\AppData\Local\Temp` is ordinary on Windows. Left alone, that
+ * apostrophe closes the string early and the remainder of the path is handed to PowerShell as source, which
+ * fails to parse before the launcher is ever loaded. Doubling the quote is the language's own escape for it;
+ * inside a single-quoted literal no other character needs escaping.
+ */
+function powerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+/**
  * The PowerShell program that loads the launcher and starts one command under the restricted token.
  *
  * **Nothing per-command appears in this text, and that is a performance requirement rather than tidiness.** A
@@ -283,10 +381,10 @@ function bootstrap(dll: string, source: string): string {
     // Without this a non-interactive PowerShell writes progress records to stderr as CLIXML, which buries the
     // real error and makes every failure message start with a serialised object graph.
     '$ProgressPreference = "SilentlyContinue"',
-    `$dll = '${dll}'`,
+    `$dll = ${powerShellLiteral(dll)}`,
     'if (-not (Test-Path -LiteralPath $dll)) {',
     `  $temporary = $dll + '.' + $PID + '.dll'`,
-    `  Add-Type -TypeDefinition ([IO.File]::ReadAllText('${source}')) -OutputAssembly $temporary`,
+    `  Add-Type -TypeDefinition ([IO.File]::ReadAllText(${powerShellLiteral(source)})) -OutputAssembly $temporary`,
     // Two commands can arrive at once on a cold cache. The loser's move fails because the winner's file is
     // already loaded, which is a success: the launcher that is there is the same launcher.
     '  try { Move-Item -LiteralPath $temporary -Destination $dll -Force -ErrorAction Stop }',
@@ -295,7 +393,7 @@ function bootstrap(dll: string, source: string): string {
     '}',
     '[void][Reflection.Assembly]::LoadFrom($dll)',
     `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
-    `exit [YuantuSandbox]::Run([string]$spec.command, [string]$spec.cwd, [string[]]$spec.env, [string]$spec.sid, ${LAUNCHER_FLAGS})`,
+    `exit [YuantuSandbox]::Run([string]$spec.command, [string]$spec.cwd, [string[]]$spec.env, [string[]]$spec.sids, ${LAUNCHER_FLAGS})`,
   ].join('\n');
 }
 /** What one command needs: where to run, what to run, and the environment the child is started with. */
@@ -304,6 +402,7 @@ interface Spec {
   cwd: string;
   env: NodeJS.ProcessEnv;
   sid?: string;
+  sids?: string[];
 }
 /** The environment for the *starter*: this process's sanitised set plus the payload it reads back. */
 function starterEnvironment(spec: Spec, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -313,7 +412,7 @@ function starterEnvironment(spec: Spec, base: NodeJS.ProcessEnv): NodeJS.Process
       JSON.stringify({
         command: spec.command,
         cwd: spec.cwd,
-        sid: spec.sid ?? workspaceSandboxSid(spec.cwd),
+        sids: spec.sids ?? [spec.sid ?? workspaceSandboxSid(spec.cwd)],
         env: Object.entries(spec.env).map(([name, value]) => `${name}=${value ?? ''}`),
       }),
     ),
@@ -396,30 +495,43 @@ function run(
   });
 }
 /**
- * Grants one directory to the sandbox's SID, once per directory per process.
+ * Grants a disposable scratch directory to its independent sandbox SID.
  *
- * Set-Acl propagates the inheritable entry into the existing tree, including files that predate the grant.
- * Doing it per command instead would re-walk the whole workspace on every command; doing it never would mean
- * every command failed with `Access is denied` on the first write. The memo is per process because a second run
- * of the same workspace does not need the walk either — re-granting an identical ACE is a no-op the system
- * already paid for.
+ * Persistent workspace security changes use the journal helper below instead of this disposable grant.
  */
 const granted = new Map<string, Promise<void>>();
 const grantScript = [
   "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
   `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
   '$sid = [Security.Principal.SecurityIdentifier]::new([string]$spec.sid)',
   '$acl = Get-Acl -LiteralPath ([string]$spec.root)',
+  // Only disposable scratch uses a protected DACL. Workspace grants continue to merge user ACLs.
+  'if ($spec.privateScratch) {',
+  '  $acl = [Security.AccessControl.DirectorySecurity]::new()',
+  '  $acl.SetAccessRuleProtection($true, $false)',
+  '  foreach ($identity in @([Security.Principal.WindowsIdentity]::GetCurrent().User, [Security.Principal.SecurityIdentifier]::new("S-1-5-18"))) {',
+  '    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit", [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow))',
+  '  }',
+  // An owner retains READ_CONTROL but has no implicit WRITE_DAC path around the restricting SID check.
+  '  $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new("S-1-3-4"), [Security.AccessControl.FileSystemRights]::ReadPermissions, [Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit", [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow))',
+  '}',
   '$rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, [Security.AccessControl.FileSystemRights]::Modify, [Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit", [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)',
   '$acl.AddAccessRule($rule)',
+  '$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new("S-1-1-0"), [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles, [Security.AccessControl.InheritanceFlags]::ContainerInherit, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Deny))',
   'Set-Acl -LiteralPath ([string]$spec.root) -AclObject $acl',
+  '& "$env:SystemRoot\\System32\\icacls.exe" ([string]$spec.root) /setintegritylevel "(OI)(CI)L" /Q | Out-Null',
+  'if ($LASTEXITCODE -ne 0) { throw "Could not label sandbox scratch Low integrity" }',
 ].join('\n');
-function grant(root: string, sid: string): Promise<void> {
+function grant(root: string, sid: string, privateScratch = false): Promise<void> {
   const pending = granted.get(root);
   if (pending) return pending;
   const work = (async () => {
     const result = await run(powershellPath(), launcherArgs(grantScript), {
-      env: { ...toolEnvironment(), [SPEC_VARIABLE]: encode(JSON.stringify({ root, sid })) },
+      env: {
+        ...toolEnvironment(),
+        [SPEC_VARIABLE]: encode(JSON.stringify({ root, sid, privateScratch })),
+      },
     });
     if (result.code !== 0)
       throw new Error(
@@ -431,6 +543,189 @@ function grant(root: string, sid: string): Promise<void> {
   work.catch(() => granted.delete(root));
   granted.set(root, work);
   return work;
+}
+
+interface WorkspaceLease {
+  references: number;
+  journal: string;
+  releaseLock: () => Promise<void>;
+  closing?: Promise<void>;
+}
+const workspaceLeases = new Map<string, Promise<WorkspaceLease>>();
+const planLeases = new WeakMap<SandboxPlan, { root: string; scratch: string }>();
+const planCleanup = new WeakMap<SandboxPlan, Promise<void>>();
+// Electron's CommonJS bundles live in dist/desktop; ordinary ESM keeps the module-relative asset.
+const aclHelper =
+  typeof __dirname === 'string'
+    ? path.resolve(__dirname, '../packages/tools/windows-sandbox/acl.ps1')
+    : fileURLToPath(new URL('./windows-sandbox/acl.ps1', import.meta.url));
+// Capture trusted application code once. Guest workspace edits must never become host cleanup code.
+const aclSource = gzipSync(readFileSync(aclHelper)).toString('base64');
+const ACL_VARIABLE = 'YUANTU_SANDBOX_ACL_SOURCE';
+const aclBootstrap = [
+  "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
+  `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
+  `$bytes = [Convert]::FromBase64String($env:${ACL_VARIABLE})`,
+  '$memory = [IO.MemoryStream]::new([byte[]]$bytes, $false)',
+  '$gzip = [IO.Compression.GZipStream]::new($memory, [IO.Compression.CompressionMode]::Decompress)',
+  '$reader = [IO.StreamReader]::new($gzip)',
+  '$script = [ScriptBlock]::Create($reader.ReadToEnd())',
+  '$reader.Dispose()',
+  '& $script -Operation ([string]$spec.operation) -Root ([string]$spec.root) -Journal ([string]$spec.journal) -Sid ([string]$spec.sid)',
+].join('\n');
+interface ProcessLease {
+  references: number;
+  release: () => Promise<void>;
+  closing?: Promise<void>;
+}
+let processLease: Promise<ProcessLease> | undefined;
+/** One Host owns persistent ACL changes at a time, including overlapping roots in other Hosts. */
+async function acquireProcessLease(state: string): Promise<() => Promise<void>> {
+  processLease ??= (async () => {
+    const lockPath = path.join(state, 'workspace-owner.lock');
+    const handle = await open(lockPath, 'wx').catch(() => {
+      throw new Error(
+        `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
+      );
+    });
+    try {
+      await handle.writeFile(JSON.stringify({ pid: process.pid }));
+      await handle.sync();
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+    return {
+      references: 0,
+      release: async () => {
+        await handle.close();
+        await rm(lockPath);
+      },
+    };
+  })();
+  const pending = processLease;
+  let lease: ProcessLease;
+  try {
+    lease = await pending;
+  } catch (error) {
+    if (processLease === pending) processLease = undefined;
+    throw error;
+  }
+  if (lease.closing) {
+    await lease.closing;
+    return acquireProcessLease(state);
+  }
+  lease.references++;
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    if (--lease.references !== 0) return;
+    lease.closing = lease.release().finally(() => {
+      if (processLease === pending) processLease = undefined;
+    });
+    await lease.closing;
+  };
+}
+async function journalOperation(
+  operation: 'grant' | 'restore' | 'validate-control',
+  root: string,
+  journal: string,
+  sid: string,
+): Promise<void> {
+  const result = await run(powershellPath(), launcherArgs(aclBootstrap), {
+    env: {
+      ...toolEnvironment(),
+      [ACL_VARIABLE]: aclSource,
+      [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid })),
+    },
+  });
+  if (result.code !== 0)
+    throw new Error(
+      `Windows sandbox ACL ${operation} failed; recovery journal ${journal}: ${result.error}`,
+    );
+}
+async function acquireWorkspace(root: string, sid: string): Promise<void> {
+  for (const existing of workspaceLeases.keys()) {
+    const contains = (parent: string, child: string) => {
+      const relative = path.relative(parent, child);
+      return (
+        !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)
+      );
+    };
+    if (existing !== root && (contains(existing, root) || contains(root, existing)))
+      throw new Error('Overlapping Windows sandbox ACL leases are unsupported');
+  }
+  let pending = workspaceLeases.get(root);
+  if (pending) {
+    const lease = await pending;
+    if (lease.closing) {
+      await lease.closing;
+      return acquireWorkspace(root, sid);
+    }
+  }
+  if (!pending) {
+    pending = (async () => {
+      // Account-derived profile, independent of TEMP/USERPROFILE overrides in different Hosts.
+      // Keep this outside MSIX-virtualized AppData/Local, which differs between packaged and CLI Hosts.
+      const state = path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
+      await mkdir(state, { recursive: true });
+      if (path.resolve(await realpath(state)).toLowerCase() !== path.resolve(state).toLowerCase())
+        throw new Error('Windows sandbox refuses redirected ACL state paths');
+      await journalOperation('validate-control', state, '-', '-');
+      const releaseProcess = await acquireProcessLease(state);
+      const name = createHash('sha256').update(root.toLowerCase()).digest('hex');
+      const lockPath = path.join(state, `${name}.lock`);
+      const journal = path.join(state, `${name}.json`);
+      const lock = await open(lockPath, 'wx').catch(async () => {
+        await releaseProcess();
+        throw new Error(
+          `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
+        );
+      });
+      await lock.writeFile(JSON.stringify({ pid: process.pid, root, journal }));
+      await lock.sync();
+      const releaseLock = async () => {
+        await lock.close();
+        await rm(lockPath);
+        await releaseProcess();
+      };
+      try {
+        await journalOperation('grant', root, journal, sid);
+        return { references: 0, journal, releaseLock };
+      } catch (error) {
+        // Retain lock + journal after partial mutation; never automatically guess that another process died.
+        const journalExists = await stat(journal).then(
+          () => true,
+          () => false,
+        );
+        if (!journalExists) await releaseLock();
+        else await lock.close();
+        throw error;
+      }
+    })();
+    workspaceLeases.set(root, pending);
+    pending.catch(() => workspaceLeases.delete(root));
+  }
+  const lease = await pending;
+  lease.references++;
+}
+async function releaseWorkspace(root: string): Promise<void> {
+  const pending = workspaceLeases.get(root);
+  if (!pending) return;
+  const lease = await pending;
+  if (--lease.references !== 0) return;
+  // Block new prepares until restoration completes, then release the cross-process lease.
+  lease.closing = (async () => {
+    try {
+      await journalOperation('restore', root, lease.journal, workspaceSandboxSid(root));
+      await lease.releaseLock();
+    } finally {
+      workspaceLeases.delete(root);
+    }
+  })();
+  await lease.closing;
 }
 /**
  * Whether this backend can run here — answered by *running it*, not by looking for a file.
@@ -447,18 +742,19 @@ export function windowsSandboxAvailable(
 ): Promise<string | null> {
   if (process.platform !== 'win32')
     return Promise.resolve(
-      'The Windows restricted-token backend only runs on Windows; use docker, sbx, or host',
+      'The Windows restricted-token backend only runs on Windows; no command was started',
     );
   availability ??= (async (): Promise<string | null> => {
     const powershell = powershellPath();
     try {
       await stat(powershell);
     } catch {
-      return `PowerShell is not installed at ${powershell}; use docker, sbx, or host`;
+      return `PowerShell is not installed at ${powershell}; no command was started`;
     }
     const dll = launcherPath();
     const directory = path.dirname(dll);
     await mkdir(directory, { recursive: true });
+    await journalOperation('validate-control', directory, '-', '-');
     const source = await writeLauncherSource(dll);
     const args = launcherArgs(bootstrap(dll, source));
     const start = await run(powershell, args, {
@@ -473,7 +769,7 @@ export function windowsSandboxAvailable(
       ),
     });
     if (start.code !== 0)
-      return `The Windows sandbox launcher could not start a process: ${start.error.trim() || `exit code ${String(start.code)}`}; use docker, sbx, or host`;
+      return `The Windows sandbox launcher could not start a process: ${start.error.trim() || `exit code ${String(start.code)}`}; execution refused`;
     const probe = path.join(directory, `probe-${process.pid}.txt`);
     const confined = await run(powershell, args, {
       cwd: directory,
@@ -492,66 +788,131 @@ export function windowsSandboxAvailable(
     );
     if (wrote) await rm(probe, { force: true });
     if (confined.code === 0 || wrote)
-      return 'The restricted token did not confine a write outside the workspace; use docker, sbx, or host';
+      return 'The restricted token did not confine a write outside the workspace; execution refused';
+    const deleteProbe = path.join(directory, `delete-probe-${process.pid}-${randomUUID()}.txt`);
+    await writeFile(deleteProbe, 'retain', { flag: 'wx' });
+    let retained = false;
+    try {
+      await run(powershell, args, {
+        cwd: directory,
+        env: starterEnvironment(
+          {
+            command: windowsCommandLine({ command: `del /q "${deleteProbe}"` }),
+            cwd: directory,
+            env: commandEnvironment(directory),
+          },
+          toolEnvironment(env),
+        ),
+      });
+      retained = await stat(deleteProbe).then(
+        () => true,
+        () => false,
+      );
+    } finally {
+      await rm(deleteProbe, { force: true });
+    }
+    if (!retained)
+      return 'The restricted token could delete launcher-cache files; execution refused';
     return null;
   })().catch((error: unknown) => {
     availability = undefined;
-    return `The Windows sandbox could not be prepared: ${String(error)}; use docker, sbx, or host`;
+    return `The Windows sandbox could not be prepared: ${String(error)}; execution refused`;
   });
   return availability;
 }
 /** Starts one command under the restricted token, granting the workspace and a private scratch directory. */
 async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
+  insideWorkspace(request.root, request.cwd);
+  if (request.config.files === 'read-only')
+    throw new Error(
+      'Windows basic sandbox cannot enforce strict process read-only; select a backend with read-only enforcement',
+    );
+  if (request.config.network === 'denied')
+    throw new Error('Windows basic sandbox cannot deny network access');
   const unavailable = await windowsSandboxAvailable();
   if (unavailable) throw new Error(unavailable);
   const canonical = await realpath(request.root);
   const working = await realpath(request.cwd);
   insideWorkspace(canonical, working);
   const sid = workspaceSandboxSid(canonical);
+  const dll = launcherPath();
+  await mkdir(path.dirname(dll), { recursive: true });
+  const profile = await realpath(os.userInfo().homedir);
+  const fixedState = path.join(profile, '.yuantu', 'sandbox-state', 'windows');
+  const state = await realpath(fixedState).catch(() => fixedState);
+  const cache = await realpath(path.dirname(dll));
+  const contains = (target: string) => {
+    const relative = path.relative(canonical, target);
+    return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+  };
+  if (path.parse(canonical).root.toLowerCase() === canonical.toLowerCase())
+    throw new Error('Windows sandbox refuses a volume root as workspace');
+  if (contains(state) || contains(cache))
+    throw new Error('Windows sandbox workspace contains trusted control paths; execution refused');
+  await journalOperation('validate-control', path.dirname(dll), '-', '-');
+  const source = await writeLauncherSource(dll);
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'yuantu-sandbox-'));
+  let workspaceAcquired = false;
   try {
-    await grant(canonical, sid);
+    await acquireWorkspace(canonical, sid);
+    workspaceAcquired = true;
     // The scratch directory is granted for the same reason the workspace is: almost every real command writes
     // *somewhere* for temporary files, and a sandbox whose commands cannot use a temp directory fails in ways
     // that look like the tool being broken rather than the sandbox doing its job. It is deliberately outside the
     // workspace — a command's scratch files are not the repository's business — and removed with the plan.
-    await grant(scratch, sid);
+    const scratchSid = workspaceSandboxSid(scratch);
+    await grant(scratch, scratchSid, true);
     granted.delete(scratch);
-    const dll = launcherPath();
-    await mkdir(path.dirname(dll), { recursive: true });
-    const source = await writeLauncherSource(dll);
     const env = commandEnvironment(scratch, request.env);
-    return {
+    const plan: SandboxPlan = {
       executable: powershellPath(),
       // The script is constant, so the per-command data rides in the starter's environment (see `bootstrap`).
       args: launcherArgs(bootstrap(dll, source)),
       cwd: working,
       env: starterEnvironment(
-        { command: windowsCommandLine(request), cwd: working, env, sid },
+        { command: windowsCommandLine(request), cwd: working, env, sids: [sid, scratchSid] },
         toolEnvironment(),
       ),
       windowsVerbatimArguments: false,
       backend: 'windows',
+      processTree: 'contained',
       cleanupPath: scratch,
     };
+    planLeases.set(plan, { root: canonical, scratch });
+    return plan;
   } catch (error) {
     await rm(scratch, { recursive: true, force: true });
+    if (workspaceAcquired) await releaseWorkspace(canonical);
     throw error;
   }
 }
 /**
- * Teardown: nothing was created but the scratch directory, which the seam removes for any backend that set
- * `cleanupPath`. The workspace grant stays, because it is not this command's — removing it would break every
- * command that runs next. It names only this workspace's identity; another workspace's token cannot use it.
+ * Teardown restores the original workspace security after the last concurrent plan releases its lease,
+ * then deletes this plan's private scratch. Repeated cleanup of a plan cannot release another plan's lease.
  */
 async function windowsCleanup(plan: SandboxPlan): Promise<void> {
-  if (plan.cleanupPath) await rm(plan.cleanupPath, { recursive: true, force: true });
+  const existing = planCleanup.get(plan);
+  if (existing) return existing;
+  const owned = planLeases.get(plan);
+  // A serialized or forged plan does not own the parent process's lease or any cleanup path.
+  if (!owned) return;
+  planLeases.delete(plan);
+  const work = (async () => {
+    try {
+      await releaseWorkspace(owned.root);
+    } finally {
+      await rm(owned.scratch, { recursive: true, force: true });
+    }
+  })();
+  planCleanup.set(plan, work);
+  return work;
 }
 /** The backend as the seam sees it, registered by `sandbox.ts` next to the other built-ins. */
 export const windowsSandboxProvider: SandboxProvider = {
   mode: 'windows',
+  capabilities: () => WINDOWS_CAPABILITIES,
   description:
-    'Windows write-restricted token: workspace-specific write grants and private scratch; ambient Everyone write ACLs remain effective. Reads and network are not confined; strict workspace-only requirements are unsupported.',
+    'Windows Low integrity write-restricted token: journaled workspace write grants and private scratch; ambient Low integrity Everyone grants remain effective. Reads and network are not confined; strict process read-only is unsupported.',
   available: (env) => windowsSandboxAvailable(env),
   prepare: windowsPrepare,
   cleanup: windowsCleanup,
