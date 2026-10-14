@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { connectClient, listeningHost, waitForStderr } from './listening-host-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -26,8 +27,22 @@ test('a Host keeps running rounds until the session goal is finished', async (t)
           { id: 'goal-1', name: 'create_goal', input: { objective: 'Ship the migration' } },
         ]),
       );
-    else if (step === 2) sendFrames(res, frames('Round one is done.'));
-    else if (step === 3)
+    /**
+     * The first round does substantive work before it ends.
+     *
+     * A continuation round that only narrates now stops the loop — a completed round with no real tool activity
+     * is not progress, and continuing would buy a model request per round for nothing. This fixture therefore has
+     * the round inspect the workspace, which is what a real round continuing a goal would do.
+     */
+    else if (step === 2)
+      sendFrames(
+        res,
+        frames('Round one is done.', [
+          { id: 'inspect-1', name: 'search_files', input: { query: 'migration' } },
+        ]),
+      );
+    else if (step === 3) sendFrames(res, frames('Round one is done.'));
+    else if (step === 4)
       sendFrames(
         res,
         frames('Goal complete.', [
@@ -58,8 +73,9 @@ test('a Host keeps running rounds until the session goal is finished', async (t)
   assert.equal(result.text, 'Done.');
   assert.equal(started.length, 2, 'the client witnessed two runs, not one');
   // …and the round nobody asked for was aimed at the same objective and was the last one.
-  assert.match(prompts[2]!, /round 2 of 256/);
-  assert.match(prompts[2]!, /Ship the migration/);
+  const continuationPrompt = prompts.find((prompt) => /round 2 of 256/.test(prompt));
+  assert.ok(continuationPrompt, 'the continuation round carried the goal prompt');
+  assert.match(continuationPrompt, /Ship the migration/);
   assert.match(host.stderr(), /\[goal\] round 2/);
   // The line is written before the reply is sent, but on another pipe: waiting for it is what makes this an
   // assertion about the Host rather than about which pipe won the race.
@@ -196,11 +212,13 @@ test('a task run is not extended by a goal, because its rounds belong to its att
     sendFrames(res, frames('Task round done.'));
   });
   let seeded = '';
+  let workspace = '';
   const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (dbPath) => {
     const store = new SessionStore(dbPath);
     try {
       const session = store.create(path.dirname(dbPath));
       seeded = session.id;
+      workspace = path.dirname(dbPath);
       // Seeded rather than created by a round: a goal an earlier run left active is exactly the state a task
       // run starts in, and it must not pull the task's attempt along with it.
       store.recordEvent(session.id, 'goal.changed', {
@@ -211,6 +229,9 @@ test('a task run is not extended by a goal, because its rounds belong to its att
       store.close();
     }
   });
+  // A definition the run can actually satisfy: a task with no criteria is no longer a vacuous pass, and this
+  // test is about the goal loop standing down, not about verification.
+  await writeFile(path.join(workspace, 'marker.txt'), 'ok');
   const { client } = await connectClient(host.port);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -218,6 +239,13 @@ test('a task run is not extended by a goal, because its rounds belong to its att
     sessionId: seeded,
     title: 'Ship it',
     description: 'Ship the migration',
+    acceptance: [
+      {
+        description: 'marker file matches',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
+    ],
   });
   const result = await client.run(seeded, 'Ship the migration', { taskId: task.id });
   assert.equal(result.status, 'completed', result.error);

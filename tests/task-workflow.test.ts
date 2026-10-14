@@ -8,7 +8,11 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 import type { Acceptance, Task } from '../packages/protocol/index.ts';
 
-async function fixture(t: TestContext, mode: 'draft' | 'tool' | 'run' = 'run', delayMs = 0) {
+async function fixture(
+  t: TestContext,
+  mode: 'draft' | 'tool' | 'run' | 'checkpoint' = 'run',
+  delayMs = 0,
+) {
   let requests = 0;
   const bodies: any[] = [];
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-workflow-'));
@@ -22,10 +26,24 @@ async function fixture(t: TestContext, mode: 'draft' | 'tool' | 'run' = 'run', d
     requests++;
     bodies.push(body);
     if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    /**
+     * A run that actually records progress.
+     *
+     * Completion now requires every declared step to be completed, so a fixture that only ever answers in prose
+     * can never produce a completed task — which is the behaviour under test, not an obstacle to it. This mode
+     * has the model checkpoint its one step first, exactly as a real run is told to.
+     */
+    if (mode === 'checkpoint' && requests === 1) {
+      sendFrames(
+        res,
+        frames('', [{ id: 'step-0', name: 'task_step', input: { index: 0, status: 'completed' } }]),
+      );
+      return;
+    }
     sendFrames(
       res,
       frames(
-        mode === 'run' ? 'Done' : JSON.stringify(draft),
+        mode === 'run' || mode === 'checkpoint' ? 'Done' : JSON.stringify(draft),
         mode === 'tool'
           ? [{ id: 'unsafe', name: 'write_file', input: { path: 'forbidden.txt', content: 'bad' } }]
           : [],
@@ -117,10 +135,27 @@ test('tool-calling proposal is rejected without execution or task changes', asyn
 });
 
 test('task edit rejects stale revisions and clears all completion evidence', async (t) => {
-  const f = await fixture(t);
-  const task = await f.create();
+  const f = await fixture(t, 'checkpoint');
+  /**
+   * A definition that can actually be satisfied.
+   *
+   * The task used to complete on a manual criterion alone, with its single step still pending — the "empty
+   * acceptance" behaviour this change removes. A completed task now needs a criterion with a check that passes,
+   * a user confirmation for the manual half, and every declared step completed.
+   */
+  await writeFile(path.join(f.root, 'result.txt'), 'ok');
+  const task = await f.create([
+    { description: 'User reviews result', met: false },
+    {
+      description: 'result file matches',
+      met: false,
+      check: { id: 'exact', kind: 'file-exact', path: 'result.txt', expected: 'ok' },
+    },
+  ]);
   await f.client.run(f.sessionId, 'Perform task', { taskId: task.id });
   const reviewed = await f.get(task);
+  assert.equal(reviewed.status, 'needs_review');
+  assert.equal(reviewed.steps[0]!.status, 'completed');
   const complete = await f.confirm(reviewed);
   assert.equal(complete.status, 'completed');
   assert.ok(complete.verification?.passed);
@@ -257,7 +292,13 @@ test('verifying a task that was never run cannot complete it', async (t) => {
     taskId: task.id,
   });
   assert.equal(verified.task.status, 'needs_review');
-  assert.equal(verified.task.verification?.passed, true);
+  // The check itself passes — the file is there and matches. What stops the task is that nobody ever ran the
+  // work, which is now expressed as the definition-level verdict rather than by the checks aggregate alone.
+  assert.equal(
+    verified.task.verification?.checks.find((check) => check.id === 'exact')?.passed,
+    true,
+  );
+  assert.equal(verified.task.verification?.passed, false);
   assert.match(verified.attempt.error ?? '', /not been run/);
   assert.equal(f.requests(), 0);
 });

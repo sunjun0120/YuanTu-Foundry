@@ -113,6 +113,14 @@ export const RUN_SCOPED_TOOLS = [
   'create_goal',
   'get_goal',
   'update_goal',
+  /**
+   * The workspace tools, for the same reason as `delegate_task`: their closure captures *this* session — the
+   * directory it may import into and the child results it was offered. A child that inherited `workspace_results`
+   * would be reading its siblings' results, and one that inherited `workspace_result_apply` could import them into
+   * its own workspace, which is precisely the authority the parent's approval exists to gate.
+   */
+  'workspace_results',
+  'workspace_result_apply',
 ] as const;
 /**
  * What a result says when it was cut, and the only evidence the result stage has that it was.

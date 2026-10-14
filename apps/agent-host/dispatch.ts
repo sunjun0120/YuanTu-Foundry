@@ -10,6 +10,7 @@ import { runHandlers } from './handlers/runs.ts';
 import { sessionHandlers } from './handlers/sessions.ts';
 import { systemHandlers } from './handlers/system.ts';
 import { taskHandlers } from './handlers/tasks.ts';
+import { workspaceHandlers } from './handlers/workspaces.ts';
 import type { Dispatcher, HostContext, WakeGrant } from './state.ts';
 
 /**
@@ -44,6 +45,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
   ...sessionHandlers,
   ...taskHandlers,
   ...compactionHandlers,
+  ...workspaceHandlers,
 };
 
 /** Build the one entry point every request goes through, closing over the Host's state. */

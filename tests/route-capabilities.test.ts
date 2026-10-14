@@ -5,7 +5,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { readConfig } from '../packages/providers/config.ts';
 import { routeSupports } from '../packages/protocol/cache-modes.ts';
-import { AgentHostClient } from '../packages/sdk/index.ts';
+import { AgentHostClient } from '../packages/client/host-client.ts';
 import { ModelSettingsStore } from '../apps/desktop/model-settings.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';

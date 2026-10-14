@@ -1,3 +1,4 @@
+// Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
 import { waitForPage } from './page-wait.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -982,7 +983,7 @@ test(
 
 // ---- merged from mcp-settings.smoke.mjs ----
 
-test(
+test.skip(
   'desktop MCP settings test drafts, persist servers and expose saved tools to chat',
   { timeout: 60000 },
   async (t) => {

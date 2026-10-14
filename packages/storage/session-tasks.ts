@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type {
   Acceptance,
+  AcceptanceEvidence,
   Approval,
+  CompletionSummary,
   Task,
   TaskAttempt,
   TaskAttemptKind,
@@ -62,6 +64,14 @@ export interface TaskJournalPort {
   getTask(sessionId: string, id: string): Task;
   getTaskAttempt(sessionId: string, taskId: string, attemptId: string): TaskAttempt;
   hasPendingTaskEffects(sessionId: string, taskId: string, attemptId?: string): boolean;
+  /**
+   * The verification rounds already recorded for one attempt.
+   *
+   * The round number is the key a repeated verification must be refused on, and the journal keeps it in the
+   * session log rather than in a column of its own: the log is the record of what happened, and a task run that
+   * repaired three times is three facts about the same attempt, not one number that overwrote its predecessor.
+   */
+  completionVerificationRounds(sessionId: string, attemptId: string): number[];
   settleAbandonedRun(sessionId: string, runId: string, reason: string): void;
   recordEvent(
     id: string,
@@ -185,19 +195,6 @@ export class TaskJournal {
       const finalStatus =
         input.status === 'completed' && uncertainEffect ? 'needs_review' : input.status;
       const finalError = uncertainEffect ? TASK_EFFECT_OUTCOME_UNKNOWN : (input.error ?? null);
-      this.port.db
-        .prepare(
-          'UPDATE task_attempts SET status=?,verification=?,error=?,finished_at=? WHERE id=? AND task_id=? AND session_id=?',
-        )
-        .run(
-          finalStatus,
-          input.verification ? JSON.stringify(input.verification) : null,
-          finalError,
-          finishedAt,
-          attemptId,
-          taskId,
-          sessionId,
-        );
       // A failed verification must not erase work the model durably checkpointed as done; only the
       // steps that never completed fall back to the verifier's verdict.
       const checkpointed = stepStatusMap(this.port.db, taskId);
@@ -208,12 +205,39 @@ export class TaskJournal {
               : step,
           )
         : task.steps;
+      /**
+       * The last backstop against a completion no step supports.
+       *
+       * The verifier already refuses to pass a task whose steps are unfinished, so this normally never fires. It
+       * exists because `completed` is the one status every other surface reads as "the definition was met", and a
+       * caller that hands in a completed attempt alongside a pending step has stated two contradictory things.
+       * The row keeps the weaker of the two rather than the one that reads better.
+       */
+      const unfinishedSteps =
+        finalStatus === 'completed' && steps.some((step) => step.status !== 'completed');
+      const settledStatus = unfinishedSteps ? ('needs_review' as const) : finalStatus;
+      const settledError = unfinishedSteps
+        ? 'Task steps are not all completed; completion is not valid while work remains.'
+        : finalError;
+      this.port.db
+        .prepare(
+          'UPDATE task_attempts SET status=?,verification=?,error=?,finished_at=? WHERE id=? AND task_id=? AND session_id=?',
+        )
+        .run(
+          settledStatus,
+          input.verification ? JSON.stringify(input.verification) : null,
+          settledError,
+          finishedAt,
+          attemptId,
+          taskId,
+          sessionId,
+        );
       this.port.db
         .prepare(
           'UPDATE tasks SET status=?,acceptance=?,verification=?,steps=?,updated_at=? WHERE session_id=? AND id=?',
         )
         .run(
-          finalStatus,
+          settledStatus,
           JSON.stringify(validateAcceptance(input.acceptance ?? task.acceptance)),
           input.verification ? JSON.stringify(input.verification) : null,
           JSON.stringify(validateSteps(steps)),
@@ -226,7 +250,7 @@ export class TaskJournal {
           .prepare('UPDATE tasks SET next_run_at=NULL WHERE session_id=? AND id=?')
           .run(sessionId, taskId);
       if (
-        finalStatus === 'completed' &&
+        settledStatus === 'completed' &&
         attempt.trigger === 'manual' &&
         task.approvalOutcomeUnknown
       ) {
@@ -249,7 +273,7 @@ export class TaskJournal {
             'UPDATE tasks SET last_trigger_error=NULL WHERE session_id=? AND id=? AND last_trigger_error=?',
           )
           .run(sessionId, taskId, TASK_EFFECT_OUTCOME_UNKNOWN);
-        if (finalStatus === 'completed')
+        if (settledStatus === 'completed')
           this.port.db
             .prepare(
               'UPDATE tasks SET last_trigger_error=NULL WHERE session_id=? AND id=? AND last_trigger_error=?',
@@ -257,6 +281,74 @@ export class TaskJournal {
             .run(sessionId, taskId, TASK_APPROVAL_OUTCOME_UNKNOWN);
       }
       return this.port.getTask(sessionId, taskId);
+    });
+  }
+  /**
+   * Record one verification round and settle the command effects whose outcome it observed.
+   *
+   * A repairing task verifies more than once inside a single attempt, and the earlier design had nowhere to put
+   * the second round: `finishTaskAttempt` resolved every known effect at the *end*, so a first round's command
+   * effects stayed pending across the repair and the task's own finalization then read `hasPendingTaskEffects`
+   * and declared the outcome unknown — the run was punished for work it had already accounted for. This writes
+   * the round's evidence and closes exactly the effects that round actually finished, in one transaction.
+   *
+   * What it refuses is as load-bearing as what it writes, and all of it rolls back together:
+   *
+   * - a round already recorded for this attempt (a replay would double-count it and reset the repair budget);
+   * - a round that does not advance (the sequence is what a reader reconstructs the run's history from);
+   * - an attempt that is not active (a late writer must not resurrect a finished attempt's evidence);
+   * - an effect that is not pending *in this attempt* (an id from another attempt would otherwise be settled by
+   *   whoever named it, which is how one attempt's unknown outcome becomes another's clean record).
+   */
+  recordTaskVerificationRound(
+    sessionId: string,
+    taskId: string,
+    attemptId: string,
+    input: {
+      verificationRound: number;
+      evidence: AcceptanceEvidence;
+      resolvedEffectIds: string[];
+      summary: CompletionSummary;
+    },
+  ): void {
+    this.port.transaction(() => {
+      const task = this.port.getTask(sessionId, taskId);
+      const attempt = this.port.getTaskAttempt(sessionId, taskId, attemptId);
+      if (attempt.status !== 'in_progress')
+        throw new Error('Task attempt is not active; refusing to record a verification round');
+      if (!Number.isSafeInteger(input.verificationRound) || input.verificationRound < 1)
+        throw new Error('Invalid task verification round');
+      const recorded = this.port.completionVerificationRounds(sessionId, attemptId);
+      if (recorded.includes(input.verificationRound))
+        throw new Error('Task verification round already recorded');
+      const highest = recorded.length ? Math.max(...recorded) : 0;
+      if (input.verificationRound <= highest)
+        throw new Error('Task verification round does not advance the recorded sequence');
+      const finishedAt = new Date().toISOString();
+      for (const effectId of input.resolvedEffectIds) {
+        const changed = this.port.db
+          .prepare(
+            "UPDATE task_effects SET status='completed',completed_at=? WHERE id=? AND session_id=? AND task_id=? AND attempt_id=? AND status='pending'",
+          )
+          .run(finishedAt, effectId, sessionId, taskId, attemptId);
+        if (Number(changed.changes) !== 1)
+          throw new Error('Task effect is not pending in this attempt');
+      }
+      this.port.db
+        .prepare(
+          'UPDATE task_attempts SET verification=? WHERE id=? AND task_id=? AND session_id=?',
+        )
+        .run(JSON.stringify(input.evidence), attemptId, taskId, sessionId);
+      this.port.recordEvent(sessionId, 'completion.updated', {
+        taskId,
+        attemptId,
+        verificationRound: input.verificationRound,
+        ...(input.summary.contractId === undefined ? {} : { contractId: input.summary.contractId }),
+        summary: input.summary,
+        steps: task.steps,
+        failedCheckIds: input.summary.failedCheckIds,
+        unfinishedStepIds: input.summary.unfinishedStepIds,
+      });
     });
   }
   getTaskAttempt(sessionId: string, taskId: string, attemptId: string): TaskAttempt {

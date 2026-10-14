@@ -1,5 +1,6 @@
 import type { Usage } from '../protocol/index.ts';
 import type { SubAgentRole, SubAgentSummaryReport, SubAgentTaskStatus } from '../protocol/index.ts';
+import type { WorkspaceBinding } from '../protocol/workspaces.ts';
 import type { Disposer } from '../tools/dispatch.ts';
 
 /**
@@ -35,6 +36,15 @@ export const SUBAGENT_CAPABILITIES = [
    * without any way to do the first.
    */
   'contextFork',
+  /**
+   * The provider can give the child its own execution directory rather than the parent's.
+   *
+   * A capability rather than a given, because it is a promise about *where the child's writes land*: a provider
+   * that runs its child somewhere this runtime does not manage cannot honour it, and a request that asked for
+   * isolation and was silently given the parent's directory would be the worst possible answer — the parent would
+   * believe two children could not overwrite each other when they share one tree.
+   */
+  'workspaceIsolation',
 ] as const;
 export type SubAgentCapability = (typeof SUBAGENT_CAPABILITIES)[number];
 const CAPABILITY_NAMES = new Set<string>(SUBAGENT_CAPABILITIES);
@@ -115,12 +125,29 @@ export interface SubAgentRequestOptions {
   persona?: string;
   /** `true` starts the child from the parent's transcript instead of from nothing. */
   contextFork?: boolean;
+  /**
+   * The execution-directory mode this task wants, after `auto` has been resolved against its role.
+   *
+   * Only requested when the task genuinely needs isolation. A `shared` task asks for nothing — sharing is what
+   * every provider already does — so a request that resolves to `shared` leaves this absent and a provider that
+   * runs its child elsewhere is still usable for it. `worktree` is a promise about where the writes land, and a
+   * provider that cannot keep it must refuse the task rather than accept it and run in the parent's directory.
+   */
+  workspace?: 'shared' | 'worktree';
 }
 export interface SubAgentStartRequest {
   task: SubAgentTask;
   parent: SubAgentParent;
   options: SubAgentRequestOptions;
   signal: AbortSignal;
+  /**
+   * The directory this child was given, when the run isolates its children.
+   *
+   * Part of the *request* rather than of the options, because it is a decision the coordinator already made for this
+   * specific task and not something a provider may choose: the options say what was asked for, this says where the
+   * child must actually work. A provider that cannot use it must have refused the request at capability time.
+   */
+  binding?: WorkspaceBinding;
   /** Called as soon as the child session exists, which is what lets progress be published early. */
   started: (sessionId: string) => void;
 }
@@ -176,6 +203,7 @@ const OPTION_CAPABILITIES: readonly [keyof SubAgentRequestOptions, SubAgentCapab
   ['toolFilter', 'toolFilter'],
   ['persona', 'persona'],
   ['contextFork', 'contextFork'],
+  ['workspace', 'workspaceIsolation'],
 ];
 export class SubAgentProviderRegistry {
   private providers = new Map<string, SubAgentProvider>();

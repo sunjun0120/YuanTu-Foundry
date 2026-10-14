@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, writeFile, rm, mkdir, readFile } from 'node:fs/promises';
@@ -691,6 +691,35 @@ test('a changed document is re-indexed in one write transaction, and nothing els
   assert.equal(changed.value[0]?.source, 'doc-2.md');
   assert.equal(store.search(root, 'alpha').length, 4, 'the old content left the index with it');
   assert.equal(store.listDocuments(root).length, 5, 'and the document is still pinned');
+});
+
+test('an unchanged pinned document is verified by metadata instead of being read again', async (t) => {
+  /**
+   * The other half of "unchanged is free": the old refresh decided a document was unchanged by *reading* it and
+   * comparing digests, so asking the same question twice paid for the whole corpus twice. A stat answers the same
+   * question for an unchanged file, and the digest check inside `pinDocument` stays the authority for one that
+   * moved.
+   */
+  const { root, store } = await documentFixture(t);
+  await pinDocuments(root, store, 0, 5);
+  store.search(root, 'alpha');
+  const before = store.refreshCounts();
+  store.search(root, 'alpha');
+  const after = store.refreshCounts();
+  assert.equal(
+    after.verified - before.verified,
+    5,
+    'five unchanged documents were verified cheaply',
+  );
+  assert.equal(after.reread - before.reread, 0, 'and none of them was read again');
+
+  // A change still costs a read, and still lands in the index.
+  await writeFile(path.join(root, 'doc-3.md'), 'Document number 3 was rewritten to carry omega.');
+  const changed = store.search(root, 'omega');
+  assert.equal(changed.length, 1);
+  assert.equal(changed[0]?.source, 'doc-3.md');
+  const afterChange = store.refreshCounts();
+  assert.ok(afterChange.reread > after.reread, 'the changed document was read again');
 });
 
 test('a document that cannot be re-read keeps its index entry; a deleted one is unpinned', async (t) => {

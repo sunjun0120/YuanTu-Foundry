@@ -512,3 +512,31 @@ test('the retry count is read from the log, so a restarted process does not star
   assert.equal(store.retryCount('run-1', 1), 0);
   assert.equal(store.retryCount('run-2', 0), 0);
 });
+
+test('the backoff is jittered, so callers sharing an endpoint do not return in lockstep', () => {
+  // A band check cannot tell a jittered wait from a fixed one: zero jitter still sits inside
+  // `[250 * 2 ** (n - 1), 250 * 2 ** (n - 1) + 100)`. The property the jitter exists for is spread, so that
+  // is what is asserted — over enough samples that a constant implementation cannot pass by luck.
+  const samples = new Set<number>();
+  for (let index = 0; index < 200; index++) samples.add(retryDelayMs(1));
+  assert.ok(samples.size > 1, 'the first attempt always waits exactly the same time');
+  for (const sample of samples) assert.ok(sample >= 250 && sample < 350, `${sample}`);
+});
+
+test('a retry may hold a round open for at most thirty seconds', () => {
+  // The bound is asserted as a literal on purpose. This wait is time the user pays without seeing progress, so
+  // it is a promise about the product rather than an implementation detail that may drift with the constant:
+  // comparing against `RETRY_MAX_WAIT_MS` would move both sides together and pin nothing.
+  assert.equal(RETRY_MAX_WAIT_MS, 30_000);
+  assert.equal(retryDelayMs(20), 30_000);
+  // A cooldown longer than that is not shortened here — the caller abandons the attempt instead — so this
+  // function still reports what the endpoint asked for.
+  assert.equal(retryDelayMs(4, 90_000), 90_000);
+});
+
+test('a cooldown of zero is a readable cooldown, not an unreadable value', () => {
+  // `retry-after: 0` is the endpoint saying "come back immediately". It is well-formed, so it parses to 0 and
+  // that is what travels into the failure record — unlike `invalid`, which is discarded rather than guessed at.
+  assert.equal(retryAfterMs('0'), 0);
+  assert.equal(retryAfterMs('0.0'), 0);
+});

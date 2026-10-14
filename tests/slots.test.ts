@@ -191,3 +191,51 @@ test('an unknown slot name is refused instead of silently kept', () => {
   );
   assert.equal(registry.size('composer.above'), 0);
 });
+
+test('a reader receives a frozen snapshot it cannot reorder', () => {
+  const registry = new SlotRegistry<TestSlots>();
+  registry.register('message.actions', labelled('only'));
+  const snapshot = registry.contributions('message.actions');
+  // The next render reads the registry again, so a caller that could sort or splice the array it was handed
+  // would be editing the composition of every later render from the outside.
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.throws(() => (snapshot as unknown as unknown[]).push(labelled('intruder')), TypeError);
+  assert.equal(registry.size('message.actions'), 1);
+});
+
+test('re-rendering with the same contributions keeps the frames it already built', () => {
+  const registry = new SlotRegistry<TestSlots>();
+  const container = new FakeElement('div');
+  registry.register('composer.above', labelled('kept'));
+  const mount = mountSlot(
+    document_,
+    container as unknown as HTMLElement,
+    registry,
+    'composer.above',
+  );
+  mount.render('ctx');
+  const first = container.children[0];
+  assert.ok(first);
+  mount.render('ctx');
+  // Rebuilding the frame replaces the node a panel is living in. In the real window that is where an input
+  // inside a slot loses its focus and a scrolled list jumps back to the top on every re-render, so the frame
+  // is created once and rebuilt only when the set of contributions actually changed.
+  assert.equal(container.children.length, 1);
+  assert.equal(container.children[0], first, 'the frame was rebuilt for an unchanged set');
+});
+
+test('a slot name reaches the DOM as one class that can be selected', () => {
+  const registry = new SlotRegistry<TestSlots>();
+  const container = new FakeElement('div');
+  registry.register('tool.result.extra', labelled('one'));
+  const mount = mountSlot(
+    document_,
+    container as unknown as HTMLElement,
+    registry,
+    'tool.result.extra',
+  );
+  mount.render('ctx');
+  // The dot in a slot name is a namespace separator, not part of a class: leaving it in produces
+  // `slot slot-tool.result.extra`, which is three class tokens, and no stylesheet can select the frame.
+  assert.equal(container.children[0]?.className, 'slot slot-tool-result-extra');
+});

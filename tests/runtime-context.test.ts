@@ -188,9 +188,11 @@ test('the newest announcement of a source is the one the conversation is read ba
     ),
     undefined,
   );
+  // The list is closed on purpose: a snapshot is read back by source, so a new one has to be declared rather than
+  // borrowed, and the completion contract is the one added for a definition a compaction could otherwise swallow.
   assert.deepEqual(
     [...RUNTIME_SNAPSHOT_SOURCES],
-    ['task', 'memory', 'skills', 'workspace-outline'],
+    ['task', 'completion', 'memory', 'skills', 'workspace-outline'],
   );
 });
 

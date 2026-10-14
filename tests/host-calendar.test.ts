@@ -32,6 +32,19 @@ test('one-shot Host approval recovery keeps one logical delivery and records aut
   const task = await client.request('task.create', {
     sessionId: session.id,
     title: 'Create once.txt',
+    /**
+     * A definition the run can satisfy.
+     *
+     * A task with no criteria used to complete on the strength of its own final message; it now needs a criterion
+     * that passes, which is what this test has always been about — the file the approved write produced.
+     */
+    acceptance: [
+      {
+        description: 'once.txt holds the approved content',
+        met: false,
+        check: { id: 'once', kind: 'file-contains', path: 'once.txt', expected: 'approved once' },
+      },
+    ],
   });
   await client.request('task.trigger', {
     sessionId: session.id,

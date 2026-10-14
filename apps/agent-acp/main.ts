@@ -5,6 +5,10 @@ import { ndJsonStream } from '@agentclientprotocol/sdk';
 import { connectAcp } from '../../packages/sdk/acp.ts';
 import { parseArgs } from '../shared/args.ts';
 import { applySandboxDefaults, resolveWorkspace, safeError } from '../shared/runtime.ts';
+import { requireProductEntry } from '../../packages/protocol/product-scope.ts';
+
+// Public ACP delivery is paused; refuse before opening a Host or stdio connection.
+requireProductEntry('acp');
 
 /**
  * What this adapter's own `--help` prints.

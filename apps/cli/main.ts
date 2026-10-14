@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { requireProductEntry } from '../../packages/protocol/product-scope.ts';
 import { createInterface } from 'node:readline/promises';
 import { SESSION_DATABASE_POLICY } from '../../packages/storage/sqlite.ts';
 import {
@@ -60,6 +61,10 @@ import { extensionTools } from '../../packages/resources/extensions.ts';
 import { loadHookRegistry } from '../shared/hooks.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
 import { verifyTaskAcceptance, type TaskBaselines } from '../../packages/core/task-acceptance.ts';
+import { normalizeCompletionSpec } from '../../packages/core/completion-contract.ts';
+
+/** The largest completion contract this CLI will read. A definition, not a payload. */
+const MAX_COMPLETION_SPEC_BYTES = 128 * 1024;
 import { SubAgentResidency } from '../../packages/core/residency.ts';
 import { TerminalSessions } from '../../packages/tools/terminal.ts';
 import { InvariantRegistry } from '../../packages/core/invariants.ts';
@@ -73,6 +78,9 @@ import {
   readMcpOAuthStatus,
   revokeMcpAuthorization,
 } from '../../packages/mcp/oauth.ts';
+
+// Public CLI is paused; refuse before parsing arguments or opening workspace state.
+requireProductEntry('cli');
 
 const help = `YuanTu Agent — independent coding agent (Node.js >=24)
 
@@ -782,6 +790,23 @@ async function main(): Promise<void> {
      * `createAgent`. A terminal only helps here while the process lives, which is exactly one command.
      */
     const terminals = new TerminalSessions(workspace);
+    /**
+     * How much *substantive* tool work the run in flight has done.
+     *
+     * The goal loop uses it to decide whether another automatic round is worth starting: a round that only
+     * narrated, or only rewrote its own checklist and goal, has not moved the work, and continuing would spend a
+     * model request per round to produce nothing. Recording state is not doing work, so `todo`-style, goal
+     * lifecycle and completion progress/scope tools are excluded from the count deliberately.
+     */
+    const NON_SUBSTANTIVE_TOOLS = new Set([
+      'todo_write',
+      'create_goal',
+      'update_goal',
+      'task_step',
+      'completion_step',
+      'completion_scope',
+    ]);
+    let substantiveToolCalls = 0;
     try {
       const agent = await createAgent(
         store,
@@ -795,11 +820,11 @@ async function main(): Promise<void> {
           if (options.json) process.stdout.write(JSON.stringify({ type: 'event', event }) + '\n');
           else if (event.type === 'message.delta')
             process.stdout.write(display(String(event.data.text)));
-          else if (event.type === 'tool.started')
-            process.stderr.write(
-              `\n[tool] ${display(String((event.data.call as { name: string }).name))}\n`,
-            );
-          else if (event.type === 'tool.finished' && event.data.isError)
+          else if (event.type === 'tool.started') {
+            const toolName = (event.data.call as { name: string }).name;
+            if (!NON_SUBSTANTIVE_TOOLS.has(toolName)) substantiveToolCalls += 1;
+            process.stderr.write(`\n[tool] ${display(toolName)}\n`);
+          } else if (event.type === 'tool.finished' && event.data.isError)
             process.stderr.write(`[tool error] ${display(String(event.data.content))}\n`);
           else if (event.type === 'tool.finished' && Array.isArray(event.data.images))
             // A terminal cannot show the picture, but the person should know one was taken and looked at —
@@ -969,6 +994,31 @@ async function main(): Promise<void> {
               : args[0]!
             : args[existing ? 1 : 0]!;
       if (!prompt) throw new Error('Task has no prior run prompt; provide prompt');
+      /**
+       * The completion contract the caller asked for, read and normalized before the run starts.
+       *
+       * Size-bounded before it is parsed: the contract is a definition a person writes, not a payload, and a file
+       * that large is either a mistake or an attempt to make the runtime read something else. It is normalized
+       * here — before any model request — so an invalid or contradictory contract costs nothing to discover.
+       */
+      const completionSpec =
+        options.completionSpec === undefined
+          ? undefined
+          : (() => {
+              const absolute = path.resolve(options.completionSpec!);
+              const stat = statSync(absolute);
+              if (!stat.isFile() || stat.size > MAX_COMPLETION_SPEC_BYTES)
+                throw new Error(
+                  `--completion-spec must be a regular JSON file <= ${String(MAX_COMPLETION_SPEC_BYTES)} bytes`,
+                );
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(readFileSync(absolute, 'utf8'));
+              } catch {
+                throw new Error('--completion-spec must contain valid UTF-8 JSON');
+              }
+              return normalizeCompletionSpec(parsed);
+            })();
       await reconcilePendingFileChanges(store, session.id, workspace);
       if (!options.json) process.stderr.write(`Session: ${session.id}\nWorkspace: ${workspace}\n`);
       for (const failure of await hooks.sessionStart(
@@ -999,6 +1049,7 @@ async function main(): Promise<void> {
         prompt,
         ...(plan ? { planPhase: true, planId: plan.id } : {}),
         ...(executingPlan ? { approvedPlan: executingPlan } : {}),
+        ...(completionSpec === undefined ? {} : { completion: completionSpec }),
         images: validateImages(
           (options.images ?? []).map((file) => {
             const absolute = path.resolve(file);
@@ -1107,6 +1158,16 @@ async function main(): Promise<void> {
             process.stderr.write(`[goal] ${goalLine(verdict)}\n`);
           },
           runOnce: async (prompt) => {
+            /**
+             * A continuation carries the session's contract rather than starting a second one.
+             *
+             * `resumeCompletionId` restores the definition, the budget and the repair clock the previous round
+             * was already spending; without it, round two of a verified request would look like a fresh run with
+             * no evidence, and the repair budget would reset every round — the one thing a bounded loop must not
+             * let happen.
+             */
+            const contract = store.completionCurrent(session.id);
+            substantiveToolCalls = 0;
             result = await agent.run({
               sessionId: session.id,
               prompt,
@@ -1114,9 +1175,11 @@ async function main(): Promise<void> {
               // Started by the runtime to carry the goal forward, not by the user: it may report on the goal but
               // not change who is in charge of it (see `HUMAN_ONLY_GOAL_ACTIONS`).
               authority: 'automatic',
+              ...(contract ? { resumeCompletionId: contract.contractId } : {}),
             });
             report(result);
-            return { status: result.status };
+            // Substantive tool activity is what makes a round progress; a round that only talked stops the loop.
+            return { status: result.status, toolCalls: substantiveToolCalls };
           },
         });
         if (rounds.continuations > 0) {

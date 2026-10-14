@@ -141,3 +141,16 @@ test('stripping comments preserves the line numbers of everything after them', (
 test('the gate passes on this repository', async () => {
   assert.deepEqual(await scanI18n(projectRoot), []);
 });
+
+test('shared carrier modules cannot introduce untranslated copy, including nested modules', async (t) => {
+  const root = await tree({
+    'packages/carrier/service.ts': "throw new Error('连接断开');\n",
+    'packages/carrier/nested/status.ts': "export const status = '正在恢复';\n",
+    'packages/carrier/comments.ts': '// 中文注释\nexport const status = "Ready";\n',
+  });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const problems = await scanI18n(root);
+  assert.equal(problems.length, 2);
+  assert.ok(problems.some((problem) => problem.startsWith('packages/carrier/service.ts:1:')));
+  assert.ok(problems.some((problem) => problem.startsWith('packages/carrier/nested/status.ts:1:')));
+});

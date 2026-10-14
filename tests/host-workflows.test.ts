@@ -12,6 +12,7 @@ import type { AgentEvent, Message } from '../packages/protocol/index.ts';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { isSummaryBody } from './summary-request.ts';
 import { projectRoot } from './process-fixture.ts';
+import { commandPid } from './process-pid-fixture.ts';
 
 // ---- merged from host-workflows.test.ts ----
 
@@ -41,16 +42,36 @@ async function workspace(t: test.TestContext) {
  * never starts still fails here, and the assertion each caller makes afterwards — that this process was killed
  * — is the one that means something.
  */
-async function commandPid(file: string, what: string): Promise<number> {
-  for (let attempt = 0; attempt < 150; attempt++) {
-    try {
-      const pid = Number(await readFile(file, 'utf8'));
-      if (pid > 0) return pid;
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 100));
+test('a foreground readiness check reports early run failure instead of polling for fifteen seconds', async () => {
+  const controller = new AbortController();
+  const finished = Promise.resolve({
+    status: 'failed',
+    error: 'fixture sandbox preparation refused',
+  });
+  const waiting = commandPid('missing-fixture-pid.txt', 'fixture command', {
+    finished,
+    signal: controller.signal,
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await assert.rejects(
+      Promise.race([
+        waiting,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('readiness still waited for its polling deadline')),
+            1_000,
+          );
+        }),
+      ]),
+      /fixture sandbox preparation refused/,
+    );
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    await waiting.catch(() => {});
   }
-  throw new Error(`${what} did not write ${path.basename(file)} within 15s`);
-}
+});
 function clientFor(root: string, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
   return new AgentHostClient({
     nodePath: process.execPath,
@@ -583,7 +604,9 @@ test('Host cancellation after command effects kills the command and retains unce
   await client.start();
   const session = await client.request('session.create', {});
   const running = client.run(session.id, 'Run the foreground command.');
-  const pid = await commandPid(path.join(root, 'pid.txt'), 'the foreground command');
+  const pid = await commandPid(path.join(root, 'pid.txt'), 'the foreground command', {
+    finished: running,
+  });
   await client.request('run.cancel', { sessionId: session.id });
   assert.equal((await running).status, 'cancelled');
   await Promise.all(approvals);
@@ -961,15 +984,30 @@ test('JSONL Host accepts approvals, returns run results and cancels a streaming 
   t.after(() => rm(root, { recursive: true, force: true }));
   let step = 0;
   const url = await httpFixture(t, (_, res) => {
-    if (step++ === 0)
+    /**
+     * Every run records its step before answering.
+     *
+     * A run whose declared step is still pending now repairs rather than completing — which is the point of the
+     * change — so a fixture that only ever writes the file would spend its whole repair budget and then sit on the
+     * hanging response below. The task's own step is checkpointed in the round that does the work, exactly as a
+     * real run is told to.
+     */
+    const index = step++;
+    if (index === 0)
       sendFrames(
         res,
         frames('', [
+          { id: 's0', name: 'task_step', input: { index: 0, status: 'completed' } },
           { id: 'w', name: 'write_file', input: { path: 'approved.txt', content: 'ok' } },
         ]),
       );
-    else if (step === 2) sendFrames(res, frames('Created'));
-    else if (step === 3) sendFrames(res, frames('Retried'));
+    else if (index === 1) sendFrames(res, frames('Created'));
+    else if (index === 2)
+      sendFrames(
+        res,
+        frames('', [{ id: 's1', name: 'task_step', input: { index: 0, status: 'completed' } }]),
+      );
+    else if (index === 3) sendFrames(res, frames('Retried'));
     else {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write(': waiting\n\n');

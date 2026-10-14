@@ -4,7 +4,13 @@ import {
 } from '../../packages/protocol/goals.ts';
 import { isMachineContext } from '../../packages/protocol/context.ts';
 import { validateImages } from '../../packages/protocol/images.ts';
-import type { AgentEvent, RunResult, TaskTriggerSource } from '../../packages/protocol/index.ts';
+import type {
+  AgentEvent,
+  CompletionRepairPolicy,
+  CompletionSpec,
+  RunResult,
+  TaskTriggerSource,
+} from '../../packages/protocol/index.ts';
 import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { PermissionPolicy } from '../../packages/core/permissions.ts';
@@ -146,8 +152,29 @@ export async function startRun(
     throw error;
   }
   let runId = '';
+  /**
+   * How much *substantive* tool work the round in flight has done.
+   *
+   * The goal loop reads it after each automatic round: a round that only narrated, or only rewrote its own
+   * checklist and goal, has not moved the work, and continuing would spend a model request per round to produce
+   * nothing. Recording state is not doing work, so the `todo`-style, goal lifecycle and completion
+   * progress/scope tools are excluded deliberately — counting them would make a stalled round look busy.
+   */
+  const NON_SUBSTANTIVE_TOOLS = new Set([
+    'todo_write',
+    'create_goal',
+    'update_goal',
+    'task_step',
+    'completion_step',
+    'completion_scope',
+  ]);
+  let substantiveToolCalls = 0;
   const emit = (event: AgentEvent) => {
     runId = event.runId;
+    if (event.type === 'tool.started') {
+      const name = (event.data.call as { name?: string } | undefined)?.name;
+      if (name && !NON_SUBSTANTIVE_TOOLS.has(name)) substantiveToolCalls += 1;
+    }
     // Kept for `invariants.list`: the run reports its own failure, but a host outlives the run and an
     // operator asking "does this deployment currently satisfy its promises" needs an answer afterwards.
     if (event.type === 'invariant.violated')
@@ -245,6 +272,20 @@ export async function startRun(
         ? { taskTrigger: params.trigger as TaskTriggerSource }
         : {}),
       ...(params.resume === true ? { resumeTask: true } : {}),
+      // The completion contract, when the caller supplied one. A task carries its own and refuses these; a plan
+      // run may add checks without rewriting the approved steps; a plain request may ask to be verified at all.
+      ...(params.completion === undefined
+        ? {}
+        : { completion: params.completion as CompletionSpec }),
+      ...(typeof params.resumeCompletionId === 'string'
+        ? { resumeCompletionId: params.resumeCompletionId }
+        : {}),
+      ...(params.completionRepairPolicy === undefined
+        ? {}
+        : { completionRepairPolicy: params.completionRepairPolicy as CompletionRepairPolicy }),
+      ...(Array.isArray(params.completionInputs)
+        ? { completionInputs: params.completionInputs.map(String) }
+        : {}),
       images: validateImages(params.images),
       signal: controller.signal,
     });
@@ -304,13 +345,20 @@ export async function startRun(
         runOnce: async (prompt) => {
           // Another round of the same goal, started by the runtime rather than by the user: it may carry
           // the work forward and report on the goal, but not re-aim it or undo a pause.
+          //
+          // The session's contract travels with it. `resumeCompletionId` restores the definition, the budget and
+          // the repair clock the previous round was already spending, so round two of a verified request is the
+          // same contract in a new run rather than a fresh one with no evidence and a reset budget.
+          const contract = ctx.store.completionCurrent(sessionId);
+          substantiveToolCalls = 0;
           outcome = await agent.run({
             sessionId,
             prompt,
             signal: controller.signal,
             authority: 'automatic',
+            ...(contract ? { resumeCompletionId: contract.contractId } : {}),
           });
-          return { status: outcome.status };
+          return { status: outcome.status, toolCalls: substantiveToolCalls };
         },
       });
       if (rounds.continuations > 0)

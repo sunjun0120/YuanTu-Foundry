@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "nodeVersion": "24.19.0",
+  "archive": {
+    "name": "node-v24.19.0.tar.xz",
+    "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0.tar.xz",
+    "sha256": "f6d95e10a0431ee1067fc6aabe9f762908b4716dd35324e1ddb4b1466b76659f"
+  },
+  "checksumsUrl": "https://nodejs.org/dist/v24.19.0/SHASUMS256.txt.asc",
+  "releaseSigner": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+  "releaseKeyUrl": "https://raw.githubusercontent.com/nodejs/release-keys/HEAD/keys/5BE8A3F6C8A5C01D106C0AD820B1A390B168D356.asc",
+  "patch": {
+    "name": "libuv-2cadaa40167050baf7c6905ac897e6fb57afb2c6.patch",
+    "url": "https://github.com/libuv/libuv/commit/2cadaa40167050baf7c6905ac897e6fb57afb2c6.patch",
+    "commit": "2cadaa40167050baf7c6905ac897e6fb57afb2c6",
+    "sha256": "69c9776d5d93346620e71019ad8931e949427d06d4dca1213f3f517af9027327",
+    "file": "deps/uv/src/win/pipe.c",
+    "originalSha256": "a712502b4bc71ad994e1c639fcba386ac1748ab8dcb693038d0203dbdbfe107a",
+    "patchedSha256": "6375fa10b714e4e0e0b76fa58e33e936e1ad3d70ddf5b44b325baf2ee20aafb0"
+  },
+  "licenseSha256": "148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5"
+}

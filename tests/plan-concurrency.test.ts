@@ -166,3 +166,56 @@ test('accepted submission returns its own decision rather than a subsequent reje
   };
   assert.equal(first.submitPlan('session', plan.id, body).status, 'proposed');
 });
+
+test('a submission cannot revive a plan that was already decided', (t) => {
+  const { first } = connectedPlans(t);
+  // Both decided states matter: re-submitting overwrites the row with new text and moves it back to
+  // `proposed`, so a second approval could be granted without anyone re-reading the first decision.
+  for (const decide of ['rejected', 'approved'] as const) {
+    const plan = first.createPlan('session');
+    const proposed = first.submitPlan('session', plan.id, body);
+    if (decide === 'rejected') first.rejectPlan('session', plan.id, 'Declined');
+    else first.approvePlan('session', plan.id, proposed.hash);
+    assert.throws(
+      () => first.submitPlan('session', plan.id, competingBody),
+      new RegExp(`already ${decide}`, 'i'),
+    );
+    const remaining = first.getPlan('session', plan.id);
+    assert.equal(remaining.status, decide);
+    assert.equal(remaining.title, body.title);
+  }
+});
+
+test('a rejection cannot overwrite a plan a human already decided', (t) => {
+  const { first } = connectedPlans(t);
+  const plan = first.createPlan('session');
+  const proposed = first.submitPlan('session', plan.id, body);
+  const approved = first.approvePlan('session', plan.id, proposed.hash);
+  // Overwriting the row here would erase the approval record while leaving the plan text the human read.
+  assert.throws(() => first.rejectPlan('session', plan.id, 'Changed my mind'), /already approved/i);
+  const stillApproved = first.getPlan('session', plan.id);
+  assert.equal(stillApproved.status, 'approved');
+  assert.equal(stillApproved.approvedAt, approved.approvedAt);
+  assert.equal(stillApproved.reason, undefined);
+  // The same guard covers re-rejecting: a second reason must not replace the recorded one.
+  const other = first.createPlan('session');
+  first.submitPlan('session', other.id, body);
+  first.rejectPlan('session', other.id, 'First reason');
+  assert.throws(() => first.rejectPlan('session', other.id, 'Second reason'), /already rejected/i);
+  assert.equal(first.getPlan('session', other.id).reason, 'First reason');
+});
+
+test('an approved plan stops being executable once its body changes', (t) => {
+  const { first, secondDb } = connectedPlans(t);
+  const plan = first.createPlan('session');
+  const proposed = first.submitPlan('session', plan.id, body);
+  first.approvePlan('session', plan.id, proposed.hash);
+  assert.equal(first.executablePlan('session', plan.id).status, 'approved');
+  // The status alone cannot tell whether the text is still the approved text, so the digest is what
+  // stops an edit between approval and execution from running work nobody reviewed. Written through a
+  // second connection because that is the path the plan API does not cover.
+  secondDb
+    .prepare('UPDATE plans SET steps=? WHERE session_id=? AND id=?')
+    .run(JSON.stringify(['Edited after approval']), 'session', plan.id);
+  assert.throws(() => first.executablePlan('session', plan.id), /body changed after approval/i);
+});

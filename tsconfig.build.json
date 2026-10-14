@@ -10,5 +10,5 @@
     "sourceMap": true
   },
   "include": ["packages/**/*.ts", "apps/**/*.ts"],
-  "exclude": ["tests"]
+  "exclude": ["tests", "apps/cli", "apps/web", "apps/agent-acp", "packages/sdk"]
 }

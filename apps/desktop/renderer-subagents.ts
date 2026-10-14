@@ -41,6 +41,10 @@ export function setupSubAgents(
   const chatTitle = required('chat-title');
   const note = required('subagent-transcript-note');
   const body = required('subagent-transcript-messages');
+  const processHistory = required<HTMLDetailsElement>('subagent-transcript-process');
+  const processTitle = required('subagent-transcript-process-title');
+  const resultTitle = required('subagent-transcript-result-title');
+  const resultBody = required('subagent-transcript-result-body');
   const liveMessage = document.createElement('div');
   liveMessage.className = 'message assistant subagent-live';
   const liveContent = document.createElement('div');
@@ -227,6 +231,7 @@ export function setupSubAgents(
     if (!view.childSessionId) return;
     if (page === null) pageScroll = conversation.scrollTop;
     page = { id: view.id, childSessionId: view.childSessionId, objective: view.objective };
+    processHistory.open = false;
     viewerKey = '';
     storedAssistantCount = -1;
     send({
@@ -397,12 +402,14 @@ export function setupSubAgents(
     const nearBottom =
       conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 90;
     const selected = page;
-    const text = selected
-      ? (live.get(selected.id) ?? views.find((entry) => entry.id === selected.id)?.text ?? '')
-      : '';
+    const view = selected ? views.find((entry) => entry.id === selected.id) : undefined;
+    const text =
+      selected && (view?.status === 'running' || (view && running(view)))
+        ? (live.get(selected.id) ?? views.find((entry) => entry.id === selected.id)?.text ?? '')
+        : '';
     liveContent.textContent = text;
     liveMessage.hidden = !text;
-    if (page && text && liveMessage.parentElement !== body) body.append(liveMessage);
+    if (page && text && liveMessage.parentElement !== resultBody) resultBody.append(liveMessage);
     if (nearBottom && page) conversation.scrollTop = conversation.scrollHeight;
   }
   function paintLiveTool(): void {
@@ -425,21 +432,43 @@ export function setupSubAgents(
     if (page === null) {
       viewerKey = '';
       body.replaceChildren();
+      resultBody.replaceChildren();
       liveMessage.hidden = true;
       liveTool.remove();
       return;
     }
-    const next = JSON.stringify([transcript, locale(), page.childSessionId]);
+    const view = views.find((entry) => entry.id === page?.id);
+    const status = view?.status ?? transcript?.status;
+    const next = JSON.stringify([
+      transcript,
+      locale(),
+      page.childSessionId,
+      status,
+      view?.report,
+      view?.error,
+      view?.workspace,
+      getState()?.session.running,
+      getState()?.session.loading,
+      getState()?.error,
+      processHistory.open,
+    ]);
     if (next === viewerKey) return;
     const nearBottom =
       body.querySelector('.message') !== null &&
       conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 90;
     viewerKey = next;
+    resultTitle.textContent = t(
+      status === 'running' ? 'subagent.liveProgress' : 'subagent.finalResult',
+    );
     // The record arrives on a round trip: the page is already on screen when the command is sent, and a blank
     // body would read as "this child recorded nothing" rather than "the answer is still coming".
     if (!transcript || transcript.childSessionId !== page.childSessionId) {
       note.textContent = t('subagent.transcriptLoading');
+      processTitle.textContent = t('subagent.process');
       body.replaceChildren();
+      resultBody.replaceChildren(
+        element('p', t('subagent.transcriptLoading'), 'subagent-result-empty'),
+      );
       paintLive();
       paintLiveTool();
       return;
@@ -454,13 +483,88 @@ export function setupSubAgents(
     const assistantCount = messages.filter((message) => message.role === 'assistant').length;
     if (storedAssistantCount >= 0 && assistantCount > storedAssistantCount) live.set(page.id, '');
     storedAssistantCount = assistantCount;
-    body.replaceChildren(...messages.map(renderMessage));
+    // A tool request, reasoning-only message or interrupted answer is a process record, not a
+    // final reply. Read the final prose from the stored tail so a bounded live preview cannot clip it.
+    const report = view?.report ?? transcript.report;
+    const finalMessage =
+      status === 'completed' && !report
+        ? [...messages]
+            .reverse()
+            .find(
+              (message) =>
+                message.role === 'assistant' &&
+                message.content.trim() &&
+                !message.toolCalls?.length &&
+                !message.interrupted,
+            )
+        : undefined;
+    const processMessages = messages.flatMap((message): Message[] => {
+      if (message !== finalMessage) return [message];
+      // Only the answer moves to the result section; its reasoning still belongs to the process.
+      return message.role === 'assistant' && message.reasoning ? [{ ...message, content: '' }] : [];
+    });
+    processTitle.textContent = t(
+      transcript.truncated ? 'subagent.processRecentCount' : 'subagent.processCount',
+      { count: processMessages.length },
+    );
+    // Keep the outer details node across updates, and render its bounded history only on expansion.
+    body.replaceChildren(...(processHistory.open ? processMessages.map(renderMessage) : []));
+    resultBody.replaceChildren();
+    if (report && status !== 'running') resultBody.append(findings(report));
+    else if (finalMessage)
+      resultBody.append(
+        renderMessage({ role: 'assistant', content: finalMessage.content, toolCalls: [] }),
+      );
+    else
+      resultBody.append(
+        element(
+          'p',
+          view?.error ??
+            transcript.error ??
+            t(status === 'running' ? 'subagent.finalPending' : 'subagent.finalEmpty'),
+          'subagent-result-empty',
+        ),
+      );
+    if (view?.workspace?.kind === 'worktree' && view.status !== 'running') {
+      const actions = element('div', '', 'subagent-workspace-actions');
+      const available =
+        view.workspace.state === 'ready'
+          ? (['archive'] as const)
+          : view.workspace.state === 'archived'
+            ? (['remove', 'restore'] as const)
+            : ['removed', 'blocked'].includes(view.workspace.state)
+              ? (['restore'] as const)
+              : [];
+      for (const action of available) {
+        const button = element(
+          'button',
+          t(`subagent.workspace.action.${action}`),
+          'secondary',
+        ) as HTMLButtonElement;
+        button.type = 'button';
+        button.dataset.workspaceAction = action;
+        button.disabled = Boolean(getState()?.session.running || getState()?.session.loading);
+        button.addEventListener('click', () => {
+          if (action === 'remove' && !window.confirm(t('subagent.workspace.removeConfirm'))) return;
+          button.disabled = true;
+          send({
+            type: 'subagentWorkspace',
+            subagentId: view.id,
+            childSessionId: view.childSessionId!,
+            action,
+          });
+        });
+        actions.append(button);
+      }
+      resultBody.append(actions);
+    }
     paintLive();
     paintLiveTool();
-    if (!messages.length && liveMessage.hidden)
+    if (processHistory.open && !processMessages.length)
       body.append(element('p', t('subagent.transcriptEmpty'), 'subagent-transcript-empty'));
     if (nearBottom) conversation.scrollTop = conversation.scrollHeight;
   }
+  processHistory.addEventListener('toggle', () => renderViewer());
   /**
    * Open one child's record as a page, and go back by the header's own title.
    *
@@ -619,6 +723,57 @@ export function setupSubAgents(
                 );
               }
               if (view.error) card.append(element('div', view.error, 'subagent-error'));
+              /**
+               * Where this child worked, said plainly.
+               *
+               * The two labels are deliberately not symmetrical, because the two situations are not: an isolated
+               * child's changes are *not* in the parent's change list until somebody imports them, while a shared
+               * child's already are. A card that showed both as "done" would have a person looking for work in a
+               * list that does not have it.
+               */
+              if (view.workspace) {
+                const where = element(
+                  'div',
+                  view.workspace.kind === 'worktree'
+                    ? format(t('subagent.workspace.isolated'), {
+                        path: view.workspace.executionRoot,
+                      })
+                    : t('subagent.workspace.shared'),
+                  'subagent-workspace',
+                );
+                where.dataset.kind = view.workspace.kind;
+                where.dataset.state = view.workspace.state;
+                if (view.workspace.problem) {
+                  where.append(
+                    element(
+                      'span',
+                      format(t('subagent.workspace.problem'), { reason: view.workspace.problem }),
+                      'subagent-workspace-problem',
+                    ),
+                  );
+                }
+                if (view.workspace.dependencyWarning) {
+                  where.append(
+                    element(
+                      'span',
+                      t('subagent.workspace.dependenciesMissing'),
+                      'subagent-workspace-problem',
+                    ),
+                  );
+                }
+                if (view.workspace.result) {
+                  where.append(
+                    element(
+                      'span',
+                      format(t(`subagent.workspace.result.${view.workspace.result.status}`), {
+                        count: view.workspace.result.paths.length,
+                      }),
+                      'subagent-workspace-result',
+                    ),
+                  );
+                }
+                card.append(where);
+              }
               // Tokens and time matter to the person paying for them: the parent run is charged for every
               // child, and a card that showed only rounds and tool calls hid the expensive ones.
               const meta = element('div', '', 'subagent-meta');

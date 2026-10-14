@@ -251,6 +251,56 @@ export function setupTranscript(options: {
       if (steps) steps.scrollTop = processScroll.get(group.dataset.processKey!) ?? 0;
     }
   }
+  /**
+   * What the session's completion contract currently says, as one line under the transcript.
+   *
+   * The point of the line is the distinction it draws that the transcript cannot: a run that ended is not a request
+   * that was met. Four states get four sentences — verified, unverified, needs review, repair limit reached — and
+   * a session with no contract says so rather than borrowing any of them. Nothing internal is shown: no hash, no
+   * attempt id, no effect id, because none of them help the person decide whether to trust the work.
+   */
+  function completionNotice(): HTMLElement | null {
+    const completion = options.getState()?.session.completion ?? null;
+    if (!completion) return null;
+    const summary = completion.summary;
+    const element = node('div', '', `completion-notice completion-${summary.state}`);
+    element.append(
+      node('strong', `${t('ui.completionTitle')} · ${t(`ui.completionState.${summary.state}`)}`),
+    );
+    if (completion.definition.objective)
+      element.append(
+        node('p', t('ui.completionObjective', { objective: completion.definition.objective })),
+      );
+    const done = completion.steps.filter((step) => step.status === 'completed').length;
+    if (completion.steps.length)
+      element.append(
+        node(
+          'p',
+          t('ui.completionSteps', { done: String(done), total: String(completion.steps.length) }),
+        ),
+      );
+    if (summary.unfinishedStepIds.length)
+      element.append(
+        node('p', t('ui.completionUnfinished', { steps: summary.unfinishedStepIds.join(', ') })),
+      );
+    if (summary.failedCheckIds.length)
+      element.append(
+        node('p', t('ui.completionFailedChecks', { checks: summary.failedCheckIds.join(', ') })),
+      );
+    // A budget is only worth showing once it is being spent: a verified contract with no repairs does not need to
+    // tell the reader how many attempts it was allowed.
+    if (completion.policy.maxRepairRounds > 0 && summary.repairRounds > 0)
+      element.append(
+        node(
+          'p',
+          t('ui.completionRepairs', {
+            used: String(summary.repairRounds),
+            max: String(completion.policy.maxRepairRounds),
+          }),
+        ),
+      );
+    return element;
+  }
   function render(messages: Message[], startIndex: number, runPaused: boolean): void {
     reconcileChildren(required('messages'), [
       ...transcriptViews(messages, startIndex),
@@ -259,6 +309,9 @@ export function setupTranscript(options: {
        * after the last thing that happened. `renderPaused` is the only place this sentence is written.
        */
       ...(runPaused ? [node('p', t('ui.runPaused'), 'run-paused')] : []),
+      // …and the contract's verdict last, because it is the answer to the question the whole transcript is read
+      // for: whether any of this was verified.
+      ...(completionNotice() ? [completionNotice()!] : []),
     ]);
     restoreScroll();
   }

@@ -1,39 +1,74 @@
 import type { UiLanguage } from './ui-settings.ts';
+import type { CarrierErrorCode } from '../../packages/carrier/errors.ts';
 
 type Listener = () => void;
 export type TranslationValues = Record<string, string | number>;
 type Pair = [string, string];
+const carrierMessages: Record<`carrier.${CarrierErrorCode}`, Pair> = {
+  'carrier.hostExited': [
+    'Agent Host 意外退出，请重新启动应用。',
+    'Agent Host exited unexpectedly; restart the application.',
+  ],
+  'carrier.hostDisconnected': [
+    '与 Agent Host 的连接已断开；请让启动它的载体重新连接。',
+    'The Agent Host connection was lost; ask the carrier that started it to reconnect.',
+  ],
+  'carrier.policyUnsupported': [
+    'Agent Host 不确认文件/网络执行策略（缺少 execution-policy-files-network-v1）；请升级 Agent Host 后重新选择该档位。',
+    'Agent Host does not acknowledge file/network execution policy (missing execution-policy-files-network-v1); upgrade Agent Host and select the preset again.',
+  ],
+  'carrier.policyMismatch': [
+    'Agent Host 未按请求确认执行策略（请求 {requested}，回执 {received}）；策略状态未知，在重新确认前不再执行。',
+    'Agent Host did not confirm the requested execution policy (requested {requested}, received {received}); policy status is unknown and execution is blocked until it is confirmed again.',
+  ],
+  'carrier.hostRecoveryFailed': [
+    'Agent Host 意外退出，自动重启失败；请重新启动应用。',
+    'Agent Host exited unexpectedly and automatic restart failed; restart the application.',
+  ],
+  'carrier.hostRecovering': [
+    'Agent Host 正在自动重启，请稍候。',
+    'Agent Host is restarting automatically; please wait.',
+  ],
+  'carrier.hostNotReady': [
+    'Agent Host 尚未就绪，请重新启动应用。',
+    'Agent Host is not ready; restart the desktop',
+  ],
+  'carrier.policyUnconfirmed': [
+    '执行策略尚未确认：上次沙箱选择未获 Agent Host 确认，请重新选择档位并确认后再运行。',
+    'Execution policy is unconfirmed: Agent Host did not acknowledge the last sandbox selection. Select and confirm a preset before running again.',
+  ],
+  'carrier.modelNotConfigured': [
+    '请打开“模型设置”，填写接口地址、模型 ID 和 API 密钥。',
+    'Open Model settings and enter an endpoint, model ID and API key.',
+  ],
+  'carrier.draftPlanningFailed': [
+    '草稿已保存，自动规划未完成；可编辑后执行。{message}',
+    'The draft was saved, but automatic planning did not finish; edit it before execution. {message}',
+  ],
+  'carrier.sessionRequired': ['请先创建或打开会话。', 'Create or load a session first'],
+  'carrier.subagentNotInSession': [
+    '该子代理不属于当前会话。',
+    'That sub-agent does not belong to this session',
+  ],
+  'carrier.sessionOperationBusy': [
+    '会话操作正在进行，请稍候。',
+    'Session operation is in progress',
+  ],
+  'carrier.runBusy': [
+    '请等待当前运行或加载操作结束。',
+    'Wait for the current run or loading operation to finish',
+  ],
+  'carrier.operationBusy': ['请等待当前操作结束。', 'Wait for the current operation to finish'],
+  'carrier.taskNotFound': ['任务不存在。', 'Task not found'],
+  'carrier.shellCommand': [
+    '此命令应由应用界面处理。',
+    'This command belongs to the carrier shell, not the carrier service',
+  ],
+};
 const messages: Record<string, Pair> = {
+  ...carrierMessages,
   'backup.title': ['数据备份', 'Data backups'],
-  'backup.description': [
-    '为当前工作区保留会话快照，查看备份或恢复数据。',
-    'Keep session snapshots for the current workspace, inspect backups or restore data.',
-  ],
-  'backup.enabled': ['启用每日备份', 'Enable daily backups'],
-  'backup.scheduleNote': [
-    '默认关闭。启用后，在应用打开且距上次备份超过 24 小时时自动备份；每 15 分钟检查。保留最近 5 份，总计不超过 512 MB。',
-    'Off by default. While the app is open, a backup is made after 24 hours since the latest snapshot, checked every 15 minutes. Keep up to 5 snapshots within 512 MB.',
-  ],
-  'backup.scope': [
-    '包含数据库内的会话、记录和图片。工作区文件、外部附件及应用设置需另行备份。恢复前请结束运行并关闭使用同一工作区的其他 Host/CLI。',
-    'Includes sessions, records and images stored in the database. Back up workspace files, external attachments and app settings separately. Finish runs and close other Hosts/CLIs using this workspace before restoring.',
-  ],
-  'backup.list': ['可恢复的备份（从新到旧）', 'Available backups (newest first)'],
-  'backup.empty': ['尚无备份', 'No backups yet'],
-  'backup.create': ['立即备份', 'Back up now'],
-  'backup.refresh': ['刷新列表', 'Refresh'],
   'backup.restore': ['恢复所选备份', 'Restore selected backup'],
-  'backup.working': ['正在处理…', 'Working…'],
-  'backup.saved': ['备份设置或快照已保存。', 'Backup settings or snapshot saved.'],
-  'backup.cancelled': ['已取消恢复。', 'Restore cancelled.'],
-  'backup.failed': [
-    '备份连接中断，请刷新后重试。',
-    'Backup connection interrupted. Refresh and try again.',
-  ],
-  'backup.restored': [
-    '已恢复备份。恢复前的数据副本保留在：{path}',
-    'Backup restored. The previous data is preserved at: {path}',
-  ],
   'backup.reconnectFailed': [
     '数据已恢复，但桌面重连失败，请重启应用。恢复前的数据副本保留在：{path}',
     'Data restored, but desktop reconnection failed. Restart the app. The previous data is preserved at: {path}',
@@ -221,8 +256,8 @@ const messages: Record<string, Pair> = {
     'Administrator initialization requires a signed release in a protected installation directory.',
   ],
   'sandboxSetup.runtime': [
-    '当前版本的运行时尚不兼容增强隔离，请使用兼容的签名安装版本。',
-    'This runtime is not compatible with enhanced isolation. Use a compatible signed release.',
+    '无法验证当前安装包的运行时，请修复安装或使用可信的签名版本。',
+    'The installed runtime could not be verified. Repair the installation or use a trusted signed release.',
   ],
   'sandboxSetup.release': [
     '安装位置或发布签名未通过检查，无法进行管理员初始化。',
@@ -374,6 +409,20 @@ const messages: Record<string, Pair> = {
   ],
   'ui.toolCardLimited': ['结果被截断，不是全部匹配', 'truncated: these are not all the matches'],
   'ui.toolCardNoMatches': ['没有匹配', 'no matches'],
+  /**
+   * Three statements about a search that are not the same statement.
+   *
+   * `coverageUnknown` is what a result written before coverage existed says: the scan happened, and whether it
+   * reached the end of the workspace is simply not recorded. `incomplete` is a scan that stopped early and knows
+   * why. Neither may be rendered as the other, and neither may be rendered as "no matches" — which is why the
+   * card shows one of these instead of staying silent.
+   */
+  'ui.toolCardCoverageUnknown': ['扫描范围未记录', 'scan coverage not recorded'],
+  'ui.toolCardIncomplete': ['扫描不完整：{reasons}', 'incomplete scan: {reasons}'],
+  'ui.toolCardOutputTruncated': [
+    '返回结果已按输出预算截断',
+    'the returned matches were cut to the output budget',
+  ],
   'ui.toolCardExit': ['退出码 {code}', 'exit {code}'],
   'ui.toolCardSignal': ['被 {signal} 终止', 'killed by {signal}'],
   'ui.toolCardUnknownExit': ['退出码未知', 'exit code unknown'],
@@ -526,8 +575,35 @@ const messages: Record<string, Pair> = {
     "Read-only: this is the full transcript of the sub-agent's own session.",
   ],
   'subagent.transcriptTruncated': [
-    '记录过长，只显示开头部分。',
-    'The transcript was long, so only the beginning is shown.',
+    '过程记录较长，此处展示最近记录。最终结果单独展示。',
+    'Recent process records are shown here. The final result is displayed separately.',
+  ],
+  'subagent.workspace.dependenciesMissing': [
+    '隔离副本尚未安装项目依赖；需要依赖的检查须先审批安装。',
+    'Project dependencies are not installed in this isolated copy; approve a local install before checks that need them.',
+  ],
+  'subagent.process': ['执行过程', 'Execution history'],
+  'subagent.workspace.action.archive': ['归档工作区', 'Archive workspace'],
+  'subagent.workspace.action.remove': ['清理已归档目录', 'Remove archived directory'],
+  'subagent.workspace.action.restore': ['恢复工作区', 'Restore workspace'],
+  'subagent.workspace.removeConfirm': [
+    '清理这个已归档的子代理目录？源码将保存到可恢复快照；未能保存的文件会阻止清理。',
+    'Remove this archived sub-agent directory? Source files will be saved in a recoverable snapshot; files that cannot be preserved prevent removal.',
+  ],
+  'subagent.processCount': ['执行过程 · {count} 条记录', 'Execution history · {count} records'],
+  'subagent.processRecentCount': [
+    '执行过程 · 最近 {count} 条记录',
+    'Execution history · latest {count} records',
+  ],
+  'subagent.finalResult': ['最终结果', 'Final result'],
+  'subagent.liveProgress': ['当前进展', 'Current progress'],
+  'subagent.finalPending': [
+    '子代理仍在运行，完成后显示最终结果。',
+    'The sub-agent is running. Its final result will appear when it finishes.',
+  ],
+  'subagent.finalEmpty': [
+    '该子代理没有生成最终结果。',
+    'This sub-agent did not produce a final result.',
   ],
   'subagent.transcriptEmpty': ['该子代理还没有任何记录。', 'The sub-agent recorded no messages.'],
   'subagent.transcriptLoading': ['正在载入记录…', 'Loading the record…'],
@@ -542,6 +618,37 @@ const messages: Record<string, Pair> = {
   'subagent.message.assistant': ['子代理回复', 'Sub-agent reply'],
   'subagent.message.tool': ['工具', 'Tool'],
   'subagent.attribution': ['子代理：{objective}', 'Sub-agent: {objective}'],
+  /**
+   * Where a sub-agent worked, and what happened to its work.
+   *
+   * The two "where" labels are not translations of each other and must not be collapsed: one promises that the
+   * child's changes are somewhere else and have to be imported, the other says there is no separation at all. A
+   * person reading "isolated" over a shared child would look in the wrong pane for its work.
+   */
+  'subagent.workspace.isolated': ['独立工作区：{path}', 'Isolated workspace: {path}'],
+  'subagent.workspace.shared': [
+    '共享工作区：与本次会话同一目录，改动直接出现在变更列表里，不做隔离',
+    'Shared workspace: the same directory as this session, so its changes appear directly in the change list — not isolated',
+  ],
+  'subagent.workspace.problem': ['工作区不可用：{reason}', 'Workspace unusable: {reason}'],
+  'subagent.workspace.result.ready': [
+    '成果待合入（{count} 个路径）',
+    'Result awaiting import ({count} path(s))',
+  ],
+  'subagent.workspace.result.unsupported': [
+    '成果无法自动合入（{count} 个路径），请在子代理目录中人工处理',
+    'Result cannot be imported automatically ({count} path(s)); review the sub-agent’s directory instead',
+  ],
+  'subagent.workspace.result.applying': ['正在合入', 'Import in progress'],
+  'subagent.workspace.result.applied': ['已合入', 'Imported'],
+  'subagent.workspace.result.conflict': [
+    '合入冲突：目标文件已被修改，未写入任何文件',
+    'Import conflict: the target files changed, so nothing was written',
+  ],
+  'subagent.workspace.result.superseded': [
+    '已被该子代理后续回合取代',
+    'Superseded by a later turn of this sub-agent',
+  ],
   'ui.resumeUndo': ['继续完成恢复', 'Resume the interrupted undo'],
   'ui.undoInterrupted': [
     '上次撤销被中断（应用被关闭或进程意外结束），文件可能只恢复了一部分；可继续完成恢复。',
@@ -676,6 +783,30 @@ const messages: Record<string, Pair> = {
     'The goal survives the run: while it stays active, the runtime starts the next round on its own until the budget or the user stops it.',
   ],
   'ui.deliverablesTitle': ['交付物', 'Deliverables'],
+  /**
+   * The completion contract, in the words a person decides with.
+   *
+   * Five states and not one: "the run ended", "the acceptance passed", "nothing has verified this", "a person has
+   * to look", and "this run is not allowed to keep trying". Collapsing any two of them is how the old UI could
+   * show "done" for work nobody had checked — which is the failure the whole contract exists to remove. Nothing
+   * here shows a hash, an attempt id or an effect id: a reader deciding whether to trust the work is not served by
+   * the runtime's bookkeeping.
+   */
+  'ui.completionTitle': ['验收状态', 'Verification'],
+  'ui.completionState.verified': ['验收通过', 'Verified'],
+  'ui.completionState.unverified': ['尚未验证', 'Not verified'],
+  'ui.completionState.needs_review': ['需要审查', 'Needs review'],
+  'ui.completionState.limited': ['达到修复限制', 'Repair limit reached'],
+  'ui.completionObjective': ['目标：{objective}', 'Objective: {objective}'],
+  'ui.completionSteps': ['步骤 {done}/{total} 已完成', '{done} of {total} step(s) done'],
+  'ui.completionRepairs': ['已修复 {used}/{max} 轮', '{used} of {max} repair round(s) used'],
+  'ui.completionUnfinished': ['未完成步骤：{steps}', 'Unfinished steps: {steps}'],
+  'ui.completionFailedChecks': ['未通过的检查：{checks}', 'Failed checks: {checks}'],
+  'ui.completionRunEnded': ['本轮已结束', 'This run has ended'],
+  'ui.completionNoContract': [
+    '本次运行没有验收契约：上面是本轮的回答，不代表需求已被验证。',
+    'This run carried no acceptance contract: the answer above is not evidence that the request was met.',
+  ],
   'ui.sessionUsage': ['会话用量统计', 'Session usage'],
   'settings.keyStoredLocally': [
     '密钥将使用系统加密存储保存在本机。',

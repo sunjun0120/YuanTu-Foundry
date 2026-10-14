@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { AgentHostClient, HostDisconnectedError } from '../packages/sdk/index.ts';
+import { AgentHostClient, HostDisconnectedError } from '../packages/client/host-client.ts';
 import { fileChangeAction, undoConfirmKey } from '../packages/client/change-actions.ts';
 import { translate } from '../apps/desktop/i18n.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';

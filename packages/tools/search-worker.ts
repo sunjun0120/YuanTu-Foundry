@@ -1,69 +1,78 @@
 import { parentPort, workerData } from 'node:worker_threads';
-import { open } from 'node:fs/promises';
+import { scanText, searchOptions } from '../search/text.ts';
+import type { FileEntry, WorkspaceAccess } from '../search/types.ts';
 
+/**
+ * The regular-expression backend, still a worker thread and still interruptible.
+ *
+ * `regex` mode has always run out of process, and for a reason that has not changed: a pattern with nested
+ * quantifiers can take exponential time on one line, and the only way to stop that from the outside is to kill
+ * the thread. What *has* changed is that the worker no longer reads a 256000-byte prefix of each file — it calls
+ * the same streaming scanner the literal path uses, so a match past the old prefix is found here too, and the
+ * coverage it returns is the same shape the literal path returns.
+ *
+ * This file deliberately imports `../search/text.ts` rather than `./files.ts`: pulling the tool module in would
+ * load the registry, Ajv and every sibling tool into a thread whose whole job is to read files and match lines.
+ * The search package has no such dependencies, which is exactly why it can be shared this way.
+ */
 interface SearchInput {
+  root: string;
   files: { path: string; label: string }[];
   query: string;
   sensitive: boolean;
   limit: number;
-}
-
-/**
- * One match, as data.
- *
- * The worker used to format each hit into `label:line: text` and the tool printed that string. The tool now
- * builds the text form itself, from these fields, for two reasons: a result has to carry the match as a value
- * for a client to list, and re-parsing `path:line: text` back out of a string would break on the first path
- * that contains a colon — which on Windows is every absolute path there is.
- */
-interface Match {
-  path: string;
-  line: number;
-  text: string;
+  maxScanBytes: number;
+  /** The worker's own budget. Kept below the caller's hard timeout so partial results beat a killed thread. */
+  timeoutMs: number;
+  maxOutputChars: number;
 }
 
 const input = workerData as SearchInput;
-/**
- * The query as a pattern, which is the only thing `regex` mode ever sends here.
- *
- * This expression must stay `new RegExp(pattern, sensitive ? '' : 'i')`: `./files.ts` matches both of its modes
- * through this same expression — escaping the query first when the mode is `literal` — so the `i` flag is the
- * one case-insensitive rule the two share. The flag is not locale-aware and lowercasing is, which is exactly
- * how the two modes came to disagree about one file on some hosts; a fold added on either side would reopen it.
- */
-const expression = new RegExp(input.query, input.sensitive ? '' : 'i');
-const matches: Match[] = [];
-let limited = false;
 
-for (const file of input.files) {
-  let text: string;
-  try {
-    const handle = await open(file.path, 'r');
-    try {
-      const buffer = Buffer.alloc(256_001);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      text = buffer.subarray(0, Math.min(bytesRead, 256_000)).toString('utf8');
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    continue;
-  }
-  if (text.includes('\0')) continue;
-  const lines = text.split(/\r?\n/);
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]!;
-    if (!expression.test(line)) continue;
-    // 500 characters, kept in step with `MAX_MATCH_TEXT` in `./files.ts`: this file is loaded in a worker
-    // thread, and importing the tool module to share one number would load the registry, Ajv and every sibling
-    // tool into a thread whose whole job is to read files and match lines.
-    matches.push({ path: file.label, line: index + 1, text: line.slice(0, 500) });
-    if (matches.length >= input.limit) {
-      limited = true;
-      break;
-    }
-  }
-  if (limited) break;
+/**
+ * The narrowest possible access: the root, for the containment check, and a refusal for everything else.
+ *
+ * Nothing here resolves or filters — the tool layer already admitted these paths, and a second policy in a
+ * thread would be one more place for the two to disagree. `resolve` is never called by the scanner.
+ */
+const access: WorkspaceAccess = {
+  root: input.root,
+  resolve: async (relative: string) => {
+    throw new Error(`Search worker does not resolve paths (${relative})`);
+  },
+  isExcluded: () => false,
+};
+
+const entries: FileEntry[] = input.files.map((file) => ({
+  path: file.label,
+  absolutePath: file.path,
+  // Enumeration happened in the tool process; the scanner's containment check is what needs the root, and the
+  // scan re-stats a file it is about to report as changed, so a zeroed fingerprint is enough here.
+  fingerprint: { size: 0, mtimeMs: 0, sha256: null },
+}));
+
+async function* listed(): AsyncGenerator<FileEntry> {
+  for (const entry of entries) yield entry;
 }
 
-parentPort!.postMessage({ matches, limited });
+const page = await scanText(
+  access,
+  listed(),
+  searchOptions({
+    query: input.query,
+    mode: 'regex',
+    caseMode: input.sensitive ? 'sensitive' : 'insensitive',
+    maxResults: input.limit,
+    maxOutputChars: input.maxOutputChars,
+    maxScanBytes: input.maxScanBytes,
+    timeoutMs: input.timeoutMs,
+    // The tool layer owns cancellation and terminates this thread; there is no signal to forward.
+    signal: new AbortController().signal,
+  }),
+);
+
+parentPort!.postMessage({
+  matches: page.matches,
+  coverage: page.coverage,
+  outputTruncated: page.outputTruncated,
+});

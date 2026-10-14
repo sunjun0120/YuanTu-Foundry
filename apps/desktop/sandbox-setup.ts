@@ -98,6 +98,8 @@ export class WindowsSandboxSetup {
       const uv = (
         await this.execute(this.options.nodePath, ['-p', 'process.versions.uv'], 10000)
       ).stdout.trim();
+      // Identity is a setup prerequisite; version numbers cannot prove guest
+      // child-pipe compatibility. The provider probes that before execution.
       if (appContainerRuntimeError(uv)) return { ...view, reason: 'runtime' };
     } catch {
       return { ...view, reason: 'runtime' };

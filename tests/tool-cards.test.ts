@@ -93,15 +93,19 @@ test('a window past the end of a file says the range is empty, not that the file
     context(),
   );
   const model = modelOf(result.output);
-  assert.deepEqual(model, {
-    kind: 'file-read',
-    path: 'two.txt',
-    startLine: 5,
-    endLine: 4,
-    totalLines: 2,
-    text: '',
-    truncated: false,
-  });
+  assert.deepEqual(
+    { ...model, fileFingerprint: undefined },
+    {
+      kind: 'file-read',
+      path: 'two.txt',
+      startLine: 5,
+      endLine: 4,
+      totalLines: 2,
+      text: '',
+      truncated: false,
+      fileFingerprint: undefined,
+    },
+  );
   const dom = installDom();
   t.after(dom.restore);
   const card = textOf(toolCardView(model) as unknown as FakeNode);
@@ -146,17 +150,21 @@ test('a file read becomes a card that says which lines it is', async (t) => {
     { path: 'src.ts', start_line: 2, end_line: 3 },
     context(),
   );
-  assert.deepEqual(modelOf(result.output), {
-    kind: 'file-read',
-    path: 'src.ts',
-    language: 'typescript',
-    startLine: 2,
-    endLine: 3,
-    totalLines: 4,
-    // The card draws the raw lines: the numbering in the text form is the model's, not the card's.
-    text: 'two\nthree',
-    truncated: false,
-  });
+  assert.deepEqual(
+    { ...modelOf(result.output), fileFingerprint: undefined },
+    {
+      kind: 'file-read',
+      path: 'src.ts',
+      language: 'typescript',
+      startLine: 2,
+      endLine: 3,
+      totalLines: 4,
+      // The card draws the raw lines: the numbering in the text form is the model's, not the card's.
+      text: 'two\nthree',
+      truncated: false,
+      fileFingerprint: undefined,
+    },
+  );
 });
 
 test('a search becomes a card that lists its hits', async (t) => {
@@ -166,13 +174,28 @@ test('a search becomes a card that lists its hits', async (t) => {
     { query: 'needle' },
     context(),
   );
-  assert.deepEqual(modelOf(result.output), {
-    kind: 'search-results',
-    query: 'needle',
-    mode: 'literal',
-    matches: [{ path: 'a.txt', line: 2, text: 'beta needle' }],
-    limited: false,
-  });
+  const model = modelOf(result.output);
+  if (model.kind !== 'search-results') assert.fail('a search result draws a search card');
+  // The four fields a card has always read, pinned exactly; the coverage fields this round added are asserted
+  // beside them rather than folded in, so a change to either is visible as itself.
+  assert.deepEqual(
+    {
+      query: model.query,
+      mode: model.mode,
+      matches: model.matches,
+      limited: model.limited,
+    },
+    {
+      query: 'needle',
+      mode: 'literal',
+      matches: [{ path: 'a.txt', line: 2, text: 'beta needle' }],
+      limited: false,
+    },
+  );
+  assert.equal(model.coverage?.complete, true);
+  assert.deepEqual(model.coverage?.reasons, []);
+  assert.equal(model.nextCursor, null);
+  assert.equal(model.outputTruncated, false);
 });
 
 test('a command becomes a card that carries its own exit code and streams', async (t) => {

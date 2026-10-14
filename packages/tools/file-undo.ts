@@ -31,14 +31,45 @@ function matches(value: Buffer | null, expected: Uint8Array | null): boolean {
   return value === null ? expected === null : expected !== null && value.equals(expected);
 }
 
+/**
+ * The directory a session's journalled file changes belong in.
+ *
+ * A session's *project* is what `Session.workspace` has always meant, and an isolated session's *execution root* is
+ * the worktree its binding names. Which one a passed root has to be depends on where the change was made: a shared
+ * child's journal belongs to its delegator's project, while an imported sub-agent result is journalled against the
+ * parent session but written into the directory the import named — which is the binding's root.
+ *
+ * Both are resolved here rather than in each caller, because the alternative is what a caller would do instead:
+ * compare against the project and refuse, which would make every import into an isolated delegator's workspace
+ * impossible to undo.
+ */
+function acceptableRoots(store: SessionStore, sessionId: string): string[] {
+  const session = store.get(sessionId);
+  const roots = [session.workspace];
+  try {
+    const binding = store.workspaceBinding(sessionId);
+    roots.push(binding.executionRoot);
+  } catch {
+    // A session whose binding cannot be read has only its project, which is what it had before isolation existed.
+  }
+  return roots;
+}
+
+async function assertOwnsRoot(store: SessionStore, sessionId: string, root: string): Promise<void> {
+  const resolved = await realpath(root).catch(() => null);
+  for (const candidate of acceptableRoots(store, sessionId)) {
+    const known = await realpath(candidate).catch(() => null);
+    if (known && resolved && known === resolved) return;
+  }
+  throw new Error('Session belongs to another workspace');
+}
+
 export async function reconcilePendingFileChanges(
   store: SessionStore,
   sessionId: string,
   root: string,
 ): Promise<void> {
-  const session = store.get(sessionId);
-  if ((await realpath(session.workspace)) !== (await realpath(root)))
-    throw new Error('Session belongs to another workspace');
+  await assertOwnsRoot(store, sessionId, root);
   const workspace = new Workspace(root);
   for (const item of store.fileChanges(sessionId).filter((change) => change.status === 'pending')) {
     const snapshots = store.fileChangeSnapshots(sessionId, item.id);
@@ -89,9 +120,7 @@ export async function undoFileChange(
   id: string,
   root: string,
 ): Promise<void> {
-  const session = store.get(sessionId);
-  if ((await realpath(session.workspace)) !== (await realpath(root)))
-    throw new Error('Session belongs to another workspace');
+  await assertOwnsRoot(store, sessionId, root);
   const item = store.fileChanges(sessionId).find((candidate) => candidate.id === id);
   if (!item) throw new Error('File change not found in session');
   if (item.status === 'undone') throw new Error('File change was already undone');

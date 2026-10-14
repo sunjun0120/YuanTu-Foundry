@@ -1241,8 +1241,8 @@ body[data-page='background'] {
   text-align: left;
 }
 :root[data-theme] #settings-page .settings-sidebar nav button > span {
-  flex: 0 0 16px;
-  width: 16px;
+  flex: 0 0 20px;
+  width: 20px;
   text-align: center;
 }
 :root[data-theme] #settings-page .settings-sidebar nav button[aria-current='page'],

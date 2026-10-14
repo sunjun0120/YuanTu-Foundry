@@ -5,7 +5,7 @@ kind: 'project-readme'
 
 # YuanTu Agent
 
-独立实现的编程 Agent 内核，四种入口：命令行、JSONL Agent Host、Electron 桌面与 Web。不依赖 Pi（不读 `.pi` 配置或会话），也不依赖 DSH 的包——模型协议、会话存储、工具管线与扩展点都是本项目自己的实现。
+独立实现的编程 Agent 内核，当前交付 Windows/macOS Electron 桌面客户端，由本地 JSONL Agent Host 驱动。模型协议、会话存储、工具管线与扩展点都是本项目自己的实现。
 
 需要 **Node.js 24 或更新版本**。工程是 ESM，TypeScript 源码由 Node 的类型擦除直接运行，`npm run build` 的产物只是分发形式。
 
@@ -43,39 +43,17 @@ kind: 'project-readme'
 
 ## 快速开始
 
-Windows 使用 PowerShell：
+当前交付目标是 Windows/macOS 本地 Electron 客户端。MCP 服务管理、Web、对外 CLI 和 SDK/ACP 暂时停用，源码与相关测试保留。范围开关见 [product-scope.ts](packages/protocol/product-scope.ts)，暂停的 npm 入口保存在 [package.json](package.json) 的 `pausedEntrypoints` 中；恢复时需同步调整范围开关、构建入口、界面入口与相关跳过测试。桌面内部的 Agent Host、客户端协议与现有 MCP 工具调用继续保留。
+
+需要 Node.js 24 或更新版本。Windows 使用 PowerShell：
 
 ```powershell
-cd E:\agent-desktop\agent-test
+cd E:\agent-desktop\YuanTu-Foundry
 npm.cmd ci
-
-$env:ANTHROPIC_API_KEY = '你的 API 密钥'
-$env:YUANTU_MODEL = '你的接口实际支持的模型 ID'
-
-# 先问端点它究竟提供哪些模型与上下文窗口
-npm.cmd run dev -- models
-
-# 窗口与输出预算自动解析；也可用参数手动覆盖
-npm.cmd run dev -- run "列出项目文件，读取 package.json，解释项目结构" `
-  --workspace .
-```
-
-桌面与 Web：
-
-```powershell
 npm.cmd run desktop -- --workspace E:\your-project
-npm.cmd run web                 # 打印 http://127.0.0.1:<port>/?token=<token>
 ```
 
-Agent Host（供自建载体连接）：
-
-```powershell
-npm.cmd run host -- --workspace . --listen 127.0.0.1:0
-```
-
-首次运行 Electron 可能需要下载对应二进制；终端依赖代理时可先设 `$env:NODE_USE_ENV_PROXY = '1'` 再执行 `node node_modules/electron/install.js`。`resources`、`models`、`mcp`、`sessions`、`show` 这些命令不需要 API 密钥。
-
-Windows x64 安装包通过 `npm.cmd run package:windows` 构建，产物位于 `dist/release`，附版本/schema 与 SHA-256 清单；程序、安装器与卸载器使用 `build` 中的图标。安装版自带 Node 运行时，不需要开发 Node/npm；卸载保留设置和工作区数据。安装、路径、数据保留及签名发行需要独立验收。
+首次启动后，在“设置 → 模型设置”中配置端点、模型和密钥。Windows 安装包通过 `npm.cmd run package:windows` 构建；macOS 打包需在对应架构的 Mac 上运行 `npm run package:macos`。产物位于 `dist/release`，签名、安装和目标平台实机运行需要独立验收。
 
 ---
 
@@ -173,19 +151,19 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 
 文件工具、搜索与仓库地图统一排除常见凭据名称：`.env` 及其变体、`.npmrc`、`.pypirc`、`.netrc`、`credentials`／`credentials.*`、`id_rsa`／`id_ed25519`，以及 `.pem`、`.p12`、`.pfx`、`.key` 文件。名称检查不区分大小写，覆盖嵌套目录；直接读取或修改这些路径也会拒绝。内部 `.yuantu/spill` 的输出读取豁免不会放开其后代的凭据路径。容器预检查复用凭据名称规则，并额外拒绝数据库文件；它保留 `.env.example` 占位文件例外，文件工具仍排除全部 `.env` 名称。名称规则不能识别藏在普通源码中的秘密。
 
-| 工具           | 行为                                                         | 审批 |
-| -------------- | ------------------------------------------------------------ | ---- |
-| `list_files`   | 递归列出最多 1000 个文件，跳过链接、凭据与依赖目录           | —    |
-| `read_file`    | 读 UTF-8 文本并标注行号，可切起止行；只读前 256KB            | —    |
-| `read_image`   | 读工作区内图片（PNG/JPEG/GIF/WebP，≤5MB）并作为图片返回      | —    |
-| `search_files` | 在最多 1000 个文件中搜索；默认字面量、区分大小写、100 条结果 | —    |
-| `repo_map`     | 工作区结构大纲（文件 → 声明）；带 `query` 时按符号名检索     | —    |
-| `edit_file`    | 把唯一匹配的 `old_text` 换成 `new_text`，保留其他字节        | 写入 |
-| `write_file`   | 在已有目录新建文件；拒绝覆盖                                 | 写入 |
-| `apply_patch`  | 对单个文件应用精确 unified diff，审批后重新校验源内容        | 写入 |
-| `delete_file`  | 删除单个文件，审批后做精确字节校验                           | 写入 |
-| `move_file`    | 移动到不存在的目标路径，源与目标审批后重新校验               | 写入 |
-| `batch_edit`   | 按顺序执行 1–100 次精确替换，按一组展示、记账与撤销          | 写入 |
+| 工具           | 行为                                                                                            | 审批 |
+| -------------- | ----------------------------------------------------------------------------------------------- | ---- |
+| `list_files`   | 递归列出文件，跳过链接、凭据与依赖目录；默认每页 1000 条，可用 `limit` 与 `nextCursor` 继续翻页 | —    |
+| `read_file`    | 读 UTF-8 文本并标注行号，可切起止行；整文件可读，`totalLines` 是真实行数                        | —    |
+| `read_image`   | 读工作区内图片（PNG/JPEG/GIF/WebP，≤5MB）并作为图片返回                                         | —    |
+| `search_files` | 搜索工作区文本；默认字面量、区分大小写、100 条结果；结果说明扫描是否覆盖完整                    | —    |
+| `repo_map`     | 工作区结构大纲（整文件符号索引）；带 `query` 时按符号名检索，并给出索引新鲜度                   | —    |
+| `edit_file`    | 把唯一匹配的 `old_text` 换成 `new_text`，保留其他字节                                           | 写入 |
+| `write_file`   | 在已有目录新建文件；拒绝覆盖                                                                    | 写入 |
+| `apply_patch`  | 对单个文件应用精确 unified diff，审批后重新校验源内容                                           | 写入 |
+| `delete_file`  | 删除单个文件，审批后做精确字节校验                                                              | 写入 |
+| `move_file`    | 移动到不存在的目标路径，源与目标审批后重新校验                                                  | 写入 |
+| `batch_edit`   | 按顺序执行 1–100 次精确替换，按一组展示、记账与撤销                                             | 写入 |
 
 ### 命令与终端
 
@@ -296,6 +274,7 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 | 家族     | 注册条件                                 | 工具                                                                                                                        |
 | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | 子代理   | 宿主启用委派（`--no-subagents` 关闭）    | `delegate_task`、`subagent_fork`、`collect_subagents`、`list_subagent_models`、`send_message`；子代理内另有 `submit_report` |
+| 工作区   | 宿主管理隔离子代理工作区                 | `workspace_results`（只读）、`workspace_result_apply`（写入，需审批）                                                       |
 | 会话查询 | 宿主提供了会话库                         | `search_sessions`、`read_session_events`、`search_session_events`、`trace_session`                                          |
 | 目标续跑 | 该运行自己拥有这份工作（根运行）         | `create_goal`、`get_goal`、`update_goal`                                                                                    |
 | 计划模式 | 计划阶段                                 | `submit_plan`、`exit_plan_mode`                                                                                             |
@@ -374,9 +353,15 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 `YUANTU_SANDBOX` 接受 `native`、`windows`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用受限令牌，macOS 使用 Seatbelt；其他系统明确拒绝。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
-文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径。因此 Windows 基础后端拒绝严格进程只读及断网请求。Windows 增强后端尚未实现，管理员初始化、专用账号和网络过滤的交付条件见 [增强后端设计](packages/tools/windows-sandbox/ENHANCED-DESIGN.md)。
+文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径。因此 Windows 基础后端拒绝严格进程只读及断网请求。Windows AppContainer 增强后端已有未启用原型，兼容运行时、签名资产、受保护安装与真实隔离验收仍是前置条件；基础验收入口为 `npm.cmd run check:windows-sandbox`，后端边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)，增强就绪条件见 [就绪检查脚本](scripts/check-windows-appcontainer.mjs)。
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
+
+Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复跑；AppContainer 管道能力通过 `npm.cmd run check:windows-appcontainer-pipes` 实际诊断，未通过时非零退出，不用版本号代替能力证据。管道诊断默认检查执行该脚本的 Node；检查独立候选时，需用候选 `node.exe` 执行 [管道检查脚本](scripts/check-windows-appcontainer-pipes.mjs)。
+
+独立 Windows Node 候选的源码、管道回移补丁与许可证身份由 [运行时来源锁](build/windows-runtime.lock.json) 固定，[构建脚本](scripts/build-windows-runtime.mjs) 区分 `diagnostic` 与 `production` profile。`npm.cmd run check:windows-runtime-source` 重验诊断候选来源，`npm.cmd run package:windows:candidate:dir` 打包诊断候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。诊断候选不能作为正式发行或增强隔离验收通过的依据。
+
+`npm.cmd run package:windows:protected` 使用 [受保护安装配置](electron-builder.protected.config.cjs)：强制代码签名、按机器安装、固定安装目录，并在签名后核对运行时和签名者。此入口要求显式设置 `WINDOWS_SANDBOX_PROTECTED_RELEASE=1`、`WINDOWS_SIGN_CERTIFICATE_SHA1`、无凭据的 HTTPS `WINDOWS_SIGN_TIMESTAMP_URL`，以及指向已签名 production 候选的 `WINDOWS_SANDBOX_NODE_CANDIDATE`；签名辅助程序还需匹配固定签名清单。该配置是保留的发行门禁，不能因历史文档删除而移除；正式发行和增强隔离仍需完成目标平台安装、实际文件/网络隔离及 WFP 验收。
 
 全部原生 Git 工具与 stdio MCP 在非 `host` 模式仍明确拒绝：它们尚未接入原生进程启动器。远程 HTTP/SSE MCP、网页抓取和浏览器不受命令沙箱约束。显式 `host` 表示无操作系统隔离，命令可访问宿主其他位置和网络。macOS 取消按进程组执行，主动脱离进程组的子孙回收尚未解决；后台记录不会将其标为整棵进程树清理已确认。macOS 真机隔离与签名/公证验收仍需在 Mac 完成：打包走 `scripts/prepare-macos-package.mjs` 与 `npm run package:macos`，真机探针走 `npm run check:macos-sandbox`。
 
@@ -390,7 +375,7 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 ## 会话、事件与投影
 
-默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面“设置 → 数据备份”还提供立即备份、可选每日备份和确认后恢复：每日备份默认关闭，应用打开时每 15 分钟检查，距最新快照超过 24 小时生成一份；最多保留 5 份、合计 512 MiB。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本并关闭本应用 Host；其他 Host/CLI 必须先关闭。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
+默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置、模型设置与 MCP 服务，不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复与中断恢复通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover` 维护命令提供，备份最多保留 5 份、合计 512 MiB。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
 
 桌面会话默认加载最近 100 条展示消息，可按“加载更早记录”每次向前加载 100 条；重用未变化的消息节点，保留阅读位置和操作组展开状态。此分页仅限制展示传输与渲染，模型仍读取完整会话记录。模型设置中的容量、自动压缩阈值和流空闲超时支持编辑；部分保存省略字段时保留旧值，显式清空恢复默认行为。
 
@@ -478,6 +463,19 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 - **报告是结构化的**：子代理必须用 `submit_report` 结束，给出结论 + 依据 + 未核实项 + 阻碍；空报告会被拒绝并要求重写。
 - **上限**：单次调用最多 4 个任务、并发 8、单次父运行最多 8 个、默认不再往下委派、无进展 600 秒后停止（看门狗按「沉默」计时，只要还在产出就重新计时）。`list_subagent_models` 只列出宿主**确实能服务**的模型。
 
+### 子代理工作区隔离
+
+写入型子代理不再直接改委派者的目录：它在一个由服务创建的 Git worktree 里工作，产物由父代理**显式审批后合入**。读只读子代理（`explore`）仍共享委派者目录——它改不了任何东西，复制一棵树只花磁盘不买保护。
+
+- **一次委派一份冻结输入**：基线是委派者目录**当前的字节**（含已暂存后又改的、删掉的、未跟踪的文件），用受控 `GIT_INDEX_FILE` + `commit-tree` 形成一个合成提交。同一次调用的所有子代理共用这一个快照，**包括排队等并发槽的那些**——否则先跑的改了目录，后跑的就会看到另一份输入。
+- **用户仓库不被触碰**：不用 stash、不提交、不动 index/HEAD、不整树 `git add`、不跑仓库钩子或 clean/smudge filter；冻结前后对 index 取哈希比对是证据而不是声明。凭据文件、symlink、junction、子模块、稀疏检出与未合并索引按名字明确拒绝。
+- **结果是一份冻结差异**：`workspace_results` 列出每个子代理产出的路径与 digest，`workspace_result_apply` 先给出逐路径 diff 供审批，执行时**重新校验同一 digest 与每个目标文件的字节**。任一目标文件已变则整体判为 `conflict` 且不写任何文件；同一 resultId + digest 重复应用只写一次（按 resultId+digest+目标绑定去重）。
+- **命令写文件也算数**：结果来自**目录本身**而不是文件工具 journal，所以 `run_command` 产生的改动一样会出现在结果里；未通过限制（二进制、模式变化、单文件 >1 MiB、>64 路径）的结果标为 `unsupported`，保留现场供人工处理，**不部分合入**。
+- **合入后可撤销**：导入写成一次分组 journal 记录，属于父会话自己的改动列表，`changes.undo` 按目标绑定的执行根恢复精确字节。
+- **崩溃可收敛**：`preparing` 记录按目录是否存在分类，导入中断按 journal 的 before/after 逐路径判断（第三种字节判 conflict），**不重放审批**，也不会把未验证当作已验证——结果里附带的是工具执行的持久证据，不是模型的自我报告。
+- **设置**：`YUANTU_SUBAGENT_WORKSPACE` / `--subagent-workspace` 取 `auto`（默认；写入型隔离、只读共享）、`shared`（保留旧共享写入行为，**不提供隔离**，界面必须如实标注）、`worktree`（连只读也隔离）。当前执行策略无法安全管理 Git 元数据时返回 `WORKSPACE_POLICY_UNSUPPORTED`，**不降级为 shared**。
+- **边界**：worktree 是代码工作副本隔离，不是 OS 安全隔离；host shell 仍可能访问其他目录，不隔离网络、共享账户或外部数据库。首版不安装依赖，需要跑测试的子代理缺依赖时报 `WORKSPACE_DEPENDENCIES_MISSING`。
+
 ### 持久任务与目标
 
 持久任务是带验收条件与触发器的实体，落在同一 SQLite 里（任务、尝试、步骤检查点、效果、审批各有表），由 Host 的调度器按到点或事件触发；事件级联有深度上限，且调度器只在没有活动运行时动手。目标续跑由 `runGoalRounds` 在运行结束后自动推进，轮数上限**独立于目标自身的预算**（后者模型可以用 `update_goal` 抬高，所以不能同时充当宿主的那道闸）；预算耗尽会记成 `blocked` 并写明轮数，而不是停在 `active`。`edit` / `pause` / `resume` 只允许出现在带用户输入的回合里：续跑轮可以报进展、可以结束目标，但不能抬高自己的预算，也不能撤销一个人刚按下的暂停（`HUMAN_ONLY_GOAL_ACTIONS`）。
@@ -520,6 +518,8 @@ JS 钩子必须由人显式指定模块路径（`--hooks <module>` 或 `YUANTU_H
 
 ### CLI
 
+此入口当前暂时停用；以下为保留源码的实现说明，相关 npm 命令不属于当前客户端交付范围。
+
 `apps/cli/main.ts` 是单文件入口。需要模型凭据的命令只有五个（`run`、`resume`、`plan`、`plan-execute`、`task-retry`），其余命令与维护命令都不需要；命令词表、计数与维护命令见[生成事实](#facts)，真源是 `apps/shared/cli-commands.ts`——帮助文本的 `Usage:` 段由那份清单渲染，`docs:check` 会核对上面这句里点名的命令，所以两者不可能各说一套。交互模式下**进度全部走 stderr**，stdout 只留答复本身，因此它可以安全地接管道；`--json` 模式把事件、结果与计划都变成 JSONL。它明确拒绝 `--listen`：要对外服务请用 Agent Host。
 
 CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*` 变量与取值不合法的已知变量都会被列出并拒绝启动**，拼错的名字给出最近似名建议，且一次报出全部问题。库代码（`packages/core`、`packages/client`）不做这项检查——嵌入方进程里可能有别的 `YUANTU_*` 变量，判断环境是否合法是宿主的决定。
@@ -539,7 +539,8 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | 后台命令   | `background.list`、`background.state`、`background.policy`、`background.poll`、`background.stop`、`background.clear`                                                                       |
 | 资源与文件 | `resources.list`、`files.list`、`files.read`                                                                                                                                               |
 | 变更       | `changes.list`、`changes.undo`                                                                                                                                                             |
-| 会话附属   | `todos.get`、`deliverables.get`、`subagents.list`、`goal.get`                                                                                                                              |
+| 工作区     | `workspaces.get`、`workspace.results`、`workspace.apply`、`workspace.archive`、`workspace.restore`、`workspace.remove`                                                                     |
+| 会话附属   | `todos.get`、`deliverables.get`、`completion.current`、`subagents.list`、`goal.get`                                                                                                        |
 
 **同时只接受一个连接**（审批、运行、提问映射与工作区锁都是 per-Host），第二个连接会收到明确的拒绝报文后被关闭。载体断开即走同一个关闭流程——Host 属于拉起它的载体。
 
@@ -564,6 +565,8 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 模型密钥用系统 `safeStorage` 加密（系统加密不可用时拒绝保存），配置文件（模型、界面、权限、沙箱）都在 Electron 的应用数据目录；每个接口分组最多 100 个模型。MCP OAuth 凭据在 `mcp-oauth/`，默认使用系统密钥库保存密钥并以 AES-256-GCM 加密，桌面与 Agent Host 共用同一份凭据；CLI 默认存于用户目录 `.yuantu/mcp-oauth/`。Linux 要求可用的 Secret Service。旧文件读取时原子迁移，密钥库不可用时拒绝读取或保存，不回退明文；删除本地凭据仍可执行。
 
 ### Web
+
+此入口当前暂时停用；以下为保留源码的实现说明，相关 npm 命令不属于当前客户端交付范围。
 
 `npm run web` 先构建静态页，再启动一个**只绑回环**的桥：默认端口 `0`（由系统分配）与随机 token，访问地址形如 `http://127.0.0.1:<port>/?token=<token>`，WebSocket 走 `/ws?token=`，非回环来源一律 403。桥自身是 `spawnedCarrier`，页面与桌面共用同一套渲染层与同一个 `CarrierService`。第二标签页会被拒绝且不会踢掉已连接的页面。网页版刻意不提供壳专属能力（附件、MCP 设置、权限与沙箱设置、模型设置），这些请求会返回明确的拒绝文案。
 
@@ -597,7 +600,7 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 <!-- settings:start -->
 
-**由代码算出**：共 63 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 65 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -650,9 +653,11 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | `YUANTU_MEMORY_DIR` | `string` | 用户级记忆目录 |
 | `YUANTU_KNOWLEDGE_DB` | `string` | 知识库数据库路径 |
 | `YUANTU_REPO_MAP` | `on` / `off` | 是否注入结构大纲 |
+| `YUANTU_SEARCH_RG` | `0` / `1` | 是否启用固定 ripgrep 快速搜索后端（0 关闭；缺省启用，但仍需已核验的固定资产） |
 | `YUANTU_LSP_AFTER_EDIT` | `0` / `1` | 编辑后是否附加诊断 |
 | `YUANTU_SUBAGENTS` | `0` / `1` | 是否启用子代理委派 |
 | `YUANTU_SUBAGENT_CONCURRENCY` | `1–16` | 子代理并发上限 |
+| `YUANTU_SUBAGENT_WORKSPACE` | `auto` / `shared` / `worktree` | 子代理执行目录：auto 自动隔离（默认），shared 沿用委派者目录（旧行为，不做隔离），worktree 连只读子代理也隔离 |
 | `YUANTU_SUBAGENT_TIMEOUT_MS` | `0–3600000` | 子代理无进展（卡住）多久后停止（毫秒，0 = 不设看门狗；只要子代理还在产出就会重新计时，长任务不会被它切断） |
 | `YUANTU_SEARCH_PROVIDER` | `string` | 联网搜索提供方 |
 | `YUANTU_SEARCH_API_KEY` | `string` | 联网搜索密钥 |
@@ -685,18 +690,18 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 67 个 / 36.0 KB | `createTools().specs()` |
-| 工具（只读运行） | 34 个 / 17.7 KB | `specs({ readOnly: true })` |
+| 工具（空工作区，全部） | 67 个 / 36.5 KB | `createTools().specs()` |
+| 工具（只读运行） | 34 个 / 18.1 KB | `specs({ readOnly: true })` |
 | 工具（折叠为 `run_code`） | 1 个 / 10.6 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 24 条 | `EXPLORE_TOOLS` |
-| 会话 schema 版本 | v28 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 49 / 42 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
-| 桌面冒烟套件 | 7 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 193 个 | `tests/*.test.ts` |
+| 会话 schema 版本 | v30 | 新建库上的 `PRAGMA user_version` |
+| 持久事件类型 / 实时事件类型 | 50 / 45 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
+| 行为测试文件 | 222 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 50 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| Host JSON-RPC 方法 | 57 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->
@@ -717,13 +722,17 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 - **语言服务器支持 host 与 Windows/macOS 原生执行后端**；后端不可用或不能满足文件、网络要求时拒绝启动。服务器保留创建策略，切换后需要停止并重新启动才能继续请求。服务器不会自动重启，也没有空闲回收，必须显式 `lsp_start`。没有格式化工具，而语言服务器返回的 `WorkspaceEdit` 里除了文本编辑还可能带**建文件/改名/删文件类资源操作**——这些一律拒绝整份编辑，而不是只应用文本那一半（否则引用被改名而文件没动，调用方还会以为重命名成功了）。
 - **MCP 没有命令允许名单，也没有域名白名单**：约束是「HTTPS 或回环」加上来源白名单，stdio 传输额外要求 host 沙箱。运行时的授权请求不会自动弹浏览器，必须显式完成一次授权；远端返回的 schema、提示词与内容一律当作不可信数据。工具目录在连接建立时读取一次，此后只在服务器自己发出 `notifications/tools/list_changed` 时按需重读——用已经开着的连接重读，不重握手，也不因为收到通知就立刻发起请求。
 - **`verify_file_delivery` 校验的是结构而不是语义**：它核对大小、SHA-256 与魔数，不判断页数、能否被 Office 打开、版式或内容是否正确。
-- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝；管理员初始化的增强后端尚未实现。
+- **检索结果区分「扫描完整」与「扫描不完整」**：`search_files` 零命中时明确说明这是完整扫描的结果，还是预算、读错误或超限导致只扫了一部分；`limited` 可能来自结果上限、输出预算或未完成的枚举，三者含义不同。正文结果里，字面量追加 `[match limit reached]`，正则超时仍按错误返回，不伪装成空匹配。
+- **列表与符号结果带机器可读的覆盖行**：`list_files` 与 `repo_map` 的正文末尾有一行 `Retrieval metadata:`，说明覆盖状态、来源版本、下一页游标与索引新鲜度（`validated`／`building`／`stale`／`unknown`）。索引不新鲜时，符号零命中会说明「索引仍在构建」，而不是断言仓库里没有该符号。
+- **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它；每个索引行记录文件大小、mtime 与内容 SHA-256，写入后由工具主动失效、查询时后台重建。凭据与依赖目录同样不进入索引。
+- **快速搜索后端需要固定资产**：`literal` + 区分大小写可走固定版本的 ripgrep，仅使用 `build/search-assets.lock.json` 中已记录 SHA-256 且校验通过的二进制；打包时由 `scripts/copy-search-assets.mjs` 核验后放入应用资源。没有可用资产、或执行环境无法安全启动进程时，一律回退内置流式扫描，不回退 host 进程。
+- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝；AppContainer 原型尚未作为公开模式启用，初始化前置检查不能代替真实增强隔离验收。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
 - **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host 与 Windows/macOS 原生执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。VM 和 Node Permission Model 都不是恶意代码沙箱，直接效果仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。旧容器入口已移除，不能回退 host。独立 runner 的构建产物由 `scripts/build-program-runner.mjs` 生成，验收边界需在目标平台实测。
 - **CLI 不是 Host**：它不监听端口，`--listen` 会被明确拒绝。
-- **每日备份是桌面可选设置**：默认关闭，应用未运行时不生成；没有自动恢复。较新 schema 的库仍拒绝打开。桌面确认恢复或维护命令均复用离线校验与保全流程；恢复后主对话不自动续跑，已保存的定时/触发任务和目标唤醒仍按现有规则运行。
+- **数据保护由存储层负责**：旧库迁移前自动备份，桌面不再调度每日备份，也不自动恢复。较新 schema 的库仍拒绝打开；维护命令复用离线校验与保全流程。恢复后主对话不自动续跑，已保存的定时/触发任务和目标唤醒仍按现有规则运行。
 - 环境检查只做在 CLI 与 Host，库代码不做——嵌入方进程里可能存在别的 `YUANTU_*` 变量。
 
 ---
@@ -733,11 +742,13 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 ## 开发
 
 ```powershell
-npm.cmd run check        # format:check → docs:check → references:check → i18n:check → typecheck → test → build → smoke:client → smoke:web
+npm.cmd run check        # format:check → docs:check → references:check → i18n:check → typecheck → test → build → smoke:client
 npm.cmd run check:changed   # 开发时按 Git 改动及传递依赖选择验证；不确定时回退全量
 npm.cmd run check:changed -- --plan   # 只预览改动、选测数量与回退原因
 npm.cmd test             # 全量行为测试：仅输出汇总、跳过原因和失败详情，完整日志落盘
 npm.cmd test -- tests/host-requests.test.ts   # 明确指定测试文件
+npm.cmd run test:partitioned -- --plan   # 只预览已审查的并行组与串行组，不执行测试
+npm.cmd run test:partitioned   # 先跑并行组，再独占执行串行组
 npm.cmd run test:verbose    # 原始详细输出，排查时使用
 npm.cmd run check:full      # 阶段验收；与 check 相同
 npm.cmd run check:release   # check 加真窗口桌面冒烟；打包另行执行
@@ -748,8 +759,10 @@ npm.cmd run docs:generate   # 重写 README 的生成事实块
 
 开发选测规则见 [选测脚本](scripts/check-changed.mjs)，日志与并发处理见 [测试入口](scripts/run-tests.mjs)。`check:changed` 用于开发反馈，不替代阶段验收或发布前的完整门禁。
 
-`npm run check` 里的 `docs:check` 会**计算**文档引用的数字并与文档比较：它既重写生成事实块，也拒绝那些曾经为真、现在不再为真的说法（`scripts/docs-facts.mjs` 里逐条带原因登记）。因此本 README 里的计数一律以生成块为准，而不是手写。`references:check` 管另一半：文档、工作流与 `package.json` 脚本里指向本仓库的路径必须存在，markdown 链接的 `#anchor` 必须能解析（`scripts/check-references.mjs`），因此「引用了被删掉的文件」会在门禁里失败，而不是等到 CI 或读者发现。
+[test-parallel-safe.json](test-parallel-safe.json) 是分组测试读取的审查白名单，记录测试文件、审查原因及测试与本地依赖的 SHA-256。只有记录完整且哈希仍匹配的测试可进入并行组；未审查或输入已变化的测试退回串行。缺少该文件时全部串行，格式错误则拒绝分组执行。默认 `npm test` 仍串行；保留此文件才能保留已审查的并行配置，修改源码后不能仅重算哈希来代替重新审查。
+
+`npm run check` 里的 `docs:check` 会**计算**文档引用的数字并与文档比较，也拒绝那些曾经为真、现在不再为真的说法（`scripts/docs-facts.mjs` 里逐条带原因登记）；`docs:generate` 才会重写生成事实块。因此本 README 里的计数一律以生成块为准，而不是手写。`references:check` 检查本 README、`docs/` 下的顶层 Markdown、工作流与 `package.json` 脚本中的仓库路径和 Markdown 锚点（`scripts/check-references.mjs`）。`docs/` 可以为空；删除文档后仍需清理各处引用，其他目录的说明文件也应单独核对链接。
 
 `i18n:check` 是语言门禁的另一半。渲染层的门禁是**真窗口冒烟**：切到 `en-US` 后遍历可见 DOM，任何还能看到的中文都算失败——这对渲染层是对的，因为它本来就以中文为源文本，由遍历器在渲染时翻译。主进程没有 DOM，它产出的校验文案、失败对话框与设置回执只会被递给可能已经切到英文的页面，所以这里改用静态规则：**人读的模块把词放进 `apps/desktop/i18n.ts`**，这些文件里再出现中文就失败（扫描前先剥掉注释，所以规则针对代码而不是注释；行号按原文给，注释吞掉换行的话报的位置就会漂）。规则本身是**目录扫描**而不是文件清单——`apps/desktop/**/*.ts` 默认全在门禁内，例外只有四条并各带理由（渲染层自己的模块与字典、`session-management.ts`、给模型的 `attachment-contract.ts`），且每条例外必须仍然匹配到文件：改名或被删就会失败，而不是悄悄少扫一个模块（`scripts/i18n-gate.mjs`）。guest worker 另有一条规则：`packages/tools/*worker*.ts` 的文案进的是模型与调用方的日志、不是带语言的人，所以要求是「保持英文」而不是「进字典」；桌面自己的 worker 属于界面进程，仍按界面规则。两个进程读同一本字典，因此设置页的标签和它自己的报错不会各说一种语言。
 
-CI 的 `check` job 直接跑 `npm run check`——聚合名是唯一入口，因此新增的门禁不可能只加进 `package.json` 而漏在 CI 里（`smoke:web` 就这样漏过）。Linux 上的检查、基准与覆盖率明确选择 `host`，只验证通用契约；Windows 上单独跑原生后端回归与桌面冒烟，macOS job 配置了实际 Seatbelt 回归及当前架构的未签名应用打包。部分测试会因平台或外部依赖缺失而**带原因自我跳过**（macOS 内核隔离、真实语言服务器、本机 Office、Playwright 的 Chromium 下载）。跳过不能替代对应平台或依赖的验收；macOS job 也不代替签名、公证及两个架构的发行验收。
+CI 的 `check` job 直接跑 `npm run check`，新增聚合门禁会随该入口执行。Web 冒烟随 Web 产品入口暂停，当前聚合检查不包含 `smoke:web`。Linux 上的检查、基准与覆盖率明确选择 `host`，只验证通用契约；Windows 上单独跑原生后端回归与桌面冒烟，macOS job 配置了实际 Seatbelt 回归及当前架构的未签名应用打包。部分测试会因平台或外部依赖缺失而**带原因自我跳过**（macOS 内核隔离、真实语言服务器、本机 Office、Playwright 的 Chromium 下载）。跳过不能替代对应平台或依赖的验收；macOS job 也不代替签名、公证及两个架构的发行验收。

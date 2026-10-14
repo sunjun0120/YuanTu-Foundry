@@ -20,6 +20,14 @@ import { writeAll, atomicWriteFile } from '../packages/tools/write-all.ts';
 import { Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
 
+/**
+ * This suite is about the *built-in* scanner’s accounting — real bytes read, files read to EOF, the reason a
+ * scan stopped — so it pins the engine rather than accepting whichever backend this machine happens to have a
+ * verified asset for. The fast backend is exercised where it belongs: tests/search-ripgrep.test.ts runs it
+ * against the built-in scanner on the same fixture and requires the two to agree match for match.
+ */
+process.env.YUANTU_SEARCH_RG = '0';
+
 // ---- merged from file-review.test.ts ----
 
 test('file approvals show actual unified diff and successful results retain it', async (t) => {

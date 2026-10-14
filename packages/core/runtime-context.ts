@@ -27,7 +27,13 @@ import { RUNTIME_CONTEXT_TAG } from '../protocol/context.ts';
  * The sources, closed on purpose: a snapshot is read back *by source*, so two features cannot share one without
  * reading each other's text as their own.
  */
-export const RUNTIME_SNAPSHOT_SOURCES = ['task', 'memory', 'skills', 'workspace-outline'] as const;
+export const RUNTIME_SNAPSHOT_SOURCES = [
+  'task',
+  'completion',
+  'memory',
+  'skills',
+  'workspace-outline',
+] as const;
 export type RuntimeSnapshotSource = (typeof RUNTIME_SNAPSHOT_SOURCES)[number];
 
 const TAG = RUNTIME_CONTEXT_TAG;
@@ -42,6 +48,15 @@ const CLOSE = `\n</${TAG}>`;
  */
 const PREAMBLE: Record<RuntimeSnapshotSource, string> = {
   task: 'Machine-written snapshot of the approved task, announced when its steps changed. If this conversation holds more than one, the last is the current one.',
+  /**
+   * The contract's own state, re-announced after a compaction.
+   *
+   * It exists because a compaction can swallow the record that stated what "done" means for this session: the
+   * contract is durable and the summary is not, so without this the model would keep working — or stop — against a
+   * definition it can no longer read. What it carries is the definition and the progress, never a hash or an id.
+   */
+  completion:
+    'Machine-written snapshot of this run’s completion contract: the objective, the constraints, the criteria and how the work stands against them. If this conversation holds more than one, the last is the current one.',
   memory:
     'Machine-written snapshot of saved memory, announced when it changed. If this conversation holds more than one, the last is the current one.',
   skills:

@@ -11,6 +11,9 @@ import { realpathSync, statSync } from 'node:fs';
 import { SessionStore } from '../../packages/storage/sqlite.ts';
 import { Agent } from '../../packages/core/agent.ts';
 import { createTools } from '../../packages/tools/index.ts';
+import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
+import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
+import type { WorkspaceMode } from '../../packages/protocol/workspaces.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { createProvider, readConfig } from '../../packages/providers/index.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
@@ -198,6 +201,37 @@ export function sessionDatabasePath(options: Options): string {
     options.db ?? path.join(options.workspace ?? process.cwd(), '.yuantu', 'sessions.sqlite'),
   );
 }
+/**
+ * Whether the effective policy permits the Git metadata operations a managed worktree needs.
+ *
+ * The plan's rule is that worktree management is *controlled infrastructure work*: it needs a policy that can say
+ * it is safe to write repository metadata. Only the host policy currently can, and the answer is deliberately
+ * about the policy rather than about the platform — a native sandbox that cannot state whether it may manage Git's
+ * own files must fail with `WORKSPACE_POLICY_UNSUPPORTED` instead of running outside the policy it was given.
+ */
+export function metadataWritesAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  const config = resolveSandboxConfig(env);
+  return config.mode === 'host' && config.files !== 'read-only';
+}
+/**
+ * The execution-directory mode this process delegates under.
+ *
+ * Read from the setting rather than defaulted here, so a mistyped value fails at startup with the list of ones
+ * that exist instead of silently becoming the default — a workspace mode is a statement about isolation, and
+ * "isolation was quietly off" is the one answer that must never be produced by a typo.
+ */
+export function workspaceModeFor(
+  options: { subagentWorkspace?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): WorkspaceMode {
+  const raw = options.subagentWorkspace ?? parseSetting(env, 'YUANTU_SUBAGENT_WORKSPACE');
+  // The shipped default: a write-capable child gets its own directory, and a read-only one shares the delegator's.
+  if (raw === undefined || raw === '') return 'auto';
+  if (raw === 'auto' || raw === 'shared' || raw === 'worktree') return raw;
+  throw new Error(
+    `YUANTU_SUBAGENT_WORKSPACE must be auto, shared or worktree (got ${JSON.stringify(raw)})`,
+  );
+}
 export function openStore(options: Options): SessionStore {
   return new SessionStore(sessionDatabasePath(options));
 }
@@ -237,6 +271,17 @@ export async function createAgent(
       const config = resolveSandboxConfig();
       return callExecutionPolicy(config.mode, config);
     });
+  const workspaces = new WorkspaceManager({
+    store,
+    // Session overrides can change after construction; use the same live policy as the child's tools.
+    metadataWritesAllowed: () =>
+      withExecutionPolicy(policyForCall(), () => metadataWritesAllowed()),
+    onDiagnostic: (message) => console.error(`[workspace] ${message}`),
+  });
+  const workspaceResults = new WorkspaceResultsService({
+    store,
+    onDiagnostic: (message) => console.error(`[workspace] ${message}`),
+  });
   return new Agent({
     store,
     executionEnvironment: () => withExecutionPolicy(policyForCall(), () => executionEnvironment()),
@@ -294,13 +339,35 @@ export async function createAgent(
      * built by `childTools`. That is a real cost: each resident child owns its language servers, background
      * commands and MCP connections. It is the price of a child that outlives the run that started it, and it
      * is why residency is opt-in per process rather than a default.
+     *
+     * The factory is always supplied, not only when there is a residency, because an *isolated* child needs one
+     * too: it works in a directory this run's tools were never bound to, so borrowing them would mean reading and
+     * writing the delegator's tree. `childTools` is called with the child's binding; the fallback keeps every
+     * existing caller working unchanged.
      */
-    ...(residency
-      ? {
-          subagentResidency: residency,
-          childTools: () => createTools(workspace, undefined, 'subagent', hooks),
-        }
-      : {}),
+    subagentResidency: residency,
+    childTools: (binding) =>
+      createTools(binding?.executionRoot ?? workspace, undefined, 'subagent', hooks),
+    workspaceMode: workspaceModeFor(options),
+    workspaceManager: workspaces,
+    workspaceResults,
+    workspaceApply: workspaceResults,
+    /**
+     * Where a session actually executes, resolved per call rather than captured.
+     *
+     * The fallback matters as much as the resolution: a session whose binding cannot be read is a session whose
+     * directory this process must not guess at, so it keeps its project — which is exactly what it did before
+     * isolation existed.
+     */
+    workspaceRoots: (sessionId) => {
+      try {
+        const binding = workspaces.resolve(sessionId);
+        return { projectRoot: binding.projectRoot, executionRoot: binding.executionRoot };
+      } catch {
+        const projectRoot = store.get(sessionId).workspace;
+        return { projectRoot, executionRoot: projectRoot };
+      }
+    },
     maxContextChars: options.maxContextChars,
     maxContextTokens: capacity.contextWindow,
     // Per round, not per run: a policy that moves a round onto another model moves it onto that model's window

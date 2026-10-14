@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { isCredentialFileName } from './credential-paths.ts';
+import { withRetrievalMetadata } from './retrieval-metadata.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -388,7 +389,40 @@ export type WorkspaceSymbolSearch = (
   signal: AbortSignal,
 ) => Promise<{ path: string; line?: number; kind: string; name: string; container?: string }[]>;
 
-export function repoMapTools(root: string, searchWorkspaceSymbols?: WorkspaceSymbolSearch): Tool[] {
+/**
+ * The symbol index, as this module is allowed to see it.
+ *
+ * Structural rather than imported so that `repo-map.ts` keeps working — and keeps its prompt-section caller
+ * working — in a build with no index at all. The search service satisfies it; a test can too, with three lines.
+ */
+export interface SymbolIndexSource {
+  symbols(input: {
+    query: string;
+    path?: string;
+    language?: string;
+    limit: number;
+    signal: AbortSignal;
+  }): Promise<{
+    symbols: {
+      path: string;
+      name: string;
+      kind: string;
+      startLine: number;
+      endLine: number;
+    }[];
+    coverage: unknown;
+    sourceVersion: string | null;
+    nextCursor: string | null;
+    freshness: string;
+  }>;
+  ready?(): Promise<void>;
+}
+
+export function repoMapTools(
+  root: string,
+  searchWorkspaceSymbols?: WorkspaceSymbolSearch,
+  index?: SymbolIndexSource,
+): Tool[] {
   return [
     {
       name: 'repo_map',
@@ -410,9 +444,30 @@ export function repoMapTools(root: string, searchWorkspaceSymbols?: WorkspaceSym
           typeof args.limit === 'number' && Number.isSafeInteger(args.limit) ? args.limit : 60;
         if (!query) {
           const text = formatRepoMap(buildRepoMap(root), 8_000);
+          /**
+           * The bounded map keeps its own limits, and now says which ones they are.
+           *
+           * `coverage.complete` is false here because this listing is bounded by a file cap and a head-of-file
+           * scan — the very limits S4 exists to work around. Saying so is the honest version of a listing that
+           * has always been partial without mentioning it.
+           */
           return {
             isError: false,
-            content: text || 'No outlineable source files found',
+            content: withRetrievalMetadata(text || 'No outlineable source files found', {
+              coverage: {
+                complete: false,
+                reasons: ['file-limit', 'line-limit'],
+                entriesVisited: 0,
+                filesConsidered: 0,
+                filesScanned: 0,
+                partialFiles: 0,
+                unreadableFiles: 0,
+                bytesRead: null,
+              },
+              sourceVersion: null,
+              nextCursor: null,
+              freshness: 'unknown',
+            }),
           };
         }
         context.signal.throwIfAborted();
@@ -423,17 +478,93 @@ export function repoMapTools(root: string, searchWorkspaceSymbols?: WorkspaceSym
             if (hits?.length)
               return {
                 isError: false,
-                content: hits
-                  .slice(0, limit)
-                  .map(
-                    (hit) =>
-                      `${hit.path}${hit.line === undefined ? '' : `:${hit.line}`} ${hit.kind} ${hit.container ? `${hit.container}.` : ''}${hit.name}`,
-                  )
-                  .join('\n'),
+                content: withRetrievalMetadata(
+                  hits
+                    .slice(0, limit)
+                    .map(
+                      (hit) =>
+                        `${hit.path}${hit.line === undefined ? '' : `:${hit.line}`} ${hit.kind} ${hit.container ? `${hit.container}.` : ''}${hit.name}`,
+                    )
+                    .join('\n'),
+                  {
+                    coverage: { complete: true, reasons: [], bytesRead: null },
+                    sourceVersion: null,
+                    nextCursor: null,
+                    freshness: 'validated',
+                  },
+                ),
               };
           } catch {
-            /* No running server, or it failed: fall through to the heuristic index. */
+            /* No running server, or it failed: fall through to the index, then to the heuristic scan. */
           }
+        }
+        /**
+         * The index answers the whole declared scope.
+         *
+         * This is the change that matters for a large repository: the heuristic scan reads the first 32KiB of
+         * the first 400 files, so a symbol in the body of a long file, or in any file past the four hundredth,
+         * simply did not exist for this tool. The index is built from whole files.
+         */
+        if (index) {
+          const page = await index.symbols({ query, limit, signal: context.signal });
+          /**
+           * A hit from a list that is not current still goes out — with the freshness beside it.
+           *
+           * The alternative is worse in both directions: withholding a hit the index does have is a worse answer
+           * than a hit whose age is stated, and returning it silently would let a line number that moved read as
+           * the current one. The metadata line carries the same value in machine-readable form.
+           */
+          const note =
+            page.freshness === 'validated'
+              ? ''
+              : `\n[symbol index: ${page.freshness}; this list may lag recent writes]`;
+          if (page.symbols.length)
+            return {
+              isError: false,
+              content: withRetrievalMetadata(
+                page.symbols
+                  .map(
+                    (symbol) => `${symbol.path}:${symbol.startLine} ${symbol.kind} ${symbol.name}`,
+                  )
+                  .join('\n') + note,
+                {
+                  coverage: page.coverage,
+                  sourceVersion: page.sourceVersion,
+                  nextCursor: page.nextCursor,
+                  freshness: page.freshness,
+                },
+              ),
+            };
+          /**
+           * A zero from an index that is not current is not a zero.
+           *
+           * This is the rule the whole round is about, applied to symbols: "no symbols match" may only be said
+           * about a list that was checked against the files as they are. While one is being rebuilt, the honest
+           * answer is that there is no answer yet.
+           */
+          if (page.freshness === 'building' || page.freshness === 'stale')
+            return {
+              isError: false,
+              content: withRetrievalMetadata(
+                `The symbol index is still being built, so no answer can be given for "${query}" yet. ` +
+                  'Ask again in a moment; this is not evidence that the symbol does not exist.',
+                {
+                  coverage: page.coverage,
+                  sourceVersion: page.sourceVersion,
+                  nextCursor: null,
+                  freshness: page.freshness,
+                },
+              ),
+            };
+          return {
+            isError: false,
+            content: withRetrievalMetadata(`No symbols match "${query}" in the indexed scope.`, {
+              coverage: page.coverage,
+              sourceVersion: page.sourceVersion,
+              nextCursor: null,
+              freshness: page.freshness,
+            }),
+          };
         }
         const lowered = query.toLowerCase();
         const matches = buildRepoMap(root)

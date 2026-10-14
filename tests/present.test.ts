@@ -284,3 +284,40 @@ test('presentFiles is a replacement, and the list stays bounded', () => {
   assert.equal(bounded.length, 40);
   assert.equal(bounded.at(-1)?.path, 'f59', 'the oldest declarations drop off first');
 });
+
+test('the shapes a declaration may not have are refused', async (t) => {
+  /**
+   * The refusal is asserted as a *behaviour*, not as a layer. These shapes are refused twice over: the declared
+   * input schema rejects them before the tool body runs, and `normalize` checks them again for a caller that
+   * reaches `execute` without the schema. A mutation of either layer alone therefore changes nothing observable
+   * — which is exactly why the assertion has to be about the outcome, so that removing both is still caught.
+   */
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'one.txt'), 'one\n');
+  const tools = createTools(root);
+  t.after(() => tools.close());
+  const refusals: [string, { files: unknown }][] = [
+    ['an empty list is not a declaration', { files: [] }],
+    [
+      'more than four files in one call',
+      {
+        files: Array.from({ length: 5 }, (_, index) => ({ path: `f${index}.txt` })),
+      },
+    ],
+    ['a path that is only whitespace', { files: [{ path: '   ' }] }],
+    ['a description that is not text', { files: [{ path: 'one.txt', description: 42 }] }],
+  ];
+  for (const [what, args] of refusals) {
+    const result = await tools.execute(
+      call('present', args),
+      context({ read: () => [], write: () => {} }),
+    );
+    assert.equal(result.isError, true, `${what}: was accepted`);
+  }
+  // and the same call with a shape it may have is still accepted
+  const accepted = await tools.execute(
+    call('present', { files: [{ path: 'one.txt' }] }),
+    context({ read: () => [], write: () => {} }),
+  );
+  assert.equal(accepted.isError, false);
+});

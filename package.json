@@ -4,42 +4,46 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "exports": {
-    "./sdk": {
-      "types": "./dist/packages/sdk/index.d.ts",
-      "import": "./dist/packages/sdk/index.js"
-    }
-  },
-  "description": "Independent YuanTu coding agent runtime, CLI and desktop",
+  "exports": {},
+  "description": "Independent YuanTu desktop coding agent",
   "engines": {
     "node": ">=24.0.0"
   },
-  "bin": {
-    "yuantu-agent": "dist/apps/cli/main.js"
-  },
   "scripts": {
-    "package:windows": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && electron-builder --config electron-builder.config.cjs --win --x64 && node scripts/write-release-manifest.mjs",
-    "package:windows:dir": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir",
-    "package:macos": "node scripts/prepare-macos-package.mjs && npm run build && electron-builder --config electron-builder.config.cjs --mac",
-    "package:macos:dir": "node scripts/prepare-macos-package.mjs && npm run build && electron-builder --config electron-builder.config.cjs --mac --dir",
-    "package:macos:arm64": "node scripts/prepare-macos-package.mjs --arch=arm64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --arm64",
-    "package:macos:arm64:dir": "node scripts/prepare-macos-package.mjs --arch=arm64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --arm64 --dir",
-    "package:macos:x64": "node scripts/prepare-macos-package.mjs --arch=x64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --x64",
-    "package:macos:x64:dir": "node scripts/prepare-macos-package.mjs --arch=x64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --x64 --dir",
-    "dev": "node apps/cli/main.ts",
+    "build:windows-runtime": "node scripts/build-windows-runtime.mjs",
+    "check:windows-runtime-source": "node scripts/build-windows-runtime.mjs --verify-only",
+    "certificate:windows:test": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/new-windows-test-certificate.ps1",
+    "package:windows:candidate:dir": "npm run check:windows-runtime-source && npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs --candidate=.scratch/windows-appcontainer-runtime/node-v24.19.0-libuv-2cadaa4/candidate-diagnostic && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir && node scripts/check-windows-package.mjs",
+    "check:windows-package": "node scripts/check-windows-package.mjs",
+    "package:windows:protected": "node scripts/build-windows-runtime.mjs --verify-only --profile=production && npm run build && node scripts/prepare-windows-package.mjs --appcontainer && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.protected.config.cjs --win --x64 && node scripts/check-windows-package.mjs --production && node scripts/write-release-manifest.mjs",
+    "package:windows": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 && node scripts/write-release-manifest.mjs",
+    "package:windows:dir": "npm run build:windows-sandbox && npm run build && node scripts/prepare-windows-package.mjs && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir",
+    "package:windows:appcontainer": "npm run build && node scripts/prepare-windows-package.mjs --appcontainer && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 && node scripts/write-release-manifest.mjs",
+    "package:windows:appcontainer:dir": "npm run build && node scripts/prepare-windows-package.mjs --appcontainer && node scripts/copy-search-assets.mjs && electron-builder --config electron-builder.config.cjs --win --x64 --dir",
+    "package:macos": "node scripts/prepare-macos-package.mjs && node scripts/copy-search-assets.mjs --platform=darwin && npm run build && electron-builder --config electron-builder.config.cjs --mac",
+    "package:macos:dir": "node scripts/prepare-macos-package.mjs && node scripts/copy-search-assets.mjs --platform=darwin && npm run build && electron-builder --config electron-builder.config.cjs --mac --dir",
+    "package:macos:arm64": "node scripts/prepare-macos-package.mjs --arch=arm64 && node scripts/copy-search-assets.mjs --platform=darwin --arch=arm64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --arm64",
+    "package:macos:arm64:dir": "node scripts/prepare-macos-package.mjs --arch=arm64 && node scripts/copy-search-assets.mjs --platform=darwin --arch=arm64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --arm64 --dir",
+    "package:macos:x64": "node scripts/prepare-macos-package.mjs --arch=x64 && node scripts/copy-search-assets.mjs --platform=darwin --arch=x64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --x64",
+    "package:macos:x64:dir": "node scripts/prepare-macos-package.mjs --arch=x64 && node scripts/copy-search-assets.mjs --platform=darwin --arch=x64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --x64 --dir",
     "host": "node apps/agent-host/main.ts",
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-sandbox-assets.mjs && node scripts/build-program-runner.mjs && node scripts/build-desktop.mjs && node scripts/build-web.mjs",
+    "build": "node scripts/clean-paused-builds.mjs && tsc -p tsconfig.build.json && node scripts/copy-sandbox-assets.mjs && node scripts/build-program-runner.mjs && node scripts/build-desktop.mjs",
     "build:program-runner": "node scripts/build-program-runner.mjs",
     "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
     "check:macos-sandbox": "node scripts/check-macos-sandbox.mjs",
+    "check:windows-sandbox": "node scripts/check-windows-sandbox.mjs",
+    "check:windows-desktop-sandbox": "npm run build && node scripts/check-windows-sandbox.mjs --desktop",
+    "check:windows-appcontainer-pipes": "node scripts/check-windows-appcontainer-pipes.mjs",
+    "check:windows-appcontainer": "node scripts/check-windows-appcontainer.mjs",
+    "sign:windows-sandbox": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/sign-windows-sandbox.ps1",
     "desktop": "npm run build && node scripts/start-desktop.mjs",
-    "web": "node scripts/build-web.mjs && node apps/web/main.ts",
-    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/backups.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs",
-    "smoke:web": "node scripts/run-tests.mjs tests/web.smoke.mjs",
+    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/backups.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs tests/workspace-ui.smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check . --log-level warn",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-tests.mjs",
+    "test:serial": "node scripts/run-tests.mjs --schedule=serial",
+    "test:partitioned": "node scripts/run-tests.mjs --schedule=partitioned",
     "test:verbose": "node --test --test-concurrency=1 tests/*.test.ts",
     "snapshot:update": "node scripts/update-snapshots.mjs",
     "bench": "node benchmarks/run.mjs",
@@ -49,12 +53,14 @@
     "docs:check": "node scripts/docs-facts.mjs --check",
     "references:check": "node scripts/check-references.mjs",
     "i18n:check": "node scripts/check-i18n.mjs",
-    "smoke:client": "node scripts/run-tests.mjs --concurrency=2 tests/compiled-client.smoke.mjs tests/compiled-sdk.smoke.mjs",
-    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run i18n:check && npm run typecheck && npm test && npm run build && npm run smoke:client && npm run smoke:web",
+    "smoke:client": "node scripts/run-tests.mjs tests/compiled-client.smoke.mjs",
+    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run i18n:check && npm run typecheck && npm test && npm run build && npm run smoke:client",
     "check:changed": "node scripts/check-changed.mjs",
     "check:related": "node scripts/check-related.mjs",
     "check:full": "npm run check",
-    "check:release": "npm run check && npm run smoke:desktop"
+    "check:release": "npm run check && npm run smoke:desktop",
+    "search-assets:prepare": "node scripts/prepare-search-assets.mjs",
+    "search-assets:verify": "node scripts/prepare-search-assets.mjs --verify-only"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.7.0",
@@ -68,6 +74,7 @@
     "mammoth": "^1.12.3",
     "marked": "^18.0.13",
     "pdfjs-dist": "^6.3.289",
+    "typescript": "^5.9.3",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.5"
   },
@@ -77,7 +84,26 @@
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "playwright": "^1.63.0",
-    "prettier": "^3.9.6",
-    "typescript": "^5.9.3"
+    "prettier": "^3.9.6"
+  },
+  "pausedEntrypoints": {
+    "reason": "Desktop-only product scope; implementation and paused tests are retained for restoration.",
+    "exports": {
+      "./sdk": {
+        "types": "./dist/packages/sdk/index.d.ts",
+        "import": "./dist/packages/sdk/index.js"
+      }
+    },
+    "bin": {
+      "yuantu-agent": "dist/apps/cli/main.js"
+    },
+    "scripts": {
+      "dev": "node apps/cli/main.ts",
+      "web": "node scripts/build-web.mjs && node apps/web/main.ts",
+      "smoke:web": "node scripts/run-tests.mjs tests/web.smoke.mjs",
+      "build": "tsc -p tsconfig.build.json && node scripts/copy-sandbox-assets.mjs && node scripts/build-program-runner.mjs && node scripts/build-desktop.mjs && node scripts/build-web.mjs",
+      "smoke:client": "node scripts/run-tests.mjs --concurrency=2 tests/compiled-client.smoke.mjs tests/compiled-sdk.smoke.mjs",
+      "check": "npm run format:check && npm run docs:check && npm run references:check && npm run i18n:check && npm run typecheck && npm test && npm run build && npm run smoke:client && npm run smoke:web"
+    }
   }
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -91,6 +91,29 @@ test('upgrade validates identity, version, channel and complete checksum before 
   assert.throws(() => checkUpgrade(f.file, f.current), /checksum/i);
 });
 
+test('a version whose components do not form three numbers is refused', (t) => {
+  const f = fixture(t);
+  // Every component here parses as a number, so only the three-component shape separates these from a real
+  // release. `newer()` reads just the first three indices, so `1.2` and `1.2.3.4` would otherwise compare as
+  // newer than the installed 0.1.0 and be accepted as a legitimate upgrade.
+  for (const version of ['1.2', '1.2.3.4', '0.2.0.0', '']) {
+    const original = { ...f.manifest };
+    f.manifest.version = version;
+    f.save();
+    assert.throws(
+      () => checkUpgrade(f.file, f.current),
+      /version/i,
+      `${JSON.stringify(version)} must not be accepted as a release version`,
+    );
+    Object.assign(f.manifest, original);
+    f.save();
+  }
+  // The Node runtime version goes through the same validation.
+  f.manifest.nodeVersion = '24.19';
+  f.save();
+  assert.throws(() => checkUpgrade(f.file, f.current), /version/i);
+});
+
 test('staging and preparation preserve software, settings and a compatible database', (t) => {
   const f = fixture(t);
   const staged = stageUpgrade(f.file, f.profile, f.current);
@@ -105,6 +128,22 @@ test('staging and preparation preserve software, settings and a compatible datab
     '{"encrypted":"fixture"}',
   );
   assert.equal(journal.databaseBackup.version, f.current.maxSchemaVersion);
+});
+
+test('preparation refuses a link inside the software it is about to snapshot', (t) => {
+  const f = fixture(t);
+  const staged = stageUpgrade(f.file, f.profile, f.current);
+  // A link would make the snapshot record whatever it points at — possibly outside the application
+  // directory — and the restore would then write through the link instead of restoring the application's
+  // own bytes. A junction is used because it needs no elevation on Windows, and it is what the directory
+  // form of the escape looks like there.
+  const external = path.join(f.root, 'external');
+  mkdirSync(external);
+  symlinkSync(external, path.join(f.installDirectory, 'linked'), 'junction');
+  assert.throws(
+    () => prepareUpgrade(staged, f.installDirectory, f.database, f.current),
+    /symbolic link/i,
+  );
 });
 
 test('installer and first startup failures retain recoverable states', async (t) => {

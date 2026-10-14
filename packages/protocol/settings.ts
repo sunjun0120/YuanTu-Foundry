@@ -422,9 +422,35 @@ export const ENVIRONMENT = {
   YUANTU_MEMORY_DIR: { kind: 'string', description: '用户级记忆目录' },
   YUANTU_KNOWLEDGE_DB: { kind: 'string', description: '知识库数据库路径' },
   YUANTU_REPO_MAP: { kind: 'enum', values: ['on', 'off'], description: '是否注入结构大纲' },
+  /**
+   * The fast search backend's switch.
+   *
+   * `0` removes it; `1` (or unset) leaves it in place, where it still refuses to run without a verified asset.
+   * A setting rather than an internal constant because a deployment that has decided never to ship a search
+   * binary should not have to look for one on every literal search.
+   */
+  YUANTU_SEARCH_RG: {
+    kind: 'enum',
+    values: ['0', '1'],
+    description: '是否启用固定 ripgrep 快速搜索后端（0 关闭；缺省启用，但仍需已核验的固定资产）',
+  },
   YUANTU_LSP_AFTER_EDIT: { kind: 'boolean', description: '编辑后是否附加诊断' },
   YUANTU_SUBAGENTS: { kind: 'boolean', description: '是否启用子代理委派' },
   YUANTU_SUBAGENT_CONCURRENCY: { kind: 'number', range: [1, 16], description: '子代理并发上限' },
+  /**
+   * Where a write-capable sub-agent executes.
+   *
+   * `auto` is the product default: a read-only child shares the delegator's directory, because a copy of a tree it
+   * cannot change buys nothing, and anything that may write gets its own worktree so two children cannot overwrite
+   * each other. `shared` is the pre-isolation behaviour kept deliberately available — it offers no isolation at all,
+   * which is why the interface must say so rather than showing it as isolated.
+   */
+  YUANTU_SUBAGENT_WORKSPACE: {
+    kind: 'enum',
+    values: ['auto', 'shared', 'worktree'],
+    description:
+      '子代理执行目录：auto 自动隔离（默认），shared 沿用委派者目录（旧行为，不做隔离），worktree 连只读子代理也隔离',
+  },
   YUANTU_SUBAGENT_TIMEOUT_MS: {
     kind: 'number',
     range: [0, 3_600_000],

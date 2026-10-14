@@ -95,7 +95,7 @@ test('unsupported platforms and development installs perform no subprocess or UA
   let calls = 0;
   const execute = async () => {
     calls++;
-    return { stdout: '1.53.0' };
+    return { stdout: '1.52.1' };
   };
   assert.equal((await service(execute, { platform: 'darwin' }).status()).reason, 'platform');
   assert.equal((await service(execute, { packaged: false }).status()).reason, 'development');
@@ -105,12 +105,12 @@ test('unsupported platforms and development installs perform no subprocess or UA
 
 test('runtime and signature preflight failures never dispatch the elevation operation', async () => {
   const operations: string[] = [];
-  const oldRuntime = service(async (_file, args) => {
+  const invalidRuntime = service(async (_file, args) => {
     operations.push(args[0]!);
-    return { stdout: '1.52.1' };
+    return { stdout: 'unknown' };
   });
-  assert.equal((await oldRuntime.status()).reason, 'runtime');
-  await assert.rejects(oldRuntime.initialize());
+  assert.equal((await invalidRuntime.status()).reason, 'runtime');
+  await assert.rejects(invalidRuntime.initialize());
   assert.equal(
     operations.every((operation) => operation === '-p'),
     true,
@@ -118,7 +118,7 @@ test('runtime and signature preflight failures never dispatch the elevation oper
   operations.length = 0;
   const badRelease = service(async (_file, args) => {
     operations.push(args[0]!);
-    if (args[0] === '-p') return { stdout: '1.53.0' };
+    if (args[0] === '-p') return { stdout: '1.52.1' };
     throw new Error('signature mismatch');
   });
   assert.equal((await badRelease.status()).reason, 'release');
@@ -131,7 +131,7 @@ test('initialization uses only captured paths and fixed operations, then verifie
   let initialized = false;
   const setup = service(async (file, args, timeout) => {
     calls.push([file, args, timeout]);
-    if (args[0] === '-p') return { stdout: '1.53.0' };
+    if (args[0] === '-p') return { stdout: '1.52.1' };
     if (args[0] === 'network-preflight') return { stdout: '{"version":1,"ready":true}' };
     if (args[0] === 'network-setup') {
       initialized = true;
@@ -163,7 +163,7 @@ test('invalid status or a successful process with missing policy is not installa
     const setup = service(async (_file, args) => ({
       stdout:
         args[0] === '-p'
-          ? '1.53.0'
+          ? '1.52.1'
           : args[0] === 'network-preflight'
             ? '{"version":1,"ready":true}'
             : invalid,
@@ -182,7 +182,7 @@ test('concurrent initialization is refused and UAC cancellation permits a later 
     rejectUac = reject;
   });
   const setup = service(async (_file, args) => {
-    if (args[0] === '-p') return { stdout: '1.53.0' };
+    if (args[0] === '-p') return { stdout: '1.52.1' };
     if (args[0] === 'network-preflight') return { stdout: '{"version":1,"ready":true}' };
     if (args[0] === 'network-setup') {
       announce();

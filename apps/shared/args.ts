@@ -14,6 +14,8 @@ export interface Options {
    * carrier changes.
    */
   listen?: string;
+  /** Path to a JSON completion contract, read and normalized before any model request is made. */
+  completionSpec?: string;
   json: boolean;
   allowWrite: boolean;
   allowCommand: boolean;
@@ -40,6 +42,14 @@ export interface Options {
    * operator says "let the child finish"; any positive value restores the deadline.
    */
   subagentTimeoutMs?: number;
+  /**
+   * Where a write-capable sub-agent executes: `auto` (its own worktree), `shared` (the delegator's
+   * directory, the pre-isolation behaviour) or `worktree` (isolate read-only children too).
+   *
+   * `auto` is the product default; `shared` exists so an operator can ask for the old behaviour deliberately,
+   * and a host that cannot manage Git metadata fails the task rather than quietly falling back to it.
+   */
+  subagentWorkspace?: string;
   /** Characters of this session's transcript a forked sub-agent inherits. */
   forkTranscriptChars?: number;
   /** Messages of this session's transcript a forked sub-agent inherits. */
@@ -153,6 +163,7 @@ export function parseArgs(
     help: false,
   };
   if (env.YUANTU_HOOKS_MODULE) options.hooks = env.YUANTU_HOOKS_MODULE;
+  if (env.YUANTU_SUBAGENT_WORKSPACE) options.subagentWorkspace = env.YUANTU_SUBAGENT_WORKSPACE;
   if (env.YUANTU_SUBAGENTS) {
     const value = env.YUANTU_SUBAGENTS.trim().toLowerCase();
     if (['off', 'false', '0', 'no'].includes(value)) options.subagents = false;
@@ -167,7 +178,14 @@ export function parseArgs(
   }
   const strings: Record<
     string,
-    'workspace' | 'db' | 'permissionPolicy' | 'taskId' | 'hooks' | 'listen'
+    | 'workspace'
+    | 'db'
+    | 'permissionPolicy'
+    | 'taskId'
+    | 'hooks'
+    | 'listen'
+    | 'completionSpec'
+    | 'subagentWorkspace'
   > = {
     '--workspace': 'workspace',
     '--db': 'db',
@@ -175,6 +193,23 @@ export function parseArgs(
     '--task-id': 'taskId',
     '--hooks': 'hooks',
     '--listen': 'listen',
+    /**
+     * A completion contract, as a path to a JSON file.
+     *
+     * A file rather than inline JSON because the contract is a definition a person writes once and reuses, and
+     * because a shell-quoted JSON body on the command line is a quoting problem nobody should have to solve twice.
+     * There is deliberately no environment variable for it: the contract is what makes a run *verified*, and an
+     * inherited variable that silently turned every run in a shell into a verified one is not a convenience.
+     */
+    '--completion-spec': 'completionSpec',
+    /**
+     * Where a write-capable sub-agent executes.
+     *
+     * A flag as well as an environment variable because it is a per-invocation decision as often as a machine-wide
+     * one: a person running the CLI against their own checkout wants the default, and a script that must not create
+     * worktrees says so on the command line.
+     */
+    '--subagent-workspace': 'subagentWorkspace',
   };
   const numbers: Record<
     string,

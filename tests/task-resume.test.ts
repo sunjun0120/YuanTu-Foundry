@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -150,9 +150,23 @@ test('a crash during a permissioned effect stays paused after database reopen', 
 });
 test('a successful manual task effect preserves its existing automatic schedule', async (t) => {
   const { root, store, session } = await fixture(t);
+  /**
+   * The task needs a definition that can pass.
+   *
+   * `createTask` with no acceptance produces an empty definition, and an empty definition is no longer a
+   * vacuous pass — so this fixture names one criterion with a check the test can satisfy up front.
+   */
+  await writeFile(path.join(root, 'marker.txt'), 'ok');
   const task = store.createTask(session.id, {
     title: 'Scheduled task',
     trigger: { kind: 'interval', enabled: true, everyMinutes: 30 },
+    acceptance: [
+      {
+        description: 'marker file matches',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
+    ],
   });
   const nextRunAt = task.nextRunAt;
   const tools = createTools(root);
@@ -358,11 +372,23 @@ test('a failed verification keeps checkpointed steps complete instead of erasing
 
 test('the agent checkpoints task steps through the task_step tool', async (t) => {
   const { root, store, session } = await fixture(t);
+  /**
+   * A definition that a clean finish can actually satisfy.
+   *
+   * The task used to declare no acceptance criteria at all and still complete — "every criterion of none holds".
+   * That vacuous pass is exactly what this change removes, so the fixture states one criterion with a check that
+   * passes, and one step, which the model then checkpoints through `task_step` as a real run is told to.
+   */
+  await writeFile(path.join(root, 'marker.txt'), 'ok');
   const task = store.createTask(session.id, {
     title: 'Tool driven',
-    steps: [
-      { description: 'inspect', status: 'pending' },
-      { description: 'implement', status: 'pending' },
+    steps: [{ description: 'inspect', status: 'pending' }],
+    acceptance: [
+      {
+        description: 'marker file matches',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
     ],
   });
   const provider = scripted([{ name: 'task_step', input: { index: 0, status: 'completed' } }], []);
@@ -373,8 +399,8 @@ test('the agent checkpoints task steps through the task_step tool', async (t) =>
     provider,
   });
   const result = await agent.run({ sessionId: session.id, taskId: task.id, prompt: 'do it' });
-  // The task declares no acceptance criteria, so a clean finish completes it.
   assert.equal(result.status, 'completed');
+  assert.equal(result.completion?.state, 'verified');
   const attempts = store.listTaskAttempts(session.id, task.id);
   assert.equal(attempts.length, 1);
   const journal = store.taskStepCheckpoints(session.id, task.id);

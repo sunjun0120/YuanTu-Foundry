@@ -55,8 +55,8 @@ export function goalContinuation(goal: Goal | null | undefined): GoalContinuatio
  * bound honest: the count that limits this loop is the same one an operator can read, raise, or close.
  */
 export async function runGoalRounds(input: {
-  /** Start one run with this prompt and answer with its status. */
-  runOnce: (prompt: string, round: number) => Promise<{ status: string }>;
+  /** Start one run with this prompt and answer with its status and how much substantive tool work it did. */
+  runOnce: (prompt: string, round: number) => Promise<{ status: string; toolCalls?: number }>;
   /** The goal as it now stands — read from the durable log, not from a cache. */
   goalOf: () => Goal | null | undefined;
   /** Called before each continuation, so a caller can log or observe the round it is about to start. */
@@ -78,14 +78,20 @@ export async function runGoalRounds(input: {
    */
   maxContinuations: number;
   signal?: AbortSignal;
-}): Promise<{ continuations: number; stopped: 'goal' | 'rounds' | 'run' | 'cancelled' }> {
+}): Promise<{
+  continuations: number;
+  stopped: 'goal' | 'rounds' | 'run' | 'cancelled' | 'no-progress';
+}> {
   let continuations = 0;
+  const reportExhausted = (goal: Goal | null | undefined): void => {
+    if (goal?.status === 'active' && goalExhausted(goal)) input.onExhausted?.(goal);
+  };
   for (;;) {
     if (input.signal?.aborted) return { continuations, stopped: 'cancelled' };
     const goal = input.goalOf();
     const continuation = goalContinuation(goal);
     if (!continuation) {
-      if (goal?.status === 'active' && goalExhausted(goal)) input.onExhausted?.(goal);
+      reportExhausted(goal);
       return { continuations, stopped: 'goal' };
     }
     if (continuations >= input.maxContinuations) return { continuations, stopped: 'rounds' };
@@ -93,5 +99,32 @@ export async function runGoalRounds(input: {
     const result = await input.runOnce(continuation.prompt, continuation.round);
     continuations++;
     if (result.status !== 'completed') return { continuations, stopped: 'run' };
+    /**
+     * A round that finished the goal is reported as the goal stopping, not as the round being quiet.
+     *
+     * The order matters and is the whole reason this check is here rather than at the top of the loop: a round
+     * whose last act was `update_goal complete` did perfectly good work, and calling that "no progress" would
+     * tell the user the wrong thing about a goal that just closed itself. The reuse of the top-of-loop condition
+     * is deliberate — the question "is there another round to start?" has one answer, asked in one place.
+     */
+    const settled = input.goalOf();
+    if (!goalContinuation(settled)) {
+      reportExhausted(settled);
+      return { continuations, stopped: 'goal' };
+    }
+    /**
+     * A round that did no substantive tool work is not progress, so it does not buy another round.
+     *
+     * Without this, an active goal whose model keeps answering in prose — "I will continue shortly", a summary,
+     * a plan it never executes — restarts itself until its round budget is gone, spending a model request per
+     * round to produce nothing. The counter is *substantive* tool activity: `todo`, the goal lifecycle tools and
+     * `completion_step`/`completion_scope` are excluded before it gets here, because recording state is not doing
+     * work, and a round that only rewrote its own checklist would otherwise look busy forever.
+     *
+     * A missing count stops the loop too. Absent data is not evidence of progress, and the conservative reading
+     * of "I cannot tell whether this round did anything" is to stop rather than to keep paying — a person can
+     * always continue deliberately.
+     */
+    if ((result.toolCalls ?? 0) <= 0) return { continuations, stopped: 'no-progress' };
   }
 }

@@ -36,6 +36,14 @@ import type {
 import { projectRoot } from './process-fixture.ts';
 
 /**
+ * This suite is about the *built-in* scanner’s accounting — real bytes read, files read to EOF, the reason a
+ * scan stopped — so it pins the engine rather than accepting whichever backend this machine happens to have a
+ * verified asset for. The fast backend is exercised where it belongs: tests/search-ripgrep.test.ts runs it
+ * against the built-in scanner on the same fixture and requires the two to agree match for match.
+ */
+process.env.YUANTU_SEARCH_RG = '0';
+
+/**
  * The Ajv the registry compiles tool *input* schemas with, used here on the *output* declarations.
  *
  * The same options on purpose: `strict: true` is what makes "the contract is JSON Schema" a checked claim
@@ -88,6 +96,29 @@ function payload(tool: Tool, result: ToolResult): Record<string, unknown> {
   );
   return result.output.value as Record<string, unknown>;
 }
+/**
+ * The four fields of a `search_files` payload that existed before coverage did.
+ *
+ * Pinned separately so the fields a card has always read stay *exactly* what they were: the new coverage,
+ * truncation and cursor fields are additive, and a test that compared whole payloads would have to be rewritten
+ * — losing the guarantee this exists to make.
+ */
+function searchFields(result: ToolResult, tool: Tool): Record<string, unknown> {
+  const value = payload(tool, result);
+  return {
+    query: value.query,
+    mode: value.mode,
+    matches: value.matches,
+    limited: value.limited,
+  };
+}
+function coverageOf(value: Record<string, unknown>): {
+  complete: boolean;
+  reasons: string[];
+  filesScanned: number;
+} {
+  return value.coverage as { complete: boolean; reasons: string[]; filesScanned: number };
+}
 
 test('read_file publishes the slice it read, without changing the text form', async (t) => {
   const root = await workspace(t);
@@ -99,16 +130,35 @@ test('read_file publishes the slice it read, without changing the text form', as
   // split artifact, which is what keeps "lines 2–3 of 4" a true sentence about a four-line file.
   assert.equal(result.content, '2: two\n3: three');
   const value = payload(tool, result);
-  assert.deepEqual(value, {
-    path: 'src.ts',
-    language: 'typescript',
-    startLine: 2,
-    endLine: 3,
-    totalLines: 4,
-    // The raw lines, so a card draws its own gutter starting at `startLine` instead of re-parsing `2: two`.
-    text: 'two\nthree',
-    truncated: false,
-  });
+  assert.deepEqual(
+    { ...value, fileFingerprint: undefined },
+    {
+      path: 'src.ts',
+      language: 'typescript',
+      startLine: 2,
+      endLine: 3,
+      totalLines: 4,
+      // The raw lines, so a card draws its own gutter starting at `startLine` instead of re-parsing `2: two`.
+      text: 'two\nthree',
+      truncated: false,
+      fileFingerprint: undefined,
+    },
+  );
+  /**
+   * The fingerprint is additive, and it claims only what it can support.
+   *
+   * Size and mtime let a later read notice that the file moved; `sha256` is null because a range read verifies
+   * freshness from metadata rather than by hashing the file it just read. A non-null digest here would be a
+   * content claim nothing in this path earned.
+   */
+  const fingerprint = value.fileFingerprint as {
+    size: number;
+    mtimeMs: number;
+    sha256: string | null;
+  };
+  assert.equal(fingerprint.size, 19);
+  assert.equal(typeof fingerprint.mtimeMs, 'number');
+  assert.equal(fingerprint.sha256, null);
   // The whole file, when no range is asked for: endLine is the last line actually returned, not the last one
   // requested — a window presented as the whole file is the failure this field exists to prevent.
   const whole = payload(tool, await tool.execute({ path: 'src.ts' }, context()));
@@ -134,12 +184,18 @@ test('search_files publishes the same matches the text form lists, in both modes
   ];
   const literal = await tool.execute({ query: 'needle' }, context());
   assert.equal(literal.content, 'a.txt:2: beta needle\nb.txt:1: needle delta');
-  assert.deepEqual(payload(tool, literal), {
+  assert.deepEqual(searchFields(literal, tool), {
     query: 'needle',
     mode: 'literal',
     matches: expected,
     limited: false,
   });
+  // A complete scan of a small tree: the coverage says so, and the extra fields are present rather than absent,
+  // so a caller never has to guess whether this build measured its own coverage.
+  const literalCoverage = coverageOf(payload(tool, literal));
+  assert.equal(literalCoverage.complete, true);
+  assert.deepEqual(literalCoverage.reasons, []);
+  assert.equal(literalCoverage.filesScanned, 2);
   /**
    * The regular-expression path runs in a worker and used to hand back formatted lines, which the tool printed
    * as they were. It now hands back the matches themselves, so the two modes cannot grow two ideas of what a
@@ -147,15 +203,16 @@ test('search_files publishes the same matches the text form lists, in both modes
    */
   const regex = await tool.execute({ query: 'n[e]edle', mode: 'regex' }, context());
   assert.equal(regex.content, literal.content);
-  assert.deepEqual(payload(tool, regex), {
+  assert.deepEqual(searchFields(regex, tool), {
     query: 'n[e]edle',
     mode: 'regex',
     matches: expected,
     limited: false,
   });
   const none = await tool.execute({ query: 'nothing-here' }, context());
-  assert.equal(none.content, 'No matches');
-  assert.deepEqual(payload(tool, none), {
+  // A zero that is a fact about the scope, and it says which kind of zero it is.
+  assert.equal(none.content, 'No matches in the requested scope.');
+  assert.deepEqual(searchFields(none, tool), {
     query: 'nothing-here',
     mode: 'literal',
     matches: [],
@@ -169,12 +226,16 @@ test('search_files reports a cut list as limited, and keeps the text form it alw
   const tool = toolNamed(fileTools(root), 'search_files');
   const limited = await tool.execute({ query: 'needle', max_results: 1 }, context());
   assert.equal(limited.content, 'a.txt:1: needle one\n[match limit reached]');
-  assert.deepEqual(payload(tool, limited), {
+  assert.deepEqual(searchFields(limited, tool), {
     query: 'needle',
     mode: 'literal',
     matches: [{ path: 'a.txt', line: 1, text: 'needle one' }],
     limited: true,
   });
+  // `limited` is now derived from a stated reason: a scan that stopped at the result limit did not finish.
+  const cut = coverageOf(payload(tool, limited));
+  assert.equal(cut.complete, false);
+  assert.ok(cut.reasons.includes('result-limit'));
   /**
    * A matched line longer than the display cap: the text form cuts it and appends the marker it has always
    * appended, while the payload carries the line itself, because a `[output truncated]` marker is presentation
@@ -182,9 +243,9 @@ test('search_files reports a cut list as limited, and keeps the text form it alw
    */
   const long = 'x'.repeat(600) + 'NEEDLE';
   await writeFile(path.join(root, 'long.txt'), `${long}\n`);
-  const cut = await tool.execute({ query: 'NEEDLE' }, context());
-  assert.equal(cut.content, `long.txt:1: ${'x'.repeat(500)}\n[output truncated]`);
-  const value = payload(tool, cut) as { matches: { text: string }[] };
+  const line = await tool.execute({ query: 'NEEDLE' }, context());
+  assert.equal(line.content, `long.txt:1: ${'x'.repeat(500)}\n[output truncated]`);
+  const value = payload(tool, line) as { matches: { text: string }[] };
   assert.equal(value.matches[0]!.text, 'x'.repeat(500));
 });
 
@@ -337,7 +398,10 @@ test('a live tool result reaches the client snapshot with its payload and render
   if (message?.role !== 'tool') assert.fail('the tool result is projected into the transcript');
   // The field path a carrier reads: `snapshot.messages[i].output`, on the message whose role is `tool`.
   assert.equal(message.output?.render, 'file-read');
-  assert.deepEqual(message.output?.value, {
+  const snapshotValue = { ...(message.output?.value as Record<string, unknown>) };
+  const snapshotFingerprint = snapshotValue.fileFingerprint;
+  delete snapshotValue.fileFingerprint;
+  assert.deepEqual(snapshotValue, {
     path: 'a.txt',
     startLine: 1,
     endLine: 1,
@@ -345,6 +409,11 @@ test('a live tool result reaches the client snapshot with its payload and render
     text: 'alpha',
     truncated: false,
   });
+  assert.equal(
+    (snapshotFingerprint as { size: number }).size,
+    6,
+    'the fingerprint crosses the wire with the payload',
+  );
   // The text form is still there beside the payload, and still numbers the line a trailing newline splits off.
   assert.equal(message.content, '1: alpha\n2: ');
   /**

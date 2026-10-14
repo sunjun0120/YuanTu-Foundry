@@ -19,6 +19,23 @@ export interface ToolCardMatch {
   line: number;
   text: string;
 }
+/**
+ * How much of the requested scope a scan actually covered.
+ *
+ * `null` inside this shape — and an absent field on the model — are different facts: `null` here means a scan
+ * that could not measure its own coverage, and an absent `coverage` on the model means a result written before
+ * there was anything to measure. Both are shown as "not recorded"; neither is treated as complete.
+ */
+export interface ToolCardCoverage {
+  complete: boolean;
+  reasons: string[];
+  entriesVisited: number;
+  filesConsidered: number;
+  filesScanned: number;
+  partialFiles: number;
+  unreadableFiles: number;
+  bytesRead: number | null;
+}
 /** What a card needs, per renderer name. Anything not exactly this shape produces no card. */
 export type ToolCardModel =
   | {
@@ -30,6 +47,8 @@ export type ToolCardModel =
       totalLines: number;
       text: string;
       truncated: boolean;
+      /** Absent for a result written before the field existed; a card draws the same either way. */
+      fileFingerprint?: { size: number; mtimeMs: number; sha256: string | null };
     }
   | {
       kind: 'search-results';
@@ -37,6 +56,17 @@ export type ToolCardModel =
       mode: 'literal' | 'regex';
       matches: ToolCardMatch[];
       limited: boolean;
+      /**
+       * Absent when the result predates coverage — an old log, or a tool that never declared it.
+       *
+       * The three states a card has to tell apart are "complete", "incomplete, here is why" and "nobody
+       * recorded it". This field being absent is the third, and it is deliberately not defaulted to complete:
+       * a result that cannot say how much it scanned must not be shown as if it had.
+       */
+      coverage?: ToolCardCoverage;
+      outputTruncated?: boolean;
+      nextCursor?: string | null;
+      sourceVersion?: string | null;
     }
   | {
       kind: 'command-output';
@@ -79,6 +109,58 @@ function matches(value: unknown): ToolCardMatch[] | null {
   return list;
 }
 /**
+ * A coverage value, or `null` when the field is present but is not one.
+ *
+ * `undefined` is not an error and never reaches here — the caller checks for absence first, because "this log
+ * predates the field" and "this log has a broken field" are different answers and only one of them is a skew.
+ */
+function coverage(value: unknown): ToolCardCoverage | null {
+  const row = record(value);
+  if (!row) return null;
+  const complete = flag(row.complete);
+  const reasons = row.reasons;
+  if (complete === null || !Array.isArray(reasons) || !reasons.every((r) => typeof r === 'string'))
+    return null;
+  const entriesVisited = count(row.entriesVisited);
+  const filesConsidered = count(row.filesConsidered);
+  const filesScanned = count(row.filesScanned);
+  const partialFiles = count(row.partialFiles);
+  const unreadableFiles = count(row.unreadableFiles);
+  const bytesRead = row.bytesRead === null ? null : count(row.bytesRead);
+  if (row.bytesRead !== null && bytesRead === null) return null;
+  if (
+    entriesVisited === null ||
+    filesConsidered === null ||
+    filesScanned === null ||
+    partialFiles === null ||
+    unreadableFiles === null
+  )
+    return null;
+  return {
+    complete,
+    reasons: reasons as string[],
+    entriesVisited,
+    filesConsidered,
+    filesScanned,
+    partialFiles,
+    unreadableFiles,
+    bytesRead,
+  };
+}
+/** A file fingerprint, or `null` when the field is present but is not one. */
+function fingerprint(
+  value: unknown,
+): { size: number; mtimeMs: number; sha256: string | null } | null {
+  const row = record(value);
+  if (!row) return null;
+  const size = count(row.size);
+  const mtimeMs = typeof row.mtimeMs === 'number' ? row.mtimeMs : null;
+  const sha256 = row.sha256 === null ? null : text(row.sha256);
+  if (size === null || mtimeMs === null) return null;
+  if (row.sha256 !== null && sha256 === null) return null;
+  return { size, mtimeMs, sha256 };
+}
+/**
  * The view model for a result, or `null` when this build has no card for it.
  *
  * `undefined` (a result with no payload), an unknown renderer name, a value that is not an object, and a value
@@ -109,6 +191,14 @@ export function toolCardModel(output: ToolResultOutput | undefined): ToolCardMod
       return null;
     // An absent language is a fact (the extension is unknown); a present non-string one is a skew.
     if (value.language !== undefined && text(value.language) === null) return null;
+    // The fingerprint is additive and optional: a log written before it existed still draws its card, but a
+    // fingerprint that is *present* and malformed is a skew rather than something to ignore.
+    let fileFingerprint: { size: number; mtimeMs: number; sha256: string | null } | undefined;
+    if (value.fileFingerprint !== undefined) {
+      const parsed = fingerprint(value.fileFingerprint);
+      if (!parsed) return null;
+      fileFingerprint = parsed;
+    }
     return {
       kind: 'file-read',
       path,
@@ -118,6 +208,7 @@ export function toolCardModel(output: ToolResultOutput | undefined): ToolCardMod
       totalLines,
       text: body,
       truncated,
+      ...(fileFingerprint ? { fileFingerprint } : {}),
     };
   }
   if (output.render === 'search-results') {
@@ -126,7 +217,38 @@ export function toolCardModel(output: ToolResultOutput | undefined): ToolCardMod
     const list = matches(value.matches);
     const limited = flag(value.limited);
     if (query === null || !mode || !list || limited === null) return null;
-    return { kind: 'search-results', query, mode, matches: list, limited };
+    const parsedCoverage = value.coverage === undefined ? undefined : coverage(value.coverage);
+    if (value.coverage !== undefined && !parsedCoverage) return null;
+    const outputTruncated =
+      value.outputTruncated === undefined ? undefined : (flag(value.outputTruncated) ?? null);
+    if (outputTruncated === null) return null;
+    const nextCursor =
+      value.nextCursor === undefined
+        ? undefined
+        : value.nextCursor === null
+          ? null
+          : (text(value.nextCursor) ?? null);
+    if (nextCursor === null && value.nextCursor !== null && value.nextCursor !== undefined)
+      return null;
+    const sourceVersion =
+      value.sourceVersion === undefined
+        ? undefined
+        : value.sourceVersion === null
+          ? null
+          : (text(value.sourceVersion) ?? null);
+    if (sourceVersion === null && value.sourceVersion !== null && value.sourceVersion !== undefined)
+      return null;
+    return {
+      kind: 'search-results',
+      query,
+      mode,
+      matches: list,
+      limited,
+      ...(parsedCoverage ? { coverage: parsedCoverage } : {}),
+      ...(outputTruncated === undefined ? {} : { outputTruncated }),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      ...(sourceVersion === undefined ? {} : { sourceVersion }),
+    };
   }
   if (output.render === 'command-output') {
     const command = text(value.command);

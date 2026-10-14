@@ -60,7 +60,9 @@ test('the loop continues while the goal asks, and reports why it stopped', async
   const outcome = await runGoalRounds({
     runOnce: async () => {
       rounds++;
-      return { status: 'completed' };
+      // Substantive tool work. A round that reports none is treated as no progress and stops the loop; that is
+      // asserted separately below, so every fixture here that means "the round advanced the work" says so.
+      return { status: 'completed', toolCalls: 1 };
     },
     // The goal stays active for three continuations, then completes itself.
     goalOf: () => goal({ status: rounds >= 3 ? 'completed' : 'active', roundsStarted: 1 + rounds }),
@@ -70,13 +72,45 @@ test('the loop continues while the goal asks, and reports why it stopped', async
   assert.equal(rounds, 3);
 });
 
+test('a completed round that did no substantive work does not buy another one', async () => {
+  /**
+   * The failure this stops: an active goal whose model keeps answering in prose — "I will continue shortly", a
+   * summary, a plan it never executes — used to restart itself until its round budget was gone, spending one
+   * model request per round to produce nothing. A missing count is treated the same way, because "I cannot tell
+   * whether this round did anything" is not evidence that it did.
+   */
+  for (const toolCalls of [0, undefined] as const) {
+    let rounds = 0;
+    const outcome = await runGoalRounds({
+      runOnce: async () => {
+        rounds++;
+        return toolCalls === undefined
+          ? { status: 'completed' }
+          : { status: 'completed', toolCalls };
+      },
+      goalOf: () => goal({ roundsStarted: 1 + rounds }),
+      maxContinuations: 10,
+    });
+    assert.deepEqual(outcome, { continuations: 1, stopped: 'no-progress' }, String(toolCalls));
+    assert.equal(rounds, 1, 'the loop stops before paying for a second round');
+  }
+  // A goal that is finished anyway still reports the goal, not the missing progress: the reason a loop stopped
+  // is the earliest true one, and "there is nothing left to continue" is truer than "the last round was quiet".
+  const finished = await runGoalRounds({
+    runOnce: async () => ({ status: 'completed', toolCalls: 0 }),
+    goalOf: () => goal({ status: 'completed' }),
+    maxContinuations: 10,
+  });
+  assert.deepEqual(finished, { continuations: 0, stopped: 'goal' });
+});
+
 test('a round that did not finish stops the loop instead of being retried', async () => {
   for (const status of ['failed', 'cancelled'] as const) {
     let rounds = 0;
     const outcome = await runGoalRounds({
       runOnce: async () => {
         rounds++;
-        return { status };
+        return { status, toolCalls: 1 };
       },
       goalOf: () => goal(),
       maxContinuations: 10,
@@ -96,7 +130,7 @@ test('the loop has its own bound, because the goal budget is something the model
   const outcome = await runGoalRounds({
     runOnce: async () => {
       rounds++;
-      return { status: 'completed' };
+      return { status: 'completed', toolCalls: 3 };
     },
     // The kernel admits a round when a run starts, which is what advances the count — so the fake advances it
     // too, or every iteration would read the same goal and ask for the same round.
@@ -119,7 +153,7 @@ test('a spent budget is reported so the caller can record it, not left looking a
   const outcome = await runGoalRounds({
     runOnce: async () => {
       rounds++;
-      return { status: 'completed' };
+      return { status: 'completed', toolCalls: 1 };
     },
     goalOf: () => goal({ roundsStarted: 1 + rounds, maxGoalRounds: 2 }),
     maxContinuations: 10,
@@ -132,7 +166,7 @@ test('a spent budget is reported so the caller can record it, not left looking a
   for (const status of ['paused', 'completed', 'blocked'] as const) {
     const reported: Goal[] = [];
     await runGoalRounds({
-      runOnce: async () => ({ status: 'completed' }),
+      runOnce: async () => ({ status: 'completed', toolCalls: 1 }),
       goalOf: () => goal({ status, roundsStarted: 9, maxGoalRounds: 9 }),
       maxContinuations: 3,
       onExhausted: (value) => reported.push(value),
@@ -148,7 +182,7 @@ test('cancellation stops the loop before it starts another round', async () => {
     runOnce: async () => {
       rounds++;
       controller.abort();
-      return { status: 'completed' };
+      return { status: 'completed', toolCalls: 1 };
     },
     goalOf: () => goal(),
     maxContinuations: 10,

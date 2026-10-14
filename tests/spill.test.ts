@@ -9,7 +9,17 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -435,4 +445,120 @@ test('spill caps actual utf8 bytes without broken characters', async (t) => {
     if (item.cut) assert.ok(text.length < item.content.length, `${item.name}: over the cap is cut`);
     else assert.equal(text, item.content, `${item.name}: exactly the cap is left whole`);
   }
+});
+
+test('a tool name can neither escape the spill directory nor grow without bound', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-name-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  // The name says which tool produced the spill, but it is a tool's own name and nothing in it may climb out
+  // of the session's directory — a spill is a copy of whatever the tool read.
+  const escaping = spillOutput({
+    workspace: root,
+    sessionId: 'name-session',
+    tool: '../../outside',
+    content: 'x',
+  })!;
+  assert.ok(escaping);
+  const directory = path.resolve(root, SPILL_DIRECTORY, 'name-session');
+  assert.equal(escaping.path.includes('..'), false, `escaped the directory: ${escaping.path}`);
+  assert.ok(
+    path.resolve(root, escaping.path).startsWith(`${directory}${path.sep}`),
+    `the file is not under the session directory: ${escaping.path}`,
+  );
+  // And a name is not allowed to be arbitrarily long either.
+  const long = spillOutput({
+    workspace: root,
+    sessionId: 'name-session',
+    tool: 'x'.repeat(400),
+    content: 'y',
+  })!;
+  assert.ok(long);
+  const name = path.basename(long.path);
+  assert.ok(
+    name.startsWith('x'.repeat(40)),
+    `the name is not the sanitised, capped prefix: ${name}`,
+  );
+  assert.ok(name.length <= 64, `the name grew past the cap: ${name.length} characters`);
+});
+
+test('a session keeps only the newest spills', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-trim-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  const directory = path.join(root, SPILL_DIRECTORY, 'trim-session');
+  await mkdir(directory, { recursive: true });
+  // The older spills get explicit times, so "newest" does not depend on filesystem timestamp granularity —
+  // fifty files written in one loop would otherwise share a timestamp and the order would be arbitrary.
+  for (let index = 0; index < 50; index++) {
+    const file = path.join(directory, `old-${String(index).padStart(3, '0')}.txt`);
+    await writeFile(file, 'old');
+    const at = new Date(Date.UTC(2026, 0, 1, 0, 0, index));
+    await utimes(file, at, at);
+  }
+  const spilled = spillOutput({
+    workspace: root,
+    sessionId: 'trim-session',
+    tool: 'search',
+    content: 'newest',
+  })!;
+  assert.ok(spilled);
+  const remaining = (await readdir(directory)).filter((name) => name.endsWith('.txt')).sort();
+  // A directory left to grow is a tool that can fill a disk one output at a time.
+  assert.equal(remaining.length, 50, `kept ${remaining.length} files`);
+  assert.equal(remaining.includes('old-000.txt'), false, 'the oldest spill was kept');
+  assert.ok(remaining.includes(path.basename(spilled.path)), 'the newest spill was trimmed away');
+});
+
+test('an unchanged projection is not written to disk again', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-projection-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  const input = {
+    workspace: root,
+    sessionId: 'projection-session',
+    key: 'call-1',
+    content: 'the same text as last round',
+  };
+  const first = spillResult(input)!;
+  assert.ok(first);
+  const file = path.resolve(root, first.path);
+  const before = await stat(file);
+  // Long enough that a rewrite would land on a different modification time.
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const second = spillResult(input)!;
+  assert.deepEqual(second, first);
+  // Shortening is a projection recomputed every round: rewriting the file would mean touching the disk on
+  // every round and changing nothing the model reads.
+  assert.equal((await stat(file)).mtimeMs, before.mtimeMs, 'the file was rewritten');
+});
+
+test('two sessions with the same tool call do not share a spilled file', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-identity-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  // The file name is the message's identity, and a tool call id is only unique within its own session.
+  const one = spillResult({
+    workspace: root,
+    sessionId: 'session-one',
+    key: 'call-1',
+    content: 'the first session said this',
+  })!;
+  const two = spillResult({
+    workspace: root,
+    sessionId: 'session-two',
+    key: 'call-1',
+    content: 'the second session said that',
+  })!;
+  assert.ok(one && two);
+  assert.notEqual(one.path, two.path, 'both sessions point at the same file');
+  assert.equal(await readFile(path.resolve(root, one.path), 'utf8'), 'the first session said this');
+  assert.equal(
+    await readFile(path.resolve(root, two.path), 'utf8'),
+    'the second session said that',
+  );
 });

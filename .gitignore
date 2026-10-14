@@ -10,3 +10,6 @@ artifacts/
 *.sqlite-shm
 *.sqlite-wal
 model-settings.json
+
+# Prepared search binaries: the lock file records their identity, and they are fetched at build time.
+build/search-assets/

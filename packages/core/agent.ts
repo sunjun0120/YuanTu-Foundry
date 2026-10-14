@@ -1,6 +1,12 @@
 import { createChildTurns } from './run-child-turns.ts';
+import { randomUUID } from 'node:crypto';
 import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
-import { goalNoticeText, taskDefinitionText, skillsCatalogue } from './agent-notices.ts';
+import {
+  goalNoticeText,
+  completionContractText,
+  taskDefinitionText,
+  skillsCatalogue,
+} from './agent-notices.ts';
 import { createRunPromptSections } from './run-prompt.ts';
 import { admitVisibleBackground } from './background-deliveries.ts';
 import type {
@@ -55,7 +61,7 @@ import {
   type FailureCode,
 } from '../protocol/failure.ts';
 import { RETRY_MAX_WAIT_MS, retryDelayMs, retryable } from '../protocol/retry.ts';
-import { admitGoalRound, type Goal } from '../protocol/goals.ts';
+import { admitGoalRound, changeGoal, type Goal } from '../protocol/goals.ts';
 import type { StepEndReason } from '../protocol/steps.ts';
 import { resolveRunLimits } from '../protocol/settings.ts';
 import { groupToolCalls, runBounded } from './tool-schedule.ts';
@@ -69,6 +75,10 @@ import { createRunInteraction } from './run-interaction.ts';
 import { createProviderMeasurement } from './run-provider.ts';
 import { createSubAgentProviders } from './run-subagents.ts';
 import { createCoordinator } from './run-coordinator.ts';
+import type { WorkspaceBinding } from '../protocol/workspaces.ts';
+import type { WorkspaceMode } from '../protocol/workspaces.ts';
+import type { WorkspaceManager } from '../workspaces/manager.ts';
+import type { WorkspaceApply, WorkspaceResults } from '../workspaces/results.ts';
 import { createResidentMessageTool } from './run-residency.ts';
 import {
   REPORT_SCHEMA,
@@ -94,9 +104,31 @@ import { validateUserInput } from '../protocol/images.ts';
 import { discoverSkills, expandSkill } from '../resources/skills.ts';
 import {
   captureTaskBaselines,
+  verifyCompletionAcceptance,
   verifyTaskAcceptance,
   type TaskBaselines,
 } from './task-acceptance.ts';
+import { decideCompletion, failureFingerprint, type CompletionDecision } from './completion.ts';
+import { snapshotCompletionInputs, type CompletionInputSnapshot } from './completion-inputs.ts';
+import {
+  completionDefinitionHash,
+  normalizeCompletionPath,
+  normalizeCompletionRepairPolicy,
+  normalizeCompletionSpec,
+  planCompletionSpec,
+  taskCompletionSpec,
+  taskCompletionStepId,
+} from './completion-contract.ts';
+import { COMPLETION_LIMITS } from '../protocol/index.ts';
+import type {
+  CompletionRepairPolicy,
+  CompletionSpec,
+  CompletionStep,
+  CompletionSummary,
+  TaskStepStatus,
+} from '../protocol/index.ts';
+
+const MAX_AFFECTED_PATHS = COMPLETION_LIMITS.affectedPaths;
 
 export interface AgentOptions {
   /**
@@ -181,7 +213,33 @@ export interface AgentOptions {
    * a factory, residency is refused rather than silently degraded to borrowing: a child whose tools vanish
    * between turns would fail in a way nobody could attribute.
    */
-  childTools?: () => ToolRegistry;
+  childTools?: (binding?: WorkspaceBinding) => ToolRegistry;
+  /**
+   * Which directory this session actually executes in.
+   *
+   * Absent for an embedder that manages no workspaces, and then a session's directory is its project — the
+   * pre-isolation behaviour, unchanged. Present, it answers for *this session's* binding, which is what lets a
+   * delegated child whose directory is a worktree load the instructions, skills and outline of the tree it is
+   * actually editing rather than the delegator's.
+   *
+   * It is a resolver rather than a string because the binding is durable state: a call that read it once at
+   * construction would keep using a directory that a restart or a restore has since replaced.
+   */
+  workspaceRoots?: (sessionId: string) => { projectRoot: string; executionRoot: string };
+  /**
+   * How this run's delegations decide where a child executes.
+   *
+   * Absent means `shared`, which is exactly what delegation did before isolation existed: every child runs in the
+   * delegator's own directory, and the parent's change list shows its work directly. `auto` is what a shipped
+   * product selects, and `worktree` isolates read-only children as well as writing ones.
+   */
+  workspaceMode?: WorkspaceMode;
+  /** The workspace service, when this host manages isolated directories at all. */
+  workspaceManager?: WorkspaceManager;
+  /** Where a child's frozen results are exported from, by the child's own turn. */
+  workspaceResults?: WorkspaceResults;
+  /** Where those results are previewed and imported, by the parent's tools. */
+  workspaceApply?: WorkspaceApply;
   /** Appended to the system prompt, to give a delegated child its role. */
   rolePrompt?: string;
   /**
@@ -453,6 +511,26 @@ export class Agent {
       /** An approved plan to execute. Its approval and hash were checked before the run started. */
       approvedPlan?: Plan;
       /**
+       * The completion contract this run is judged against, when it carries one of its own.
+       *
+       * A task's contract is built from the task definition and cannot be supplied here: the operator's
+       * definition of done is not something the caller of a run gets to replace. This field is for an ordinary
+       * request or an approved plan, which have no task row to read a definition from.
+       */
+      completion?: CompletionSpec;
+      /** A previously recorded contract to continue, by id. Conflicts with `completion` and with `taskId`. */
+      resumeCompletionId?: string;
+      /** How much repair this run may spend before it stops. Callers may lower it or raise it to the ceilings. */
+      completionRepairPolicy?: CompletionRepairPolicy;
+      /**
+       * The file range a task's checks are about.
+       *
+       * Only meaningful for a task (its own definition supplies the rest) and only for verification: it says
+       * which files the evidence covers, never what "done" means. Supplying it alongside an explicit
+       * `completion` is a conflict rather than an override.
+       */
+      completionInputs?: string[];
+      /**
        * Session that owns the file-change journal. A sub-agent sets it to the parent session, so its
        * writes appear in the session the user is actually looking at and remain undoable there.
        */
@@ -544,7 +622,15 @@ export class Agent {
           .at(-1)
       : undefined;
     if (task) task.acceptance = task.acceptance.map((item) => ({ ...item, met: false }));
-    const workspace = store.get(input.sessionId).workspace;
+    /**
+     * The project a session belongs to, and the directory it works in — two facts, deliberately separate.
+     *
+     * `project` is what `Session.workspace` has always meant: the logical project the session lives in, which
+     * ownership checks, session listing, search and the scheduler all read. `workspace` is where this run's files,
+     * instructions, skills, outline and spill actually go, which for a delegated child is its own worktree.
+     */
+    const project = store.get(input.sessionId).workspace;
+    const workspace = this.options.workspaceRoots?.(input.sessionId).executionRoot ?? project;
     const journalSessionId = input.journalSessionId ?? input.sessionId;
     /**
      * A sub-agent's file changes are journaled against the parent session, so the tag has to travel
@@ -684,7 +770,7 @@ export class Agent {
       tools.replace({
         name: 'submit_report',
         description: custom
-          ? 'Submit the structured result this task asked for and end this run. The arguments are the object described by this tool’s own schema: include every required field, and use the field descriptions to decide what belongs in each. Call this exactly once, when you can answer or you are blocked.'
+          ? 'Submit the structured result this task asked for and end this run. The arguments are the object described by this tool’ own schema: include every required field, and use the field descriptions to decide what belongs in each. Call this exactly once, when you can answer or you are blocked.'
           : SUBMIT_REPORT_DESCRIPTION,
         inputSchema: schema,
         execute: async (args, context) => {
@@ -778,7 +864,59 @@ export class Agent {
       acceptance: RunResult['acceptance'],
       taskVerification: Awaited<ReturnType<typeof verifyTaskAcceptance>> | undefined,
       result!: RunResult;
-    const acceptanceEffects = new Map<string, string>();
+    /**
+     * The completion contract and the bounded repair loop's own state.
+     *
+     * All of it is per run and in memory, which is what the plan asks for: the *counters* are persisted on every
+     * round (the `completion.updated` record carries `repairRounds`), so a restart reads them back from the log
+     * rather than resetting a budget by dying. `repairStartedAt` is set when the first failure is decided and
+     * never moved afterwards — a resume must not restart the clock it is being measured against.
+     */
+    const completionPolicy: CompletionRepairPolicy = normalizeCompletionRepairPolicy(
+      input.completionRepairPolicy,
+    );
+    let contractId: string | undefined;
+    let contractDefinitionHash: string | undefined;
+    let contractSpec: CompletionSpec | undefined;
+    let completionSteps: CompletionStep[] = [];
+    /**
+     * The paths this run has declared as the scope of its changes.
+     *
+     * Recorded through the `completion_scope` tool rather than inferred: a refactor that missed a caller is
+     * exactly the failure this list exists to make visible, and a list derived from what the model happened to
+     * edit could never contain the file it never opened.
+     */
+    let affectedPaths: string[] = [];
+    let completionSummary: CompletionSummary | undefined;
+    /** A round that decided "complete" but has not yet survived cleanup, re-fingerprinting and persistence. */
+    let candidateCompletion: CompletionSummary | undefined;
+    let verificationRound = 0;
+    let repairRounds = 0;
+    let repeatedFailures = 0;
+    let repairStartedAt: number | undefined;
+    let previousFailureFingerprint: string | undefined;
+    let lastFailureFingerprint: string | undefined;
+    let previousStepSignature: string | undefined;
+    /**
+     * The fingerprint taken after the last verification round, and the one before it.
+     *
+     * `lastInputSnapshot` is what the final cleanup is compared against (`S1` against `S2`): a resource that is
+     * still writing when the run declares itself done has changed the monitored source, and evidence collected
+     * before that write does not describe what is on disk. `previousInputDigest` is what makes "did the code
+     * change since the last failure" answerable, which is the question the repeat detector asks.
+     */
+    let lastInputSnapshot: CompletionInputSnapshot | undefined;
+    /**
+     * The exact input list the last snapshot covered.
+     *
+     * Kept rather than recomputed, because the digest is a function of the *list* as well as the tree: a final
+     * check that rebuilt the list slightly differently — the task fallback plus the check paths, say — would
+     * compare two different questions and call the difference a workspace change.
+     */
+    let lastMonitoredInputs: string[] = [];
+    let previousInputDigest: string | undefined;
+    /** The message from the last failed fingerprint attempt, reported with the stop rather than swallowed. */
+    let snapshotFailure: string | undefined;
     /** Every event type this run emitted, which is what the protocol invariant checks at the end. */
     const emittedTypes = new Set<string>();
     /**
@@ -816,6 +954,269 @@ export class Agent {
       state: emission,
       onEvent: this.options.onEvent,
     });
+    /**
+     * The contract this run is judged against, resolved before a single model request.
+     *
+     * Everything that can be wrong about a contract is refused here rather than discovered after the model has
+     * been paid to do work: a conflicting source, an invalid body, a task whose definition the caller tried to
+     * replace. There is at most one contract per run, and the conflicts are errors rather than a silent
+     * precedence order — a caller that supplied two different definitions did not mean either one of them.
+     */
+    const taskInputs = input.completionInputs ?? [];
+    if (task && input.completion)
+      throw new Error('A task already carries the acceptance definition for this run');
+    if (task && input.resumeCompletionId)
+      throw new Error('A task run continues its own completion contract');
+    if (input.completion && input.resumeCompletionId)
+      throw new Error('Provide a completion spec or a contract to resume, not both');
+    if (input.completion && input.completionInputs)
+      throw new Error('Completion inputs describe a task contract, not an explicit spec');
+    if (input.resumeCompletionId && input.completionInputs)
+      throw new Error('A resumed contract already records the inputs it was created with');
+    const requestedSpec = input.completion
+      ? input.approvedPlan
+        ? // An approved plan's steps are the ones a person approved, so the caller may add checks and inputs but
+          // not rewrite the steps; `planCompletionSpec` refuses anything that is not byte-identical and in order.
+          planCompletionSpec(input.approvedPlan, {
+            ...(input.completion.constraints ? { constraints: input.completion.constraints } : {}),
+            ...(input.completion.steps ? { steps: input.completion.steps } : {}),
+            acceptance: input.completion.acceptance,
+            inputs: input.completion.inputs,
+          })
+        : normalizeCompletionSpec(input.completion)
+      : undefined;
+    if (requestedSpec) {
+      contractId = input.approvedPlan ? `plan:${input.approvedPlan.id}` : randomUUID();
+      contractDefinitionHash = completionDefinitionHash(requestedSpec);
+      contractSpec = requestedSpec;
+      completionSteps = requestedSpec.steps.map((step) => ({ ...step }));
+      const record = {
+        runId,
+        contractId,
+        source: input.approvedPlan ? ('approved-plan' as const) : ('request' as const),
+        ...(input.approvedPlan
+          ? { planId: input.approvedPlan.id, planHash: input.approvedPlan.hash }
+          : {}),
+        definition: requestedSpec,
+        policy: completionPolicy,
+        steps: completionSteps,
+        affectedPaths,
+        summary: {
+          version: 1 as const,
+          state: 'unverified' as const,
+          reason: 'contract-created',
+          contractId,
+          definitionHash: contractDefinitionHash,
+          verificationRound: 0,
+          repairRounds: 0,
+          repeatedFailures: 0,
+          failedCheckIds: [],
+          unfinishedStepIds: [],
+        },
+      };
+      store.recordEvent(input.sessionId, 'completion.updated', record);
+      emit('completion.updated', record);
+    } else if (input.resumeCompletionId) {
+      /**
+       * Continue a contract this session already recorded.
+       *
+       * What is restored is the *contract* — its definition, its budget, the repair clock and how much of that
+       * budget is spent — and deliberately not the verdict: a `verified` conclusion belongs to the code that was
+       * on disk when it was reached, and a resume happens precisely because something changed or nothing was
+       * finished. Re-running the checks is the only way to earn it again.
+       */
+      const record = store.completionCurrent(input.sessionId);
+      if (!record) throw new Error('No completion contract is recorded for this session');
+      if (record.contractId !== input.resumeCompletionId)
+        throw new Error(
+          'The requested completion contract is not the current one for this session',
+        );
+      if (record.sessionId !== input.sessionId)
+        throw new Error('The requested completion contract belongs to another session');
+      contractId = record.contractId;
+      contractDefinitionHash = record.definitionHash;
+      contractSpec = record.definition;
+      affectedPaths = [...record.affectedPaths];
+      completionSteps = record.steps.map((step) => ({
+        ...step,
+        status: step.status === 'completed' ? 'completed' : 'pending',
+      }));
+      repairRounds = record.summary.repairRounds;
+      repeatedFailures = record.summary.repeatedFailures;
+      if (record.repairStartedAt !== undefined) repairStartedAt = record.repairStartedAt;
+      store.recordEvent(input.sessionId, 'completion.updated', {
+        runId,
+        contractId,
+        ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
+        ...(record.planId === undefined ? {} : { planId: record.planId }),
+        steps: completionSteps,
+        summary: { ...record.summary, state: 'unverified', reason: 'resumed' },
+        ...(record.policy === undefined ? {} : { policy: record.policy }),
+      });
+    } else if (task) {
+      // A task's contract is derived from the definition the operator approved, and its identity is the task:
+      // a resume of the same task continues the same contract rather than minting a second one.
+      const spec = taskCompletionSpec(task, taskInputs);
+      contractId = `task:${task.id}`;
+      contractDefinitionHash = completionDefinitionHash(spec);
+      contractSpec = spec;
+      completionSteps = spec.steps.map((step) => ({ ...step }));
+      const record = {
+        runId,
+        contractId,
+        source: 'task' as const,
+        taskId: task.id,
+        definition: spec,
+        policy: completionPolicy,
+        steps: completionSteps,
+        affectedPaths: [],
+        summary: {
+          version: 1 as const,
+          state: 'unverified' as const,
+          reason: 'contract-created',
+          contractId,
+          definitionHash: contractDefinitionHash,
+          verificationRound: 0,
+          repairRounds: 0,
+          repeatedFailures: 0,
+          failedCheckIds: [],
+          unfinishedStepIds: [],
+        },
+      };
+      store.recordEvent(input.sessionId, 'completion.updated', record);
+      emit('completion.updated', record);
+    }
+    /**
+     * The two tools that speak about the contract, registered only when there is one.
+     *
+     * A planning run, a read-only run and a run with no contract get neither: a tool that records progress on
+     * steps nobody defined, or widens a scope nobody is verifying, is an invitation to believe the runtime is
+     * checking something it is not. `task_step` stays registered for a task as well — it is the compatibility
+     * entry point — and the two cannot disagree, because `completion_step` writes through the *same* checkpoint
+     * call rather than keeping a second list.
+     */
+    if (contractId && !readOnly && !input.planPhase && completionSteps.length) {
+      tools.replace({
+        name: 'completion_step',
+        description:
+          'Record durable progress on this run’ completion steps: mark one step in_progress, completed, blocked or skipped by its id. This is the same list acceptance is judged against, so call it as you finish each step. Use it for progress only — it cannot confirm an acceptance criterion.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', maxLength: 64 },
+            status: {
+              type: 'string',
+              enum: ['pending', 'in_progress', 'completed', 'blocked', 'skipped'],
+            },
+            note: { type: 'string', maxLength: 500 },
+          },
+          required: ['id', 'status'],
+          additionalProperties: false,
+        },
+        execute: async (args, context) => {
+          context.signal.throwIfAborted();
+          try {
+            const id = String(args.id);
+            const index = completionSteps.findIndex((step) => step.id === id);
+            if (index < 0) return { isError: true, content: `Unknown completion step: ${id}` };
+            const status = String(args.status) as TaskStepStatus;
+            const note = args.note === undefined ? undefined : String(args.note);
+            if (task && taskAttempt) {
+              const updated = store.checkpointTaskStep(input.sessionId, task.id, {
+                attemptId: taskAttempt.id,
+                index,
+                status,
+                ...(note === undefined ? {} : { note }),
+              });
+              completionSteps = updated.steps.map((step, position) => ({
+                id: taskCompletionStepId(task.id, position),
+                description: step.description,
+                status: step.status,
+              }));
+              emit('task.step', { taskId: task.id, steps: updated.steps });
+            } else {
+              completionSteps = completionSteps.map((step, position) =>
+                position === index ? { ...step, status } : step,
+              );
+              const update = {
+                runId,
+                contractId,
+                steps: completionSteps,
+                ...(note === undefined ? {} : { note }),
+              };
+              store.recordEvent(input.sessionId, 'completion.updated', update);
+            }
+            return {
+              isError: false,
+              content: completionSteps
+                .map((step) => `[${step.status}] ${step.id} — ${step.description}`)
+                .join('\n'),
+            };
+          } catch (error) {
+            return {
+              isError: true,
+              content: error instanceof Error ? error.message : String(error),
+            };
+          }
+        },
+      });
+      tools.replace({
+        name: 'completion_scope',
+        description:
+          'Declare the workspace paths this change touches, so a missed caller, export, config or test is visible instead of assumed. Declaring a path grants no permission: writes still need their own approval. Use it when a cross-file refactor finds a new reference.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            paths: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 64,
+              items: { type: 'string', maxLength: 4096 },
+            },
+            note: { type: 'string', maxLength: 500 },
+          },
+          required: ['paths'],
+          additionalProperties: false,
+        },
+        execute: async (args, context) => {
+          context.signal.throwIfAborted();
+          try {
+            const raw = Array.isArray(args.paths) ? args.paths : [];
+            const note = args.note === undefined ? undefined : String(args.note);
+            const added: string[] = [];
+            for (const value of raw) {
+              const normalized = normalizeCompletionPath(value, 'scope path');
+              if (normalized === '.' || affectedPaths.includes(normalized)) continue;
+              added.push(normalized);
+            }
+            if (affectedPaths.length + added.length > MAX_AFFECTED_PATHS)
+              return {
+                isError: true,
+                content: `Completion scope is limited to ${String(MAX_AFFECTED_PATHS)} paths; record the remaining ones in your answer instead.`,
+              };
+            affectedPaths = [...affectedPaths, ...added];
+            store.recordEvent(input.sessionId, 'completion.updated', {
+              runId,
+              contractId,
+              affectedPaths,
+              ...(note === undefined ? {} : { note }),
+            });
+            emit('completion.updated', { runId, contractId, affectedPaths });
+            return {
+              isError: false,
+              content: added.length
+                ? `Recorded ${String(added.length)} path(s). Scope now covers ${String(affectedPaths.length)}.`
+                : 'Those paths were already recorded.',
+            };
+          } catch (error) {
+            return {
+              isError: true,
+              content: error instanceof Error ? error.message : String(error),
+            };
+          }
+        },
+      });
+    }
     /**
      * The wrapper every model call of this run goes through, and the accounting it produces.
      *
@@ -897,7 +1298,7 @@ export class Agent {
        * turn may change the goal's standing, exactly as a request they typed would.
        */
       humanTurn = true;
-      const expanded = expandSkill(store.get(input.sessionId).workspace, item.prompt);
+      const expanded = expandSkill(workspace, item.prompt);
       const message: Message = {
         role: 'user',
         createdAt: item.createdAt,
@@ -1015,6 +1416,7 @@ export class Agent {
         sessionId: input.sessionId,
         taskEffectScope,
         createAgent: (options) => new Agent(options),
+        workspaceResults: this.options.workspaceResults,
       });
       /**
        * The providers this run delegates through: the built-in in-process one plus the host's own.
@@ -1030,6 +1432,7 @@ export class Agent {
         depth,
         residency: this.options.subagentResidency,
         childTurns,
+        workspaceManager: this.options.workspaceManager,
         resolveProviderFor: this.options.subagentProviderFor,
         forkTranscriptChars: this.options.forkTranscriptChars,
         forkTranscriptMessages: this.options.forkTranscriptMessages,
@@ -1055,6 +1458,9 @@ export class Agent {
         providerName: this.options.subagentProvider,
         models: this.options.subagentModels,
         tools,
+        ...(this.options.workspaceMode ? { workspaceMode: this.options.workspaceMode } : {}),
+        ...(this.options.workspaceManager ? { workspaces: this.options.workspaceManager } : {}),
+        ...(this.options.workspaceApply ? { results: this.options.workspaceApply } : {}),
         arm: (armed) => {
           emission.coordinator = armed;
         },
@@ -1124,6 +1530,257 @@ export class Agent {
      * throw needs the step it happened in after the loop's own variable is out of scope.
      */
     let openStep: number | null = null;
+    /**
+     * One verification round, for whichever contract this run carries.
+     *
+     * Written once, on purpose. A task's definition, an approved plan's and a request's are three sources and one
+     * decision: if each grew its own round, the plan's guarantee — "Task, ordinary explicit contract and approved
+     * plan all use the same decision maker, with no second driver" — would be a claim about three code paths that
+     * happen to agree today. What differs by source is only where the definition and the progress are *read from*,
+     * and where the round is *recorded*; everything between those two points is here.
+     */
+    const verifyRound = async (): Promise<CompletionDecision | undefined> => {
+      if (!contractId || !contractSpec) return undefined;
+      const taskSubject = task && taskAttempt ? { task, attemptId: taskAttempt.id } : undefined;
+      const currentTask = taskSubject
+        ? store.getTask(input.sessionId, taskSubject.task.id)
+        : undefined;
+      const roundSteps: CompletionStep[] = currentTask
+        ? currentTask.steps.map((step, index) => ({
+            id: taskCompletionStepId(taskSubject!.task.id, index),
+            description: step.description,
+            status: step.status,
+          }))
+        : completionSteps.map((step) => ({ ...step }));
+      const roundAcceptance = currentTask
+        ? currentTask.acceptance.map((item) => ({ ...item, met: false }))
+        : contractSpec.acceptance;
+      // The definition hash is taken over the same normalized body the contract was created with, with the live
+      // acceptance in place: step *statuses* are excluded by the hash itself, so progress does not read as an edit.
+      const roundHash = completionDefinitionHash({ ...contractSpec, acceptance: roundAcceptance });
+      /**
+       * The files this contract's evidence is about.
+       *
+       * An explicit spec states them (and refuses to be empty). A task does not, so it falls back to the whole
+       * execution root minus the derived directories — the honest default for "verify the work", stated here so
+       * that the coverage of a task's evidence is a documented range rather than an assumption.
+       */
+      const inputPaths = contractSpec.inputs.length
+        ? contractSpec.inputs
+        : taskSubject
+          ? ['.']
+          : [];
+      /**
+       * A path a check names is always covered, whatever the declared input range says.
+       *
+       * A `file-exact` check is a statement about one file; a fingerprint that skipped it because the caller's
+       * range did not mention it would let the check's own subject change without the evidence noticing. The
+       * declared range decides what *else* is monitored, never less than what was asserted. A protected path is
+       * still refused rather than included, because refusing is the honest answer to "verify this credential file".
+       */
+      const checkPaths: string[] = [];
+      for (const item of roundAcceptance) {
+        const checkPath = item.check?.path;
+        if (!checkPath) continue;
+        try {
+          const normalized = normalizeCompletionPath(checkPath, 'check path');
+          if (normalized !== '.') checkPaths.push(normalized);
+        } catch {
+          // An unusable check path is already an `invalid-definition` failure from the verifier; the fingerprint
+          // must not turn it into a different error from a different layer.
+        }
+      }
+      const monitored: string[] = [...new Set([...inputPaths, ...checkPaths])].sort(
+        (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+      );
+      const reviewEarly = (reason: string): CompletionDecision => ({
+        action: 'review',
+        summary: {
+          version: 1,
+          state: 'needs_review',
+          reason,
+          contractId: contractId!,
+          definitionHash: roundHash,
+          verificationRound,
+          repairRounds,
+          repeatedFailures,
+          failedCheckIds: [],
+          unfinishedStepIds: [],
+        },
+      });
+      const before = monitored.length
+        ? await snapshotCompletionInputs(workspace, monitored, signal, {
+            runtimeStatePaths: store.databaseFiles(),
+          }).then(
+            (snapshot) => snapshot,
+            (error: unknown) => {
+              // A range that cannot be fingerprinted is not a range that can be declared verified: a digest over
+              // part of the tree would be a digest of a different tree.
+              snapshotFailure = error instanceof Error ? error.message : String(error);
+              return undefined;
+            },
+          )
+        : undefined;
+      if (monitored.length && !before)
+        return reviewEarly(`input-snapshot-failed: ${snapshotFailure ?? 'unknown'}`);
+      const roundEffects = new Map<string, string>();
+      const verification: Awaited<ReturnType<typeof verifyCompletionAcceptance>> =
+        await verifyCompletionAcceptance(
+          workspace,
+          roundAcceptance,
+          roundSteps,
+          baselines,
+          signal,
+          async (approval, approvalSignal) => {
+            const allowed = await approveTool(approval, approvalSignal);
+            // Only a task has an effect ledger to write into; for any other source the acceptance command is
+            // approved exactly like any other command of the run, with no journal to reconcile afterwards.
+            if (allowed && taskSubject) {
+              roundEffects.set(
+                approval.toolCall.id.slice('acceptance:'.length),
+                store.beginTaskEffect(
+                  input.sessionId,
+                  taskSubject.task.id,
+                  taskSubject.attemptId,
+                  approval.toolCall.name,
+                ),
+              );
+            }
+            return allowed;
+          },
+        );
+      taskVerification = verification;
+      acceptance = taskVerification.evidence;
+      verificationRound += 1;
+      const after = before
+        ? await snapshotCompletionInputs(workspace, monitored, signal, {
+            runtimeStatePaths: store.databaseFiles(),
+          }).then(
+            (snapshot) => snapshot,
+            (error: unknown) => {
+              snapshotFailure = error instanceof Error ? error.message : String(error);
+              return undefined;
+            },
+          )
+        : undefined;
+      if (before && !after)
+        return reviewEarly(`input-snapshot-failed: ${snapshotFailure ?? 'unknown'}`);
+      /**
+       * A check that changed the code it was judging has verified nothing.
+       *
+       * The two snapshots bracket the checks, so a difference means the verification command (or a build it
+       * started, or anything else that ran in between) wrote to the monitored range. Whatever the checks said
+       * about the tree they read, that tree is gone; the report is `needs_review`, never a pass.
+       */
+      if (before && after && before.digest !== after.digest)
+        return reviewEarly('verification-changed-monitored-inputs');
+      if (after) {
+        lastInputSnapshot = after;
+        lastMonitoredInputs = [...monitored];
+      }
+      const stepSignature = roundSteps.map((step) => step.status).join(',');
+      const fingerprint = failureFingerprint(taskVerification.evidence, roundSteps);
+      lastFailureFingerprint = fingerprint;
+      const decision = decideCompletion({
+        summary: {
+          version: 1,
+          state: 'unverified',
+          reason: '',
+          contractId,
+          definitionHash: roundHash,
+          verificationRound,
+          repairRounds,
+          repeatedFailures,
+          failedCheckIds: [],
+          unfinishedStepIds: [],
+          ...(after === undefined ? {} : { inputDigest: after.digest }),
+        },
+        steps: roundSteps,
+        evidence: taskVerification.evidence,
+        definitionValid: taskVerification.completionReason !== 'invalid-definition',
+        definitionNonEmpty: roundAcceptance.length > 0,
+        manualPending: taskVerification.completionReason === 'manual-review',
+        pendingEffects: false,
+        definitionChanged: roundHash !== contractDefinitionHash,
+        cancelled: false,
+        now: Date.now(),
+        ...(repairStartedAt === undefined ? {} : { repairStartedAt }),
+        policy: completionPolicy,
+        failureFingerprint: fingerprint,
+        ...(previousFailureFingerprint === undefined ? {} : { previousFailureFingerprint }),
+        // A round that moved the monitored input is progress even when the same check fails again: the code under
+        // test is not the code the previous round judged, and reporting otherwise would stop a run that is working.
+        inputChanged:
+          after !== undefined &&
+          previousInputDigest !== undefined &&
+          after.digest !== previousInputDigest,
+        stepsChanged:
+          previousStepSignature !== undefined && previousStepSignature !== stepSignature,
+      });
+      if (after) previousInputDigest = after.digest;
+      completionSummary = decision.summary;
+      previousStepSignature = stepSignature;
+      if (taskSubject && currentTask) {
+        /**
+         * One write for the round: the evidence and the effects it settled, or nothing at all.
+         *
+         * A round that cannot be recorded must not be followed by another model request — the repair counter
+         * would advance against evidence the journal never accepted, and the attempt would report rounds that do
+         * not exist.
+         */
+        try {
+          store.recordTaskVerificationRound(
+            input.sessionId,
+            currentTask.id,
+            taskSubject.attemptId,
+            {
+              verificationRound,
+              evidence: taskVerification.evidence,
+              resolvedEffectIds: [...roundEffects.values()],
+              summary: decision.summary,
+            },
+          );
+        } catch (recordError) {
+          return {
+            action: 'review',
+            summary: {
+              ...decision.summary,
+              state: 'needs_review',
+              reason:
+                'round-not-recorded: ' +
+                (recordError instanceof Error ? recordError.message : String(recordError)),
+            },
+          };
+        }
+      } else {
+        // No attempt row to write into, so the round's own record *is* the evidence: one durable write, with the
+        // same payload shape the task path produces, so a reader of either sees the same thing.
+        store.recordEvent(input.sessionId, 'completion.updated', {
+          runId,
+          contractId,
+          verificationRound,
+          definitionHash: roundHash,
+          summary: decision.summary,
+          steps: roundSteps,
+          affectedPaths,
+          policy: completionPolicy,
+          ...(repairStartedAt === undefined ? {} : { repairStartedAt }),
+          failureFingerprint: fingerprint,
+        });
+      }
+      emit('completion.updated', {
+        runId,
+        contractId,
+        ...(taskSubject && currentTask
+          ? { taskId: currentTask.id, attemptId: taskSubject.attemptId }
+          : {}),
+        verificationRound,
+        summary: decision.summary,
+        steps: roundSteps,
+        failureFingerprint: fingerprint,
+      });
+      return decision;
+    };
     const endStep = (step: number, reason: StepEndReason): void => {
       openStep = null;
       // Whatever a step opened and never committed — a cancellation, a failure mid-stream — leaves no span
@@ -1139,8 +1796,8 @@ export class Agent {
     };
     try {
       signal.throwIfAborted();
-      const instructions = loadInstructions(store.get(input.sessionId).workspace);
-      const skills = discoverSkills(store.get(input.sessionId).workspace);
+      const instructions = loadInstructions(workspace);
+      const skills = discoverSkills(workspace);
       /**
        * What this run says about the plan phase, as a value rather than a literal inside the prompt.
        *
@@ -1216,6 +1873,34 @@ export class Agent {
             taskDefinitionText(
               current,
               current.steps.some((step) => step.status === 'completed'),
+            ),
+          );
+        }
+        /**
+         * The completion contract, re-announced when the conversation has lost or outgrown it.
+         *
+         * A compaction can swallow the record that said what "done" means, and the contract is durable while the
+         * summary is not — so without this the model would keep working against a definition it can no longer
+         * read. It is announced from the *live* state (the contract, the current steps, the last round's summary)
+         * rather than from the record that created it, so what the model reads is what the evidence says now.
+         */
+        if (contractSpec && contractId) {
+          const liveSteps = task ? store.getTask(input.sessionId, task.id).steps : completionSteps;
+          announce(
+            'completion',
+            completionContractText(
+              contractSpec,
+              liveSteps.map((step, index) => ({
+                id: task ? taskCompletionStepId(task.id, index) : (step as CompletionStep).id,
+                description: step.description,
+                status: step.status,
+              })),
+              completionSummary ?? {
+                state: 'unverified',
+                reason: 'no verification round has run yet',
+                repairRounds,
+                failedCheckIds: [],
+              },
             ),
           );
         }
@@ -1302,7 +1987,7 @@ export class Agent {
         catalog: tools.specs({ readOnly, ...(policy ? { policy } : {}), mode: 'native' }),
       });
       let { specs, catalog: catalogSpecs } = buildCatalog();
-      const expanded = expandSkill(store.get(input.sessionId).workspace, input.prompt);
+      const expanded = expandSkill(workspace, input.prompt);
       store.append(input.sessionId, {
         role: 'user',
         createdAt: new Date().toISOString(),
@@ -2237,38 +2922,54 @@ export class Agent {
             continue;
           }
           status = 'completed';
-          if (task && taskAttempt) {
-            if (store.hasPendingTaskEffects(input.sessionId, task.id, taskAttempt.id)) {
+          if (contractId && contractSpec) {
+            if (
+              task &&
+              taskAttempt &&
+              store.hasPendingTaskEffects(input.sessionId, task.id, taskAttempt.id)
+            ) {
               status = 'needs_review';
               error = 'Task side effect outcome unknown; inspect state before retrying.';
               endStep(round, 'final');
               break;
             }
-            taskVerification = await verifyTaskAcceptance(
-              workspace,
-              task,
-              baselines,
-              signal,
-              async (approval, approvalSignal) => {
-                const allowed = await approveTool(approval, approvalSignal);
-                if (allowed) {
-                  acceptanceEffects.set(
-                    approval.toolCall.id.slice('acceptance:'.length),
-                    store.beginTaskEffect(
-                      input.sessionId,
-                      task.id,
-                      taskAttempt.id,
-                      approval.toolCall.name,
-                    ),
-                  );
-                }
-                return allowed;
-              },
-            );
-            acceptance = taskVerification.evidence;
-            if (!taskVerification.passed) {
+            const decision = await verifyRound();
+            if (decision?.action === 'repair') {
+              // The budget is charged when the next request is about to be made, which is exactly here: a run
+              // that stops for any other reason never spent the round it was allowed.
+              repairRounds += 1;
+              repeatedFailures = decision.summary.repeatedFailures;
+              previousFailureFingerprint = lastFailureFingerprint;
+              repairStartedAt ??= Date.now();
+              store.append(input.sessionId, { role: 'user', content: decision.feedback });
+              // Announced as well as appended: a client watching the run sees that a repair round began rather
+              // than reading a silently longer transcript.
+              emit('context.injected', {
+                source: 'completion-repair',
+                round: verificationRound,
+              });
+              endStep(round, 'queued-input');
+              continue;
+            }
+            if (decision?.action === 'complete') {
+              // A candidate only. Cleanup, the final fingerprint and persistence all still have to succeed
+              // before anything may call this verified.
+              candidateCompletion = decision.summary;
+            } else if (decision?.action === 'limit') {
+              status = 'limited';
+              error =
+                taskVerification?.error ?? `Acceptance repair stopped: ${decision.summary.reason}`;
+            } else if (decision) {
               status = 'needs_review';
-              error = taskVerification.error;
+              error =
+                taskVerification?.error ?? `Acceptance review required: ${decision.summary.reason}`;
+            }
+          } else if (task && taskAttempt) {
+            // A task run whose contract could not be built still refuses to claim success with an unknown effect
+            // standing: the effect ledger is a separate promise from the contract and outlives it.
+            if (store.hasPendingTaskEffects(input.sessionId, task.id, taskAttempt.id)) {
+              status = 'needs_review';
+              error = 'Task side effect outcome unknown; inspect state before retrying.';
             }
           }
           endStep(round, 'final');
@@ -2437,6 +3138,26 @@ export class Agent {
                 // that has to see it.
                 human: humanTurn,
                 /**
+                 * Whether the completion contract lets this goal be closed as complete.
+                 *
+                 * The binding is deliberate and narrow: a goal only answers to a contract whose objective is
+                 * *exactly* the goal's own. A task the user approved for something else must not be able to close
+                 * a goal it never described, and an unbound goal keeps its old behaviour instead of being held
+                 * retroactively to criteria nobody wrote.
+                 */
+                canComplete: async () => {
+                  const goal = store.goal(input.sessionId);
+                  if (!goal || !contractId || !contractSpec) return { allowed: true };
+                  if (goal.objective !== contractSpec.objective) return { allowed: true };
+                  if (completionSummary?.state === 'verified') return { allowed: true };
+                  return {
+                    allowed: false,
+                    reason:
+                      completionSummary?.reason ??
+                      'no verification round has passed for this contract yet',
+                  };
+                },
+                /**
                  * A goal the model writes mid-run is *said*, not rebuilt into the prompt.
                  *
                  * The prompt is the cacheable prefix, and rebuilding it here invalidated the system prompt and the
@@ -2557,7 +3278,20 @@ export class Agent {
                 };
                 const type =
                   phase === 'started' ? 'tool.execution.started' : 'tool.execution.finished';
-                store.recordEvent(input.sessionId, type, { runId, ...measurement });
+                /**
+                 * The tool's own name rides on the record, and it is the one field a *reader* needs.
+                 *
+                 * Everything else here measures how a call was carried out — how many attempts, how long, how many
+                 * ran at once — which answers "was this run healthy". The name answers "what did it actually do",
+                 * which is the question a workspace result has to be able to answer from durable evidence rather
+                 * than from the model's prose: a result that carried only durations could not say whether a child
+                 * ran the test suite or merely said it had.
+                 */
+                store.recordEvent(input.sessionId, type, {
+                  runId,
+                  tool: call.name,
+                  ...measurement,
+                });
                 emit(type, measurement);
               },
             });
@@ -2793,17 +3527,19 @@ export class Agent {
       if (task && taskAttempt) {
         try {
           const persistedTask = store.finishTaskAttempt(input.sessionId, task.id, taskAttempt.id, {
-            resolvedEffectIds: taskVerification?.evidence.checks.flatMap((check) =>
-              check.command && !check.command.timedOut
-                ? [acceptanceEffects.get(check.id)].filter((id): id is string => Boolean(id))
-                : [],
-            ),
+            // The acceptance commands' effects were settled by the round that ran them
+            // (`recordTaskVerificationRound`), which is what makes a second round possible at all: resolving them
+            // here as well would refuse the ids as already completed, and resolving them *only* here is what left
+            // the first round's effects pending across a repair.
+            resolvedEffectIds: [],
             status:
               status === 'completed' || status === 'needs_review'
                 ? status
                 : status === 'cancelled'
                   ? 'cancelled'
-                  : 'blocked',
+                  : status === 'limited'
+                    ? 'needs_review'
+                    : 'blocked',
             ...(taskVerification ? { verification: taskVerification.evidence } : {}),
             ...(error ? { error } : {}),
             ...(taskVerification
@@ -2818,6 +3554,93 @@ export class Agent {
           status = 'failed';
           error = 'Failed to persist task finalization';
         }
+      }
+      /**
+       * Only now may a candidate completion become `verified`.
+       *
+       * Everything that could still invalidate the evidence has happened: the tool resources are closed, the
+       * sub-agents have settled, the task row has been written. A client that was told `verified` before the
+       * cleanup ran would be told the work was done while a build or a language server was still writing to the
+       * workspace — which is the one ordering this whole loop exists to get right. A run whose cleanup or
+       * persistence failed keeps the check evidence and reports `needs_review` instead.
+       */
+      if (candidateCompletion && status === 'completed' && lastInputSnapshot) {
+        // `S1` was taken after the checks and before the cleanup; `S2` after it. A difference means the closing
+        // phase itself wrote to the monitored source — a background build finishing, a formatter, a language
+        // server — so the evidence describes a tree that no longer exists.
+        const settled = await snapshotCompletionInputs(workspace, lastMonitoredInputs, signal, {
+          runtimeStatePaths: store.databaseFiles(),
+        }).catch((error: unknown) => {
+          snapshotFailure = error instanceof Error ? error.message : String(error);
+          return undefined;
+        });
+        if (
+          !settled ||
+          settled.digest !== lastInputSnapshot.digest ||
+          settled.rootId !== lastInputSnapshot.rootId
+        ) {
+          status = 'needs_review';
+          error =
+            'Monitored inputs changed during finalization' +
+            (snapshotFailure ? `: ${snapshotFailure}` : '') +
+            '; the verification evidence no longer describes this workspace.';
+        }
+      }
+      if (candidateCompletion && status === 'completed') {
+        completionSummary = {
+          ...candidateCompletion,
+          state: 'verified',
+          reason: 'verified',
+        };
+        /**
+         * A bound, still-active goal closes here — in the kernel, without asking the model.
+         *
+         * The goal already did its job: it is what kept the session working across runs. Spending one more model
+         * request to have the model announce what the runtime just proved would be paying for a formality, and it
+         * would be paying with a request whose only possible output is a tool call the runtime has already made.
+         * Only an `active` goal whose objective is unchanged is closed: `paused` belongs to the user, `blocked`
+         * carries a reason a successful run does not erase, and a goal that was re-aimed mid-run is no longer the
+         * objective this contract verified.
+         */
+        const boundGoal = contractSpec ? store.goal(input.sessionId) : null;
+        if (
+          boundGoal &&
+          boundGoal.status === 'active' &&
+          boundGoal.objective === contractSpec?.objective
+        ) {
+          const completedGoal = changeGoal(boundGoal, 'complete', {}, new Date().toISOString());
+          store.recordEvent(input.sessionId, 'goal.changed', {
+            action: 'complete',
+            goal: completedGoal,
+          });
+          emit('goal.changed', { action: 'complete', goal: completedGoal });
+        }
+        if (contractId)
+          emit('completion.updated', { runId, contractId, summary: completionSummary });
+      } else if (candidateCompletion) {
+        completionSummary = {
+          ...candidateCompletion,
+          state: 'needs_review',
+          reason: status === 'failed' ? 'finalization-failed' : 'cleanup-incomplete',
+        };
+      }
+      if (!completionSummary && contractId) {
+        // A contract that never reached a verification round still reports its state rather than nothing: the
+        // absence of a verdict and an unverified verdict are different answers, and only one of them is true.
+        completionSummary = {
+          version: 1,
+          state: 'unverified',
+          reason: error ?? 'not-verified',
+          contractId,
+          ...(contractDefinitionHash === undefined
+            ? {}
+            : { definitionHash: contractDefinitionHash }),
+          verificationRound,
+          repairRounds,
+          repeatedFailures,
+          failedCheckIds: [],
+          unfinishedStepIds: [],
+        };
       }
       result = {
         runId,
@@ -2848,6 +3671,7 @@ export class Agent {
           ? {}
           : { requestId: endpointFailure.requestId }),
         ...(acceptance ? { acceptance } : {}),
+        ...(completionSummary ? { completion: completionSummary } : {}),
       };
       // Stop hooks observe the finished run and can only annotate it. The effects already happened
       // and the result is about to be persisted, so a reason here is reported, never a veto.

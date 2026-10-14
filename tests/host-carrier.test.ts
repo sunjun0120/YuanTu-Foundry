@@ -234,3 +234,40 @@ test('the framing helper is shared, bounded, and survives split characters', asy
   assert.equal(bounded.length, 1);
   assert.match(bounded[0]!.message, /exceeds frame limit/);
 });
+
+test('the framing helper delivers every line in a chunk, ignores blank lines, and reports a pending prefix', () => {
+  const lines: string[] = [];
+  const errors: Error[] = [];
+  const framer = lineFramer({
+    maxFrameBytes: 1024,
+    onLine: (line) => lines.push(line),
+    onError: (error) => errors.push(error),
+  });
+  // Several lines in one chunk, and the later ones are *shorter* than the first: taking a line out has to reset
+  // where the next scan starts, or the following newline sits behind that position and is never found — the rest
+  // of the chunk then rides along inside the next line instead of arriving as its own message.
+  framer.write(Buffer.from('first\nx\ny\n'));
+  assert.deepEqual(lines, ['first', 'x', 'y']);
+  // A blank line separates messages; it is not one.
+  framer.write(Buffer.from('\n\nfour\n'));
+  assert.deepEqual(lines, ['first', 'x', 'y', 'four']);
+  // Half a line is pending, and a caller can ask rather than guess.
+  framer.write(Buffer.from('par'));
+  assert.equal(framer.buffered(), true);
+  assert.deepEqual(lines, ['first', 'x', 'y', 'four']);
+  framer.write(Buffer.from('tial\n'));
+  assert.equal(framer.buffered(), false);
+  assert.deepEqual(lines, ['first', 'x', 'y', 'four', 'partial']);
+  assert.deepEqual(errors, []);
+  // The bound applies to what has not been framed yet as well: one peer that never sends a newline must not be
+  // able to grow the pending buffer without limit.
+  const unbounded: Error[] = [];
+  const prefix = lineFramer({
+    maxFrameBytes: 16,
+    onLine: () => assert.fail('a prefix with no newline is not a line'),
+    onError: (error) => unbounded.push(error),
+  });
+  prefix.write(Buffer.from('z'.repeat(64)));
+  assert.equal(unbounded.length, 1);
+  assert.match(unbounded[0]!.message, /exceeds frame limit/);
+});

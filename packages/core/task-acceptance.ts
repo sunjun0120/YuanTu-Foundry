@@ -1,6 +1,7 @@
 import type {
   Acceptance,
   AcceptanceEvidence,
+  CompletionStep,
   Task,
   TaskStep,
   Approver,
@@ -11,14 +12,34 @@ import {
   type AcceptanceSpec,
   type PathSnapshot,
 } from './acceptance.ts';
+import { taskCompletionStepId } from './completion-contract.ts';
 
 export type TaskBaselines = Record<string, PathSnapshot>;
+
+/**
+ * Why a task's own definition says it is not done yet.
+ *
+ * The order of this union is the precedence the verifier applies: the first condition that holds decides, and the
+ * order is not arbitrary. "The definition cannot be executed" outranks "the definition is empty" (an unusable
+ * check is a definition problem whether or not there are others), both outrank progress (there is no point
+ * discussing steps against a definition that cannot be judged), progress outranks a human's pending judgement
+ * (asking the model to fix what a person has to sign off is not repair), and failing checks come last because
+ * they are the only class another model round may address.
+ */
+export type TaskCompletionReason =
+  | 'invalid-definition'
+  | 'empty-acceptance'
+  | 'unfinished-steps'
+  | 'manual-review'
+  | 'checks-failed';
 
 export interface TaskVerification {
   evidence: AcceptanceEvidence;
   passed: boolean;
   acceptance: Acceptance[];
   steps: TaskStep[];
+  /** Set only on failure, so a reader that sees it knows the verdict came from the definition. */
+  completionReason?: TaskCompletionReason;
   error?: string;
 }
 
@@ -32,9 +53,12 @@ export async function captureTaskBaselines(root: string, task: Task): Promise<Ta
   return baselines;
 }
 
-function acceptanceSpecs(task: Task, baselines: TaskBaselines): AcceptanceSpec[] {
+function acceptanceSpecs(
+  acceptance: readonly Acceptance[],
+  baselines: TaskBaselines,
+): AcceptanceSpec[] {
   const specs: AcceptanceSpec[] = [];
-  for (const item of task.acceptance) {
+  for (const item of acceptance) {
     const check = item.check;
     if (!check) continue;
     if (check.kind === 'command' && check.command) {
@@ -90,6 +114,32 @@ function acceptanceSpecs(task: Task, baselines: TaskBaselines): AcceptanceSpec[]
   return specs;
 }
 
+const REASON_DETAIL: Record<TaskCompletionReason, string> = {
+  'invalid-definition':
+    'Task acceptance contains a criterion that cannot be executed as written; review the definition.',
+  'empty-acceptance':
+    'Task has no acceptance criteria, so nothing about this run can be verified; the definition needs a criterion that states what done means.',
+  'unfinished-steps':
+    'Task steps are not all completed, so the work is not finished; record progress before asking for completion.',
+  'manual-review':
+    'Acceptance requires explicit user confirmation of a manual criterion; review the evidence.',
+  'checks-failed': 'Acceptance checks did not pass; review the evidence.',
+};
+
+/**
+ * Verify one task definition against the work that was actually done.
+ *
+ * Three rules here are the whole point of the function, and each replaced a way an empty or unfinished task used
+ * to be reported as successful:
+ *
+ * 1. **An empty definition proves nothing.** A task with no criteria used to pass vacuously — "every criterion of
+ *    none holds" — which turned "nobody said what done means" into a success. It is now `empty-acceptance`.
+ * 2. **Steps are the model's own record of progress, not the verifier's verdict.** The result copies the statuses
+ *    it was given. It used to overwrite every step with `completed` or `blocked` from the run's overall outcome,
+ *    which meant a failing check erased real progress and a passing one declared unstarted work finished.
+ * 3. **`skipped` is not `completed`.** A step the model skipped is not work the definition was satisfied
+ *    against; only a person may change the definition that says otherwise.
+ */
 export async function verifyTaskAcceptance(
   root: string,
   task: Task,
@@ -97,19 +147,63 @@ export async function verifyTaskAcceptance(
   signal?: AbortSignal,
   approve?: Approver,
 ): Promise<TaskVerification> {
-  const specs = acceptanceSpecs(task, baselines);
+  return verifyCompletionAcceptance(
+    root,
+    task.acceptance,
+    task.steps.map((step, index) => ({
+      id: taskCompletionStepId(task.id, index),
+      description: step.description,
+      status: step.status,
+    })),
+    baselines,
+    signal,
+    approve,
+  );
+}
+
+/**
+ * The same verdict, for a contract that is not a task.
+ *
+ * An ordinary request or an approved plan carries a `CompletionSpec` rather than a task row, and the rules it is
+ * judged by have to be *the same rules* — the plan's requirement is one decision maker, not two that agree today.
+ * So this is not a parallel implementation: it is the body of `verifyTaskAcceptance` with the task row removed,
+ * which is why the task version above is three lines of adaptation.
+ */
+export async function verifyCompletionAcceptance(
+  root: string,
+  acceptance: readonly Acceptance[],
+  steps: readonly CompletionStep[],
+  baselines: TaskBaselines,
+  signal?: AbortSignal,
+  approve?: Approver,
+): Promise<TaskVerification> {
+  const specs = acceptanceSpecs(acceptance, baselines);
   const evidence = await verifyAcceptance(root, specs, { signal, approve });
-  // A task with no acceptance criteria is vacuously executable: every criterion (of none)
-  // has a corresponding check, so verification cannot stall forever on an empty definition.
-  const executable = specs.length === task.acceptance.filter((item) => item.check).length;
-  const manual = task.acceptance.filter((item) => !item.check);
-  const passed = evidence.passed && executable && manual.every((item) => item.met);
+  const declaredChecks = acceptance.filter((item) => item.check);
+  // A declared check that produced no spec is a definition this verifier cannot execute — not a failing
+  // assertion. It is named separately because the fix is to the definition, never to the code under test.
+  const invalidDefinition = specs.length !== declaredChecks.length;
+  const manual = acceptance.filter((item) => !item.check);
+  const unfinished = steps.filter((step) => step.status !== 'completed');
+  const manualPending = manual.some((item) => !item.met);
+  const completionReason: TaskCompletionReason | undefined = invalidDefinition
+    ? 'invalid-definition'
+    : acceptance.length === 0
+      ? 'empty-acceptance'
+      : unfinished.length
+        ? 'unfinished-steps'
+        : manualPending
+          ? 'manual-review'
+          : !evidence.passed
+            ? 'checks-failed'
+            : undefined;
+  const passed = completionReason === undefined;
   const combinedEvidence: AcceptanceEvidence = {
     ...evidence,
     passed,
     checks: [
       ...evidence.checks,
-      ...task.acceptance.flatMap((item, index) =>
+      ...acceptance.flatMap((item, index) =>
         item.check
           ? []
           : [
@@ -121,6 +215,9 @@ export async function verifyTaskAcceptance(
                   ? 'Explicitly confirmed by the user'
                   : 'Awaiting explicit user confirmation',
                 durationMs: 0,
+                // A criterion only a person can settle is never repairable by another model round; saying so
+                // here is what keeps the repair loop from asking the model to confirm its own work.
+                ...(item.met ? {} : { failureReason: 'manual-review' as const }),
               },
             ],
       ),
@@ -129,22 +226,17 @@ export async function verifyTaskAcceptance(
   return {
     evidence: combinedEvidence,
     passed,
-    acceptance: task.acceptance.map((item) => ({
+    acceptance: acceptance.map((item) => ({
       ...item,
       met: item.check
         ? (evidence.checks.find((check) => check.id === item.check?.id)?.passed ?? false)
         : item.met,
     })),
-    steps: task.steps.map((step) => ({
-      ...step,
-      status: passed ? 'completed' : 'blocked',
+    // Copied, not reconstructed. The execution journal is what decides progress; this result only reports it.
+    steps: steps.map((step) => ({
+      description: step.description,
+      status: step.status,
     })),
-    ...(!passed
-      ? {
-          error: executable
-            ? 'Acceptance checks did not pass or require explicit user confirmation; review the evidence.'
-            : 'Task has acceptance criteria without executable checks; review is required.',
-        }
-      : {}),
+    ...(completionReason ? { completionReason, error: REASON_DETAIL[completionReason] } : {}),
   };
 }

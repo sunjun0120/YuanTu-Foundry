@@ -39,6 +39,8 @@ import path from 'node:path';
 
 /** Where the interface's own copy lives: every module here is scanned unless an exception matches it. */
 const INTERFACE_DIR = 'apps/desktop';
+/** Shared service failures reach the interface through snapshots and command replies. */
+const CARRIER_DIR = 'packages/carrier';
 /**
  * Where a worker's text is data rather than copy, scanned by name because that is what makes it a worker.
  *
@@ -185,6 +187,12 @@ export async function scanI18n(root) {
         "Chinese text in a guest worker; its words reach the model or a caller's log rather than a person, so keep the worker's own text in English (a caller that shows it to somebody owns the copy)",
       );
     }
+  }
+  for (const file of await modulesUnder(root, CARRIER_DIR)) {
+    await scan(
+      file,
+      'Chinese text in shared carrier code; return a locale-independent error code and parameters, keep fallback text in English, and translate it in the application dictionary',
+    );
   }
   for (const exclusion of EXCLUSIONS) {
     if (matched.has(exclusion)) continue;

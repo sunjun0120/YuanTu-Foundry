@@ -159,6 +159,11 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
     // here continues from exactly where it stopped, and a page that came back empty does not move it.
     return { entries, nextSeq: entries.at(-1)?.seq ?? afterSeq };
   },
+  'completion.current': async (ctx, params) => {
+    const id = required(params, 'sessionId');
+    ownedSession(ctx.store, ctx.workspace, id);
+    return ctx.store.completionCurrent(id);
+  },
   'session.events': async (ctx, params) => {
     const id = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, id);

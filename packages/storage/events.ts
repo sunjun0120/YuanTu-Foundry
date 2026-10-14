@@ -131,6 +131,16 @@ export const SESSION_EVENT_TYPES = [
   'deliverable.presented',
   'goal.changed',
   /**
+   * The completion contract a session is working against, and how its evidence stands.
+   *
+   * Durable for the same reason `goal.changed` is: "is this actually done, and what said so" is the question a
+   * person reopens a session to ask, and a live-only frame would leave a reopened session showing the work
+   * without the verdict. One record per verification round carries the whole summary, so the newest record alone
+   * rebuilds the current state, and the record written when the contract is created carries the full definition —
+   * a reader must fold back to the record that has one rather than treating the latest payload as complete.
+   */
+  'completion.updated',
+  /**
    * The two halves of every human decision, recorded separately and in order.
    *
    * Asked and decided are separate records because the interesting state is *between* them: a log that ends

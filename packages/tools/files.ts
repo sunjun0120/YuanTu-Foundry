@@ -1,11 +1,13 @@
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { lstat, realpath, readdir, open } from 'node:fs/promises';
+import { lstat, realpath, open } from 'node:fs/promises';
 import type { Tool, ToolContext, ToolResult } from '../protocol/index.ts';
+import type { PreparedTool } from '../protocol/index.ts';
 import { toolOutput } from '../protocol/tool-result.ts';
 import type { ToolOutputContract } from '../protocol/tool-result.ts';
 import { MAX_IMAGE_BYTES, sniffImageType, validateImages } from '../protocol/images.ts';
-import { MAX_TOOL_OUTPUT, bounded } from './registry.ts';
+import { MAX_TOOL_OUTPUT, TRUNCATION_MARKER, bounded } from './registry.ts';
+import { withRetrievalMetadata } from './retrieval-metadata.ts';
 import { prepareFileChange } from './file-change.ts';
 import {
   prepareApplyPatch,
@@ -17,6 +19,28 @@ import { loadInstructions } from '../resources/instructions.ts';
 import { FileObservations, type MutationGates } from './fs-observation.ts';
 import { workerExecArgv } from './environment.ts';
 import { isCredentialFileName } from './credential-paths.ts';
+import {
+  LEGACY_MAX_ENTRIES,
+  LEGACY_MAX_FILES,
+  SEARCH_MAX_ENTRIES,
+  SEARCH_TIMEOUT_MS,
+  collectInventory,
+  iterateInventory,
+} from '../search/inventory.ts';
+import { readRange } from '../search/lines.ts';
+import { MAX_MATCH_TEXT, mergeCoverage, scanText, searchOptions } from '../search/text.ts';
+import type { WorkspaceSearchService } from '../search/service.ts';
+import {
+  COVERAGE_SCHEMA,
+  markStop,
+  type Coverage,
+  type FileEntry,
+  type InventoryOptions,
+  type InventoryResult,
+  type SearchBackend,
+  type SearchPage,
+  type WorkspaceAccess,
+} from '../search/types.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -65,10 +89,38 @@ function inside(root: string, target: string): boolean {
     (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative))
   );
 }
+/**
+ * The exclusion policy expressed the way the search package needs it: a workspace-relative path and what kind of
+ * entry it names.
+ *
+ * One implementation, used by enumeration and by the search scan, because two spellings of "is this path
+ * allowed" is how a credential file becomes searchable through the back door. `Workspace.resolve` asks the same
+ * questions about the same segments when a single path is opened; this is its bulk form. `.yuantu/spill` is
+ * deliberately *not* exempt here: a read may reach spilled output, but enumeration never advertises it, or a
+ * tool result would become searchable content and a result set could grow to contain itself.
+ */
+function isExcludedRelative(relative: string): boolean {
+  return relative.split('/').filter(Boolean).some(hidden);
+}
 // Budget for the "read these scoped instructions first" notice. Merged instructions can legally
 // reach 64KB (32KB per file), which is far more than a tool result should carry, so the text is
 // trimmed rather than rejected — see guidance().
 const MAX_GUIDANCE_CHARS = 18000;
+/**
+ * The workspace as the search package sees it.
+ *
+ * The `resolve` adapter is written out rather than bound, because the second positional parameter differs:
+ * `Workspace.resolve`'s is `allowNew` and `WorkspaceAccess.resolve`'s is `allowSpill`. Binding it would hand a
+ * spill read the ability to name a file that does not exist, and a missing path is precisely what a write is
+ * allowed to create — the wrong one of the two permissions is also the more dangerous one.
+ */
+export function workspaceAccess(workspace: Workspace): WorkspaceAccess {
+  return {
+    root: workspace.root,
+    resolve: (relative, allowSpill = false) => workspace.resolve(relative, false, allowSpill),
+    isExcluded: (relative) => isExcludedRelative(relative),
+  };
+}
 export class Workspace {
   root: string;
   constructor(root: string) {
@@ -130,41 +182,42 @@ export class Workspace {
       await handle.close();
     }
   }
+  /**
+   * Enumerates the workspace and says how much of it was reached.
+   *
+   * The default budgets are the ones `walk` has always had — five thousand entries, one thousand candidate
+   * files — because this is the compatibility entry point and a caller that never asked about coverage must not
+   * silently start paying for a bigger scan. `search_files` passes the search budgets explicitly.
+   *
+   * The filters decide *before* the candidate budget, which is the whole point: a file the caller named by
+   * `include` is a candidate, and a thousand files the caller did not ask for never consume the room it needs.
+   */
+  async walkWithCoverage(
+    input: string,
+    context: ToolContext,
+    options: Partial<Omit<InventoryOptions, 'path' | 'signal'>> = {},
+  ): Promise<InventoryResult> {
+    return collectInventory(workspaceAccess(this), {
+      path: input,
+      include: options.include ?? [],
+      exclude: options.exclude ?? [],
+      maxEntries: options.maxEntries ?? LEGACY_MAX_ENTRIES,
+      maxFiles: options.maxFiles === undefined ? LEGACY_MAX_FILES : options.maxFiles,
+      timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
+      signal: context.signal,
+    });
+  }
+  /**
+   * The old bounded walk, kept as the compatibility wrapper it now is.
+   *
+   * Its signature and its return type are unchanged: an array of workspace-relative paths, at most a thousand
+   * of them. What it can no longer do is imply that the array is the workspace — nothing here says whether the
+   * walk stopped at a limit, and a caller that needs to know asks `walkWithCoverage` instead.
+   */
   async walk(input: string, context: ToolContext): Promise<string[]> {
-    const start = await this.resolve(input);
-    const files: string[] = [];
-    const queue = [start];
-    let scanned = 0;
-    while (queue.length && scanned < 5000 && files.length < 1000) {
-      context.signal.throwIfAborted();
-      const dir = queue.shift()!;
-      const entries = await readdir(dir, { withFileTypes: true });
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-      for (const entry of entries) {
-        if (++scanned > 5000 || files.length >= 1000) break;
-        if (hidden(entry.name) || entry.isSymbolicLink()) continue;
-        const file = path.join(dir, entry.name);
-        if (entry.isDirectory()) queue.push(file);
-        else if (entry.isFile())
-          files.push(path.relative(this.root, file).split(path.sep).join('/'));
-      }
-    }
-    return files;
+    const { files } = await this.walkWithCoverage(input, context);
+    return files.map((file) => file.path);
   }
-}
-function compileGlob(glob: string): RegExp {
-  let source = '^';
-  for (let i = 0; i < glob.length; i++) {
-    const char = glob[i]!;
-    if (char === '*') {
-      if (glob[i + 1] === '*') {
-        source += '.*';
-        i++;
-      } else source += '[^/]*';
-    } else if (char === '?') source += '[^/]';
-    else source += char.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-  }
-  return new RegExp(source + '$');
 }
 /**
  * One match as data, rather than as the line the text form lays out for the model.
@@ -177,15 +230,6 @@ interface SearchMatch {
   line: number;
   text: string;
 }
-/**
- * How much of a matched line either form shows.
- *
- * A single line of a minified bundle can be megabytes long, and one such line would otherwise become the whole
- * result. Kept in step with the same constant in `./search-worker.ts`, which cannot import this module: the
- * worker is a separate thread and pulling the tool module into it would load the registry, Ajv and every sibling
- * tool for a job that reads files and matches lines.
- */
-const MAX_MATCH_TEXT = 500;
 /**
  * The extension-to-language hint a card can hand to a syntax highlighter.
  *
@@ -281,6 +325,18 @@ const READ_FILE_OUTPUT: ToolOutputContract = {
       },
       text: { type: 'string', description: 'The lines themselves, without line numbering.' },
       truncated: { type: 'boolean', description: 'True when `text` is not the whole slice.' },
+      fileFingerprint: {
+        type: 'object',
+        description:
+          'The file this slice came from: size and mtime, with a null digest because a range read verifies freshness by metadata.',
+        properties: {
+          size: { type: 'integer', minimum: 0 },
+          mtimeMs: { type: 'number' },
+          sha256: { type: ['string', 'null'] },
+        },
+        required: ['size', 'mtimeMs', 'sha256'],
+        additionalProperties: false,
+      },
     },
     required: ['path', 'startLine', 'endLine', 'totalLines', 'text', 'truncated'],
     additionalProperties: false,
@@ -319,6 +375,19 @@ const SEARCH_FILES_OUTPUT: ToolOutputContract = {
         },
       },
       limited: { type: 'boolean' },
+      coverage: COVERAGE_SCHEMA,
+      outputTruncated: {
+        type: 'boolean',
+        description: 'True when matches were found but did not fit the result character budget.',
+      },
+      nextCursor: {
+        type: ['string', 'null'],
+        description: 'Continuation token for the next page; null when this page is the end.',
+      },
+      sourceVersion: {
+        type: ['string', 'null'],
+        description: 'The inventory or index version these matches were computed against.',
+      },
     },
     required: ['query', 'mode', 'matches', 'limited'],
     additionalProperties: false,
@@ -343,15 +412,22 @@ function shownMatches(rendered: readonly string[]): number {
   return rendered.length;
 }
 /**
- * Every RegExp metacharacter, escaped, so a literal query is matched as text.
+ * One regular-expression scan, run out of process.
  *
- * `literal` mode and `regex` mode share one matching strategy — the engine, with the same flags — and this is
- * the only thing that separates them. Without it, a literal `a+b[0]` would be compiled as a pattern and would
- * match `aab0` while missing `a+b[0]`, which is the opposite of what the caller asked for.
+ * The worker is the catastrophic-backtracking protection and stays that way: a pattern like `(a+)+$` cannot be
+ * interrupted from this thread, so the only reliable stop is terminating the thread that runs it. What changed
+ * is everything else — the worker now streams each file to EOF instead of reading a 256000-byte prefix, and it
+ * returns coverage rather than a bare match list, so `regex` mode can no longer report a complete-looking zero
+ * for a scan that stopped inside a file.
+ *
+ * Two deadlines, and the difference between them matters. The worker's own budget is the smaller of the
+ * request's and {@link REGEX_WORKER_BUDGET_MS}: when it expires the worker answers with what it has and says
+ * `time-limit`, which is a *partial result*. The outer timer is that budget plus slack and exists for the case
+ * the inner one cannot cover — a single test that never returns, where the thread is still alive at the deadline
+ * and the only honest answer is the error this has always returned.
  */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+const REGEX_WORKER_BUDGET_MS = 2_000;
+const REGEX_WORKER_SLACK_MS = 250;
 function regexSearch(
   root: string,
   files: string[],
@@ -359,7 +435,8 @@ function regexSearch(
   sensitive: boolean,
   limit: number,
   signal: AbortSignal,
-): Promise<{ matches: SearchMatch[]; limited: boolean }> {
+  budgets: { maxScanBytes: number; timeoutMs: number; maxOutputChars: number },
+): Promise<{ matches: SearchMatch[]; coverage: Coverage; outputTruncated: boolean }> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const workerUrl =
@@ -372,14 +449,19 @@ function regexSearch(
     const worker = new Worker(workerUrl, {
       execArgv: workerExecArgv(),
       workerData: {
+        root,
         files: files.map((label) => ({ path: path.join(root, ...label.split('/')), label })),
         query,
         sensitive,
         limit,
+        maxScanBytes: budgets.maxScanBytes,
+        timeoutMs: Math.min(budgets.timeoutMs, REGEX_WORKER_BUDGET_MS),
+        maxOutputChars: budgets.maxOutputChars,
       },
     });
+    type Outcome = { matches: SearchMatch[]; coverage: Coverage; outputTruncated: boolean };
     let settled = false;
-    const finish = (error?: unknown, value?: { matches: SearchMatch[]; limited: boolean }) => {
+    const finish = (error?: unknown, value?: Outcome) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -389,9 +471,12 @@ function regexSearch(
       else resolve(value!);
     };
     const abort = () => finish(signal.reason ?? new Error('Search cancelled'));
-    const timer = setTimeout(() => finish(new Error('Regular expression search timed out')), 2000);
+    const timer = setTimeout(
+      () => finish(new Error('Regular expression search timed out')),
+      Math.min(budgets.timeoutMs, REGEX_WORKER_BUDGET_MS) + REGEX_WORKER_SLACK_MS,
+    );
     signal.addEventListener('abort', abort, { once: true });
-    worker.once('message', (value) => finish(undefined, value));
+    worker.once('message', (value: Outcome) => finish(undefined, value));
     worker.once('error', finish);
     worker.once('exit', (code) => {
       if (!settled && code !== 0) finish(new Error('Regular expression search worker failed'));
@@ -399,6 +484,53 @@ function regexSearch(
   });
 }
 
+/**
+ * What a text search says when it found nothing — and the distinction this whole change is about.
+ *
+ * "No matches" is two different facts. A complete scan that found nothing is a statement about the workspace; a
+ * bounded scan that found nothing is a statement about the part of it that was read. The reasons are listed
+ * because a caller told "incomplete" and nothing else cannot decide whether to narrow the query or the scope.
+ */
+function noMatchNotice(coverage: Coverage): string {
+  if (coverage.complete) return 'No matches in the requested scope.';
+  const reasons = coverage.reasons.length ? ` Stopped at: ${coverage.reasons.join(', ')}.` : '';
+  return `No matches in the scanned portion; search is incomplete.${reasons}`;
+}
+/** A prepared file list as the async iterable the scanner takes. */
+async function* fromFiles(files: Iterable<FileEntry>): AsyncGenerator<FileEntry> {
+  for (const file of files) yield file;
+}
+/**
+ * How many files `list_files` keeps listing when the caller does not say.
+ *
+ * Unchanged from the tool's first version on purpose: the model asks for a listing to get oriented, and a listing
+ * of a hundred thousand paths is not orientation. What changed is that the cap is now *askable* — the optional
+ * `limit` and `cursor` inputs let a caller page past it — and that the result says the list was cut, so the cap
+ * no longer reads as the size of the workspace.
+ */
+const LIST_FILES_LIMIT = 1_000;
+/** Files a caller may ask one listing page to hold. The same ceiling the tool has always promised. */
+const MAX_LIST_FILES_LIMIT = 1_000;
+/**
+ * How many admitted files a regular-expression scan hands to its worker.
+ *
+ * The worker takes one flat list, and handing it a hundred thousand paths would spend the whole regex budget
+ * serialising them across the thread boundary before a single line was matched. The remainder is reported as
+ * `file-limit` rather than dropped silently, so a regex search over a very large tree says it is partial instead
+ * of pretending the tree is small.
+ */
+const REGEX_MAX_FILES = 10_000;
+/**
+ * A matched line as the *text* form shows it, for the mode that has always marked a clipped line.
+ *
+ * The scanner hands back the first {@link MAX_MATCH_TEXT} characters and nothing about what came after, so a
+ * line exactly at the cap and a line far past it are the same value here. Presenting the former as clipped is
+ * the conservative direction: showing a clipped line as complete is the failure that matters, and the cost of
+ * being wrong the other way is one marker beside one line.
+ */
+function clippedDisplay(text: string): string {
+  return text.length >= MAX_MATCH_TEXT ? text + TRUNCATION_MARKER : text;
+}
 const str = { type: 'string', minLength: 1, maxLength: 4096 };
 function schema(
   properties: Record<string, unknown>,
@@ -406,8 +538,24 @@ function schema(
 ): Record<string, unknown> {
   return { type: 'object', properties, required, additionalProperties: false };
 }
-export function fileTools(root: string, options: { observe?: boolean } = {}): Tool[] {
+export function fileTools(
+  root: string,
+  setup: {
+    observe?: boolean;
+    searchBackend?: SearchBackend;
+    /**
+     * The shared search service, when the assembly layer has one.
+     *
+     * Structural (`Pick<…>`) rather than the whole service: what this module needs from it is a paged listing,
+     * a way to record that paths changed, and how current its index is — and a bare `fileTools` in a test or an
+     * embedder must keep working with none of it.
+     */
+    search?: Pick<WorkspaceSearchService, 'listingPage' | 'invalidate' | 'freshness'>;
+  } = {},
+): Tool[] {
   const workspace = new Workspace(root);
+  /** The workspace as the search package sees it: one path policy, stated once. */
+  const access = workspaceAccess(workspace);
   /**
    * What this run has read, shared by every read and change tool from this call.
    *
@@ -415,7 +563,7 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
    * files, and a resumed session that inherited the last run's record would be trusting a memory nobody can
    * check. See `./fs-observation.ts` for the whole policy.
    */
-  const observations = new FileObservations(workspace, options.observe ?? true);
+  const observations = new FileObservations(workspace, setup.observe ?? true);
   const gates: MutationGates = { instructions: guidance, observations };
   const known = new Set<string>([loadInstructions(root).text]);
   async function guidance(input: string): Promise<string> {
@@ -435,17 +583,57 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
       'Read the instruction files listed above directly to see the remainder.]';
     return loaded.text.slice(0, MAX_GUIDANCE_CHARS - notice.length) + notice;
   }
-  return [
+  const tools: Tool[] = [
     {
       name: 'list_files',
       isConcurrencySafe: parallelRead,
       description:
-        'List up to 1000 files recursively relative to workspace; skips links, credentials and dependency directories.',
-      inputSchema: schema({ path: str }),
+        'List files recursively relative to workspace; skips links, credentials and dependency directories. Up to 1000 per page; pass limit, and the nextCursor of a previous result to reach the rest. The list ends with a retrieval-metadata line saying whether it is the whole scope or was cut short.',
+      inputSchema: schema({
+        path: str,
+        limit: { type: 'integer', minimum: 1, maximum: MAX_LIST_FILES_LIMIT },
+        cursor: { type: 'string', minLength: 1, maxLength: 128 },
+      }),
       async execute(args, ctx) {
+        const input = String(args.path ?? '.');
+        const limit =
+          typeof args.limit === 'number' && Number.isSafeInteger(args.limit)
+            ? Math.min(MAX_LIST_FILES_LIMIT, Math.max(1, args.limit))
+            : LIST_FILES_LIMIT;
+        const cursor = typeof args.cursor === 'string' && args.cursor ? args.cursor : null;
+        /**
+         * With a shared service the listing is paged by it, which is what makes the cursor a real continuation:
+         * the token is bound to this workspace, this path and the position, and an unknown or stale one is
+         * refused rather than reinterpreted. Without one — a bare `fileTools` in a test or an embedder — the
+         * listing is the bounded walk it has always been, and a cursor is refused rather than silently ignored.
+         */
+        if (setup.search) {
+          const page = await setup.search.listingPage({ path: input, limit, cursor }, ctx.signal);
+          return {
+            isError: false,
+            content: withRetrievalMetadata(page.files.map((file) => file.path).join('\n'), {
+              coverage: page.coverage,
+              sourceVersion: page.sourceVersion,
+              nextCursor: page.nextCursor,
+              freshness: setup.search.freshness(),
+            }),
+          };
+        }
+        if (cursor)
+          throw new Error(
+            'cursor-invalid: this tool set has no shared listing cursor. Search again without a cursor.',
+          );
+        const { files, coverage } = await workspace.walkWithCoverage(input, ctx, {
+          maxFiles: limit,
+        });
         return {
           isError: false,
-          content: bounded((await workspace.walk(String(args.path ?? '.'), ctx)).join('\n')),
+          content: withRetrievalMetadata(files.map((file) => file.path).join('\n'), {
+            coverage,
+            sourceVersion: null,
+            nextCursor: null,
+            freshness: 'unknown',
+          }),
         };
       },
     },
@@ -454,7 +642,7 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
       isConcurrencySafe: parallelRead,
       output: READ_FILE_OUTPUT,
       description:
-        'Read a UTF-8 file. Returns numbered lines; use start_line and end_line for slices. Files are limited to the first 256KB. Output a tool could not return is stored under .yuantu/spill and is readable here.',
+        'Read a UTF-8 file. Returns numbered lines; use start_line and end_line for slices. The whole file is searchable, so a slice may start anywhere in it, and totalLines is the file’s real length. Output a tool could not return is stored under .yuantu/spill and is readable here.',
       inputSchema: schema(
         {
           path: str,
@@ -463,13 +651,19 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
         },
         ['path'],
       ),
-      async execute(args) {
+      async execute(args, ctx) {
         const start = Number(args.start_line ?? 1),
           end = Number(args.end_line ?? start + 199);
         if (end < start) throw new Error('end_line must be >= start_line');
         const input = String(args.path);
-        // Reads reach the spill directory so output that was too large to return is still usable.
-        const split = (await workspace.read(input, 256_000, true)).split(/\r?\n/);
+        /**
+         * The real range read, not a slice of a truncated prefix.
+         *
+         * `Workspace.read` keeps its 256000-byte default for its existing callers, and this tool no longer uses
+         * it: reading a prefix and slicing a window out of that answered "line 130001" with empty text and a
+         * total of 128002 for a file that has 130001 lines. The range read either knows the count or fails.
+         */
+        const range = await readRange(access, input, start, end, ctx.signal, true);
         // The model has now seen this file's bytes, which is what a later change to it will be checked against.
         await observations.record(input);
         /**
@@ -487,15 +681,19 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
           ? ''
           : await guidance(input);
         /**
-         * The split produces one more element than the file has lines when the file ends in a newline, and the
-         * numbering the model reads has always shown that element (`5: ` on a four-line file). The payload drops
-         * it: `totalLines` is what a card prints beside "lines 2–3 of N", and counting a split artifact there
-         * would put the number one too high on essentially every source file in existence. So `shown` is the
-         * window exactly as the model receives it, and `slice` is the same window as lines of the file.
+         * The numbered text keeps the convention it has always had, and the payload keeps the count.
+         *
+         * A file ending in a newline splits into one more element than it has lines, and the numbering the model
+         * reads has always shown that element (`5: ` on a four-line file). The payload drops it: `totalLines` is
+         * what a card prints beside "lines 2–3 of N", and counting a split artifact there would put the number
+         * one too high on essentially every source file in existence. `shown` reproduces the model's window
+         * exactly; `lines` is the same window as lines of the file.
          */
-        const shown = split.slice(start - 1, end);
-        const slice = (split.at(-1) === '' ? split.slice(0, -1) : split).slice(start - 1, end);
-        const text = slice.join('\n');
+        const lines = range.endLine >= range.startLine ? range.text.split('\n') : [];
+        const shown = [...lines];
+        const artifact = range.endsWithNewline || range.totalLines === 0;
+        if (artifact && range.totalLines >= start - 1 && range.totalLines < end) shown.push('');
+        const text = lines.join('\n');
         const language = languageOf(file);
         const body = text.slice(0, MAX_TOOL_OUTPUT);
         return {
@@ -508,10 +706,11 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
             path: path.relative(workspace.root, file).split(path.sep).join('/'),
             ...(language === undefined ? {} : { language }),
             startLine: start,
-            endLine: start + slice.length - 1,
-            totalLines: split.at(-1) === '' ? split.length - 1 : split.length,
+            endLine: range.endLine,
+            totalLines: range.totalLines,
             text: body,
-            truncated: body.length < text.length,
+            truncated: body.length < text.length || range.truncated,
+            fileFingerprint: range.fileFingerprint,
           }),
         };
       },
@@ -566,7 +765,7 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
       isConcurrencySafe: parallelRead,
       output: SEARCH_FILES_OUTPUT,
       description:
-        'Search text in up to 1000 workspace files (first 256KB each). Defaults remain literal, case-sensitive, and 100 results; supports regex, case modes, include/exclude globs, and a bounded result limit.',
+        'Search workspace text. Defaults remain literal, case-sensitive, and 100 results; supports regex, case modes, include/exclude globs and a bounded result limit. Files are read to EOF, and the result says whether the scan was complete — an incomplete scan never reports that the workspace has no such text.',
       inputSchema: schema(
         {
           query: { type: 'string', minLength: 1, maxLength: 1000 },
@@ -589,8 +788,11 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
       ),
       async execute(args, ctx) {
         const query = String(args.query);
-        const mode = String(args.mode ?? 'literal');
-        const caseMode = String(args.case ?? 'sensitive');
+        // Narrowed rather than cast: the input schema enumerates both values, so anything else is a caller that
+        // bypassed the schema, and the tool's own defaults are what it falls back to.
+        const mode: 'literal' | 'regex' = args.mode === 'regex' ? 'regex' : 'literal';
+        const caseMode: 'sensitive' | 'insensitive' | 'smart' =
+          args.case === 'insensitive' || args.case === 'smart' ? args.case : 'sensitive';
         const sensitive = caseMode === 'sensitive' || (caseMode === 'smart' && /[A-Z]/.test(query));
         if (mode === 'regex') {
           try {
@@ -601,103 +803,145 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
             );
           }
         }
-        const includes = Array.isArray(args.include)
-          ? args.include.map(String).map(compileGlob)
-          : [];
-        const excludes = Array.isArray(args.exclude)
-          ? args.exclude.map(String).map(compileGlob)
-          : [];
+        const includes = Array.isArray(args.include) ? args.include.map(String) : [];
+        const excludes = Array.isArray(args.exclude) ? args.exclude.map(String) : [];
         const limit = Number(args.max_results ?? 100);
-        const files = (await workspace.walk(String(args.path ?? '.'), ctx)).filter(
-          (file) =>
-            (!includes.length || includes.some((pattern) => pattern.test(file))) &&
-            !excludes.some((pattern) => pattern.test(file)),
-        );
+        const options = searchOptions({
+          query,
+          mode,
+          caseMode,
+          maxResults: limit,
+          maxOutputChars: MAX_TOOL_OUTPUT,
+          signal: ctx.signal,
+          deadlineMs: Date.now() + SEARCH_TIMEOUT_MS,
+        });
         /**
-         * One scan, two forms.
+         * One set of enumeration options for every backend.
          *
-         * `found` is the payload's list and `rendered` is the text form the model reads, appended together so
-         * neither can drift from the other: a hit that reaches the payload reached the text too, and the other
-         * way round. Both paths below end in this same tail, which is what keeps the two modes from growing two
-         * different ideas of what "limited" and "No matches" mean.
+         * The filters travel as strings and are compiled inside the search package, so `search_files` and the
+         * inventory cannot end up with two ideas of what an include pattern means. `maxFiles` is `null` — the
+         * entry budget is what bounds a search now, and a repository with more candidate files than results
+         * should still be *searched*, not truncated to the first thousand.
          */
-        const found: SearchMatch[] = [];
-        const rendered: string[] = [];
-        /**
-         * `display` defaults to the payload's own text, and the literal path passes it explicitly because its
-         * rendered line has always carried `bounded`'s `[output truncated]` marker while the payload may not:
-         * the marker is presentation, not part of the file, and dropping it from a card is the point — but
-         * dropping it from the text as well would change what the model reads, which this change must not do.
-         */
-        const add = (file: string, line: number, text: string, display = text): void => {
-          found.push({ path: file, line, text });
-          rendered.push(`${file}:${line}: ${display}`);
+        const inventoryOptions: InventoryOptions = {
+          path: String(args.path ?? '.'),
+          include: includes,
+          exclude: excludes,
+          maxEntries: SEARCH_MAX_ENTRIES,
+          maxFiles: null,
+          timeoutMs: SEARCH_TIMEOUT_MS,
+          deadlineMs: options.deadlineMs,
+          signal: ctx.signal,
         };
-        let limited = false;
-        if (mode === 'regex') {
-          const result = await regexSearch(
-            workspace.root,
-            files,
-            query,
-            sensitive,
-            limit,
-            ctx.signal,
-          );
-          for (const match of result.matches) add(match.path, match.line, match.text);
-          limited = result.limited;
-        } else {
-          /**
-           * Case-insensitive literals match through the same engine and the same flag as `regex` mode.
-           *
-           * The test used to be `line.toLocaleLowerCase().includes(query.toLocaleLowerCase())`, which is wrong
-           * twice over. It is locale-dependent and the engine's `i` flag is not, so the two modes of one tool
-           * could answer differently about the same file on a host whose locale folds differently — that is the
-           * risk this pair exists to remove rather than to move. And lowercasing is not the relation
-           * case-insensitive matching implements: `'İ'.toLocaleLowerCase()` is `i` plus a combining dot above,
-           * so a literal search for `i` counted a line containing `İ` as a hit while `new RegExp('i', 'i')` does
-           * not, and `literal` therefore disagreed with `regex` on any host at all.
-           *
-           * The query is escaped, so this remains a literal: `a+b[0]` matches that text and never `aab0`, and a
-           * query full of metacharacters is a query rather than a syntax error. Case-sensitive is the same
-           * expression without the flag, which is exact matching — asserted, not assumed.
-           */
-          const expression = new RegExp(escapeRegExp(query), sensitive ? '' : 'i');
-          scan: for (const file of files) {
-            ctx.signal.throwIfAborted();
-            let text: string;
-            try {
-              text = await workspace.read(file);
-            } catch {
-              continue;
-            }
-            const lines = text.split(/\r?\n/);
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i]!;
-              if (!expression.test(line)) continue;
-              add(file, i + 1, line.slice(0, MAX_MATCH_TEXT), bounded(line, MAX_MATCH_TEXT));
-              if (found.length >= limit) {
-                limited = true;
-                break scan;
-              }
-            }
-          }
-        }
+        const page = await search();
+        /**
+         * One scan, two forms — still.
+         *
+         * `found` is the payload's list and `rendered` is the text form the model reads, built from the same
+         * matches so neither can drift from the other. The only difference between the two modes is the one that
+         * has always been there: the literal path marks a clipped line with `bounded`'s marker in the text form,
+         * while the regex path shows the clipped line itself. That marker is presentation, not part of the file,
+         * and dropping it would change what the model reads.
+         */
+        const found = page.matches;
+        const rendered = found.map(
+          (match) =>
+            `${match.path}:${match.line}: ${
+              mode === 'literal' ? clippedDisplay(match.text) : match.text
+            }`,
+        );
         const shown = shownMatches(rendered);
+        const limited =
+          !page.coverage.complete ||
+          page.outputTruncated ||
+          page.nextCursor !== null ||
+          shown < found.length;
         return {
           isError: false,
           content: bounded(
-            rendered.join('\n') +
-              (limited ? '\n[match limit reached]' : rendered.length ? '' : 'No matches'),
+            found.length
+              ? rendered.join('\n') + (limited ? '\n[match limit reached]' : '')
+              : noMatchNotice(page.coverage),
           ),
           output: toolOutput(SEARCH_FILES_OUTPUT, {
             query,
             mode,
             matches: found.slice(0, shown),
-            // Two different cuts end in the same answer for a card: the scan stopped at the result limit, or the
-            // payload dropped matches the text form could not show either. Both mean "this is not every match".
-            limited: limited || shown < found.length,
+            limited,
+            coverage: page.coverage,
+            outputTruncated: page.outputTruncated || shown < found.length,
+            nextCursor: page.nextCursor,
+            sourceVersion: page.sourceVersion,
           }),
         };
+
+        /**
+         * The backend decision, made in one place.
+         *
+         * `regex` goes to its worker — the only thing that can stop a pathological pattern — and everything else
+         * is a case-sensitive literal the built-in scanner answers, unless the assembly layer supplied a verified
+         * fast backend and it can actually run here. When it cannot, the built-in scanner is used directly rather
+         * than the backend being asked to fall back to it: the same engine either way, and one less indirection
+         * in the way a partial result would be explained.
+         */
+        async function search(): Promise<SearchPage> {
+          if (mode === 'regex') {
+            // The worker cannot enumerate — path policy lives here — so it is handed one flat, admitted list.
+            const inventory = await collectInventory(access, inventoryOptions);
+            const remainingMs = Math.max(0, options.deadlineMs! - Date.now());
+            if (remainingMs === 0)
+              return scanText(
+                access,
+                fromFiles(inventory.files),
+                options,
+                () => inventory.coverage,
+              );
+            const result = await regexSearch(
+              workspace.root,
+              inventory.files.slice(0, REGEX_MAX_FILES).map((file) => file.path),
+              query,
+              sensitive,
+              limit,
+              ctx.signal,
+              { ...options, timeoutMs: remainingMs },
+            );
+            const truncated = inventory.files.length > REGEX_MAX_FILES;
+            if (truncated) markStop(inventory.coverage, 'file-limit');
+            return {
+              matches: result.matches.map((match) => ({
+                path: match.path,
+                line: match.line,
+                text: match.text,
+              })),
+              coverage: mergeCoverage(inventory.coverage, result.coverage),
+              outputTruncated: result.outputTruncated,
+              nextCursor: null,
+              sourceVersion: null,
+            };
+          }
+          const backend = setup.searchBackend;
+          if (backend && (await backend.available())) {
+            const inventory = await collectInventory(access, inventoryOptions);
+            if (Date.now() >= options.deadlineMs!)
+              return scanText(
+                access,
+                fromFiles(inventory.files),
+                options,
+                () => inventory.coverage,
+              );
+            return backend.search(
+              {
+                files: inventory.files,
+                options,
+                inventory: () => inventory.coverage,
+                fallback: (files) => scanText(access, fromFiles(files), options),
+              },
+              ctx,
+            );
+          }
+          const stream = iterateInventory(access, inventoryOptions);
+          return scanText(access, stream, options, () => stream.coverage());
+        }
       },
     },
     {
@@ -799,4 +1043,78 @@ export function fileTools(root: string, options: { observe?: boolean } = {}): To
       },
     },
   ];
+  /**
+   * A change this run made is news the index has to hear.
+   *
+   * The index is built from the files as they were, so a write that lands and does not reach it leaves the next
+   * `repo_map` answering with a symbol at a line that no longer holds it. Recording the paths here — rather than
+   * rebuilding — is deliberate: a batch of writes should cost one reconcile, and the paths are all the index
+   * needs to know which rows to re-check.
+   *
+   * Only a change that *happened* is recorded, and the paths come from the arguments as well as from the result,
+   * because a rename touches two paths and only one of them is in `change`.
+   */
+  return setup.search
+    ? tools.map((tool) =>
+        tool.permission === 'write' ? withInvalidation(tool, setup.search!) : tool,
+      )
+    : tools;
+}
+
+/**
+ * Wraps one write tool so a change it made invalidates the index rows that described the old content.
+ *
+ * Both dispatch paths are covered on purpose. A tool the registry calls directly goes through `execute` here, but
+ * a tool with a `prepare` does not: the registry asks `prepare` for the preview it shows a person and then runs
+ * `prepared.execute`, never touching `tool.execute` again. Wrapping only the obvious one left the invalidation
+ * unreachable for every mutation tool in the product — which is exactly what the lifecycle test caught.
+ */
+function withInvalidation(tool: Tool, search: Pick<WorkspaceSearchService, 'invalidate'>): Tool {
+  const reminder = async (args: Record<string, unknown>, result: ToolResult): Promise<void> => {
+    if (result.isError) return;
+    const paths = touchedPaths(args, result);
+    if (paths.length) await search.invalidate({ paths, reason: 'tool-write' }).catch(() => {});
+  };
+  const wrapPrepared = (args: Record<string, unknown>, prepared: PreparedTool): PreparedTool => ({
+    ...prepared,
+    execute: async (context) => {
+      const result = await prepared.execute(context);
+      await reminder(args, result);
+      return result;
+    },
+  });
+  const wrapped: Tool = {
+    ...tool,
+    async execute(args, context) {
+      const result = await tool.execute(args, context);
+      await reminder(args, result);
+      return result;
+    },
+  };
+  if (tool.prepare)
+    wrapped.prepare = async (args, context) => {
+      const prepared = await tool.prepare!(args, context);
+      return prepared ? wrapPrepared(args, prepared) : prepared;
+    };
+  return wrapped;
+}
+
+/** Every workspace path one write call named, from its arguments and from the change it produced. */
+function touchedPaths(args: Record<string, unknown>, result: ToolResult): string[] {
+  const paths = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value === 'string' && value.trim()) paths.add(value);
+  };
+  add(args.path);
+  add(args.from);
+  add(args.to);
+  if (Array.isArray(args.edits))
+    for (const edit of args.edits)
+      if (edit && typeof edit === 'object') add((edit as Record<string, unknown>).path);
+  const change = result.change;
+  if (change) {
+    add(change.path);
+    for (const nested of change.changes ?? []) add(nested.path);
+  }
+  return [...paths];
 }

@@ -21,7 +21,9 @@ import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry, HookRegistry } from '../packages/tools/registry.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
+import { AgentHostClient } from '../packages/client/host-client.ts';
 import { connectClient, listeningHost } from './listening-host-fixture.ts';
+import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import type { AgentEvent, ModelResponse, Provider } from '../packages/protocol/index.ts';
 
 const reply = (text = 'Done'): ModelResponse => ({
@@ -201,4 +203,162 @@ test('a client that missed a fact finds out and catches up without the Host rest
   );
   // Caught up means caught up: the next check is a no-op again.
   assert.equal(await controller.catchUp(), false);
+});
+
+test('a cursor is a position in the log, and it only ever moves forward', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cursor-mark-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+  // The mark is local bookkeeping, so it needs no Host — which is exactly why it can be pinned this directly.
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath: path.resolve('apps/agent-host/main.ts'),
+    workspace: root,
+    db: path.join(root, 'sessions.sqlite'),
+    env: { YUANTU_MODEL: 'fixture', YUANTU_API_KEY: 'fixture' },
+  });
+  // A session nothing has been received for is at the start of the log. 0 is that position; "before the
+  // beginning" is not a position a Host could answer a question about.
+  assert.equal(client.cursorOf('unknown-session'), 0);
+  // Something that is not a position is not recorded. `Infinity` is the one that matters: it compares greater
+  // than every real cursor, so a single unvalidated frame would pin the mark past the end of the log forever
+  // and no gap could ever be detected again.
+  client.noteCursor('s1', Number.NaN);
+  client.noteCursor('s1', Number.POSITIVE_INFINITY);
+  client.noteCursor('s1', -5);
+  assert.equal(client.cursorOf('s1'), 0);
+  client.noteCursor('s1', 7);
+  assert.equal(client.cursorOf('s1'), 7);
+  // The mark is what the client has *received*. Receiving something older afterwards does not un-receive it,
+  // and letting the mark walk backwards would make a real gap look like a smaller one.
+  client.noteCursor('s1', 3);
+  assert.equal(client.cursorOf('s1'), 7);
+  // And it is per session: one session's position says nothing about another's.
+  assert.equal(client.cursorOf('another-session'), 0);
+});
+
+test('a client that cannot check assumes a gap rather than reporting a level view', async (t) => {
+  const host = await listeningHost(t, {});
+  const { client } = await connectClient(host.port);
+  t.after(() => client.stop().catch(() => undefined));
+  await client.start();
+  const session = await client.request('session.create', {});
+  // A Host that does not advertise the cursor capability. "Did I miss anything?" cannot be asked, and the only
+  // safe reading of "I cannot check" is "assume a gap": reporting a level view would show a stale transcript
+  // with nothing to say that it is stale.
+  const blind = new Proxy(client, {
+    get(target, property) {
+      if (property === 'supports') return () => false;
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as AgentHostClient;
+  const controller = new SessionController(blind);
+  t.after(() => controller.dispose());
+  await controller.load(session.id);
+  // The log moves on while this client cannot find out how far.
+  const other = new SessionStore(host.dbPath);
+  try {
+    other.append(session.id, { role: 'user', content: 'written while nobody was watching' });
+    other.flush(session.id);
+  } finally {
+    other.close();
+  }
+  assert.equal(
+    await controller.catchUp(),
+    true,
+    'a check that could not be made is not a level view',
+  );
+  assert.equal(
+    controller.snapshot.messages.map((message) => message.content).at(-1),
+    'written while nobody was watching',
+  );
+});
+
+test('a catch-up during a live run leaves the run alone', async (t) => {
+  // The endpoint holds its answer until the test says so, instead of sleeping for a fixed span. A fixed sleep
+  // makes "the turn is still in flight when the check runs" a bet on the scheduler: too short and the check runs
+  // after the turn ended (passing for the wrong reason), too long and every run pays for the margin. A handshake
+  // makes the in-flight window a fact the test establishes before it asserts anything about it.
+  const marks: { arrived?: () => void } = {};
+  const arrived = new Promise<void>((resolve) => (marks.arrived = resolve));
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const requests: string[] = [];
+  const url = await httpFixture(t, (body, res) => {
+    requests.push(typeof body?.model === 'string' ? body.model : '');
+    marks.arrived?.();
+    // The protocol this Host speaks is SSE, and the answer is framed as SSE: a JSON body here is not a slower
+    // answer, it is a `no-stream` failure (packages/providers/anthropic.ts) that the retry policy treats as
+    // retryable (packages/protocol/retry.ts), which turns a one-request test into a retry ladder.
+    return held.then(() => sendFrames(res, frames('late answer')));
+  });
+  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const { client } = await connectClient(host.port);
+  t.after(() => client.stop().catch(() => undefined));
+  await client.start();
+  const session = await client.request('session.create', {});
+  const controller = new SessionController(client);
+  t.after(() => controller.dispose());
+  await controller.load(session.id);
+  const running = controller.send('Hi');
+  // A diagnostic deadline that does not outlive its own purpose: `AbortSignal.timeout` is unref'd, so an
+  // endpoint that never answers fails this test instead of holding the run open for the rest of the timeout.
+  const deadline = AbortSignal.timeout(15_000);
+  const expired = () =>
+    new Error(
+      'the run never reached the point where the check could interrupt it; nothing was asserted',
+    );
+  await Promise.race([
+    arrived,
+    new Promise((_, reject) =>
+      deadline.addEventListener('abort', () => reject(expired()), { once: true }),
+    ),
+  ]);
+  try {
+    // The turn is provably in flight: the Host is holding a request open for it.
+    assert.equal(controller.snapshot.running, true, 'the run never started');
+    // A re-read here would rebuild the state mid-turn and drop the in-flight turn the window is showing, so the
+    // check has to decline even though it could answer.
+    assert.equal(await controller.catchUp(), false, 'a live run must not be re-read');
+  } finally {
+    // Released even when an assertion above failed, so a failure is reported rather than left hanging on teardown.
+    release();
+  }
+  // The answer the endpoint was holding belongs to the run, and the run has to end well: `running.catch(() =>
+  // undefined)` used to make this test pass while the turn actually failed with a protocol error, which is the
+  // failure the fixture's non-SSE JSON body was producing.
+  const answer = await running;
+  assert.equal(answer.status, 'completed');
+  assert.equal(controller.snapshot.error, null);
+  // One request: the run asked once and the held answer satisfied it. A retry ladder would show up here.
+  assert.equal(requests.length, 1);
+});
+
+test('the success assertions above are not vacuous: a run refused by the endpoint fails them', async (t) => {
+  // Negative control for the assertions directly above. Those assertions are only worth having if the failure
+  // they are meant to catch actually trips them, so this runs the same shape against an endpoint that refuses the
+  // request outright. Without it, "the answer was completed" could be a property of the fixture rather than of the
+  // code under test — which is exactly how the JSON-body fixture used to pass while the turn was failing.
+  const url = await httpFixture(t, (_body, res) => {
+    res.writeHead(401, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        type: 'error',
+        error: { type: 'authentication_error', message: 'refused' },
+      }),
+    );
+  });
+  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const { client } = await connectClient(host.port);
+  t.after(() => client.stop().catch(() => undefined));
+  await client.start();
+  const session = await client.request('session.create', {});
+  const controller = new SessionController(client);
+  t.after(() => controller.dispose());
+  await controller.load(session.id);
+  const answer = await controller.send('Hi');
+  assert.notEqual(answer.status, 'completed', 'a refused run is not a completed run');
+  assert.ok(controller.snapshot.error, 'the refusal is visible on the controller, not swallowed');
 });

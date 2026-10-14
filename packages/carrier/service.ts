@@ -15,6 +15,7 @@ import type { PermissionPolicySource } from '../core/permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
 import { parseCarrierCommand, type CarrierSnapshot, type SubAgentTranscript } from './contract.ts';
+import { CarrierError, carrierIssue } from './errors.ts';
 /**
  * How many times the carrier restarts a Host that died on its own, and the pause between tries.
  *
@@ -66,8 +67,8 @@ function describeSelection(selection: { mode: string; files?: string; network?: 
     ...(selection.network === undefined ? [] : [`network=${selection.network}`]),
   ].join(' ');
 }
-/** How many 100-message history pages the sub-agent viewer will load before it stops. */
-const SUBAGENT_TRANSCRIPT_PAGES = 2;
+/** Keep the newest process records and the final reply within a bounded child history window. */
+const SUBAGENT_TRANSCRIPT_MESSAGES = 200;
 
 /**
  * The client state machine every carrier shares: sessions, run state, transcript projection, pending
@@ -148,7 +149,7 @@ export class CarrierService {
    */
   private unconfirmedPolicies = new Set<string>();
   private startupStage: CarrierSnapshot['startupStage'] = 'starting';
-  private error: string | null = null;
+  private error: string | CarrierError | null = null;
   private recovery: CarrierSnapshot['recovery'] = null;
   private recovering = false;
   /**
@@ -229,8 +230,8 @@ export class CarrierService {
           this.interrupted = true;
           this.startupStage = 'failed';
           this.error ||= this.supervisesHost
-            ? 'Agent Host 意外退出，请重新启动应用。'
-            : '与 Agent Host 的连接已断开；请让启动它的载体重新连接。';
+            ? new CarrierError('hostExited')
+            : new CarrierError('hostDisconnected');
           void this.recoverHost();
         } else if (
           status === 'ready' &&
@@ -273,9 +274,7 @@ export class CarrierService {
   ): Promise<void> {
     const strict = selection.files !== undefined || selection.network !== undefined;
     if (strict && !this.client.supports(EXECUTION_POLICY_CAPABILITY))
-      throw new Error(
-        'Agent Host 不确认文件/网络执行策略（缺少 execution-policy-files-network-v1）；请升级 Agent Host 后重新选择该档位。',
-      );
+      throw new CarrierError('policyUnsupported');
     const answer = await this.client.request('sandbox.set', {
       mode: selection.mode,
       ...(selection.files === undefined ? {} : { files: selection.files }),
@@ -289,9 +288,10 @@ export class CarrierService {
     );
     if (!confirmed) {
       this.unconfirmedPolicies.add(target.key);
-      throw new Error(
-        `Agent Host 未按请求确认执行策略（请求 ${describeSelection(selection)}，回执 ${describeSelection(answer)}）；策略状态未知，在重新确认前不再执行。`,
-      );
+      throw new CarrierError('policyMismatch', {
+        requested: describeSelection(selection),
+        received: describeSelection(answer),
+      });
     }
     this.unconfirmedPolicies.delete(target.key);
     this.sandboxSelections.set(target.key, confirmed);
@@ -373,7 +373,7 @@ export class CarrierService {
       recovery: this.recovery ? { ...this.recovery } : null,
       resources: structuredClone(this.resources),
       workspace: this.workspace,
-      model: redactSecrets(env.YUANTU_MODEL || '未配置模型', env),
+      model: redactSecrets(env.YUANTU_MODEL || '', env),
       configured,
       supportsVision: env.YUANTU_SUPPORTS_VISION !== 'false',
       ready: this.ready && this.client.status === 'ready',
@@ -389,7 +389,8 @@ export class CarrierService {
       taskSteps: structuredClone(this.taskSteps),
       session: this.controller.snapshot,
       subagentTranscript: structuredClone(this.subagentTranscript),
-      error: this.error,
+      error: this.error instanceof CarrierError ? this.error.message : this.error,
+      errorDetail: carrierIssue(this.error, (value) => this.safeError(new Error(value))),
     };
   }
   subscribe(listener: (snapshot: CarrierSnapshot) => void): () => void {
@@ -625,15 +626,14 @@ export class CarrierService {
    * Opens a sub-agent's transcript for reading.
    *
    * The ids come from the interface, so they are checked against the delegations this session actually
-   * recorded — the viewer must not become a way to read any session in the workspace. The page budget
-   * is deliberately small: the panel is for spot-checking what a child did, not for browsing a second
-   * conversation, and the whole snapshot is deep-cloned on every publish.
+   * recorded — the viewer must not become a way to read any session in the workspace. The bounded
+   * window starts at the tail so a long process cannot hide the child's final reply at the end.
    */
   private async openSubAgentTranscript(subagentId: string, childSessionId: string): Promise<void> {
     this.closeSubAgentTranscript();
     const version = this.subagentTranscriptVersion;
     const sessionId = this.controller.snapshot.sessionId;
-    if (!sessionId) throw new Error('Open a session first');
+    if (!sessionId) throw new CarrierError('sessionRequired');
     // The durable card list shows completed delegations. While the current run is still active, its child
     // exists only in the controller's live event projection, so the viewer must accept that same trusted view.
     const live = this.controller.snapshot.subagents.find(
@@ -641,22 +641,27 @@ export class CarrierService {
     );
     const summary =
       live ??
-      (await this.client.request('subagents.list', { sessionId })).find(
+      (await this.client.request('subagents.list', { sessionId, includePreviousRuns: true })).find(
         (entry) => entry.id === subagentId && entry.sessionId === childSessionId,
       );
-    if (!summary) throw new Error('That sub-agent does not belong to this session');
+    if (!summary) throw new CarrierError('subagentNotInSession');
     const history = await readDisplayHistory(
       this.client,
       childSessionId,
-      SUBAGENT_TRANSCRIPT_PAGES * 100,
+      SUBAGENT_TRANSCRIPT_MESSAGES,
+      0,
+      { tail: SUBAGENT_TRANSCRIPT_MESSAGES },
     );
     if (version !== this.subagentTranscriptVersion) return;
     this.subagentTranscript = {
       subagentId,
       childSessionId,
       objective: summary.objective,
+      status: summary.status,
+      ...(summary.report ? { report: summary.report } : {}),
+      ...(summary.error ? { error: summary.error } : {}),
       messages: history.messages,
-      truncated: history.truncated,
+      truncated: history.truncated || history.startOffset > 0,
     };
     this.subagentTranscriptOffset = history.nextOffset;
     this.startSubAgentTranscriptPolling();
@@ -682,17 +687,55 @@ export class CarrierService {
     if (!transcript || this.subagentTranscriptRefreshing || this.client.status !== 'ready') return;
     this.subagentTranscriptRefreshing = true;
     try {
-      const history = await readDisplayHistory(
+      let history = await readDisplayHistory(
         this.client,
         transcript.childSessionId,
         100,
         this.subagentTranscriptOffset,
       );
+      // If a busy child produced more than a polling page, catch up to its newest window rather
+      // than working through old process records while its completed answer stays off screen.
+      const replaceWindow = history.truncated;
+      if (replaceWindow)
+        history = await readDisplayHistory(
+          this.client,
+          transcript.childSessionId,
+          SUBAGENT_TRANSCRIPT_MESSAGES,
+          0,
+          { tail: SUBAGENT_TRANSCRIPT_MESSAGES },
+        );
       if (this.subagentTranscript !== transcript) return;
       this.subagentTranscriptOffset = history.nextOffset;
-      if (!history.messages.length) return;
-      transcript.messages = [...transcript.messages, ...history.messages].slice(-200);
-      transcript.truncated ||= history.truncated;
+      const current = this.controller.snapshot.subagents.find(
+        (entry) =>
+          entry.id === transcript.subagentId && entry.childSessionId === transcript.childSessionId,
+      );
+      const previousResult = JSON.stringify([
+        transcript.status,
+        transcript.report,
+        transcript.error,
+      ]);
+      if (current) {
+        transcript.status = current.status;
+        transcript.report = current.report;
+        transcript.error = current.error;
+      }
+      if (!history.messages.length) {
+        if (
+          previousResult !==
+          JSON.stringify([transcript.status, transcript.report, transcript.error])
+        )
+          this.publish();
+        return;
+      }
+      const combined = replaceWindow
+        ? history.messages
+        : [...transcript.messages, ...history.messages];
+      transcript.messages = combined.slice(-SUBAGENT_TRANSCRIPT_MESSAGES);
+      transcript.truncated ||=
+        history.truncated ||
+        (replaceWindow && history.startOffset > 0) ||
+        combined.length > SUBAGENT_TRANSCRIPT_MESSAGES;
       this.publish();
     } finally {
       this.subagentTranscriptRefreshing = false;
@@ -729,7 +772,7 @@ export class CarrierService {
         try {
           await this.client.start();
         } catch (error) {
-          this.error = this.safeError(error);
+          this.error = this.captureError(error);
           if (attempt < HOST_RECOVERY_ATTEMPTS) await this.recoveryDelay(attempt);
           continue;
         }
@@ -782,13 +825,13 @@ export class CarrierService {
           this.startBackgroundPolling();
           return;
         } catch (error) {
-          this.error = this.safeError(error);
+          this.error = this.captureError(error);
           await this.client.stop().catch(() => {});
           if (attempt < HOST_RECOVERY_ATTEMPTS) await this.recoveryDelay(attempt);
         }
       }
       this.startupStage = 'failed';
-      this.error ||= 'Agent Host 意外退出，自动重启失败；请重新启动应用。';
+      this.error ||= new CarrierError('hostRecoveryFailed');
     } finally {
       this.recovering = false;
       this.publish();
@@ -823,7 +866,7 @@ export class CarrierService {
       this.startBackgroundPolling();
     } catch (error) {
       this.startupStage = 'failed';
-      this.error = this.safeError(error);
+      this.error = this.captureError(error);
       throw error;
     } finally {
       this.publish();
@@ -835,22 +878,20 @@ export class CarrierService {
       ...this.env,
     });
   }
+  private captureError(error: unknown): string | CarrierError {
+    const detail = carrierIssue(error, (value) => this.safeError(new Error(value)));
+    return detail ? new CarrierError(detail.code, detail.values) : this.safeError(error);
+  }
   async dispatch(input: unknown): Promise<CarrierSnapshot> {
     const command = parseCarrierCommand(input);
     if (command.type === 'snapshot') return this.snapshot;
     if (!this.ready || this.client.status !== 'ready')
-      throw new Error(
-        this.recovering
-          ? 'Agent Host 正在自动重启，请稍候。'
-          : 'Agent Host is not ready; restart the desktop',
-      );
+      throw new CarrierError(this.recovering ? 'hostRecovering' : 'hostNotReady');
     if (
       EXECUTION_COMMANDS.has(command.type) &&
       this.unconfirmedPolicies.has(this.controller.snapshot.sessionId ?? '')
     )
-      throw new Error(
-        '执行策略尚未确认：上次沙箱选择未获 Agent Host 确认，请重新选择档位并确认后再运行。',
-      );
+      throw new CarrierError('policyUnconfirmed');
     // Any action counts as seeing the notice: it is there to explain a window that came back by itself, not to
     // stay on screen until the app is restarted again.
     this.recovery = null;
@@ -874,7 +915,7 @@ export class CarrierService {
         await this.refreshBackground();
         return this.snapshot;
       } catch (error) {
-        this.error = this.safeError(error);
+        this.error = this.captureError(error);
         throw error;
       } finally {
         this.publish();
@@ -882,7 +923,7 @@ export class CarrierService {
     }
     if (command.type === 'backgroundPolicy') {
       const sessionId = this.controller.snapshot.sessionId;
-      if (!sessionId) throw Error('Create or load a session first');
+      if (!sessionId) throw new CarrierError('sessionRequired');
       await this.client.request('background.policy', {
         sessionId,
         policy: command.policy,
@@ -901,7 +942,7 @@ export class CarrierService {
       await this.refreshBackground();
       return this.snapshot;
     }
-    if (this.restoring || this.managing) throw new Error('Session operation is in progress');
+    if (this.restoring || this.managing) throw new CarrierError('sessionOperationBusy');
     const manages = [
       'rename',
       'deleteSession',
@@ -920,9 +961,10 @@ export class CarrierService {
       'planReject',
       'planExecute',
       'planRefresh',
+      'subagentWorkspace',
     ].includes(command.type);
     if (manages) {
-      if (this.busy) throw new Error('Wait for the current run or loading operation to finish');
+      if (this.busy) throw new CarrierError('runBusy');
       this.managing = true;
     }
     this.error = null;
@@ -953,7 +995,7 @@ export class CarrierService {
         case 'undo': {
           const current = this.controller.snapshot;
           if (current.running || current.loading || !current.sessionId)
-            throw new Error('Wait for the current operation to finish');
+            throw new CarrierError('operationBusy');
           this.restoring = true;
           try {
             await this.client.request('changes.undo', {
@@ -1000,8 +1042,7 @@ export class CarrierService {
           break;
         }
         case 'send':
-          if (!this.snapshot.configured)
-            throw new Error('请打开“模型设置”，填写接口地址、模型 ID 和 API 密钥。');
+          if (!this.snapshot.configured) throw new CarrierError('modelNotConfigured');
           await this.controller.send(command.prompt, command.images);
           break;
         case 'enqueue':
@@ -1012,7 +1053,7 @@ export class CarrierService {
           break;
         case 'taskSave': {
           const sessionId = this.controller.snapshot.sessionId;
-          if (!sessionId) throw new Error('No active session');
+          if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.update', {
             sessionId,
             taskId: command.taskId,
@@ -1023,7 +1064,7 @@ export class CarrierService {
         }
         case 'taskConfirm': {
           const sessionId = this.controller.snapshot.sessionId;
-          if (!sessionId) throw new Error('No active session');
+          if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.confirm', {
             sessionId,
             taskId: command.taskId,
@@ -1034,7 +1075,7 @@ export class CarrierService {
         }
         case 'taskPropose': {
           const sessionId = this.controller.snapshot.sessionId;
-          if (!sessionId) throw new Error('No active session');
+          if (!sessionId) throw new CarrierError('sessionRequired');
           try {
             await this.client.request('task.propose', { sessionId, taskId: command.taskId });
           } finally {
@@ -1044,14 +1085,14 @@ export class CarrierService {
         }
         case 'taskStart': {
           const task = this.tasks.find((item) => item.id === command.taskId);
-          if (!task) throw new Error('Task not found');
+          if (!task) throw new CarrierError('taskNotFound');
           normalizeTaskDraft(task);
           await this.controller.send(task.description || task.title, undefined, task.id);
           break;
         }
         case 'taskApproval': {
           const sessionId = this.controller.snapshot.sessionId;
-          if (!sessionId) throw new Error('No active session');
+          if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.approval.respond', {
             sessionId,
             taskId: command.taskId,
@@ -1062,7 +1103,7 @@ export class CarrierService {
         }
         case 'taskTrigger': {
           const sessionId = this.controller.snapshot.sessionId;
-          if (!sessionId) throw new Error('No active session');
+          if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.trigger', {
             sessionId,
             taskId: command.taskId,
@@ -1087,9 +1128,9 @@ export class CarrierService {
           break;
         }
         case 'taskRetry': {
-          if (!this.controller.snapshot.sessionId) throw new Error('No active session');
+          if (!this.controller.snapshot.sessionId) throw new CarrierError('sessionRequired');
           const task = this.tasks.find((item) => item.id === command.taskId);
-          if (!task) throw new Error('Task not found');
+          if (!task) throw new CarrierError('taskNotFound');
           await this.controller.send(
             command.prompt?.trim() || task.description,
             undefined,
@@ -1111,14 +1152,14 @@ export class CarrierService {
         case 'export':
           break;
         case 'compact':
-          if (!this.controller.snapshot.sessionId) throw new Error('No active session');
+          if (!this.controller.snapshot.sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('context.compact', {
             sessionId: this.controller.snapshot.sessionId,
           });
           break;
         case 'goal': {
           const sessionId = this.controller.snapshot.sessionId;
-          if (!sessionId) throw new Error('No active session');
+          if (!sessionId) throw new CarrierError('sessionRequired');
           const draft = initialTaskDraft(command.type, command.prompt);
           const task = await this.client.request('task.create', {
             sessionId,
@@ -1129,7 +1170,9 @@ export class CarrierService {
             try {
               await this.client.request('task.propose', { sessionId, taskId: task.id });
             } catch (error) {
-              this.error = '草稿已保存，自动规划未完成；可编辑后执行。' + this.safeError(error);
+              this.error = new CarrierError('draftPlanningFailed', {
+                message: this.safeError(error),
+              });
             } finally {
               await this.controller.load(sessionId);
             }
@@ -1168,6 +1211,28 @@ export class CarrierService {
         case 'subagentTranscript':
           await this.openSubAgentTranscript(command.subagentId, command.childSessionId);
           break;
+        case 'subagentWorkspace': {
+          const parentSessionId = this.controller.snapshot.sessionId;
+          if (!parentSessionId) throw new CarrierError('sessionRequired');
+          const children = await this.client.request('subagents.list', {
+            sessionId: parentSessionId,
+            includePreviousRuns: true,
+          });
+          if (
+            !children.some(
+              (child) =>
+                child.id === command.subagentId && child.sessionId === command.childSessionId,
+            )
+          )
+            throw new CarrierError('subagentNotInSession');
+          const params = { sessionId: command.childSessionId };
+          if (command.action === 'archive') await this.client.request('workspace.archive', params);
+          else if (command.action === 'remove')
+            await this.client.request('workspace.remove', params);
+          else await this.client.request('workspace.restore', params);
+          await this.controller.load(parentSessionId);
+          break;
+        }
         case 'closeSubagentTranscript':
           this.closeSubAgentTranscript();
           break;
@@ -1180,12 +1245,12 @@ export class CarrierService {
         case 'copyText':
         case 'openLink':
         case 'chooseWorkspace':
-          throw new Error('This command belongs to the carrier shell, not the carrier service');
+          throw new CarrierError('shellCommand');
       }
       await this.refresh();
       return this.snapshot;
     } catch (error) {
-      this.error = this.safeError(error);
+      this.error = this.captureError(error);
       throw error;
     } finally {
       if (manages) this.managing = false;

@@ -27,6 +27,7 @@ class FakeClient {
   readonly requests: string[] = [];
   history: unknown[] = [];
   listed: SubAgentSummary[] = [];
+  workspaceResultStatus?: string;
   settle!: (result: RunResult) => void;
   private pending = new Promise<RunResult>((resolve) => {
     this.settle = resolve;
@@ -51,6 +52,21 @@ class FakeClient {
       };
     if (method === 'plan.get') return null;
     if (method === 'subagents.list') return this.listed;
+    if (method === 'workspace.results' && this.workspaceResultStatus)
+      return [
+        {
+          id: 'result-1',
+          digest: 'a'.repeat(64),
+          status: this.workspaceResultStatus,
+          childSessionId: 'child-1',
+          paths: ['child.txt'],
+        },
+      ];
+    if (method === 'workspaces.get' && this.workspaceResultStatus)
+      return {
+        binding: { kind: 'worktree', executionRoot: '/child', state: 'ready' },
+        problems: [],
+      };
     return {};
   }
   /**
@@ -66,6 +82,59 @@ function controller(): { client: FakeClient; session: SessionController } {
   const client = new FakeClient();
   return { client, session: new SessionController(client as unknown as AgentHostClient) };
 }
+
+test('a parent import refreshes the existing child result after its run finishes', async (t) => {
+  const { client, session } = controller();
+  t.after(() => session.dispose());
+  client.listed = [summary()];
+  client.workspaceResultStatus = 'ready';
+  await session.load('s1');
+  assert.equal(session.snapshot.subagents[0]!.workspace?.result?.status, 'ready');
+  const sending = session.send('Import the child result');
+  client.emit({ type: 'run.started', sessionId: 's1', runId: 'r1', data: {} });
+  client.workspaceResultStatus = 'applied';
+  const result: RunResult = {
+    sessionId: 's1',
+    runId: 'r1',
+    status: 'completed',
+    text: 'Imported the child result',
+    usage,
+  };
+  client.emit({ type: 'run.finished', sessionId: 's1', runId: 'r1', data: { result } });
+  client.settle(result);
+  await sending;
+  assert.equal(session.snapshot.subagents[0]!.workspace?.result?.status, 'applied');
+});
+
+test('a restored card selects the latest result even when it is no longer ready', async (t) => {
+  const { client, session } = controller();
+  t.after(() => session.dispose());
+  client.listed = [summary()];
+  client.workspaceResultStatus = 'applied';
+  const request = client.request.bind(client);
+  client.request = async (method) =>
+    method === 'workspace.results'
+      ? [
+          {
+            id: 'old',
+            digest: 'a'.repeat(64),
+            status: 'superseded',
+            childSessionId: 'child-1',
+            paths: ['old.txt'],
+          },
+          {
+            id: 'new',
+            digest: 'b'.repeat(64),
+            status: 'applied',
+            childSessionId: 'child-1',
+            paths: ['new.txt'],
+          },
+        ]
+      : request(method);
+  await session.load('s1');
+  assert.equal(session.snapshot.subagents[0]!.workspace?.result?.id, 'new');
+  assert.equal(session.snapshot.subagents[0]!.workspace?.result?.status, 'applied');
+});
 
 test('sub-agent progress becomes panel state without a snapshot per token', async (t) => {
   const { client, session } = controller();
@@ -236,9 +305,24 @@ test('reopening a session rebuilds the sub-agent cards from the stored run', asy
     'session.get',
     'plan.get',
     'subagents.list',
+    /**
+     * Where each child worked, and what it produced.
+     *
+     * Two calls, not one per child: the results are a *session* query (`workspace.results`) and the binding is a
+     * query about one session (`workspaces.get`), so this is one call for the whole panel plus one per card. They
+     * are here in the list rather than tolerated as extra because a restored card has to be able to say "this
+     * child's work is somewhere else and has not been imported" — without them the panel can only show that a
+     * child ran, which is the one thing a person cannot act on.
+     */
+    'workspace.results',
+    'workspaces.get',
+    'workspaces.get',
     'todos.get',
     'deliverables.get',
     'goal.get',
+    // The completion contract is session state in the same sense the goal is: written during a run, still the
+    // verdict afterwards, and read back from the log rather than from a result a reopened window never saw.
+    'completion.current',
     'run.queue.get',
   ]);
   assert.deepEqual(

@@ -203,6 +203,77 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         created_at TEXT NOT NULL,
         reviewed_at TEXT
       );
+      -- Sub-agent workspace isolation (schema v29). Four tables, and the foreign keys are deliberately uneven.
+      --
+      -- A binding keeps its session as a *nullable* reference rather than a cascade: the row is written in the
+      -- preparing state before the child session exists, which is what makes an interrupted allocation a record
+      -- this service can still own instead of an orphan directory. project_root is the logical project and
+      -- execution_root is what a child's tools actually use — keeping both is what lets a child work somewhere
+      -- else while its session still belongs where it always did.
+      CREATE TABLE workspace_bindings (
+        id TEXT PRIMARY KEY,
+        session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        parent_session_id TEXT,
+        project_root TEXT NOT NULL,
+        execution_root TEXT NOT NULL,
+        repository_root TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('shared','worktree')),
+        snapshot_id TEXT,
+        base_commit TEXT,
+        state TEXT NOT NULL CHECK(state IN ('preparing','ready','blocked','archiving','archived','removing','removed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX workspace_bindings_session ON workspace_bindings(session_id);
+      CREATE INDEX workspace_bindings_state ON workspace_bindings(state,created_at);
+      CREATE TABLE workspace_operation_leases (
+        binding_id TEXT PRIMARY KEY REFERENCES workspace_bindings(id) ON DELETE CASCADE,
+        owner_pid INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      -- A frozen input. No session reference at all: one snapshot is shared by every child of a delegation call,
+      -- and the whole point of it is that it outlives the sessions built from it.
+      CREATE TABLE workspace_snapshots (
+        id TEXT PRIMARY KEY,
+        project_root TEXT NOT NULL,
+        source_root TEXT NOT NULL,
+        source_head TEXT NOT NULL,
+        base_commit TEXT NOT NULL,
+        base_tree TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      -- A child's exported work. The parent session is a plain id and not a reference, so a result survives the
+      -- deletion of the session that produced it: it is the record of what a child changed, and losing it with a
+      -- cascade would lose the only description of a directory nobody else has.
+      CREATE TABLE workspace_results (
+        id TEXT PRIMARY KEY,
+        binding_id TEXT NOT NULL,
+        child_session_id TEXT NOT NULL,
+        parent_session_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        comparison_tree TEXT NOT NULL,
+        result_tree TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        paths TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('ready','unsupported','applying','applied','conflict','superseded')),
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX workspace_results_parent ON workspace_results(parent_session_id,created_at);
+      CREATE INDEX workspace_results_child ON workspace_results(child_session_id,status);
+      -- The idempotency key of one import: the same result, the same digest, the same target directory. Written
+      -- in the same transaction as the journal entry it names, so "the change exists" and "this result was
+      -- imported" cannot disagree, and a repeated request is answered with what already happened.
+      CREATE TABLE workspace_apply_receipts (
+        id TEXT PRIMARY KEY,
+        result_id TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        target_binding_id TEXT NOT NULL,
+        change_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(result_id,digest,target_binding_id)
+      );
     `);
   // The session search index. The projection column is filled by `append`, and these triggers keep the index in
   // step for every write path. They are part of "the current schema" rather than of a migration: a database

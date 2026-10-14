@@ -19,7 +19,11 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
-import { appContainerRuntimeError } from './appcontainer-runtime.ts';
+import {
+  appContainerRuntimeError,
+  APPCONTAINER_CHILD_STDIO_PROBE,
+  appContainerProbeFailure,
+} from './appcontainer-runtime.ts';
 import {
   insideWorkspace,
   type SandboxPlan,
@@ -503,6 +507,7 @@ export const appcontainerSandboxProvider: SandboxProvider = {
     if (runtimeError) return runtimeError;
     let directory: string | undefined;
     let plan: SandboxPlan | undefined;
+    let cancelled = false;
     try {
       await helper();
       directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-appcontainer-probe-'));
@@ -514,11 +519,13 @@ export const appcontainerSandboxProvider: SandboxProvider = {
           argv: [
             '-e',
             `
-const fs=require('fs'),net=require('net'),dgram=require('dgram'),cp=require('child_process');
+const fs=require('fs'),net=require('net'),dgram=require('dgram');
+const recordAppContainerProbeStage=stage=>fs.writeFileSync('probe-stage.json',JSON.stringify({version:1,stage}));
+recordAppContainerProbeStage('workspace-started');
 fs.writeFileSync('allowed','ok');
 if(fs.readFileSync('allowed','utf8')!=='ok')throw Error('workspace file probe failed');
-const child=cp.spawnSync(process.execPath,['-e','console.log("pipe")'],{encoding:'utf8',timeout:1500});
-if(child.error||child.status!==0||child.stdout.trim()!=='pipe')throw Error('child stdio probe failed');
+${APPCONTAINER_CHILD_STDIO_PROBE}
+recordAppContainerProbeStage('network-started');
 const checks=[];
 for(const host of ['127.0.0.1','::1','1.1.1.1']) checks.push(new Promise(resolve=>{const socket=net.connect({host,port:9});let done=false;const finish=(value)=>{if(done)return;done=true;socket.destroy();resolve(value)};socket.on('connect',()=>finish(false));socket.on('error',error=>finish(['EACCES','EPERM'].includes(error.code)));socket.setTimeout(1500,()=>finish(false))}));
 for(const host of ['127.0.0.1','::1']) checks.push(new Promise(resolve=>{const server=net.createServer();server.on('error',error=>resolve(['EACCES','EPERM'].includes(error.code)));server.listen(0,host,()=>server.close(()=>resolve(false)))}));
@@ -526,7 +533,7 @@ for(const [kind,host] of [['udp4','127.0.0.1'],['udp6','::1']]) {
   checks.push(new Promise(resolve=>{const socket=dgram.createSocket(kind);let done=false;const finish=(value)=>{if(done)return;done=true;try{socket.close()}catch{}resolve(value)};socket.on('error',error=>finish(['EACCES','EPERM'].includes(error.code)));socket.send(Buffer.from('probe'),9,host,error=>finish(Boolean(error&&['EACCES','EPERM'].includes(error.code))))}));
   checks.push(new Promise(resolve=>{const socket=dgram.createSocket(kind);socket.on('error',error=>{try{socket.close()}catch{}resolve(['EACCES','EPERM'].includes(error.code))});socket.bind(0,host,()=>socket.close(()=>resolve(false)))}));
 }
-Promise.all(checks).then(result=>{if(result.length!==9||result.some(value=>!value))throw Error('TCP/UDP loopback network denial probe failed');console.log('ok')});
+Promise.all(checks).then(result=>{if(result.length!==9||result.some(value=>!value))throw Error('TCP/UDP loopback network denial probe failed');recordAppContainerProbeStage('complete');console.log('ok')});
 `,
           ],
           config: {
@@ -541,6 +548,7 @@ Promise.all(checks).then(result=>{if(result.length!==9||result.some(value=>!valu
       const pendingPlan = plan;
       let stopping: Promise<void> | undefined;
       const cancelTimer = setTimeout(() => {
+        cancelled = true;
         stopping = stopAppContainer(pendingPlan);
         void stopping.catch(() => {});
       }, 5000);
@@ -561,7 +569,21 @@ Promise.all(checks).then(result=>{if(result.length!==9||result.some(value=>!valu
         throw new Error('AppContainer functional enforcement probe failed');
       return null;
     } catch (error) {
-      return `AppContainer enforcement probe failed: ${String(error)}`;
+      let stage: unknown;
+      if (directory) {
+        const record = await readFile(path.join(directory, 'probe-stage.json'), 'utf8').catch(
+          () => undefined,
+        );
+        if (record && record.length <= 256) {
+          try {
+            const value = JSON.parse(record);
+            if (value.version === 1) stage = value.stage;
+          } catch {
+            /* Missing/corrupt stages are not evidence. */
+          }
+        }
+      }
+      return appContainerProbeFailure(stage, cancelled, error);
     } finally {
       if (plan) await cleanupAppContainer(plan);
       if (directory) await rm(directory, { recursive: true, force: true });

@@ -1,5 +1,26 @@
 import type { FailureCode } from './failure.ts';
 import type { ToolOutputContract, ToolResultOutput } from './tool-result.ts';
+import type { CheckFailureReason, CompletionSummary } from './completion.ts';
+
+export type {
+  CheckFailureReason,
+  CompletionRecord,
+  CompletionRepairPolicy,
+  CompletionSpec,
+  CompletionState,
+  CompletionStep,
+  CompletionSummary,
+} from './completion.ts';
+export {
+  CHECK_FAILURE_REASONS,
+  COMPLETION_LIMITS,
+  COMPLETION_REPAIR_CEILINGS,
+  COMPLETION_REPAIR_DEFAULTS,
+  COMPLETION_STATES,
+  collectFailedChecks,
+  isRepairableFailure,
+  type FailedCheckRef,
+} from './completion.ts';
 export interface ToolCall {
   id: string;
   name: string;
@@ -365,6 +386,20 @@ export interface GoalLog {
    * record: the same goal is `active` in both turns, and only the caller knows which one this is.
    */
   human: boolean;
+  /**
+   * Whether a completion contract permits this goal to be closed as complete.
+   *
+   * A goal is the model's own statement of what it is trying to achieve, and `complete` was a lifecycle
+   * transition with no evidence behind it: a run could declare an objective achieved and nothing in the runtime
+   * disagreed. When a session also carries a completion contract, that contract is the stronger statement — it
+   * names the criteria and holds the evidence — so the transition consults it first. The seam is optional
+   * because a caller with no completion support simply has no opinion, and a goal that no contract is bound to
+   * keeps its old behaviour rather than being retroactively held to criteria nobody wrote.
+   *
+   * The seam *reads* the current evidence; it never runs checks of its own. A goal tool that executed a set of
+   * unapproved verification commands would be a permission bypass wearing a lifecycle hook's clothes.
+   */
+  canComplete?: () => Promise<{ allowed: boolean; reason?: string }>;
 }
 export interface ToolContext {
   /** Diagnostic observer around each actual tool body attempt, after approval. Cannot control execution. */
@@ -633,6 +668,12 @@ export interface AcceptanceEvidence {
     passed: boolean;
     detail: string;
     durationMs: number;
+    /**
+     * Why the check failed, when the checker could say. Absent on success, and absent on every result recorded
+     * before the field existed — which the repair policy reads as "not automatically repairable" rather than
+     * guessing a reason from `detail`.
+     */
+    failureReason?: CheckFailureReason;
     command?: {
       exitCode: number | null;
       signal: string | null;
@@ -653,6 +694,15 @@ export interface RunResult {
   text: string;
   usage: Usage;
   acceptance?: AcceptanceEvidence;
+  /**
+   * The evidence state of the completion contract this run was judged against, when it carried one.
+   *
+   * Separate from `status` on purpose. `status: 'completed'` says the run ended by itself; it never said the
+   * request was satisfied, and before this field existed nothing in the result could say so. A run with no
+   * contract leaves it unset — or reports `unverified` — rather than borrowing the `completed` word for a claim
+   * no check made.
+   */
+  completion?: CompletionSummary;
   /** One entry per sub-agent this run delegated to, in the order the tasks were requested. */
   subagents?: SubAgentSummary[];
   /**
@@ -796,6 +846,13 @@ export const AGENT_EVENT_TYPES = [
    * seven, and the blocked floor is expressed in exactly that number.
    */
   'goal.changed',
+  /**
+   * The completion contract's current evidence state, announced as it changes.
+   *
+   * Live and durable: the live frame fills in the panel while the run is still repairing, and the durable record
+   * (same name, in the session log) is what a reopened session reads to answer "did anything verify this".
+   */
+  'completion.updated',
   'context.compacting',
   'context.compacted',
   /**
@@ -873,6 +930,28 @@ export const AGENT_EVENT_TYPES = [
    */
   'subagent.progress',
   'subagent.finished',
+  /**
+   * An isolated child's directory, and the result it produced.
+   *
+   * Its own frame rather than fields on `subagent.started` and `subagent.finished`, because the two facts it carries
+   * become true at *different* moments than those two frames: the directory is decided before the child's turn begins,
+   * and the result exists only after the turn has ended and been frozen. Folding either into an existing frame would
+   * mean publishing a fact that is not yet true — a `finished` card claiming a result that was not exported, or a
+   * `started` card claiming a directory nobody has validated.
+   *
+   * A client that shows where a child worked reads this; a client that does not can ignore it entirely.
+   */
+  'subagent.workspace',
+  /**
+   * An isolated child's work could not be frozen when its turn ended.
+   *
+   * Its own event rather than a line inside `subagent.finished`, because the two are different facts and a reader
+   * has to be able to act on the second without parsing the first: the child's turn *did* happen — its report, its
+   * usage and its journal are all recorded — and what failed is the export of what it changed. A parent that was
+   * told its child failed would be losing the answer it paid for, so this is a diagnostic beside the outcome
+   * rather than a replacement for it.
+   */
+  'subagent.workspace.failed',
   /**
    * A runtime invariant did not hold. Emitted for diagnostics even though the run is already failing at that
    * point: the log is where an operator sees a broken promise, and a host outlives many runs.

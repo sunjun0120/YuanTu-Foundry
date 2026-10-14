@@ -29,6 +29,7 @@ import { socketTransport } from '../packages/client/host-transport.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { connectSocket, listeningHost } from './listening-host-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { withoutComments } from '../scripts/i18n-gate.mjs';
 
 /** Poll until `condition` holds, so a test does not encode a sleep that is either slow or flaky. */
 async function waitFor(condition: () => boolean, what: string): Promise<void> {
@@ -53,7 +54,7 @@ test('the carrier package imports neither Electron nor the shell that consumes i
     [/\bnavigator\s*\./, 'touches the browser navigator'],
   ];
   for (const name of files) {
-    const text = await readFile(path.join(directory, name), 'utf8');
+    const text = withoutComments(await readFile(path.join(directory, name), 'utf8'));
     for (const [pattern, why] of banned)
       assert.doesNotMatch(text, pattern, `packages/carrier/${name} ${why}`);
   }
@@ -226,7 +227,7 @@ test('a carrier that does not own the Host reports the break instead of restarti
   // Restarting is the link owner's job: this carrier has no process to start, so it says so and stops there
   // rather than pretending to recover (`recovery` is what a window shows when a restart did happen).
   assert.equal(carrier.snapshot.recovery, null);
-  assert.match(carrier.snapshot.error ?? '', /连接已断开/);
+  assert.equal(carrier.snapshot.errorDetail?.code, 'hostDisconnected');
 });
 
 test(
@@ -648,20 +649,19 @@ test(
     await host.setReply('mismatch');
     await assert.rejects(
       carrier.dispatch({ type: 'sandbox', mode: 'seatbelt', files: 'read-only' }),
-      /策略状态未知/,
+      { code: 'policyMismatch' },
     );
     // The Host may have applied part of it, so work is refused rather than run under a policy nobody can name.
-    await assert.rejects(
-      carrier.dispatch({ type: 'taskVerify', taskId: 'task-1' }),
-      /执行策略尚未确认/,
-    );
+    await assert.rejects(carrier.dispatch({ type: 'taskVerify', taskId: 'task-1' }), {
+      code: 'policyUnconfirmed',
+    });
     await host.setReply('echo');
     await carrier.dispatch({ type: 'sandbox', mode: 'host', files: 'read-only' });
     // A confirmed selection clears the state, so the same command reaches the Host again.
     await assert.rejects(
       carrier.dispatch({ type: 'taskVerify', taskId: 'task-1' }),
       (error: unknown) => {
-        assert.doesNotMatch(String(error), /执行策略尚未确认/);
+        assert.notEqual((error as { code?: string }).code, 'policyUnconfirmed');
         return true;
       },
     );

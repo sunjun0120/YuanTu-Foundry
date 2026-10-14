@@ -26,7 +26,7 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'subagents.list': async (ctx, params) => {
     const id = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, id);
-    return ctx.store.subagents(id);
+    return ctx.store.subagents(id, params.includePreviousRuns === true);
   },
   'todos.get': async (ctx, params) => {
     const id = required(params, 'sessionId');

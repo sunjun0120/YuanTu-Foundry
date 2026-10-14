@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "suiteVersion": "project-seeded-v1",
+  "batchId": "offline-v1",
+  "runtimeSource": {
+    "kind": "snapshot",
+    "directory": "E:/agent-desktop/YuanTu-Foundry",
+    "manifestSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "corpusSource": {
+    "kind": "snapshot",
+    "directory": "E:/agent-desktop/YuanTu-Foundry",
+    "manifestSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "cases": ["E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09", "E10"],
+  "repeats": 3,
+  "model": null,
+  "protocol": null,
+  "endpointId": null,
+  "endpointUrl": null,
+  "maxContextTokens": 128000,
+  "maxOutputTokens": 8192,
+  "reasoning": "off",
+  "promptCache": "off",
+  "toolMode": "native",
+  "sandbox": "host",
+  "caseConcurrency": 1,
+  "caseTimeoutMs": {
+    "E01": 300000,
+    "E02": 300000,
+    "E03": 300000,
+    "E04": 300000,
+    "E05": 600000,
+    "E06": 600000,
+    "E07": 600000,
+    "E08": 300000,
+    "E09": 600000,
+    "E10": 600000
+  },
+  "requestTimeoutMs": 120000,
+  "streamIdleTimeoutMs": 60000,
+  "verificationTimeoutMs": 180000,
+  "maxLiveAttempts": 30,
+  "maxObservedRequestsPerSample": 40,
+  "maxKnownTokensPerSample": 500000,
+  "approvedLiveBudget": {
+    "authorized": false,
+    "maxAttempts": 0,
+    "maxCurrency": null,
+    "currency": null,
+    "pricingSha256": null
+  },
+  "approvalMode": "fixed-policy"
+}

@@ -206,3 +206,49 @@ test('recovery preserves failed replacement evidence with its identifying metada
   assert.match(metadata.originals[0].sha256, /^[a-f0-9]{64}$/);
   assert.ok(fs.existsSync(path.join(evidence, 'database.sqlite')));
 });
+
+test('inspection accepts this build’s schema version and refuses one from the future', (t) => {
+  const { file } = fixture(t);
+  // The fixture stamps user_version=1, which is exactly policy.maxVersion: the boundary is accepted, and
+  // measuring it here is what keeps the comparison honest about `>` rather than `>=`.
+  assert.equal(inspectDatabase(file, policy).version, policy.maxVersion);
+  // One past it was written by a newer build. Inspection is the single place that decision is made, so an
+  // accepted candidate here would let a later restore replace this database with a schema it cannot read.
+  const db = new DatabaseSync(file);
+  db.exec(`PRAGMA user_version = ${policy.maxVersion + 1}`);
+  db.close();
+  assert.throws(
+    () => inspectDatabase(file, policy),
+    new RegExp(
+      `Unsupported session database version: ${policy.maxVersion + 1} \\(maximum ${policy.maxVersion}\\)`,
+    ),
+  );
+});
+
+test('releasing the gate does not delete a lock another owner replaced', (t) => {
+  const { file } = fixture(t);
+  const lock = `${file}.maintenance-lock`;
+  const replacement = `${process.pid}:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb`;
+  const held = initializeDatabase(file, () => {
+    // A second owner takes the gate while this one is still inside it, so the name now holds a *different*
+    // file. Removing that lock on the way out would strip a live owner of its only claim to the database —
+    // the reason the release path compares device and inode instead of trusting the path.
+    fs.rmSync(lock);
+    fs.writeFileSync(lock, replacement);
+    return 'held';
+  });
+  assert.equal(held, 'held');
+  assert.equal(fs.readFileSync(lock, 'utf8'), replacement);
+});
+
+test('releasing the gate does not delete a lock whose owner record is no longer ours', (t) => {
+  const { file } = fixture(t);
+  const lock = `${file}.maintenance-lock`;
+  const other = `${process.pid}:cccccccc-cccc-cccc-cccc-cccccccccccc`;
+  initializeDatabase(file, () => {
+    // Same file, rewritten in place: the inode still matches, so only the owner record can tell this holder
+    // that the claim it is about to remove is somebody else's.
+    fs.writeFileSync(lock, other);
+  });
+  assert.equal(fs.readFileSync(lock, 'utf8'), other);
+});

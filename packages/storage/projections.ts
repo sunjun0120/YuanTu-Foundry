@@ -410,10 +410,17 @@ export const subAgentsProjection: SessionProjection<SubAgentCardsState> = {
  * **interrupted and never reported**, so an unfinished delegation does not disappear from the UI just
  * because a later run happened. Ordering follows the log, which is the order the runs happened in.
  */
-export function subAgentCards(state: SubAgentCardsState): SubAgentSummary[] {
+export function subAgentCards(
+  state: SubAgentCardsState,
+  includePreviousRuns = false,
+): SubAgentSummary[] {
   const cards = Object.values(state.children);
   const latest = state.latestRunId;
-  const shown = latest ? cards.filter((card) => card.runId === latest) : [];
+  const shown = includePreviousRuns
+    ? [...cards]
+    : latest
+      ? cards.filter((card) => card.runId === latest)
+      : [];
   const shownIds = new Set(shown.map((card) => card.id));
   for (const card of cards)
     if (card.status === 'interrupted' && !shownIds.has(card.id)) shown.push(card);

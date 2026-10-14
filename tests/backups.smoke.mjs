@@ -1,15 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { waitForPage } from './page-wait.mjs';
 
 test(
-  'desktop backups persist daily opt-in, require native restore confirmation and retain the previous database',
+  'desktop settings omit backups, ignore legacy daily opt-in and preserve manual restore safeguards',
   { timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-backup-ui-'));
@@ -32,7 +31,7 @@ test(
     delete env.ELECTRON_RUN_AS_NODE;
     const profile = path.join(root, 'profile');
     await mkdir(profile);
-    await writeFile(path.join(profile, 'backup-settings.json'), '{"enabled":');
+    await writeFile(path.join(profile, 'backup-settings.json'), '{"enabled":true}');
     const app = await electron.launch({
       executablePath: electronPath,
       args: [path.resolve('dist/desktop/main.cjs'), `--user-data-dir=${profile}`],
@@ -46,32 +45,37 @@ test(
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
     await page.locator('#open-settings').click();
-    await page.locator('#backup-settings').click();
-    await waitForPage(page, () => !document.querySelector('#backup-enabled').disabled);
-    assert.equal(await page.locator('#backup-enabled').isChecked(), false);
-    assert.match(await page.locator('#backup-feedback').textContent(), /backup settings/i);
-    await page.locator('#backup-enabled').check();
-    await waitForPage(
-      page,
-      () =>
-        !document.querySelector('#backup-enabled').disabled &&
-        Boolean(document.querySelector('#backup-list').value),
+    assert.deepEqual(
+      await page
+        .locator('.settings-sidebar nav button')
+        .evaluateAll((buttons) => buttons.map((button) => button.id)),
+      ['general-settings', 'model-settings'],
     );
-    assert.equal(
-      JSON.parse(await readFile(path.join(profile, 'backup-settings.json'), 'utf8')).enabled,
-      true,
+    assert.equal(await page.locator('#backup-settings-content,#backup-enabled').count(), 0);
+    const initial = await page.evaluate(() => window.yuantu.backups({ type: 'get' }));
+    assert.equal(initial.ok, true, JSON.stringify(initial));
+    assert.equal(initial.view.enabled, false);
+    assert.equal(initial.view.backups.length, 0);
+    const configuration = await page.evaluate(() =>
+      window.yuantu.backups({ type: 'configure', enabled: true }),
     );
-    assert.equal(await page.locator('#backup-list option').count(), 1);
-    await page.screenshot({ path: '.scratch/backup-settings-qa.png' });
-    const id = await page.locator('#backup-list').inputValue();
+    assert.equal(configuration.ok, false);
+    const created = await page.evaluate(() => window.yuantu.backups({ type: 'create' }));
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.equal(created.view.backups.length, 1);
+    const id = created.view.backups[0].id;
     store = new SessionStore(file);
     store.append(session.id, { role: 'user', content: 'BACKUP_NEWER' });
     store.close();
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false });
     });
-    await page.locator('#backup-restore').click();
-    await page.getByText('已取消恢复。', { exact: true }).waitFor();
+    const cancelled = await page.evaluate(
+      (id) => window.yuantu.backups({ type: 'restore', id }),
+      id,
+    );
+    assert.equal(cancelled.ok, true, JSON.stringify(cancelled));
+    assert.equal(cancelled.cancelled, true);
     store = new SessionStore(file);
     assert.equal(store.messages(session.id).length, 2);
     store.close();

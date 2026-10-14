@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { Workspace } from '../tools/files.ts';
+import { VerificationAssertionError, VerificationDefinitionError } from './verification-errors.ts';
 
 export const deliveryFormats = [
   'auto',
@@ -67,22 +68,39 @@ export async function verifyFileDelivery(
   spec: FileDeliverySpec,
 ): Promise<FileDeliveryEvidence> {
   if (typeof spec.path !== 'string' || !spec.path.trim() || spec.path.length > 4096)
-    throw new Error('Invalid delivery path');
+    throw new VerificationDefinitionError('Invalid delivery path');
   if (spec.format !== undefined && !deliveryFormats.includes(spec.format))
-    throw new Error('Invalid delivery format');
+    throw new VerificationDefinitionError('Invalid delivery format');
   const minBytes = spec.minBytes ?? 1;
   if (!Number.isSafeInteger(minBytes) || minBytes < 1 || minBytes > 100_000_000)
-    throw new Error('Invalid delivery minimum bytes');
+    throw new VerificationDefinitionError('Invalid delivery minimum bytes');
   if (spec.sha256 !== undefined && !/^[a-f0-9]{64}$/i.test(spec.sha256))
-    throw new Error('Invalid delivery SHA-256');
-  const target = await new Workspace(root).resolve(spec.path);
+    throw new VerificationDefinitionError('Invalid delivery SHA-256');
+  /**
+   * Resolving the path answers two different questions, and their failures are not the same failure.
+   *
+   * `Workspace.resolve` refuses a path that leaves the root, a link, or a blocked internal path — those are
+   * statements about the *definition*, and no amount of extra work by the model changes them. It also lets an
+   * `ENOENT` through when the final component does not exist, and for a delivery check that is exactly the
+   * assertion being made: the file this criterion names was never produced.
+   */
+  const target = await new Workspace(root)
+    .resolve(spec.path)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === 'ENOENT')
+        throw new VerificationAssertionError(
+          `Delivered file is missing or too small: ${spec.path}`,
+        );
+      throw new VerificationDefinitionError(error instanceof Error ? error.message : String(error));
+    });
   const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) throw new Error('Delivery path is not a regular file');
-    if (stat.size < minBytes) throw new Error('Delivered file is missing or too small');
+    if (!stat.isFile()) throw new VerificationAssertionError('Delivery path is not a regular file');
+    if (stat.size < minBytes)
+      throw new VerificationAssertionError('Delivered file is missing or too small');
     if (stat.size > 100_000_000)
-      throw new Error('Delivered file exceeds 100 MB verification limit');
+      throw new VerificationAssertionError('Delivered file exceeds 100 MB verification limit');
     const hash = createHash('sha256');
     const format =
       spec.format === undefined || spec.format === 'auto' ? detectedFormat(spec.path) : spec.format;
@@ -111,7 +129,7 @@ export async function verifyFileDelivery(
       offset += bytesRead;
     }
     decoder?.decode();
-    if (sawNul) throw new Error('Delivered text contains NUL bytes');
+    if (sawNul) throw new VerificationAssertionError('Delivered text contains NUL bytes');
     if (offset !== stat.size || (await handle.stat()).size !== stat.size)
       throw new Error('Delivered file changed during verification');
     if (tail.length) {
@@ -124,34 +142,38 @@ export async function verifyFileDelivery(
       format === 'pdf' &&
       (!first.toString('latin1').startsWith('%PDF-') || !last.includes('%%EOF'))
     )
-      throw new Error('Delivered PDF has an invalid header or EOF marker');
+      throw new VerificationAssertionError('Delivered PDF has an invalid header or EOF marker');
     if (
       format === 'png' &&
       (!starts([137, 80, 78, 71, 13, 10, 26, 10]) ||
         !tail.subarray(-8).equals(Buffer.from([73, 69, 78, 68, 174, 66, 96, 130])))
     )
-      throw new Error('Delivered PNG has an invalid signature or ending');
+      throw new VerificationAssertionError('Delivered PNG has an invalid signature or ending');
     if (
       format === 'jpeg' &&
       (!starts([255, 216, 255]) || !tail.subarray(-2).equals(Buffer.from([255, 217])))
     )
-      throw new Error('Delivered JPEG has an invalid signature or ending');
+      throw new VerificationAssertionError('Delivered JPEG has an invalid signature or ending');
     if (
       ['zip', 'docx', 'xlsx', 'pptx'].includes(format) &&
       (!starts([80, 75, 3, 4]) || !last.includes('PK\x05\x06'))
     )
-      throw new Error('Delivered ZIP document has an invalid archive structure');
+      throw new VerificationAssertionError(
+        'Delivered ZIP document has an invalid archive structure',
+      );
     if (format === 'docx' && !last.includes('word/document.xml'))
-      throw new Error('Delivered DOCX is missing word/document.xml');
+      throw new VerificationAssertionError('Delivered DOCX is missing word/document.xml');
     if (format === 'xlsx' && !last.includes('xl/workbook.xml'))
-      throw new Error('Delivered XLSX is missing xl/workbook.xml');
+      throw new VerificationAssertionError('Delivered XLSX is missing xl/workbook.xml');
     if (format === 'pptx' && !last.includes('ppt/presentation.xml'))
-      throw new Error('Delivered PPTX is missing ppt/presentation.xml');
+      throw new VerificationAssertionError('Delivered PPTX is missing ppt/presentation.xml');
     if (['doc', 'xls', 'ppt'].includes(format) && !starts([208, 207, 17, 224, 161, 177, 26, 225]))
-      throw new Error(`Delivered ${format.toUpperCase()} has an invalid compound-file signature`);
+      throw new VerificationAssertionError(
+        `Delivered ${format.toUpperCase()} has an invalid compound-file signature`,
+      );
     const digest = hash.digest('hex');
     if (spec.sha256 && digest.toLowerCase() !== spec.sha256.toLowerCase())
-      throw new Error('Delivered file SHA-256 does not match');
+      throw new VerificationAssertionError('Delivered file SHA-256 does not match');
     return {
       path: path.relative(new Workspace(root).root, target).split(path.sep).join('/'),
       bytes: stat.size,

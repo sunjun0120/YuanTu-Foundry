@@ -155,9 +155,10 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   assert.match(await approvals.locator('.subagent-badge').textContent(), /写入说明文件/);
   await page.locator('#open-subagents').click();
   await page.locator('#subagent-catalog .subagent-row').nth(1).click();
+  await page.locator('#subagent-transcript-process > summary').click();
   await page.locator('#subagent-transcript .subagent-live-tool').waitFor();
   assert.match(await page.locator('#subagent-transcript').textContent(), /write_file/);
-  assert.equal(await page.locator('#subagent-transcript details[open]').count(), 0);
+  assert.equal(await page.locator('#subagent-transcript-messages details[open]').count(), 0);
   await page.locator('#chat-title').click();
   await page.locator('#subagent-transcript').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '允许一次' }).click();
@@ -262,12 +263,16 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
     await page.locator('#subagent-transcript-note').textContent(),
     /只读：这是该子代理自己会话里的完整记录。/,
   );
+  assert.equal(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
+  await page.locator('#subagent-transcript-result .subagent-report').waitFor();
+  await page.locator('#subagent-transcript-process > summary').click();
+  await page.locator('#subagent-transcript-messages .message').first().waitFor();
   const transcript = await page
     .locator('#subagent-transcript .message, #subagent-transcript .tool-result')
     .allTextContents();
   assert.match(transcript[0], /Objective: 调查加载器结构/);
   assert.match(transcript.join('\n'), /submit_report/);
-  assert.equal(await page.locator('#subagent-transcript details[open]').count(), 0);
+  assert.equal(await page.locator('#subagent-transcript details[open]').count(), 1);
   // The conversation the reader came from is off screen, and the composer with it: this is a record, not a
   // place to type. The jump-to-latest button goes too — there is no tail here to follow.
   assert.equal(await page.locator('#messages').isVisible(), false);

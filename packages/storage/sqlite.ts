@@ -25,6 +25,11 @@ import type {
   TaskTriggerSource,
   Usage,
   Acceptance,
+  CompletionRecord,
+  CompletionRepairPolicy,
+  CompletionSpec,
+  CompletionStep,
+  CompletionSummary,
   TaskAttemptKind,
   TaskStep,
   TaskStepStatus,
@@ -58,6 +63,14 @@ import {
 } from './projections.ts';
 import type { StatisticsState, SubAgentCardsState, TurnTiming } from './projections.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
+import type {
+  WorkspaceApplyReceipt,
+  WorkspaceBinding,
+  WorkspaceResult,
+  WorkspaceResultStatus,
+  WorkspaceSnapshot,
+  WorkspaceState,
+} from '../protocol/workspaces.ts';
 import type { Goal } from '../protocol/goals.ts';
 import {
   APPEND_BATCH_LIMIT,
@@ -81,6 +94,7 @@ import { taskFromRow } from './session-schema.ts';
 import { TaskJournal } from './session-tasks.ts';
 import { StreamCheckpoints } from './session-streams.ts';
 import { SessionLifecycle } from './session-lifecycle.ts';
+import { SessionWorkspaces } from './session-workspaces.ts';
 import { sessionTitle, storedMessage, type QueuedBlob } from './session-blobs.ts';
 import type {
   Session,
@@ -93,6 +107,32 @@ export { normalizePlanBody, planHash } from '../protocol/plans.ts';
 export type { PlanBody } from '../protocol/plans.ts';
 export { LEASE_RENEW_INTERVAL_MS } from '../protocol/session-lease.ts';
 export type { SessionLease } from '../protocol/session-lease.ts';
+/**
+ * The workspace vocabulary is re-exported for the same reason the row shapes are: a caller that has to name a
+ * state, a failure code or a binding should not have to know which package physically declares it.
+ */
+import { WorkspaceFailure } from '../protocol/workspaces.ts';
+export {
+  WorkspaceFailure,
+  canTransition,
+  isWorkspaceFailure,
+  isWorkspaceMode,
+  isWorkspaceState,
+  workspaceBindingFrom,
+  workspaceResultFrom,
+  workspaceSnapshotFrom,
+} from '../protocol/workspaces.ts';
+export type {
+  WorkspaceApplyReceipt,
+  WorkspaceBinding,
+  WorkspaceFailureCode,
+  WorkspaceKind,
+  WorkspaceMode,
+  WorkspaceResult,
+  WorkspaceResultStatus,
+  WorkspaceSnapshot,
+  WorkspaceState,
+} from '../protocol/workspaces.ts';
 export { hashesIn, imageHash, sessionTitle, storedMessage } from './session-blobs.ts';
 export type { QueuedBlob } from './session-blobs.ts';
 /**
@@ -185,6 +225,7 @@ export class SessionStore implements PlanRepository {
   private readonly search: SessionSearch;
   private readonly checkpoints: SessionCheckpoints;
   private db!: DatabaseSync;
+  private readonly file: string;
   private releaseDatabase?: () => void;
   private readonly plans: SqlitePlanStore;
   /** The task execution journal; this class forwards to it (see `./session-tasks.ts`). */
@@ -193,6 +234,14 @@ export class SessionStore implements PlanRepository {
   private readonly streams: StreamCheckpoints;
   /** Renaming, generated titles and deletion; this class forwards to it (see `./session-lifecycle.ts`). */
   private readonly lifecycle: SessionLifecycle;
+  /**
+   * Durable execution bindings: which directory a session actually works in.
+   *
+   * Deliberately separate from `Session.workspace`, which keeps meaning *the logical project* the run belongs to
+   * — session lists, ownership checks and the scheduler all read that. A sub-agent's directory is a second fact,
+   * and this is where it lives; see `./session-workspaces.ts` for why the two must not be merged.
+   */
+  private readonly workspaces: SessionWorkspaces;
   /**
    * The projections a reader can fold the log with. The store hosts them because it owns the log; a host
    * that wants its own views registers them here, and `stateOf`/`snapshot` read them.
@@ -211,8 +260,23 @@ export class SessionStore implements PlanRepository {
   private pendingLog: Map<string, SessionEvent[]> | null = null;
   /** Messages appended but not yet written, per session: one commit per batch instead of one per message. */
   private pendingAppends = new Map<string, QueuedMessage[]>();
+  /**
+   * The files this store keeps its own state in: the database and the two sidecar files SQLite writes beside it.
+   *
+   * Exposed because a verifier that fingerprints a workspace has to exclude state the *runtime* is writing —
+   * otherwise a session whose database lives inside its workspace would invalidate its own evidence on every
+   * round, and a task could never pass. It is the resolved paths and not a `.sqlite` suffix rule: excluding every
+   * file that ends that way would silently skip a user's own SQLite resource, which is source.
+   */
+  databaseFiles(): string[] {
+    const file = path.resolve(this.file);
+    // `-wal`, `-shm` and `-journal` are SQLite's own sidecars; `.users` is the access-control record the sandbox
+    // backend keeps beside the database. All four are written by the runtime rather than by the work.
+    return [file, `${file}-wal`, `${file}-shm`, `${file}-journal`, `${file}.users`];
+  }
   constructor(file: string, options: { backupRetention?: BackupPolicy } = {}) {
     mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+    this.file = path.resolve(file);
     this.releaseDatabase = registerDatabase(file);
     try {
       this.db = new DatabaseSync(file);
@@ -262,6 +326,8 @@ export class SessionStore implements PlanRepository {
           this.getTaskAttempt(sessionId, taskId, attemptId),
         hasPendingTaskEffects: (sessionId, taskId, attemptId) =>
           this.hasPendingTaskEffects(sessionId, taskId, attemptId),
+        completionVerificationRounds: (sessionId, attemptId) =>
+          this.completionVerificationRounds(sessionId, attemptId),
         settleAbandonedRun: (sessionId, runId, reason) =>
           this.settleAbandonedRun(sessionId, runId, reason),
         recordEvent: (id, type, data, stored) => this.recordEvent(id, type, data, stored),
@@ -292,6 +358,23 @@ export class SessionStore implements PlanRepository {
           this.pendingAppends.delete(id);
         },
       });
+      /**
+       * The workspace bindings, given the connection, the transaction wrapper and one read of the session's own
+       * project. It borrows `get` rather than a copy of the workspace string because the ownership check it makes
+       * has to be against what the row says *now*: a session whose project was edited after a binding was written
+       * is a binding that no longer describes where the session belongs.
+       */
+      this.workspaces = new SessionWorkspaces({
+        db: this.db,
+        transaction: (fn) => this.transaction(fn),
+        sessionProject: (sessionId) => {
+          const session = this.get(sessionId);
+          return {
+            workspace: session.workspace,
+            parentSessionId: session.parentSessionId ?? null,
+          };
+        },
+      });
       for (const projection of BUILT_IN_SESSION_PROJECTIONS) this.projections.register(projection);
       initializeDatabase(file, () => this.initialize(file, options));
     } catch (error) {
@@ -316,6 +399,136 @@ export class SessionStore implements PlanRepository {
   migrationSteps(): { from: number; upTo: number }[] {
     return this.schema.migrationSteps();
   }
+  /**
+   * The directory a session executes in, as a durable binding.
+   *
+   * A session written before isolation existed has no row, and the answer for it is the synthesised `shared`
+   * binding — its own project directory — rather than a refusal. That is what makes every existing session
+   * readable by the new seams without a migration that would have had to invent a record this service never made.
+   */
+  workspaceBinding(sessionId: string): WorkspaceBinding {
+    return this.workspaces.resolve(sessionId);
+  }
+  workspaceById(id: string): WorkspaceBinding | null {
+    return this.workspaces.byId(id);
+  }
+  workspaceBindingsByState(states: readonly WorkspaceState[]): WorkspaceBinding[] {
+    return this.workspaces.byState(states);
+  }
+  createWorkspaceBinding(
+    input: Parameters<SessionWorkspaces['createBinding']>[0],
+  ): WorkspaceBinding {
+    return this.workspaces.createBinding(input);
+  }
+  attachWorkspaceBinding(input: { bindingId: string; childSessionId: string }): WorkspaceBinding {
+    return this.workspaces.attach(input);
+  }
+  setWorkspaceState(input: Parameters<SessionWorkspaces['setState']>[0]): WorkspaceBinding {
+    return this.workspaces.setState(input);
+  }
+  claimWorkspaceOperation(bindingId: string): string {
+    return this.workspaces.claimOperation(bindingId);
+  }
+  assertWorkspaceOperation(bindingId: string, token: string): void {
+    this.workspaces.assertOperation(bindingId, token);
+  }
+  releaseWorkspaceOperation(bindingId: string, token: string): void {
+    this.workspaces.releaseOperation(bindingId, token);
+  }
+  recordWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+    return this.workspaces.recordSnapshot(snapshot);
+  }
+  workspaceSnapshot(id: string): WorkspaceSnapshot | null {
+    return this.workspaces.snapshot(id);
+  }
+  workspaceSnapshots(): WorkspaceSnapshot[] {
+    return this.workspaces.snapshots();
+  }
+  recordWorkspaceResult(result: WorkspaceResult): WorkspaceResult {
+    return this.workspaces.recordResult(result);
+  }
+  workspaceResult(id: string): WorkspaceResult | null {
+    return this.workspaces.result(id);
+  }
+  workspaceResults(parentSessionId: string): WorkspaceResult[] {
+    return this.workspaces.resultsForParent(parentSessionId);
+  }
+  childWorkspaceResults(childSessionId: string): WorkspaceResult[] {
+    return this.workspaces.resultsForChild(childSessionId);
+  }
+  /** Every result in one state, for the start-up pass that converges interrupted imports. */
+  workspaceResultsInState(status: WorkspaceResultStatus): WorkspaceResult[] {
+    return this.workspaces.resultsInState(status);
+  }
+  /** The import receipts of one result, so a recovery pass can find the change an interruption left behind. */
+  workspaceApplyReceipts(resultId: string): WorkspaceApplyReceipt[] {
+    return this.workspaces.receiptsForResult(resultId);
+  }
+  setWorkspaceResultStatus(
+    input: Parameters<SessionWorkspaces['setResultStatus']>[0],
+  ): WorkspaceResult {
+    return this.workspaces.setResultStatus(input);
+  }
+  supersedeWorkspaceResults(childSessionId: string): WorkspaceResult[] {
+    return this.workspaces.supersedeResults(childSessionId);
+  }
+  workspaceApplyReceipt(input: {
+    resultId: string;
+    digest: string;
+    targetBindingId: string;
+  }): WorkspaceApplyReceipt | null {
+    return this.workspaces.receipt(input);
+  }
+  recordWorkspaceApplyReceipt(
+    input: Parameters<SessionWorkspaces['recordReceipt']>[0],
+  ): WorkspaceApplyReceipt {
+    return this.workspaces.recordReceipt(input);
+  }
+  /** Publish an import attempt and its recovery journal atomically, before any file writes. */
+  beginWorkspaceApply(input: {
+    parentSessionId: string;
+    resultId: string;
+    digest: string;
+    targetBindingId: string;
+    change: FileChange;
+    files: FileSnapshot[];
+  }): string {
+    return this.transaction(() => {
+      if (this.workspaceApplyReceipt(input))
+        throw new WorkspaceFailure('WORKSPACE_BUSY', 'This import already has a recovery record');
+      this.setWorkspaceResultStatus({
+        resultId: input.resultId,
+        expect: ['ready', 'conflict'],
+        to: 'applying',
+      });
+      const changeId = this.prepareFileChangeGroup(
+        input.parentSessionId,
+        input.change,
+        input.files,
+      );
+      this.recordWorkspaceApplyReceipt({ ...input, changeId });
+      return changeId;
+    });
+  }
+  /** The durable success state and the journal must commit together. */
+  finishWorkspaceApply(resultId: string, changeId: string): void {
+    this.transaction(() => {
+      this.markFileChange(changeId, 'applied');
+      this.setWorkspaceResultStatus({ resultId, expect: 'applying', to: 'applied' });
+    });
+  }
+  /** Recovery proved every path still has its before bytes; abandon this attempt and allow new approval. */
+  resetUnwrittenWorkspaceApply(receipt: WorkspaceApplyReceipt): void {
+    this.transaction(() => {
+      this.markFileChange(receipt.changeId, 'abandoned');
+      this.workspaces.removeReceipt(receipt.id, receipt.changeId);
+      this.setWorkspaceResultStatus({
+        resultId: receipt.resultId,
+        expect: 'applying',
+        to: 'ready',
+      });
+    });
+  }
   prepareFileChange(
     sessionId: string,
     change: FileChange,
@@ -336,6 +549,16 @@ export class SessionStore implements PlanRepository {
   fileChanges(sessionId: string): StoredFileChange[] {
     return this.changes.fileChanges(sessionId);
   }
+  /**
+   * Which session's journal holds one change, for a recovery pass that has only the id.
+   *
+   * An import receipt records the change id; the session that owns it is the *parent's*, which is not necessarily the
+   * session whose directory the bytes went into. Asking the row is what keeps a caller from having to already know
+   * the answer it is asking for.
+   */
+  fileChangeOwner(id: string): string | null {
+    return this.changes.fileChangeOwner(id);
+  }
   fileChangeSnapshots(sessionId: string, id: string): FileSnapshot[] {
     return this.changes.fileChangeSnapshots(sessionId, id);
   }
@@ -355,10 +578,11 @@ export class SessionStore implements PlanRepository {
    * resident child's later turns have no start of their own there — and a catalog that showed a delegated
    * child's age instead of its work time would be measuring the wrong thing.
    */
-  subagents(sessionId: string): SubAgentSummary[] {
-    return subAgentCards(this.stateOf<SubAgentCardsState>('subagents', sessionId)).map((card) =>
-      card.sessionId ? this.withTurnTiming(card) : card,
-    );
+  subagents(sessionId: string, includePreviousRuns = false): SubAgentSummary[] {
+    return subAgentCards(
+      this.stateOf<SubAgentCardsState>('subagents', sessionId),
+      includePreviousRuns,
+    ).map((card) => (card.sessionId ? this.withTurnTiming(card) : card));
   }
   /** One child card plus the timing of the session that holds its work. */
   private withTurnTiming(card: SubAgentSummary): SubAgentSummary {
@@ -666,6 +890,51 @@ export class SessionStore implements PlanRepository {
   }
   getTaskAttempt(sessionId: string, taskId: string, attemptId: string) {
     return this.tasks.getTaskAttempt(sessionId, taskId, attemptId);
+  }
+  recordTaskVerificationRound(
+    sessionId: string,
+    taskId: string,
+    attemptId: string,
+    input: {
+      verificationRound: number;
+      evidence: NonNullable<Task['verification']>;
+      resolvedEffectIds: string[];
+      summary: CompletionSummary;
+    },
+  ) {
+    return this.tasks.recordTaskVerificationRound(sessionId, taskId, attemptId, input);
+  }
+  /**
+   * The verification rounds one attempt has already recorded.
+   *
+   * Read straight from the log rather than from a column, because the log *is* the record of the rounds. The
+   * scan is bounded by the number of rounds of a single attempt — a handful, even for a task that repaired to its
+   * ceiling — and it is filtered by attempt before any payload is parsed, so a long session pays for its own
+   * round count and not for the session's history.
+   */
+  private completionVerificationRounds(sessionId: string, attemptId: string): number[] {
+    const rows = this.db
+      .prepare(
+        "SELECT data FROM session_events WHERE session_id=? AND type='completion.updated' ORDER BY seq",
+      )
+      .all(sessionId);
+    const rounds: number[] = [];
+    for (const row of rows) {
+      let data: unknown;
+      try {
+        data = JSON.parse(String(row.data));
+      } catch {
+        // A record this build cannot parse is not a round it may claim was already recorded; the round-number
+        // guard still refuses a replay through its other branch, and refusing to read the log at all would
+        // break every task on a session that contains one damaged line.
+        continue;
+      }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
+      const record = data as Record<string, unknown>;
+      if (record.attemptId !== attemptId) continue;
+      if (typeof record.verificationRound === 'number') rounds.push(record.verificationRound);
+    }
+    return rounds;
   }
   listTaskAttempts(sessionId: string, taskId: string) {
     return this.tasks.listTaskAttempts(sessionId, taskId);
@@ -1186,6 +1455,116 @@ export class SessionStore implements PlanRepository {
     return data && typeof data === 'object' && !Array.isArray(data)
       ? (data as Record<string, unknown>)
       : undefined;
+  }
+  /**
+   * The session's current completion contract, folded from its `completion.updated` records.
+   *
+   * Three properties of the fold are what make it usable rather than merely correct:
+   *
+   * - **The definition is folded back to, not taken from the newest record.** Only the record written when a
+   *   contract is created carries the whole definition; every later record carries the round's evidence. A reader
+   *   that treated the newest payload as complete would report a contract with no objective and no criteria.
+   * - **The newest summary wins whole.** Each round writes its entire summary, so the state is a replacement
+   *   rather than a replay of deltas, and nothing has to be re-derived from the sequence.
+   * - **The cost is the contract's own round count.** A task that repaired twice has a handful of these records;
+   *   a session with a thousand runs has the same handful if it never carried a contract. This is deliberately not
+   *   a scan of the session's history.
+   *
+   * `null` for a session that never carried one — which is every session from before this existed, and every
+   * session whose request never asked to be verified.
+   */
+  completionCurrent(sessionId: string): CompletionRecord | null {
+    const rows = this.db
+      .prepare(
+        "SELECT seq,data FROM session_events WHERE session_id=? AND type='completion.updated' ORDER BY seq",
+      )
+      .all(sessionId);
+    if (!rows.length) return null;
+    let definition: CompletionSpec | undefined;
+    let policy: CompletionRepairPolicy | undefined;
+    let originRunId: string | undefined;
+    let latestRunId: string | undefined;
+    let source: CompletionRecord['source'] | undefined;
+    let contractId: string | undefined;
+    let definitionHash: string | undefined;
+    let summary: CompletionSummary | undefined;
+    let steps: CompletionStep[] | undefined;
+    let affectedPaths: string[] | undefined;
+    let repairStartedAt: number | undefined;
+    let failureFingerprint: string | undefined;
+    let taskId: string | undefined;
+    let planId: string | undefined;
+    let planHash: string | undefined;
+    let goalObjective: string | undefined;
+    for (const row of rows) {
+      let data: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(String(row.data));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+        data = parsed as Record<string, unknown>;
+      } catch {
+        // A damaged record is skipped rather than fatal: the alternative is a session whose completion state
+        // cannot be read at all because one line was truncated by a crash, and the remaining records still
+        // describe the contract honestly.
+        continue;
+      }
+      if (typeof data.contractId === 'string') contractId = data.contractId;
+      if (typeof data.runId === 'string') {
+        originRunId ??= data.runId;
+        latestRunId = data.runId;
+      }
+      if (data.source === 'task' || data.source === 'request' || data.source === 'approved-plan')
+        source = data.source;
+      if (data.definition && typeof data.definition === 'object')
+        definition = data.definition as CompletionSpec;
+      if (data.policy && typeof data.policy === 'object')
+        policy = data.policy as CompletionRepairPolicy;
+      if (data.summary && typeof data.summary === 'object')
+        summary = data.summary as CompletionSummary;
+      if (Array.isArray(data.steps)) steps = data.steps as CompletionStep[];
+      if (Array.isArray(data.affectedPaths)) affectedPaths = data.affectedPaths as string[];
+      if (typeof data.repairStartedAt === 'number') repairStartedAt = data.repairStartedAt;
+      if (typeof data.failureFingerprint === 'string') failureFingerprint = data.failureFingerprint;
+      if (typeof data.taskId === 'string') taskId = data.taskId;
+      if (typeof data.planId === 'string') planId = data.planId;
+      if (typeof data.planHash === 'string') planHash = data.planHash;
+      if (typeof data.goalObjective === 'string') goalObjective = data.goalObjective;
+    }
+    if (!contractId || !summary) return null;
+    if (!definition) {
+      // A contract whose creating record is missing is reported as a contract with an empty definition rather
+      // than as an error: the evidence that a run verified something is still worth reading.
+      definition = {
+        version: 1,
+        objective: summary.reason,
+        constraints: [],
+        steps: steps ?? [],
+        acceptance: [],
+        inputs: [],
+      };
+    }
+    if (!definitionHash) definitionHash = summary.definitionHash;
+    if (!definitionHash) return null;
+    return {
+      version: 1,
+      contractId,
+      sessionId,
+      originRunId: originRunId ?? '',
+      latestRunId: latestRunId ?? '',
+      source: source ?? 'request',
+      definition,
+      definitionHash,
+      summary,
+      steps: steps ?? definition.steps,
+      affectedPaths: affectedPaths ?? [],
+      policy: policy ?? { maxRepairRounds: 0, maxRepeatedFailures: 0, repairTimeoutMs: 0 },
+      ...(repairStartedAt === undefined ? {} : { repairStartedAt }),
+      ...(failureFingerprint === undefined ? {} : { failureFingerprint }),
+      ...(taskId === undefined ? {} : { taskId }),
+      ...(planId === undefined ? {} : { planId }),
+      ...(planHash === undefined ? {} : { planHash }),
+      ...(goalObjective === undefined ? {} : { goalObjective }),
+    };
   }
   /**
    * Append one durable fact. Every state change goes through here, so the log stays the record.
@@ -1797,6 +2176,17 @@ export class SessionStore implements PlanRepository {
   beginRun(id: string): string {
     return this.transaction(() => {
       const session = this.get(id);
+      const binding = this.workspaceBinding(id);
+      if (binding.kind === 'worktree' && this.workspaces.operationIsLive(binding.id))
+        throw new WorkspaceFailure(
+          'WORKSPACE_BUSY',
+          'Workspace management is in progress; wait before starting a run',
+        );
+      if (binding.kind === 'worktree' && binding.state !== 'ready')
+        throw new WorkspaceFailure(
+          'WORKSPACE_BUSY',
+          'Restore the isolated workspace before starting a run',
+        );
       if (session.activeRun) {
         const row = this.db.prepare('SELECT owner_pid FROM runs WHERE id=?').get(session.activeRun);
         let alive = false;

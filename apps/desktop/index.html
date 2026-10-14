@@ -187,8 +187,15 @@
         <!-- A sub-agent's own record, opened as a page: the header's title goes back to the conversation
              that delegated it, which is the navigation DSH uses for the same view. -->
         <section id="subagent-transcript" class="subagent-page" aria-label="子代理记录" hidden>
-          <p id="subagent-transcript-note" class="subagent-transcript-note"></p>
-          <div id="subagent-transcript-messages" class="subagent-transcript-messages"></div>
+          <details id="subagent-transcript-process" class="subagent-process">
+            <summary id="subagent-transcript-process-title">执行过程</summary>
+            <p id="subagent-transcript-note" class="subagent-transcript-note"></p>
+            <div id="subagent-transcript-messages" class="subagent-transcript-messages"></div>
+          </details>
+          <section id="subagent-transcript-result" class="subagent-result">
+            <h2 id="subagent-transcript-result-title">最终结果</h2>
+            <div id="subagent-transcript-result-body"></div>
+          </section>
         </section>
         <div id="live" class="message assistant" hidden>
           <details id="live-reasoning" class="message-reasoning" hidden>
@@ -426,10 +433,40 @@
         <h1>设置</h1>
         <nav aria-label="设置菜单">
           <button id="general-settings" type="button">
-            <span aria-hidden="true">⚙</span> 通用设置
+            <span aria-hidden="true"
+              ><svg
+                class="settings-nav-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                focusable="false"
+              >
+                <path d="M4 7h7m6 0h3M4 17h3m6 0h7" />
+                <circle cx="14" cy="7" r="3" />
+                <circle cx="10" cy="17" r="3" /></svg
+            ></span>
+            通用设置
           </button>
           <button id="model-settings" type="button" aria-current="page">
-            <span aria-hidden="true">◈</span> 模型设置
+            <span aria-hidden="true"
+              ><svg
+                class="settings-nav-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                focusable="false"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+                <path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3" />
+                <rect x="9" y="9" width="6" height="6" rx="1" /></svg
+            ></span>
+            模型设置
           </button>
         </nav>
       </aside>

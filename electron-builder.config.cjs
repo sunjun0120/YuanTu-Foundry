@@ -14,12 +14,39 @@ module.exports = {
     'dist/program-runner/**/*',
     'package.json',
     'LICENSE',
+    // Public entry points are paused, including stale output from earlier builds.
+    '!dist/apps/cli/**/*',
+    '!dist/apps/web/**/*',
+    '!dist/apps/agent-acp/**/*',
+    '!dist/packages/sdk/**/*',
     '!dist/**/*.map',
     '!dist/**/*.d.ts',
   ],
-  extraResources: [{ from: '.scratch/packaging/runtime', to: 'runtime' }],
+  extraResources: [
+    { from: '.scratch/packaging/runtime', to: 'runtime' },
+    /**
+     * The verified search binary, staged per target by `scripts/copy-search-assets.mjs`.
+     *
+     * It lands beside `app.asar` rather than inside it, next to the runtime for the same reason: it is a program
+     * the application *executes*, and the runtime resolves it from `process.resourcesPath` and checks its digest
+     * against the checked-in lock before running it. A platform with no pinned asset stages an empty directory
+     * with a note, and the search tool uses its built-in scanner instead.
+     */
+    { from: '.scratch/packaging/search-assets', to: 'search-assets' },
+  ],
   // A copied standalone Node is architecture-specific; never silently cross-package it.
   beforePack: async (context) => {
+    if (context.electronPlatformName === 'win32') {
+      const { validatePackagedWindowsRuntime } =
+        await import('./scripts/windows-runtime-product.mjs');
+      await validatePackagedWindowsRuntime(
+        require('node:path').resolve('.scratch/packaging/runtime'),
+        {
+          production: process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1',
+        },
+      );
+      return;
+    }
     if (context.electronPlatformName !== 'darwin') return;
     const { Arch } = require('builder-util');
     const { assertMacRuntime, validateMacRuntime, validateMacRuntimeDependencies } =
@@ -41,6 +68,13 @@ module.exports = {
     await validateMacRuntimeDependencies(
       require('node:path').resolve('.scratch/packaging/runtime/node'),
     );
+  },
+  afterPack: async (context) => {
+    if (context.electronPlatformName !== 'win32') return;
+    const { validateWindowsPackage } = await import('./scripts/check-windows-package.mjs');
+    await validateWindowsPackage(context.appOutDir, {
+      production: process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1',
+    });
   },
   mac: {
     target: ['dmg', 'zip'],

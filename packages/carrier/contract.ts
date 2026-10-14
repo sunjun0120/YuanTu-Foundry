@@ -11,6 +11,7 @@ import type {
   SessionSnapshot,
   MessageDelta,
   SubAgentDelta,
+  SubAgentView,
   StatisticsDelta,
 } from '../client/session-controller.ts';
 export type { MessageDelta, SubAgentDelta, StatisticsDelta };
@@ -108,6 +109,12 @@ export type CarrierCommand =
   | { type: 'approve'; id: string; allow: boolean }
   | { type: 'questionAnswer'; id: string; answers?: QuestionAnswer[]; cancelled?: boolean }
   | { type: 'subagentTranscript'; subagentId: string; childSessionId: string }
+  | {
+      type: 'subagentWorkspace';
+      subagentId: string;
+      childSessionId: string;
+      action: 'archive' | 'remove' | 'restore';
+    }
   | { type: 'closeSubagentTranscript' };
 /**
  * A sub-agent's transcript, opened from its card. It is read-only by construction: the panel shows
@@ -117,10 +124,14 @@ export interface SubAgentTranscript {
   subagentId: string;
   childSessionId: string;
   objective: string;
+  status: SubAgentView['status'];
+  report?: SubAgentView['report'];
+  error?: string;
   messages: Message[];
   /** True when the transcript was longer than the viewer's page budget. */
   truncated: boolean;
 }
+export type { CarrierIssue } from './errors.ts';
 export interface CarrierSnapshot {
   sessionQuery?: string;
   currentSession?: SessionInfo | null;
@@ -165,6 +176,8 @@ export interface CarrierSnapshot {
   session: SessionSnapshot;
   subagentTranscript: SubAgentTranscript | null;
   error: string | null;
+  /** Optional for older callers; the shell translates this instead of matching rendered strings. */
+  errorDetail?: import('./errors.ts').CarrierIssue | null;
 }
 export function parseCarrierCommand(input: unknown): CarrierCommand {
   const invalid = () => {
@@ -224,6 +237,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     approve: ['type', 'id', 'allow'],
     questionAnswer: ['type', 'id', 'answers', 'cancelled'],
     subagentTranscript: ['type', 'subagentId', 'childSessionId'],
+    subagentWorkspace: ['type', 'subagentId', 'childSessionId', 'action'],
     closeSubagentTranscript: ['type'],
   };
   if (typeof value.type !== 'string' || !Object.hasOwn(fields, value.type)) return invalid();
@@ -474,13 +488,18 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     return value as CarrierCommand;
   }
   if (
-    value.type === 'subagentTranscript' &&
+    (value.type === 'subagentTranscript' || value.type === 'subagentWorkspace') &&
     (typeof value.subagentId !== 'string' ||
       !value.subagentId.trim() ||
       value.subagentId.length > 128 ||
       typeof value.childSessionId !== 'string' ||
       !value.childSessionId.trim() ||
       value.childSessionId.length > 128)
+  )
+    return invalid();
+  if (
+    value.type === 'subagentWorkspace' &&
+    !['archive', 'remove', 'restore'].includes(String(value.action))
   )
     return invalid();
   return value as CarrierCommand;

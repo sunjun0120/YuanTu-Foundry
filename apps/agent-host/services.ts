@@ -7,6 +7,8 @@ import { BackgroundCommands } from '../../packages/tools/background.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { pipelineStagesInvariant } from '../../packages/tools/pipeline.ts';
 import { TerminalSessions } from '../../packages/tools/terminal.ts';
+import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
+import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
 import type { Options } from '../shared/args.ts';
 import { loadHookRegistry } from '../shared/hooks.ts';
 import { openStore } from '../shared/runtime.ts';
@@ -51,6 +53,23 @@ export async function openHostServices(options: Options, workspace: string): Pro
   // Tasks an operator put on a schedule are put back on the queue so an interrupted attempt
   // resumes from its last completed step instead of waiting for a human.
   store.resumableTasks(workspace);
+  /**
+   * The workspace service's own two convergence passes.
+   *
+   * `manager.reconcile` classifies the allocations a dead Host left: a `preparing` row whose directory never
+   * appeared is removed, and a binding whose directory has gone or changed identity is blocked rather than
+   * silently re-pointed. `results.reconcile` decides each interrupted import from the bytes its journal recorded —
+   * finishing the ones whose approved content was partly written, refusing the ones that now conflict, and
+   * re-offering the ones where nothing happened at all. Neither replays a command, a model request or an approval.
+   *
+   * Both run here rather than per run because they are facts about the *process*: exactly one Host owns these
+   * directories, and a pass that ran inside every run would classify the same rows repeatedly and race itself.
+   */
+  const workspaces = new WorkspaceManager({ store });
+  const workspaceResults = new WorkspaceResultsService({ store });
+  const reconciliation = new AbortController();
+  await workspaces.reconcile(reconciliation.signal);
+  await workspaceResults.reconcile(reconciliation.signal);
   const background = new BackgroundCommands(workspace);
   /**
    * The host's terminals, one manager for the process.

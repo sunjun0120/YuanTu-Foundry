@@ -142,6 +142,58 @@ export interface HostMethods {
   };
   'changes.undo': { params: { sessionId: string; id: string }; result: { undone: true } };
   /**
+   * The directory a session's work actually happens in.
+   *
+   * Separate from `session.get` because it is a different question with a different lifetime: a session's project is
+   * fixed when it is created, while its execution binding is created, blocked, archived and restored as children run
+   * and are collected. `problems` is the diagnostic half — a directory that was replaced or removed reads as broken
+   * here rather than being reported as ready.
+   */
+  'workspaces.get': {
+    params: { sessionId: string };
+    result: {
+      binding: import('./workspaces.ts').WorkspaceBinding;
+      snapshot: import('./workspaces.ts').WorkspaceSnapshot | null;
+      problems: string[];
+      dependencyWarnings?: import('../workspaces/dependencies.ts').DependencyWarning[];
+    };
+  };
+  /** What this session's children produced, with the per-file detail an import preview needs. */
+  'workspace.results': {
+    params: { sessionId: string };
+    result: (import('./workspaces.ts').WorkspaceResult & {
+      files: import('../workspaces/results.ts').WorkspaceResultFile[];
+      evidence: { tool: string; at: string }[];
+    })[];
+  };
+  /**
+   * Import one result into the calling session's own directory.
+   *
+   * A conflict is a *result*, not an error: the client is told which paths changed underneath the result and that
+   * nothing was written, which is information to act on rather than a failure to report.
+   */
+  'workspace.apply': {
+    params: { sessionId: string; resultId: string; expectedDigest: string };
+    result: {
+      status: 'applied' | 'conflict';
+      changeId?: string;
+      conflicts: string[];
+      files: { path: string; added: number; removed: number }[];
+    };
+  };
+  'workspace.archive': {
+    params: { sessionId: string };
+    result: { archived: true; bindingId: string; state: 'archived' };
+  };
+  'workspace.restore': {
+    params: { sessionId: string };
+    result: { restored: true; binding: import('./workspaces.ts').WorkspaceBinding };
+  };
+  'workspace.remove': {
+    params: { sessionId: string };
+    result: { removed: true; bindingId: string; state: 'removed' };
+  };
+  /**
    * Select one session's backend, or the default for sessions without a selection.
    *
    * Active runs refuse a policy change; each run and tool invocation pins its policy. A selection for another
@@ -284,6 +336,19 @@ export interface HostMethods {
       trigger?: import('./index.ts').TaskTriggerSource;
       /** Resume the task's deferred approval instead of starting its step over. */
       resume?: boolean;
+      /**
+       * The completion contract for a request or an approved plan, when the caller wants the work verified.
+       *
+       * Omitted by an ordinary chat turn, which is why "no evidence was claimed" and "the evidence passed" stay
+       * distinguishable: only a caller that said what done means can be told it was reached.
+       */
+      completion?: import('./completion.ts').CompletionSpec;
+      /** Continue a contract this session already recorded, by id. Conflicts with `completion` and `taskId`. */
+      resumeCompletionId?: string;
+      /** How much repair the run may spend before it stops, up to the ceilings the protocol fixes. */
+      completionRepairPolicy?: import('./completion.ts').CompletionRepairPolicy;
+      /** The file range a task's evidence covers; conflicts with an explicit `completion`. */
+      completionInputs?: string[];
     };
     result: RunResult;
   };
@@ -297,6 +362,17 @@ export interface HostMethods {
   'deliverables.get': {
     params: { sessionId: string };
     result: import('./deliverables.ts').PresentedFile[];
+  };
+  /**
+   * The completion contract this session is working against, or null when it has none.
+   *
+   * `completion.updated` carries the live change; this is what a reopened window asks, because a contract outlives
+   * the run that created it and the answer has to survive the process. The record carries the whole definition, so
+   * a reader never has to reconstruct it from a sequence of round records.
+   */
+  'completion.current': {
+    params: { sessionId: string };
+    result: import('./completion.ts').CompletionRecord | null;
   };
   /**
    * The session's goal, or null when it has none.
@@ -313,7 +389,7 @@ export interface HostMethods {
    * live state; this is what rebuilds the panel after a reload.
    */
   'subagents.list': {
-    params: { sessionId: string };
+    params: { sessionId: string; includePreviousRuns?: boolean };
     result: import('./index.ts').SubAgentSummary[];
   };
   /**

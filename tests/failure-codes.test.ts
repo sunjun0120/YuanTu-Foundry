@@ -23,6 +23,7 @@ import {
   RunFailure,
   codeForHttpStatus,
   failureCodeOf,
+  isContextWindowExceeded,
   statusForFailure,
 } from '../packages/protocol/failure.ts';
 import { httpFixture } from './http-fixture.ts';
@@ -400,4 +401,14 @@ test('the code reaches the durable record, not just the result the caller happen
   assert.equal((logged.data as { httpStatus?: number }).httpStatus, 429);
   assert.equal((logged.data as { requestId?: string }).requestId, 'req-fixture-429');
   assert.equal(path.basename(root).startsWith('yuantu-failure-'), true);
+});
+
+test('overflow prose is recognised whatever case the endpoint used', () => {
+  // The signature is matched case-insensitively on purpose: these phrases come from an endpoint's own error
+  // body, and this runtime does not get to choose how a gateway capitalises them. Without the flag a
+  // mixed-case body would be reported as an anonymous failure instead of the overflow it is — and the
+  // consequence is not cosmetic, because only a recognised overflow is answered by compressing the round.
+  assert.equal(isContextWindowExceeded('Prompt is too long: 300000 tokens > 200000 maximum'), true);
+  assert.equal(isContextWindowExceeded('CONTEXT_LENGTH_EXCEEDED'), true);
+  assert.equal(isContextWindowExceeded(new Error('Maximum Context Length is 8192 tokens')), true);
 });

@@ -388,7 +388,7 @@ export function projectionFoldIdentity(projection: SessionProjection<unknown>): 
  * of the constructor have to agree, and the failure they would produce apart is silent in one direction (an
  * older build opening a newer file) and fatal in the other.
  */
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 30;
 /**
  * Every table this build creates, so "is this file ours?" can be answered without guessing.
  *
@@ -418,6 +418,11 @@ export const SCHEMA_TABLES = [
   'task_effects',
   'task_step_checkpoints',
   'tasks',
+  'workspace_apply_receipts',
+  'workspace_bindings',
+  'workspace_operation_leases',
+  'workspace_results',
+  'workspace_snapshots',
 ] as const;
 export const SESSION_DATABASE_POLICY: DatabasePolicy = {
   application: APPLICATION_NAME,

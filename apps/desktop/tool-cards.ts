@@ -134,6 +134,29 @@ export function toolCardView(model: ToolCardModel): HTMLElement {
         ),
       );
     if (model.limited) card.append(node('p', t('ui.toolCardLimited'), 'tool-card-note'));
+    /**
+     * The coverage note, and the reason it is not folded into `limited`.
+     *
+     * "These are not all the matches" and "the scan did not reach the end of the workspace" are different facts
+     * with different remedies, and a card that showed only the first would leave a reader unable to tell a
+     * narrow query from a narrow scan. A result with no coverage at all — a log from before the field existed —
+     * says exactly that rather than staying silent, because silence there reads as a complete scan.
+     */
+    if (!model.coverage) card.append(node('p', t('ui.toolCardCoverageUnknown'), 'tool-card-note'));
+    else if (!model.coverage.complete)
+      card.append(
+        node(
+          'p',
+          format(t('ui.toolCardIncomplete'), {
+            reasons: model.coverage.reasons.length
+              ? model.coverage.reasons.join(', ')
+              : t('ui.toolCardCoverageUnknown'),
+          }),
+          'tool-card-note',
+        ),
+      );
+    if (model.outputTruncated)
+      card.append(node('p', t('ui.toolCardOutputTruncated'), 'tool-card-note'));
     if (!model.matches.length) card.append(node('p', t('ui.toolCardNoMatches'), 'tool-card-note'));
     return card;
   }

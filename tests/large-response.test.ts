@@ -6,6 +6,7 @@ import path from 'node:path';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { readSse } from '../packages/providers/sse.ts';
+import { RunFailure } from '../packages/protocol/failure.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
@@ -323,4 +324,145 @@ test('a chunked first history page still carries the session steps a plain first
   assert.ok(rest.messageChunk, 'the continuation is the same message');
   assert.equal('steps' in rest, false, 'a continuation chunk is not a new first page');
   assert.equal('statistics' in rest, false);
+});
+
+/**
+ * The SSE reader's own frame semantics, driven directly.
+ *
+ * The tests above reach `readSse` through an adapter, so they say "a large response arrives whole" and nothing
+ * about the reader's edges: what counts as a frame, what a heartbeat is, when `[DONE]` ends the stream, what
+ * happens to a half frame at the end, which failures keep their name, and what a byte boundary in the middle of
+ * a character does. It takes a `ReadableStream`, so all of that is reachable with synthetic chunks — no endpoint,
+ * no Host, no timing.
+ */
+function streamOf(chunks: readonly (string | Uint8Array)[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (index >= chunks.length) {
+        controller.close();
+        return;
+      }
+      const chunk = chunks[index++]!;
+      controller.enqueue(typeof chunk === 'string' ? encoder.encode(chunk) : chunk);
+    },
+  });
+}
+
+async function readAll(
+  body: ReadableStream<Uint8Array>,
+  options: { signal?: AbortSignal; allowDone?: boolean } = {},
+): Promise<Record<string, unknown>[]> {
+  const events: Record<string, unknown>[] = [];
+  for await (const event of readSse(
+    body,
+    options.signal ?? new AbortController().signal,
+    options.allowDone ?? false,
+  ))
+    events.push(event);
+  return events;
+}
+
+test('a stream frame is a data line, and only an object is an event', async () => {
+  // A comment or heartbeat frame carries no data at all: it is not an event, and it must not become one by
+  // being parsed as the empty string.
+  assert.deepEqual(await readAll(streamOf([': keep-alive\n\n', 'data: {"a":1}\n\n'])), [{ a: 1 }]);
+  // `data:` with a space is the same field; multi-line data is joined with a newline, as the format says.
+  assert.deepEqual(await readAll(streamOf(['data: {"a":\n', 'data: 2}\n\n'])), [{ a: 2 }]);
+  // Anything that is not an object is refused rather than handed to an adapter that would read fields off it.
+  for (const payload of ['[1,2]', 'null', '42', '"text"'])
+    await assert.rejects(
+      readAll(streamOf([`data: ${payload}\n\n`])),
+      /Invalid stream event/,
+      payload,
+    );
+  // and a frame that is not JSON at all says so
+  await assert.rejects(readAll(streamOf(['data: {oops\n\n'])), /Invalid JSON in model stream/);
+});
+
+test('[DONE] ends the stream only where the protocol says it may', async () => {
+  // Without permission it is not a terminal marker; it is a payload that is not JSON, and saying so is better
+  // than silently ending a stream the caller did not know could end that way.
+  await assert.rejects(readAll(streamOf(['data: [DONE]\n\n'])), /Invalid JSON/);
+  // With permission it ends the stream, and what follows it is not parsed: a provider that keeps talking after
+  // its own terminator must not have those frames delivered.
+  assert.deepEqual(
+    await readAll(streamOf(['data: {"a":1}\n\n', 'data: [DONE]\n\n', 'data: {"b":2}\n\n']), {
+      allowDone: true,
+    }),
+    [{ a: 1 }, { type: 'stream.done' }],
+  );
+});
+
+test('a half frame at the end of the body is an error, not a truncation', async () => {
+  // The connection closed mid-frame. Dropping it silently would hand the caller a stream that looks complete.
+  await assert.rejects(
+    readAll(streamOf(['data: {"a":1}\n\n', 'data: {"b":'])),
+    /Incomplete model stream frame/,
+  );
+  // A trailing blank line is not a half frame.
+  assert.deepEqual(await readAll(streamOf(['data: {"a":1}\n\n'])), [{ a: 1 }]);
+});
+
+test('a named failure keeps its name, and a cancel is reported as the cancel', async () => {
+  // The retry policy decides from the code, so a failure that already has one must not be re-wrapped as an
+  // anonymous transport error.
+  const named = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.error(new RunFailure('timeout', 'idle'));
+    },
+  });
+  await assert.rejects(readAll(named), (error: unknown) => {
+    assert.equal((error as RunFailure).code, 'timeout');
+    return true;
+  });
+  // Aborting the request errors the body, so a Stop arrives through the same path: it must surface as the
+  // caller's own reason rather than as weather worth re-sending.
+  const controller = new AbortController();
+  const cancelled = new ReadableStream<Uint8Array>({
+    pull(inner) {
+      controller.abort(new Error('the user stopped this run'));
+      inner.error(new Error('socket closed'));
+    },
+  });
+  await assert.rejects(
+    readAll(cancelled, { signal: controller.signal }),
+    /the user stopped this run/,
+  );
+  // Everything else that arrives from the body is the connection, and it is named as such.
+  const broken = new ReadableStream<Uint8Array>({
+    pull(inner) {
+      inner.error(new Error('socket closed'));
+    },
+  });
+  await assert.rejects(readAll(broken), (error: unknown) => {
+    assert.equal((error as RunFailure).code, 'transport');
+    return true;
+  });
+});
+
+test('a frame boundary split across chunks is still a boundary', async () => {
+  // The `\r\n\r\n` arrives in three pieces. A reader that only searched the newly appended text would miss the
+  // boundary and glue two frames together, and the glued payload is not JSON.
+  assert.deepEqual(
+    await readAll(streamOf(['data: {"a":1}\r', '\n\r', '\ndata: {"b":2}\r\n\r\n'])),
+    [{ a: 1 }, { b: 2 }],
+  );
+});
+
+test('an unfinished frame is bounded, and a character split across chunks survives', async () => {
+  // One frame with no boundary and no end: the bound is what stops a runaway tool from filling memory.
+  await assert.rejects(
+    readAll(streamOf([`data: ${'x'.repeat(17_000_000)}`])),
+    /exceeds 16MB limit/,
+  );
+  // The three bytes of a CJK character arrive in two chunks. Decoding each chunk on its own would put a
+  // replacement character in the payload — and in an answer a person then reads.
+  const bytes = new TextEncoder().encode('data: {"a":"中"}\n\n');
+  const cut = bytes.indexOf(0xe4);
+  assert.ok(cut > 0);
+  assert.deepEqual(await readAll(streamOf([bytes.slice(0, cut + 1), bytes.slice(cut + 1)])), [
+    { a: '中' },
+  ]);
 });

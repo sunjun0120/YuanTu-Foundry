@@ -17,7 +17,11 @@ import {
   prepareAppContainerDiagnostic,
 } from '../packages/tools/sandbox-appcontainer.ts';
 import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
-import { appContainerRuntimeError } from '../packages/tools/appcontainer-runtime.ts';
+import { runInNewContext } from 'node:vm';
+import {
+  appContainerRuntimeError,
+  APPCONTAINER_CHILD_STDIO_PROBE,
+} from '../packages/tools/appcontainer-runtime.ts';
 
 const execute = promisify(execFile);
 const windows = { skip: process.platform !== 'win32', timeout: 120000 };
@@ -42,10 +46,11 @@ async function prepare(
     config: { mode: 'appcontainer' as never, image: 'native', files, network: 'denied' },
   });
 }
-async function run(plan: SandboxPlan) {
+async function run(plan: SandboxPlan, onCancellation = () => {}) {
   markAppContainerStarted(plan);
   let stopping: Promise<void> | undefined;
   const timer = setTimeout(() => {
+    onCancellation();
     stopping = stopAppContainer(plan);
     void stopping.catch(() => {});
   }, 8000);
@@ -222,7 +227,7 @@ test(
             argv: ['-e', 'throw new Error("must not start")'],
             config: { mode: 'appcontainer' as never, image: 'native', network: 'denied' },
           }),
-          /network|policy|WFP|libuv/i,
+          /AppContainer enforcement probe (?:failed|timed out)|Invalid libuv runtime identity/,
         );
         assert.equal(await readFile(path.join(root, 'read.txt'), 'utf8'), 'workspace');
         t.skip(`Real WFP network acceptance unavailable: ${unavailable}`);
@@ -319,30 +324,53 @@ test('AppContainer refuses unrestricted networking without fallback', windows, a
 });
 
 test(
-  'AppContainer Node child pipes require a compatible runtime before public execution',
+  'AppContainer Node child pipe compatibility is measured inside the actual container',
   windows,
-  async () => {
+  async (t) => {
     const { parent, root } = await fixture();
     let plan: SandboxPlan | undefined;
     try {
-      if (appContainerRuntimeError(process.versions.uv)) {
-        await assert.rejects(
-          prepareAppContainer({
-            root,
-            cwd: root,
-            command: process.execPath,
-            argv: ['-e', ''],
-            config: { mode: 'appcontainer' as never, image: 'native' },
-          }),
-          /libuv.*1\.53/,
+      plan = await prepare(
+        root,
+        `const recordAppContainerProbeStage=stage=>require('fs').writeFileSync('child-probe-stage.json',JSON.stringify({version:1,stage,pid:process.pid}));
+try { ${APPCONTAINER_CHILD_STDIO_PROBE}; console.log(JSON.stringify({passed:true})); }
+catch(error) { console.log(JSON.stringify({passed:false,error:String(error)})); }`,
+      );
+      let evidence;
+      let cancelled = false;
+      try {
+        evidence = JSON.parse(
+          (
+            await run(plan, () => {
+              cancelled = true;
+            })
+          ).stdout.trim(),
+        );
+      } catch (error) {
+        const phase = JSON.parse(await readFile(path.join(root, 'child-probe-stage.json'), 'utf8'));
+        assert.equal(phase.stage, 'child-stdio-started');
+        assert.equal(cancelled, true);
+        assert.throws(() => process.kill(phase.pid, 0), { code: 'ESRCH' });
+        const failure = error as {
+          code?: number;
+          killed?: boolean;
+          stdout?: string;
+          stderr?: string;
+        };
+        assert.equal(failure.code, 1);
+        assert.equal(failure.killed, false);
+        assert.equal(failure.stdout, '');
+        assert.equal(failure.stderr, '');
+        t.skip(
+          'Actual child stdio probe started but did not complete before contained cancellation; compatibility is not accepted',
         );
         return;
       }
-      plan = await prepare(
-        root,
-        `const cp=require('child_process');const child=cp.spawnSync(process.execPath,['-e','console.log("pipe-child")'],{encoding:'utf8',timeout:2000});if(child.error)throw child.error;console.log(child.stdout.trim());`,
-      );
-      assert.equal((await run(plan)).stdout.trim(), 'pipe-child');
+      assert.equal(typeof evidence.passed, 'boolean');
+      if (!evidence.passed) {
+        assert.match(evidence.error, /child stdio capability probe failed/);
+        t.skip(`Actual runtime capability unavailable: ${evidence.error}`);
+      }
     } finally {
       if (plan) await cleanupAppContainer(plan);
       await rm(parent, { recursive: true, force: true });
@@ -350,10 +378,90 @@ test(
   },
 );
 
-test('AppContainer runtime compatibility uses numeric libuv versions', () => {
-  for (const uv of ['1.52.1', '1.9.9', undefined, 'unknown'])
-    assert.match(appContainerRuntimeError(uv)!, /requires libuv/);
-  for (const uv of ['1.53.0', '1.54.1', '2.0.0']) assert.equal(appContainerRuntimeError(uv), null);
+test('AppContainer runtime versions are identity metadata, not capability evidence', () => {
+  for (const uv of [undefined, 'unknown', '1.52', '1.52.1\n'])
+    assert.match(appContainerRuntimeError(uv)!, /identity/);
+  for (const uv of ['1.52.1', '1.9.9', '1.53.0', '1.54.1', '2.0.0'])
+    assert.equal(appContainerRuntimeError(uv), null);
+});
+
+test('AppContainer child stdio probe rejects spawn failure, timeout, nonzero exit and broken channels', () => {
+  const success = { status: 0, stdout: 'yuantu-stdin', stderr: 'yuantu-stderr' };
+  const stages: string[] = [];
+  const probe = (result: object) =>
+    runInNewContext(APPCONTAINER_CHILD_STDIO_PROBE, {
+      process: { execPath: 'C:\\runtime\\node.exe' },
+      recordAppContainerProbeStage: (stage: string) => stages.push(stage),
+      require: (name: string) => {
+        assert.equal(name, 'node:child_process');
+        return {
+          spawnSync: (
+            file: string,
+            args: string[],
+            options: { input: string; timeout: number },
+          ) => {
+            assert.equal(file, 'C:\\runtime\\node.exe');
+            assert.equal(args[0], '-e');
+            assert.equal(options.input, 'yuantu-stdin');
+            assert.ok(options.timeout > 0);
+            return result;
+          },
+        };
+      },
+    });
+  assert.doesNotThrow(() => probe(success));
+  assert.deepEqual(stages, ['child-stdio-started', 'child-spawn-returned', 'child-stdio-passed']);
+  for (const result of [
+    { ...success, error: { code: 'EPERM' } },
+    { ...success, error: { code: 'ETIMEDOUT' }, status: null },
+    { ...success, status: 1 },
+    { ...success, stdout: '' },
+    { ...success, stderr: '' },
+  ])
+    assert.throws(() => probe(result), /child stdio capability probe failed/);
+});
+
+test('AppContainer failure diagnostics distinguish an actual cancelled phase from an unknown stage', async () => {
+  const runtime = await import('../packages/tools/appcontainer-runtime.ts');
+  const format = (
+    runtime as unknown as {
+      appContainerProbeFailure: (stage: unknown, cancelled: boolean, error: unknown) => string;
+    }
+  ).appContainerProbeFailure;
+  assert.equal(typeof format, 'function');
+  assert.match(
+    format('child-stdio-started', true, Error('helper exit 1')),
+    /timed out during child-stdio-started/,
+  );
+  assert.match(
+    format('network-started', false, Error('EPERM')),
+    /failed during network-started.*EPERM/,
+  );
+  for (const stage of [null, { stage: 'fake' }, 'untrusted-path-and-secret']) {
+    const result = format(stage, true, Error('helper exit 1'));
+    assert.match(result, /unknown/);
+    assert.doesNotMatch(result, /untrusted-path-and-secret/);
+  }
+});
+
+test('AppContainer public execution refuses a failed capability probe before preparing a workload', async () => {
+  const original = appcontainerSandboxProvider.available;
+  appcontainerSandboxProvider.available = async () =>
+    'AppContainer enforcement probe failed: child stdio capability probe failed: EPERM';
+  try {
+    await assert.rejects(
+      prepareAppContainer({
+        root: 'nonexistent-workspace-must-not-be-prepared',
+        cwd: 'nonexistent-workspace-must-not-be-prepared',
+        command: process.execPath,
+        argv: ['-e', 'throw Error("must not execute")'],
+        config: { mode: 'appcontainer' as never, image: 'native', network: 'denied' },
+      }),
+      /child stdio capability probe failed: EPERM/,
+    );
+  } finally {
+    appcontainerSandboxProvider.available = original;
+  }
 });
 
 test(

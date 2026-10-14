@@ -19,6 +19,8 @@ import type { ConnectedHostOptions, SpawnedHostOptions } from '../client/host-cl
 import { CarrierService } from './service.ts';
 
 export { CarrierService } from './service.ts';
+export { CarrierError, carrierIssue } from './errors.ts';
+export type { CarrierIssue, CarrierErrorCode } from './errors.ts';
 export { parseCarrierCommand } from './contract.ts';
 export type { CarrierCommand, CarrierSnapshot, SubAgentTranscript } from './contract.ts';
 export type { MessageDelta, SubAgentDelta, StatisticsDelta } from './contract.ts';

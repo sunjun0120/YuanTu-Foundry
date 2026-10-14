@@ -150,3 +150,41 @@ test('corrupt optional backup settings disable scheduling and can be repaired wi
   assert.equal(repaired.error, null);
   assert.equal(repaired.backups.length, 1);
 });
+
+test('a setting that is valid JSON but not a boolean is refused as corrupt', async (t) => {
+  const f = await fixture(t);
+  // Parses cleanly, so only the type check can tell that this is not a setting anybody wrote: a non-empty
+  // string is truthy, and treating it as `true` would schedule backups off a value of the wrong kind.
+  await writeFile(f.settings, '{"enabled":"yes"}');
+  const service = new DailyBackups(f.settings, async (file, operation, id) =>
+    databaseBackupAction(file, operation, id),
+  );
+  await service.load();
+  const broken = await service.view(f.file);
+  assert.equal(broken.enabled, false);
+  assert.match(broken.error!, /backup settings/i);
+  await service.tick(f.file);
+  assert.equal((await service.view(f.file)).backups.length, 0);
+});
+
+test('a failed snapshot stays visible while listing the backups still works', async (t) => {
+  const f = await fixture(t);
+  let creates = 0;
+  const service = new DailyBackups(f.settings, async (file, operation, id) => {
+    if (operation === 'create' && ++creates > 1)
+      throw new Error('Disk full while publishing the snapshot');
+    return databaseBackupAction(file, operation, id);
+  });
+  await service.configure(true);
+  await service.tick(f.file);
+  const first = await service.view(f.file);
+  assert.equal(first.backups.length, 1);
+  assert.equal(first.error, null);
+  // A day later the schedule tries again and the write fails. Listing still succeeds, so the view cannot
+  // learn about the failure from the operation it just ran — the remembered error is the only channel that
+  // can tell the settings page the snapshot did not happen.
+  await service.tick(f.file, Date.now() + 86_400_001);
+  const failed = await service.view(f.file);
+  assert.match(failed.error!, /disk full/i);
+  assert.equal(failed.backups.length, 1);
+});

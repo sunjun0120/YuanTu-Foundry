@@ -384,7 +384,14 @@ test('task runs complete only after persisted acceptance passes', async (t) => {
   assert.equal(persisted.verification?.passed, true);
 });
 
-test('a task with no acceptance criteria completes vacuously after a run', async (t) => {
+test('a task with no acceptance criteria does not complete vacuously after a run', async (t) => {
+  /**
+   * The reversal of the behaviour this test used to pin.
+   *
+   * "Every criterion of none holds" made an empty definition a pass, so a task nobody had said what done meant
+   * for was reported as verified by the model's own closing sentence. It is now the definition-level stop
+   * `empty-acceptance`, and the task stays open until a criterion states what done means.
+   */
   const ctx = await fixture(t, {
     async complete() {
       return reply('done');
@@ -397,8 +404,10 @@ test('a task with no acceptance criteria completes vacuously after a run', async
     prompt: 'finish',
     taskId: task.id,
   });
-  assert.equal(result.status, 'completed');
-  assert.equal(ctx.store.getTask(ctx.session.id, task.id).status, 'completed');
+  assert.equal(result.status, 'needs_review');
+  assert.equal(result.completion?.state, 'needs_review');
+  assert.match(String(result.error), /no acceptance criteria/i);
+  assert.equal(ctx.store.getTask(ctx.session.id, task.id).status, 'needs_review');
 });
 
 test('failed or non-executable task acceptance requires review', async (t) => {
@@ -541,7 +550,19 @@ test('a retried task receives persisted attempt evidence and a no-replay recover
       return reply('Recovered');
     },
   });
-  const task = ctx.store.createTask(ctx.session.id, { title: 'Long task' });
+  // A criterion the recovered run can satisfy: an empty definition is no longer a vacuous pass, and this test is
+  // about the recovery instruction the resumed attempt is given, not about what "done" means.
+  await writeFile(path.join(ctx.root, 'marker.txt'), 'ok');
+  const task = ctx.store.createTask(ctx.session.id, {
+    title: 'Long task',
+    acceptance: [
+      {
+        description: 'marker file matches',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
+    ],
+  });
   const first = await ctx.agent.run({
     sessionId: ctx.session.id,
     taskId: task.id,

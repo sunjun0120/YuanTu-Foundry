@@ -9,6 +9,8 @@ import type {
 } from '../protocol/index.ts';
 import type { Session, SessionStore } from '../storage/sqlite.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
+import type { WorkspaceBinding } from '../protocol/workspaces.ts';
+import type { WorkspaceResults } from '../workspaces/results.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { ResidentChildInput } from './residency.ts';
 import type { ChildTurns } from './run-subagents.ts';
@@ -16,6 +18,7 @@ import type { RunEmit } from './run-emit.ts';
 import { EXPLORE_TOOLS, subAgentRolePrompt, toolArgumentPreview } from './subagents.ts';
 import { RunQueueFull } from './run-queue.ts';
 import { redactSecrets } from './errors.ts';
+import { nodeDependencyWarning } from '../workspaces/dependencies.ts';
 
 export interface ChildTurnOptions {
   agent: AgentOptions;
@@ -25,6 +28,14 @@ export interface ChildTurnOptions {
   sessionId: string;
   taskEffectScope: AgentOptions['taskEffectScope'];
   createAgent(options: AgentOptions): Pick<Agent, 'run' | 'enqueue'>;
+  /**
+   * Where this host freezes what an isolated child produced.
+   *
+   * Called once a turn has ended, which is the first moment the answer is meaningful: the child has stopped writing,
+   * its journalled writes have settled, and the directory holds one state rather than a moment of a build. Absent
+   * for a host that manages no workspaces, and then nothing is exported and nothing is claimed.
+   */
+  workspaceResults?: WorkspaceResults | undefined;
 }
 
 /** Build turns with the parent run's resources; resident activations own their registry. */
@@ -58,6 +69,14 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
      * coordinator used to do — would have erased the harness's identity paragraph for every delegated child.
      */
     persona?: string;
+    /**
+     * The directory this child was given, when the run isolates its children.
+     *
+     * Everything the child's turn reaches — its registry, its instructions, its spill, its language servers — is
+     * built from *this* root rather than the delegator's. That is the whole point of isolation at this seam: a child
+     * told to work in a copy and then handed the original's tools would write into the tree it was protected from.
+     */
+    binding?: WorkspaceBinding;
   }): { turn: ResidentChildInput['turn']; close?: () => Promise<void> } => {
     const { task, childSession, tag } = input_;
     const childProvider = input_.childProvider;
@@ -68,17 +87,44 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
      * A resident child owns one built by the host and keeps it for its whole residency: the parent
      * run's registry dies with the run, so a child that borrowed it would lose its tools between
      * turns. A one-shot child keeps borrowing the parent's copy, which is what makes its parent's
-     * language servers, background commands and MCP connections reachable without duplicating them.
+     * language servers, background commands and MCP connections reachable without duplicating them —
+     * unless it was given a directory of its own, in which case borrowing would mean reading and
+     * writing the delegator's tree through tools that were built for it.
      */
-    const ownsRegistry = Boolean(options.agent.subagentResidency);
-    const childRegistry = ownsRegistry
-      ? (options.agent.childTools?.() ??
-        (() => {
-          throw new Error(
-            'Resident sub-agents need a childTools factory: a child cannot borrow the tool registry of the run that started it',
-          );
-        })())
-      : tools.forRun(task.role === 'explore' ? { allow: EXPLORE_TOOLS } : {});
+    const binding = input_.binding;
+    /**
+     * Whether this child must build its *own* tools rather than borrow the parent's copy.
+     *
+     * A borrowed registry carries the parent's `workspaceRoot` and the factories that were bound to it, so every
+     * file, command, language server and spill would still point at the delegator's directory. Isolation is
+     * therefore a rebuilding decision at this seam and not merely a path change.
+     */
+    const rebuildTools = Boolean(binding && binding.executionRoot !== binding.projectRoot);
+    /**
+     * The tools this child may use, from whichever factory owns it.
+     *
+     * The read-only narrowing is applied to the registry a child *borrows*, and deliberately not to one a host
+     * factory builds. A factory is asked for a registry, and the host that owns it decides what that registry
+     * contains — a resident child's registry outlives the run, is never copied from the parent's, and may already
+     * carry restrictions of its own. Narrowing it here would be this module overruling the host that built it,
+     * which is exactly what a resident child's first tool call exposed: the registry a host had handed over came
+     * back with the parent's tools *and* the read-only allowlist applied to them, so a tool the host had installed
+     * on it was reported as "registered but excluded by a restriction".
+     *
+     * The borrowed path is where the narrowing genuinely belongs: `forRun()` is the copy the parent's own registry
+     * produces, and `allow: EXPLORE_TOOLS` is what stops a read-only child from stopping its parent's background
+     * jobs or language servers — tools that carry no permission and would otherwise pass the read-only filter.
+     */
+    const buildTools = (): ToolRegistry => {
+      if (options.agent.childTools) return options.agent.childTools(binding);
+      if (rebuildTools)
+        throw new Error(
+          'An isolated sub-agent needs a childTools factory: a child cannot borrow the tool registry of the run that started it',
+        );
+      return tools.forRun(task.role === 'explore' ? { allow: EXPLORE_TOOLS } : {});
+    };
+    const ownsRegistry = Boolean(options.agent.subagentResidency) || rebuildTools;
+    const childRegistry = buildTools();
     let rounds = 0,
       toolCalls = 0;
     /** One turn on this child session. A resident child replays it; a one-shot child runs it once. */
@@ -241,9 +287,18 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
         // Only when this turn *is* the task: a follow-up on a resident child is a question, and holding it
         // to the original task's shape would be answering a question with a form.
         ...(reportRequired && input_.reportSchema ? { reportSchema: input_.reportSchema } : {}),
-        // The child's writes are journaled against the parent session, so the session change list
-        // and undo stay one surface instead of hiding half of a run's effects in a hidden session.
-        journalSessionId: options.sessionId,
+        /**
+         * The child's writes are journaled against the session whose directory they happened in — which is decided
+         * by the *kind* of binding, not by whether one exists.
+         *
+         * A shared child works in the delegator's directory, so its journal belongs to the delegator: that is what
+         * keeps the session change list and undo one surface, and it is what every delegation did before isolation
+         * existed. An isolated child's paths are relative to a directory the delegator's undo has never seen, so
+         * writing them into the parent's journal would make the parent's undo operate on files it does not have.
+         * Testing "is there a binding" instead of "is it isolated" would send every shared child's writes into its
+         * own hidden session, where the parent's change list could not show them at all.
+         */
+        journalSessionId: binding?.kind === 'worktree' ? childSession.id : options.sessionId,
       });
       handle?.attach((message, id) => {
         try {
@@ -266,6 +321,64 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
       });
       try {
         const result = await started;
+        /**
+         * The child's work is frozen as soon as its turn is over.
+         *
+         * Here rather than at collect time, because this is the last moment the directory provably holds one state:
+         * the turn has ended, the tools have returned, and nothing of this child's is running. Exporting later —
+         * when the parent finally reads a report, which may be a run boundary away — would freeze whatever the
+         * directory had become by then, including anything a follow-up turn added.
+         *
+         * A failure to export never fails the child's turn. The turn *happened*: its report, its usage and its
+         * journal are all recorded, and a parent that was told "your child failed" because a frozen record could not
+         * be written would be losing the answer it paid for. The child's outcome is reported as it is, and the
+         * failure is published as a diagnostic so the reason is visible rather than silent.
+         */
+        if (binding?.kind === 'worktree' && options.workspaceResults) {
+          try {
+            const result = await options.workspaceResults.export({
+              childSessionId: childSession.id,
+              signal: turnSignal,
+            });
+            /**
+             * Where the child worked, and what it produced — published as one frame, after the export.
+             *
+             * The result is only a fact once it has been frozen, so this cannot ride `subagent.finished`: that frame
+             * is emitted during settlement, and a card that showed "awaiting import" before an export existed would
+             * be offering work the parent cannot apply.
+             */
+            const dependencyWarning =
+              binding.kind === 'worktree'
+                ? await nodeDependencyWarning(binding.executionRoot, new AbortController().signal)
+                : null;
+            emit('subagent.workspace', {
+              id: task.id,
+              childSessionId: childSession.id,
+              bindingId: binding.id,
+              kind: binding.kind,
+              executionRoot: binding.executionRoot,
+              state: binding.state,
+              ...(dependencyWarning ? { dependencyWarning: dependencyWarning.message } : {}),
+              ...(result
+                ? {
+                    result: {
+                      id: result.id,
+                      digest: result.digest,
+                      status: result.status,
+                      paths: result.paths,
+                    },
+                  }
+                : {}),
+            });
+          } catch (error) {
+            emit('subagent.workspace.failed', {
+              id: task.id,
+              childSessionId: childSession.id,
+              bindingId: binding.id,
+              reason: redactSecrets(error instanceof Error ? error.message : String(error)),
+            });
+          }
+        }
         return {
           usage: result.usage,
           text: result.text,

@@ -25,6 +25,7 @@ import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/tools/index.ts';
 import type { AgentEvent, Provider, RunResult } from '../packages/protocol/index.ts';
+import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
 import type { SubAgentProvider } from '../packages/core/subagent-providers.ts';
 
 async function fixture(
@@ -372,4 +373,52 @@ test('the registered providers are discoverable, with what each one can honour',
     () => registry.register({ ...alt, name: 'bad', capabilities: ['nonsense'] as never }),
     /Unknown sub-agent capability/,
   );
+});
+
+test('an option in its off position asks for nothing', () => {
+  const registry = new SubAgentProviderRegistry();
+  registry.register(stubProvider('plain', []));
+  // `false`, an empty filter and a blank persona are the switch in its off position. Reading any of them as a
+  // request would refuse a provider that never advertised the capability that switches them on — which is the
+  // mirror image of the bug this seam exists to prevent.
+  assert.equal(registry.resolve('plain', { contextFork: false }).name, 'plain');
+  assert.equal(registry.resolve('plain', { toolFilter: [] }).name, 'plain');
+  assert.equal(registry.resolve('plain', { persona: '   ' }).name, 'plain');
+  assert.equal(registry.resolve('plain', {}).name, 'plain');
+  // The same option switched on is a request, and this provider cannot honour it.
+  assert.throws(() => registry.resolve('plain', { contextFork: true }), /UNSUPPORTED_CAPABILITY/);
+});
+
+test('each option is checked against its own capability', () => {
+  const registry = new SubAgentProviderRegistry();
+  // One provider can hold a child to a depth, the other can give it a persona, and neither can do both. If the
+  // option-to-capability table drifts, these four answers flip in pairs.
+  registry.register(stubProvider('depth-only', ['depthLimit']));
+  registry.register(stubProvider('persona-only', ['persona']));
+  assert.equal(registry.resolve('depth-only', { maxDepth: 2 }).name, 'depth-only');
+  assert.equal(registry.resolve('persona-only', { persona: 'be terse' }).name, 'persona-only');
+  assert.throws(() => registry.resolve('depth-only', { persona: 'be terse' }), /persona/);
+  assert.throws(() => registry.resolve('persona-only', { maxDepth: 2 }), /depthLimit/);
+});
+
+test('a provider needs a name', () => {
+  const registry = new SubAgentProviderRegistry();
+  // Unnamed registrations cannot be selected by a task and cannot be reported by `describe()`, so the name is
+  // not decoration — a provider without one is unusable rather than merely untidy.
+  assert.throws(() => registry.register(stubProvider('', [])), /needs a name/);
+  assert.throws(() => registry.register(stubProvider('   ', [])), /needs a name/);
+  assert.equal(registry.size, 0);
+});
+
+test('disposal removes only the registration it created', () => {
+  const registry = new SubAgentProviderRegistry();
+  const dispose = registry.register(stubProvider('same-name', []));
+  dispose();
+  assert.equal(registry.size, 0);
+  // The name is free again. The disposer that ran belongs to the session that registered the old provider, so it
+  // must not be able to remove somebody else's later registration of the same name.
+  registry.register(stubProvider('same-name', []));
+  dispose();
+  assert.equal(registry.size, 1);
+  assert.deepEqual(registry.names(), ['same-name']);
 });

@@ -1466,6 +1466,62 @@ select {
 .subagent-page .subagent-live {
   margin-top: 20px;
 }
+.subagent-process {
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+.subagent-process > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+.subagent-process > summary::-webkit-details-marker {
+  display: none;
+}
+.subagent-process > summary::before {
+  content: '›';
+  display: inline-block;
+  font-size: 20px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+.subagent-process[open] > summary::before {
+  transform: rotate(90deg);
+}
+.subagent-process > summary:hover {
+  color: var(--ink);
+}
+.subagent-process > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.subagent-process[open] > summary {
+  margin-bottom: 18px;
+}
+.subagent-result > h2 {
+  margin: 0 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.subagent-result .message {
+  margin-top: 0;
+}
+.subagent-result-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+.subagent-workspace-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
 body[data-subagent-page='open'] #conversation > :not(#subagent-transcript),
 body[data-subagent-page='open'] .composer-area {
   display: none;
@@ -1718,6 +1774,17 @@ body[data-page='background'] {
   color: #335b40;
   border-radius: 8px;
   font-weight: 600;
+}
+.settings-sidebar nav button > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-nav-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 .settings-content {
   overflow: auto;
@@ -2339,25 +2406,4 @@ select.model-chip:disabled {
 }
 .deliverables .deliverable-description {
   color: #6f7568;
-}
-/* The data panel uses the settings page's existing typography and controls. */
-.backup-enabled {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.backup-enabled input {
-  width: auto;
-}
-.backup-note {
-  color: var(--muted);
-  line-height: 1.65;
-  margin: 16px 0;
-}
-#backup-settings-content .settings-field select {
-  display: block;
-  width: min(100%, 480px);
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 10px 12px;
 }

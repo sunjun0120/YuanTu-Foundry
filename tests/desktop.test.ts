@@ -203,6 +203,17 @@ test('the sub-agent transcript viewer refuses sessions this one did not delegate
   );
   assert.equal(service.snapshot.subagentTranscript, null);
 
+  for (const action of ['archive', 'remove', 'restore'] as const)
+    await assert.rejects(
+      service.dispatch({
+        type: 'subagentWorkspace',
+        subagentId: 'made-up',
+        childSessionId: other,
+        action,
+      }),
+      /does not belong to this session/,
+    );
+
   // Closing when nothing is open is a no-op rather than an error.
   await service.dispatch({ type: 'closeSubagentTranscript' });
   assert.equal(service.snapshot.subagentTranscript, null);

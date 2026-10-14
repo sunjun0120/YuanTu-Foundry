@@ -10,8 +10,10 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import type { CheckFailureReason } from '../protocol/index.ts';
 import type { Approver } from '../protocol/index.ts';
 import { DeferredApprovalError } from './approval-deferred.ts';
+import { VerificationAssertionError, VerificationDefinitionError } from './verification-errors.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_OUTPUT_BYTES = 24_000;
@@ -108,7 +110,27 @@ export interface AcceptanceCheckResult {
   passed: boolean;
   detail: string;
   durationMs: number;
+  /**
+   * Why the check failed, when this layer knew. Omitted on success, so a reader that sees the field at all is
+   * looking at a failure it may be able to classify without reading `detail`.
+   */
+  failureReason?: CheckFailureReason;
   command?: CommandExecutionResult;
+}
+
+/**
+ * A successful command that exits with the wrong code, a missing deliverable, content that does not match.
+ *
+ * One name for the whole class because the repair policy treats them identically: the definition was executable,
+ * the assertion is false, and the code is what has to change.
+ */
+function assertion(message: string): VerificationAssertionError {
+  return new VerificationAssertionError(message);
+}
+
+/** A definition that cannot be executed as written; executing more of it will not help. */
+function definition(message: string): VerificationDefinitionError {
+  return new VerificationDefinitionError(message);
 }
 
 export interface AcceptanceResult {
@@ -132,13 +154,13 @@ interface SnapshotState {
 
 function integerInRange(value: number, label: string, minimum: number, maximum: number): number {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum)
-    throw new Error(`${label} must be an integer from ${minimum} to ${maximum}`);
+    throw definition(`${label} must be an integer from ${minimum} to ${maximum}`);
   return value;
 }
 
 function validateId(id: string): void {
   if (!id || id.length > 128)
-    throw new Error('Acceptance check id must contain 1 to 128 characters');
+    throw definition('Acceptance check id must contain 1 to 128 characters');
 }
 
 async function workspaceRoot(root: string): Promise<string> {
@@ -158,16 +180,16 @@ async function resolveWorkspacePath(
   input: string,
 ): Promise<{ target: string; exists: boolean }> {
   if (!input || input.includes('\0'))
-    throw new Error('Acceptance path must be non-empty and valid');
+    throw definition('Acceptance path must be non-empty and valid');
   const target = path.resolve(root, input);
-  if (!contained(root, target)) throw new Error(`Acceptance path is outside workspace: ${input}`);
+  if (!contained(root, target)) throw definition(`Acceptance path is outside workspace: ${input}`);
   const parts = path.relative(root, target).split(path.sep).filter(Boolean);
   let current = root;
   for (const part of parts) {
     current = path.join(current, part);
     try {
       if ((await lstat(current)).isSymbolicLink())
-        throw new Error(`Symbolic links are not allowed in acceptance paths: ${input}`);
+        throw definition(`Symbolic links are not allowed in acceptance paths: ${input}`);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { target, exists: false };
       throw error;
@@ -175,21 +197,21 @@ async function resolveWorkspacePath(
   }
   const canonical = await realpath(target);
   if (!contained(root, canonical))
-    throw new Error(`Acceptance path resolves outside workspace: ${input}`);
+    throw definition(`Acceptance path resolves outside workspace: ${input}`);
   return { target: canonical, exists: true };
 }
 
 async function readBoundedFile(root: string, input: string, maxBytes: number): Promise<string> {
   const resolved = await resolveWorkspacePath(root, input);
-  if (!resolved.exists) throw new Error(`File does not exist: ${input}`);
+  if (!resolved.exists) throw assertion(`File does not exist: ${input}`);
   const handle = await open(resolved.target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) throw new Error(`Expected a regular file: ${input}`);
+    if (!stat.isFile()) throw assertion(`Expected a regular file: ${input}`);
     if (stat.size > maxBytes)
-      throw new Error(`File exceeds ${maxBytes} byte acceptance limit: ${input}`);
+      throw assertion(`File exceeds ${maxBytes} byte acceptance limit: ${input}`);
     const buffer = await handle.readFile();
-    if (buffer.includes(0)) throw new Error(`Expected a UTF-8 text file: ${input}`);
+    if (buffer.includes(0)) throw assertion(`Expected a UTF-8 text file: ${input}`);
     return buffer.toString('utf8');
   } finally {
     await handle.close();
@@ -291,16 +313,16 @@ async function runCommand(
   maxOutputBytes: number,
 ): Promise<CommandExecutionResult> {
   if (!spec.command || spec.command.includes('\0'))
-    throw new Error('Command must be non-empty and valid');
+    throw definition('Command must be non-empty and valid');
   const args = [...(spec.args ?? [])];
   if (
     args.length > 256 ||
     args.some((argument) => argument.length > 16_000 || argument.includes('\0'))
   )
-    throw new Error('Command arguments exceed acceptance limits');
+    throw definition('Command arguments exceed acceptance limits');
   const cwd = await resolveWorkspacePath(root, spec.cwd ?? '.');
   if (!cwd.exists || !(await lstat(cwd.target)).isDirectory())
-    throw new Error(`Command working directory does not exist: ${spec.cwd ?? '.'}`);
+    throw definition(`Command working directory does not exist: ${spec.cwd ?? '.'}`);
   const timeoutMs = integerInRange(
     spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     'Command timeoutMs',
@@ -405,7 +427,21 @@ function failed(
     passed: false,
     detail: error instanceof Error ? error.message : String(error),
     durationMs: Date.now() - started,
+    failureReason: classifyFailure(error),
   };
+}
+
+/**
+ * Turn a thrown verification failure into the reason a repair decision reads.
+ *
+ * The residual class is `environment-error` on purpose. An error nobody classified is an error nobody
+ * understands, and "we do not know why this failed" must not be spent as a repair round: the plan's rule is that
+ * only failures whose semantics the checker understood are handed back to the model.
+ */
+function classifyFailure(error: unknown): CheckFailureReason {
+  if (error instanceof VerificationDefinitionError) return 'invalid-definition';
+  if (error instanceof VerificationAssertionError) return 'assertion-failed';
+  return 'environment-error';
 }
 
 async function verifyOne(
@@ -452,11 +488,19 @@ async function verifyOne(
             passed: false,
             detail: 'Command acceptance was not authorized',
             durationMs: Date.now() - started,
+            failureReason: 'permission-denied',
           };
       }
       const command = (await runCommand(root, spec, signal, maxOutputBytes))!;
       const expected = spec.expectedExitCode ?? 0;
       const passed = !command.timedOut && command.exitCode === expected;
+      // A command that ran out of time, or that a signal ended, is not a statement about the work: the check
+      // never reached its own verdict. Both stop the repair loop, which is why they are one reason.
+      const failureReason: CheckFailureReason | undefined = passed
+        ? undefined
+        : command.timedOut || (command.exitCode === null && command.signal !== null)
+          ? 'timeout'
+          : 'assertion-failed';
       return {
         id: spec.id,
         kind: spec.kind,
@@ -467,6 +511,7 @@ async function verifyOne(
             ? `Command exited with expected code ${expected}`
             : `Expected exit code ${expected}, received ${command.exitCode ?? command.signal ?? 'unknown'}`,
         durationMs: Date.now() - started,
+        ...(failureReason ? { failureReason } : {}),
         command,
       };
     }
@@ -510,6 +555,7 @@ async function verifyOne(
             ? 'File content did not match exactly'
             : 'File did not contain expected content',
         durationMs: Date.now() - started,
+        ...(passed ? {} : { failureReason: 'assertion-failed' as const }),
       };
     }
     const snapshot = await capturePathSnapshot(root, spec.path);
@@ -517,6 +563,19 @@ async function verifyOne(
       spec.expectation === 'absent'
         ? snapshot.state === 'absent'
         : sameSnapshot(snapshot, spec.baseline);
+    /**
+     * A forbidden path that changed is not repairable work.
+     *
+     * The check exists to fence off something the run promised not to touch. Once it has been touched, "the model
+     * should try harder" is the wrong response and a retry would run the same commands against an already-dirty
+     * tree; a person has to look. `absent` is the model's own output appearing where it must not, which the model
+     * *can* undo, so that one stays an assertion.
+     */
+    const failureReason: CheckFailureReason | undefined = passed
+      ? undefined
+      : spec.expectation === 'absent'
+        ? 'assertion-failed'
+        : 'invalid-definition';
     return {
       id: spec.id,
       kind: spec.kind,
@@ -529,6 +588,7 @@ async function verifyOne(
           ? 'Forbidden path exists'
           : 'Forbidden path changed',
       durationMs: Date.now() - started,
+      ...(failureReason ? { failureReason } : {}),
     };
   } catch (error) {
     if (signal?.aborted) throw signal.reason ?? error;

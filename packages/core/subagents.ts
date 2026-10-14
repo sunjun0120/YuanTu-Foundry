@@ -10,6 +10,8 @@ import type {
   Usage,
 } from '../protocol/index.ts';
 import { failure } from '../tools/registry.ts';
+import type { WorkspaceBinding, WorkspaceMode } from '../protocol/workspaces.ts';
+import { resolveWorkspaceKind } from '../workspaces/manager.ts';
 import type { PendingSubagentMessage } from '../storage/projections.ts';
 import { redactSecrets } from './errors.ts';
 import type { SettlementNotice } from './settlements.ts';
@@ -248,9 +250,32 @@ interface ScheduledSubAgent {
   stallTimer?: NodeJS.Timeout;
   /** Aborts this child because it stopped making progress; separate from the run and caller signals. */
   stallController: AbortController;
+  /**
+   * The directory this child was given, once it has one.
+   *
+   * Held on the task rather than recomputed per use, because the three places that need it — the child's turns, the
+   * result export, and the report the parent reads — must agree about which directory the child worked in.
+   */
+  binding?: WorkspaceBinding;
+  /**
+   * The task as it was admitted, kept for the one caller that needs the whole thing later.
+   *
+   * The batch allocator keys its directories by task identity, and reconstructing the task at dispatch time would
+   * hand it a different object — so the admitted task travels with the scheduled one instead. Rebuilding it would
+   * also be a place for the two to drift: the mode that was capability-checked is the mode the directory must be
+   * allocated for.
+   */
+  admitted?: AdmittedTask;
+  /**
+   * The batch this task belongs to, when this run isolates its children.
+   *
+   * Held per task rather than looked up at dispatch, because the directory must be allocated by the *batch* — it is
+   * the object that knows which baseline was frozen for this call and which directories it has already handed out.
+   */
+  batch?: BatchWorkspace;
 }
 /** One task as the coordinator accepts it, after normalisation and before it is scheduled. */
-interface AdmittedTask {
+export interface AdmittedTask {
   role: SubAgentRole;
   objective: string;
   context?: string;
@@ -276,6 +301,30 @@ interface AdmittedTask {
   schema?: Record<string, unknown>;
   /** Whether this task starts from the parent's transcript; set by which tool admitted it. */
   fork: boolean;
+  /**
+   * Which directory this task asked for, after `auto` was resolved against its role.
+   *
+   * Resolved at admission rather than at dispatch, because the capability check that decides whether the task may
+   * run at all depends on it: a provider that cannot isolate must refuse a task that needs isolation *before* any
+   * child session exists, and a task that only wanted a shared directory must not be refused for a capability it
+   * never needed.
+   */
+  workspaceMode: 'shared' | 'worktree';
+}
+
+/**
+ * What one delegation call's worth of isolated directories looks like from the coordinator's side.
+ *
+ * Two operations, and the split between them is the plan's rule stated as an interface. `forTask` is called when a
+ * task actually starts, so a batch that is refused or cancelled before dispatch never pays for directories it does
+ * not use; the *baseline* it allocates from was frozen once, before any of them, so the order they start in cannot
+ * change what they see.
+ */
+export interface BatchWorkspace {
+  /** The directory for one task, created on first use and remembered for the rest of the call. */
+  forTask(task: AdmittedTask): Promise<WorkspaceBinding>;
+  /** Releases whatever this batch holds that no child will use — nothing that a started child depends on. */
+  release?(): Promise<void>;
 }
 /**
  * A counting semaphore. The coordinator used to bound concurrency per call, which stopped being enough
@@ -480,6 +529,28 @@ export interface SubAgentCoordinatorDeps {
    * parent is the one that folds the log.
    */
   inbox?: () => readonly PendingSubagentMessage[];
+  /**
+   * The directory a task must be given, when this run isolates its children at all.
+   *
+   * Called once for the whole batch, and the answer is reused for every task in it — including the ones that are
+   * still queued behind the concurrency cap when the call returns. That is the whole reason it takes the task list
+   * as one argument instead of being read per child: a snapshot taken when a child *happens to start* would give
+   * the early and late children of one delegation two different baselines, which is exactly the divergence that
+   * makes two agents overwrite each other's conclusions.
+   *
+   * Absent means this run does not isolate: every child shares the delegator's directory, as it always did.
+   */
+  workspaceForBatch?: (input: {
+    tasks: readonly AdmittedTask[];
+    signal: AbortSignal;
+  }) => Promise<BatchWorkspace>;
+  /**
+   * How this run's tasks choose a directory.
+   *
+   * Read at admission, because it decides two things at once: whether a task is shared or isolated, and therefore
+   * which provider capability the task has to be checked against before any child exists.
+   */
+  workspaceMode?: WorkspaceMode;
 }
 export class SubAgentCoordinator {
   private deps: SubAgentCoordinatorDeps;
@@ -622,7 +693,17 @@ export class SubAgentCoordinator {
     signal.throwIfAborted();
     try {
       const tasks = this.admit(args.tasks, this.deps.options.maxFanout, fork);
-      const scheduled = tasks.map((task, index) => this.schedule(task, index, tasks.length));
+      /**
+       * The batch's directories are decided once, here, before a single child is scheduled.
+       *
+       * This is the ordering the plan is explicit about, and it has two halves. The baseline is frozen *after*
+       * provider and capability validation, so a task that will be refused leaves no snapshot behind; and it is
+       * frozen *before* the tasks are scheduled, so the ones still queued behind the concurrency cap see exactly
+       * the bytes the first one saw. A child that started later would otherwise read a directory the early
+       * children had already changed.
+       */
+      const batch = await this.deps.workspaceForBatch?.({ tasks, signal });
+      const scheduled = tasks.map((task, index) => this.schedule(task, index, tasks.length, batch));
       /**
        * The call's own cancellation reaches the children it admitted, and stops reaching them when the call is
        * over.
@@ -692,7 +773,12 @@ export class SubAgentCoordinator {
    * copy is how one of them would end up weaker than the other.
    */
   private admit(value: unknown, maxFanout: number, fork: boolean): AdmittedTask[] {
-    const tasks = normalizeTasks(value, maxFanout).map((task) => ({ ...task, fork }));
+    const tasks = normalizeTasks(value, maxFanout, this.deps.workspaceMode ?? 'shared').map(
+      (task) => ({
+        ...task,
+        fork,
+      }),
+    );
     if (this.deps.readOnly && tasks.some((task) => task.role === 'general'))
       throw new SubAgentLimitError('This run is read-only, so it may only delegate explore tasks');
     const remaining = this.deps.options.maxPerRun - this.started;
@@ -747,6 +833,15 @@ export class SubAgentCoordinator {
       maxDepth: this.deps.options.maxDepth,
       ...(task.role === 'explore' ? { toolFilter: [...EXPLORE_TOOLS] } : {}),
       /**
+       * Isolation is asked for only when it is genuinely needed.
+       *
+       * A `shared` task requests nothing: sharing is what every provider already does, so asking for it would make
+       * a provider that runs its child out-of-process unusable for the work it can perfectly well do. `worktree` is
+       * a promise about where the writes land, and a provider that cannot keep it must refuse the task instead of
+       * accepting it and running in the delegator's directory.
+       */
+      ...(task.workspaceMode === 'worktree' ? { workspace: 'worktree' as const } : {}),
+      /**
        * The role prompt is **not** sent here, and that is a correction rather than an omission.
        *
        * `persona` used to be set to `subAgentRolePrompt(task.role)`, which asked every provider to take the child's
@@ -771,7 +866,12 @@ export class SubAgentCoordinator {
    * where it can be admitted but cannot be paid for — which is what the old shared token pool could produce,
    * and what made a late delegation report "N tokens remained" instead of an honest limit.
    */
-  private schedule(task: AdmittedTask, index: number, total: number): ScheduledSubAgent {
+  private schedule(
+    task: AdmittedTask,
+    index: number,
+    total: number,
+    batch?: BatchWorkspace,
+  ): ScheduledSubAgent {
     const id = randomUUID();
     const options = this.requestOptions(task);
     // Resolve (and re-assert) the provider here rather than at dispatch time: the scheduled task must
@@ -812,6 +912,8 @@ export class SubAgentCoordinator {
       stallController: new AbortController(),
       promise,
       settleTask,
+      admitted: task,
+      ...(batch ? { batch } : {}),
     };
     this.started++;
     this.scheduled.push(scheduled);
@@ -975,6 +1077,16 @@ export class SubAgentCoordinator {
     ]);
     let outcome: SubAgentOutcome;
     try {
+      /**
+       * The directory is allocated immediately before the child starts, from the baseline this call froze.
+       *
+       * Allocating here rather than at schedule time is what keeps a batch that is cancelled before dispatch from
+       * creating directories nothing will use; allocating it from the *batch* rather than from a fresh freeze is
+       * what keeps a child that waited for a slot on the same bytes as the ones that did not.
+       */
+      if (scheduled.batch && !scheduled.binding && scheduled.admitted) {
+        scheduled.binding = await scheduled.batch.forTask(scheduled.admitted);
+      }
       outcome = await scheduled.provider.start({
         provider: scheduled.provider.name,
         task: {
@@ -985,6 +1097,7 @@ export class SubAgentCoordinator {
           ...(scheduled.context ? { context: scheduled.context } : {}),
           ...(scheduled.schema ? { schema: scheduled.schema } : {}),
         },
+        ...(scheduled.binding ? { binding: scheduled.binding } : {}),
         parent: this.deps.parent,
         options: scheduled.options,
         signal,
@@ -1328,7 +1441,11 @@ function tasksSchema(maxFanout: number, providers: readonly string[]): Record<st
     },
   };
 }
-function normalizeTasks(value: unknown, maxFanout: number): Omit<AdmittedTask, 'fork'>[] {
+function normalizeTasks(
+  value: unknown,
+  maxFanout: number,
+  mode: WorkspaceMode,
+): Omit<AdmittedTask, 'fork'>[] {
   if (!Array.isArray(value) || !value.length)
     throw new SubAgentLimitError('delegate_task needs at least one task');
   if (value.length > maxFanout)
@@ -1355,6 +1472,9 @@ function normalizeTasks(value: unknown, maxFanout: number): Omit<AdmittedTask, '
       ...(provider ? { provider } : {}),
       ...(persona ? { persona } : {}),
       ...(task.schema === undefined ? {} : { schema: answerSchema(task.schema) }),
+      // `explore` is the default role, and it is read-only: under `auto` that means it shares the delegator's
+      // directory, because a copy of the tree it cannot change would cost disk and buy no protection.
+      workspaceMode: resolveWorkspaceKind(mode, role),
     };
   });
 }

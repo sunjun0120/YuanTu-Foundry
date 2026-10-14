@@ -692,6 +692,11 @@ test('the cards a reader sees are the latest finished run, plus children left in
     'the selector returns summaries, not the bookkeeping field',
   );
   assert.deepEqual(subAgentCards({ children: {} }), []);
+  assert.deepEqual(
+    subAgentCards(state, true).map((card) => card.id),
+    ['old', 'current', 'stuck'],
+    'historical workspace actions must still find a child after a later parent-only run',
+  );
 });
 
 test('a fresh database never creates the assignment table', async (t) => {

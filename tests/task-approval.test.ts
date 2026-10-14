@@ -383,6 +383,20 @@ test('a scheduled write waits for review, stays paused across Host restart, then
     description: 'create approved.txt',
     steps: [{ description: 'write the file', status: 'pending' }],
     trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
+    /**
+     * A definition the run can satisfy, and the progress that makes it satisfiable.
+     *
+     * A task with no criteria used to complete on the strength of its own final message; it now needs a criterion
+     * with a check that passes and every declared step completed. The fixture therefore states the file's content
+     * as the criterion — which is what this test was always about — and has the model checkpoint its step.
+     */
+    acceptance: [
+      {
+        description: 'approved.txt was written',
+        met: false,
+        check: { id: 'written', kind: 'file-contains', path: 'approved.txt', expected: 'reviewed' },
+      },
+    ],
   });
   seed.scheduleImmediateRun(session.id, task.id);
   seed.close();
@@ -394,6 +408,7 @@ test('a scheduled write waits for review, stays paused across Host restart, then
       sendFrames(
         res,
         frames('', [
+          { id: 'step-' + requests, name: 'task_step', input: { index: 0, status: 'completed' } },
           {
             id: 'write-' + requests,
             name: 'write_file',
@@ -503,4 +518,181 @@ test('approved tool request ignores JSON property order but still checks approva
   );
   assert.equal(store.consumeTaskApproval(session.id, task.id, reordered), true);
   assert.equal(store.consumeTaskApproval(session.id, task.id, reordered), false);
+});
+
+test('an approval is bound to its operation kind and tool, not only its arguments', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-bound-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const task = store.createTask(session.id, {
+    title: 'Bound operation',
+    trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
+  });
+  const attempt = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  const approved = {
+    kind: 'write' as const,
+    description: 'write_file: {"path":"bound.txt","content":"ok"}',
+    toolCall: { id: 'call', name: 'write_file', arguments: { path: 'bound.txt', content: 'ok' } },
+  };
+  const pending = store.deferTaskApproval(session.id, task.id, approved).pendingApproval!;
+  store.finishTaskAttempt(session.id, task.id, attempt.id, { status: 'needs_review' });
+  store.resolveTaskApproval(session.id, task.id, true, pending.id);
+  // Same tool, same arguments, same preview text — only the *kind* differs. That is a different
+  // operation, so it must not spend the grant.
+  assert.equal(
+    store.consumeTaskApproval(session.id, task.id, { ...approved, kind: 'command' }),
+    false,
+  );
+  // Again identical everywhere else, but a different tool.
+  assert.equal(
+    store.consumeTaskApproval(session.id, task.id, {
+      ...approved,
+      toolCall: { ...approved.toolCall, name: 'delete_file' },
+    }),
+    false,
+  );
+  assert.equal(store.consumeTaskApproval(session.id, task.id, approved), true);
+});
+
+test('a pending approval cannot be resolved while the run that raised it is still live', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-window-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const trigger = { kind: 'interval' as const, enabled: true, everyMinutes: 60 };
+  const task = store.createTask(session.id, { title: 'Narrow window', trigger });
+  const attempt = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  const approval = {
+    kind: 'write' as const,
+    description: 'write window.txt',
+    toolCall: { id: 'call', name: 'write_file', arguments: { path: 'window.txt', content: 'ok' } },
+  };
+  const pending = store.deferTaskApproval(session.id, task.id, approval).pendingApproval!;
+  // Approving while the attempt that raised the request is still live would race the very run the
+  // request belongs to.
+  assert.throws(
+    () => store.resolveTaskApproval(session.id, task.id, true, pending.id),
+    /still running/i,
+  );
+  // and the same request is reviewable once that attempt has finished
+  store.finishTaskAttempt(session.id, task.id, attempt.id, { status: 'needs_review' });
+  assert.equal(
+    store.resolveTaskApproval(session.id, task.id, true, pending.id).pendingApproval?.state,
+    'approved',
+  );
+  // The neighbouring guard in resolveTaskApproval ("trigger is disabled") is deliberately *not* asserted:
+  // the only way to disable a trigger is updateTask, which deletes the task's approvals in the same
+  // transaction (packages/storage/sqlite.ts:597). A pending request and a disabled trigger therefore cannot
+  // coexist through this API, so that branch is defensive rather than reachable.
+});
+
+test('an oversized approval request is refused before it is stored', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-size-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const task = store.createTask(session.id, {
+    title: 'Oversized request',
+    trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
+  });
+  store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  // The stored row carries the tool call verbatim, so the bound has to hold before the write happens.
+  assert.throws(
+    () =>
+      store.deferTaskApproval(session.id, task.id, {
+        kind: 'write',
+        description: 'write big.txt',
+        toolCall: {
+          id: 'call',
+          name: 'write_file',
+          arguments: { path: 'big.txt', content: 'x'.repeat(130_000) },
+        },
+      }),
+    /128KB/i,
+  );
+  assert.equal(store.getTask(session.id, task.id).pendingApproval, undefined);
+});
+
+test('only a live scheduled run may register an approval request', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-inactive-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const task = store.createTask(session.id, {
+    title: 'Inactive request',
+    trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
+  });
+  const approval = {
+    kind: 'write' as const,
+    description: 'write inactive.txt',
+    toolCall: {
+      id: 'call',
+      name: 'write_file',
+      arguments: { path: 'inactive.txt', content: 'ok' },
+    },
+  };
+  // Nothing has started this task, so a request registered here would be one with no run behind it —
+  // and approving it would queue a recovery attempt for work that never happened.
+  assert.throws(
+    () => store.deferTaskApproval(session.id, task.id, approval),
+    /Only an active scheduled task/,
+  );
+  assert.equal(store.getTask(session.id, task.id).pendingApproval, undefined);
+});
+
+test('a finalizing run does not clear a grant made under a later revision', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-revision-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const trigger = { kind: 'interval' as const, enabled: true, everyMinutes: 60 };
+  const task = store.createTask(session.id, { title: 'Revision guard', trigger });
+  const approval = {
+    kind: 'write' as const,
+    description: 'write revision.txt',
+    toolCall: {
+      id: 'call',
+      name: 'write_file',
+      arguments: { path: 'revision.txt', content: 'ok' },
+    },
+  };
+  const first = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  const pending = store.deferTaskApproval(session.id, task.id, approval).pendingApproval!;
+  store.finishTaskAttempt(session.id, task.id, first.id, { status: 'needs_review' });
+  store.resolveTaskApproval(session.id, task.id, true, pending.id);
+  const staleRule = store.getTask(session.id, task.id).triggerRevision ?? 'legacy';
+  // The task is re-armed while that run is still finalizing: the rearm deletes the *old* approvals, and a
+  // run under the new revision produces a fresh grant. The old run's cleanup must not delete that one.
+  store.updateTask(session.id, task.id, { trigger: { ...trigger, everyMinutes: 30 } });
+  const second = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  const current = store.deferTaskApproval(session.id, task.id, approval).pendingApproval!;
+  store.finishTaskAttempt(session.id, task.id, second.id, { status: 'needs_review' });
+  store.resolveTaskApproval(session.id, task.id, true, current.id);
+  store.clearApprovedTaskApproval(session.id, task.id, staleRule);
+  assert.equal(store.consumeTaskApproval(session.id, task.id, approval), true);
+  // The other direction, so the guard cannot pass by never clearing anything: the revision that owns a
+  // grant does clear it when its own run finalizes.
+  const third = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
+  const latest = store.deferTaskApproval(session.id, task.id, approval).pendingApproval!;
+  store.finishTaskAttempt(session.id, task.id, third.id, { status: 'needs_review' });
+  store.resolveTaskApproval(session.id, task.id, true, latest.id);
+  const currentRule = store.getTask(session.id, task.id).triggerRevision ?? 'legacy';
+  store.clearApprovedTaskApproval(session.id, task.id, currentRule);
+  assert.equal(store.consumeTaskApproval(session.id, task.id, approval), false);
 });

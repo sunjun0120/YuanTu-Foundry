@@ -1,0 +1,9 @@
+{
+  "approvedLiveBudget": {
+    "authorized": true,
+    "maxAttempts": 2,
+    "maxCurrency": null,
+    "currency": null,
+    "pricingSha256": null
+  }
+}

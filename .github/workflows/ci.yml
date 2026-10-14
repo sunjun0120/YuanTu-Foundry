@@ -33,11 +33,11 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - name: Browser runtime for the Web page smoke
+      - name: Browser runtime for browser-tool regressions
         run: npx playwright install --with-deps chromium
       # The aggregate is the entry point, and that is the point: `check` is what the README tells a developer to
-      # run and what every gate is added to, so a job that listed the steps itself could leave a new one out — as
-      # it did with `smoke:web`, which no job ever ran. `docs:check` and `references:check` inside it are what
+      # run and what every gate is added to. Web and public SDK smoke are temporarily paused;
+      # the internal client smoke remains active. `docs:check` and `references:check` inside it are what
       # make the numbers and the paths in the documentation fail here rather than in a reader's browser.
       - run: npm run check
 
@@ -86,8 +86,10 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - name: Windows basic sandbox real acceptance without skips
+        run: npm run check:windows-sandbox
       - name: Windows platform regressions
-        run: node scripts/run-tests.mjs tests/sandbox-windows.test.ts tests/sandbox-windows-assets.test.ts tests/sandbox-windows-recovery.test.ts tests/restricted-consumers.test.ts tests/desktop-installation.test.ts tests/windows-install-safety.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
+        run: node scripts/run-tests.mjs tests/desktop-installation.test.ts tests/windows-install-safety.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
       - uses: dtolnay/rust-toolchain@stable
       - name: Windows enhanced helper safety and refusal regressions
         run: |
@@ -95,6 +97,8 @@ jobs:
           cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml
           node scripts/run-tests.mjs tests/sandbox-appcontainer.test.ts tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts
       - run: npm run build
+      - name: Windows desktop basic sandbox real acceptance without skips
+        run: node scripts/check-windows-sandbox.mjs --desktop
       - run: npm run smoke:desktop
 
   native-macos:

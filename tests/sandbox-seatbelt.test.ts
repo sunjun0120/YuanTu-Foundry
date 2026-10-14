@@ -147,7 +147,7 @@ test('cleanup refuses to remove a forged directory', async (t) => {
 
 test(
   'Seatbelt fails closed on non-macOS instead of returning a host plan',
-  { skip: process.platform === 'darwin' },
+  { skip: process.platform === 'darwin' ? 'this asserts the non-macOS failure path' : false },
   async () => {
     assert.match((await seatbeltSandboxProvider.available())!, /macOS/);
     await assert.rejects(
@@ -195,7 +195,12 @@ function execute(plan: SandboxPlan): Promise<{ code: number | null; out: string;
 
 test(
   'macOS kernel confines subprocess reads, writes, protected metadata and private scratch',
-  { skip: process.platform !== 'darwin' },
+  {
+    skip:
+      process.platform !== 'darwin'
+        ? 'macOS only: seatbelt confinement is a macOS facility'
+        : false,
+  },
   async (t) => {
     assert.equal(await seatbeltSandboxProvider.available(), null);
     const fixture = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-kernel-'));
@@ -281,7 +286,12 @@ test(
 
 test(
   'macOS argv preserves quotes and cwd, and both network policies undergo functional verification',
-  { skip: process.platform !== 'darwin' },
+  {
+    skip:
+      process.platform !== 'darwin'
+        ? 'macOS only: seatbelt confinement is a macOS facility'
+        : false,
+  },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-quoted-'));
     const cwd = path.join(root, 'directory"with quote');
@@ -339,7 +349,12 @@ async function eventually<T>(
 
 test(
   'macOS unused original plan cleans scratch while starting a forged copy does not claim ownership',
-  { skip: process.platform !== 'darwin' },
+  {
+    skip:
+      process.platform !== 'darwin'
+        ? 'macOS only: seatbelt confinement is a macOS facility'
+        : false,
+  },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-unused-'));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -358,7 +373,13 @@ test(
 
 test(
   'macOS cancellation stops a live foreground group and retains unknown descendant scratch',
-  { skip: process.platform !== 'darwin', timeout: 20000 },
+  {
+    skip:
+      process.platform !== 'darwin'
+        ? 'macOS only: seatbelt confinement is a macOS facility'
+        : false,
+    timeout: 20000,
+  },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-cancel-'));
     const plan = await seatbeltSandboxProvider.prepare({
@@ -403,7 +424,13 @@ test(
 
 test(
   'macOS detached descendants inherit confinement and keep scratch after their leader exits',
-  { skip: process.platform !== 'darwin', timeout: 25000 },
+  {
+    skip:
+      process.platform !== 'darwin'
+        ? 'macOS only: seatbelt confinement is a macOS facility'
+        : false,
+    timeout: 25000,
+  },
   async (t) => {
     const fixture = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-detached-'));
     const root = path.join(fixture, 'root');

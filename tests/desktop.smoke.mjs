@@ -777,12 +777,12 @@ test(
     );
     assert.equal(
       (await page.locator('#model-settings').innerText()).replace(/\s+/g, ' '),
-      '◈ Models',
+      'Models',
     );
-    assert.equal(
-      (await page.locator('#mcp-settings').innerText()).replace(/\s+/g, ' '),
-      '◇ MCP Services',
-    );
+    assert.equal(await page.locator('#mcp-settings,#mcp-panel').count(), 0);
+    const pausedMcp = await page.evaluate(() => window.yuantu.mcp({ type: 'get' }));
+    assert.equal(pausedMcp.ok, false);
+    assert.match(pausedMcp.error, /temporarily disabled/);
     assert.equal(await page.locator('#permission-settings').count(), 0);
     await page.locator('#settings-back').click();
     await page.waitForFunction(() => !document.querySelector('#permission-mode').disabled);
@@ -866,7 +866,7 @@ test(
         return [...new Set(values.filter(Boolean))];
       });
     await page.locator('#open-settings').click();
-    for (const tab of ['general-settings', 'model-settings', 'mcp-settings']) {
+    for (const tab of ['general-settings', 'model-settings']) {
       await page.locator('#' + tab).click();
       assert.deepEqual(
         await visibleHan(),
@@ -1000,13 +1000,12 @@ test(
       'the tooltip carries the whole title',
     );
     await page.locator('#open-settings').click();
-    await page.locator('#mcp-settings').click();
-    assert.equal(await page.locator('#mcp-panel').isVisible(), true);
+    // MCP management is paused; general/model navigation still has layout coverage.
+    assert.equal(await page.locator('#mcp-settings,#mcp-panel').count(), 0);
     for (const [tab, panel] of [
-      ['mcp-settings', '#mcp-panel'],
       ['general-settings', '#general-settings-content'],
       ['model-settings', '[aria-labelledby="settings-title"]'],
-      ['mcp-settings', '#mcp-panel'],
+      ['general-settings', '#general-settings-content'],
     ]) {
       await page.locator('#' + tab).click();
       assert.equal(
@@ -1020,7 +1019,7 @@ test(
       assert.ok(content.x >= sidebar.x + sidebar.width - 1, tab + ' must occupy the right column');
       assert.ok(Math.abs(content.y - sidebar.y) < 1, tab + ' must remain in the first grid row');
     }
-    await page.screenshot({ path: 'artifacts/settings-mcp-layout.png' });
+    await page.screenshot({ path: 'artifacts/settings-layout.png' });
 
     await page.locator('#settings-back').click();
     await fits();
@@ -1465,6 +1464,46 @@ test(
       [],
       `en-US still shows Chinese (zh-CN baseline: ${before.size} strings):\n${report.join('\n')}`,
     );
+
+    // Persist the English selection so the main-process reply uses it too; subsequent switches preview it.
+    await page.locator('#open-settings').click();
+    await page.locator('.settings-sidebar nav button').first().click();
+    await page.locator('#general-settings-save').click();
+    await waitForPage(page, async () => {
+      const reply = await window.yuantu.uiSettings({ type: 'get' });
+      return reply.ok && reply.kind === 'settings' && reply.settings.language === 'en-US';
+    });
+    await toChat();
+
+    // A real carrier rejection travels through both the command reply and the pushed snapshot.
+    const failure = await page.evaluate(() =>
+      window.yuantu.invoke({
+        type: 'subagentTranscript',
+        subagentId: 'missing-agent',
+        childSessionId: 'missing-session',
+      }),
+    );
+    assert.equal(failure.ok, false);
+    assert.equal(failure.errorDetail.code, 'subagentNotInSession');
+    assert.doesNotMatch(failure.error, /\p{Script=Han}/u);
+    await waitForPage(page, () =>
+      document.querySelector('#error').textContent.includes('does not belong'),
+    );
+    assert.doesNotMatch(await page.locator('#error').textContent(), /\p{Script=Han}/u);
+
+    // The same retained error is translated again when the user changes language.
+    await page.locator('#open-settings').click();
+    await page.locator('.settings-sidebar nav button').first().click();
+    await page.locator('#ui-language').selectOption('zh-CN');
+    await waitForPage(page, () => document.documentElement.lang === 'zh-CN');
+    await toChat();
+    assert.match(await page.locator('#error').textContent(), /不属于当前会话/);
+    await page.locator('#open-settings').click();
+    await page.locator('.settings-sidebar nav button').first().click();
+    await page.locator('#ui-language').selectOption('en-US');
+    await waitForPage(page, () => document.documentElement.lang === 'en-US');
+    await toChat();
+    assert.match(await page.locator('#error').textContent(), /does not belong/);
   },
 );
 
@@ -1588,8 +1627,119 @@ test(
     assert.ok(subagentPopoverBounds && subagentPopoverBounds.width <= 340);
     await page.locator('#subagent-catalog .subagent-row').click();
     await page.waitForFunction(() => document.body.dataset.subagentPage === 'open');
+    assert.equal(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
+    await page.locator('#subagent-transcript-process > summary').click();
     await page.getByText('子代理实时记录', { exact: true }).waitFor();
     assert.deepEqual(pageErrors, []);
+  },
+);
+
+test(
+  'a long child record opens with its process collapsed and its complete final reply visible',
+  { timeout: 60_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-subagent-result-'));
+    const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+    const parent = store.create(root);
+    const child = store.create(root, parent.id);
+    store.recordEvent(parent.id, 'subagent.assigned', {
+      id: 'long-child',
+      role: 'explore',
+      objective: '检查长子代理记录',
+      childSessionId: child.id,
+      runId: 'previous-run',
+    });
+    store.append(child.id, { role: 'user', content: '检查长子代理记录' });
+    for (let index = 0; index < 300; index++)
+      store.append(child.id, { role: 'assistant', content: `过程记录 ${index}` });
+    const finalText =
+      '# 子代理最终结论\n\n' + '完整结果正文。\n'.repeat(3000) + '\nFINAL_RESULT_END';
+    store.append(child.id, {
+      role: 'assistant',
+      content: finalText,
+      reasoning: '最终回答前的完整分析',
+    });
+    store.recordEvent(parent.id, 'subagent.finished', {
+      id: 'long-child',
+      status: 'completed',
+      rounds: 1,
+      toolCalls: 0,
+    });
+    store.recordEvent(parent.id, 'run.finished', { runId: 'previous-run' });
+    store.close();
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_API_KEY: 'fixture',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let app;
+    t.after(async () => {
+      await app?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        '--user-data-dir=' + path.join(root, 'profile'),
+      ],
+      env,
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(15_000);
+    await waitForPage(page, () => !document.querySelector('#prompt').disabled);
+    await page.locator(`[data-session-id="${parent.id}"]`).click();
+    await page.locator('#open-subagents').hover();
+    await page.locator('#subagent-catalog .subagent-row').click();
+    await page.locator('#subagent-transcript').waitFor();
+    const result = page.locator('#subagent-transcript-result');
+    await result.getByText('子代理最终结论', { exact: true }).waitFor();
+    assert.equal(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
+    assert.equal(await page.locator('#subagent-transcript-messages').isVisible(), false);
+    const answer = await result.locator('.message-content').innerText();
+    assert.ok(
+      answer.includes('FINAL_RESULT_END'),
+      'the final reply is loaded from the end of the record',
+    );
+    assert.equal(
+      answer.match(/完整结果正文。/g)?.length,
+      3000,
+      'the entire final reply is retained',
+    );
+    await page.locator('#subagent-transcript-process > summary').click();
+    await page
+      .locator('#subagent-transcript-messages')
+      .getByText('过程记录 299', { exact: true })
+      .waitFor();
+    const reasoning = page.locator('#subagent-transcript-messages .message-reasoning');
+    await reasoning.locator('summary').click();
+    await reasoning.locator('.reasoning-content').waitFor();
+    assert.equal(
+      await reasoning.locator('.reasoning-content').textContent(),
+      '最终回答前的完整分析',
+    );
+    assert.equal(await result.locator('.message-reasoning').count(), 0);
+    assert.equal(
+      await page
+        .locator('#subagent-transcript-result')
+        .getByText('过程记录 299', { exact: true })
+        .count(),
+      0,
+    );
+    // Polling must preserve the reader's expansion state.
+    await page.waitForTimeout(900);
+    assert.notEqual(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
+    await page.locator('#chat-title').click();
+    await page.locator('#subagent-transcript').waitFor({ state: 'hidden' });
+    await page.locator('#open-subagents').hover();
+    await page.locator('#subagent-catalog .subagent-row').click();
+    await result.getByText('子代理最终结论', { exact: true }).waitFor();
+    assert.equal(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
   },
 );
 
@@ -1651,6 +1801,8 @@ test('a child page opens while that child is still running', { timeout: 60_000 }
   await page.locator('#open-subagents').hover();
   await page.locator('#subagent-catalog .subagent-row').click();
   await page.waitForFunction(() => document.body.dataset.subagentPage === 'open');
+  assert.equal(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
+  await page.locator('#subagent-transcript-process > summary').click();
   await page.waitForFunction(() =>
     document
       .querySelector('#subagent-transcript-messages')
@@ -1659,6 +1811,16 @@ test('a child page opens while that child is still running', { timeout: 60_000 }
   await page.locator('#subagent-transcript .subagent-live').getByText('子代理实时片段').waitFor();
   assert.equal(requests >= 2, true);
   assert.equal(await page.locator('#subagent-transcript .subagent-live').isVisible(), true);
+  releaseChild?.();
+  await waitForPage(
+    page,
+    () => document.querySelector('#subagent-transcript-result-title')?.textContent === '最终结果',
+  );
+  await page
+    .locator('#subagent-transcript-result')
+    .getByText('子代理实时片段', { exact: true })
+    .waitFor();
+  assert.notEqual(await page.locator('#subagent-transcript-process').getAttribute('open'), null);
 });
 
 // ---- merged from user-message.smoke.mjs ----

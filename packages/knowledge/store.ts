@@ -26,6 +26,21 @@ const extensions = new Set(
   ),
 );
 const canonical = (root: string) => realpathSync(root);
+/**
+ * Size and mtime of a pinned document, or `null` when it cannot be stat'ed.
+ *
+ * A null answer means "ask the expensive way": the caller falls through to `pinDocument`, which has the real
+ * error handling and the digest check. This function is allowed to be incurious — it exists to avoid work, never
+ * to decide that something is fine.
+ */
+function statSource(root: string, relative: string): { size: number; mtimeMs: number } | null {
+  try {
+    const stats = statSync(path.resolve(root, documentPath(relative)));
+    return stats.isFile() ? { size: stats.size, mtimeMs: stats.mtimeMs } : null;
+  } catch {
+    return null;
+  }
+}
 const idFor = (root: string, file: string) =>
   createHash('sha256')
     .update(root + '\0' + file)
@@ -83,6 +98,9 @@ export function defaultKnowledgePath(): string {
 }
 export class KnowledgeStore {
   private db: DatabaseSync;
+  /** Size and mtime of each document as it was when last indexed, keyed by scope and path. */
+  private verified = new Map<string, { size: number; mtimeMs: number }>();
+  private refreshChecks = { verified: 0, reread: 0 };
   constructor(file = defaultKnowledgePath()) {
     mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
@@ -226,15 +244,45 @@ export class KnowledgeStore {
    * limit), and silently unpinning on those discarded the document permanently with no error.
    * The entry is only dropped when the source file is genuinely gone, or when the stored path
    * is no longer a valid document path.
+   *
+   * A document whose size and mtime are what they were when it was last indexed is skipped
+   * outright, which is the difference between a search costing a stat per document and a search
+   * costing a *read* per document. `pinDocument` already avoided the write for unchanged content,
+   * but it decided that after reading the whole file, so asking the same question twice still paid
+   * for the corpus twice. The digest check inside `pinDocument` remains the authority — this is a
+   * cheaper question asked first, and the maps below are dropped on any failure so a document that
+   * cannot be re-read is retried rather than remembered as verified.
    */
   private refreshDocuments(root: string): void {
+    const scope = canonical(root);
     for (const document of this.listDocuments(root)) {
+      const key = `${scope}\u0000${document.path}`;
+      const known = this.verified.get(key);
+      if (known) {
+        const current = statSource(root, document.path);
+        if (current && current.size === known.size && current.mtimeMs === known.mtimeMs) {
+          this.refreshChecks.verified++;
+          continue;
+        }
+      }
       try {
         this.pinDocument(root, document.path);
+        this.refreshChecks.reread++;
+        const current = statSource(root, document.path);
+        if (current) this.verified.set(key, current);
+        else this.verified.delete(key);
       } catch {
+        this.verified.delete(key);
         if (this.documentMissing(root, document.path)) this.unpinDocument(root, document.path);
       }
     }
+  }
+  /**
+   * What the last refreshes did, so "an unchanged document is not read twice" is a measured
+   * claim rather than a description of the code.
+   */
+  refreshCounts(): { verified: number; reread: number } {
+    return { ...this.refreshChecks };
   }
   private documentMissing(root: string, relative: string): boolean {
     let resolved: string;

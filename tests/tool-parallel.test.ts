@@ -97,7 +97,7 @@ function timedTool(
 async function fixture(
   t: test.TestContext,
   provider: Provider,
-  options: { maxParallelToolCalls?: number } = {},
+  options: { maxParallelToolCalls?: number; onEvent?: (event: AgentEvent) => void } = {},
 ) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-parallel-'));
   const store = new SessionStore(path.join(root, 'sessions.sqlite'));
@@ -118,8 +118,11 @@ async function fixture(
     provider,
     tools,
     approve: async () => true,
-    onEvent: (event) => events.push(event),
     ...options,
+    onEvent: (event) => {
+      events.push(event);
+      options.onEvent?.(event);
+    },
   });
   return { root, store, session, agent, events, timeline, tools };
 }
@@ -267,12 +270,58 @@ test('a limit of two bounds a group of four', async (t) => {
       return reply();
     },
   };
-  const { session, agent, timeline } = await fixture(t, provider, { maxParallelToolCalls: 2 });
-  const begun = Date.now();
-  const result = await agent.run({ sessionId: session.id, prompt: 'Read four things' });
-  assert.ok(Date.now() - begun < 200, 'two waves of 30ms, not four serial calls');
-  assert.equal(result.status, 'completed');
-  assert.equal(timeline.peak, 2, 'the cap held');
+  const { session, agent, timeline, tools } = await fixture(t, provider, {
+    maxParallelToolCalls: 2,
+  });
+  const releases = new Map<string, () => void>();
+  const announce = new Map<string, () => void>();
+  const waits = new Map(
+    ['a', 'b', 'c', 'd'].map((id) => [
+      id,
+      new Promise<void>((resolve) => releases.set(id, resolve)),
+    ]),
+  );
+  const started = new Map(
+    ['a', 'b', 'c', 'd'].map((id) => [
+      id,
+      new Promise<void>((resolve) => announce.set(id, resolve)),
+    ]),
+  );
+  for (const name of ['read_one', 'read_two', 'read_three'])
+    tools.replace(
+      timedTool(name, timeline, {
+        gate: async (id) => {
+          announce.get(id)!();
+          await waits.get(id);
+        },
+      }),
+    );
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<never>((_, reject) => {
+    guard = setTimeout(() => reject(new Error('the next tool slot never started')), 5_000);
+  });
+  const running = agent.run({ sessionId: session.id, prompt: 'Read four things' });
+  void running.catch(() => {});
+  try {
+    await Promise.race([Promise.all([started.get('a'), started.get('b')]), stalled]);
+    assert.deepEqual(timeline.events, ['start a', 'start b'], 'later calls wait for a slot');
+    releases.get('a')!();
+    await Promise.race([started.get('c'), stalled]);
+    assert.equal(timeline.inFlight, 2, 'the third call overlaps the still-blocked second');
+    releases.get('b')!();
+    await Promise.race([started.get('d'), stalled]);
+    assert.equal(timeline.inFlight, 2, 'the fourth call fills only the newly freed slot');
+    releases.get('c')!();
+    releases.get('d')!();
+    const result = await running;
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(timeline.peak, 2, 'the cap held');
+    assert.equal(timeline.inFlight, 0, 'all tool calls joined cleanup');
+  } finally {
+    clearTimeout(guard);
+    for (const release of releases.values()) release();
+    await running.catch(() => {});
+  }
   /**
    * Rolling, not fixed windows: the third call starts the moment *one* slot frees, so exactly one call has
    * ended by then — and the fourth waits for the second slot.
@@ -397,13 +446,23 @@ test('a cancelled run charges the tool span it was still waiting on, exactly onc
   const provider: Provider = {
     async complete() {
       round++;
-      if (round === 1) return calls(['stuck', 'read_two', 5_000]);
+      if (round === 1) {
+        // Startup/model time is deliberately longer than the cancellation window. Only time
+        // spent waiting for the actual tool belongs to toolMs.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return calls(['stuck', 'read_two', 5_000]);
+      }
       return reply();
     },
   };
-  const { agent, session } = await fixture(t, provider);
   const controller = new AbortController();
-  const cancelledAt = setTimeout(() => controller.abort(), 100);
+  let cancelledAt: ReturnType<typeof setTimeout> | undefined;
+  const { agent, session, timeline } = await fixture(t, provider, {
+    onEvent: (event) => {
+      if (event.type === 'tool.started' && !cancelledAt)
+        cancelledAt = setTimeout(() => controller.abort(), 100);
+    },
+  });
   t.after(() => clearTimeout(cancelledAt));
   const result = await agent.run({
     sessionId: session.id,
@@ -411,6 +470,9 @@ test('a cancelled run charges the tool span it was still waiting on, exactly onc
     signal: controller.signal,
   });
   assert.equal(result.status, 'cancelled');
+  assert.ok(cancelledAt, 'cancellation is armed by the tool starting, not by run initialization');
+  assert.deepEqual(timeline.events, ['start stuck']);
+  assert.equal(timeline.inFlight, 0, 'the cancelled tool joins cleanup');
   assert.ok(
     result.statistics!.toolMs >= 80,
     `the span the run was waiting on is charged, saw ${result.statistics!.toolMs}`,
@@ -448,15 +510,25 @@ test('a cancelled run still records the sibling that had already finished', asyn
       return reply();
     },
   };
-  const { store, session, agent } = await fixture(t, provider);
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 120);
+  let cancelledAt: ReturnType<typeof setTimeout> | undefined;
+  const { store, session, agent, timeline } = await fixture(t, provider, {
+    onEvent: (event) => {
+      // Transcript tool.finished is published after the whole group settles. Use the actual
+      // execution event and let its result finish the pipeline before cancelling its sibling.
+      if (event.type === 'tool.execution.finished' && event.data.callId === 'quick')
+        cancelledAt = setTimeout(() => controller.abort(), 0);
+    },
+  });
+  t.after(() => clearTimeout(cancelledAt));
   const result = await agent.run({
     sessionId: session.id,
     prompt: 'One quick, one stuck',
     signal: controller.signal,
   });
   assert.equal(result.status, 'cancelled');
+  assert.equal(timeline.peak, 2, 'both siblings actually started');
+  assert.equal(timeline.inFlight, 0, 'cancellation waits for the stuck sibling to stop');
   // The quick call's result is real and is written before the run ends. The stuck call produced no result at
   // all, so the run's teardown answers it with uncertainty — which is the point: an outcome nobody observed
   // must never be reported as one that did not happen.

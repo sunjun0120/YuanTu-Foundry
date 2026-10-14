@@ -27,6 +27,24 @@ import { isPresentedFile, presentFiles } from '../protocol/deliverables.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
 import type { Goal } from '../protocol/goals.ts';
 import { isGoal } from '../protocol/goals.ts';
+import type { CompletionRecord } from '../protocol/completion.ts';
+
+/**
+ * The definition a window shows before it has read one.
+ *
+ * A `completion.updated` record written by a mid-run round carries the evidence but not the contract, so a window
+ * that attached while a run was already repairing folds its first record without an objective. This stands in so
+ * the shape is stable and the reader can tell "not read yet" from "no contract" — the latter being `null` on the
+ * state itself. It is never written back to the session.
+ */
+const EMPTY_COMPLETION_DEFINITION: CompletionRecord['definition'] = {
+  version: 1,
+  objective: '',
+  constraints: [],
+  steps: [],
+  acceptance: [],
+  inputs: [],
+};
 import type { ToolResultOutput } from '../protocol/tool-result.ts';
 import type { ContextBreakdown } from '../core/budget.ts';
 
@@ -157,6 +175,25 @@ export interface SubAgentView {
   /** The child's structured report, when it submitted one instead of answering in prose. */
   report?: SubAgentSummaryReport;
   error?: string;
+  /**
+   * Where this child actually worked, when the Host can say.
+   *
+   * A card that said "isolated" without saying *where* would be asking a person to take the protection on faith, and
+   * a card that showed an isolated child's changes in the parent's own change list would be actively misleading —
+   * the parent's undo does not reach that directory. `kind: 'shared'` is therefore the honest label for a child that
+   * has no directory of its own, in either of the two cases that produce one: an explicit `shared` mode, and a
+   * Host that predates this capability and cannot answer at all.
+   */
+  workspace?: {
+    kind: 'shared' | 'worktree';
+    executionRoot: string;
+    state: string;
+    /** Why this workspace is not usable, when it is not. */
+    problem?: string;
+    dependencyWarning?: string;
+    /** The result this child produced, while it is still outstanding. */
+    result?: { id: string; digest: string; status: string; paths: string[] };
+  };
 }
 export interface SessionSnapshot {
   statistics?: SessionStatistics;
@@ -214,6 +251,16 @@ export interface SessionSnapshot {
   deliverables: PresentedFile[];
   /** What the session is working toward, when a run declared a goal. It outlives every run that works on it. */
   goal: Goal | null;
+  /**
+   * The completion contract's evidence state, when this session carries one.
+   *
+   * Separate from `status` on purpose, and the separation is the point of the whole feature: `status` says how the
+   * last run ended, and a run that ended because the model stopped talking is `completed` whether or not anything
+   * was verified. A window that showed only `status` would show "done" for work nobody checked. `null` means no
+   * contract was ever recorded — which is what every ordinary chat turn and every session from before this
+   * existed reports, and it is a different statement from "unverified".
+   */
+  completion: CompletionRecord | null;
   error: string | null;
 }
 export class SessionController {
@@ -234,6 +281,7 @@ export class SessionController {
     plan: null,
     deliverables: [],
     goal: null,
+    completion: null,
     running: false,
     loading: false,
     status: 'idle',
@@ -505,6 +553,8 @@ export class SessionController {
     if (this.staleRead(generation)) return;
     const goal = await this.historyGoal(sessionId);
     if (this.staleRead(generation)) return;
+    const completion = await this.historyCompletion(sessionId);
+    if (this.staleRead(generation)) return;
     /**
      * The live run is read *last*, after every other query has been answered.
      *
@@ -560,6 +610,7 @@ export class SessionController {
       plan,
       deliverables,
       goal,
+      completion,
       running,
       loading: this.state.loading,
       status: running ? 'running' : 'idle',
@@ -677,12 +728,41 @@ export class SessionController {
     }
   }
   /**
+   * The completion contract this session is working against, for a session load.
+   *
+   * The record outlives the run that created it, so a window reopened after a repair — or after a crash — has to
+   * read it back from the log rather than from a result it never saw. `null` is the honest answer for a session
+   * with no contract, and a Host that predates the capability answers the same way.
+   */
+  private async historyCompletion(sessionId: string): Promise<CompletionRecord | null> {
+    try {
+      return await this.client.request('completion.current', { sessionId });
+    } catch {
+      return null;
+    }
+  }
+  /**
    * Sub-agents of the most recent run, as stored with its result. A Host that predates the capability
    * simply answers with an error, and the panel stays empty instead of failing the session load.
    */
   private async historySubAgents(sessionId: string): Promise<SubAgentView[]> {
     try {
-      const summaries = await this.client.request('subagents.list', { sessionId });
+      const summaries = await this.client.request('subagents.list', {
+        sessionId,
+        includePreviousRuns: true,
+      });
+      /**
+       * Where each child worked, reconstructed from what the Host still knows.
+       *
+       * This is the *reopen* path: a session loaded after the fact has no `subagent.workspace` frames to replay, so
+       * the workspace state has to be read rather than remembered. A failure is tolerated on purpose — a Host that
+       * predates the capability answers "Unknown method" — and the cards are then built without the field instead of
+       * the session load failing.
+       */
+      const workspaces = await this.workspaceViews(
+        sessionId,
+        summaries.map((entry) => entry.sessionId),
+      );
       return summaries.map((summary, index) => ({
         id: summary.id,
         index,
@@ -703,10 +783,72 @@ export class SessionController {
         // findings say what it found.
         ...(summary.report ? { report: summary.report } : {}),
         ...(summary.error ? { error: summary.error } : {}),
+        ...(workspaces.get(summary.sessionId)
+          ? { workspace: workspaces.get(summary.sessionId)! }
+          : {}),
       }));
     } catch {
       return [];
     }
+  }
+
+  /**
+   * The workspace each child ran in, keyed by child session id.
+   *
+   * Two requests per child, and both are allowed to fail independently: the *binding* is where it worked and the
+   * *result* is what it produced, and a child that produced nothing still has a place it worked. A failure returns no
+   * entry at all rather than a `shared` one, which is the difference between "we do not know" and "this is not
+   * isolated" — and only one of those is safe to show a person as reassurance.
+   */
+  private async workspaceViews(
+    parentSessionId: string,
+    childSessionIds: readonly string[],
+  ): Promise<Map<string, NonNullable<SubAgentView['workspace']>>> {
+    const found = new Map<string, NonNullable<SubAgentView['workspace']>>();
+    const results = new Map<
+      string,
+      { id: string; digest: string; status: string; paths: string[] }
+    >();
+    try {
+      for (const result of await this.client.request('workspace.results', {
+        sessionId: parentSessionId,
+      })) {
+        // The newest result per child wins, which is the one still outstanding: an earlier import has already been
+        // accepted, and a card that offered it again would be offering work the parent already has.
+        // The Host orders durable results oldest first; take the latest even after it conflicts or is imported.
+        results.set(result.childSessionId, {
+          id: result.id,
+          digest: result.digest,
+          status: result.status,
+          paths: [...result.paths],
+        });
+      }
+    } catch {
+      // A Host without the method, or a session with no results at all.
+    }
+    for (const childSessionId of childSessionIds) {
+      if (!childSessionId) continue;
+      try {
+        const answer = await this.client.request('workspaces.get', { sessionId: childSessionId });
+        found.set(childSessionId, {
+          kind: answer.binding.kind,
+          executionRoot: answer.binding.executionRoot,
+          state: answer.binding.state,
+          ...(answer.problems.length ? { problem: answer.problems.join('; ') } : {}),
+          ...(answer.dependencyWarnings?.length
+            ? {
+                dependencyWarning: answer.dependencyWarnings
+                  .map((warning) => warning.message)
+                  .join('; '),
+              }
+            : {}),
+          ...(results.get(childSessionId) ? { result: results.get(childSessionId)! } : {}),
+        });
+      } catch {
+        // Some Hosts cannot answer; saying nothing is the honest response.
+      }
+    }
+    return found;
   }
   /**
    * The checklist as last written, for a session load, plus what the last write changed about it. A Host that
@@ -837,11 +979,18 @@ export class SessionController {
       }
       if (!this.disposed && this.client.status === 'ready') {
         const { messages, statistics, historyStart } = await this.history(sessionId);
+        const workspaces = owns()
+          ? await this.workspaceViews(
+              sessionId,
+              this.state.subagents.map((child) => child.childSessionId ?? ''),
+            )
+          : new Map();
         if (owns()) {
           this.state.messages = messages;
           this.state.historyStart = historyStart;
           this.state.messageRevision++;
           this.state.statistics = statistics;
+          this.refreshWorkspaceViews(workspaces);
         }
       }
       return result;
@@ -951,16 +1100,30 @@ export class SessionController {
     this.state.approvals = [];
     this.state.questions = [];
   }
+  private refreshWorkspaceViews(
+    workspaces: Map<string, NonNullable<SubAgentView['workspace']>>,
+  ): void {
+    for (const child of this.state.subagents) {
+      const workspace = child.childSessionId ? workspaces.get(child.childSessionId) : undefined;
+      if (workspace) child.workspace = workspace;
+    }
+  }
   private async refreshFinishedHistory(sessionId: string, finishedRun: string): Promise<void> {
     const owns = () =>
       this.state.sessionId === sessionId && this.runId === finishedRun && !this.state.running;
     try {
       const { messages, statistics, historyStart } = await this.history(sessionId);
       if (this.disposed || !owns()) return;
+      const workspaces = await this.workspaceViews(
+        sessionId,
+        this.state.subagents.map((child) => child.childSessionId ?? ''),
+      );
+      if (this.disposed || !owns()) return;
       this.state.messages = messages;
       this.state.historyStart = historyStart;
       this.state.messageRevision++;
       this.state.statistics = statistics;
+      this.refreshWorkspaceViews(workspaces);
     } catch {
     } finally {
       // A completion snapshot may immediately send again: release the foreground request first.
@@ -1186,6 +1349,87 @@ export class SessionController {
         // carries the whole goal, so the panel is a replacement and never a patch.
         if (isGoal(event.data.goal)) this.state.goal = structuredClone(event.data.goal);
         break;
+      case 'completion.updated': {
+        /**
+         * The contract's state, folded rather than merged.
+         *
+         * Every record the runtime writes carries a whole `summary`, so the newest one is the current state and no
+         * client has to replay a sequence. The *definition* is the exception and is deliberately kept: only the
+         * record written when a contract is created carries it, and a later round record without one must not erase
+         * the objective and criteria the user is reading. `steps` replaces only when present, for the same reason.
+         */
+        const summary = event.data.summary;
+        if (!summary || typeof summary !== 'object' || Array.isArray(summary)) break;
+        const definition = event.data.definition;
+        const steps = event.data.steps;
+        const affectedPaths = event.data.affectedPaths;
+        const previous = this.state.completion;
+        const contractId = String(event.data.contractId ?? previous?.contractId ?? '');
+        if (!contractId) break;
+        this.state.completion = {
+          version: 1,
+          contractId,
+          sessionId: this.state.sessionId ?? '',
+          originRunId: String(event.data.runId ?? previous?.originRunId ?? event.runId ?? ''),
+          latestRunId: String(event.data.runId ?? event.runId ?? previous?.latestRunId ?? ''),
+          source:
+            event.data.source === 'task' ||
+            event.data.source === 'request' ||
+            event.data.source === 'approved-plan'
+              ? event.data.source
+              : (previous?.source ?? 'request'),
+          definition:
+            definition && typeof definition === 'object' && !Array.isArray(definition)
+              ? structuredClone(definition as CompletionRecord['definition'])
+              : (previous?.definition ?? EMPTY_COMPLETION_DEFINITION),
+          definitionHash: String(
+            (summary as { definitionHash?: unknown }).definitionHash ??
+              previous?.definitionHash ??
+              '',
+          ),
+          summary: structuredClone(summary as CompletionRecord['summary']),
+          steps: Array.isArray(steps)
+            ? structuredClone(steps as CompletionRecord['steps'])
+            : (previous?.steps ?? []),
+          affectedPaths: Array.isArray(affectedPaths)
+            ? affectedPaths.map(String)
+            : (previous?.affectedPaths ?? []),
+          policy:
+            event.data.policy && typeof event.data.policy === 'object'
+              ? structuredClone(event.data.policy as CompletionRecord['policy'])
+              : (previous?.policy ?? {
+                  maxRepairRounds: 0,
+                  maxRepeatedFailures: 0,
+                  repairTimeoutMs: 0,
+                }),
+          ...(typeof event.data.repairStartedAt === 'number'
+            ? { repairStartedAt: event.data.repairStartedAt }
+            : previous?.repairStartedAt === undefined
+              ? {}
+              : { repairStartedAt: previous.repairStartedAt }),
+          ...(typeof event.data.failureFingerprint === 'string'
+            ? { failureFingerprint: event.data.failureFingerprint }
+            : previous?.failureFingerprint === undefined
+              ? {}
+              : { failureFingerprint: previous.failureFingerprint }),
+          ...(typeof event.data.taskId === 'string'
+            ? { taskId: event.data.taskId }
+            : previous?.taskId === undefined
+              ? {}
+              : { taskId: previous.taskId }),
+          ...(typeof event.data.planId === 'string'
+            ? { planId: event.data.planId }
+            : previous?.planId === undefined
+              ? {}
+              : { planId: previous.planId }),
+          ...(typeof event.data.goalObjective === 'string'
+            ? { goalObjective: event.data.goalObjective }
+            : previous?.goalObjective === undefined
+              ? {}
+              : { goalObjective: previous.goalObjective }),
+        };
+        break;
+      }
       case 'plan.approved':
         // The approval is the human's answer, and the plan row is the durable record; the panel reads the same
         // status here so it stops offering a decision that has been made.
@@ -1254,6 +1498,38 @@ export class SessionController {
           ...(view.usage ? { usage: view.usage } : {}),
         });
         return;
+      }
+      case 'subagent.workspace': {
+        /**
+         * Where this child worked, and what it produced.
+         *
+         * The live card is built from the child's own frames, and this is the one fact those frames cannot carry: the
+         * directory is a decision of the *parent's* workspace service, and the result exists only once the turn has
+         * ended and been frozen. It arrives as its own frame for the same reason — see the event's own note.
+         *
+         * A card that has not appeared yet is not an error worth reporting: a frame can outrun the `started` frame it
+         * belongs to when a child finishes fast, and the durable read after the run is what fills the card in then.
+         */
+        const view = this.subagents().find(
+          (entry) =>
+            entry.id === String(event.data.id) ||
+            entry.childSessionId === String(event.data.childSessionId),
+        );
+        if (!view) break;
+        view.workspace = {
+          kind: event.data.kind as 'shared' | 'worktree',
+          executionRoot: String(event.data.executionRoot),
+          state: String(event.data.state),
+          ...(typeof event.data.dependencyWarning === 'string'
+            ? { dependencyWarning: event.data.dependencyWarning }
+            : {}),
+          ...(event.data.result
+            ? {
+                result: event.data.result as NonNullable<SubAgentView['workspace']>['result'],
+              }
+            : {}),
+        };
+        break;
       }
       case 'subagent.finished': {
         const view = this.subagents().find((entry) => entry.id === event.data.id);

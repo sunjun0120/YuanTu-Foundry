@@ -29,7 +29,13 @@ import type {
 
 export type { MessageDelta, SubAgentDelta, StatisticsDelta };
 export type { CarrierCommand, CarrierSnapshot };
-export type DesktopReply = { ok: true; state: CarrierSnapshot } | { ok: false; error: string };
+export type DesktopReply =
+  | { ok: true; state: CarrierSnapshot }
+  | {
+      ok: false;
+      error: string;
+      errorDetail?: import('../../packages/carrier/errors.ts').CarrierIssue;
+    };
 export interface DesktopBridge {
   backups(command: BackupCommand): Promise<BackupReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;

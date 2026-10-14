@@ -3,7 +3,9 @@ import { setupStatistics } from './renderer-statistics.ts';
 import { setupWorkspace } from './renderer-workspace.ts';
 import { setupSubAgents } from './renderer-subagents.ts';
 import { setupMcpSettings } from './renderer-mcp.ts';
-import type { DesktopBridge } from './contract.ts';
+import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
+import type { DesktopBridge, DesktopReply } from './contract.ts';
+import { carrierErrorText } from './carrier-errors.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import type { Message } from '../../packages/protocol/index.ts';
 import { fileChangeAction, undoConfirmKey } from '../../packages/client/change-actions.ts';
@@ -23,7 +25,6 @@ import { setupTranscript } from './renderer-transcript.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
 import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
-import { setupBackups } from './renderer-backups.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { SlotRegistry, mountSlot, type SlotMount } from './slots.ts';
@@ -174,8 +175,7 @@ let state: CarrierSnapshot | null = null;
 let mcpSettings: ReturnType<typeof setupMcpSettings> | undefined;
 let permissionSettings: ReturnType<typeof setupPermissionSettings> | undefined;
 let modelSettings: ReturnType<typeof setupModelSettings> | undefined;
-let backupSettings: ReturnType<typeof setupBackups> | undefined;
-let localError: string | null = null;
+let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
 let operation = false;
 let approvalBusy = new Set<string>();
 let transcriptKey = '';
@@ -215,7 +215,7 @@ async function invoke(command: CarrierCommand): Promise<CarrierSnapshot | null> 
   try {
     const reply = await window.yuantu.invoke(command);
     if (!reply.ok) {
-      localError = reply.error;
+      localError = reply;
       render();
       return null;
     }
@@ -307,11 +307,15 @@ function render(): void {
 
   renderTasks();
   modelSettings?.updateBusy();
-  backupSettings?.updateBusy();
   mcpSettings?.updateBusy();
   permissionSettings?.updateBusy();
   element('configuration').hidden = !state.ready || state.configured;
-  const stopError = localError || state.error || session.error;
+  const stopError =
+    (typeof localError === 'string'
+      ? localError
+      : localError && carrierErrorText(localError, locale())) ||
+    carrierErrorText(state, locale()) ||
+    session.error;
   /**
    * A run the user stopped is not an error, and the kernel's marker for it is not shown as one.
    *
@@ -668,16 +672,6 @@ new ResizeObserver(() => {
 }).observe(element('chat-page').querySelector('.composer-area')!);
 setupGeneralSettings();
 setupSandboxInitialization();
-backupSettings = setupBackups(
-  () =>
-    Boolean(
-      operation || composerView.isSending() || state?.session.running || state?.session.loading,
-    ),
-  (busy) => {
-    operation = busy;
-    render();
-  },
-);
 modelSettings = setupModelSettings(
   () =>
     Boolean(
@@ -688,17 +682,19 @@ modelSettings = setupModelSettings(
     render();
   },
 );
-mcpSettings = setupMcpSettings(
-  () =>
-    Boolean(
-      operation || composerView.isSending() || state?.session.running || state?.session.loading,
-    ),
-  (busy) => {
-    operation = busy;
-    render();
-  },
-  () => state?.workspace,
-);
+// MCP service management is temporarily hidden; keep its renderer for restoration.
+if (PRODUCT_SCOPE.mcpManagement)
+  mcpSettings = setupMcpSettings(
+    () =>
+      Boolean(
+        operation || composerView.isSending() || state?.session.running || state?.session.loading,
+      ),
+    (busy) => {
+      operation = busy;
+      render();
+    },
+    () => state?.workspace,
+  );
 permissionSettings = setupPermissionSettings(
   (busy) => {
     operation = busy;

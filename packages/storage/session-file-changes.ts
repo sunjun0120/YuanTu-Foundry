@@ -96,6 +96,21 @@ export class SessionFileChanges {
       );
   }
 
+  /**
+   * Which session's journal holds one change.
+   *
+   * A recovery pass is given a change id and nothing else: the import that wrote it was interrupted, so the process
+   * that knew which session it belonged to is gone, and the id is what the durable receipt recorded. Reading the
+   * owner back from the row is therefore the honest lookup rather than a guess — the alternative is a caller that has
+   * to already know the answer it is asking for.
+   */
+  fileChangeOwner(id: string): string | null {
+    const row = this.port.db
+      .prepare('SELECT session_id AS sessionId FROM file_changes WHERE id=?')
+      .get(id) as { sessionId?: unknown } | undefined;
+    return row?.sessionId === undefined ? null : String(row.sessionId);
+  }
+
   fileChangeSnapshots(sessionId: string, id: string): FileSnapshot[] {
     const owner = this.port.db
       .prepare('SELECT 1 FROM file_changes WHERE session_id=? AND id=?')

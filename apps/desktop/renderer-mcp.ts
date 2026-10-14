@@ -14,7 +14,8 @@ export function setupMcpSettings(
   nav.replaceChildren();
   const icon = document.createElement('span');
   icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = '◇';
+  icon.innerHTML =
+    '<svg class="settings-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M9 3v5m6-5v5M7 8h10v3a5 5 0 0 1-10 0V8Zm5 8v5M5 8h14" /></svg>';
   nav.append(icon, document.createTextNode(t('mcp.title')));
   onLocaleChange(() => {
     nav.lastChild!.textContent = t('mcp.title');

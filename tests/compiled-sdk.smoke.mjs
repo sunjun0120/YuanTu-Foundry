@@ -1,3 +1,4 @@
+// Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -6,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 
-test(
+test.skip(
   'public compiled SDK example streams a response and exits its Host',
   { timeout: 20000 },
   async (t) => {

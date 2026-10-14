@@ -277,7 +277,16 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
         ...(verified.error ? { error: verified.error } : {}),
         ...(!completed
           ? {
-              error: verified.error ?? 'Task has not been run; run it before verifying completion',
+              /**
+               * "Never run" is the more useful of the two truths.
+               *
+               * A verification of a task that was never executed also fails for a definition-level reason — its
+               * steps are still pending, which is what not having run means. Reporting the cause rather than the
+               * consequence is what tells the reader to run the task instead of to edit it.
+               */
+              error: task.latestRunId
+                ? (verified.error ?? 'Task verification did not pass; review the evidence')
+                : 'Task has not been run; run it before verifying completion',
             }
           : {}),
         acceptance: verified.acceptance,

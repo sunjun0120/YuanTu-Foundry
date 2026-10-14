@@ -40,6 +40,7 @@ import {
   encodeText,
 } from './websocket.ts';
 import { parseBridgeRequest, type BridgeFrame } from './protocol.ts';
+import { requireProductEntry } from '../../packages/protocol/product-scope.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const project = path.resolve(here, '..', '..');
@@ -198,6 +199,8 @@ export async function startBridge(options: Options): Promise<{
   readonly carrier: CarrierService;
   close(): Promise<void>;
 }> {
+  // Refuse before opening settings, spawning a Host, or binding a port.
+  requireProductEntry('web');
   const env = {
     ...process.env,
     ...options.env,
@@ -419,6 +422,8 @@ async function servePage(
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // Importing retained code is harmless; starting its public entry is paused.
+  requireProductEntry('web');
   const options = parseBridgeArgs(process.argv.slice(2));
   const bridge = await startBridge(options);
   process.stdout.write(`[web] ${bridge.url}\n[web] workspace: ${options.workspace}\n`);

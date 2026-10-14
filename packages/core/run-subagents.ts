@@ -1,5 +1,9 @@
 import type { Provider, SubAgentRole, SubAgentTag } from '../protocol/index.ts';
+import type { WorkspaceBinding } from '../protocol/workspaces.ts';
 import type { SessionStore, Session } from '../storage/sqlite.ts';
+import { isDurableBinding } from '../storage/session-workspaces.ts';
+import type { WorkspaceManager } from '../workspaces/manager.ts';
+import { nodeDependencyWarning } from '../workspaces/dependencies.ts';
 import { RUN_DEFAULTS } from '../protocol/settings.ts';
 import { forkSeed, seedReport } from './fork.ts';
 import { SubAgentProviderRegistry, inProcessProvider } from './subagent-providers.ts';
@@ -40,6 +44,14 @@ export type ChildTurns = (input: {
   childSignal?: AbortSignal;
   reportSchema?: Record<string, unknown>;
   persona?: string;
+  /**
+   * The directory this child was given, when the run isolates its children.
+   *
+   * Carried into the turn builder rather than resolved there, because it is already a durable decision by the time
+   * a turn exists: the manager allocated the directory and the store recorded which session owns it. A child whose
+   * turns resolve their own root would be a second answer to a question that already has one.
+   */
+  binding?: WorkspaceBinding;
 }) => {
   turn: (
     prompt: string,
@@ -58,6 +70,13 @@ export interface InProcessProviderOptions {
   depth: number;
   residency?: SubAgentResidency | undefined;
   childTurns: ChildTurns;
+  /**
+   * The workspace service, when this host isolates its children.
+   *
+   * The provider is where a binding becomes a fact about a session: it creates the child session, attaches it to
+   * the directory the coordinator allocated, and records both in the parent's log before anybody can observe either.
+   */
+  workspaceManager?: WorkspaceManager | undefined;
   /** Resolves the provider for a model a task asked for, or `undefined` when this host cannot serve it. */
   resolveProviderFor?: ((model: string) => Provider | undefined) | undefined;
   /** Characters of the parent transcript a forked child starts with. Defaults to `RUN_DEFAULTS`. */
@@ -87,12 +106,18 @@ export function createSubAgentProviders(
         'depthLimit',
         'toolFilter',
         'persona',
+        /**
+         * Always true here, and for the same reason `contextFork` is: this provider creates the child session
+         * itself, so the directory the child works in is a decision this process makes rather than a promise about
+         * somebody else's runtime. A provider that runs children elsewhere must *not* advertise this.
+         */
+        'workspaceIsolation',
         // Always true here: this provider creates the child session itself, so seeding it from the
         // parent's transcript is a local write rather than a promise about somebody else's runtime.
         'contextFork',
         ...(options.resolveProviderFor ? (['agentOptions'] as const) : []),
       ],
-      run: async ({ task, options: childOptions, signal: childSignal, started }) => {
+      run: async ({ task, options: childOptions, signal: childSignal, binding, started }) => {
         // Resolve the child's model *before* creating a session, so a model this host cannot serve
         // leaves no empty child session behind for a crash-recovery pass to find.
         const model = childOptions.agentOptions?.model;
@@ -117,6 +142,36 @@ export function createSubAgentProviders(
             })
           : undefined;
         const childSession = store.create(workspace, parentSessionId);
+        /**
+         * The child is attached to its directory before anything can address it.
+         *
+         * `store.create` is what makes the session exist, and `attach` is what makes its directory usable; both
+         * happen before `started()` and before the assignment is recorded, so a reader that reacts to the child the
+         * moment it is announced can never find a session whose writes have nowhere to go. The store re-checks the
+         * parent/child relationship inside that transaction, which is the ownership half of it: a binding cannot be
+         * attached to a session that is not this delegator's own child.
+         *
+         * A *shared* binding is passed through rather than attached, and the distinction is real: the synthesized
+         * binding of a session that predates isolation has no `preparing` row to finish and no directory this
+         * service created, so asking the store to attach it would be asking it to complete an allocation that never
+         * happened. The child simply executes in the delegator's directory, which is what the binding already says.
+         */
+        const childBinding =
+          binding && isDurableBinding(binding)
+            ? (options.workspaceManager?.attach({
+                bindingId: binding.id,
+                childSessionId: childSession.id,
+              }) ?? binding)
+            : binding;
+        const dependencyWarning =
+          childBinding?.kind === 'worktree'
+            ? await nodeDependencyWarning(childBinding.executionRoot, childSignal)
+            : null;
+        const prompt =
+          subAgentPrompt(task) +
+          (dependencyWarning
+            ? `\n\nWorkspace dependency diagnostic (${dependencyWarning.code}): ${dependencyWarning.message}`
+            : '');
         if (seed) for (const message of seed.messages) store.append(childSession.id, message);
         /**
          * The persona this child speaks with: the one its delegation named, and nothing else.
@@ -163,6 +218,7 @@ export function createSubAgentProviders(
           ...(task.schema ? { reportSchema: task.schema } : {}),
           ...(childProvider ? { childProvider } : {}),
           childSignal,
+          ...(childBinding ? { binding: childBinding } : {}),
         });
         const settle = (outcome: ResidentTurnResult) => ({
           sessionId: childSession.id,
@@ -186,9 +242,9 @@ export function createSubAgentProviders(
             turn: child.turn,
             ...(child.close ? { close: child.close } : {}),
           } satisfies ResidentChildInput);
-          return settle(await activation.run(subAgentPrompt(task), true));
+          return settle(await activation.run(prompt, true));
         }
-        return settle(await child.turn(subAgentPrompt(task), new AbortController().signal, true));
+        return settle(await child.turn(prompt, new AbortController().signal, true));
       },
     }),
   );

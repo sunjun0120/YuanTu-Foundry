@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { projectRoot } from './process-fixture.ts';
 
 const exec = promisify(execFile);
@@ -20,6 +22,317 @@ async function tree(
     await writeFile(path.join(root, file), content);
   }
   return root;
+}
+
+// Exercise the real entry point in an isolated repository so policy failures and stage transitions
+// can be tested without replacing the shared checkout's policy or running its entire suite.
+async function runnerTree(t: test.TestContext, files: Record<string, string>) {
+  const root = await tree(t, files);
+  await mkdir(path.join(root, 'scripts'), { recursive: true });
+  for (const name of [
+    'run-tests.mjs',
+    'test-summary.mjs',
+    'test-reporter.mjs',
+    'test-timings.mjs',
+    'test-execution-policy.ts',
+  ])
+    await copyFile(path.join(projectRoot, 'scripts', name), path.join(root, 'scripts', name));
+  return root;
+}
+
+const readRecords = async (file: string) =>
+  (await readFile(file, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+
+test('serial fallback runs even when the experimental parallel policy is malformed', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/pass.test.ts': "import test from 'node:test'; test('passing fixture', () => {});",
+    'test-parallel-safe.json': '{ invalid json',
+  });
+  const result = await run(process.execPath, ['scripts/run-tests.mjs'], {
+    cwd: root,
+    windowsHide: true,
+  });
+  assert.equal(result.code, undefined, result.stderr);
+  assert.match(result.stdout, /Tests: 1 pass=1 fail=0/);
+  const refusal = await run(
+    process.execPath,
+    ['scripts/run-tests.mjs', '--schedule=partitioned', '--plan'],
+    {
+      cwd: root,
+      windowsHide: true,
+    },
+  );
+  assert.equal(refusal.code, 1);
+  assert.match(refusal.stderr, /not valid JSON/);
+});
+
+test('the runner retains spec and timing evidence without multiplying event-stream listeners', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/pass.test.ts': "import test from 'node:test'; test('reporter fixture', () => {});",
+  });
+  for (const timed of [false, true]) {
+    const result = await run(
+      process.execPath,
+      ['scripts/run-tests.mjs', ...(timed ? ['--timings=timings.ndjson'] : [])],
+      { cwd: root, windowsHide: true },
+    );
+    assert.equal(result.code, undefined, result.stderr);
+    assert.match(result.stdout, /Tests: 1 pass=1 fail=0/);
+    assert.doesNotMatch(result.stderr, /MaxListenersExceededWarning/);
+  }
+  const logs = await readdir(path.join(root, '.scratch/test-logs'));
+  for (const log of logs)
+    assert.match(
+      await readFile(path.join(root, '.scratch/test-logs', log), 'utf8'),
+      /reporter fixture/,
+    );
+  assert.ok(
+    (await readRecords(path.join(root, 'timings.ndjson'))).some(
+      (record) => record.kind === 'phase-summary',
+    ),
+  );
+});
+
+test('a spec log that cannot be opened fails promptly instead of waiting forever for drain', async (t) => {
+  const root = await runnerTree(t, {});
+  const moduleURL = pathToFileURL(path.join(root, 'scripts/test-reporter.mjs'));
+  moduleURL.searchParams.set('log', root); // A directory cannot be opened as the spec log file.
+  const { default: reporter } = await import(moduleURL.href);
+  async function* events() {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    yield { type: 'test:pass', data: { name: 'delayed', nesting: 0, details: { duration_ms: 1 } } };
+  }
+  let timer;
+  const outcome = await Promise.race([
+    reporter(events())
+      .next()
+      .then(
+        () => ({ error: null }),
+        (error: NodeJS.ErrnoException) => ({ error }),
+      ),
+    new Promise<{ error: null }>((resolve) => {
+      timer = setTimeout(() => resolve({ error: null }), 1000);
+    }),
+  ]);
+  clearTimeout(timer);
+  assert.ok(outcome.error, 'the failed spec stream never rejected');
+  assert.match(outcome.error.code ?? '', /EISDIR|EPERM|EACCES/);
+});
+
+test('explicit reviewed files retain their parallel classification without selecting other entries', async (t) => {
+  const content = "import test from 'node:test'; test('reviewed fixture', () => {});";
+  const root = await runnerTree(t, {
+    'tests/a.test.ts': content,
+    'tests/b.test.ts': content,
+    'test-parallel-safe.json': JSON.stringify({
+      version: 1,
+      entries: ['a', 'b'].map((name) => ({
+        file: `tests/${name}.test.ts`,
+        reason: 'isolated fixture with no shared resources',
+        inputs: [
+          {
+            file: `tests/${name}.test.ts`,
+            sha256: createHash('sha256').update(content).digest('hex'),
+          },
+        ],
+      })),
+    }),
+  });
+  for (const file of ['tests/a.test.ts', path.join(root, 'tests/a.test.ts')]) {
+    const { stdout } = await exec(
+      process.execPath,
+      ['scripts/run-tests.mjs', '--schedule=partitioned', '--plan', file],
+      { cwd: root, windowsHide: true },
+    );
+    assert.match(stdout, /^parallel\s+tests\/a\.test\.ts/m);
+    assert.match(stdout, /parallel=1 serial=0 total=1/);
+    assert.doesNotMatch(stdout, /tests\/b\.test\.ts/);
+  }
+});
+
+test('skip-pattern exclusion is marked as filtered in measurement metadata', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/pass.test.ts':
+      "import test from 'node:test'; test('included', () => {}); test('excluded', () => { throw Error('must not run'); });",
+  });
+  const { stdout } = await exec(
+    process.execPath,
+    ['scripts/run-tests.mjs', '--test-skip-pattern=excluded', '--timings=timings.ndjson'],
+    { cwd: root, windowsHide: true },
+  );
+  assert.match(stdout, /Tests: 1 pass=1 fail=0/);
+  assert.equal(
+    JSON.parse(await readFile(path.join(root, 'timings.ndjson.meta.json'), 'utf8')).filtered,
+    true,
+  );
+});
+
+test('explicit partitioned execution overlaps reviewed files and waits before the serial file', async (t) => {
+  const parallelSource = (name: string, other: string) => `
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {writeFile, access} from 'node:fs/promises';
+const exists = async file => access(file).then(() => true, () => false);
+test('handshake ${name}', async () => {
+  await writeFile('${name}.ready', 'ready');
+  const deadline = Date.now() + 5000;
+  while (!(await exists('${other}.ready')) && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(await exists('${other}.ready'), true, 'reviewed files did not overlap');
+  assert.equal(await exists('serial.started'), false, 'serial phase overlapped parallel');
+  await writeFile('${name}.done', 'done');
+});`;
+  const sources = { a: parallelSource('a', 'b'), b: parallelSource('b', 'a') };
+  const root = await runnerTree(t, {
+    'tests/a.test.ts': sources.a,
+    'tests/b.test.ts': sources.b,
+    'tests/c.test.ts': `import test from 'node:test'; import {access,writeFile} from 'node:fs/promises';
+test('serial follows both completed parallel files', async () => {
+  await writeFile('serial.started','started'); await access('a.done'); await access('b.done');
+});`,
+    'test-parallel-safe.json': JSON.stringify({
+      version: 1,
+      entries: (['a', 'b'] as const).map((name) => ({
+        file: `tests/${name}.test.ts`,
+        reason: 'test-only handshake in isolated repository',
+        inputs: [
+          {
+            file: `tests/${name}.test.ts`,
+            sha256: createHash('sha256').update(sources[name]).digest('hex'),
+          },
+        ],
+      })),
+    }),
+  });
+  const { stdout } = await exec(
+    process.execPath,
+    [
+      'scripts/run-tests.mjs',
+      '--schedule=partitioned',
+      '--parallel-concurrency=2',
+      'tests/a.test.ts',
+      'tests/b.test.ts',
+      'tests/c.test.ts',
+    ],
+    { cwd: root, windowsHide: true },
+  );
+  assert.match(stdout, /Phase parallel: 2 file\(s\), concurrency=2/);
+  assert.match(stdout, /Phase serial: 1 file\(s\), concurrency=1/);
+  await readFile(path.join(root, 'serial.started'), 'utf8');
+});
+
+test('timings retain ordinary nested tests and their skip reasons', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/nested.test.ts':
+      "import test from 'node:test'; test('parent', async t => { await t.test('child pass', () => {}); await t.test('child skip', {skip:'nested skip reason'}, () => {}); });",
+  });
+  await exec(process.execPath, ['scripts/run-tests.mjs', '--timings=timings.ndjson'], {
+    cwd: root,
+    windowsHide: true,
+  });
+  const records = await readRecords(path.join(root, 'timings.ndjson'));
+  const cases = records.filter((record) => record.kind === 'case');
+  assert.deepEqual(cases.map((record) => record.name).sort(), [
+    'child pass',
+    'child skip',
+    'parent',
+  ]);
+  assert.equal(
+    cases.find((record) => record.name === 'child skip').skipReason,
+    'nested skip reason',
+  );
+  assert.equal(records.find((record) => record.kind === 'run-summary').counts.tests, 3);
+});
+
+test('timings distinguish cancelled tests and failed TODO cases from ordinary failures', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/status.test.ts':
+      "import test from 'node:test'; test('todo failure', {todo:'pending fix'}, () => { throw Error('pending'); }); test('cancelled case', {timeout:20}, async () => { await new Promise(resolve => setTimeout(resolve,60)); });",
+  });
+  const failure = await run(
+    process.execPath,
+    ['scripts/run-tests.mjs', '--timings=timings.ndjson'],
+    {
+      cwd: root,
+      windowsHide: true,
+    },
+  );
+  assert.equal(failure.code, 1);
+  const records = await readRecords(path.join(root, 'timings.ndjson'));
+  const cases = records.filter((record) => record.kind === 'case');
+  assert.equal(cases.find((record) => record.name === 'todo failure').status, 'todo');
+  assert.equal(cases.find((record) => record.name === 'cancelled case').status, 'cancelled');
+  assert.equal(records.find((record) => record.kind === 'run-summary').counts.failed, 0);
+});
+
+test('whole-run wall time includes preparation before either schedule starts its harness', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/pass.test.ts': "import test from 'node:test'; test('passing fixture', () => {});",
+  });
+  // A controlled slow dependency exposes whether the runner starts its clock only after discovery.
+  // The actual discovery/classification implementation still runs after the delay.
+  await copyFile(
+    path.join(root, 'scripts/test-execution-policy.ts'),
+    path.join(root, 'scripts/real-policy.ts'),
+  );
+  await writeFile(
+    path.join(root, 'scripts/test-execution-policy.ts'),
+    `
+import { discoverTests as discover, loadPolicy, partitionTests } from './real-policy.ts';
+export { loadPolicy, partitionTests };
+export async function discoverTests(root) {
+  await new Promise(resolve => setTimeout(resolve, 300));
+  return discover(root);
+}`,
+  );
+  for (const schedule of ['serial', 'partitioned']) {
+    await exec(
+      process.execPath,
+      ['scripts/run-tests.mjs', `--schedule=${schedule}`, `--timings=${schedule}.ndjson`],
+      {
+        cwd: root,
+        windowsHide: true,
+      },
+    );
+    const metadata = JSON.parse(
+      await readFile(path.join(root, `${schedule}.ndjson.meta.json`), 'utf8'),
+    );
+    const phaseMs = Object.values(metadata.phaseWall).reduce(
+      (sum: number, value) => sum + Number(value),
+      0,
+    );
+    assert.ok(
+      metadata.wallMs - phaseMs >= 250,
+      `whole run omitted preparation: ${JSON.stringify(metadata)}`,
+    );
+  }
+});
+
+/**
+ * Run a command and describe how it ended, whether it succeeded or failed.
+ *
+ * `execFile` rejects on a non-zero exit code, so a test that cares about the code has to catch; this
+ * keeps that shape in one place instead of a cast at every call site.
+ */
+async function run(
+  command: string,
+  args: string[],
+  options: { cwd: string; windowsHide: boolean },
+): Promise<{ code: number | undefined; stdout: string; stderr: string }> {
+  try {
+    const { stdout, stderr } = await exec(command, args, options);
+    return { code: undefined, stdout, stderr };
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return {
+      code: typeof failure.code === 'number' ? failure.code : 1,
+      stdout: failure.stdout ?? '',
+      stderr: failure.stderr ?? '',
+    };
+  }
 }
 
 test('quiet runner retains successful output in a log without printing each passing test', async (t) => {
@@ -62,6 +375,247 @@ test('quiet runner reports the failing assertion and preserves a nonzero exit co
       return true;
     },
   );
+});
+
+/**
+ * The timing reporter is an extra observer, so it may not change what the run does: the same cases
+ * pass, fail and skip, the quiet output stays quiet, and the exit code still reports a failure. Each
+ * of these asserts a property of the run rather than of the file's shape, because a reporter that
+ * silently swallowed an event would still produce a plausible-looking file.
+ */
+test('timings are opt-in, and the run is otherwise identical without them', async (t) => {
+  const root = await tree(t, {
+    'pass.test.mjs': "import test from 'node:test'; test('passing case', () => {});",
+  });
+  const file = path.join(root, 'pass.test.mjs');
+  const { stdout } = await exec(process.execPath, ['scripts/run-tests.mjs', file], {
+    cwd: projectRoot,
+    windowsHide: true,
+  });
+  assert.match(stdout, /pass=1 fail=0/);
+  // One total line per phase is new; it is the phase's own summary, not a second copy of the run.
+  assert.match(stdout, /^Total: serial tests=1 pass=1 fail=0/m);
+  const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
+  assert.ok(log);
+  t.after(() => rm(log, { force: true }));
+  // No --timings path was given, so nothing is written where a caller would look for one; the
+  // phase's internal report lives beside the log, not in the caller's tree.
+  assert.deepEqual(
+    (await readdir(root)).filter((name) => name.includes('timings') || name.includes('meta')),
+    [],
+  );
+});
+
+test('timings record every case outcome, create their directory, and report a failure', async (t) => {
+  const root = await tree(t, {
+    'mixed.test.mjs': `import test from 'node:test';
+import assert from 'node:assert/strict';
+test('passing case', () => {});
+test('failing case', () => assert.equal(1, 2));
+test('skipped case', { skip: 'fixture skip reason' }, () => {});
+test('todo case', { todo: 'fixture todo' }, () => {});`,
+  });
+  const file = path.join(root, 'mixed.test.mjs');
+  // A directory that does not exist yet: the reporter creates it instead of failing the run.
+  const timings = path.join(root, 'nested', 'deeper', 'timings.ndjson');
+  const failure = await run(
+    process.execPath,
+    ['scripts/run-tests.mjs', `--timings=${timings}`, file],
+    { cwd: projectRoot, windowsHide: true },
+  );
+  assert.equal(failure.code, 1, 'a failing case still fails the run');
+  assert.match(failure.stdout, /fail=1/);
+  const log = /Log: (.+)/.exec(failure.stdout)?.[1]?.trim();
+  assert.ok(log);
+  t.after(() => rm(log, { force: true }));
+
+  const records = (await readFile(timings, 'utf8'))
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+  const cases = records.filter((record) => record.kind === 'case');
+  assert.deepEqual(cases.map((record) => record.status).sort(), [
+    'failed',
+    'passed',
+    'skipped',
+    'todo',
+  ]);
+  for (const record of cases) {
+    assert.equal(record.schemaVersion, 1);
+    assert.equal(record.phase, 'serial');
+    assert.ok(Number.isFinite(record.durationMs), `${record.name} has no duration`);
+    assert.ok(path.isAbsolute(record.file), `${record.name} carries no absolute file`);
+  }
+  const skipped = cases.find((record) => record.status === 'skipped');
+  assert.equal(skipped.skipReason, 'fixture skip reason');
+  for (const record of cases.filter((item) => item.status !== 'skipped'))
+    assert.equal(record.skipReason, null);
+  // A complete report is one the writer closed: the terminal record is what tells a truncated file
+  // from a finished one, and the runner refuses the former.
+  assert.equal(records.at(-1).kind, 'phase-summary');
+  const summary = records.find((record) => record.kind === 'run-summary');
+  assert.equal(summary.file, null);
+  assert.deepEqual(summary.counts, {
+    tests: 4,
+    passed: 1,
+    failed: 1,
+    skipped: 1,
+    cancelled: 0,
+    todo: 1,
+  });
+  // The per-file summary is Node's own duration for that file, not a sum over the cases.
+  const perFile = records.find((record) => record.kind === 'file-summary');
+  assert.equal(perFile.file, file);
+  assert.ok(Number.isFinite(perFile.durationMs));
+});
+
+test('a timings report on an unwritable path fails the run rather than passing quietly', async (t) => {
+  const root = await tree(t, {
+    'pass.test.mjs': "import test from 'node:test'; test('passing case', () => {});",
+  });
+  // A path whose parent is an existing *file* cannot be created, whatever the platform's error code.
+  const blocked = path.join(root, 'not-a-directory', 'timings.ndjson');
+  await writeFile(path.join(root, 'not-a-directory'), 'a file, not a directory');
+  const failure = await run(
+    process.execPath,
+    ['scripts/run-tests.mjs', `--timings=${blocked}`, path.join(root, 'pass.test.mjs')],
+    { cwd: projectRoot, windowsHide: true },
+  );
+  assert.equal(failure.code, 1, 'an unwritable report is a failed run');
+  const log = /Log: (.+)/.exec(failure.stdout)?.[1]?.trim();
+  assert.ok(log);
+  t.after(() => rm(log, { force: true }));
+});
+
+test('a filtered run is marked as filtered in the timings metadata', async (t) => {
+  const root = await tree(t, {
+    'skip.test.mjs': `import test from 'node:test';
+test('chosen case', () => {});
+test('excluded case', () => { throw new Error('must be filtered'); });`,
+  });
+  const timings = path.join(root, 'timings.ndjson');
+  const { stdout } = await exec(
+    process.execPath,
+    [
+      'scripts/run-tests.mjs',
+      '--test-name-pattern=chosen',
+      `--timings=${timings}`,
+      path.join(root, 'skip.test.mjs'),
+    ],
+    { cwd: projectRoot, windowsHide: true },
+  );
+  assert.match(stdout, /pass=1 fail=0/);
+  const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
+  assert.ok(log);
+  t.after(() => rm(log, { force: true }));
+  const metadata = JSON.parse(await readFile(`${timings}.meta.json`, 'utf8'));
+  assert.equal(metadata.filtered, true);
+  assert.equal(metadata.schedule, 'serial');
+  assert.equal(metadata.parallelConcurrency, null);
+  assert.equal(metadata.discovered, 1);
+  assert.equal(metadata.explicit, true);
+  assert.ok(metadata.head, 'the run records the revision it measured');
+  assert.ok(Number.isFinite(metadata.wallMs), 'the run records a monotonic wall clock');
+});
+
+test('--plan previews the partition without starting a harness or writing a log', async () => {
+  const { discoverTests } = await import('../scripts/test-execution-policy.ts');
+  const discovered = await discoverTests(projectRoot);
+  const { stdout } = await exec(
+    process.execPath,
+    ['scripts/run-tests.mjs', '--schedule=partitioned', '--parallel-concurrency=2', '--plan'],
+    { cwd: projectRoot, windowsHide: true },
+  );
+  // The preview covers the discovered suite exactly once and names every file's phase.
+  assert.match(stdout, /^Discovered \d+ test file\(s\)$/m);
+  const phase = [...stdout.matchAll(/^(parallel|serial)\s+(tests\/\S+\.test\.ts)\s+\(/gm)];
+  assert.equal(phase.length, discovered.length);
+  assert.deepEqual(phase.map((match) => match[2]).sort(), [...discovered].sort());
+  assert.match(stdout, /^Plan: parallel=\d+ serial=\d+ total=\d+ parallel-concurrency=2$/m);
+  assert.doesNotMatch(stdout, /^Log: /m, 'a preview writes no log');
+  assert.doesNotMatch(stdout, /^Tests: /m, 'a preview runs no harness');
+});
+
+test('--plan and the partitioned schedule refuse a schedule they cannot honour', async () => {
+  const bad = async (args: string[]) => {
+    const failure = await run(process.execPath, ['scripts/run-tests.mjs', ...args], {
+      cwd: projectRoot,
+      windowsHide: true,
+    });
+    assert.notEqual(failure.code, undefined, `expected a refusal for ${args.join(' ')}, not a run`);
+    assert.notEqual(failure.code, 0, `expected a refusal for ${args.join(' ')}`);
+    return failure.stderr;
+  };
+  // `--plan` on the serial schedule would print a plan for a run that does not use one.
+  assert.match(await bad(['--plan']), /--plan is only meaningful/);
+  // Two different widths for the same idea: the phase width and the harness width.
+  assert.match(
+    await bad(['--schedule=partitioned', '--concurrency=4']),
+    /--concurrency applies to the serial phases/,
+  );
+  assert.match(await bad(['--schedule=unknown']), /Unsupported schedule/);
+  assert.match(
+    await bad(['--schedule=partitioned', '--parallel-concurrency=0']),
+    /--parallel-concurrency must be a positive integer/,
+  );
+  assert.match(await bad(['--timings=']), /--timings requires a path/);
+});
+
+test('a partitioned run with no reviewed overlap degenerates to one serial phase', async (t) => {
+  const root = await tree(t, {
+    'pass.test.mjs': "import test from 'node:test'; test('passing case', () => {});",
+  });
+  const file = path.join(root, 'pass.test.mjs');
+  const timings = path.join(root, 'partitioned.ndjson');
+  const { stdout } = await exec(
+    process.execPath,
+    [
+      'scripts/run-tests.mjs',
+      '--schedule=partitioned',
+      '--parallel-concurrency=2',
+      `--timings=${timings}`,
+      file,
+    ],
+    { cwd: projectRoot, windowsHide: true },
+  );
+  // An unreviewed file is serial, so the parallel phase is empty and is not started at all. The
+  // run still has to prove what it did: one phase, one total line, and a report on disk.
+  assert.doesNotMatch(stdout, /^Phase parallel:/m, 'an empty phase is not started');
+  assert.match(stdout, /^Phase serial: 1 file\(s\), concurrency=1$/m);
+  assert.match(stdout, /^Total: serial tests=1 pass=1 fail=0/m);
+  const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
+  assert.ok(log);
+  t.after(() => rm(log, { force: true }));
+  const records = (await readFile(timings, 'utf8'))
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+  assert.equal(records.filter((record) => record.phase === 'parallel').length, 0);
+  assert.ok(records.some((record) => record.phase === 'serial' && record.kind === 'case'));
+  const metadata = JSON.parse(await readFile(`${timings}.meta.json`, 'utf8'));
+  assert.equal(metadata.schedule, 'partitioned');
+  assert.equal(metadata.parallelConcurrency, 2);
+  assert.equal(metadata.parallel, 0);
+  assert.equal(metadata.serial, 1);
+});
+
+test('--concurrency keeps its meaning for a serial run and reaches the harness', async (t) => {
+  const root = await tree(t, {
+    'pass.test.mjs': "import test from 'node:test'; test('passing case', () => {});",
+  });
+  const { stdout } = await exec(
+    process.execPath,
+    ['scripts/run-tests.mjs', '--concurrency=4', path.join(root, 'pass.test.mjs')],
+    { cwd: projectRoot, windowsHide: true },
+  );
+  // The runner's own line and the harness phase line must agree, and both must say 4: a width that
+  // is silently dropped would make every concurrency experiment measure nothing.
+  assert.match(stdout, /^Running 1 test file\(s\), concurrency=4$/m);
+  assert.match(stdout, /^Phase serial: 1 file\(s\), concurrency=4$/m);
+  assert.match(stdout, /pass=1 fail=0/);
+  const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
+  assert.ok(log);
+  t.after(() => rm(log, { force: true }));
 });
 
 test('changed selection follows transitive imports and literal worker paths', async (t) => {
@@ -179,4 +733,38 @@ test('changed discovery includes staged, unstaged, deleted and untracked files b
     'unstaged.txt',
   ]);
   await assert.rejects(getChangedFiles(root, 'nonexistent-baseline'));
+});
+
+test('a documentation-only change selects nothing instead of the whole suite', async (t) => {
+  const root = await tree(t, {
+    'tests/a.test.ts': 'export {};',
+    'packages/example/new.ts': 'export {};',
+    'README.md': '# readme',
+    LICENSE: 'licence',
+    'docs/notes.md': 'notes',
+  });
+  const { selectTests } = await import('../scripts/select-tests.ts');
+  // Editing prose is the one change that provably cannot affect a test, and running 2000 cases for it is what
+  // makes a developer stop using the selector at all. None of these three may fall through to the fallbacks
+  // below, which would turn a README edit into a full run.
+  for (const changed of ['README.md', 'LICENSE', 'docs/notes.md']) {
+    const selection = await selectTests(root, [changed]);
+    assert.deepEqual(selection.tests, [], changed);
+    assert.equal(selection.full, false, changed);
+  }
+  assert.equal((await selectTests(root, ['README.md'])).reason, 'Documentation only');
+});
+
+test('a shared critical module outside the ones already exercised still falls back to all tests', async (t) => {
+  const root = await tree(t, {
+    'tests/a.test.ts': 'export {};',
+    'tests/carrier-consumer.test.ts': "import '../packages/carrier/service.ts';",
+    'packages/carrier/service.ts': 'export {};',
+  });
+  const { selectTests } = await import('../scripts/select-tests.ts');
+  // `carrier` has implicit consumers: a test imports its service, so without the critical-module rule the
+  // selector would answer "just that one test" for a change to a module whose real reach is the whole runtime.
+  const selection = await selectTests(root, ['packages/carrier/service.ts']);
+  assert.equal(selection.full, true, selection.reason);
+  assert.deepEqual(selection.tests, ['tests/a.test.ts', 'tests/carrier-consumer.test.ts']);
 });

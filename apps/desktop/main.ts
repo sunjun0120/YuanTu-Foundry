@@ -8,6 +8,7 @@ import {
 } from './sandbox-setup.ts';
 import { Worker } from 'node:worker_threads';
 import { McpSettingsStore } from './mcp-settings.ts';
+import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import { parseMcpCommand, type McpReply } from './mcp-contract.ts';
 import { parseFilesCommand, type FilesReply } from './files-contract.ts';
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, clipboard, Menu } from 'electron';
@@ -32,6 +33,7 @@ import type { ProviderConfig } from '../../packages/providers/config.ts';
 import { discoverModels } from '../../packages/providers/discovery.ts';
 import { parseUiSettingsCommand, type UiSettingsReply } from './ui-settings.ts';
 import { mainText, setMainLocale } from './i18n.ts';
+import { carrierErrorReply } from './carrier-errors.ts';
 import { UiSettingsStore } from './ui-settings-store.ts';
 import { permissionPolicyForMode, type PermissionMode } from './permission-settings.ts';
 import { PermissionSettingsStore } from './permission-settings-store.ts';
@@ -64,7 +66,6 @@ let uiSettingsStore: UiSettingsStore;
 let permissionSettingsStore: PermissionSettingsStore;
 let sandboxEnvironment: SandboxEnvironment;
 let dailyBackups: DailyBackups;
-let backupTimer: NodeJS.Timeout | undefined;
 let backupRestoring: Promise<BackupReply> | undefined;
 let sandboxInitializing: Promise<SandboxSetupView> | undefined;
 const backupWorkers = new Set<Promise<BackupResult>>();
@@ -402,12 +403,7 @@ function attach(next: CarrierService): CarrierService {
   moving = undefined;
   following = undefined;
   service = next;
-  let backupStarted = false;
   unsubscribe = next.subscribe((state) => {
-    if (state.ready && !backupStarted && !quitting && !switching) {
-      backupStarted = true;
-      void dailyBackups?.tick(path.join(state.workspace, '.yuantu', 'sessions.sqlite'));
-    }
     if (state.ready && state.session.sessionId) followSession(state.session.sessionId);
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:state', state);
@@ -430,7 +426,7 @@ function attach(next: CarrierService): CarrierService {
   return next;
 }
 function safeError(error: unknown): string {
-  return redactSecrets(error instanceof Error ? error.message : 'Desktop operation failed');
+  return carrierErrorReply(error).error;
 }
 /**
  * The pair a session is in, and the pair the live carrier is actually enforcing.
@@ -549,7 +545,6 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   if (quitting) return;
   quitting = true;
-  if (backupTimer) clearInterval(backupTimer);
   settingsAbort.abort();
   void (async () => {
     try {
@@ -590,15 +585,7 @@ void app
       path.join(app.getPath('userData'), 'backup-settings.json'),
       executeBackup,
     );
-    await dailyBackups.load();
-    backupTimer = setInterval(
-      () => {
-        if (!quitting && !switching && service?.snapshot.ready)
-          void dailyBackups.tick(sessionDatabase());
-      },
-      15 * 60 * 1000,
-    );
-    backupTimer.unref();
+    // Manual maintenance only: legacy daily opt-in files no longer enable scheduling.
     uiSettingsStore = new UiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
     await uiSettingsStore.load();
     /**
@@ -717,19 +704,6 @@ void app
           throw new Error(mainText('upgrade.busy'));
         const file = sessionDatabase();
         if (command.type === 'get') return { ok: true, view: await dailyBackups.view(file) };
-        if (command.type === 'configure') {
-          const write = dailyBackups.configure(command.enabled);
-          profileWrites.add(write);
-          try {
-            await write;
-          } finally {
-            profileWrites.delete(write);
-          }
-          if (quitting || switching) throw new Error(mainText('upgrade.busy'));
-          await dailyBackups.tick(file);
-          if (quitting || switching) throw new Error(mainText('upgrade.busy'));
-          return { ok: true, view: await dailyBackups.view(file) };
-        }
         if (command.type === 'create') return { ok: true, view: await dailyBackups.create(file) };
         const work = restoreBackup(file, command.id);
         backupRestoring = work;
@@ -819,6 +793,9 @@ void app
       try {
         assertSender(event);
         const command = parseMcpCommand(input);
+        // The hidden management surface must also refuse direct IPC calls.
+        if (!PRODUCT_SCOPE.mcpManagement)
+          return { ok: false, error: 'MCP service management is temporarily disabled.' };
         if (command.type === 'cancel-authorize') {
           mcpAuthorize?.abort(new Error('MCP authorization cancelled'));
           return { ok: true, message: mainText('mcpMain.cancelAuthorize') };
@@ -1152,7 +1129,7 @@ void app
         if (command.type !== 'snapshot') await following;
         return { ok: true, state };
       } catch (error) {
-        return { ok: false, error: safeError(error) };
+        return carrierErrorReply(error);
       }
     });
     await window.loadFile(pagePath);

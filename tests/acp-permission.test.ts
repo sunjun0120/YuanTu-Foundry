@@ -1,3 +1,4 @@
+// Temporarily paused ACP tests retain their bodies; restore test.skip with the public ACP entry.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -14,7 +15,7 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 
 for (const decision of ['reject-once', 'unknown-option', 'cancelled']) {
-  test(`ACP permission ${decision} never writes a file`, { timeout: 20000 }, async (t) => {
+  test.skip(`ACP permission ${decision} never writes a file`, { timeout: 20000 }, async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-deny-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     let step = 0;

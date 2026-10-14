@@ -6,7 +6,9 @@ import { knowledgeTools } from '../knowledge/tools.ts';
 import { ToolRegistry, type HookRegistry } from './registry.ts';
 import { extensionTools } from '../resources/extensions.ts';
 import { discoverSkills, expandSkill } from '../resources/skills.ts';
-import { fileTools } from './files.ts';
+import { fileTools, workspaceAccess, Workspace } from './files.ts';
+import { createSearchBackend } from './search-backend.ts';
+import { acquireSearchService, releaseSearchService } from '../search/service.ts';
 import { commandTool } from './command.ts';
 import { mcpTools } from '../mcp/tools.ts';
 import { BackgroundCommands } from './background.ts';
@@ -99,7 +101,33 @@ export function createTools(
   for (const tool of mcp.tools) registry.register(tool);
   const lsp = new LspManager(root);
   const annotate = process.env.YUANTU_LSP_AFTER_EDIT !== '0';
-  for (const tool of fileTools(root, { observe: fileObservationEnabled() }))
+  /**
+   * The fast search backend, when one is prepared for this platform.
+   *
+   * `YUANTU_SEARCH_RG=0` removes it entirely. The backend itself refuses to run without a verified binary, so
+   * the environment variable is an operator's switch rather than a correctness gate — what it protects is the
+   * cost of the lookup in a deployment that has decided never to ship one.
+   */
+  const searchBackend =
+    process.env.YUANTU_SEARCH_RG === '0' ? undefined : createSearchBackend(root);
+  /**
+   * The symbol index, shared per workspace and released with this registry.
+   *
+   * `acquireSearchService` ref-counts: a registry is built for every run, and the index has to outlive the run
+   * that first asked for it without being closed by the next registry to finish. It gets the *same* access
+   * adapter the file tools use, so the index enumerates under one path and credential policy rather than a second
+   * one that could disagree with it. The database lives under the internal `.yuantu/search` directory, which the
+   * file tools already refuse to read or write.
+   */
+  const search = acquireSearchService(workspaceAccess(new Workspace(path.resolve(root))), {
+    indexDirectory: path.join(path.resolve(root), '.yuantu', 'search'),
+  });
+  registry.onClose(() => releaseSearchService(search));
+  for (const tool of fileTools(root, {
+    observe: fileObservationEnabled(),
+    searchBackend,
+    search,
+  }))
     registry.register(
       annotate && MUTATION_TOOLS.has(tool.name) ? attachDiagnostics(tool, lsp, root) : tool,
     );
@@ -118,21 +146,25 @@ export function createTools(
   for (const tool of languageServers.tools) registry.register(tool);
   // `workspace/symbol` is only consulted for a server the operator already started; nothing here
   // launches one, so the repo-map tool degrades to its heuristic index instead of paying for a server.
-  for (const tool of repoMapTools(root, async (query, language, signal) => {
-    const client = lsp.running(typeof language === 'string' ? language : '');
-    if (!client) return [];
-    return parseWorkspaceSymbols(
-      await client.send('workspace/symbol', { query }, signal),
-      root,
-      200,
-    ).map((entry) => ({
-      path: entry.path,
-      kind: entry.kind,
-      name: entry.name,
-      ...(entry.line === undefined ? {} : { line: entry.line }),
-      ...(entry.container === undefined ? {} : { container: entry.container }),
-    }));
-  }))
+  for (const tool of repoMapTools(
+    root,
+    async (query, language, signal) => {
+      const client = lsp.running(typeof language === 'string' ? language : '');
+      if (!client) return [];
+      return parseWorkspaceSymbols(
+        await client.send('workspace/symbol', { query }, signal),
+        root,
+        200,
+      ).map((entry) => ({
+        path: entry.path,
+        kind: entry.kind,
+        name: entry.name,
+        ...(entry.line === undefined ? {} : { line: entry.line }),
+        ...(entry.container === undefined ? {} : { container: entry.container }),
+      }));
+    },
+    search,
+  ))
     registry.register(tool);
   for (const tool of extensionTools(root)) registry.register(tool);
   /**

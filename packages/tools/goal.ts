@@ -182,6 +182,25 @@ function updateTool(now: () => string): Tool {
          */
         const refusal = goalAuthorityRefusal(action, context.goals.human);
         if (refusal) return { isError: true, content: refusal };
+        /**
+         * A goal bound to a completion contract may only be closed on the contract's evidence.
+         *
+         * Asked before the transition rather than after it, because the whole point is that the goal stays
+         * `active` when the answer is no: a refusal that had already written `completed` and then rolled it back
+         * would leave a window — and an event — announcing work that was never verified. The refusal names the
+         * next action, so a model that tried to close early learns what to do instead of retrying the same call.
+         */
+        if (action === 'complete' && context.goals.canComplete) {
+          const verdict = await context.goals.canComplete();
+          if (!verdict.allowed)
+            return {
+              isError: true,
+              content:
+                'This goal is bound to a completion contract, which has not verified yet' +
+                (verdict.reason ? `: ${verdict.reason}` : '') +
+                '. Keep working and record progress on the contract’s steps; the goal closes itself once the contract verifies, or ask the user to review the evidence.',
+            };
+        }
         const next = changeGoal(
           goal,
           action,

@@ -179,6 +179,67 @@ export class SessionMigrations {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(run_id,message_id)
       );
+      -- Sub-agent workspace isolation (schema v29). Created here as well as in the current-schema entry: an
+      -- existing database has to *gain* these tables, while a new one declares them, and the parity regression
+      -- in tests/schema-migrations.test.ts is what keeps the two definitions identical. No data step accompanies
+      -- them — a session written before isolation has no binding, and the honest reading of such a session is the
+      -- synthesised shared binding the store returns on read, not a row this migration would have invented.
+      CREATE TABLE IF NOT EXISTS workspace_bindings (
+        id TEXT PRIMARY KEY,
+        session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+        parent_session_id TEXT,
+        project_root TEXT NOT NULL,
+        execution_root TEXT NOT NULL,
+        repository_root TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('shared','worktree')),
+        snapshot_id TEXT,
+        base_commit TEXT,
+        state TEXT NOT NULL CHECK(state IN ('preparing','ready','blocked','archiving','archived','removing','removed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS workspace_bindings_session ON workspace_bindings(session_id);
+      CREATE INDEX IF NOT EXISTS workspace_bindings_state ON workspace_bindings(state,created_at);
+      CREATE TABLE IF NOT EXISTS workspace_operation_leases (
+        binding_id TEXT PRIMARY KEY REFERENCES workspace_bindings(id) ON DELETE CASCADE,
+        owner_pid INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workspace_snapshots (
+        id TEXT PRIMARY KEY,
+        project_root TEXT NOT NULL,
+        source_root TEXT NOT NULL,
+        source_head TEXT NOT NULL,
+        base_commit TEXT NOT NULL,
+        base_tree TEXT NOT NULL,
+        manifest_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workspace_results (
+        id TEXT PRIMARY KEY,
+        binding_id TEXT NOT NULL,
+        child_session_id TEXT NOT NULL,
+        parent_session_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        comparison_tree TEXT NOT NULL,
+        result_tree TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        paths TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('ready','unsupported','applying','applied','conflict','superseded')),
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS workspace_results_parent ON workspace_results(parent_session_id,created_at);
+      CREATE INDEX IF NOT EXISTS workspace_results_child ON workspace_results(child_session_id,status);
+      CREATE TABLE IF NOT EXISTS workspace_apply_receipts (
+        id TEXT PRIMARY KEY,
+        result_id TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        target_binding_id TEXT NOT NULL,
+        change_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(result_id,digest,target_binding_id)
+      );
       CREATE TABLE IF NOT EXISTS file_changes (
         seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
         session_id TEXT NOT NULL REFERENCES sessions(id), run_id TEXT,
@@ -497,6 +558,11 @@ export class SessionMigrations {
       { from: 26, upTo: 27, run: () => {} },
       // Old readers must not launch automatic work while ignoring its durable authority.
       { from: 27, upTo: 28, run: () => {} },
+      // A reader compatibility fence: v28 cannot interpret a durable workspace binding, and a run that ignored
+      // one would write into a directory it was never given (see the workspace_bindings tables above).
+      { from: 28, upTo: 29, run: () => {} },
+      // Older hosts do not honour the cross-process workspace cleanup lease.
+      { from: 29, upTo: 30, run: () => {} },
     ];
   }
 

@@ -218,3 +218,37 @@ test('a first-writer temporary-file collision preserves that file and removes th
   assert.equal(f.passwords.size, 0);
   assert.equal(readdirSync(f.directory).includes('.secret-key-id'), false);
 });
+
+test('a vault key spelled differently but decoding to the same bytes is refused', (t) => {
+  /**
+   * The length checks are not the whole check. A 32-byte key has several 44-character base64 spellings: the last
+   * character carries four significant bits, and the two bits after them are padding that a decoder ignores. So
+   * a vault holding `…Q` and one holding `…R` name the same bytes, and a check that only asked "is it 44
+   * characters, and does it decode to 32 bytes?" would accept both.
+   *
+   * That matters because "the key in the vault" has to have exactly one spelling: two spellings of one key means
+   * two strings that compare unequal while being the same key, which is how a rotation or an equality check
+   * quietly stops working. The round-trip check is what makes the spelling canonical.
+   */
+  const f = fixture(t);
+  const bytes = f.cipher().encrypt('fixture token');
+  const entry = [...f.passwords.keys()][0]!;
+  const canonical = f.passwords.get(entry)!;
+  // 32 bytes encode to 44 characters, the last of which is the `=` pad; the character before it carries two
+  // significant bits and four padding bits.
+  assert.equal(canonical.length, 44);
+  assert.equal(canonical.at(-1), '=');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const swapped = alphabet[alphabet.indexOf(canonical[42]!) + 1]!;
+  const respelled = `${canonical.slice(0, 42)}${swapped}=`;
+  assert.equal(respelled.length, 44);
+  assert.deepEqual(
+    Buffer.from(respelled, 'base64'),
+    Buffer.from(canonical, 'base64'),
+    'the two spellings are the same key',
+  );
+  assert.notEqual(respelled, canonical);
+  assert.equal(Buffer.from(respelled, 'base64').toString('base64'), canonical);
+  f.passwords.set(entry, respelled);
+  assert.throws(() => f.cipher().decrypt(bytes), /system-vault key invalid/i);
+});

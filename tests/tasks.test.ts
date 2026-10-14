@@ -455,7 +455,20 @@ test('event triggers run a dependent task when its source completes', async (t) 
   const bodies: string[] = [];
   const url = await httpFixture(t, (body, res) => {
     bodies.push(JSON.stringify(body));
-    sendFrames(res, frames('OK'));
+    /**
+     * The source task's own round records progress before it answers.
+     *
+     * A completed task now requires its declared steps to be completed and its acceptance to be satisfiable, so a
+     * fixture that only ever answers in prose can no longer produce the `task.completed` this test chains on.
+     */
+    if (bodies.length === 1)
+      sendFrames(
+        res,
+        frames('OK', [
+          { id: 'step-1', name: 'task_step', input: { index: 0, status: 'completed' } },
+        ]),
+      );
+    else sendFrames(res, frames('OK'));
   });
   const client = new AgentHostClient({
     nodePath: process.execPath,
@@ -477,11 +490,20 @@ test('event triggers run a dependent task when its source completes', async (t) 
   });
   await client.start();
   const session = await client.request('session.create', {});
+  // The source task's criterion is a file that is already there, so a clean finish can satisfy it.
+  await writeFile(path.join(root, 'marker.txt'), 'ok');
   const source = await client.request('task.create', {
     sessionId: session.id,
     title: 'Source task',
     description: 'source work',
     steps: [{ description: 'one', status: 'pending' }],
+    acceptance: [
+      {
+        description: 'marker file matches',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
+    ],
   });
   const dependent = await client.request('task.create', {
     sessionId: session.id,
@@ -502,10 +524,14 @@ test('event triggers run a dependent task when its source completes', async (t) 
     prompt: 'do source',
   });
   const deadline = Date.now() + 20_000;
-  while (bodies.length < 2 && Date.now() < deadline)
+  // Waited for by *content* rather than by request count: the source's own round needs a second request to close
+  // (the checkpoint is a tool call, and a run does not end on one), so counting requests would race the chain.
+  while (!bodies.some((body) => /dependent work/.test(body)) && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(bodies.length, 2, 'the dependent task did not run after the source completed');
-  assert.match(bodies[1]!, /dependent work/);
+  assert.ok(
+    bodies.some((body) => /dependent work/.test(body)),
+    'the dependent task did not run after the source completed',
+  );
 });
 
 // ---- merged from task-trigger.test.ts ----
