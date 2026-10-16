@@ -424,6 +424,18 @@ function handle(message: Incoming): void {
             newText: params.newName,
           },
         ];
+      /**
+       * The edit names a path that is inside the workspace as a string and outside it as a file: `linked/` is a
+       * link the caller placed there. This is the shape that decides whether the workspace check answers about
+       * the path or about the file, and only the second answer keeps the read inside.
+       */
+      if (text.includes('SYMLINKTARGET'))
+        changes[`${rootUri}/linked/secret.fake`] = [
+          {
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+            newText: params.newName,
+          },
+        ];
       send({ jsonrpc: '2.0', id: message.id, result: { changes } });
       return;
     }

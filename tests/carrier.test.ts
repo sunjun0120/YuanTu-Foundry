@@ -195,6 +195,7 @@ test('the same service drives a Host it did not start, over a socket', async (t)
   const socket = await connectSocket(host.port);
   const carrier = connectedCarrier({
     transport: socketTransport(socket),
+    authToken: host.authToken,
     env: {
       YUANTU_API_KEY: 'fixture',
       YUANTU_MODEL: 'fixture',
@@ -216,7 +217,11 @@ test('the same service drives a Host it did not start, over a socket', async (t)
 test('a carrier that does not own the Host reports the break instead of restarting it', async (t) => {
   const host = await listeningHost(t, {});
   const socket = await connectSocket(host.port);
-  const carrier = connectedCarrier({ transport: socketTransport(socket), env: {} });
+  const carrier = connectedCarrier({
+    transport: socketTransport(socket),
+    authToken: host.authToken,
+    env: {},
+  });
   t.after(() => carrier.stop().catch(() => {}));
   await carrier.start();
   assert.equal(carrier.snapshot.ready, true);

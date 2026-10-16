@@ -52,7 +52,7 @@ test('a Host keeps running rounds until the session goal is finished', async (t)
     else sendFrames(res, frames('Done.'));
   });
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const started: string[] = [];
@@ -129,7 +129,7 @@ test('a continuation round cannot re-aim the goal the runtime started it for', a
     else sendFrames(res, frames('Done.'));
   });
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const started: string[] = [];
@@ -177,7 +177,7 @@ test('a goal that has spent its rounds is recorded as blocked, not left looking 
     else sendFrames(res, frames('That is the whole budget.'));
   });
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const started: string[] = [];
@@ -232,7 +232,7 @@ test('a task run is not extended by a goal, because its rounds belong to its att
   // A definition the run can actually satisfy: a task with no criteria is no longer a vacuous pass, and this
   // test is about the goal loop standing down, not about verification.
   await writeFile(path.join(workspace, 'marker.txt'), 'ok');
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const task = await client.request('task.create', {

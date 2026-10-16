@@ -30,6 +30,8 @@ function node<K extends keyof HTMLElementTagNameMap>(
   const value = document.createElement(tag);
   value.textContent = text;
   value.className = className;
+  if (['todo-content', 'deliverable-path', 'deliverable-description'].includes(className))
+    value.translate = false;
   return value;
 }
 

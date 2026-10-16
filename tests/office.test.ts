@@ -8,13 +8,14 @@ import JSZip from 'jszip';
 import {
   OfficeUnavailableError,
   isOfficeUnavailable,
+  isScriptAuthorizationFailure,
   runOfficeAutomation,
 } from '../packages/office/automation.ts';
 import { readPptxSlides } from '../packages/office/read.ts';
 import { verifyFileDelivery, deliveryFormats } from '../packages/core/delivery.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
-import { MAX_CREATED_SHEETS } from '../packages/office/spreadsheet.ts';
+import { MAX_CREATED_SHEETS, runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
 import { deliveryTool } from '../packages/tools/delivery.ts';
 
 // ---- merged from office.test.ts ----
@@ -39,6 +40,54 @@ test('a missing Office install is recognised from the localized COM error', () =
   assert.equal(isOfficeUnavailable('Word text not found: marker 947'), false);
   assert.equal(isOfficeUnavailable(''), false);
   assert.equal(isOfficeUnavailable('Office operation failed: 0x800A01A8'), false);
+});
+
+test('a refused script is recognised apart from a missing Office install', () => {
+  // Captured verbatim by running the shipped `automation.ps1` on a machine whose integrity label makes
+  // Windows refuse the file. The script never ran, so this says nothing about whether Office is installed.
+  const refused =
+    'AuthorizationManager check failed.\n' +
+    '    + CategoryInfo          : SecurityError: (:) [], ParentContainsErrorRecordException\n' +
+    '    + FullyQualifiedErrorId : UnauthorizedAccess\n';
+  assert.equal(isScriptAuthorizationFailure(refused), true);
+  assert.equal(
+    isOfficeUnavailable(refused),
+    false,
+    'a refused script must not be reported as a missing installation',
+  );
+  // The other shape the same refusal takes: an execution policy that will not run unsigned files.
+  assert.equal(
+    isScriptAuthorizationFailure(
+      'automation.ps1 cannot be loaded because it is not digitally signed.\n' +
+        '    + CategoryInfo : SecurityError: (:) [], PSSecurityException\n' +
+        '    + FullyQualifiedErrorId : UnauthorizedAccess\n',
+    ),
+    true,
+  );
+  // And the two must not swallow each other's cause.
+  assert.equal(isScriptAuthorizationFailure('80040154 Class not registered'), false);
+  assert.equal(isScriptAuthorizationFailure('Word text not found: marker 947'), false);
+  assert.equal(isScriptAuthorizationFailure(''), false);
+});
+
+test('operation text containing authorization keywords is not a script refusal', () => {
+  for (const keyword of ['AuthorizationManager', 'UnauthorizedAccess', 'PSSecurityException']) {
+    for (const app of ['Word', 'PowerPoint']) {
+      assert.equal(
+        isScriptAuthorizationFailure(
+          `${app} text not found: ${keyword} | at <ScriptBlock>, automation.ps1: line 37`,
+        ),
+        false,
+        `${app} replacement text: ${keyword}`,
+      );
+    }
+  }
+  assert.equal(isScriptAuthorizationFailure('UnauthorizedAccess'), false);
+  assert.equal(
+    isScriptAuthorizationFailure('    + FullyQualifiedErrorId : UnauthorizedAccess\n'),
+    false,
+    'a general access error alone does not prove script loading was refused',
+  );
 });
 
 /**
@@ -357,6 +406,25 @@ test('Office tools create, inspect, edit and preview XLSX behind write approval'
   assert.match(await readFile(path.join(root, 'preview.html'), 'utf8'), /Revenue/);
 });
 
+/**
+ * Why this environment cannot run the Office COM automation, or `undefined` when it can.
+ *
+ * Word and PowerPoint need local Office *and* a machine willing to load `automation.ps1`. Both refusals are
+ * facts about the environment rather than evidence about the product, so they skip with their own reason — and
+ * nothing else does, because only the classified markers count. "Any error means skip" would quietly turn a
+ * broken operation into a green run, which is the failure mode the explicit rule exists to prevent.
+ *
+ * The tool path flattens the typed error into the result text (the registry reports `error.message`, which
+ * keeps the `Original error:` tail), so the markers are matched there; the direct `runOfficeAutomation` path
+ * skips on `OfficeUnavailableError` itself.
+ */
+function officeEnvironmentReason(text: string): string | undefined {
+  if (isScriptAuthorizationFailure(text))
+    return 'Windows refused to load the Office automation script on this machine';
+  if (isOfficeUnavailable(text)) return 'Microsoft Office is not installed on this machine';
+  return undefined;
+}
+
 test(
   'Office tools create and verify a PowerPoint file through local Office',
   { skip: process.platform !== 'win32', timeout: 120000 },
@@ -377,6 +445,11 @@ test(
       },
       { signal: new AbortController().signal, approve: async () => true },
     );
+    const environment = result.isError ? officeEnvironmentReason(result.content) : undefined;
+    if (environment) {
+      t.skip(`${environment}; creating PPTX needs local Office`);
+      return;
+    }
     assert.equal(result.isError, false, result.content);
     assert.match(result.content, /"format":"pptx"/);
     const inspected = await registry.execute(
@@ -496,3 +569,207 @@ async function runOfficeOperation(
   );
   if (result.isError) throw new Error(result.content);
 }
+
+// ---- OOXML decompression bounds ----
+/**
+ * A package that is small on disk and enormous once opened.
+ *
+ * This is the shape the bound exists for: the compressed member is a few kilobytes of repeated text, so every
+ * check that measures the *input* — the 20 MB package limit included — passes, and only a limit applied while the
+ * part is inflated can refuse it. The bound this replaced ran on `.length` after `async('string')` had already
+ * produced the whole string, so the cost of finding out had been paid by the process before the check happened.
+ */
+const PPTX_PRESENTATION = (slides: string): string =>
+  `<p:presentation><p:sldIdLst>${slides}</p:sldIdLst></p:presentation>`;
+const PPTX_SLIDE_ID = '<p:sldId id="256" r:id="rId1"/>';
+const PPTX_RELS =
+  '<Relationships><Relationship Id="rId1" Target="slides/slide1.xml"/></Relationships>';
+
+test('a presentation part that inflates past its bound is refused, in a package every input check accepts', async () => {
+  const zip = new JSZip();
+  zip.file('ppt/presentation.xml', 'a'.repeat(24_000_000));
+  zip.file('ppt/_rels/presentation.xml.rels', PPTX_RELS);
+  const bomb = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  assert.ok(bomb.length < 20_000_000, 'the package itself passes the 20 MB input limit');
+  // Before the bound existed this part had no limit at all: it was read into a 24 MB string and the failure the
+  // caller saw came from the missing slides further down, not from the size.
+  await assert.rejects(() => readPptxSlides(bomb), /PPTX presentation XML is too large/);
+});
+
+test('the relationship part is bounded, so a bomb there cannot pass as a presentation', async () => {
+  const zip = new JSZip();
+  zip.file('ppt/presentation.xml', PPTX_PRESENTATION(PPTX_SLIDE_ID));
+  zip.file('ppt/_rels/presentation.xml.rels', 'a'.repeat(24_000_000));
+  const bomb = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  assert.ok(bomb.length < 20_000_000);
+  await assert.rejects(() => readPptxSlides(bomb), /PPTX relationship XML is too large/);
+});
+
+test('a slide part that inflates past its bound is refused while it is being read', async () => {
+  const zip = new JSZip();
+  zip.file('ppt/presentation.xml', PPTX_PRESENTATION(PPTX_SLIDE_ID));
+  zip.file('ppt/_rels/presentation.xml.rels', PPTX_RELS);
+  zip.file('ppt/slides/slide1.xml', `<p:sld><a:t>${'a'.repeat(24_000_000)}</a:t></p:sld>`);
+  const bomb = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  assert.ok(bomb.length < 20_000_000);
+  // The slide part had a post-decompression check before this change, so this test states the boundary rather
+  // than proving a repair; it fails if a refactor drops the bound while keeping the streaming reader.
+  await assert.rejects(() => readPptxSlides(bomb), /PPTX slide XML is too large/);
+});
+
+test('a small package of the same shape still reads part by part', async () => {
+  const zip = new JSZip();
+  zip.file('ppt/presentation.xml', PPTX_PRESENTATION(PPTX_SLIDE_ID));
+  zip.file('ppt/_rels/presentation.xml.rels', PPTX_RELS);
+  zip.file('ppt/slides/slide1.xml', '<p:sld><a:t>Hello from the bounded reader</a:t></p:sld>');
+  const bytes = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  // The streaming reader has to return exactly what `async('string')` returned, or the bound has broken reading.
+  assert.deepEqual(await readPptxSlides(bytes), ['Hello from the bounded reader']);
+});
+
+test('an oversized workbook part is refused before any worksheet is located', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-ooxml-bound-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const zip = new JSZip();
+  zip.file('xl/workbook.xml', 'a'.repeat(24_000_000));
+  zip.file('xl/_rels/workbook.xml.rels', '<Relationships/>');
+  const source = path.join(root, 'book.xlsx');
+  await writeFile(source, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
+  assert.ok(
+    (await readFile(source)).length < 20_000_000,
+    'the package itself passes the input limit',
+  );
+  // `xl/workbook.xml` had no bound at all before this change, which is why this is the sharpest of the five.
+  await assert.rejects(
+    () =>
+      runSpreadsheetOperation({
+        operation: 'edit',
+        format: 'xlsx',
+        sourcePath: source,
+        outputPath: path.join(root, 'out.xlsx'),
+        cells: [{ sheet: 'Sheet1', cell: 'A1', value: 'x' }],
+      }),
+    /Excel workbook XML is too large/,
+  );
+});
+
+/**
+ * `office_inspect` is the one Office path that hands a package to a reader this repository does not own — mammoth
+ * for DOCX, SheetJS for XLSX — and neither library bounds what it inflates on the way in. The 20 MB check above
+ * them is about the *compressed* file, which is the number the package's author writes, so a small package with
+ * one enormous part passed every input check and was handed over whole.
+ *
+ * Measured on the unfixed code with the fixtures below: a **24,312-byte** DOCX made mammoth return the whole
+ * 24,000,002-character text, and a **25,087-byte** XLSX made SheetJS parse the part (heap +23 MB).
+ */
+const CONTENT_TYPES = (overrides: string): string =>
+  '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+  '<Default Extension="xml" ContentType="application/xml"/>' +
+  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+  overrides +
+  '</Types>';
+const OFFICE_DOCUMENT_RELS = (target: string): string =>
+  '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"' +
+  ` Target="${target}"/></Relationships>`;
+/** The smallest DOCX mammoth accepts, so a failure here is about the bound and not about package shape. */
+function docxWithDocumentXml(documentXml: string): JSZip {
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    CONTENT_TYPES(
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>',
+    ),
+  );
+  zip.file('_rels/.rels', OFFICE_DOCUMENT_RELS('word/document.xml'));
+  zip.file('word/document.xml', documentXml);
+  return zip;
+}
+/** The smallest XLSX SheetJS accepts, for the same reason. */
+function xlsxWithSheetXml(sheetXml: string): JSZip {
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    CONTENT_TYPES(
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+    ),
+  );
+  zip.file('_rels/.rels', OFFICE_DOCUMENT_RELS('xl/workbook.xml'));
+  zip.file(
+    'xl/workbook.xml',
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+  );
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"' +
+      ' Target="worksheets/sheet1.xml"/></Relationships>',
+  );
+  zip.file('xl/worksheets/sheet1.xml', sheetXml);
+  return zip;
+}
+const WORD_BODY = (text: string): string =>
+  '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' +
+  text +
+  '</w:t></w:r></w:p></w:body></w:document>';
+
+test('a DOCX whose document part inflates past its ceiling is refused before mammoth reads it', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-inspect-bound-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bomb = await docxWithDocumentXml(WORD_BODY('a'.repeat(24_000_000))).generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+  });
+  assert.ok(bomb.length < 20_000_000, 'the package itself passes the 20 MB input limit');
+  await writeFile(path.join(root, 'bomb.docx'), bomb);
+  const tool = officeTools(root).find((item) => item.name === 'office_inspect')!;
+  await assert.rejects(
+    () =>
+      tool.execute(
+        { path: 'bomb.docx' },
+        { signal: new AbortController().signal, approve: async () => false },
+      ),
+    /DOCX package part word\/document\.xml is too large/,
+  );
+});
+
+test('an XLSX whose worksheet part inflates past its ceiling is refused before SheetJS reads it', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-xlsx-inspect-bound-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bomb = await xlsxWithSheetXml(
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">' +
+      `<c r="A1" t="inlineStr"><is><t>${'a'.repeat(24_000_000)}</t></is></c>` +
+      '</row></sheetData></worksheet>',
+  ).generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  assert.ok(bomb.length < 20_000_000, 'the package itself passes the 20 MB input limit');
+  await writeFile(path.join(root, 'bomb.xlsx'), bomb);
+  const tool = officeTools(root).find((item) => item.name === 'office_inspect')!;
+  await assert.rejects(
+    () =>
+      tool.execute(
+        { path: 'bomb.xlsx' },
+        { signal: new AbortController().signal, approve: async () => false },
+      ),
+    /XLSX package part xl\/worksheets\/sheet1\.xml is too large/,
+  );
+});
+
+test('a small DOCX of the same shape still inspects to its text', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-inspect-small-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bytes = await docxWithDocumentXml(
+    WORD_BODY('Hello from the bounded inspect path'),
+  ).generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  await writeFile(path.join(root, 'small.docx'), bytes);
+  const tool = officeTools(root).find((item) => item.name === 'office_inspect')!;
+  const result = await tool.execute(
+    { path: 'small.docx' },
+    { signal: new AbortController().signal, approve: async () => false },
+  );
+  // The bound must price the package without changing what a readable one returns.
+  assert.equal(result.isError, false);
+  assert.match(result.content, /Hello from the bounded inspect path/);
+});

@@ -49,6 +49,12 @@ export function assetDirectory(version: string, key = platformArchKey()): string
   return path.join(buildRoot(), 'search-assets', version, key);
 }
 
+/** `process.resourcesPath` when this build is a packaged desktop application, otherwise `null`. */
+function resourcesRoot(): string | null {
+  const resources = (process as unknown as { resourcesPath?: unknown }).resourcesPath;
+  return typeof resources === 'string' && resources ? resources : null;
+}
+
 /**
  * Every place a verified asset may live, most-specific first.
  *
@@ -59,22 +65,47 @@ export function assetDirectory(version: string, key = platformArchKey()): string
  */
 export function assetDirectories(version: string, key = platformArchKey()): string[] {
   const directories: string[] = [];
-  const resources = (process as unknown as { resourcesPath?: unknown }).resourcesPath;
-  if (typeof resources === 'string' && resources)
-    directories.push(path.join(resources, 'search-assets', version, key));
+  const resources = resourcesRoot();
+  if (resources) directories.push(path.join(resources, 'search-assets', version, key));
   directories.push(assetDirectory(version, key));
   return directories;
 }
 
 /**
- * Reads the lock file.
+ * Every place the lock file may live, most-specific first — deliberately the same order as `assetDirectories`,
+ * because the two have to agree to be any use.
+ *
+ * A packaged application stages its verified binary under `resources/search-assets`, and a lock that is only
+ * ever looked for beside the compiled module makes that binary *unreachable*: the runtime answers "no verified
+ * asset" while a verified asset sits next to its own `resources`. The compiled layout is what exposes it —
+ * `buildRoot()` from `resources/app/dist/packages/search` is `resources/app/dist/build`, and no package
+ * contains that directory at all. So `scripts/copy-search-assets.mjs` stages the lock beside the binary it
+ * describes, and this list looks there first.
+ */
+export function lockFiles(): string[] {
+  const files: string[] = [];
+  const resources = resourcesRoot();
+  if (resources) files.push(path.join(resources, 'search-assets', 'search-assets.lock.json'));
+  files.push(path.join(buildRoot(), 'search-assets.lock.json'));
+  return files;
+}
+
+/**
+ * Reads the lock file, from the first place one is actually found.
  *
  * A missing or unparsable lock is `null` rather than an error: it means this build has no verified asset, which
- * is a supported configuration — the built-in scanner is the backend then.
+ * is a supported configuration — the built-in scanner is the backend then. Passing a path reads exactly that
+ * path and nothing else, which is what callers that already know where their lock is want.
  */
-export async function loadSearchAssetLock(
-  file = path.join(buildRoot(), 'search-assets.lock.json'),
-): Promise<SearchAssetLock | null> {
+export async function loadSearchAssetLock(file?: string): Promise<SearchAssetLock | null> {
+  for (const candidate of file === undefined ? lockFiles() : [file]) {
+    const lock = await readLockFile(candidate);
+    if (lock) return lock;
+  }
+  return null;
+}
+
+async function readLockFile(file: string): Promise<SearchAssetLock | null> {
   try {
     const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<SearchAssetLock>;
     if (typeof parsed.version !== 'string' || typeof parsed.targets !== 'object' || !parsed.targets)

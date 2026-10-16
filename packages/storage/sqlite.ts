@@ -1,18 +1,15 @@
-import { SessionCheckpoints } from './session-checkpoints.ts';
-import { SessionSearch } from './session-search.ts';
-import { SessionFileChanges } from './session-file-changes.ts';
-import { SessionMigrations } from './session-migrations.ts';
-import { SqlitePlanStore } from './plans.ts';
-import type { PlanBody, PlanRepository } from '../protocol/plans.ts';
-import type { SessionLease } from '../protocol/session-lease.ts';
-import { DatabaseSync } from 'node:sqlite';
-import { initializeDatabase, registerDatabase, type BackupPolicy } from './database-maintenance.ts';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
+import { DatabaseSync } from 'node:sqlite';
+import type { Surface, SurfaceOp } from '../protocol/context.ts';
+import type { PresentedFile } from '../protocol/deliverables.ts';
+import { type Goal } from '../protocol/goals.ts';
 import type {
+  Acceptance,
   Approval,
+  CompletionRecord,
+  CompletionSummary,
   FileChange,
   FileSnapshot,
   Message,
@@ -20,49 +17,20 @@ import type {
   RunResult,
   SubAgentSummary,
   Task,
-  TaskStatus,
-  TodoItem,
-  TaskTriggerSource,
-  Usage,
-  Acceptance,
-  CompletionRecord,
-  CompletionRepairPolicy,
-  CompletionSpec,
-  CompletionStep,
-  CompletionSummary,
   TaskAttemptKind,
+  TaskStatus,
   TaskStep,
   TaskStepStatus,
   TaskTrigger,
+  TaskTriggerSource,
+  TodoItem,
+  Usage,
 } from '../protocol/index.ts';
-import { normalizeTaskDraft } from '../core/task-spec.ts';
-import { normalizeTaskTrigger, oneShot } from '../core/task-trigger.ts';
-import { contextBoundaries, surfaceOf } from '../protocol/context.ts';
-import type { Surface, SurfaceOp } from '../protocol/context.ts';
+import type { PlanBody, PlanRepository } from '../protocol/plans.ts';
+import type { SessionLease } from '../protocol/session-lease.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
-import type { TodoChange } from '../protocol/todos.ts';
-import { foldSteps, inFlightStep as openStepOf } from '../protocol/steps.ts';
 import type { StepRecord } from '../protocol/steps.ts';
-import { redactSecrets } from '../core/errors.ts';
-import { isImageReference } from '../protocol/images.ts';
-import {
-  appendFoldedMessages,
-  assertKnownEvents,
-  AUDIT_SESSION_EVENTS,
-  foldMessages,
-  foldPendingInputs,
-  messageEventType,
-  type PendingSessionInput,
-  type SessionEvent,
-  type SessionEventType,
-} from './events.ts';
-import {
-  BUILT_IN_SESSION_PROJECTIONS,
-  SessionProjectionRegistry,
-  subAgentCards,
-} from './projections.ts';
-import type { StatisticsState, SubAgentCardsState, TurnTiming } from './projections.ts';
-import type { PresentedFile } from '../protocol/deliverables.ts';
+import type { TodoChange } from '../protocol/todos.ts';
 import type {
   WorkspaceApplyReceipt,
   WorkspaceBinding,
@@ -71,31 +39,23 @@ import type {
   WorkspaceSnapshot,
   WorkspaceState,
 } from '../protocol/workspaces.ts';
-import type { Goal } from '../protocol/goals.ts';
+import { initializeDatabase, registerDatabase, type BackupPolicy } from './database-maintenance.ts';
+import { type PendingSessionInput, type SessionEvent, type SessionEventType } from './events.ts';
+import { SqlitePlanStore } from './plans.ts';
+import type { StatisticsState, SubAgentCardsState, TurnTiming } from './projections.ts';
 import {
-  APPEND_BATCH_LIMIT,
-  LOG_CACHE_ENTRIES,
-  RUN_INTERRUPTED_REASON,
-  TASK_SELECT,
-  ageSuffix,
-  assertTaskTransition,
-  deadOwner,
-  frozen,
-  leaseEvidence,
-  messageSearchText,
-  nextTaskTimestamp,
-  scheduledNextRunAt,
-  taskStatuses,
-  validateAcceptance,
-  validateSteps,
-  validateTaskText,
-} from './session-schema.ts';
-import { taskFromRow } from './session-schema.ts';
-import { TaskJournal } from './session-tasks.ts';
-import { StreamCheckpoints } from './session-streams.ts';
+  BUILT_IN_SESSION_PROJECTIONS,
+  SessionProjectionRegistry,
+  subAgentCards,
+} from './projections.ts';
+import { SessionCheckpoints } from './session-checkpoints.ts';
+import { SessionCompletion } from './session-completion.ts';
+import { SessionContext } from './session-context.ts';
+import { SessionEventJournal } from './session-event-journal.ts';
+import { SessionFileChanges } from './session-file-changes.ts';
 import { SessionLifecycle } from './session-lifecycle.ts';
-import { SessionWorkspaces } from './session-workspaces.ts';
-import { sessionTitle, storedMessage, type QueuedBlob } from './session-blobs.ts';
+import { SessionMigrations } from './session-migrations.ts';
+import { SessionRuns } from './session-runs.ts';
 import type {
   Session,
   SessionSearchPage,
@@ -103,22 +63,22 @@ import type {
   TaskCreate,
   TaskUpdate,
 } from './session-schema.ts';
+import { SessionSearch } from './session-search.ts';
+import { StreamCheckpoints } from './session-streams.ts';
+import { SessionTaskDefinitions } from './session-task-definitions.ts';
+import { TaskJournal } from './session-tasks.ts';
+import { SessionWorkspaces } from './session-workspaces.ts';
 export { normalizePlanBody, planHash } from '../protocol/plans.ts';
 export type { PlanBody } from '../protocol/plans.ts';
 export { LEASE_RENEW_INTERVAL_MS } from '../protocol/session-lease.ts';
 export type { SessionLease } from '../protocol/session-lease.ts';
-/**
- * The workspace vocabulary is re-exported for the same reason the row shapes are: a caller that has to name a
- * state, a failure code or a binding should not have to know which package physically declares it.
- */
-import { WorkspaceFailure } from '../protocol/workspaces.ts';
 export {
-  WorkspaceFailure,
   canTransition,
   isWorkspaceFailure,
   isWorkspaceMode,
   isWorkspaceState,
   workspaceBindingFrom,
+  WorkspaceFailure,
   workspaceResultFrom,
   workspaceSnapshotFrom,
 } from '../protocol/workspaces.ts';
@@ -136,6 +96,11 @@ export type {
 export { hashesIn, imageHash, sessionTitle, storedMessage } from './session-blobs.ts';
 export type { QueuedBlob } from './session-blobs.ts';
 /**
+ * The workspace vocabulary is re-exported for the same reason the row shapes are: a caller that has to name a
+ * state, a failure code or a binding should not have to know which package physically declares it.
+ */
+import { WorkspaceFailure } from '../protocol/workspaces.ts';
+/**
  * The store's public vocabulary is re-exported here because this module is the storage layer's entry
  * point: callers import `{ SessionStore, SCHEMA_VERSION, … }` from one path, and where the definitions
  * physically live is this package's business. Splitting them out is what keeps this file about the
@@ -145,14 +110,14 @@ export {
   APPLICATION_FORMAT,
   APPLICATION_ID,
   APPLICATION_NAME,
+  ftsQuery,
   MAX_SEARCH_MATCHES,
   MAX_SEARCH_SESSIONS,
+  messageSearchText,
+  projectionFoldIdentity,
   SCHEMA_TABLES,
   SCHEMA_VERSION,
   SESSION_DATABASE_POLICY,
-  ftsQuery,
-  messageSearchText,
-  projectionFoldIdentity,
 } from './session-schema.ts';
 export type {
   Session,
@@ -163,62 +128,15 @@ export type {
   TaskCreate,
   TaskUpdate,
 } from './session-schema.ts';
-/**
- * A transcript this store has already folded, plus what it takes to know the fold is still current.
- *
- * `dataVersion` is SQLite's `PRAGMA data_version` at the moment the fold was taken: SQLite bumps it when
- * *another* connection commits, so comparing it is how a reader notices a writer it does not own — a
- * second agent-host process, or the CLI appending while the desktop has the session open.
- */
-interface LogCacheEntry {
-  events: SessionEvent[];
-  /** The folded transcript, or null while nobody has asked for it: reading the log is not reading it. */
-  messages: Message[] | null;
-  /**
-   * Whether every event in this log is one this build can interpret: `null` until a *derived* answer asks.
-   *
-   * Kept on the entry because the check is over the whole log and the answer cannot change while the entry is
-   * current — the cached log is dropped when another connection commits, exactly as the transcript is. The raw
-   * log does not consult it: a reader diagnosing a session written by a newer build still needs to see the events.
-   */
-  readable: boolean | null;
-  dataVersion: number;
-}
-/** One message waiting to be written, with the parts of it that are cheaper to compute before the write. */
-interface QueuedMessage {
-  message: Message;
-  /** The same message as the row and the log store it: images replaced by their content addresses. */
-  stored: unknown;
-  /** The row body, serialised when the message is appended so a bad message is refused by its appender. */
-  body: string;
-  searchText: string;
-  /** Bytes this message adds to `attachment_blobs`, written in the same transaction as the row. */
-  blobs: readonly QueuedBlob[];
-  /** The title a user message gives its session; null for the roles that never set one. */
-  title: string | null;
-}
 export class SessionStore implements PlanRepository {
-  private readonly eventObservers = new Map<
-    (event: SessionEvent) => void,
-    ReadonlySet<string> | undefined
-  >();
-  /** Notifications follow COMMIT and cannot affect its outcome or the cached durable payload. */
+  private readonly journal: SessionEventJournal;
+
+  private readonly taskDefinitions: SessionTaskDefinitions;
+  private readonly completion: SessionCompletion;
+  private readonly context: SessionContext;
+  private readonly runJournal: SessionRuns;
   observeEvents(listener: (event: SessionEvent) => void, types?: ReadonlySet<string>): () => void {
-    this.eventObservers.set(listener, types);
-    return () => {
-      this.eventObservers.delete(listener);
-    };
-  }
-  private notifyCommitted(events: readonly SessionEvent[]): void {
-    for (const event of events)
-      for (const [listener, types] of this.eventObservers) {
-        if (types && !types.has(event.type)) continue;
-        try {
-          listener(structuredClone(event));
-        } catch {
-          /* Observation cannot undo a committed fact. */
-        }
-      }
+    return this.journal.observeEvents(listener, types);
   }
   private readonly schema: SessionMigrations;
   private readonly changes: SessionFileChanges;
@@ -248,19 +166,6 @@ export class SessionStore implements PlanRepository {
    */
   readonly projections = new SessionProjectionRegistry();
   /**
-   * Transcripts already folded, oldest entry first, so the least recently read one is the one evicted.
-   *
-   * The run loop reads a session's history several times per round — the context builder, the pre-step
-   * hook and the title path — and every one of those reads used to re-parse and re-fold the whole log, so
-   * the cost of a run grew with the square of its length. The cache is bounded rather than unbounded
-   * because an agent-host process outlives the sessions it reads.
-   */
-  private logCache = new Map<string, LogCacheEntry>();
-  /** Events appended inside an open transaction, folded into the cache when that transaction commits. */
-  private pendingLog: Map<string, SessionEvent[]> | null = null;
-  /** Messages appended but not yet written, per session: one commit per batch instead of one per message. */
-  private pendingAppends = new Map<string, QueuedMessage[]>();
-  /**
    * The files this store keeps its own state in: the database and the two sidecar files SQLite writes beside it.
    *
    * Exposed because a verifier that fingerprints a workspace has to exclude state the *runtime* is writing —
@@ -280,6 +185,7 @@ export class SessionStore implements PlanRepository {
     this.releaseDatabase = registerDatabase(file);
     try {
       this.db = new DatabaseSync(file);
+      this.journal = new SessionEventJournal({ db: this.db, get: (id) => this.get(id) });
       this.checkpoints = new SessionCheckpoints({
         db: this.db,
         projections: this.projections,
@@ -352,10 +258,10 @@ export class SessionStore implements PlanRepository {
         get: (id) => this.get(id),
         recordEvent: (id, type, data, stored) => this.recordEvent(id, type, data, stored),
         dropLogCache: (id) => {
-          this.logCache.delete(id);
+          this.journal.dropLogCache(id);
         },
         dropPendingAppends: (id) => {
-          this.pendingAppends.delete(id);
+          this.journal.dropPendingAppends(id);
         },
       });
       /**
@@ -375,6 +281,34 @@ export class SessionStore implements PlanRepository {
           };
         },
       });
+      this.taskDefinitions = new SessionTaskDefinitions({
+        db: this.db,
+        get: (id) => this.get(id),
+        transaction: (fn) => this.transaction(fn),
+      });
+      this.completion = new SessionCompletion({ db: this.db });
+      this.context = new SessionContext({
+        db: this.db,
+        get: (id) => this.get(id),
+        checkedLog: (id) => this.checkedLog(id),
+        leaseOf: (id) => this.leaseOf(id),
+        messages: (id) => this.messages(id),
+        recordEvent: (id, type, data) => this.recordEvent(id, type, data),
+      });
+      this.runJournal = new SessionRuns({
+        db: this.db,
+        transaction: (fn) => this.transaction(fn),
+        get: (id) => this.get(id),
+        messages: (id) => this.messages(id),
+        append: (id, message) => this.append(id, message),
+        pendingInputs: (id) => this.pendingInputs(id),
+        recordEvent: (id, type, data) => this.recordEvent(id, type, data),
+        workspaceBinding: (id) => this.workspaceBinding(id),
+        workspaces: this.workspaces,
+        goal: (id) => this.goal(id),
+        saveProjectionCheckpoints: (id) => this.saveProjectionCheckpoints(id),
+      });
+
       for (const projection of BUILT_IN_SESSION_PROJECTIONS) this.projections.register(projection);
       initializeDatabase(file, () => this.initialize(file, options));
     } catch (error) {
@@ -414,6 +348,15 @@ export class SessionStore implements PlanRepository {
   }
   workspaceBindingsByState(states: readonly WorkspaceState[]): WorkspaceBinding[] {
     return this.workspaces.byState(states);
+  }
+  /**
+   * The managed workspaces of this project whose session is gone.
+   *
+   * The directory a deleted session worked in stays this service's to manage, and after the deletion no session
+   * id can name it; this read is what a project-scoped caller uses instead.
+   */
+  orphanedWorkspaceBindings(projectRoot: string, includeRemoved = false): WorkspaceBinding[] {
+    return this.workspaces.orphaned(projectRoot, includeRemoved);
   }
   createWorkspaceBinding(
     input: Parameters<SessionWorkspaces['createBinding']>[0],
@@ -455,6 +398,10 @@ export class SessionStore implements PlanRepository {
   }
   childWorkspaceResults(childSessionId: string): WorkspaceResult[] {
     return this.workspaces.resultsForChild(childSessionId);
+  }
+  /** What one binding produced, which is the only key that survives the deletion of both sessions involved. */
+  workspaceResultsForBinding(bindingId: string): WorkspaceResult[] {
+    return this.workspaces.resultsForBinding(bindingId);
   }
   /** Every result in one state, for the start-up pass that converges interrupted imports. */
   workspaceResultsInState(status: WorkspaceResultStatus): WorkspaceResult[] {
@@ -598,20 +545,8 @@ export class SessionStore implements PlanRepository {
   turnTiming(sessionId: string): TurnTiming {
     return this.stateOf<TurnTiming>('turnTiming', sessionId);
   }
-  /**
-   * The `messages` rows as they are on disk, which is the one read that can disagree with the transcript.
-   *
-   * The transcript is folded from the log, so this is the write-through side of the I8 promise: both are
-   * written from a single call, and a divergence here is the only way to see that the two halves of that
-   * call stopped agreeing. It is also what a second connection would read, minus the connection.
-   */
   messagesFromTable(sessionId: string): Message[] {
-    this.get(sessionId);
-    this.flush(sessionId);
-    return this.db
-      .prepare('SELECT body FROM messages WHERE session_id=? ORDER BY seq')
-      .all(sessionId)
-      .map((row) => this.hydrateMessage(JSON.parse(String(row.body))) as Message);
+    return this.journal.messagesFromTable(sessionId);
   }
   /**
    * The session's checklist as the model last wrote it.
@@ -647,7 +582,7 @@ export class SessionStore implements PlanRepository {
     return this.stateOf<Goal | null>('goal', sessionId);
   }
   close(): void {
-    this.eventObservers.clear();
+    this.journal.clearObservers();
     // A store that closes writes what it was given. This is the one write that does not report a failure:
     // `close` runs in teardown paths, where throwing would replace the error that caused the shutdown.
     // Everything that promises durability — `flush` and every read — is loud about a write that failed.
@@ -657,13 +592,11 @@ export class SessionStore implements PlanRepository {
       // session in the database on the way out would make closing a store cost as much as reading all of it.
       // The list is copied because folding a projection re-inserts the session's cache entry, and a Map that is
       // re-inserted into while it is being iterated hands the same key back forever.
-      for (const id of [...this.logCache.keys()]) this.saveProjectionCheckpoints(id);
+      for (const id of this.journal.cachedSessionIds()) this.saveProjectionCheckpoints(id);
     } catch {
       // Left unwritten deliberately: the caller was told by `flush` if it asked, and asking is what promises.
     }
-    this.logCache.clear();
-    this.pendingLog = null;
-    this.pendingAppends.clear();
+    this.journal.clear();
     this.db.close();
     this.releaseDatabase?.();
   }
@@ -689,141 +622,19 @@ export class SessionStore implements PlanRepository {
     return this.get(id);
   }
   createTask(sessionId: string, input: TaskCreate): Task {
-    this.get(sessionId);
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const title = validateTaskText(input.title, 'title', 200);
-    const description = validateTaskText(input.description ?? '', 'description', 20_000, true);
-    const acceptance = validateAcceptance(input.acceptance ?? []).map((item) => ({
-      ...item,
-      met: false,
-    }));
-    const steps = validateSteps(input.steps ?? []).map((item) => ({
-      ...item,
-      status: 'pending' as const,
-    }));
-    const trigger = normalizeTaskTrigger(input.trigger);
-    this.db
-      .prepare(
-        "INSERT INTO tasks(id,session_id,title,description,status,acceptance,steps,trigger,trigger_revision,next_run_at,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        sessionId,
-        title,
-        description,
-        JSON.stringify(acceptance),
-        JSON.stringify(steps),
-        trigger ? JSON.stringify(trigger) : null,
-        trigger ? randomUUID() : null,
-        scheduledNextRunAt(trigger, new Date()),
-        now,
-        now,
-      );
-    return this.getTask(sessionId, id);
+    return this.taskDefinitions.createTask(sessionId, input);
   }
   getTask(sessionId: string, id: string): Task {
-    this.get(sessionId);
-    const row = this.db
-      .prepare(`${TASK_SELECT} WHERE t.session_id=? AND t.id=?`)
-      .get(sessionId, id);
-    if (!row) throw new Error(`Task not found: ${id}`);
-    return taskFromRow(row);
+    return this.taskDefinitions.getTask(sessionId, id);
   }
   listTasks(sessionId: string, status?: TaskStatus): Task[] {
-    this.get(sessionId);
-    if (status !== undefined && !taskStatuses.has(status)) throw new Error('Invalid task status');
-    return this.db
-      .prepare(
-        `${TASK_SELECT} WHERE t.session_id=? AND (? IS NULL OR t.status=?) ORDER BY t.created_at,t.id`,
-      )
-      .all(sessionId, status ?? null, status ?? null)
-      .map((row) => taskFromRow(row));
+    return this.taskDefinitions.listTasks(sessionId, status);
   }
-  /**
-   * Every task that carries a trigger, across all sessions in one workspace. The scheduler needs
-   * one query rather than a per-session fan-out because a trigger belongs to the task, not to
-   * whichever session happens to be open.
-   */
   listScheduledTasks(workspace?: string): Task[] {
-    return this.db
-      .prepare(
-        `${TASK_SELECT} WHERE t.trigger IS NOT NULL AND (? IS NULL OR t.session_id IN (SELECT id FROM sessions WHERE workspace=?)) ORDER BY t.next_run_at IS NULL,t.next_run_at,t.id`,
-      )
-      .all(workspace ?? null, workspace ?? null)
-      .map((row) => taskFromRow(row));
+    return this.taskDefinitions.listScheduledTasks(workspace);
   }
   updateTask(sessionId: string, id: string, update: TaskUpdate): Task {
-    return this.transaction(() => {
-      const current = this.getTask(sessionId, id);
-      const keys = Object.keys(update);
-      if (
-        !keys.length ||
-        keys.some(
-          (key) =>
-            !['title', 'description', 'status', 'acceptance', 'steps', 'trigger'].includes(key),
-        )
-      )
-        throw new Error('Invalid task update');
-      const title =
-        update.title === undefined ? current.title : validateTaskText(update.title, 'title', 200);
-      const description =
-        update.description === undefined
-          ? current.description
-          : validateTaskText(update.description, 'description', 20_000, true);
-      const status = update.status ?? current.status;
-      if (!taskStatuses.has(status)) throw new Error('Invalid task status');
-      if (update.status !== undefined) assertTaskTransition(current.status, status);
-      const acceptance =
-        update.acceptance === undefined
-          ? current.acceptance
-          : validateAcceptance(update.acceptance);
-      const steps = update.steps === undefined ? current.steps : validateSteps(update.steps);
-      // Re-arm the clock whenever the trigger changes: a new interval must not inherit the old
-      // schedule, and clearing a trigger must clear its pending obligation.
-      let rawTrigger: unknown = update.trigger;
-      if (current.trigger?.kind === 'after' && rawTrigger && typeof rawTrigger === 'object') {
-        const candidate = rawTrigger as Record<string, unknown>;
-        if (
-          candidate.kind === 'after' &&
-          candidate.afterMinutes === current.trigger.afterMinutes &&
-          candidate.enabled === current.trigger.enabled &&
-          candidate.anchorAt === undefined
-        )
-          rawTrigger = { ...candidate, anchorAt: current.trigger.anchorAt };
-      }
-      const trigger =
-        update.trigger === undefined ? current.trigger : normalizeTaskTrigger(rawTrigger);
-      const changed =
-        update.trigger !== undefined &&
-        (!oneShot(current.trigger) || !isDeepStrictEqual(trigger, current.trigger));
-      const nextAt = !changed
-        ? (current.nextRunAt ?? null)
-        : scheduledNextRunAt(trigger, new Date());
-      this.db
-        .prepare(
-          'UPDATE tasks SET title=?,description=?,status=?,acceptance=?,steps=?,trigger=?,trigger_revision=?,next_run_at=?,last_trigger_error=?,updated_at=? WHERE session_id=? AND id=?',
-        )
-        .run(
-          title,
-          description,
-          status,
-          JSON.stringify(acceptance),
-          JSON.stringify(steps),
-          trigger ? JSON.stringify(trigger) : null,
-          changed ? randomUUID() : (current.triggerRevision ?? null),
-          nextAt,
-          !changed ? (current.lastTriggerError ?? null) : null,
-          new Date().toISOString(),
-          sessionId,
-          id,
-        );
-      if (changed) {
-        this.db.prepare('DELETE FROM task_approvals WHERE task_id=?').run(id);
-        this.db.prepare('UPDATE tasks SET current_delivery_id=NULL WHERE id=?').run(id);
-      }
-      return this.getTask(sessionId, id);
-    });
+    return this.taskDefinitions.updateTask(sessionId, id, update);
   }
   replaceTaskDefinition(
     sessionId: string,
@@ -831,32 +642,7 @@ export class SessionStore implements PlanRepository {
     input: unknown,
     expectedUpdatedAt?: string,
   ): Task {
-    return this.transaction(() => {
-      const task = this.getTask(sessionId, id);
-      if (task.status === 'in_progress') throw new Error('Task is running');
-      if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== task.updatedAt)
-        throw new Error('Task changed; reload before saving');
-      const draft = normalizeTaskDraft(input);
-      const now = nextTaskTimestamp(task.updatedAt);
-      this.db
-        .prepare(
-          "UPDATE tasks SET title=?,description=?,status='pending',acceptance=?,steps=?,verification=NULL,definition_attempt_floor=(SELECT COALESCE(MAX(ordinal),0) FROM task_attempts WHERE task_id=tasks.id),updated_at=? WHERE session_id=? AND id=?",
-        )
-        .run(
-          draft.title,
-          draft.description,
-          JSON.stringify(draft.acceptance),
-          JSON.stringify(draft.steps),
-          now,
-          sessionId,
-          id,
-        );
-      // Step indexes only mean something relative to the definition they were recorded against,
-      // so an edited task starts its checkpoint history over rather than inheriting stale progress.
-      this.db.prepare('DELETE FROM task_step_checkpoints WHERE task_id=?').run(id);
-      this.db.prepare('DELETE FROM task_approvals WHERE task_id=?').run(id);
-      return this.getTask(sessionId, id);
-    });
+    return this.taskDefinitions.replaceTaskDefinition(sessionId, id, input, expectedUpdatedAt);
   }
   startTaskAttempt(
     sessionId: string,
@@ -904,37 +690,8 @@ export class SessionStore implements PlanRepository {
   ) {
     return this.tasks.recordTaskVerificationRound(sessionId, taskId, attemptId, input);
   }
-  /**
-   * The verification rounds one attempt has already recorded.
-   *
-   * Read straight from the log rather than from a column, because the log *is* the record of the rounds. The
-   * scan is bounded by the number of rounds of a single attempt — a handful, even for a task that repaired to its
-   * ceiling — and it is filtered by attempt before any payload is parsed, so a long session pays for its own
-   * round count and not for the session's history.
-   */
   private completionVerificationRounds(sessionId: string, attemptId: string): number[] {
-    const rows = this.db
-      .prepare(
-        "SELECT data FROM session_events WHERE session_id=? AND type='completion.updated' ORDER BY seq",
-      )
-      .all(sessionId);
-    const rounds: number[] = [];
-    for (const row of rows) {
-      let data: unknown;
-      try {
-        data = JSON.parse(String(row.data));
-      } catch {
-        // A record this build cannot parse is not a round it may claim was already recorded; the round-number
-        // guard still refuses a replay through its other branch, and refusing to read the log at all would
-        // break every task on a session that contains one damaged line.
-        continue;
-      }
-      if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
-      const record = data as Record<string, unknown>;
-      if (record.attemptId !== attemptId) continue;
-      if (typeof record.verificationRound === 'number') rounds.push(record.verificationRound);
-    }
-    return rounds;
+    return this.completion.completionVerificationRounds(sessionId, attemptId);
   }
   listTaskAttempts(sessionId: string, taskId: string) {
     return this.tasks.listTaskAttempts(sessionId, taskId);
@@ -1173,719 +930,56 @@ export class SessionStore implements PlanRepository {
   delete(id: string): void {
     this.lifecycle.delete(id);
   }
-  /**
-   * The message projection: the transcript is the fold of the durable log, not a table a second writer
-   * could add to. Sessions written before schema v14 had their log backfilled by the migration, so this
-   * reads the same history those sessions always had.
-   */
   messages(id: string): Message[] {
-    this.get(id);
-    this.flush(id);
-    return this.transcriptOf(id);
+    return this.journal.messages(id);
   }
-  /**
-   * The durable log, oldest first. `afterSeq` reads only what was appended since a checkpoint.
-   *
-   * `limit` is for a reader that *walks* a log rather than consuming it: the event reader a session's owner can
-   * call needs a page, not the tail of a ten-thousand-event history held in memory to print fifty lines of it.
-   * Without a limit the behaviour is unchanged, which is what every existing reader relies on.
-   */
   events(id: string, afterSeq = 0, limit?: number): SessionEvent[] {
-    // A reader must not be shown less than is recorded, so buffered appends are written before a read.
-    this.flush(id);
-    if (afterSeq === 0 && limit === undefined) return this.logOf(id).events;
-    const cached = this.transactionDepth === 0 ? this.cachedLog(id) : undefined;
-    if (cached) {
-      // A delta read asks for a tail, and the cached log is ordered by seq, so the position is found by
-      // bisection rather than by filtering the whole log: a reader that polls for new events should not pay for
-      // the history it has already seen on every poll.
-      let low = 0;
-      let high = cached.events.length;
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2);
-        if (cached.events[middle]!.seq <= afterSeq) low = middle + 1;
-        else high = middle;
-      }
-      return frozen(cached.events.slice(low, limit === undefined ? undefined : low + limit));
-    }
-    // A delta read asks for a tail, not for the log, so it stays a bounded query instead of reading the
-    // whole history to answer a question about its end.
-    return frozen(this.readEvents(id, afterSeq, limit));
+    return this.journal.events(id, afterSeq, limit);
   }
-  /**
-   * The process record, read as a bounded page rather than as the log.
-   *
-   * `limit` is required because this is a cursor read: the caller asks for a page and gets the sequence to
-   * continue from. The type filter is pushed into the query rather than applied to what came back, which is what
-   * keeps a diagnostic reader from parsing — and failing on — message payloads it was never going to show.
-   */
   auditEvents(id: string, afterSeq = 0, limit = 200): SessionEvent[] {
-    if (
-      !Number.isSafeInteger(afterSeq) ||
-      afterSeq < 0 ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 500
-    )
-      throw new Error('Invalid audit cursor');
-    this.get(id);
-    this.flush(id);
-    return frozen(this.readEvents(id, afterSeq, limit, AUDIT_SESSION_EVENTS));
+    return this.journal.auditEvents(id, afterSeq, limit);
   }
-  private readEvents(
-    id: string,
-    afterSeq: number,
-    limit?: number,
-    types?: readonly string[],
-  ): SessionEvent[] {
-    return this.db
-      .prepare(
-        `SELECT seq,session_id AS sessionId,type,data,at FROM session_events WHERE session_id=? AND seq>?${
-          types ? ` AND type IN (${types.map(() => '?').join(',')})` : ''
-        } ORDER BY seq${limit === undefined ? '' : ' LIMIT ?'}`,
-      )
-      .all(id, afterSeq, ...(types ?? []), ...(limit === undefined ? [] : [limit]))
-      .map((row) => ({
-        seq: Number(row.seq),
-        sessionId: String(row.sessionId),
-        type: String(row.type),
-        data: this.hydratePayload(JSON.parse(String(row.data)) as Record<string, unknown>),
-        at: String(row.at),
-      }));
-  }
-  /**
-   * A stored image as a live one, or an error naming the address that could not be resolved.
-   *
-   * The error is the point: an image silently dropped on the way out would leave the model and the person
-   * alike believing a screenshot was part of the conversation. An inline image — one written before schema
-   * v21, or by a caller that stored something this build does not recognise — is returned untouched, so
-   * hydration is idempotent and the two shapes coexist without a migration.
-   */
-  private hydrateImage(value: unknown): unknown {
-    if (!isImageReference(value)) return value;
-    const row = this.db
-      .prepare('SELECT mime_type AS mimeType,bytes FROM attachment_blobs WHERE hash=?')
-      .get(value.hash);
-    if (!row) throw new Error(`Attachment ${value.hash} is missing from the session database`);
-    const data = Buffer.from(row.bytes as Uint8Array).toString('base64');
-    const reference = value as unknown as Record<string, unknown>;
-    // `data` goes back exactly where `hash` was, so the hydrated image has the same key order the live one did
-    // (`{data,mimeType}` from the attachment validator, `{mimeType,data,name}` from a tool). Key order is not
-    // cosmetic here: I8 compares rows and fold as strings.
-    return Object.fromEntries(
-      Object.entries(reference).map(([key, entry]) => [
-        key === 'hash' ? 'data' : key,
-        key === 'hash' ? data : entry,
-      ]),
-    );
-  }
-  /** One message out of a row or a log payload, with every reference resolved back to bytes. */
-  private hydrateMessage(value: unknown): unknown {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-    const images = (value as { images?: unknown }).images;
-    if (!Array.isArray(images)) return value;
-    return { ...value, images: images.map((image) => this.hydrateImage(image)) };
-  }
-  /**
-   * One log payload, hydrated. `{message}` is the shape that carries model-visible bytes — the `message.*`
-   * entries written by `writeMessages` — and every other payload is a fact about the session rather than part
-   * of a transcript, so it is returned as it was read.
-   */
-  private hydratePayload(data: Record<string, unknown>): Record<string, unknown> {
-    return 'message' in data ? { ...data, message: this.hydrateMessage(data.message) } : data;
-  }
-  /**
-   * The inbox: inputs accepted for this session that no turn ever folded in.
-   *
-   * Read from the log rather than from a table, because the log is where the acceptance, the consumption and the
-   * discard are written (see `input.queued` in `./events.ts`) and a second copy in a column would be a second
-   * answer. Only the three inbox types are queried, so this stays cheap on a session with a long history, and
-   * the answer is a snapshot: it is "what is left over", which is what a client shows and what a person sends
-   * again.
-   */
   pendingInputs(id: string): PendingSessionInput[] {
-    this.flush(id);
-    const rows = this.db
-      .prepare(
-        `SELECT seq,session_id AS sessionId,type,data,at FROM session_events
-         WHERE session_id=? AND type IN ('input.queued','input.consumed','input.discarded') ORDER BY seq`,
-      )
-      .all(id)
-      .map((row) => ({
-        seq: Number(row.seq),
-        sessionId: String(row.sessionId),
-        type: String(row.type),
-        data: JSON.parse(String(row.data)) as Record<string, unknown>,
-        at: String(row.at),
-      }));
-    return foldPendingInputs(rows);
+    return this.journal.pendingInputs(id);
   }
-  /**
-   * Settle every input the inbox still shows as undelivered, and say how many there were.
-   *
-   * The log is the authority here, not the queue in memory: an entry is written when it is accepted, so
-   * everything still pending — the live queue's contents included — is in the log, and a caller that only
-   * cleared an array would leave the log saying the input is still waiting. That is what makes clearing work
-   * for the leftovers of a run that already ended or crashed, which is when a person most needs it.
-   */
   discardPendingInputs(id: string, reason: string): number {
-    const ids = this.pendingInputs(id).map((item) => item.id);
-    if (ids.length) this.recordEvent(id, 'input.discarded', { ids, reason });
-    return ids.length;
+    return this.journal.discardPendingInputs(id, reason);
   }
-  /** The log of a session, from the cache when it is still current and read from the file when it is not. */
-  private logOf(id: string): LogCacheEntry {
-    const cached = this.transactionDepth === 0 ? this.cachedLog(id) : undefined;
-    if (cached) return cached;
-    // The version is sampled *before* the log is read, so a commit that lands during the read makes this entry
-    // stale on its next use instead of being stamped with the newer version and hidden behind it.
-    const dataVersion = this.dataVersion();
-    const entry: LogCacheEntry = {
-      events: frozen(this.readEvents(id, 0)),
-      messages: null,
-      readable: null,
-      dataVersion,
-    };
-    // A read inside an open transaction sees that transaction's uncommitted rows, which a rollback would
-    // make fiction; only a statement-level read is a read of committed state.
-    if (this.transactionDepth === 0) this.rememberLog(id, entry);
-    return entry;
-  }
-  /**
-   * The transcript, folded on first ask and kept after that.
-   *
-   * The refusal lives in the fold, so it happens when a transcript is asked for and not when the log is: a reader
-   * diagnosing a session written by a newer build can still read the log, and is stopped only where it would be
-   * shown a shorter history. Every *other* derived answer goes through `checkedLog` for the same reason.
-   */
-  private transcriptOf(id: string): Message[] {
-    const entry = this.logOf(id);
-    entry.messages ??= frozen(foldMessages(entry.events));
-    return entry.messages;
-  }
-  /**
-   * The log, refusing an event this build cannot interpret, for a reader that is about to derive state from it.
-   *
-   * The check is over the *whole* log and once per loaded log, and both halves are deliberate. Whole, because a
-   * projection that resumes from a checkpoint only folds the events after it: an unknown type before that point
-   * was either seen (and refused) by the build that wrote the checkpoint or was written by a build that knew it,
-   * and in the second case folding from the checkpoint would never notice. Once, because the answer cannot change
-   * while the entry is current — another connection's commit drops the entry, exactly as it drops the transcript.
-   */
   private checkedLog(id: string): readonly SessionEvent[] {
-    const entry = this.logOf(id);
-    if (entry.readable === null) {
-      assertKnownEvents(entry.events);
-      entry.readable = true;
-    }
-    return entry.events;
+    return this.journal.checkedLog(id);
   }
-  private cachedLog(id: string): LogCacheEntry | undefined {
-    const entry = this.logCache.get(id);
-    if (!entry) return undefined;
-    if (entry.dataVersion !== this.dataVersion()) {
-      // Another connection committed since this fold was taken, so the fold is a prefix of the log rather
-      // than the log. Dropping it is what keeps a second writer's messages from being invisible here.
-      this.logCache.delete(id);
-      return undefined;
-    }
-    this.rememberLog(id, entry); // recency: the entry read most recently is the last one evicted
-    return entry;
-  }
-  private rememberLog(id: string, entry: LogCacheEntry): void {
-    this.logCache.delete(id);
-    this.logCache.set(id, entry);
-    while (this.logCache.size > LOG_CACHE_ENTRIES) {
-      const oldest = this.logCache.keys().next().value;
-      if (oldest === undefined) break;
-      this.logCache.delete(oldest);
-    }
-  }
-  /**
-   * `PRAGMA data_version` is SQLite's own answer to "did somebody else write?", which is the one thing a
-   * cache of a shared database cannot learn from its own bookkeeping: SQLite bumps it when another
-   * connection commits and leaves it alone when this one does.
-   */
-  private dataVersion(): number {
-    return Number(this.db.prepare('PRAGMA data_version').get()?.data_version ?? 0);
-  }
-  /**
-   * The session's durable cursor: the seq of the newest record it has.
-   *
-   * This is what a live frame is stamped with. Every durable fact already has a seq — the log assigns it and
-   * every reader uses it as a cursor — and the live channel used to carry no cursor at all, so a client that
-   * lost frames had no way to say where it was up to and no way to find out that it had lost any: the only
-   * recovery was to re-read the session from the beginning (or, in a carrier that owns its Host, to restart
-   * it). Stamping each frame with the log position it is ordered against turns "how much have you seen?" into
-   * a number the client can keep and hand back.
-   *
-   * Read through the same cache and the same freshness rule every other read uses, rather than from a counter
-   * of its own. A second mechanism here would be a second answer: this process's own writes are folded into the
-   * cached log as they happen, and another connection's commit invalidates that cache (SQLite's `data_version`),
-   * so "where does the log end" cannot drift from what a reader would fold. An unflushed append is not durable
-   * yet and so is not in the mark, which is the safe direction: the replay that follows a cursor re-reads those
-   * events rather than skipping them.
-   */
   lastSeq(id: string): number {
-    const cached = this.transactionDepth === 0 ? this.cachedLog(id) : undefined;
-    if (cached) return cached.events.at(-1)?.seq ?? 0;
-    const seq = Number(
-      this.db.prepare('SELECT MAX(seq) AS seq FROM session_events WHERE session_id=?').get(id)
-        ?.seq ?? 0,
-    );
-    return seq;
+    return this.journal.lastSeq(id);
   }
-  /**
-   * The newest payload of one event type in a session, or `undefined` when the session has none.
-   *
-   * For the questions whose answer is "what did the last one say" rather than "read me the history". The envelope
-   * writer is the one that needs it: before it records a prompt and a tool catalogue, it asks whether this session
-   * already holds them under the same digest, and a writer that read the whole log to answer that would make every
-   * run pay for the session's entire past. The query walks the log backwards and stops at the first match, which
-   * the `(session_id, seq)` index serves.
-   */
   newestPayload(id: string, type: SessionEventType): Record<string, unknown> | undefined {
-    const row = this.db
-      .prepare(
-        'SELECT data FROM session_events WHERE session_id=? AND type=? ORDER BY seq DESC LIMIT 1',
-      )
-      .get(id, type);
-    if (!row) return undefined;
-    const data: unknown = JSON.parse(String(row.data));
-    return data && typeof data === 'object' && !Array.isArray(data)
-      ? (data as Record<string, unknown>)
-      : undefined;
+    return this.journal.newestPayload(id, type);
   }
-  /**
-   * The session's current completion contract, folded from its `completion.updated` records.
-   *
-   * Three properties of the fold are what make it usable rather than merely correct:
-   *
-   * - **The definition is folded back to, not taken from the newest record.** Only the record written when a
-   *   contract is created carries the whole definition; every later record carries the round's evidence. A reader
-   *   that treated the newest payload as complete would report a contract with no objective and no criteria.
-   * - **The newest summary wins whole.** Each round writes its entire summary, so the state is a replacement
-   *   rather than a replay of deltas, and nothing has to be re-derived from the sequence.
-   * - **The cost is the contract's own round count.** A task that repaired twice has a handful of these records;
-   *   a session with a thousand runs has the same handful if it never carried a contract. This is deliberately not
-   *   a scan of the session's history.
-   *
-   * `null` for a session that never carried one — which is every session from before this existed, and every
-   * session whose request never asked to be verified.
-   */
   completionCurrent(sessionId: string): CompletionRecord | null {
-    const rows = this.db
-      .prepare(
-        "SELECT seq,data FROM session_events WHERE session_id=? AND type='completion.updated' ORDER BY seq",
-      )
-      .all(sessionId);
-    if (!rows.length) return null;
-    let definition: CompletionSpec | undefined;
-    let policy: CompletionRepairPolicy | undefined;
-    let originRunId: string | undefined;
-    let latestRunId: string | undefined;
-    let source: CompletionRecord['source'] | undefined;
-    let contractId: string | undefined;
-    let definitionHash: string | undefined;
-    let summary: CompletionSummary | undefined;
-    let steps: CompletionStep[] | undefined;
-    let affectedPaths: string[] | undefined;
-    let repairStartedAt: number | undefined;
-    let failureFingerprint: string | undefined;
-    let taskId: string | undefined;
-    let planId: string | undefined;
-    let planHash: string | undefined;
-    let goalObjective: string | undefined;
-    for (const row of rows) {
-      let data: Record<string, unknown>;
-      try {
-        const parsed: unknown = JSON.parse(String(row.data));
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-        data = parsed as Record<string, unknown>;
-      } catch {
-        // A damaged record is skipped rather than fatal: the alternative is a session whose completion state
-        // cannot be read at all because one line was truncated by a crash, and the remaining records still
-        // describe the contract honestly.
-        continue;
-      }
-      if (typeof data.contractId === 'string') contractId = data.contractId;
-      if (typeof data.runId === 'string') {
-        originRunId ??= data.runId;
-        latestRunId = data.runId;
-      }
-      if (data.source === 'task' || data.source === 'request' || data.source === 'approved-plan')
-        source = data.source;
-      if (data.definition && typeof data.definition === 'object')
-        definition = data.definition as CompletionSpec;
-      if (data.policy && typeof data.policy === 'object')
-        policy = data.policy as CompletionRepairPolicy;
-      if (data.summary && typeof data.summary === 'object')
-        summary = data.summary as CompletionSummary;
-      if (Array.isArray(data.steps)) steps = data.steps as CompletionStep[];
-      if (Array.isArray(data.affectedPaths)) affectedPaths = data.affectedPaths as string[];
-      if (typeof data.repairStartedAt === 'number') repairStartedAt = data.repairStartedAt;
-      if (typeof data.failureFingerprint === 'string') failureFingerprint = data.failureFingerprint;
-      if (typeof data.taskId === 'string') taskId = data.taskId;
-      if (typeof data.planId === 'string') planId = data.planId;
-      if (typeof data.planHash === 'string') planHash = data.planHash;
-      if (typeof data.goalObjective === 'string') goalObjective = data.goalObjective;
-    }
-    if (!contractId || !summary) return null;
-    if (!definition) {
-      // A contract whose creating record is missing is reported as a contract with an empty definition rather
-      // than as an error: the evidence that a run verified something is still worth reading.
-      definition = {
-        version: 1,
-        objective: summary.reason,
-        constraints: [],
-        steps: steps ?? [],
-        acceptance: [],
-        inputs: [],
-      };
-    }
-    if (!definitionHash) definitionHash = summary.definitionHash;
-    if (!definitionHash) return null;
-    return {
-      version: 1,
-      contractId,
-      sessionId,
-      originRunId: originRunId ?? '',
-      latestRunId: latestRunId ?? '',
-      source: source ?? 'request',
-      definition,
-      definitionHash,
-      summary,
-      steps: steps ?? definition.steps,
-      affectedPaths: affectedPaths ?? [],
-      policy: policy ?? { maxRepairRounds: 0, maxRepeatedFailures: 0, repairTimeoutMs: 0 },
-      ...(repairStartedAt === undefined ? {} : { repairStartedAt }),
-      ...(failureFingerprint === undefined ? {} : { failureFingerprint }),
-      ...(taskId === undefined ? {} : { taskId }),
-      ...(planId === undefined ? {} : { planId }),
-      ...(planHash === undefined ? {} : { planHash }),
-      ...(goalObjective === undefined ? {} : { goalObjective }),
-    };
+    return this.completion.completionCurrent(sessionId);
   }
-  /**
-   * Append one durable fact. Every state change goes through here, so the log stays the record.
-   *
-   * `stored` is the payload as it is written to disk when that differs from the payload in memory. It exists
-   * for one case — a `message.*` entry whose images are content addresses on disk and bytes in this process —
-   * so that a reader of the file pays for one copy of a picture while the fold that follows this very write
-   * still hands the model the bytes.
-   */
   recordEvent(
     id: string,
     type: SessionEventType,
     data: Record<string, unknown>,
     stored: Record<string, unknown> = data,
   ): void {
-    // A fact never overtakes the appends it is ordered against, so buffered messages go first.
-    if (this.transactionDepth === 0) this.flush(id);
-    const at = new Date().toISOString();
-    const written = this.db
-      .prepare('INSERT INTO session_events(session_id,type,data,at) VALUES(?,?,?,?)')
-      .run(id, type, JSON.stringify(stored), at);
-    const event: SessionEvent = {
-      seq: Number(written.lastInsertRowid),
-      sessionId: id,
-      type,
-      data,
-      at,
-    };
-    if (this.transactionDepth > 0) {
-      const pending = (this.pendingLog ??= new Map());
-      const queued = pending.get(id);
-      if (queued) queued.push(event);
-      else pending.set(id, [event]);
-      return;
-    }
-    try {
-      this.extendLog(id, [event]);
-    } catch {
-      this.logCache.delete(id);
-    }
-    this.notifyCommitted([event]);
+    return this.journal.recordEvent(id, type, data, stored);
   }
-  /**
-   * Fold what was just appended into the cached transcript, so the read that follows a write costs the
-   * new event rather than the whole history.
-   *
-   * The events are copied into the fold instead of referenced: a caller that keeps a reference to the
-   * object it appended and changes it later must not be able to change a transcript the model has
-   * already been shown.
-   */
-  private extendLog(id: string, appended: readonly SessionEvent[]): void {
-    const entry = this.logCache.get(id);
-    if (!entry) return;
-    if (entry.dataVersion !== this.dataVersion()) {
-      this.logCache.delete(id);
-      return;
-    }
-    const stored = appended.map((event) => ({ ...event, data: structuredClone(event.data) }));
-    this.rememberLog(id, {
-      events: frozen([...entry.events, ...stored]),
-      messages: entry.messages ? frozen(appendFoldedMessages([...entry.messages], stored)) : null,
-      // Appended events come from `recordEvent`, whose type is this build's own, so a log already checked stays
-      // checked; one that has not been checked stays unchecked and pays for the check when a derived read asks.
-      readable: entry.readable,
-      dataVersion: entry.dataVersion,
-    });
-  }
-  /** Fold a committed transaction's events into the cache; a failed one leaves nothing behind. */
-  private applyPendingLog(): void {
-    const pending = this.pendingLog;
-    this.pendingLog = null;
-    if (!pending) return;
-    try {
-      for (const [id, events] of pending) this.extendLog(id, events);
-    } catch {
-      // Folding into the cache is an optimisation: if it will not take, the next read rebuilds instead.
-      this.logCache.clear();
-    }
-    for (const events of pending.values()) this.notifyCommitted(events);
-  }
-  /**
-   * Append a message to the session.
-   *
-   * Outside a transaction the message is buffered and written by `flush`, because a round appends several
-   * messages in a row — the assistant message that requests tools, then one result per tool — and it was
-   * the commits, not the rows, that cost: one transaction per message measured 0.74ms, and the same
-   * messages written in one batch cost a fraction of that. Nothing observable changes: everything that
-   * could read the message, or order another fact against it, flushes first.
-   */
   append(id: string, message: Message): void {
-    // Everything that can fail about appending happens here, at the call site: serialising the message,
-    // projecting its search text, and computing the title a user message gives the session. A message that
-    // cannot be written is refused now rather than poisoning a batch that is written later. Image bytes are
-    // hashed here too, so the only thing `writeMessages` has left to do with them is insert them.
-    const { stored, blobs } = storedMessage(message);
-    const queued: QueuedMessage = {
-      message,
-      stored,
-      body: JSON.stringify(stored),
-      searchText: messageSearchText(message),
-      blobs,
-      title: message.role === 'user' ? sessionTitle(message) : null,
-    };
-    // Inside a transaction the batch is already the atomic unit; there is nothing left to coalesce.
-    if (this.transactionDepth > 0) {
-      this.writeMessages(id, [queued]);
-      return;
-    }
-    const pending = this.pendingAppends.get(id);
-    if (pending) pending.push(queued);
-    else this.pendingAppends.set(id, [queued]);
-    if ((pending?.length ?? 1) >= APPEND_BATCH_LIMIT) this.flush(id);
+    return this.journal.append(id, message);
   }
-  /**
-   * Write what is buffered, and say so.
-   *
-   * `flush` is the point at which an append is promised to survive a crash. A reader of the session, an
-   * event recorded for it, a run that ends and a store that closes all flush first, so the only appends
-   * that a crash can lose are the ones a reader had not been shown yet. The safety barrier the run loop
-   * adds to that list is the one that matters: the message naming a tool call is flushed *before* the
-   * tool runs, because a crash mid-tool has to leave the record that lets recovery report the outcome as
-   * unknown instead of letting the call be replayed as if it had never happened.
-   */
   flush(id?: string): void {
-    // Inside a transaction there is nothing to write here: `transaction` empties the buffer before it
-    // opens, and an append made while it is open goes straight to the database (see `append`).
-    if (this.transactionDepth > 0) return;
-    // `transaction` flushes before it opens, and this is the flush it is calling: one pass, no recursion.
-    if (this.flushing) return;
-    const ids =
-      id === undefined ? [...this.pendingAppends.keys()] : this.pendingAppends.has(id) ? [id] : [];
-    if (!ids.length) return;
-    this.flushing = true;
-    try {
-      this.transaction(() => {
-        for (const sessionId of ids) {
-          const messages = this.pendingAppends.get(sessionId);
-          if (messages) this.writeMessages(sessionId, messages);
-        }
-      });
-    } finally {
-      this.flushing = false;
-    }
-    // Only after the commit: a batch that failed to write is left in the buffer rather than dropped.
-    for (const sessionId of ids) this.pendingAppends.delete(sessionId);
+    return this.journal.flush(id);
   }
-  private writeMessages(id: string, batch: readonly QueuedMessage[]): void {
-    const insert = this.db.prepare(
-      'INSERT INTO messages(session_id,body,search_text) VALUES(?,?,?)',
-    );
-    const insertBlob = this.db.prepare(
-      'INSERT OR IGNORE INTO attachment_blobs(hash,mime_type,bytes,size,created_at) VALUES(?,?,?,?,?)',
-    );
-    const retitle = this.db.prepare("UPDATE sessions SET title=? WHERE id=? AND title=''");
-    for (const queued of batch) {
-      // Inside the same transaction as the row that names them: a message cannot be durable while the bytes
-      // it refers to are not, and a rolled-back batch leaves no blob behind either.
-      for (const blob of queued.blobs)
-        insertBlob.run(blob.hash, blob.mimeType, blob.bytes, blob.size, new Date().toISOString());
-      insert.run(id, queued.body, queued.searchText);
-      // The log entry and the row are written together: the projection and the write-through table can
-      // never disagree about what happened, and a crash cannot leave one without the other. The log gets the
-      // stored shape while the live object keeps its bytes, so the fold that reads this process's own writes
-      // still shows the model an image rather than a reference to one.
-      this.recordEvent(
-        id,
-        messageEventType(queued.message),
-        { message: queued.message },
-        { message: queued.stored },
-      );
-      if (queued.title !== null) retitle.run(queued.title, id);
-    }
-  }
-  /**
-   * The surface a compaction defines: what stands in for the covered messages.
-   *
-   * The answer comes from the log alone, which is the point: "what is the model shown" used to be a row in
-   * `context_checkpoints`, so the log and the table could disagree and only the table was believed. Deriving
-   * it here means a session reopened in another process, or read by a tool that never opened the write path,
-   * computes the same view the run did.
-   */
   contextSurface(id: string): Surface | null {
-    this.get(id);
-    const ops = this.surfaceOps(id);
-    return surfaceOf(ops);
+    return this.context.contextSurface(id);
   }
-  /** Every compaction this session recorded, oldest first: the surface's history, not just its state. */
   surfaceHistory(id: string): SurfaceOp[] {
-    this.get(id);
-    return this.surfaceOps(id);
+    return this.context.surfaceHistory(id);
   }
-  /**
-   * How many times a round's model request has already been re-sent, counted in the log.
-   *
-   * The counter is the log rather than a field on the run or a variable in the loop, because a retry that was
-   * recorded is a retry that happened: a host that dies during the backoff comes back to a session whose
-   * attempts are already counted, and a reader can see the number the run acted on without asking the run.
-   */
-  /**
-   * How many times a round has been retried, optionally scoped to one session.
-   *
-   * The session scope is an *index* on the query, not a second rule: `session_events` is keyed and indexed by
-   * session, so a count that names the session is served by that index, while a count across the whole database
-   * has to look at every session's retry records. Callers that know the session pass it; the two-argument form
-   * keeps working, which is what the public API promises.
-   */
   retryCount(runId: string, round: number, sessionId?: string): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM session_events WHERE ${
-          sessionId === undefined ? '' : 'session_id=? AND '
-        } type='llm.retry' AND json_extract(data,'$.runId')=? AND json_extract(data,'$.round')=?`,
-      )
-      .get(...(sessionId === undefined ? [runId, round] : [sessionId, runId, round]));
-    return Number(row?.n ?? 0);
+    return this.runJournal.retryCount(runId, round, sessionId);
   }
-  private surfaceOps(id: string): SurfaceOp[] {
-    // The surface is a state derived from this log, so it answers only from a log this build can interpret — the
-    // same rule the projections follow, and for the same reason: an event whose meaning is unknown could have
-    // changed it, and a surface that quietly ignored one is a transcript cut in the wrong place.
-    this.checkedLog(id);
-    const rows = this.db
-      .prepare(
-        "SELECT seq,data FROM session_events WHERE session_id=? AND type='context.compacted' ORDER BY seq",
-      )
-      .all(id);
-    return rows.map((row, index) =>
-      this.surfaceOp(id, Number(row.seq), index + 1, JSON.parse(String(row.data))),
-    );
-  }
-  /**
-   * One recorded op, with its range checked against the transcript it claims to replace.
-   *
-   * The check is what makes a range worth recording. A count is a claim about position and quietly re-points
-   * when the transcript changes under it; a pair of log positions either names the covered records or does
-   * not, and the log is append-only, so a mismatch means this op and these messages are not the same
-   * conversation. Refusing to derive a surface from that is the same choice the message fold makes for an
-   * event it cannot interpret: better to stop than to show a history nobody recorded.
-   */
-  private surfaceOp(id: string, seq: number, generation: number, data: unknown): SurfaceOp {
-    const payload = (data ?? {}) as Record<string, unknown>;
-    const coveredMessages = Number(payload.coveredMessages);
-    const summary = typeof payload.summary === 'string' ? payload.summary : '';
-    if (!Number.isSafeInteger(coveredMessages) || coveredMessages < 1 || !summary.trim())
-      throw new Error(
-        `Session log event context.compacted at seq ${seq} does not describe a surface replacement`,
-      );
-    const seqs = this.messageSeqs(id, coveredMessages);
-    if (seqs.length !== coveredMessages)
-      throw new Error(
-        `Session log event context.compacted at seq ${seq} covers ${coveredMessages} message(s), ` +
-          `but this session only has ${seqs.length}; refusing to derive a surface from it`,
-      );
-    const startSeq = seqs[0]!;
-    const endSeq = seqs[coveredMessages - 1]!;
-    const recordedStart = Number(payload.startSeq);
-    const recordedEnd = Number(payload.endSeq);
-    if (
-      Number.isSafeInteger(recordedStart) &&
-      Number.isSafeInteger(recordedEnd) &&
-      (recordedStart !== startSeq || recordedEnd !== endSeq)
-    )
-      throw new Error(
-        `Session log event context.compacted at seq ${seq} claims to replace ${recordedStart}–${recordedEnd}, ` +
-          `but ${coveredMessages} message(s) from seq ${startSeq}–${endSeq} are what it covers; the record and ` +
-          'the transcript do not describe the same conversation',
-      );
-    return {
-      generation,
-      startSeq,
-      endSeq,
-      coveredMessages,
-      summary,
-      ...(payload.usage ? { usage: payload.usage as Usage } : {}),
-      ...(Number.isSafeInteger(Number(payload.replacedChars))
-        ? { replacedChars: Number(payload.replacedChars) }
-        : {}),
-      ...(Number.isSafeInteger(Number(payload.surfaceChars))
-        ? { surfaceChars: Number(payload.surfaceChars) }
-        : {}),
-      // The envelope the summary ran under, carried back out for the same reason it is written: a reader of the
-      // *surface* asks "what produced this?" as often as a reader of the raw log does, and a field the record
-      // declares but the fold drops answers that question with silence.
-      ...(typeof payload.protocol === 'string' ? { protocol: payload.protocol } : {}),
-      ...(typeof payload.model === 'string' ? { model: payload.model } : {}),
-      ...(Number.isSafeInteger(Number(payload.maxTokens))
-        ? { maxTokens: Number(payload.maxTokens) }
-        : {}),
-      ...(typeof payload.rawOutput === 'string' ? { rawOutput: payload.rawOutput } : {}),
-    };
-  }
-  /** Log positions of this session's message events, oldest first, capped at `limit`. */
-  private messageSeqs(id: string, limit: number): number[] {
-    return this.db
-      .prepare(
-        "SELECT seq FROM session_events WHERE session_id=? AND type IN ('message.user','message.assistant','message.tool') ORDER BY seq LIMIT ?",
-      )
-      .all(id, limit)
-      .map((row) => Number(row.seq));
-  }
-  /**
-   * Record a compaction: the messages it covers, and what replaces them.
-   *
-   * `usage` is what the summary request cost. It is a real model call, so the session's statistics fold it
-   * in; it is not a run, so no run budget is charged for it. A caller that does not report usage leaves the
-   * event exactly as it always was.
-   *
-   * `replacedChars`/`surfaceChars` are the price of the trade: what the conversation cost before, and what
-   * it costs after. A summary that does not make it smaller is refused here rather than applied — compacting
-   * a conversation into something larger is not a compaction, and the caller's alternative (keep the
-   * history) is always available.
-   *
-   * `runId` is the write half of the compaction lock (`claimCompaction` is the acquire half): while a session
-   * is held by a run, only that run may record a compaction for it. A session with no lease on record has no
-   * competing writer to exclude, which is the store-level caller's path (a migration, a repair).
-   *
-   * `model`/`maxTokens` are the envelope the summary itself ran under: which model answered, and how much output
-   * it was allowed. Together with the per-round `context.envelope` — which records the system prompt and the tool
-   * catalogue the summary request replayed — they are what makes "this summary was produced like this" a question
-   * the log answers, rather than one only the process that asked it could.
-   */
   applyCompaction(
     id: string,
     input: {
@@ -1910,247 +1004,22 @@ export class SessionStore implements PlanRepository {
       rawOutput?: string;
     },
   ): void {
-    const lease = this.leaseOf(id);
-    if (lease && lease.runId !== input.runId)
-      throw new Error(
-        `Another run is writing this session (run ${lease.runId}, pid ${lease.ownerPid}${ageSuffix(lease.renewedAt)}); ` +
-          'the compaction was not recorded.',
-      );
-    const history = this.messages(id);
-    if (
-      !Number.isSafeInteger(input.coveredMessages) ||
-      input.coveredMessages < 1 ||
-      input.coveredMessages > history.length ||
-      !contextBoundaries(history).includes(input.coveredMessages) ||
-      !input.summary.trim()
-    )
-      throw new Error('Invalid context checkpoint boundary');
-    const seqs = this.messageSeqs(id, input.coveredMessages);
-    if (seqs.length !== input.coveredMessages)
-      throw new Error(
-        `The log has ${seqs.length} message(s); a compaction cannot cover ${input.coveredMessages}`,
-      );
-    if (
-      input.replacedChars !== undefined &&
-      input.surfaceChars !== undefined &&
-      input.surfaceChars >= input.replacedChars
-    )
-      throw new Error(
-        `Refusing a compaction that would not shrink the conversation: ${input.replacedChars} characters ` +
-          `replaced by ${input.surfaceChars}`,
-      );
-    this.recordEvent(id, 'context.compacted', {
-      coveredMessages: input.coveredMessages,
-      startSeq: seqs[0]!,
-      endSeq: seqs[input.coveredMessages - 1]!,
-      summary: input.summary,
-      ...(input.usage ? { usage: input.usage } : {}),
-      ...(input.cacheKnown === undefined ? {} : { cacheKnown: input.cacheKnown }),
-      ...(input.runId === undefined ? {} : { runId: input.runId }),
-      ...(input.replacedChars !== undefined && input.surfaceChars !== undefined
-        ? { replacedChars: input.replacedChars, surfaceChars: input.surfaceChars }
-        : {}),
-      ...(input.protocol === undefined ? {} : { protocol: input.protocol }),
-      ...(input.model === undefined ? {} : { model: input.model }),
-      ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
-      ...(input.rawOutput === undefined ? {} : { rawOutput: input.rawOutput }),
-    });
+    return this.context.applyCompaction(id, input);
   }
-  private transactionDepth = 0;
-  /** True while a flush is writing, so that the flush a transaction starts with is not attempted twice. */
-  private flushing = false;
-  /**
-   * Runs `fn` in a transaction, or joins the one already open.
-   *
-   * SQLite has no nested transactions, and nesting is now easy to reach by accident: `beginRun` settles
-   * a previously interrupted run, which appends a message, which writes its log entry — three levels that
-   * must all land or none of them. Joining the open transaction is what makes that composition work
-   * instead of throwing "cannot start a transaction within a transaction".
-   */
   private transaction<T>(fn: () => T): T {
-    if (this.transactionDepth > 0) return fn();
-    // A fact written inside this transaction must not overtake appends that are still buffered.
-    this.flush();
-    this.db.exec('BEGIN IMMEDIATE');
-    this.transactionDepth++;
-    try {
-      const value = fn();
-      this.db.exec('COMMIT');
-      this.transactionDepth--;
-      // Reads during the transaction bypassed the cache, because they had to see this transaction's own
-      // uncommitted rows. Now that it has committed, the events it appended can be folded in as a batch.
-      this.applyPendingLog();
-      return value;
-    } catch (error) {
-      this.transactionDepth--;
-      if (this.pendingLog) this.pendingLog = null;
-      try {
-        this.db.exec('ROLLBACK');
-      } catch {
-        // A commit that failed on its own has already ended the transaction; there is nothing to undo.
-      }
-      throw error;
-    }
+    return this.journal.transaction(fn);
   }
-  // An unresolved call may already have had effects: record uncertainty, never replay it.
   resolvePending(id: string, reason: string): number {
-    const messages = this.messages(id);
-    const pending = new Map<string, Message & { role: 'assistant' }>();
-    for (const message of messages) {
-      if (message.role === 'assistant')
-        for (const call of message.toolCalls) pending.set(call.id, message);
-      if (message.role === 'tool') pending.delete(message.toolCallId);
-    }
-    for (const callId of pending.keys())
-      this.append(id, { role: 'tool', toolCallId: callId, isError: true, content: reason });
-    return pending.size;
+    return this.runJournal.resolvePending(id, reason);
   }
-  /**
-   * Converge one run whose owning process is gone, and record the fact in the session's log.
-   *
-   * Every path that finds an abandoned run goes through here, because the three effects have to happen
-   * together or not at all: the unresolved calls must be answered with uncertainty (they may have had
-   * effects, so they are never replayed), the run row must stop saying `running`, and the session must stop
-   * pointing at it. The last of those is why this is not just housekeeping — a stale `active_run` blocks
-   * deleting the session and editing its history, so a crash used to leave a session that could not be
-   * cleaned up until something else happened to converge it.
-   *
-   * The `run.interrupted` record is the part that replaces what the stale pointer was carrying: "this run
-   * ended because its process died" belongs in the log, where a reader finds it next to the run's start,
-   * rather than in a column that only says a run is *somewhere* in flight.
-   */
-  /**
-   * Converge one run whose owning process is gone; the task journal settles a dead attempt through this.
-   *
-   * `private` would be the default, but the journal is a collaborator rather than a caller: it borrows exactly
-   * this and the five other members named in the port it is constructed with.
-   */
   settleAbandonedRun(sessionId: string, runId: string, reason: string): void {
-    const pendingCalls = this.resolvePending(sessionId, reason);
-    const step = this.inFlightStep(sessionId, runId);
-    /**
-     * Inputs the dead process was holding when it stopped.
-     *
-     * Counted here, where the interruption is already being described, because it is the same kind of fact as
-     * `pendingCalls`: something was accepted and never happened. The inbox fold answers it too, but a reader
-     * looking for the aftermath of a crash reads this record, and "a follow-up was waiting and was never sent"
-     * is part of that aftermath. Left off the record when there was none, so absence means "nothing was
-     * waiting" rather than "nobody counted".
-     */
-    const undelivered = this.pendingInputs(sessionId).length;
-    /**
-     * The plan this run was filling in, if it never finished filling it.
-     *
-     * The row was created before the planning run started, on purpose, so that a crash leaves a record rather than
-     * nothing. What it must not keep saying is that somebody is still working on it: `planning` is a promise, and
-     * the run that made it is gone. Moving it to `abandoned` keeps the record and drops the promise, and the count
-     * rides the interruption record so a reader learns it where they learn about the crash.
-     */
-    const abandonedPlans = this.db
-      .prepare(
-        "UPDATE plans SET status='abandoned', updated_at=? WHERE run_id=? AND status='planning'",
-      )
-      .run(new Date().toISOString(), runId).changes;
-    this.db
-      .prepare("UPDATE runs SET status='interrupted' WHERE id=? AND status='running'")
-      .run(runId);
-    this.db.prepare('UPDATE sessions SET active_run=NULL WHERE active_run=?').run(runId);
-    // The abandoned run's lease goes with it: it is presence, and the process that held it is gone. Only the
-    // owner's own lease is cleared, so converging one run cannot release another run's hold on the session.
-    this.db
-      .prepare('DELETE FROM session_leases WHERE session_id=? AND run_id=?')
-      .run(sessionId, runId);
-    this.recordEvent(sessionId, 'run.interrupted', {
-      runId,
-      pendingCalls,
-      reason,
-      /**
-       * The step it died in, when the run opened one.
-       *
-       * The first question a crash raises is "where was it?", and the answer is in the log already — a
-       * `step.started` with no end — but only for a reader who knows to pair the boundaries up. Carrying the
-       * number here means the record of the interruption answers it where somebody looks for the interruption,
-       * and `null`-less absence means the process died before the run's first step, which is a different (and
-       * equally useful) answer.
-       */
-      ...(step ? { step: step.step } : {}),
-      ...(undelivered ? { undeliveredInputs: undelivered } : {}),
-      ...(abandonedPlans ? { abandonedPlans } : {}),
-    });
+    return this.runJournal.settleAbandonedRun(sessionId, runId, reason);
   }
-  /**
-   * The step a run left open in the log, or `null` when every step it opened was closed.
-   *
-   * Read from the log rather than kept in a column, for the same reason `retryCount` is counted from the log: a
-   * second copy of "which step was in flight" is a second answer, and the one that survives a crash is the one
-   * written before it. Only the two boundary types are read and the fold is bounded, so this stays cheap on a
-   * session with a long history.
-   */
   inFlightStep(sessionId: string, runId: string): StepRecord | null {
-    const events = this.db
-      .prepare(
-        "SELECT type,data,at FROM session_events WHERE session_id=? AND type IN ('step.started','step.finished') ORDER BY seq",
-      )
-      .all(sessionId)
-      .map((row) => ({
-        type: String(row.type),
-        data: JSON.parse(String(row.data)) as Record<string, unknown>,
-        at: String(row.at),
-      }));
-    return openStepOf(foldSteps(events, { runId }));
+    return this.runJournal.inFlightStep(sessionId, runId);
   }
-  /**
-   * Converge every ordinary session a dead Host left with a run in flight.
-   *
-   * Run at startup, so reopening a workspace after a crash shows sessions that can be used, deleted or
-   * edited, and shows the interruption in each session's own record. Only runs whose owner process is gone
-   * are touched: another Host on the same workspace is a live owner, and its runs are left alone.
-   *
-   * Delegated child sessions are excluded because `reconcileChildRuns` converges them and additionally records
-   * the interruption on the parent's log, where a reader of the parent can see it. A fork is not a child in that
-   * sense — it is an ordinary conversation that happens to point at its source — so it is converged here.
-   *
-   * Every carrier that opens a workspace has to call this at startup, next to `reconcileChildRuns`: a
-   * conversation is only usable again once something has looked at it, and a carrier that forgets leaves
-   * sessions its own UI cannot delete, rename or continue. `tests/cli.test.ts` pins that for the CLI.
-   */
   reconcileInterruptedRuns(workspace?: string): number {
-    return this.transaction(() => {
-      const rows = this.db
-        .prepare(
-          `SELECT s.id AS sessionId, s.active_run AS runId, r.owner_pid AS ownerPid
-           FROM sessions s JOIN runs r ON r.id=s.active_run
-           WHERE (s.parent_session_id IS NULL OR s.fork_message_count IS NOT NULL)
-             AND r.status='running' AND (? IS NULL OR s.workspace=?)`,
-        )
-        .all(workspace ?? null, workspace ?? null)
-        .filter((row) => deadOwner(row.ownerPid));
-      /** How many were actually converged: a session that threw above is not one of them. */
-      let converged = 0;
-      for (const row of rows) {
-        /**
-         * One session at a time, and one failure at a time.
-         *
-         * `settleAbandonedRun` is not read-only housekeeping: it answers the run's unresolved tool calls and
-         * parses the session's event log, so a session this build cannot fold — a blob that is gone, an event
-         * type it refuses by design — throws from inside here. Letting that escape did two things at once: it
-         * rolled back the convergence already performed for the *other* sessions, and it propagated to the
-         * caller, which is Host startup. One unreadable conversation therefore left every session in the
-         * workspace unusable and stopped the Host from opening at all. The session that cannot be converged is
-         * named and skipped, and the rest still become deletable, renameable and continuable.
-         */
-        try {
-          this.settleAbandonedRun(String(row.sessionId), String(row.runId), RUN_INTERRUPTED_REASON);
-          converged += 1;
-        } catch (error) {
-          console.error(
-            `[session log] could not converge interrupted run ${String(row.runId)} in session ` +
-              `${String(row.sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      return converged;
-    });
+    return this.runJournal.reconcileInterruptedRuns(workspace);
   }
   /** Save a bounded-frequency recovery point while a provider is streaming visible text. */
   /** A durable recovery point for a run that is still streaming; see `./session-streams.ts`. */
@@ -2174,137 +1043,22 @@ export class SessionStore implements PlanRepository {
     return this.streams.recoverInterruptedStreams(workspace);
   }
   beginRun(id: string): string {
-    return this.transaction(() => {
-      const session = this.get(id);
-      const binding = this.workspaceBinding(id);
-      if (binding.kind === 'worktree' && this.workspaces.operationIsLive(binding.id))
-        throw new WorkspaceFailure(
-          'WORKSPACE_BUSY',
-          'Workspace management is in progress; wait before starting a run',
-        );
-      if (binding.kind === 'worktree' && binding.state !== 'ready')
-        throw new WorkspaceFailure(
-          'WORKSPACE_BUSY',
-          'Restore the isolated workspace before starting a run',
-        );
-      if (session.activeRun) {
-        const row = this.db.prepare('SELECT owner_pid FROM runs WHERE id=?').get(session.activeRun);
-        let alive = false;
-        if (row) {
-          try {
-            process.kill(Number(row.owner_pid), 0);
-            alive = true;
-          } catch (error) {
-            alive = (error as NodeJS.ErrnoException).code !== 'ESRCH';
-          }
-        }
-        if (alive)
-          throw new Error(
-            'This session is already running. Cancel or stop its owning process first.' +
-              leaseEvidence(this.leaseOf(id)),
-          );
-        // The same convergence startup performs, in case this session was never read since the crash.
-        this.settleAbandonedRun(id, session.activeRun, RUN_INTERRUPTED_REASON);
-      }
-      const runId = randomUUID();
-      this.db
-        .prepare(
-          "INSERT INTO runs(id,session_id,owner_pid,status,started_at) VALUES(?,?,?,'running',?)",
-        )
-        .run(runId, id, process.pid, new Date().toISOString());
-      this.db.prepare('UPDATE sessions SET active_run=? WHERE id=?').run(runId, id);
-      /**
-       * The lease is taken in the same transaction as the run row, so "this session has a writer" and "here is
-       * which run" cannot disagree — the pair is what makes a refusal precise and a takeover safe.
-       */
-      this.db
-        .prepare(
-          `INSERT INTO session_leases(session_id,run_id,owner_pid,renewed_at,renewals,compacting_run_id)
-           VALUES(?,?,?,?,0,NULL)
-           ON CONFLICT(session_id) DO UPDATE SET
-             run_id=excluded.run_id, owner_pid=excluded.owner_pid,
-             renewed_at=excluded.renewed_at, renewals=0, compacting_run_id=NULL`,
-        )
-        .run(id, runId, process.pid, new Date().toISOString());
-      this.recordEvent(id, 'run.started', { runId, ownerPid: process.pid });
-      return runId;
-    });
+    return this.runJournal.beginRun(id);
   }
-  /**
-   * The lease on a session, or `null` when nothing holds it.
-   *
-   * A reader, not a decision: the only code that *acts* on a lease is `beginRun` (mutual exclusion) and the
-   * compaction lock. `renewedAt` is there so a refusal can say how long ago the owner last did anything.
-   */
   leaseOf(sessionId: string): SessionLease | null {
-    const row = this.db
-      .prepare('SELECT * FROM session_leases WHERE session_id=?')
-      .get(sessionId) as Record<string, unknown> | undefined;
-    if (!row) return null;
-    return {
-      sessionId: String(row.session_id),
-      runId: String(row.run_id),
-      ownerPid: Number(row.owner_pid),
-      renewedAt: String(row.renewed_at),
-      renewals: Number(row.renewals),
-      ...(row.compacting_run_id ? { compactingRunId: String(row.compacting_run_id) } : {}),
-    };
+    return this.runJournal.leaseOf(sessionId);
   }
-  /**
-   * Records that the owning run is still working. Returns false when the session is no longer this run's.
-   *
-   * Called at every step boundary and on a timer while a request is in flight (`LEASE_RENEW_INTERVAL_MS`).
-   * Nothing expires because of it — see `SessionLease`: it is how "last active" stays true during a long model
-   * call rather than reporting a working run as idle.
-   */
   renewLease(sessionId: string, runId: string): boolean {
-    const result = this.db
-      .prepare(
-        'UPDATE session_leases SET renewed_at=?, renewals=renewals+1 WHERE session_id=? AND run_id=?',
-      )
-      .run(new Date().toISOString(), sessionId, runId);
-    return Number(result.changes) > 0;
+    return this.runJournal.renewLease(sessionId, runId);
   }
-  /** Gives up a lease this run holds. False means it is not ours any more, which is worth knowing. */
   releaseLease(sessionId: string, runId: string): boolean {
-    const result = this.db
-      .prepare('DELETE FROM session_leases WHERE session_id=? AND run_id=?')
-      .run(sessionId, runId);
-    return Number(result.changes) > 0;
+    return this.runJournal.releaseLease(sessionId, runId);
   }
-  /**
-   * Takes the compaction lock for a session, before the summary request is sent.
-   *
-   * The rule is one sentence: **a compaction may only be recorded by the run that holds the session**. The lock
-   * is taken here so a run does not pay for a summary it will be refused at the write, and `applyCompaction`
-   * re-checks the same rule — the two checkpoints are the acquire and the commit of one lock, not two locks.
-   *
-   * A session with no lease has no competing writer on record (a store-level caller, a migration), so there is
-   * nothing to exclude; a lease held by a *different* run is exactly the case this refuses.
-   */
   claimCompaction(sessionId: string, runId?: string): void {
-    const lease = this.leaseOf(sessionId);
-    if (!lease) return;
-    if (lease.runId !== runId)
-      throw new Error(
-        `Another run is writing this session (run ${lease.runId}, pid ${lease.ownerPid}${ageSuffix(lease.renewedAt)}); ` +
-          'a compaction was not attempted.',
-      );
-    if (lease.compactingRunId !== undefined)
-      throw new Error(
-        `A summary is already in flight for this session (run ${lease.compactingRunId}); a second compaction was not attempted.`,
-      );
-    this.db
-      .prepare('UPDATE session_leases SET compacting_run_id=? WHERE session_id=?')
-      .run(runId ?? null, sessionId);
+    return this.runJournal.claimCompaction(sessionId, runId);
   }
-  /** Releases the compaction lock. Only the run that took it releases it, so a stale release is a no-op. */
   releaseCompaction(sessionId: string, runId?: string): void {
-    this.db
-      .prepare(
-        'UPDATE session_leases SET compacting_run_id=NULL WHERE session_id=? AND compacting_run_id IS ?',
-      )
-      .run(sessionId, runId ?? null);
+    return this.runJournal.releaseCompaction(sessionId, runId);
   }
   /**
    * One projection's state for a session, folded from the log.
@@ -2386,42 +1140,7 @@ export class SessionStore implements PlanRepository {
   statistics(sessionId: string): SessionStatistics {
     return this.stateOf<SessionStatistics>('statistics', sessionId);
   }
-  finishRun(result: RunResult): void {
-    this.transaction(() => {
-      this.db
-        .prepare('UPDATE runs SET status=?,result=? WHERE id=?')
-        .run(result.status, JSON.stringify(result), result.runId);
-      this.db
-        .prepare('UPDATE sessions SET active_run=NULL WHERE id=? AND active_run=?')
-        .run(result.sessionId, result.runId);
-      // The run stops being this session's writer the moment it stops writing. A lease left behind would be a
-      // row claiming presence for a process that is done, and the next run would have to reason around it.
-      this.db
-        .prepare('DELETE FROM session_leases WHERE session_id=? AND run_id=?')
-        .run(result.sessionId, result.runId);
-      this.recordEvent(result.sessionId, 'run.finished', {
-        runId: result.runId,
-        status: result.status,
-        // Usage is what the statistics projection folds; the full result row stays the record of record
-        // for everything else, so a multi-megabyte payload is not duplicated into the log.
-        usage: result.usage,
-        ...(result.statistics ? { statistics: result.statistics } : {}),
-        ...(result.compactionUsage ? { compactionUsage: result.compactionUsage } : {}),
-        ...(result.error ? { error: redactSecrets(result.error).slice(0, 600) } : {}),
-        // Why it ended, when the reason has a name. It rides the durable event rather than only the run row so
-        // that "why did this fail?" is answerable from the log alone, and so a client that only follows events
-        // learns as much as one that reads the row.
-        ...(result.code ? { code: result.code } : {}),
-        // The endpoint's own two facts about the call, when the failure came from one. They ride the event for
-        // the same reason the code does: "it failed" is answerable from the log, and so is *what* the endpoint
-        // said — which is what somebody has to quote when they ask the provider about it.
-        ...(result.httpStatus === undefined ? {} : { httpStatus: result.httpStatus }),
-        ...(result.requestId === undefined ? {} : { requestId: result.requestId }),
-      });
-    });
-    // After the run is closed, not inside it: the checkpoint is derived data, and a failure to write it must not
-    // be able to fail the run's own transaction. `saveProjectionCheckpoints` swallows its errors for the same
-    // reason.
-    this.saveProjectionCheckpoints(result.sessionId);
+  finishRun(result: RunResult, options: { completeGoalObjective?: string } = {}): void {
+    return this.runJournal.finishRun(result, options);
   }
 }

@@ -1133,6 +1133,81 @@ test('manual compaction merges new conversation with the prior summary before ad
   assert.equal(store.messages(session.id).length, 6);
 });
 
+test('run.cancel stops manual compaction without committing a summary and frees the next operation', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-compact-cancel-'));
+  const db = path.join(root, 'sessions.sqlite');
+  const store = new SessionStore(db);
+  let client: AgentHostClient | undefined;
+  t.after(async () => {
+    await client?.stop();
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = store.create(root);
+  const other = store.create(root);
+  store.append(session.id, { role: 'user', content: 'Keep the blue theme.' });
+  store.append(session.id, { role: 'assistant', content: 'I will keep it blue.', toolCalls: [] });
+  store.recordEvent(session.id, 'context.envelope', {
+    runId: 'seeded',
+    round: 0,
+    system: 'You are the fixture.',
+    tools: [],
+    systemHash: 'a'.repeat(64),
+    systemBytes: 20,
+    toolsHash: 'b'.repeat(64),
+    toolsBytes: 2,
+    toolsCount: 0,
+  });
+  store.flush(session.id);
+  let entered!: () => void;
+  const summaryStarted = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let summaries = 0;
+  const url = await httpFixture(t, (_body, res, _headers, requestUrl) => {
+    if (requestUrl === '/v1/models') {
+      res.writeHead(404);
+      res.end('{}');
+      return;
+    }
+    if (++summaries === 1) {
+      entered();
+      return;
+    }
+    sendFrames(res, frames('The theme stays blue.'));
+  });
+  client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath: path.join(projectRoot, 'apps/agent-host/main.ts'),
+    workspace: root,
+    db,
+    requestTimeoutMs: 10_000,
+    env: {
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_BASE_URL: url,
+      YUANTU_MODEL: 'fixture',
+      YUANTU_API_KEY: 'test',
+    },
+  });
+  await client.start();
+  const compacting = client.request('context.compact', { sessionId: session.id });
+  const stopped = assert.rejects(compacting, /abort|cancel/i);
+  await summaryStarted;
+  assert.deepEqual(await client.request('run.cancel', { sessionId: other.id }), {
+    cancelled: false,
+  });
+  assert.deepEqual(await client.request('run.cancel', { sessionId: session.id }), {
+    cancelled: true,
+  });
+  await stopped;
+  assert.equal(store.contextSurface(session.id), null);
+  assert.deepEqual(await client.request('context.compact', { sessionId: session.id }), {
+    compacted: true,
+    coveredMessages: 2,
+  });
+  assert.equal(store.contextSurface(session.id)!.summary, 'The theme stays blue.');
+});
+
 test('manual compaction refuses rather than replay a request envelope it does not have', async (t) => {
   /**
    * The degradation the replay policy implies, and it is deliberate: a summary request whose prefix is known not
@@ -1376,6 +1451,36 @@ test('later observations move the factor gradually instead of jumping', () => {
   // An observation that names no parts is about the request as a whole, so the three weights move together —
   // which is exactly what one ratio used to do, and what a caller with no breakdown still gets.
   assert.deepEqual(calibration.parts, { system: 1.6, tools: 1.6, messages: 1.6 });
+});
+
+test('a request-wide observation moves the three weights together, keeping the shape they learned', () => {
+  /**
+   * A sample that names no parts cannot say *which* part was misjudged, so the only honest reading is that every
+   * part moves by the same relative amount: the shape the run has learned is kept and its overall size is
+   * corrected. That is a decision rather than an accident of the arithmetic — the normalisation uses the weights
+   * themselves when there is no breakdown, which is what makes `current` the correction the mix in hand would
+   * already get — and it is pinned here because a review read that normalisation as a defect and the answer is
+   * "keep it, and be able to say why".
+   */
+  const calibration = new TokenCalibration();
+  calibration.observe(1_000, 300);
+  // Evidence that *does* distinguish the parts, so the three weights are apart before the request-wide sample.
+  calibration.observe(1_000, 2_000, { system: 100, tools: 100, messages: 800 });
+  const before = calibration.parts;
+  assert.ok(
+    new Set([before.system, before.tools, before.messages]).size > 1,
+    `the parts must differ, or this case tests nothing: ${JSON.stringify(before)}`,
+  );
+  // Now the sample a caller with no breakdown sends: one total, no shares.
+  calibration.observe(1_000, 1_400);
+  const after = calibration.parts;
+  const move = after.messages / before.messages;
+  assert.ok(Math.abs(move - 1) > 1e-6, 'the observation has to move the correction');
+  for (const part of ['system', 'tools', 'messages'] as const)
+    assert.ok(
+      Math.abs(after[part] / before[part] - move) < 1e-9,
+      `${part} moved by ${after[part] / before[part]} rather than by the shared ${move}`,
+    );
 });
 
 test('a route that is wrong about one part and wrong the other way about another is corrected per part', () => {

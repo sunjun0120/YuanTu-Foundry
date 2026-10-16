@@ -154,7 +154,7 @@ export function createTools(
       return parseWorkspaceSymbols(
         await client.send('workspace/symbol', { query }, signal),
         root,
-        200,
+        Number.MAX_SAFE_INTEGER,
       ).map((entry) => ({
         path: entry.path,
         kind: entry.kind,

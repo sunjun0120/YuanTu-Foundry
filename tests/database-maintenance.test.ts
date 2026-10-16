@@ -2,7 +2,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionMigrations } from '../packages/storage/session-migrations.ts';
@@ -17,6 +25,8 @@ import {
   restoreDatabase,
   inspectDatabase,
   recoverDatabase,
+  compactDatabase,
+  RECOVERY_COPY_ADMISSION,
 } from '../packages/storage/database-maintenance.ts';
 import { runCli } from './process-fixture.ts';
 import { spawnSync } from 'node:child_process';
@@ -24,7 +34,7 @@ import { spawnSync } from 'node:child_process';
 function fixture(t: test.TestContext) {
   const root = mkdtempSync(path.join(tmpdir(), 'yuantu-backup-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  return { root, file: path.join(root, '会话 data.sqlite') };
+  return { root, file: path.join(root, '浼氳瘽 data.sqlite') };
 }
 
 test('migration creates a verified independent snapshot including committed WAL content', (t) => {
@@ -130,6 +140,61 @@ test.skip('restore refuses an active store and rejects corrupt or incompatible c
   assert.deepEqual(readFileSync(file), original);
 });
 
+test('compaction returns the pages deleted records left behind, and keeps what remains', (t) => {
+  /**
+   * The premise first, because it is the whole item: SQLite does not shrink a file when rows are deleted. The
+   * pages go on a free list for later writes to reuse, so the file keeps the size of its historical peak — and
+   * before this operation there was no path in the product that ended that state.
+   *
+   * The maintenance commands live in the CLI beside this one, and this product currently pauses that entry point
+   * (`PRODUCT_SCOPE.cli`), which is why the case below drives the operation directly instead of through
+   * `runCli` — the same reason the CLI-level backup and restore cases in this file are paused.
+   */
+  const { root, file } = fixture(t);
+  const store = new SessionStore(file);
+  const session = store.create(root);
+  const task = store.createTask(session.id, { title: 'survives compaction' });
+  for (let index = 0; index < 300; index++)
+    store.append(session.id, { role: 'assistant', content: 'x'.repeat(4000), toolCalls: [] });
+  store.close();
+  const writer = new DatabaseSync(file);
+  // Both tables, because the store reads a session's messages out of the folded event log: deleting only the
+  // `messages` rows would leave the transcript reconstructible, and the state under test is "these records are
+  // gone and their pages are not".
+  writer.exec('DELETE FROM messages; DELETE FROM session_events');
+  writer.close();
+  const peak = statSync(file).size;
+  assert.ok(peak > 500_000, `the file should still carry its peak after the delete, saw ${peak}`);
+
+  const report = compactDatabase(file);
+  assert.equal(path.basename(report.file), path.basename(file));
+  assert.ok(
+    report.freedBytes > 0 && report.afterBytes < report.beforeBytes,
+    `the file should have shrunk: ${report.beforeBytes} → ${report.afterBytes}`,
+  );
+  /**
+   * Returned pages, not returned records: what was written before the compaction is still there, and what was
+   * deleted stays deleted. A maintenance operation that lost either one would be a data-loss bug with a tidy
+   * report attached.
+   */
+  const reopened = new SessionStore(file);
+  assert.equal(reopened.messages(session.id).length, 0);
+  assert.equal(reopened.getTask(session.id, task.id)?.title, 'survives compaction');
+  reopened.close();
+  // A second run has nothing left to return, which is what "the file no longer carries its peak" means.
+  assert.equal(compactDatabase(file).freedBytes, 0);
+});
+
+test('compaction refuses a database another process still has open', (t) => {
+  const { file } = fixture(t);
+  const store = new SessionStore(file);
+  try {
+    assert.throws(() => compactDatabase(file), /active reader\/writer/i);
+  } finally {
+    store.close();
+  }
+});
+
 test('legacy unmarked databases with FTS shadow tables remain migratable', (t) => {
   const { root, file } = fixture(t);
   const store = new SessionStore(file);
@@ -183,6 +248,89 @@ test('retention bounds count and bytes; insufficient capacity leaves migration u
     SCHEMA_VERSION - 1,
   );
   original.close();
+});
+
+/**
+ * 搂7.2.8 鈥?the history budget and the admission of a required copy were one number, and the assessment located
+ * the consequence: `desktop-upgrade.ts` says recovery copies are exempt from routine retention while the call it
+ * makes still took the default 512 MiB budget, so a session database past that size made the *upgrade* stop 鈥?the
+ * one moment where the way back matters most.
+ *
+ * The fixtures below model "past that size" with a small budget rather than half a gigabyte of I/O, because what
+ * is under test is which number admission consults, not the number itself. The unit is the same in both cases.
+ */
+function sizeableDatabase(t: test.TestContext) {
+  const { file } = fixture(t);
+  const store = new SessionStore(file);
+  const session = store.create(path.dirname(file));
+  // Large enough to exceed the deliberately small budget below.
+  store.append(session.id, { role: 'user', content: 'payload '.repeat(24_000) });
+  store.close();
+  return { file };
+}
+
+test('a copy the routine budget refuses is admitted when the caller says it is required', (t) => {
+  const { file } = sizeableDatabase(t);
+  const db = new DatabaseSync(file);
+  const budget = { maxCount: 5, maxBytes: 64 * 1024 };
+  // The routine answer: this copy is bigger than the history budget, so it is refused. Unchanged behaviour, and
+  // the assertion the migration path depends on.
+  assert.throws(
+    () => createDatabaseBackup(db, file, SESSION_DATABASE_POLICY, 'migration', budget),
+    /capacity/i,
+  );
+  // The same copy, for a caller that cannot proceed without it: admitted, because the thing that should stop a
+  // required copy is the volume rather than a budget written about how much history to keep.
+  const required = createDatabaseBackup(
+    db,
+    file,
+    SESSION_DATABASE_POLICY,
+    'migration',
+    budget,
+    RECOVERY_COPY_ADMISSION,
+  );
+  db.close();
+  assert.ok(required.bytes > budget.maxBytes);
+  assert.ok(existsSync(required.file), 'the admitted copy is not on disk');
+  assert.ok(existsSync(`${required.file}.json`));
+  assert.deepEqual(inspectDatabase(required.file, SESSION_DATABASE_POLICY).bytes, required.bytes);
+});
+
+test('an admitted copy larger than the history budget is not pruned by that budget', (t) => {
+  const { file } = sizeableDatabase(t);
+  const db = new DatabaseSync(file);
+  // Admission and pruning both used to compare against the same number, which hid this: with `maxBytes` smaller
+  // than the copy, the loop deleted the snapshot it had just taken and returned a backup whose file was already
+  // gone 鈥?so the caller either fails copying a missing file or carries on believing it has a way back.
+  const backup = createDatabaseBackup(
+    db,
+    file,
+    SESSION_DATABASE_POLICY,
+    'manual',
+    { maxCount: 1, maxBytes: 1 },
+    RECOVERY_COPY_ADMISSION,
+  );
+  db.close();
+  assert.ok(backup.bytes > 1);
+  assert.ok(existsSync(backup.file), 'the snapshot just taken was pruned by the history budget');
+  assert.equal(readdirSync(`${file}.backups`).filter((name) => name.endsWith('.sqlite')).length, 1);
+  // And it is a usable snapshot, not merely a file: restoring from it has to work for it to be a way back.
+  restoreDatabase(file, backup.file, SESSION_DATABASE_POLICY);
+  assert.equal(inspectDatabase(file, SESSION_DATABASE_POLICY).bytes, backup.bytes);
+});
+
+test('backupDatabase takes the admission its caller chose, and defaults to the routine budget', (t) => {
+  const { file } = sizeableDatabase(t);
+  const store = new SessionStore(file);
+  store.close();
+  // The default keeps every existing caller exactly as it was.
+  assert.throws(() => backupDatabase(file, SESSION_DATABASE_POLICY, { maxBytes: 1 }), /capacity/i);
+  // An explicit free-space admission is what the upgrade path now passes: the file must exist afterwards.
+  const backup = backupDatabase(file, SESSION_DATABASE_POLICY, RECOVERY_COPY_ADMISSION);
+  assert.ok(existsSync(backup.file));
+  // The free-space refusal itself (a copy larger than the volume has room for, less the reserve) cannot be
+  // produced on a machine with free space, so it is not covered here; what is covered is that admission is
+  // consulted at all, by the budget case above.
 });
 
 test('restoration preserves attachments, pending approvals, durable tasks and opaque model replay', (t) => {

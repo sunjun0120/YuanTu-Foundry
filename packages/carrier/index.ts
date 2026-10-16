@@ -7,7 +7,7 @@
  *
  * ```ts
  * const carrier = spawnedCarrier({ nodePath, hostPath, workspace });   // this carrier owns the Host process
- * const carrier = connectedCarrier({ transport: socketTransport(socket) }); // somebody else's Host, this link
+ * const carrier = connectedCarrier({ transport: socketTransport(socket), authToken }); // trusted TCP credential
  * await carrier.start();
  * await carrier.dispatch({ type: 'send', prompt: 'hello' });
  * ```

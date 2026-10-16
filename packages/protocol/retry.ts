@@ -12,8 +12,9 @@ import type { FailureCode } from './failure.ts';
  *   protocol speaks (`no-stream`), or it closed a turn that carried nothing at all (`empty-response`) — a turn
  *   with no text and no call is a gateway hiccup far more often than it is a considered answer, and the round
  *   is bounded by the retry allowance either way.
- * - **Every attempt gets the same answer**: a credential or model-access refusal (`auth`), or a request the
- *   endpoint rejected on its merits (`http`: 400, 404, a malformed body).
+ * - **Every attempt gets the same answer**: a credential or model-access refusal (`auth`), a request the
+ *   endpoint rejected on its merits (`http`: 400, 404, a malformed body), or the endpoint's own policy stopping
+ *   the turn (`content-filtered`) — the same conversation is filtered again.
  * - **Room, not weather**: `context-window-exceeded` and `output-limit` are the run answering itself.
  *   Re-sending does not make the conversation smaller; the answer is a smaller task.
  * - **Not a transport question at all**: `tool-cleanup` means the run failed while releasing a resource. The
@@ -34,6 +35,7 @@ const RETRYABLE: Record<FailureCode, boolean> = {
   'tool-cleanup': false,
   'context-window-exceeded': false,
   'output-limit': false,
+  'content-filtered': false,
 };
 export function retryable(code: FailureCode | undefined): boolean {
   return code !== undefined && RETRYABLE[code];

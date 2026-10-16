@@ -215,7 +215,7 @@ test(
       YUANTU_MAX_OUTPUT_TOKENS: '',
       YUANTU_MODEL_CAPACITIES: '',
     });
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
     const session = await client.request('session.create', {});
@@ -258,7 +258,7 @@ test(
       YUANTU_MAX_OUTPUT_TOKENS: '',
       YUANTU_MODEL_CAPACITIES: '',
     });
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
     const session = await client.request('session.create', {});

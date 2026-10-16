@@ -59,26 +59,26 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
       };
     ctx.restoring = true;
     const controller = new AbortController();
-    ctx.manualCompaction = controller;
-    // The same defaults the kernel uses, from the same owner (see `packages/protocol/settings.ts`).
-    const limits = resolveRunLimits(ctx.options);
-    const config = readConfig();
-    /**
-     * The session's own correction, and the shortening the run would have applied.
-     *
-     * Manual compaction used to be measured and priced as if it were the first request of a fresh session: no
-     * calibration (so the batch was sized against a factor of one, however wrong this route's estimate had
-     * proved to be) and no shrink seam (so old tool results were replayed in full, which is exactly what makes
-     * a batch too large to summarise). Both are the run's own seams, built from the same values and the same
-     * store, so the compaction a person asks for is priced like the rounds around it.
-     */
-    const route = calibrationRoute(modelInfoFor(config));
-    const routeInfo = modelInfoFor(config);
-    const calibration = TokenCalibration.from(
-      ctx.store.newestPayload(sessionId, 'context.calibration'),
-      route,
-    );
+    ctx.manualOperation = { sessionId, controller };
     try {
+      // The same defaults the kernel uses, from the same owner (see `packages/protocol/settings.ts`).
+      const limits = resolveRunLimits(ctx.options);
+      const config = readConfig();
+      /**
+       * The session's own correction, and the shortening the run would have applied.
+       *
+       * Manual compaction used to be measured and priced as if it were the first request of a fresh session: no
+       * calibration (so the batch was sized against a factor of one, however wrong this route's estimate had
+       * proved to be) and no shrink seam (so old tool results were replayed in full, which is exactly what makes
+       * a batch too large to summarise). Both are the run's own seams, built from the same values and the same
+       * store, so the compaction a person asks for is priced like the rounds around it.
+       */
+      const route = calibrationRoute(modelInfoFor(config));
+      const routeInfo = modelInfoFor(config);
+      const calibration = TokenCalibration.from(
+        ctx.store.newestPayload(sessionId, 'context.calibration'),
+        route,
+      );
       const provider = createProvider(config);
       const capacityFor = await resolveConnectionCapacities(ctx.options, config, controller.signal);
       const capacity = capacityFor(config.model);
@@ -146,7 +146,7 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
         coveredMessages: ctx.store.contextSurface(sessionId)!.coveredMessages,
       };
     } finally {
-      ctx.manualCompaction = undefined;
+      ctx.manualOperation = undefined;
       ctx.restoring = false;
     }
   },

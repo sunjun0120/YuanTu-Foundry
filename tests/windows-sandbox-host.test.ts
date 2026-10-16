@@ -77,7 +77,7 @@ socket.once('data',data=>{result.network=data.toString();socket.destroy();fs.wri
 `,
     );
     command = `${quoteWindowsArgument(process.execPath)} ${quoteWindowsArgument(script)}`;
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     let sessionId: string | undefined;
     try {
       await client.start();
@@ -156,7 +156,7 @@ test(
       `const cp=require('node:child_process');cp.spawn(process.execPath,['-e',${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`)}],{detached:true,stdio:'ignore'});setInterval(()=>{},1000);`,
     );
     command = `${quoteWindowsArgument(process.execPath)} ${quoteWindowsArgument(script)}`;
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     let sessionId: string | undefined;
     let running: ReturnType<typeof client.run> | undefined;
     try {

@@ -3,6 +3,18 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import type { OfficeOperation } from './automation.ts';
+import { readEntry } from './zip-entry.ts';
+
+/**
+ * Per-part ceilings, in uncompressed bytes.
+ *
+ * The workbook and relationship parts are index files and are kilobytes in anything real; a worksheet is the one
+ * part that legitimately grows, and 10 MB is already a very large sheet. All three are applied while the part is
+ * read, so none of them depends on the package telling the truth about its own contents.
+ */
+const WORKBOOK_XML_BYTES = 2_000_000;
+const RELATIONSHIP_XML_BYTES = 1_000_000;
+const WORKSHEET_XML_BYTES = 10_000_000;
 
 function escapeXml(text: string): string {
   return text.replace(
@@ -21,8 +33,16 @@ async function editWorkbook(
   const source = await readFile(sourcePath);
   if (source.length > 20_000_000) throw new Error('Excel template exceeds 20 MB');
   const zip = await JSZip.loadAsync(source);
-  const workbook = await zip.file('xl/workbook.xml')?.async('string');
-  const rels = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
+  const workbook = await readEntry(
+    zip.file('xl/workbook.xml'),
+    WORKBOOK_XML_BYTES,
+    'Excel workbook XML',
+  );
+  const rels = await readEntry(
+    zip.file('xl/_rels/workbook.xml.rels'),
+    RELATIONSHIP_XML_BYTES,
+    'Excel relationship XML',
+  );
   if (!workbook || !rels) throw new Error('Invalid XLSX workbook relationships');
   const targets = new Map<string, string>();
   for (const tag of rels.match(/<Relationship\b[^>]*\/?\s*>/g) ?? []) {
@@ -42,8 +62,8 @@ async function editWorkbook(
   for (const sheetName of [...new Set(cells.map((cell) => cell.sheet))]) {
     const file = sheets.get(sheetName);
     if (!file) throw new Error('Excel sheet not found: ' + sheetName);
-    let xml = await zip.file(file)?.async('string');
-    if (!xml || xml.length > 10_000_000) throw new Error('Excel worksheet is missing or too large');
+    let xml = await readEntry(zip.file(file), WORKSHEET_XML_BYTES, 'Excel worksheet');
+    if (!xml) throw new Error('Excel worksheet is missing');
     for (const change of cells.filter((cell) => cell.sheet === sheetName)) {
       if (!/^[A-Z]{1,3}[1-9][0-9]{0,5}$/.test(change.cell))
         throw new Error('Invalid Excel cell reference');

@@ -82,13 +82,22 @@ test('two workspaces never share an index', async (t) => {
   await serviceA.ready();
   await serviceB.ready();
   assert.deepEqual(
-    (await serviceA.symbols({ query: 'onlyInSecond', limit: 5, signal: AbortSignal.abort() }))
-      .symbols,
+    (
+      await serviceA.symbols({
+        query: 'onlyInSecond',
+        limit: 5,
+        signal: new AbortController().signal,
+      })
+    ).symbols,
     [],
   );
   assert.deepEqual(
     (
-      await serviceA.symbols({ query: 'onlyInFirst', limit: 5, signal: AbortSignal.abort() })
+      await serviceA.symbols({
+        query: 'onlyInFirst',
+        limit: 5,
+        signal: new AbortController().signal,
+      })
     ).symbols.map((symbol) => symbol.path),
     ['a.ts'],
   );
@@ -105,7 +114,7 @@ test('closing waits for a running build instead of tearing it down underneath', 
   });
   // Start a build and close immediately: the close must settle it rather than leave it writing into a closed
   // database, which is how a half-written generation becomes the next query's answer.
-  void service.symbols({ query: 'name', limit: 5, signal: AbortSignal.abort() });
+  void service.symbols({ query: 'name', limit: 5, signal: new AbortController().signal });
   await service.close();
   assert.equal(service.cursorCount(), 0, 'closing drops the cursors it issued');
   // Closing twice is a no-op rather than an error: a registry may be closed more than once in a failed run.

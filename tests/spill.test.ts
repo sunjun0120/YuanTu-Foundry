@@ -9,6 +9,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   mkdir,
   mkdtemp,
@@ -562,3 +564,69 @@ test('two sessions with the same tool call do not share a spilled file', async (
     'the second session said that',
   );
 });
+
+for (const count of [1000, 3000]) {
+  test(`a git diff is spilled without losing captured bytes (${count} lines)`, async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-git-'));
+    t.after(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+    const git = (args: string[]) =>
+      promisify(execFile)('git', args, {
+        cwd: root,
+        env: {
+          ...process.env,
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+        },
+      });
+    await git(['init']);
+    const file = path.join(root, 'big.txt');
+    await writeFile(file, 'before\n');
+    await git(['add', 'big.txt']);
+    await git([
+      '-c',
+      'user.name=Fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      'commit',
+      '--no-verify',
+      '-m',
+      'fixture',
+    ]);
+    /**
+     * Cover both a complete capture and one exceeding the command's capture limit. In either case the
+     * registry must spill every captured byte, and describe a partial capture accurately.
+     */
+    const lines = Array.from({ length: count }, (_, index) => `+line ${index} ${'y'.repeat(20)}`);
+    await writeFile(file, `${lines.join('\n')}\n`);
+    const tools = createTools(root);
+    t.after(() => tools.close());
+    const result = await tools.execute(
+      { id: 'g1', name: 'git_diff', arguments: {} },
+      context({ spill: (input) => spillOutput({ workspace: root, sessionId: 's1', ...input }) }),
+    );
+    assert.equal(result.isError, false, result.content);
+    // The returned text is the prefix plus the notice naming the spilled file, so it stays near the budget
+    // rather than within it: the notice is appended outside `MAX_TOOL_OUTPUT` on purpose.
+    assert.ok(result.content.length < MAX_TOOL_OUTPUT + 512, String(result.content.length));
+    const relative = /the (?:full|captured) \d+ bytes \/ \d+ lines are in (.+?)(?:,| —)/.exec(
+      result.content,
+    )?.[1];
+    assert.ok(relative, `the notice names the spill file: ${result.content.slice(-300)}`);
+    const spilled = await readFile(path.join(root, relative), 'utf8');
+    assert.ok(spilled.length > MAX_TOOL_OUTPUT, 'the copy must hold more than the returned prefix');
+    const expected = await git(['diff', '--no-ext-diff', '--no-textconv', '--']);
+    assert.equal(
+      spilled,
+      expected.stdout.slice(0, MAX_TOOL_OUTPUT * 2),
+      'all bytes captured by Git survive in the spill',
+    );
+    if (count === 3000) {
+      assert.equal(result.truncated, true);
+      assert.match(result.content, /the captured 48000 bytes/);
+      assert.doesNotMatch(result.content, /the full 48000 bytes/);
+    } else assert.ok(spilled.includes(lines.at(-1)!), 'the complete tail survived');
+    assert.ok(!spilled.includes('[output truncated]'), 'the capture itself was not cut');
+  });
+}

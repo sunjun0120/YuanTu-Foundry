@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
@@ -13,6 +13,7 @@ import {
 } from '../packages/core/session-query.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
+import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import type {
   ModelRequest,
   ModelResponse,
@@ -614,6 +615,66 @@ const toolCall = (id: string, name: string, args: Record<string, unknown>): Mode
   finishReason: 'tool_calls',
   toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
+});
+
+test('an isolated child queries its logical project history and refuses other projects', async (t) => {
+  const { workspace, root, store, session: parent } = await fixture(t);
+  const child = record(store, workspace, 'child', ['isolated-history-marker'], parent.id);
+  store.append(parent.id, { role: 'user', content: 'project-history-marker' });
+  const foreign = record(store, path.join(root, 'other-project'), 'foreign', ['foreign-secret']);
+  const executionRoot = path.join(root, 'isolated');
+  await mkdir(executionRoot);
+  const calls = [
+    { id: 'own-read', name: READ_SESSION_EVENTS, arguments: { sessionId: child.id } },
+    {
+      id: 'own-search',
+      name: SEARCH_SESSION_EVENTS,
+      arguments: { query: 'isolated-history-marker' },
+    },
+    { id: 'own-trace', name: TRACE_SESSION, arguments: {} },
+    { id: 'parent-read', name: READ_SESSION_EVENTS, arguments: { sessionId: parent.id } },
+    { id: 'foreign-read', name: READ_SESSION_EVENTS, arguments: { sessionId: foreign.id } },
+    { id: 'project-search', name: SEARCH_SESSIONS, arguments: { query: 'project-history-marker' } },
+  ];
+  let requests = 0;
+  const tools = new ToolRegistry();
+  t.after(() => tools.close());
+  const result = await new Agent({
+    store,
+    tools,
+    approve: async () => true,
+    provider: {
+      async complete() {
+        return requests++ === 0
+          ? { ...reply(), finishReason: 'tool_calls', toolCalls: calls }
+          : reply();
+      },
+    },
+    executionPolicy: () => executionPolicy('host'),
+    workspaceRoots: () => ({ projectRoot: workspace, executionRoot }),
+  }).run({ sessionId: child.id, prompt: 'Find the earlier decisions' });
+  assert.equal(result.status, 'completed', result.error);
+  const outputs = store.messages(child.id).filter((message) => message.role === 'tool');
+  for (const id of ['own-read', 'own-search', 'own-trace', 'parent-read', 'project-search']) {
+    const output = outputs.find((message) => message.role === 'tool' && message.toolCallId === id)!;
+    assert.equal(output.isError, false, `${id}: ${output.content}`);
+    assert.doesNotMatch(output.content, /foreign-secret/);
+  }
+  assert.match(
+    outputs.find((message) => message.role === 'tool' && message.toolCallId === 'own-search')!
+      .content,
+    /isolated-history-marker/,
+  );
+  assert.match(
+    outputs.find((message) => message.role === 'tool' && message.toolCallId === 'project-search')!
+      .content,
+    new RegExp(parent.id),
+  );
+  const refused = outputs.find(
+    (message) => message.role === 'tool' && message.toolCallId === 'foreign-read',
+  )!;
+  assert.equal(refused.isError, true);
+  assert.match(refused.content, /belongs to another workspace/);
 });
 
 test('a search walks its ranked list page by page without repeating or skipping a session', async (t) => {

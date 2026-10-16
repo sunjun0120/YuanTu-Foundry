@@ -35,7 +35,7 @@ test('a cold automatic wake retains its read-only authority after a permission u
     );
     store.close();
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   await until(
@@ -83,7 +83,7 @@ test('cold completed records notify by default, opt-in wakes once and streams in
     });
     store.close();
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const controller = new SessionController(client);
@@ -168,7 +168,7 @@ test('a completion arriving in the final foreground response continues without l
     });
     store.close();
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const controller = new SessionController(client);
@@ -214,7 +214,7 @@ test('automatic wake budget cancels a stalled provider and cancellation pauses f
     );
     store.close();
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   await until(
@@ -251,7 +251,7 @@ test('a slow session hook cannot admit a second main run before the first slot i
       store.close();
     },
   );
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const first = client.run(ids[0]!, 'First');

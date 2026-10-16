@@ -12,10 +12,14 @@ export interface SessionHookContext {
   workspace: string;
   /** True when an existing session was loaded rather than created. */
   resumed: boolean;
+  /** Planning or read-only lifecycle: workspace-declared commands must not run. */
+  readOnly?: boolean;
 }
 export interface SessionEndContext {
   sessionId: string;
   reason: 'delete' | 'shutdown';
+  /** Planning or read-only lifecycle: workspace-declared commands must not run. */
+  readOnly?: boolean;
 }
 export interface PromptSubmitContext {
   sessionId: string;

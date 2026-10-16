@@ -6,7 +6,12 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore, WorkspaceFailure } from '../packages/storage/sqlite.ts';
-import { freezeSnapshot, readManifest, snapshotRef } from '../packages/workspaces/snapshot.ts';
+import {
+  freezeSnapshot,
+  readManifest,
+  snapshotRef,
+  snapshotMetadataRoot,
+} from '../packages/workspaces/snapshot.ts';
 import { repositoryIdentity } from '../packages/workspaces/git.ts';
 
 /**
@@ -50,6 +55,12 @@ class Harness {
   async close(): Promise<void> {
     this.store.close();
     await rm(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+    await rm(`${this.root}-state`, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 20,
+    });
   }
 }
 
@@ -164,6 +175,54 @@ test('the same content freezes to the same snapshot, and a change makes a new on
   git(root, ['commit', '-qm', 'user work']);
   const fourth = await freezeSnapshot({ projectRoot: root, signal });
   assert.equal(fourth.id, third.id);
+});
+
+test('identical content in independent projects has distinct snapshots in one store', async (t) => {
+  const first = await repository(t);
+  const other = await repository(t);
+  git(other.root, ['commit', '--allow-empty', '-qm', 'independent history']);
+  const left = await freezeSnapshot({ projectRoot: first.root });
+  const right = await freezeSnapshot({ projectRoot: other.root });
+  first.store.recordWorkspaceSnapshot(left);
+  first.store.recordWorkspaceSnapshot(right);
+  assert.notEqual(left.id, right.id);
+  assert.equal(first.store.workspaceSnapshot(left.id)?.projectRoot, first.root);
+  assert.equal(first.store.workspaceSnapshot(right.id)?.projectRoot, other.root);
+});
+
+test('identical content in sibling source worktrees keeps each source identity', async (t) => {
+  const harness = await repository(t);
+  const child = path.join(harness.root, '..', `${path.basename(harness.root)}-child`);
+  t.after(async () => {
+    await rm(child, { recursive: true, force: true });
+  });
+  git(harness.root, ['worktree', 'add', '--detach', child, 'HEAD']);
+  const first = await freezeSnapshot({ projectRoot: harness.root });
+  const second = await freezeSnapshot({ projectRoot: harness.root, sourceRoot: child });
+  assert.notEqual(first.id, second.id);
+  assert.equal(second.sourceRoot, child);
+  harness.store.recordWorkspaceSnapshot(first);
+  harness.store.recordWorkspaceSnapshot(second);
+});
+
+test('legacy content-only snapshot manifests remain readable after upgrading the identity format', async (t) => {
+  const harness = await repository(t);
+  const snapshot = await freezeSnapshot({ projectRoot: harness.root });
+  const identity = await repositoryIdentity(harness.root);
+  const manifest = (await readManifest(identity!.repositoryRoot, snapshot.id))!;
+  const legacy = { ...manifest, format: 1 };
+  const hash = createHash('sha256').update('v1\u0000');
+  for (const entry of legacy.files)
+    hash.update(
+      `${entry.path}\u0000${entry.mode}\u0000${entry.size}\u0000${entry.sha256}\u0000${entry.blob}\u0000`,
+    );
+  const legacyId = hash.digest('hex').slice(0, 32);
+  const directory = snapshotMetadataRoot(identity!.repositoryRoot, legacyId);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'manifest.json'), JSON.stringify(legacy));
+  assert.deepEqual(await readManifest(identity!.repositoryRoot, legacyId), legacy);
+  harness.store.recordWorkspaceSnapshot({ ...snapshot, id: legacyId, manifestHash: legacyId });
+  assert.equal(harness.store.workspaceSnapshot(legacyId)?.sourceRoot, harness.root);
 });
 
 test('an input that changes while it is being frozen is refused, not frozen half-way', async (t) => {

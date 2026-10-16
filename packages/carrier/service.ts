@@ -347,6 +347,37 @@ export class CarrierService {
   async readWorkspaceFile(input: { path: string }): Promise<HostMethods['files.read']['result']> {
     return this.client.request('files.read', input);
   }
+  /** On demand: inventories and preserved results must not inflate every streaming snapshot. */
+  async orphanWorkspaces(): Promise<HostMethods['workspaces.orphaned']['result']> {
+    if (!this.ready || this.client.status !== 'ready') throw new CarrierError('hostNotReady');
+    if (!this.client.supports('workspace-orphans-v1'))
+      throw new CarrierError('workspaceMaintenanceUnsupported');
+    return this.client.request('workspaces.orphaned', { includeRemoved: true });
+  }
+  async maintainOrphanWorkspace(
+    bindingId: string,
+    action: 'archive' | 'remove' | 'restore',
+  ): Promise<void> {
+    if (!this.ready || this.client.status !== 'ready') throw new CarrierError('hostNotReady');
+    if (!this.client.supports('workspace-orphans-v1'))
+      throw new CarrierError('workspaceMaintenanceUnsupported');
+    if (this.busy) throw new CarrierError('runBusy');
+    const policySessionId = this.controller.snapshot.sessionId;
+    if (this.unconfirmedPolicies.has(policySessionId ?? ''))
+      throw new CarrierError('policyUnconfirmed');
+    if (policySessionId && !this.client.supports('workspace-orphan-policy-context-v1'))
+      throw new CarrierError('workspaceMaintenanceUnsupported');
+    this.managing = true;
+    try {
+      await this.client.request(`workspace.${action}`, {
+        bindingId,
+        ...(policySessionId ? { policySessionId } : {}),
+      });
+    } finally {
+      this.managing = false;
+      this.publish();
+    }
+  }
   get busy(): boolean {
     return (
       this.restoring ||
@@ -1160,7 +1191,7 @@ export class CarrierService {
         case 'goal': {
           const sessionId = this.controller.snapshot.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
-          const draft = initialTaskDraft(command.type, command.prompt);
+          const draft = initialTaskDraft(command.type, command.prompt, command.language);
           const task = await this.client.request('task.create', {
             sessionId,
             ...draft,

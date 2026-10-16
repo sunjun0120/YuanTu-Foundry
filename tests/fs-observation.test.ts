@@ -275,6 +275,31 @@ test('recording a read never fails the read it is recording', async (t) => {
   await observations.assertRead('gone.txt');
 });
 
+test('a file that cannot be remembered is isolated instead of escaping as an unhandled rejection', async (t) => {
+  const { root } = await workspaceFixture(t);
+  const observations = new FileObservations(new Workspace(root));
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  t.after(() => process.off('unhandledRejection', onUnhandled));
+  /**
+   * The shape that used to escape. `settle` names a path that no longer exists, so `resolve(…, true)` succeeds
+   * on the canonical parent and it is `remember`'s `statFile` that fails — a rejection with no handler at all,
+   * because the call was never awaited and the surrounding `try` therefore covered only the resolve.
+   *
+   * The module's own contract is the thing being broken: "failing to remember it must not turn a good read into
+   * an error". Without the `await` it was not an error, it was an unhandled rejection, which by Node's default
+   * policy takes the process down — the worst possible version of "the read failed".
+   */
+  await observations.settle({ written: ['gone.txt'] });
+  await observations.settle({ removed: ['gone.txt'] });
+  // A path that resolves but is not a regular file reaches the other throw inside `remember`.
+  await mkdir(path.join(root, 'a-directory'));
+  await observations.record('a-directory');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+});
+
 test('a language-server edit is not gated, because the model did not author those bytes', async (t) => {
   const { root, context } = await workspaceFixture(t);
   await mkdir(path.join(root, 'src'), { recursive: true });

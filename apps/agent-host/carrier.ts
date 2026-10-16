@@ -1,10 +1,17 @@
 import { createInterface, type Interface } from 'node:readline';
-import { createServer, type Socket } from 'node:net';
+import { createServer, isIP, type Socket } from 'node:net';
+import { timingSafeEqual } from 'node:crypto';
+import { PassThrough, type Readable } from 'node:stream';
 import { parseListen } from '../shared/args.ts';
+import { hostAuthTokenProblem } from '../../packages/protocol/host-auth.ts';
+import { MAX_INPUT_BYTES } from '../../packages/protocol/images.ts';
+import { lineFramer } from '../../packages/client/host-transport.ts';
 
 export interface HostCarrierOptions {
   /** `[host:]port` to serve on, or undefined to serve the protocol on stdin/stdout. */
   listen?: string;
+  /** Trusted launch credential. Required only for TCP; never load this from the workspace. */
+  authToken?: string;
   /**
    * Whether the Host is shutting down.
    *
@@ -13,6 +20,37 @@ export interface HostCarrierOptions {
    * that follows is not a lost carrier.
    */
   isClosing: () => boolean;
+  /**
+   * The byte stream a stdio carrier reads.
+   *
+   * Defaults to `process.stdin`, which is what the CLI and the desktop use. The option exists because the framing
+   * rules are the same on any stream, and a stream a test owns is the only way to exercise them without a real
+   * pipe: an embedder that hosts this protocol on a duplex of its own has the same shape.
+   */
+  stdioInput?: Readable;
+}
+
+/**
+ * How much this Host will keep handing to a carrier that is not reading it.
+ *
+ * A synchronous protocol cannot throttle its own callers, so the bound is a count rather than a queue: while the
+ * far side's buffer is full, every frame handed to it is added up, and a carrier that has taken this many bytes
+ * without ever draining is one that is not reading. 64 MB is the client's own incoming-frame ceiling
+ * (`stdioTransport`), so a peer that reaches this number was never going to receive the reply anyway.
+ */
+const MAX_UNSENT_BYTES = 64_000_000;
+
+/** Validate before opening storage or listening, also for embedders constructing a carrier directly. */
+export function validateHostListener(
+  listen: string | undefined,
+  authToken: string | undefined,
+): void {
+  if (listen === undefined) return;
+  const { host } = parseListen(listen);
+  if (isIP(host) !== 4 || !host.startsWith('127.'))
+    throw new Error('--listen requires a literal IPv4 loopback address (127.x.x.x)');
+  const problem = hostAuthTokenProblem(authToken);
+  if (problem) throw new Error(problem);
 }
 
 /**
@@ -32,15 +70,28 @@ export interface HostCarrierOptions {
 export class HostCarrier {
   private readonly listen: string | undefined;
   private readonly isClosing: () => boolean;
+  private readonly authToken: string | undefined;
+  /** Where this carrier reads when it serves stdio: `process.stdin` unless somebody handed it another stream. */
+  private readonly stdioInput: Readable;
+  /** Bytes handed to a carrier whose own buffer is full, since the last time it drained. */
+  private unsentBytes = 0;
+  private drainArmed = false;
   /** Where a frame goes, once there is somewhere to put it. */
   private output: ((line: string) => void) | null = null;
   private input: Interface | null = null;
   private socket: Socket | null = null;
   private server: ReturnType<typeof createServer> | null = null;
+  private ingress: PassThrough | null = null;
+  private pending = new Set<Socket>();
+  private cancelAccept: (() => void) | null = null;
+  private closed = false;
 
   constructor(options: HostCarrierOptions) {
+    validateHostListener(options.listen, options.authToken);
     this.listen = options.listen;
     this.isClosing = options.isClosing;
+    this.authToken = options.authToken;
+    this.stdioInput = options.stdioInput ?? process.stdin;
   }
 
   /** True when the protocol is on stdin/stdout rather than on a socket. */
@@ -48,20 +99,80 @@ export class HostCarrier {
     return this.listen === undefined;
   }
 
-  /** True once there is somewhere to write a frame — which is what a wake waits for. */
+  /**
+   * True while a carrier is attached — which is what a wake waits for.
+   *
+   * It stops being true the moment the carrier is dropped, even though the output stays usable for the answers
+   * shutdown still owes its callers (see `close`). "Is anybody there to receive a frame" is the question a wake
+   * asks, and the answer to that is no once the carrier is gone.
+   */
   get connected(): boolean {
-    return this.output !== null;
+    return this.output !== null && !this.closed;
   }
 
   /** Open the carrier this Host was asked for and return the line reader the serve loop drains. */
-  async attach(): Promise<Interface> {
+  async attach(): Promise<AsyncIterable<string>> {
     const listen = this.listen;
     if (listen === undefined) {
-      this.input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-      this.output = (line) => process.stdout.write(line);
+      /**
+       * stdin is framed exactly the way a socket is.
+       *
+       * `createInterface({ input: process.stdin })` assembles a line with no upper bound, so a peer that never
+       * writes a newline — or writes one enormous line — grows this process's heap for as long as it keeps
+       * writing, and the size gate in `dispatch.ts` runs only once the whole line exists, which is the one
+       * moment it can no longer help. The framer refuses a frame past `MAX_INPUT_BYTES` while it is still
+       * arriving and the carrier is dropped, which is the guarantee the TCP path has had since the
+       * authentication work; bytes already read are bounded by the frame plus one chunk.
+       */
+      const ingress = (this.ingress = new PassThrough());
+      const frames = lineFramer({
+        maxFrameBytes: MAX_INPUT_BYTES,
+        onLine: (line) => {
+          if (!ingress.write(line + '\n')) {
+            this.stdioInput.pause();
+            ingress.once('drain', () => this.stdioInput.resume());
+          }
+        },
+        onError: () => {
+          process.stderr.write('[host] request exceeds frame limit; closing the carrier\n');
+          this.close();
+        },
+      });
+      this.stdioInput.on('data', (chunk: Buffer) => frames.write(chunk));
+      this.stdioInput.on('end', () => ingress.end());
+      this.output = (line) => this.writeBounded(process.stdout, line);
+      this.input = createInterface({ input: ingress, crlfDelay: Infinity });
       return this.input;
     }
     return await this.accept(listen);
+  }
+
+  /**
+   * Hand one frame to a carrier that may not be reading it.
+   *
+   * A synchronous protocol cannot throttle its own callers, so this is a bound rather than a queue: while the
+   * far side's own buffer is full, the frames handed to it are added up, and a carrier that has taken this many
+   * bytes without ever draining is one that is not reading. Dropping it is the honest answer — the alternative
+   * is a Host that grows its heap for a client that has gone away. The count resets on `drain`, so a slow but
+   * live reader is never dropped for being slow.
+   */
+  private writeBounded(
+    target: { write(chunk: string): boolean; once(event: 'drain', listener: () => void): unknown },
+    line: string,
+  ): void {
+    if (target.write(line)) return;
+    this.unsentBytes += Buffer.byteLength(line);
+    if (this.unsentBytes > MAX_UNSENT_BYTES) {
+      process.stderr.write('[host] carrier is not reading its replies; closing it\n');
+      this.close();
+      return;
+    }
+    if (this.drainArmed) return;
+    this.drainArmed = true;
+    target.once('drain', () => {
+      this.drainArmed = false;
+      this.unsentBytes = 0;
+    });
   }
 
   /** Write one already-framed line, or say out loud that there was nobody to write it to. */
@@ -80,12 +191,23 @@ export class HostCarrier {
    *
    * A pty is not involved, but a socket is: closing it is what tells the far side this Host is gone, and closing
    * the server is what stops a reconnect from being accepted into a process that is already unwinding.
+   *
+   * The *output* deliberately survives this call. Shutdown aborts the live runs and closes the carrier in the same
+   * synchronous turn (`lifecycle.ts`), and a run answers its caller when its own abort unwinds — asynchronously,
+   * afterwards. Nulling the output here dropped exactly those answers: the process exited cleanly with requests
+   * still pending, which the client reports as "Host exited; requests were not replayed" instead of the cancelled
+   * run it asked to stop. Stdout is still open at that point, which is why writing after `close` works at all.
    */
   close(): void {
+    this.closed = true;
+    this.cancelAccept?.();
+    this.cancelAccept = null;
     this.input?.close();
-    if (this.stdio) process.stdin.destroy();
+    this.ingress?.destroy();
+    if (this.stdio) this.stdioInput.destroy();
     else {
       this.socket?.destroy();
+      for (const candidate of this.pending) candidate.destroy();
       this.server?.close();
     }
   }
@@ -99,38 +221,118 @@ export class HostCarrier {
    * being silently accepted into a state it does not own. When the carrier goes away the Host shuts down,
    * exactly as it does on stdin EOF: a Host is owned by the carrier that started it.
    */
-  private async accept(listen: string): Promise<Interface> {
+  private async accept(listen: string): Promise<AsyncIterable<string>> {
     // The same parse the command line validated with (see `parseListen`). Re-deriving it here is exactly what
     // let the documented host-less `:8080` through the front door and into `Number(':8080')`.
     const { host, port } = parseListen(listen);
-    return await new Promise<Interface>((resolve, reject) => {
+    return await new Promise<AsyncIterable<string>>((resolve, reject) => {
+      // A signal while waiting for authentication ends the same way as stdin EOF.
+      this.cancelAccept = () => resolve({ async *[Symbol.asyncIterator]() {} });
       this.server = createServer((candidate) => {
-        if (this.socket) {
-          candidate.write(
-            JSON.stringify({
-              id: null,
-              error: {
-                message:
-                  'Agent Host already has a connected client; one connection at a time (the approvals, runs and workspace lock are per Host)',
-              },
-            }) + '\n',
-          );
-          candidate.end();
+        // Even a refused peer may reset during a write. It must never become an uncaught socket error.
+        candidate.on('error', () => candidate.destroy());
+        if (this.closed || this.isClosing()) {
+          candidate.destroy();
           return;
         }
-        this.socket = candidate;
-        this.output = (line) => candidate.write(line);
-        const lines = createInterface({ input: candidate, crlfDelay: Infinity });
-        lines.once('close', () => {
-          // A carrier that went away ends the read loop, which runs the same shutdown path stdin EOF does.
-          if (this.isClosing()) return;
-          void lines.close();
+        if (this.socket || this.pending.size >= 8) {
+          refuse(
+            candidate,
+            'HOST_BUSY',
+            this.socket
+              ? 'Agent Host already has a connected client; one connection at a time'
+              : 'Agent Host has too many pending authentication attempts',
+          );
+          return;
+        }
+        this.pending.add(candidate);
+        let authenticated = false,
+          rejected = false,
+          prefixBytes = 0;
+        const prefix: Buffer[] = [];
+        let ingress: PassThrough | undefined;
+        const timer = setTimeout(() => {
+          rejected = true;
+          refuse(candidate, 'UNAUTHORIZED', 'Agent Host authentication timed out');
+        }, 5000);
+        candidate.once('close', () => {
+          clearTimeout(timer);
+          this.pending.delete(candidate);
+          ingress?.end();
         });
-        process.stderr.write(
-          `[host] carrier connected from ${candidate.remoteAddress ?? 'local'}\n`,
-        );
-        this.input = lines;
-        resolve(lines);
+        candidate.once('end', () => ingress?.end());
+        let backpressured = false;
+        const forward = (line: string) => {
+          if (rejected || !ingress) return;
+          if (!ingress.write(line + '\n') && !backpressured) {
+            backpressured = true;
+            candidate.pause();
+            ingress.once('drain', () => {
+              backpressured = false;
+              if (!candidate.destroyed) candidate.resume();
+            });
+          }
+        };
+        const frames = lineFramer({
+          maxFrameBytes: MAX_INPUT_BYTES,
+          onLine: forward,
+          onError: () => {
+            rejected = true;
+            refuse(candidate, 'FRAME_TOO_LARGE', 'Agent Host request exceeds frame limit');
+          },
+        });
+        candidate.on('data', (chunk: Buffer) => {
+          if (rejected || this.closed) return;
+          if (authenticated) {
+            frames.write(chunk);
+            return;
+          }
+          const end = chunk.indexOf(10);
+          const head = end < 0 ? chunk : chunk.subarray(0, end);
+          prefixBytes += head.length;
+          if (prefixBytes > 4096) {
+            rejected = true;
+            refuse(candidate, 'UNAUTHORIZED', 'Agent Host authentication frame exceeds limit');
+            return;
+          }
+          prefix.push(head);
+          if (end < 0) return;
+          const request = authenticatedRequest(
+            Buffer.concat(prefix, prefixBytes).toString('utf8'),
+            this.authToken!,
+          );
+          if (!request) {
+            rejected = true;
+            refuse(candidate, 'UNAUTHORIZED', 'Agent Host authentication failed');
+            return;
+          }
+          // Peers may have entered the pending set before the first carrier authenticated.
+          if (this.socket) {
+            rejected = true;
+            refuse(
+              candidate,
+              'HOST_BUSY',
+              'Agent Host already has a connected client; one connection at a time',
+            );
+            return;
+          }
+          authenticated = true;
+          clearTimeout(timer);
+          this.pending.delete(candidate);
+          this.socket = candidate;
+          this.output = (line) => this.writeBounded(candidate, line);
+          ingress = this.ingress = new PassThrough();
+          const lines = (this.input = createInterface({ input: ingress, crlfDelay: Infinity }));
+          // Subscribe before replaying the handshake or accepting pipelined RPCs; otherwise early lines are lost.
+          const iterator = lines[Symbol.asyncIterator]();
+          this.cancelAccept = null;
+          resolve(iterator);
+          process.stderr.write(
+            `[host] authenticated carrier connected from ${candidate.remoteAddress ?? 'local'}\n`,
+          );
+          forward(JSON.stringify(request));
+          frames.write(chunk.subarray(end + 1));
+        });
       });
       this.server.on('error', (error) => reject(error));
       this.server.listen(port, host, () => {
@@ -144,4 +346,38 @@ export class HostCarrier {
       });
     });
   }
+}
+
+/** Only the bootstrap request can authenticate; remove its credential before it reaches RPC dispatch. */
+function authenticatedRequest(line: string, expected: string): Record<string, unknown> | null {
+  try {
+    const request = JSON.parse(line);
+    if (
+      !request ||
+      typeof request !== 'object' ||
+      Array.isArray(request) ||
+      typeof request.id !== 'string' ||
+      !request.id ||
+      request.method !== 'host.info' ||
+      !request.params ||
+      typeof request.params !== 'object' ||
+      Array.isArray(request.params) ||
+      typeof request.params.authToken !== 'string'
+    )
+      return null;
+    const supplied = Buffer.from(request.params.authToken, 'utf8');
+    const credential = Buffer.from(expected, 'utf8');
+    if (supplied.length !== credential.length || !timingSafeEqual(supplied, credential))
+      return null;
+    delete request.params.authToken;
+    return request;
+  } catch {
+    return null;
+  }
+}
+
+function refuse(socket: Socket, code: string, message: string): void {
+  if (socket.destroyed) return;
+  socket.end(JSON.stringify({ id: null, error: { code, message } }) + '\n');
+  socket.destroySoon();
 }

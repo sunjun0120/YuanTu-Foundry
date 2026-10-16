@@ -35,7 +35,7 @@ import {
  *    working tree. The baseline's own objects hang off a private ref so a later `gc` cannot collect them.
  */
 
-const SNAPSHOT_FORMAT = 1;
+const SNAPSHOT_FORMAT = 2;
 /** One file larger than this is not a source file this feature was built for. Refused by name, not truncated. */
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_FILES = 200_000;
@@ -398,7 +398,7 @@ async function buildManifest(
 }
 
 /**
- * The snapshot's identity: a digest of everything that decides what the baseline contains.
+ * The snapshot's identity includes its project and source directory as well as its bytes.
  *
  * Deliberately over the file list rather than over the commit, and deliberately **not** including the source HEAD.
  * A `git commit` the user runs while a delegation is queued changes HEAD without changing the working bytes this
@@ -410,6 +410,11 @@ function manifestDigest(
 ): string {
   const hash = createHash('sha256');
   hash.update(`v${manifest.format}\u0000`);
+  // Snapshots share a process-wide store, and linked worktrees share metadata on disk. Equal bytes in
+  // different directories must not reuse a record carrying another project's/source's identity.
+  hash.update(
+    `${path.resolve(manifest.projectRoot)}\u0000${path.resolve(manifest.sourceRoot)}\u0000`,
+  );
   for (const entry of manifest.files)
     hash.update(
       `${entry.path}\u0000${entry.mode}\u0000${entry.size}\u0000${entry.sha256}\u0000${entry.blob}\u0000`,
@@ -525,7 +530,7 @@ export async function readManifest(
   try {
     const parsed = JSON.parse(bytes.toString('utf8')) as SnapshotManifest;
     if (
-      parsed?.format !== SNAPSHOT_FORMAT ||
+      (parsed?.format !== 1 && parsed?.format !== SNAPSHOT_FORMAT) ||
       !Array.isArray(parsed.files) ||
       typeof parsed.baseCommit !== 'string' ||
       typeof parsed.baseTree !== 'string'

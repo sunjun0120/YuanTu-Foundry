@@ -102,6 +102,7 @@ test('a limited run and a failed run are told apart by the code alone', () => {
     'empty-response',
     'no-stream',
     'tool-cleanup',
+    'content-filtered',
   ] as const)
     assert.equal(statusForFailure(code), 'failed');
   // No code is not a code: a caller that gets `undefined` keeps whatever it knew before.
@@ -401,6 +402,47 @@ test('the code reaches the durable record, not just the result the caller happen
   assert.equal((logged.data as { httpStatus?: number }).httpStatus, 429);
   assert.equal((logged.data as { requestId?: string }).requestId, 'req-fixture-429');
   assert.equal(path.basename(root).startsWith('yuantu-failure-'), true);
+});
+
+test('a run the provider refused by policy fails with its own code, and is not re-sent', async (t) => {
+  /**
+   * The three adapters report a policy refusal as `finishReason: 'content-filter'` (see `providers.test.ts`),
+   * and the run has to make that a failure rather than an answer: the old mapping folded it into `stop`, so a
+   * refused turn was reported as a completed run with nothing in it. It is also not a length truncation, whose
+   * remedy — compress and send again — cannot help here, so the round must not be spent twice.
+   */
+  let calls = 0;
+  const provider: Provider = {
+    complete: async () => {
+      calls++;
+      return {
+        text: 'Half an answer',
+        toolCalls: [],
+        finishReason: 'content-filter',
+        usage: { inputTokens: 10, outputTokens: 5 },
+      };
+    },
+  };
+  const { store, session, events, agent } = await fixture(t, provider);
+  const result = await agent.run({ sessionId: session.id, prompt: 'Try' });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'content-filtered');
+  assert.match(result.error!, /content policy/i);
+  assert.equal(calls, 1, 'a refusal is the same request answered the same way: it is not re-sent');
+  // What the endpoint produced before it stopped is still what the user saw, so it is what the transcript keeps.
+  assert.equal(result.text, 'Half an answer');
+  const logged = store
+    .events(session.id)
+    .filter((event) => event.type === 'run.finished')
+    .at(-1)!;
+  assert.equal((logged.data as { code?: string }).code, 'content-filtered');
+  assert.equal((logged.data as { status?: string }).status, 'failed');
+  // And the run recorded no compression attempt: this is not the failure compression answers.
+  assert.equal(
+    events.filter((event) => event.type === 'context.overflow').length,
+    0,
+    'a policy refusal is not a context overflow',
+  );
 });
 
 test('overflow prose is recognised whatever case the endpoint used', () => {

@@ -108,7 +108,7 @@ export class FileObservations implements FileObservationLog {
   async record(input: string): Promise<void> {
     if (!this.enabled) return;
     try {
-      this.remember(await this.workspace.resolve(input, false, true));
+      await this.remember(await this.workspace.resolve(input, false, true));
     } catch {
       // A path that cannot be resolved or stat'ed now was not observed; the read itself already succeeded and
       // reported what it saw, and this gate is about later changes, not about that one.
@@ -144,7 +144,7 @@ export class FileObservations implements FileObservationLog {
     if (!this.enabled) return;
     try {
       for (const input of changes.written ?? [])
-        this.remember(await this.workspace.resolve(input, true));
+        await this.remember(await this.workspace.resolve(input, true));
       for (const input of changes.removed ?? []) {
         // `allowNew` because the point is to name a path that is now gone; a resolve that still fails cannot be
         // about a file this run just changed, so leaving the record alone is the honest outcome.

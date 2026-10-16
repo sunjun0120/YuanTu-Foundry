@@ -1,6 +1,13 @@
 import { mainText } from './i18n.ts';
+import type { Language } from '../../packages/protocol/language.ts';
 
-export type UiLanguage = 'zh-CN' | 'en-US';
+/**
+ * The interface language, named by the protocol's own union.
+ *
+ * The same two values travel further than this window: the carrier passes one to the kernel so a task draft is
+ * written in the language the person is reading. Aliasing rather than redeclaring keeps that one list of values.
+ */
+export type UiLanguage = Language;
 export type UiAppearance = 'system' | 'light' | 'dark';
 export type UiFontSize = 'small' | 'medium' | 'large';
 

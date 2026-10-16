@@ -23,7 +23,8 @@ export async function commandPid(
       terminal = error instanceof Error ? error : new Error(String(error));
     },
   );
-  for (let attempt = 0; attempt < 150; attempt++) {
+  // Cold Windows sandbox validation and ACL setup can precede the command's own startup.
+  for (let attempt = 0; attempt < 300; attempt++) {
     options.signal?.throwIfAborted();
     if (terminal) throw terminal;
     try {
@@ -32,5 +33,5 @@ export async function commandPid(
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`${what} did not write ${path.basename(file)} within 15s`);
+  throw new Error(`${what} did not write ${path.basename(file)} within 30s`);
 }

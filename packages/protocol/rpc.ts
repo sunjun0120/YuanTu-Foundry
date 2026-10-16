@@ -6,6 +6,10 @@ import type { SkillInfo } from '../resources/skills.ts';
 // this is a name being borrowed rather than a dependency being taken.
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from './execution.ts';
+/** Optional policy context selects a live owned session's permissions without assigning the orphan to it. */
+type WorkspaceMaintenanceParams =
+  | { sessionId: string; bindingId?: never; policySessionId?: never }
+  | { bindingId: string; sessionId?: never; policySessionId?: string };
 export interface HostInfo {
   protocolVersion: 1;
   runtime: 'yuantu';
@@ -167,6 +171,27 @@ export interface HostMethods {
     })[];
   };
   /**
+   * The managed workspaces of this project whose session is gone.
+   *
+   * Deleting a session nulls its binding's session reference instead of deleting the row, because the directory
+   * and the results exported from it have to outlive the session that produced them. That leaves a directory no
+   * session-addressed method can name, so this is the one read that does not start from a session — and the
+   * archive, restore and remove calls accept a `bindingId` for exactly the entries it returns.
+   */
+  'workspaces.orphaned': {
+    params: {
+      /** Include preserved removal records so a restarted client can discover recovery targets. */
+      includeRemoved?: boolean;
+    };
+    result: {
+      binding: import('./workspaces.ts').WorkspaceBinding;
+      /** What is wrong with the directory right now, answered rather than thrown. */
+      problems: string[];
+      /** Results exported from this binding, retained after its session is deleted. */
+      results: import('./workspaces.ts').WorkspaceResult[];
+    }[];
+  };
+  /**
    * Import one result into the calling session's own directory.
    *
    * A conflict is a *result*, not an error: the client is told which paths changed underneath the result and that
@@ -181,16 +206,23 @@ export interface HostMethods {
       files: { path: string; added: number; removed: number }[];
     };
   };
+  /**
+   * The three maintenance calls name their workspace one of two ways.
+   *
+   * `sessionId` is the ordinary door and keeps every guarantee it had. `bindingId` exists for the one case the
+   * session door cannot serve — a directory whose session was deleted — and the Host opens it only for such an
+   * orphan inside this project, never for a workspace a live session is working in.
+   */
   'workspace.archive': {
-    params: { sessionId: string };
+    params: WorkspaceMaintenanceParams;
     result: { archived: true; bindingId: string; state: 'archived' };
   };
   'workspace.restore': {
-    params: { sessionId: string };
+    params: WorkspaceMaintenanceParams;
     result: { restored: true; binding: import('./workspaces.ts').WorkspaceBinding };
   };
   'workspace.remove': {
-    params: { sessionId: string };
+    params: WorkspaceMaintenanceParams;
     result: { removed: true; bindingId: string; state: 'removed' };
   };
   /**
@@ -249,7 +281,7 @@ export interface HostMethods {
     result: { running: boolean; items: QueuedInput[]; runId?: string };
   };
   'run.queue.clear': { params: { sessionId: string }; result: { cleared: true } };
-  'host.info': { params: { protocolVersions?: number[] }; result: HostInfo };
+  'host.info': { params: { protocolVersions?: number[]; authToken?: string }; result: HostInfo };
   'runtime.ready': { params: Record<string, never>; result: { ready: true } };
   'permission.update': {
     params: { policy: PermissionPolicySource; sessionId?: string };

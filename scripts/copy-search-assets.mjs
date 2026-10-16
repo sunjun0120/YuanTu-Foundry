@@ -38,12 +38,22 @@ const key = `${options.platform}-${options.arch}`;
 const destination = path.resolve(options.out);
 await mkdir(destination, { recursive: true });
 
+/**
+ * The lock is staged beside the assets it describes, because a packaged runtime can only use a binary it can
+ * read the digests for. The runtime resolves both from `process.resourcesPath`; a lock left behind in `build/`
+ * would make a verified binary unreachable, and the application would quietly fall back to the built-in scanner
+ * while shipping a program it never ran.
+ */
+const lockFile = path.join(root, 'build', 'search-assets.lock.json');
+let lockBytes = null;
 let lock = null;
 try {
-  lock = JSON.parse(await readFile(path.join(root, 'build', 'search-assets.lock.json'), 'utf8'));
+  lockBytes = await readFile(lockFile);
+  lock = JSON.parse(lockBytes.toString('utf8'));
 } catch {
   lock = null;
 }
+if (lockBytes) await writeFile(path.join(destination, 'search-assets.lock.json'), lockBytes);
 const target = lock?.targets?.[key];
 const source = lock?.version
   ? path.join(

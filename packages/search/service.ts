@@ -27,12 +27,25 @@ import {
   iterateInventory,
 } from './inventory.ts';
 import { readRange as readFileRange } from './lines.ts';
-import { analyzeSymbolsWithParser, isOutlineable, languageOf, tooLarge } from './symbols.ts';
+import {
+  analyzeSymbolsWithParser,
+  isOutlineable,
+  languageOf,
+  MAX_SYMBOL_FILE_BYTES,
+  tooLarge,
+} from './symbols.ts';
 import { SourceIndex } from './store.ts';
-import { CursorStore, queryHashOf, type CursorWitness } from './cursor.ts';
+import {
+  CursorInvalidError,
+  CursorStore,
+  queryHashOf,
+  type CursorState,
+  type CursorWitness,
+} from './cursor.ts';
 import { isSensitive, scanText } from './text.ts';
 import {
   emptyCoverage,
+  markStop,
   type Coverage,
   type FileEntry,
   type Freshness,
@@ -106,6 +119,7 @@ export class WorkspaceSearchService {
   private listingLimit: number;
   private maxListingLimit: number;
   private lastCoverage: Coverage = emptyCoverage();
+  private inventoryFingerprints = new Map<string, { size: number; mtimeMs: number }>();
   /** Which analysis produced each indexed file's rows, so the claim can be checked rather than assumed. */
   private parsers = new Map<string, 'ast' | 'heuristic'>();
 
@@ -237,6 +251,7 @@ export class WorkspaceSearchService {
 
   /** The symbol index's answer, building it when nobody has yet. */
   async symbols(input: SymbolQueryInput): Promise<SymbolPage> {
+    input.signal.throwIfAborted();
     // Opening is deferred until a symbol question is actually asked: a registry that never asks one leaves the
     // workspace untouched, which is what keeps a per-run tool set from creating a database per run.
     this.index.ensure();
@@ -245,20 +260,26 @@ export class WorkspaceSearchService {
      *
      * Something recorded that paths changed — a tool write, a watch event — so the rows may describe content that
      * is gone. Rebuilding here rather than on the next `ready()` is what keeps a *stale* answer from being the
-     * permanent answer, and the rebuild is deliberately not awaited: a query must not block on a re-analysis of
-     * the workspace, and `freshness` is what tells the caller the list it is holding may lag the last write.
+     * permanent answer. An already-stale or unopened index builds in the background; `freshness` tells the caller
+     * its answer may lag. For a validated index we first check metadata and wait cancellably for any external
+     * changes to be reconciled, so a command write cannot silently reuse the old declarations as validated.
      */
     if (!this.started || this.index.freshness() !== 'validated') this.startBuild(input.path ?? '.');
+    else if (!this.build) await this.reconcile(false, input.signal);
+    if (input.cursor && this.freshness() !== 'validated')
+      throw new CursorInvalidError('symbol index is being rebuilt');
     const limit = clamp(input.limit, 1, MAX_SYMBOL_LIMIT);
     const after = input.cursor ? this.spendCursor(input.cursor, input, 'symbols') : null;
     const all = this.index.query(input.query || null, Number.MAX_SAFE_INTEGER, input.language);
     const start =
       after === null
         ? 0
-        : (() => {
-            const found = all.findIndex((symbol) => comparePosition(symbol, after) > 0);
-            return found === -1 ? all.length : found;
-          })();
+        : after.index !== undefined
+          ? after.index + 1
+          : (() => {
+              const found = all.findIndex((symbol) => comparePosition(symbol, after) > 0);
+              return found === -1 ? all.length : found;
+            })();
     const symbols = all.slice(start, start + limit);
     const last = symbols[symbols.length - 1];
     const nextCursor =
@@ -267,7 +288,7 @@ export class WorkspaceSearchService {
             workspace: this.root,
             queryHash: this.symbolHash(input),
             sourceVersion: this.sourceVersion(),
-            after: { path: last.path, line: last.startLine },
+            after: { path: last.path, line: last.startLine, index: start + symbols.length - 1 },
             // A symbol page cannot name one file as its witness: the next page depends on every row it is about to
             // skip. The reconcile pass is what keeps those rows true, and `freshness` is what reports it.
             witness: null,
@@ -405,11 +426,13 @@ export class WorkspaceSearchService {
       query?: string;
     },
     kind: 'listing' | 'symbols',
-  ): { path: string; line: number } | null {
+  ): CursorState['after'] {
     const state = this.cursors.take(token, {
       workspace: this.root,
       queryHash: kind === 'listing' ? this.listingHash(input) : this.symbolHash(input),
     });
+    if (kind === 'symbols' && state.sourceVersion !== this.sourceVersion())
+      throw new CursorInvalidError('the indexed source changed since this cursor was issued');
     return state.after;
   }
 
@@ -453,15 +476,46 @@ export class WorkspaceSearchService {
       this.inventoryOptions({ path: relativePath }),
     );
     this.lastCoverage = coverage;
+    this.inventoryFingerprints = new Map(
+      files
+        .filter((file) => languageOf(file.path) && isOutlineable(file.path))
+        .map((file) => [
+          file.path,
+          { size: file.fingerprint.size, mtimeMs: file.fingerprint.mtimeMs },
+        ]),
+    );
     const seen = new Set<string>();
     for (const file of files) {
       if (this.cancelledBuild || this.closed) return;
       seen.add(file.path);
       const language = languageOf(file.path);
-      if (!language || !isOutlineable(file.path) || tooLarge(file)) continue;
+      if (!language || !isOutlineable(file.path)) continue;
+      if (tooLarge(file)) {
+        this.index.remove(file.path);
+        this.parsers.delete(file.path);
+        coverage.partialFiles++;
+        markStop(coverage, 'byte-limit');
+        continue;
+      }
       try {
         const bytes = await readFile(file.absolutePath);
+        coverage.bytesRead = (coverage.bytesRead ?? 0) + bytes.length;
+        const after = await lstat(file.absolutePath);
+        if (
+          bytes.length > MAX_SYMBOL_FILE_BYTES ||
+          after.size !== file.fingerprint.size ||
+          after.mtimeMs !== file.fingerprint.mtimeMs ||
+          bytes.length !== after.size
+        ) {
+          this.index.remove(file.path);
+          this.parsers.delete(file.path);
+          this.inventoryFingerprints.delete(file.path);
+          coverage.partialFiles++;
+          markStop(coverage, bytes.length > MAX_SYMBOL_FILE_BYTES ? 'byte-limit' : 'changed');
+          continue;
+        }
         const source = bytes.toString('utf8');
+        const digest = createHash('sha256').update(bytes).digest('hex');
         /**
          * The best parser this build has, and no claim about which one that was.
          *
@@ -474,7 +528,7 @@ export class WorkspaceSearchService {
         const analysis = await analyzeSymbolsWithParser(source, file.path, language, {
           size: file.fingerprint.size,
           mtimeMs: file.fingerprint.mtimeMs,
-          sha256: createHash('sha256').update(bytes).digest('hex'),
+          sha256: digest,
         });
         const symbols = analysis.symbols;
         this.parsers.set(file.path, analysis.parser);
@@ -483,7 +537,7 @@ export class WorkspaceSearchService {
           language,
           size: file.fingerprint.size,
           mtimeMs: file.fingerprint.mtimeMs,
-          sha256: symbols[0]?.fingerprint.sha256 ?? '',
+          sha256: digest,
           symbols: symbols.map((symbol) => ({
             name: symbol.name,
             kind: symbol.kind,
@@ -493,11 +547,20 @@ export class WorkspaceSearchService {
           imports: symbols[0]?.imports ?? [],
           exports: symbols[0]?.exports ?? [],
         });
+        coverage.filesScanned++;
       } catch {
-        // An unreadable file simply has no row; the enumeration's coverage already records that it was seen.
+        this.index.remove(file.path);
+        this.parsers.delete(file.path);
+        this.inventoryFingerprints.delete(file.path);
+        coverage.unreadableFiles++;
+        markStop(coverage, 'read-error');
       }
     }
-    for (const known of this.index.paths()) if (!seen.has(known)) this.index.remove(known);
+    for (const known of this.index.paths())
+      if (!seen.has(known)) {
+        this.index.remove(known);
+        this.parsers.delete(known);
+      }
     if (this.cancelledBuild || this.closed) return;
     this.index.commit();
   }
@@ -511,14 +574,39 @@ export class WorkspaceSearchService {
    * is asked for rather than assumed: a periodic full hash of every source file is a background cost a caller
    * should be able to schedule.
    */
-  private async reconcile(hash: boolean): Promise<void> {
+  private async reconcile(hash: boolean, signal?: AbortSignal): Promise<void> {
     if (this.closed) return;
     const stale = new Set<string>(this.dirty);
     this.dirty.clear();
+    // Enumeration also detects new files; checking only existing rows would miss every new declaration.
+    const inventory = await this.inventory({ ...(signal ? { signal } : {}) });
+    if (!inventory.coverage.complete) {
+      this.lastCoverage = {
+        ...this.lastCoverage,
+        complete: false,
+        reasons: [...new Set([...this.lastCoverage.reasons, ...inventory.coverage.reasons])],
+        entriesVisited: inventory.coverage.entriesVisited,
+        filesConsidered: inventory.coverage.filesConsidered,
+      };
+      this.index.markStale();
+      return;
+    }
+    const current = new Map(
+      inventory.files
+        .filter((file) => languageOf(file.path) && isOutlineable(file.path))
+        .map((file) => [file.path, file.fingerprint]),
+    );
+    for (const [relative, actual] of current) {
+      const expected = this.inventoryFingerprints.get(relative);
+      if (!expected || actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs)
+        stale.add(relative);
+    }
+    for (const relative of this.inventoryFingerprints.keys())
+      if (!current.has(relative)) stale.add(relative);
     for (const known of this.index.paths()) {
       const expected = this.index.fingerprintOf(known);
       if (!expected) continue;
-      const actual = await statFingerprint(this.access, known).catch(() => null);
+      const actual = current.get(known) ?? null;
       if (!actual || actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
         stale.add(known);
         continue;
@@ -528,7 +616,24 @@ export class WorkspaceSearchService {
       if (!digest || digest !== this.index.digestOf(known)) stale.add(known);
     }
     if (!stale.size) return;
-    await this.runBuild('.');
+    this.startBuild('.');
+    if (!signal) await this.build;
+    else await waitForBuild(this.build!, signal);
+  }
+}
+
+/** A caller can leave while the shared rebuild continues for the next caller. */
+async function waitForBuild(build: Promise<void>, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  let abort!: () => void;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      build.then(resolve, reject);
+    });
+  } finally {
+    signal.removeEventListener('abort', abort);
   }
 }
 
@@ -583,15 +688,6 @@ function witnessOf(file: FileEntry): CursorWitness {
 function comparePosition(symbol: SymbolRecord, after: { path: string; line: number }): number {
   const byPath = Buffer.compare(Buffer.from(symbol.path, 'utf8'), Buffer.from(after.path, 'utf8'));
   return byPath !== 0 ? byPath : symbol.startLine - after.line;
-}
-
-async function statFingerprint(
-  access: WorkspaceAccess,
-  relative: string,
-): Promise<{ size: number; mtimeMs: number }> {
-  const stats = await lstat(await access.resolve(relative));
-  if (!stats.isFile()) throw new Error('Expected a regular file');
-  return { size: stats.size, mtimeMs: stats.mtimeMs };
 }
 
 /** SHA-256 of a file's bytes, for the reconcile pass a caller asked to be exhaustive. */

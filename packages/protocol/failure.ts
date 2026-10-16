@@ -15,6 +15,13 @@ export type FailureCode =
   | 'context-window-exceeded'
   /** The provider stopped at the output limit, so the turn is partial by construction. */
   | 'output-limit'
+  /**
+   * The provider stopped the turn by its own content policy.
+   *
+   * The same request gets the same answer, so neither re-sending nor compressing is a remedy — the run has to
+   * say what happened instead of reporting an answer it did not get.
+   */
+  | 'content-filtered'
   /** The endpoint refused the credential or the model access: every retry gets the same answer. */
   | 'auth'
   /** HTTP 429: the endpoint asked for a slower rate. */

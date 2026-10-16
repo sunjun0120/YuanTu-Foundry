@@ -255,6 +255,9 @@ export function createBrowserBridge(options: BrowserBridgeOptions): DesktopBridg
   const refusal = <T>(channel: keyof typeof SHELL_ONLY): T =>
     ({ ok: false, error: SHELL_ONLY[channel] }) as T;
   return {
+    async workspaceMaintenance() {
+      return { ok: false, error: 'Workspace maintenance is available in the desktop application.' };
+    },
     async backups() {
       return { ok: false, error: SHELL_ONLY.backups! };
     },

@@ -87,13 +87,38 @@ export class SessionFileChanges {
     this.port.get(sessionId);
     return this.port.db
       .prepare(
-        'SELECT id,session_id AS sessionId,change,status,created_at AS createdAt FROM file_changes WHERE session_id=? ORDER BY seq DESC',
+        `WITH timeline AS (
+          SELECT type,
+            CASE WHEN type IN ('run.started','run.finished','run.interrupted') THEN json_extract(data,'$.runId') END AS runId,
+            SUM(CASE WHEN type IN ('message.user','message.assistant','message.tool') THEN 1 ELSE 0 END)
+              OVER (ORDER BY seq) - 1 AS messageIndex
+          FROM session_events WHERE session_id=?
+            AND type IN ('message.user','message.assistant','message.tool','run.started','run.finished','run.interrupted')
+        ), endings AS (
+          SELECT runId,
+            MIN(CASE WHEN type='run.started' THEN messageIndex END) AS startMessageIndex,
+            MAX(CASE WHEN type IN ('run.finished','run.interrupted') THEN messageIndex END) AS endMessageIndex FROM timeline
+          WHERE runId IS NOT NULL GROUP BY runId
+        )
+        SELECT f.id,f.session_id AS sessionId,f.run_id AS runId,f.change,f.status,
+          f.created_at AS createdAt,
+          e.endMessageIndex IS NOT NULL AS runFinished,
+          -- Pre-v14 backfill appended all run events after the transcript; those endpoints are not ownership evidence.
+          CASE WHEN e.endMessageIndex > e.startMessageIndex THEN e.endMessageIndex END AS endMessageIndex
+        FROM file_changes f LEFT JOIN endings e ON e.runId=f.run_id
+        WHERE f.session_id=? ORDER BY f.seq DESC`,
       )
-      .all(sessionId)
-      .map(
-        (row) =>
-          ({ ...row, change: JSON.parse(String(row.change)) }) as unknown as StoredFileChange,
-      );
+      .all(sessionId, sessionId)
+      .map((row) => {
+        const { runId, runFinished, endMessageIndex, ...rest } = row;
+        return {
+          ...rest,
+          ...(typeof runId === 'string' ? { runId } : {}),
+          ...(runFinished ? { runFinished: true } : {}),
+          ...(typeof endMessageIndex === 'number' ? { endMessageIndex } : {}),
+          change: JSON.parse(String(row.change)),
+        } as unknown as StoredFileChange;
+      });
   }
 
   /**

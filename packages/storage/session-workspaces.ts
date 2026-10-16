@@ -242,6 +242,37 @@ export class SessionWorkspaces {
   }
 
   /**
+   * The managed workspaces of one project whose session no longer exists.
+   *
+   * `session_id IS NULL` is the durable record of that fact rather than an accident of the foreign key: a binding
+   * keeps a nullable session reference precisely so a directory outlives the session that worked in it, and the
+   * results exported from it are kept for the same reason. What the null cannot do by itself is say *which project*
+   * the directory belongs to, because every other workspace read starts from a session and that session is gone —
+   * so this is the one query that answers "what is still here" for a caller that owns the project.
+   *
+   * `removed` is excluded from cleanup inventory by default. Recovery callers can include it to rediscover the
+   * durable removal records after a restart. `preparing` is included on purpose — a binding written before its directory
+   * existed is still a directory this service may own, and an allocation interrupted by the deletion of its parent
+   * session would otherwise be exactly the unaddressable row this query exists to surface.
+   */
+  orphaned(projectRoot: string, includeRemoved = false): WorkspaceBinding[] {
+    const project = workspacePath(projectRoot, 'project root');
+    return (
+      this.db
+        .prepare(
+          `SELECT ${BINDING_COLUMNS} FROM workspace_bindings WHERE session_id IS NULL AND kind='worktree' AND (? OR state<>'removed') ORDER BY created_at,id`,
+        )
+        .all(includeRemoved ? 1 : 0) as Record<string, unknown>[]
+    )
+      .map(bindingFromRow)
+      .filter((binding) =>
+        // Compared through the rule every ownership check uses: the caller, the row and the filesystem spell one
+        // directory three ways, and only one of those spellings is the identity.
+        samePath(binding.projectRoot, project),
+      );
+  }
+
+  /**
    * What session `sessionId` should execute in, synthesising the pre-isolation answer when no row exists.
    *
    * A session written before this feature has no binding, and the honest reading of it is `shared`: it ran in its
@@ -519,6 +550,22 @@ export class SessionWorkspaces {
         `SELECT ${RESULT_COLUMNS} FROM workspace_results WHERE child_session_id=? ORDER BY created_at,id`,
       )
       .all(workspaceId(childSessionId))
+      .map((row) => resultFromRow(row as Record<string, unknown>));
+  }
+
+  /**
+   * Every result one binding produced.
+   *
+   * A child session id is not enough to ask with: deleting a session keeps the result rows but nulls the binding's
+   * own reference to that session, so the binding is the only key that survives both deletions. That is what makes
+   * the record of an orphan's work readable after the sessions that produced and delegated it are gone.
+   */
+  resultsForBinding(bindingId: string): WorkspaceResult[] {
+    return this.db
+      .prepare(
+        `SELECT ${RESULT_COLUMNS} FROM workspace_results WHERE binding_id=? ORDER BY created_at,id`,
+      )
+      .all(workspaceId(bindingId))
       .map((row) => resultFromRow(row as Record<string, unknown>));
   }
 

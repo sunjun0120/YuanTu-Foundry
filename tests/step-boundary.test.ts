@@ -268,7 +268,7 @@ test('a run whose process died leaves one open step, and the interruption names 
     // Deliberately never ends: the run stays in this step until the process is gone.
   });
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const session = await client.request('session.create', {});

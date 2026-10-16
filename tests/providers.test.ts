@@ -1613,3 +1613,117 @@ test('a credential that cannot travel in a header is refused where the connectio
     (error: unknown) => failureCodeOf(error) === 'auth',
   );
 });
+
+test('a policy refusal is one answer, whichever of the three protocols reported it', async (t) => {
+  /**
+   * OpenAI says `content_filter`, Anthropic says `refusal`, and the Responses API says `incomplete` with
+   * `incomplete_details.reason: 'content_filter'`. Two of those read as a clean stop and the third read as a
+   * length truncation, and neither reading is true: the endpoint stopped the turn by its own policy. A run that
+   * reads it as an answer reports success with nothing in it; a run that reads it as a length truncation says the
+   * output budget ran out, which is the one diagnosis whose remedy — compress the conversation — cannot help.
+   */
+  const chatUrl = await httpFixture(t, (_body, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(
+      'data: ' +
+        JSON.stringify({
+          choices: [
+            { index: 0, delta: { content: 'Partial answer' }, finish_reason: 'content_filter' },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 2 },
+        }) +
+        '\n\ndata: [DONE]\n\n',
+    );
+  });
+  const chat = await new OpenAIProvider({
+    apiKey: 'test',
+    model: 'test',
+    baseUrl: chatUrl,
+  }).complete(request3());
+  assert.equal(chat.finishReason, 'content-filter');
+  assert.equal(
+    chat.text,
+    'Partial answer',
+    'what the endpoint produced before the filter still travels',
+  );
+
+  const anthropicUrl = await httpFixture(t, (_body, res) =>
+    sendFrames(res, [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_refusal',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'fixture',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 0 },
+        },
+      },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Partial answer' },
+      },
+      { type: 'content_block_stop', index: 0 },
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'refusal', stop_sequence: null },
+        usage: { output_tokens: 2 },
+      },
+      { type: 'message_stop' },
+    ]),
+  );
+  const anthropic = await new AnthropicProvider({
+    apiKey: 'test',
+    model: 'test',
+    baseUrl: anthropicUrl,
+  }).complete(request3());
+  assert.equal(anthropic.finishReason, 'content-filter');
+
+  const responsesUrl = await httpFixture(t, (_body, res) =>
+    sendFrames(res, [
+      { type: 'response.output_text.delta', delta: 'Partial answer' },
+      {
+        type: 'response.incomplete',
+        response: {
+          status: 'incomplete',
+          incomplete_details: { reason: 'content_filter' },
+          output: [],
+          usage: { input_tokens: 10, output_tokens: 2 },
+        },
+      },
+    ]),
+  );
+  const responses = await new ResponsesProvider({
+    apiKey: 'test',
+    model: 'test',
+    baseUrl: responsesUrl,
+  }).complete(request3());
+  assert.equal(responses.finishReason, 'content-filter');
+  assert.equal(responses.text, 'Partial answer');
+
+  // The output limit stays the output limit: `max_output_tokens` must not be folded into the same answer.
+  const limitUrl = await httpFixture(t, (_body, res) =>
+    sendFrames(res, [
+      {
+        type: 'response.incomplete',
+        response: {
+          status: 'incomplete',
+          incomplete_details: { reason: 'max_output_tokens' },
+          output: [],
+          usage: { input_tokens: 10, output_tokens: 2 },
+        },
+      },
+    ]),
+  );
+  const limited = await new ResponsesProvider({
+    apiKey: 'test',
+    model: 'test',
+    baseUrl: limitUrl,
+  }).complete(request3());
+  assert.equal(limited.finishReason, 'length');
+});

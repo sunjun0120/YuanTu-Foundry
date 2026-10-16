@@ -1,5 +1,5 @@
 import type { Agent } from '../../packages/core/agent.ts';
-import { underSessionPolicy } from './session-policy.ts';
+import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import type { BackgroundAuthority } from '../../packages/core/background-deliveries.ts';
 import type { PermissionPolicy } from '../../packages/core/permissions.ts';
 import { SubAgentResidency } from '../../packages/core/residency.ts';
@@ -117,8 +117,8 @@ export interface HostContext {
   closing: boolean;
   /** True while a plan is being executed or a change undone: the Host refuses a concurrent run. */
   restoring: boolean;
-  /** The manual compaction in flight, so shutdown can abort it like any other run. */
-  manualCompaction: AbortController | undefined;
+  /** An exclusive operation outside a run, cancellable only by its owning session or shutdown. */
+  manualOperation: { sessionId: string; controller: AbortController } | undefined;
   /** Sessions a background wake is currently running for. */
   waking: Set<string>;
   wakeQueued: boolean;
@@ -132,8 +132,10 @@ export interface HostContext {
    */
   approvalSources: WeakMap<object, ApprovalDecisionSource>;
 
-  /** Announce a session to `sessionStart`, once per process. */
-  announceSession: (sessionId: string, resumed: boolean) => Promise<void>;
+  /** Last admitted or finished run's read-only phase, including in-run approval transitions. */
+  sessionLifecyclePhases: Map<string, boolean>;
+  /** Announce once, but refresh the lifecycle phase whenever a run is admitted. */
+  announceSession: (sessionId: string, resumed: boolean, planning?: boolean) => Promise<void>;
 
   /** The carrier this Host answers on: stdin/stdout, or the one accepted socket. */
   carrier: HostCarrier;
@@ -216,16 +218,25 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     tasks: new Set<Promise<void>>(),
     closing: false,
     restoring: false,
-    manualCompaction: undefined,
+    manualOperation: undefined,
     waking: new Set<string>(),
     wakeQueued: false,
     automaticReady: false,
     approvalSources: new WeakMap<object, ApprovalDecisionSource>(),
-    announceSession: async (sessionId: string, resumed: boolean): Promise<void> => {
+    sessionLifecyclePhases: new Map<string, boolean>(),
+    announceSession: async (
+      sessionId: string,
+      resumed: boolean,
+      planning?: boolean,
+    ): Promise<void> => {
+      if (planning !== undefined) state.sessionLifecyclePhases.set(sessionId, planning);
       if (announced.has(sessionId)) return;
       announced.add(sessionId);
       const failures = await underSessionPolicy(state, sessionId, () =>
-        hooks.sessionStart({ sessionId, workspace, resumed }, new AbortController().signal),
+        hooks.sessionStart(
+          { sessionId, workspace, resumed, readOnly: sessionLifecycleReadOnly(state, sessionId) },
+          new AbortController().signal,
+        ),
       );
       for (const failure of failures)
         process.stderr.write(`sessionStart hook failed: ${failure}\n`);
@@ -241,5 +252,9 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     dispatch: lateBound(),
     handle: lateBound(),
   };
+  hooks.observeStop((context) => {
+    if (announced.has(context.sessionId) && typeof context.readOnly === 'boolean')
+      state.sessionLifecyclePhases.set(context.sessionId, context.readOnly);
+  });
   return state;
 }

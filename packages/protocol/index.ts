@@ -163,7 +163,16 @@ export interface ModelResponse {
   providerState?: ProviderState;
   text: string;
   toolCalls: ToolCall[];
-  finishReason: 'stop' | 'tool_calls' | 'length';
+  /**
+   * How the turn ended.
+   *
+   * `content-filter` is the endpoint's own policy stopping the turn — OpenAI's `content_filter`, Anthropic's
+   * `refusal`, and the Responses API's `incomplete_details.reason: 'content_filter'`. It is neither of the other
+   * two: it is not an answer (`stop`), and it is not a budget the run can do anything about (`length`). Without
+   * the distinction two protocols described one event as a clean stop and the third described it as a length
+   * truncation, which sent a run that had been refused by policy looking for a smaller task.
+   */
+  finishReason: 'stop' | 'tool_calls' | 'length' | 'content-filter';
   /**
    * Set when the provider named the *context window* as the reason the turn ended, rather than the output
    * limit. Both arrive as `finishReason: 'length'`, and the difference decides whether the run can recover: a

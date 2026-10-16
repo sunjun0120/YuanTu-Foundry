@@ -12,7 +12,7 @@
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import type { SessionInfo } from '../../packages/protocol/index.ts';
-import { locale } from './i18n.ts';
+import { locale, t } from './i18n.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -57,8 +57,13 @@ export function setupSessionList(options: {
         button.dataset.sessionId = item.id;
         button.disabled = blocked;
         button.title = item.id;
+        const title = node(
+          'strong',
+          item.title || t('ui.sessionShort', { id: item.id.slice(0, 8) }),
+        );
+        title.translate = false;
         button.append(
-          node('strong', item.title || `会话 ${item.id.slice(0, 8)}`),
+          title,
           node(
             'small',
             new Date(item.createdAt).toLocaleString(locale(), {

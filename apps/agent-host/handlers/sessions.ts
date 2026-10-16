@@ -1,5 +1,5 @@
 import { undoFileChange } from '../../../packages/tools/file-undo.ts';
-import { underSessionPolicy } from '../session-policy.ts';
+import { underSessionPolicy, sessionLifecycleReadOnly } from '../session-policy.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
 
@@ -127,12 +127,16 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
         );
       if (ctx.announced.delete(id)) {
         const failures = await underSessionPolicy(ctx, id, () =>
-          ctx.hooks.sessionEnd({ sessionId: id, reason: 'delete' }, new AbortController().signal),
+          ctx.hooks.sessionEnd(
+            { sessionId: id, reason: 'delete', readOnly: sessionLifecycleReadOnly(ctx, id) },
+            new AbortController().signal,
+          ),
         );
         for (const failure of failures)
           process.stderr.write(`sessionEnd hook failed: ${failure}\n`);
       }
       ctx.store.delete(id);
+      ctx.sessionLifecyclePhases?.delete(id);
       ctx.sessionSandboxes.delete(id);
       ctx.sessionSandboxFiles.delete(id);
       ctx.sessionSandboxNetwork.delete(id);

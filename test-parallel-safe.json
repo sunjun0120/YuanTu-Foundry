@@ -153,7 +153,7 @@
     },
     {
       "file": "tests/audit-log-guards.test.ts",
-      "reason": "reviewed 2026-10-14: foldMessages and SessionController with FakeClient; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes",
+      "reason": "reviewed 2026-10-14: foldMessages and SessionController with FakeClient; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes | re-reviewed 2026-10-15 (§7.3.12): 6 of 106 inputs had changed since the review above (packages/search/cursor.ts, packages/search/service.ts, packages/storage/database-maintenance.ts, packages/storage/sqlite.ts, packages/tools/files.ts, packages/tools/fs-observation.ts). Re-read this file and every such input: this file imports only node:test and node:assert/strict, so it cannot reach a subprocess, a socket or the filesystem; each changed input has no top-level statement, so importing it runs nothing; no environment mutation, chdir, user state, fixed port or fixed temp name appears in it. The recorded claim therefore still holds, and the inputs were re-registered.",
       "inputs": [
         {
           "file": "packages/client/display-history.ts",
@@ -369,7 +369,7 @@
         },
         {
           "file": "packages/search/cursor.ts",
-          "sha256": "84269bea4276f29939f5d20cb666a0ff2a867f7b426e3680b8cc5b2669837b8a"
+          "sha256": "6df71db9f8b30988e1fcbdf53f37bb35a3b1711ac1fa99001b4d74c3bb429f93"
         },
         {
           "file": "packages/search/inventory.ts",
@@ -381,7 +381,7 @@
         },
         {
           "file": "packages/search/service.ts",
-          "sha256": "bb1f1b691ca45e3811430b6195436c11afc37b4ca7d42f72010c9f8d402c6eb3"
+          "sha256": "7c071125abd10b0bfec6ba3ff5fcce52276db326c621f03a91e6762a99d2bf8a"
         },
         {
           "file": "packages/search/store.ts",
@@ -401,7 +401,7 @@
         },
         {
           "file": "packages/storage/database-maintenance.ts",
-          "sha256": "dd44d02d79c5637b11a5d0c093f3a6a7acc586d7439badcf7899d2d6c1d6aa35"
+          "sha256": "53310c081c17421a8419cd46e5fdaa27266fb66fe42a12159391d78be098c9e2"
         },
         {
           "file": "packages/storage/events.ts",
@@ -461,7 +461,7 @@
         },
         {
           "file": "packages/storage/sqlite.ts",
-          "sha256": "43f8f466903425adc5fed8ba87ff1c062ae7b5343ee860a3de9f06389947a2e6"
+          "sha256": "c9d89d192d80f8a9c8ab8188f21ed9b7b77b83c514d6fbadd952f136c58f4348"
         },
         {
           "file": "packages/tools/credential-paths.ts",
@@ -493,11 +493,11 @@
         },
         {
           "file": "packages/tools/files.ts",
-          "sha256": "9f98ece6082d7bcae82a6028332074ef33c973c77b773c479d5cd77c52a2e573"
+          "sha256": "23c1e3091149c9ab0e4ecd2b756e5e13404d9399363f842058d82f0724971a9b"
         },
         {
           "file": "packages/tools/fs-observation.ts",
-          "sha256": "7f43d92b0bf40f286d326239de039723fc64ce0762d3d52fad883950c66f7212"
+          "sha256": "f87cf5c2ad7f4a080af2da6385eb5df2c4af825e64e850bf508940586655b473"
         },
         {
           "file": "packages/tools/hooks.ts",
@@ -645,7 +645,7 @@
     },
     {
       "file": "tests/completion-client.test.ts",
-      "reason": "reviewed 2026-10-14: SessionController with FakeClient; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes",
+      "reason": "reviewed 2026-10-14: SessionController with FakeClient; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes | re-reviewed 2026-10-15 (§7.3.12): 6 of 106 inputs had changed since the review above (packages/search/cursor.ts, packages/search/service.ts, packages/storage/database-maintenance.ts, packages/storage/sqlite.ts, packages/tools/files.ts, packages/tools/fs-observation.ts). Re-read this file and every such input: this file imports only node:test and node:assert/strict, so it cannot reach a subprocess, a socket or the filesystem; each changed input has no top-level statement, so importing it runs nothing; no environment mutation, chdir, user state, fixed port or fixed temp name appears in it. The recorded claim therefore still holds, and the inputs were re-registered.",
       "inputs": [
         {
           "file": "packages/client/display-history.ts",
@@ -861,7 +861,7 @@
         },
         {
           "file": "packages/search/cursor.ts",
-          "sha256": "84269bea4276f29939f5d20cb666a0ff2a867f7b426e3680b8cc5b2669837b8a"
+          "sha256": "6df71db9f8b30988e1fcbdf53f37bb35a3b1711ac1fa99001b4d74c3bb429f93"
         },
         {
           "file": "packages/search/inventory.ts",
@@ -873,7 +873,7 @@
         },
         {
           "file": "packages/search/service.ts",
-          "sha256": "bb1f1b691ca45e3811430b6195436c11afc37b4ca7d42f72010c9f8d402c6eb3"
+          "sha256": "7c071125abd10b0bfec6ba3ff5fcce52276db326c621f03a91e6762a99d2bf8a"
         },
         {
           "file": "packages/search/store.ts",
@@ -893,7 +893,7 @@
         },
         {
           "file": "packages/storage/database-maintenance.ts",
-          "sha256": "dd44d02d79c5637b11a5d0c093f3a6a7acc586d7439badcf7899d2d6c1d6aa35"
+          "sha256": "53310c081c17421a8419cd46e5fdaa27266fb66fe42a12159391d78be098c9e2"
         },
         {
           "file": "packages/storage/events.ts",
@@ -953,7 +953,7 @@
         },
         {
           "file": "packages/storage/sqlite.ts",
-          "sha256": "43f8f466903425adc5fed8ba87ff1c062ae7b5343ee860a3de9f06389947a2e6"
+          "sha256": "c9d89d192d80f8a9c8ab8188f21ed9b7b77b83c514d6fbadd952f136c58f4348"
         },
         {
           "file": "packages/tools/credential-paths.ts",
@@ -985,11 +985,11 @@
         },
         {
           "file": "packages/tools/files.ts",
-          "sha256": "9f98ece6082d7bcae82a6028332074ef33c973c77b773c479d5cd77c52a2e573"
+          "sha256": "23c1e3091149c9ab0e4ecd2b756e5e13404d9399363f842058d82f0724971a9b"
         },
         {
           "file": "packages/tools/fs-observation.ts",
-          "sha256": "7f43d92b0bf40f286d326239de039723fc64ce0762d3d52fad883950c66f7212"
+          "sha256": "f87cf5c2ad7f4a080af2da6385eb5df2c4af825e64e850bf508940586655b473"
         },
         {
           "file": "packages/tools/hooks.ts",
@@ -1075,7 +1075,7 @@
     },
     {
       "file": "tests/completion-contract.test.ts",
-      "reason": "reviewed 2026-10-14: normalizeCompletionSpec and completionDefinitionHash; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes",
+      "reason": "reviewed 2026-10-14: normalizeCompletionSpec and completionDefinitionHash; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes | re-reviewed 2026-10-15 (§7.3.12): 4 of 62 inputs had changed since the review above (packages/search/cursor.ts, packages/search/service.ts, packages/tools/files.ts, packages/tools/fs-observation.ts). Re-read this file and every such input: this file imports only node:test and node:assert/strict, so it cannot reach a subprocess, a socket or the filesystem; each changed input has no top-level statement, so importing it runs nothing; no environment mutation, chdir, user state, fixed port or fixed temp name appears in it. The recorded claim therefore still holds, and the inputs were re-registered.",
       "inputs": [
         {
           "file": "packages/core/acceptance.ts",
@@ -1195,7 +1195,7 @@
         },
         {
           "file": "packages/search/cursor.ts",
-          "sha256": "84269bea4276f29939f5d20cb666a0ff2a867f7b426e3680b8cc5b2669837b8a"
+          "sha256": "6df71db9f8b30988e1fcbdf53f37bb35a3b1711ac1fa99001b4d74c3bb429f93"
         },
         {
           "file": "packages/search/inventory.ts",
@@ -1207,7 +1207,7 @@
         },
         {
           "file": "packages/search/service.ts",
-          "sha256": "bb1f1b691ca45e3811430b6195436c11afc37b4ca7d42f72010c9f8d402c6eb3"
+          "sha256": "7c071125abd10b0bfec6ba3ff5fcce52276db326c621f03a91e6762a99d2bf8a"
         },
         {
           "file": "packages/search/store.ts",
@@ -1255,11 +1255,11 @@
         },
         {
           "file": "packages/tools/files.ts",
-          "sha256": "9f98ece6082d7bcae82a6028332074ef33c973c77b773c479d5cd77c52a2e573"
+          "sha256": "23c1e3091149c9ab0e4ecd2b756e5e13404d9399363f842058d82f0724971a9b"
         },
         {
           "file": "packages/tools/fs-observation.ts",
-          "sha256": "7f43d92b0bf40f286d326239de039723fc64ce0762d3d52fad883950c66f7212"
+          "sha256": "f87cf5c2ad7f4a080af2da6385eb5df2c4af825e64e850bf508940586655b473"
         },
         {
           "file": "packages/tools/hooks.ts",
@@ -1405,7 +1405,7 @@
     },
     {
       "file": "tests/display-history.test.ts",
-      "reason": "reviewed 2026-10-14: readDisplayHistory with a local request queue; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes",
+      "reason": "reviewed 2026-10-14: readDisplayHistory with a local request queue; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes | re-reviewed 2026-10-15 (§7.3.12): 6 of 103 inputs had changed since the review above (packages/search/cursor.ts, packages/search/service.ts, packages/storage/database-maintenance.ts, packages/storage/sqlite.ts, packages/tools/files.ts, packages/tools/fs-observation.ts). Re-read this file and every such input: this file imports only node:test and node:assert/strict, so it cannot reach a subprocess, a socket or the filesystem; each changed input has no top-level statement, so importing it runs nothing; no environment mutation, chdir, user state, fixed port or fixed temp name appears in it. The recorded claim therefore still holds, and the inputs were re-registered.",
       "inputs": [
         {
           "file": "packages/client/display-history.ts",
@@ -1609,7 +1609,7 @@
         },
         {
           "file": "packages/search/cursor.ts",
-          "sha256": "84269bea4276f29939f5d20cb666a0ff2a867f7b426e3680b8cc5b2669837b8a"
+          "sha256": "6df71db9f8b30988e1fcbdf53f37bb35a3b1711ac1fa99001b4d74c3bb429f93"
         },
         {
           "file": "packages/search/inventory.ts",
@@ -1621,7 +1621,7 @@
         },
         {
           "file": "packages/search/service.ts",
-          "sha256": "bb1f1b691ca45e3811430b6195436c11afc37b4ca7d42f72010c9f8d402c6eb3"
+          "sha256": "7c071125abd10b0bfec6ba3ff5fcce52276db326c621f03a91e6762a99d2bf8a"
         },
         {
           "file": "packages/search/store.ts",
@@ -1641,7 +1641,7 @@
         },
         {
           "file": "packages/storage/database-maintenance.ts",
-          "sha256": "dd44d02d79c5637b11a5d0c093f3a6a7acc586d7439badcf7899d2d6c1d6aa35"
+          "sha256": "53310c081c17421a8419cd46e5fdaa27266fb66fe42a12159391d78be098c9e2"
         },
         {
           "file": "packages/storage/events.ts",
@@ -1701,7 +1701,7 @@
         },
         {
           "file": "packages/storage/sqlite.ts",
-          "sha256": "43f8f466903425adc5fed8ba87ff1c062ae7b5343ee860a3de9f06389947a2e6"
+          "sha256": "c9d89d192d80f8a9c8ab8188f21ed9b7b77b83c514d6fbadd952f136c58f4348"
         },
         {
           "file": "packages/tools/credential-paths.ts",
@@ -1733,11 +1733,11 @@
         },
         {
           "file": "packages/tools/files.ts",
-          "sha256": "9f98ece6082d7bcae82a6028332074ef33c973c77b773c479d5cd77c52a2e573"
+          "sha256": "23c1e3091149c9ab0e4ecd2b756e5e13404d9399363f842058d82f0724971a9b"
         },
         {
           "file": "packages/tools/fs-observation.ts",
-          "sha256": "7f43d92b0bf40f286d326239de039723fc64ce0762d3d52fad883950c66f7212"
+          "sha256": "f87cf5c2ad7f4a080af2da6385eb5df2c4af825e64e850bf508940586655b473"
         },
         {
           "file": "packages/tools/hooks.ts",
@@ -1841,7 +1841,7 @@
     },
     {
       "file": "tests/host-requests.test.ts",
-      "reason": "reviewed 2026-10-14: add/take with local timers; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes",
+      "reason": "reviewed 2026-10-14: add/take with local timers; actual paths have no subprocess, network, native sandbox, shared database, user state, environment mutation or build writes | re-reviewed 2026-10-15 (§7.3.12): 6 of 100 inputs had changed since the review above (packages/search/cursor.ts, packages/search/service.ts, packages/storage/database-maintenance.ts, packages/storage/sqlite.ts, packages/tools/files.ts, packages/tools/fs-observation.ts). Re-read this file and every such input: this file imports only node:test and node:assert/strict, so it cannot reach a subprocess, a socket or the filesystem; each changed input has no top-level statement, so importing it runs nothing; no environment mutation, chdir, user state, fixed port or fixed temp name appears in it. The recorded claim therefore still holds, and the inputs were re-registered.",
       "inputs": [
         {
           "file": "packages/client/host-requests.ts",
@@ -2033,7 +2033,7 @@
         },
         {
           "file": "packages/search/cursor.ts",
-          "sha256": "84269bea4276f29939f5d20cb666a0ff2a867f7b426e3680b8cc5b2669837b8a"
+          "sha256": "6df71db9f8b30988e1fcbdf53f37bb35a3b1711ac1fa99001b4d74c3bb429f93"
         },
         {
           "file": "packages/search/inventory.ts",
@@ -2045,7 +2045,7 @@
         },
         {
           "file": "packages/search/service.ts",
-          "sha256": "bb1f1b691ca45e3811430b6195436c11afc37b4ca7d42f72010c9f8d402c6eb3"
+          "sha256": "7c071125abd10b0bfec6ba3ff5fcce52276db326c621f03a91e6762a99d2bf8a"
         },
         {
           "file": "packages/search/store.ts",
@@ -2065,7 +2065,7 @@
         },
         {
           "file": "packages/storage/database-maintenance.ts",
-          "sha256": "dd44d02d79c5637b11a5d0c093f3a6a7acc586d7439badcf7899d2d6c1d6aa35"
+          "sha256": "53310c081c17421a8419cd46e5fdaa27266fb66fe42a12159391d78be098c9e2"
         },
         {
           "file": "packages/storage/events.ts",
@@ -2125,7 +2125,7 @@
         },
         {
           "file": "packages/storage/sqlite.ts",
-          "sha256": "43f8f466903425adc5fed8ba87ff1c062ae7b5343ee860a3de9f06389947a2e6"
+          "sha256": "c9d89d192d80f8a9c8ab8188f21ed9b7b77b83c514d6fbadd952f136c58f4348"
         },
         {
           "file": "packages/tools/credential-paths.ts",
@@ -2157,11 +2157,11 @@
         },
         {
           "file": "packages/tools/files.ts",
-          "sha256": "9f98ece6082d7bcae82a6028332074ef33c973c77b773c479d5cd77c52a2e573"
+          "sha256": "23c1e3091149c9ab0e4ecd2b756e5e13404d9399363f842058d82f0724971a9b"
         },
         {
           "file": "packages/tools/fs-observation.ts",
-          "sha256": "7f43d92b0bf40f286d326239de039723fc64ce0762d3d52fad883950c66f7212"
+          "sha256": "f87cf5c2ad7f4a080af2da6385eb5df2c4af825e64e850bf508940586655b473"
         },
         {
           "file": "packages/tools/hooks.ts",

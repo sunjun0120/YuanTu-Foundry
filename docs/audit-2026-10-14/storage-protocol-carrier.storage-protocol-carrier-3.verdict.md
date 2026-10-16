@@ -1,0 +1,29 @@
+### storage-protocol-carrier-3 | confirmed | low
+
+**Checks:**
+
+- `packages/storage/sqlite.ts:1774-1783` — opened. `retryCount(runId: string, round: number, sessionId?: string)`; the SQL is built as
+  `SELECT COUNT(*) AS n FROM session_events WHERE ${sessionId === undefined ? '' : 'session_id=? AND '} type='llm.retry' AND json_extract(data,'$.runId')=? AND json_extract(data,'$.round')=?`.
+  The doc comment directly above (1766-1773) states "Callers that know the session pass it". Code and comment are as the finding describes.
+- `packages/core/agent.ts:2534` — opened: `const attempts = store.retryCount(runId, round);` — two arguments, no session. `input.sessionId` is in scope (the whole method is `async run(input: UserInput & {...})` at `agent.ts:484`; `store: SessionStore` at `agent.ts:145`) and is used a few lines away at `agent.ts:2506` and `agent.ts:2555` (`store.recordEvent(input.sessionId, 'llm.retry', retry)`), so the retry rows being counted are written under exactly the id that is being omitted from the count. The session-scoped form is provably equivalent, not merely narrower.
+- Repo-wide `retryCount` search (7 hits): the only non-test caller anywhere is `agent.ts:2534`; the others are the definition, a comment at `sqlite.ts:2084`, and tests (`tests/retry.test.ts:510-513`, `tests/storage-audit-repairs.test.ts:152-168`). The scoped form is only ever exercised by a test that re-binds the method by hand — nothing in production passes a session.
+- `packages/storage/session-current-schema.ts:62-69` — opened: `session_events` has exactly one index, `CREATE INDEX session_events_session ON session_events(session_id,seq)`. Cross-checked every `CREATE INDEX` in `session-migrations.ts:142-335` and `session-current-schema.ts:54-264`: no index touches `session_events(type)`, and there is no runtime index creation or `ANALYZE` anywhere in `packages/storage`.
+- `packages/storage/sqlite.ts:8` and `:282` — `import { DatabaseSync } from 'node:sqlite'` / `this.db = new DatabaseSync(file)`: the scan runs synchronously on the Host's event loop, as claimed.
+- `packages/core/agent.ts:644` (`const runId = store.beginRun(input.sessionId)`) with `packages/storage/sqlite.ts:2209` (`const runId = randomUUID()`) — run ids are globally unique, so the unscoped count is still _correct_, only expensive. This is a performance finding, not a wrong-number finding.
+- `packages/protocol/settings.ts:164` — `maxModelRetries: 5` (default), so one failing round makes at most six `retryCount` calls.
+- Measured, not estimated. I wrote `.scratch/audit/bench-retrycount.mjs`, which creates the exact `session_events` DDL/index with `node:sqlite` and times both query forms (script kept; the generated 265 MiB database was deleted after the run):
+  - 200,005 events / 265.3 MiB: unscoped **218-238 ms/call**, scoped **2.2 ms/call**.
+  - 20,005 events / 26.5 MiB: unscoped **21.5 ms/call**, scoped **0.15 ms/call**.
+  - `EXPLAIN QUERY PLAN` — unscoped: `SCAN session_events`; scoped: `SEARCH session_events USING INDEX session_events_session (session_id=?)`.
+    The 100x gap and the "SCAN" plan are exactly what the finding predicts, and the cost is linear in database size (~1.1 GB/s, i.e. page-bound).
+- `packages/storage/session-lifecycle.ts:146-167` — opened to test the "never pruned" claim: `deleteSessionRows` does `DELETE FROM session_events WHERE session_id=?` in its table loop (line 159).
+- Verified the path is shipped, not paused: the retry loop lives in `packages/core/agent.ts`, which `apps/agent-host` runs and the Electron desktop drives.
+
+**Corrections:**
+
+- Severity: **medium → low.** The mechanism is confirmed, but the measured cost is tens of milliseconds for a normal workspace and ~0.2 s per decision in a 265 MiB one, on a path that only runs after a transient provider failure, separated by backoff waits. Nothing is lost, corrupted or blocked permanently, and the fix is one token. The audit's figures ("~20 million row visits", "event-loop stalls precisely when the session is already degraded") are directionally right but read as a much larger stall than the ~9.5 s _aggregate_, spread over 40 calls, that 500k events plus `maxModelRetries: 5` would actually produce.
+- "two `json_extract` evaluations per row" is overstated. Measured on the same 200k-row database: the identical query _without_ the `type='llm.retry'` predicate takes 415 ms vs 218 ms with it, so SQLite short-circuits on `type` (first in the WHERE clause) and runs the JSON extraction on a small minority of rows. The 218 ms is dominated by reading the table's pages, not by JSON parsing. The row-visit count is right; the work per row is roughly half of what was claimed.
+- "the log is never pruned" is too strong: a session's events are deleted with the session (`session-lifecycle.ts:159`). Only _within_ a live session is there no pruning, so table size tracks live sessions rather than all history — which does not change the finding, since a workspace's live sessions still share one database.
+- The cited range `sqlite.ts:1774-1783` is correct as written; no line-number errors found in this finding.
+
+**Reasoning:** Every load-bearing claim checks out against the source: the query is built with an optional session clause, its only production caller omits the session, and the table has no index on `type`, so the statement is a full scan — confirmed by `EXPLAIN QUERY PLAN` and by a 100x timing gap on a synthetic database of realistic shape using the same driver. It is not a deliberate two-argument "public API" path either: the method's own comment says callers that know the session should pass it, and the retry rows are written under `input.sessionId` three lines away, so the omission is an accident with no behavioural upside. The correction is in impact, not existence: the measured cost is a real but modest synchronous stall on an already-failing path, which makes this low rather than medium.

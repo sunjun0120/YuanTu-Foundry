@@ -305,6 +305,56 @@ test('a provider that always refuses fails after one retry instead of looping', 
   );
 });
 
+test('a stop-reason overflow that compression cannot fix is not reported as an output limit', async (t) => {
+  /**
+   * The same situation as the case above, in the other shape it arrives in.
+   *
+   * A provider that keeps naming the *window* — here as a terminal stop reason rather than a thrown failure —
+   * ends the recovery allowance, and the round has to say which ceiling it hit. The terminal branch fell through
+   * when there was no compaction problem to name, and the `length` handling further down then reported an
+   * *output* limit: the one diagnosis that says "compress nothing", about a request the provider refused for
+   * size. Note that the second overflow takes this branch even with the default allowance, because the attempt
+   * that succeeded cleared `lastCompactionProblem`.
+   */
+  const { store, session, events } = await fixture(t);
+  for (let i = 0; i < 3; i++) {
+    store.append(session.id, { role: 'user', content: 'history '.repeat(450) });
+    store.append(session.id, { role: 'assistant', content: 'Recorded.', toolCalls: [] });
+  }
+  let mainCalls = 0;
+  const agent = new Agent({
+    store,
+    tools: new ToolRegistry(),
+    approve: async () => false,
+    maxContextChars: 200_000,
+    maxContextTokens: 20_000,
+    maxOutputTokens: 256,
+    provider: {
+      async complete(call: ModelRequest) {
+        if (isSummaryRequest(call)) return reply('summary');
+        mainCalls++;
+        return { ...reply(''), finishReason: 'length', truncation: 'context-window' };
+      },
+    },
+    onEvent: (event) => events.push(event),
+  });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Continue.' });
+  assert.equal(result.status, 'limited', result.error);
+  assert.match(result.error!, /context window/i);
+  assert.doesNotMatch(
+    result.error!,
+    /output limit/i,
+    'a request refused for size must not be reported as an output limit',
+  );
+  assert.equal(mainCalls, 2, 'one compression, then the failure stands');
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === 'context.overflow')
+      .map((event) => event.data.recovered),
+    [true, false],
+  );
+});
+
 test('a refusal with nothing left to compress fails at once, and says what really happened', async (t) => {
   const { store, session, events } = await fixture(t);
   let mainCalls = 0;

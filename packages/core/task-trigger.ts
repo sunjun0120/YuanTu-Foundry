@@ -202,6 +202,31 @@ export function nextDailyRun(atMinutes: number, after: Date): Date {
 }
 
 /**
+ * Most recent local occurrence of `atMinutes` at or before `now`.
+ *
+ * The mirror of `nextDailyRun`, and it follows the same rule about a wall time the clocks skip: a spring-forward
+ * day has no 02:30, so the latest occurrence of an 02:30 rule during that day is the *previous* day's. Asking
+ * `setHours` for it anyway answers 03:30 — a wall time the operator never chose — and that answer is what
+ * `latestScheduledAt` hands to the scheduler as the occurrence a catch-up run stands in for. Walking back until
+ * the candidate really carries the requested wall time is what keeps the label honest, and it is what the
+ * zone-aware path (`latestCalendarRun`) has always done, so one rule cannot mean two things depending on whether
+ * a timezone was filled in.
+ */
+export function latestDailyRun(atMinutes: number, now: Date): Date {
+  const hours = Math.floor(atMinutes / 60),
+    minutes = atMinutes % 60;
+  for (let days = 0; days < 370; days++) {
+    const candidate = new Date(now);
+    candidate.setDate(candidate.getDate() - days);
+    candidate.setHours(hours, minutes, 0, 0);
+    const named = candidate.getHours() === hours && candidate.getMinutes() === minutes;
+    if (named && candidate.getTime() <= now.getTime()) return candidate;
+  }
+  // A year of days without the requested wall time means the clock never shows it, which is not a schedule.
+  throw Error('Daily rule has no previous occurrence');
+}
+
+/**
  * When a trigger should next fire, expressed as an ISO timestamp. Event triggers have no clock, so
  * they carry no `nextRunAt` and are driven by `matchesEvent` instead.
  */
@@ -256,15 +281,7 @@ export function latestScheduledAt(trigger: TaskTrigger, dueAt: string, now: Date
   else if (trigger.kind === 'daily') {
     if (trigger.timeZone)
       latest = latestCalendarRun(trigger.atMinutes, trigger.timeZone, now).getTime();
-    else {
-      const candidate = new Date(now);
-      candidate.setHours(Math.floor(trigger.atMinutes / 60), trigger.atMinutes % 60, 0, 0);
-      if (candidate.getTime() > now.getTime()) {
-        candidate.setDate(candidate.getDate() - 1);
-        candidate.setHours(Math.floor(trigger.atMinutes / 60), trigger.atMinutes % 60, 0, 0);
-      }
-      latest = candidate.getTime();
-    }
+    else latest = latestDailyRun(trigger.atMinutes, now).getTime();
   }
   return new Date(Math.max(due, latest)).toISOString();
 }

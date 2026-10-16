@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1066,6 +1066,43 @@ test('a WorkspaceEdit that also moves a file is refused whole, not half-applied'
   assert.equal(await readFile(path.join(root, 'main.fake'), 'utf8'), 'TARGET = 1;\nRENAMEFILE\n');
   assert.deepEqual(approvals, [], 'nothing may be approved for an edit that will not be applied');
   await assert.rejects(() => stat(path.join(root, 'moved.fake')));
+});
+
+test('a WorkspaceEdit that reaches out of the workspace through a link is refused, not previewed', async (t) => {
+  const { root, tools } = await workspace(t);
+  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-lsp-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const secret = 'OUTSIDE-THE-WORKSPACE-SECRET\n';
+  await writeFile(path.join(outside, 'secret.fake'), secret);
+  /**
+   * `linked` is a link the workspace owner placed inside the workspace, pointing at a directory outside it. The
+   * path the server names is inside the workspace; the file it names is not. A check that compares strings
+   * accepts it, and the read that follows puts the outside file's contents into the approval preview.
+   */
+  try {
+    await symlink(outside, path.join(root, 'linked'), 'junction');
+  } catch (error) {
+    t.skip(`this environment cannot create links: ${(error as Error).message}`);
+    return;
+  }
+  await writeFile(path.join(root, 'main.fake'), 'TARGET = 1;\nSYMLINKTARGET\n');
+  await tools.execute(call('lsp_start', { language: 'fake' }), ctx());
+  const { context, approvals } = recording();
+  const result = await tools.execute(
+    call('lsp_rename', { path: 'main.fake', line: 1, character: 1, new_name: 'RENAMED' }),
+    context,
+  );
+  assert.equal(result.isError, true, 'the edit is refused rather than applied through the link');
+  assert.match(result.content, /outside the workspace/);
+  assert.ok(
+    !result.content.includes('OUTSIDE-THE-WORKSPACE-SECRET'),
+    'the file behind the link is never read, so it cannot reach the approval record',
+  );
+  assert.deepEqual(approvals, [], 'no approval is raised for a target that will not be read');
+  assert.equal(
+    await readFile(path.join(root, 'main.fake'), 'utf8'),
+    'TARGET = 1;\nSYMLINKTARGET\n',
+  );
 });
 
 test('lsp_rename rejects a position the server cannot rename and a bad name', async (t) => {

@@ -4,6 +4,7 @@ import { assertEnvironment } from '../../packages/protocol/settings.ts';
 import { resolveSandboxConfig, type SandboxConfig } from '../../packages/tools/sandbox.ts';
 import { parseArgs, type Options } from '../shared/args.ts';
 import { applySandboxDefaults, resolveWorkspace } from '../shared/runtime.ts';
+import { validateHostListener } from './carrier.ts';
 
 /**
  * The Host's `--help` text, on stdout.
@@ -12,7 +13,7 @@ import { applySandboxDefaults, resolveWorkspace } from '../shared/runtime.ts';
  * carrier that reads stdout as a protocol stream has to be able to tell the two apart (see `carrier.ts`).
  */
 export const HOST_HELP_LINE =
-  'YuanTu Agent Host: JSONL stdin/stdout. Options: --workspace <dir> --db <file> --listen [host:]port.\n';
+  'YuanTu Agent Host: JSONL stdin/stdout. Options: --workspace <dir> --db <file> --listen [host:]port (IPv4 loopback; requires YUANTU_HOST_TOKEN).\n';
 
 /**
  * Everything the Host decides before it opens anything.
@@ -54,6 +55,7 @@ export function resolveLaunch(argv: string[]): HostLaunch | null {
     return null;
   }
   if (positionals.length) throw new Error('Agent Host accepts options only');
+  validateHostListener(options.listen, process.env.YUANTU_HOST_TOKEN);
   const workspace = resolveWorkspace(options.workspace ?? process.cwd());
   const launchSandbox = resolveSandboxConfig();
   const permissionPolicy = readPermissionPolicy(

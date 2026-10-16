@@ -39,8 +39,11 @@ export function setupWorkspace() {
   }
   const panel = required('workspace-panel');
   const location = required('workspace-location');
+  location.translate = false;
   const tree = required('workspace-tree');
   const preview = required('workspace-preview');
+  // The accessible name is a file path; generated preview controls use t() when repainted.
+  preview.translate = false;
   const previewBody = required('workspace-preview-body');
   const toggle = required<HTMLButtonElement>('open-workspace');
   const refreshButton = required<HTMLButtonElement>('workspace-refresh');
@@ -81,6 +84,8 @@ export function setupWorkspace() {
     reading: boolean;
     token: number;
     scrollTop: number;
+    changePreview?: HTMLElement;
+    changeKey?: string;
   }
   const files = new Map<string, FileTab>();
   let width = Math.min(560, window.innerWidth * 0.42);
@@ -228,6 +233,7 @@ export function setupWorkspace() {
     // The full relative path, because the tree elides the directories above it and a tooltip is the only
     // place a reader can see where a file actually is.
     button.title = entry.path;
+    button.translate = false;
     if (entry.kind === 'directory') {
       button.setAttribute('aria-expanded', String(expanded.has(entry.path)));
       button.addEventListener('click', () => toggleDirectory(entry.path));
@@ -284,6 +290,7 @@ export function setupWorkspace() {
       button.setAttribute('aria-selected', String(selected === file.path));
       button.tabIndex = selected === file.path ? 0 : -1;
       button.title = file.path;
+      button.translate = false;
       button.append(
         workspaceIcon(/\.(?:md|markdown|mdown)$/i.test(file.path) ? 'markdown' : 'file'),
         element('span', fileName(file.path)),
@@ -360,6 +367,10 @@ export function setupWorkspace() {
     const markdown = shown?.kind === 'text' && /\.(?:md|markdown|mdown)$/i.test(selected ?? '');
     preview.setAttribute('aria-label', selected ?? t('workspace.imageAlt'));
     if (selected === null) return;
+    if (tab?.changePreview) {
+      previewBody.replaceChildren(tab.changePreview);
+      return;
+    }
     if (reading && shown === null) {
       const status = element('p', t('workspace.previewing'), 'workspace-note');
       status.setAttribute('role', 'status');
@@ -481,7 +492,11 @@ export function setupWorkspace() {
   async function showFile(path: string): Promise<void> {
     const fromTree = tree.contains(document.activeElement);
     let file = files.get(path);
-    const fresh = !file;
+    const fresh = !file || Boolean(file.changePreview);
+    if (file) {
+      delete file.changePreview;
+      delete file.changeKey;
+    }
     if (!file) {
       file = {
         path,
@@ -693,6 +708,41 @@ export function setupWorkspace() {
   paintTree();
   paintPreview();
   return {
+    previewChanges(path: string, content: HTMLElement, key: string): void {
+      let tab = files.get(path);
+      if (!tab) {
+        tab = { path, shown: null, error: null, reading: false, token: 0, scrollTop: 0 };
+        files.set(path, tab);
+      }
+      tab.token++;
+      tab.reading = false;
+      tab.changePreview = content;
+      tab.changeKey = key;
+      setOpen(true);
+      activate(path);
+    },
+    refreshChangePreview(key: string, content: HTMLElement): boolean {
+      const tab = [...files.values()].find((tab) => tab.changeKey === key);
+      if (!tab) return false;
+      if (tab.changePreview === content) return true;
+      const scroll = previewBody.scrollTop;
+      tab.changePreview = content;
+      if (selected === tab.path) {
+        paintPreview();
+        previewBody.scrollTop = scroll;
+      }
+      return true;
+    },
+    clearChangePreviews(): void {
+      for (const [path, tab] of files) {
+        if (!tab.changePreview) continue;
+        files.delete(path);
+        if (selected === path) selected = null;
+      }
+      paintTabs();
+      paintPreview();
+      paintTree();
+    },
     /**
      * Which workspace the panel is showing.
      *

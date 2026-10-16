@@ -13,11 +13,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   binaryName,
   loadSearchAssetLock,
@@ -261,6 +263,111 @@ test('the two backends agree, match for match, on the same fixture', async (t) =
   // ripgrep cannot report the bytes it read, so the honest answer is null rather than a size estimate.
   assert.equal(fast.coverage.bytesRead, null);
   assert.equal(fast.outputTruncated, false);
+});
+
+/**
+ * The packaged layout: the only one where the fast path is actually shipped.
+ *
+ * Every asset test above runs with this module where a checkout keeps it, so `buildRoot()` is `<repo>/build` and
+ * both the lock and the binary are found there. That says nothing about the application. In a package the module
+ * sits under `resources/app/dist/packages/search`, `buildRoot()` resolves to `resources/app/dist/build` — a
+ * directory no package contains — and both files have to come from `process.resourcesPath` instead. The lock and
+ * the binary are looked up by two separate code paths, so only a test that builds the packaged shape makes them
+ * meet; a staging script that forgets the lock, or a runtime that never looks beside its own resources, fails
+ * here instead of in a release that silently ships a program it never runs.
+ *
+ * The layout is produced by the real staging script, and read by a copy of the real module, so this is the
+ * pipeline under test rather than a description of it.
+ */
+test('a packaged layout reaches its verified binary through resourcesPath alone', async (t) => {
+  const key = platformArchKey();
+  const repoLock = await loadSearchAssetLock();
+  const target = repoLock?.targets[key];
+  if (!repoLock || repoLock.version === 'unprepared' || !target) {
+    t.diagnostic(`no asset is pinned for ${key}; the packaged layout cannot be staged here`);
+    return;
+  }
+
+  const stage = await tempDir(t, 'yuantu-rg-packaged-');
+  const assets = path.join(stage, 'search-assets');
+  const staging = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL('../scripts/copy-search-assets.mjs', import.meta.url)),
+      `--platform=${process.platform}`,
+      `--arch=${process.arch}`,
+      `--out=${assets}`,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(staging.status, 0, staging.stderr);
+  if (existsSync(path.join(assets, 'unavailable.json'))) {
+    t.diagnostic(`the pinned ${key} asset has not been prepared on this machine`);
+    return;
+  }
+
+  const binary = path.join(assets, repoLock.version, key, binaryName());
+  assert.ok(existsSync(binary), `the staging script placed ${binary}`);
+  assert.ok(
+    existsSync(path.join(assets, 'search-assets.lock.json')),
+    'the lock has to be staged beside the binary, or a packaged runtime cannot verify it',
+  );
+
+  // The module as the package would carry it, with nothing above it that could answer for `build`.
+  const app = path.join(stage, 'app', 'dist', 'packages', 'search');
+  await mkdir(app, { recursive: true });
+  await writeFile(path.join(stage, 'app', 'package.json'), '{"type":"module"}\n');
+  const module = path.join(app, 'ripgrep-assets.ts');
+  await copyFile(
+    fileURLToPath(new URL('../packages/search/ripgrep-assets.ts', import.meta.url)),
+    module,
+  );
+  assert.equal(
+    existsSync(path.join(stage, 'app', 'dist', 'build')),
+    false,
+    'the point of the fixture is that no build directory exists inside the package',
+  );
+
+  /**
+   * `resourcesPath` is the only route left to either file, which is what makes the assertions below evidence
+   * about the packaged path rather than about the checkout the test happens to run in.
+   */
+  const previous = (process as { resourcesPath?: string }).resourcesPath;
+  (process as { resourcesPath?: string }).resourcesPath = stage;
+  t.after(() => {
+    if (previous === undefined) delete (process as { resourcesPath?: string }).resourcesPath;
+    else (process as { resourcesPath?: string }).resourcesPath = previous;
+  });
+
+  const packaged = (await import(
+    pathToFileURL(module).href
+  )) as typeof import('../packages/search/ripgrep-assets.ts');
+  /**
+   * The candidate list is asserted, not assumed: the second entry is the compiled-layout path and the assertion
+   * above already proved no such directory exists, so a lock read successfully can only have come from the
+   * staged resources.
+   */
+  assert.deepEqual(packaged.lockFiles(), [
+    path.join(stage, 'search-assets', 'search-assets.lock.json'),
+    path.join(stage, 'app', 'dist', 'build', 'search-assets.lock.json'),
+  ]);
+  assert.deepEqual(await packaged.loadSearchAssetLock(), repoLock);
+  // What the lookup used to read, and nothing else: this is the null that made the packaged fast path dead code.
+  assert.equal(
+    await packaged.loadSearchAssetLock(
+      path.join(stage, 'app', 'dist', 'build', 'search-assets.lock.json'),
+    ),
+    null,
+  );
+  const workspace = await tempDir(t, 'yuantu-rg-packaged-workspace-');
+  const resolved = await packaged.resolveSearchBinary({ workspaceRoot: workspace });
+  assert.ok(resolved, 'a packaged layout resolves the binary it ships');
+  assert.equal(resolved.sha256, target.binarySha256);
+  assert.equal(resolved.version, repoLock.version);
+  assert.ok(
+    resolved.executable.startsWith(stage),
+    `resolved inside the package rather than the checkout: ${resolved.executable}`,
+  );
 });
 
 /**

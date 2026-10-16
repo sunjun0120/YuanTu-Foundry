@@ -18,7 +18,6 @@ const cache = new Map<
   string,
   { expires: number; capacities: ReadonlyMap<string, RouteCapacity> }
 >();
-const maxCatalogueBytes = 1024 * 1024;
 
 /** Best-effort metadata only: cancellation propagates, other failures leave the local budget available. */
 export async function discoverAutomaticCapacities(
@@ -37,32 +36,12 @@ export async function discoverAutomaticCapacities(
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const capacities = new Map<string, RouteCapacity>();
   try {
-    const result = await discoverModels(config, {
-      signal,
-      fetch: async (url, init) => {
-        const response = await fetch(url, { ...init, redirect: 'error', signal });
-        const reader = response.body?.getReader();
-        const chunks: Uint8Array[] = [];
-        let bytes = 0;
-        try {
-          while (reader) {
-            const chunk = await reader.read();
-            if (chunk.done) break;
-            bytes += chunk.value.byteLength;
-            if (bytes > maxCatalogueBytes)
-              throw new Error('Model catalogue exceeds its size limit');
-            chunks.push(chunk.value);
-          }
-        } finally {
-          await reader?.cancel().catch(() => {});
-        }
-        signal.throwIfAborted();
-        return new Response(bytes ? Buffer.concat(chunks) : null, {
-          status: response.status,
-          headers: response.headers,
-        });
-      },
-    });
+    /**
+     * The byte bound and the redirect refusal used to be installed here, as a wrapper around the probe. They now
+     * belong to `discoverModels`, where both the automatic and the explicit path get them — this call supplies
+     * only the deadline, which is the one thing that genuinely differs between the two.
+     */
+    const result = await discoverModels(config, { signal });
     for (const model of result.models.slice(0, 1000)) {
       if (model.contextWindow !== undefined || model.maxOutputTokens !== undefined)
         capacities.set(model.id, {

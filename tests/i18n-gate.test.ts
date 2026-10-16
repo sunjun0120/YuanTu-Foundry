@@ -142,6 +142,105 @@ test('the gate passes on this repository', async () => {
   assert.deepEqual(await scanI18n(projectRoot), []);
 });
 
+/**
+ * The kernel is the process no dictionary reaches, which is how `R1-core-4` happened: both gates passed while
+ * `packages/core` produced Chinese a person reads. The rule there is a list of decisions rather than the interface
+ * rule, because not every string in the kernel is copy — so what has to hold is that an *unrecorded* one is
+ * reported, a recorded one is not, and the list cannot go stale in silence.
+ */
+test('an unrecorded Chinese string in the kernel is reported, and a recorded one is not', async (t) => {
+  const root = await tree({
+    // The file the recorded entries actually name: a decision is about a file, so putting the same string in
+    // another module and calling it approved would prove nothing.
+    'packages/core/agent.ts': [
+      // Real characters, not `\uXXXX` escapes: the gate scans the source *text*, so an escape sequence is ASCII and
+      // would leave the rule unexercised — the mistake the first version of this test made.
+      //
+      // The shape of the two the assessment found: fallback copy a person reads, produced where no dictionary in
+      // that process can translate it. Recorded by hand in CORE_ALLOWED, with its reason saying the choice of
+      // language is still open rather than settled.
+      "throw new Error('当前连接未启用图片输入，请选择支持视觉的模型。');",
+      "export const probe = '这是未登记的中文';",
+      '// 中文注释不是文案',
+      'export const clean = "Ready";',
+      '',
+    ].join('\n'),
+  });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const problems = await scanI18n(root);
+  // Exactly one line of this file is reported: the recorded refusal on line 1 is silent, the unrecorded string on
+  // line 2 is not, and the comment is not text. The other entries are stale here — this tree has no session-title
+  // or task-spec module — and that is asserted separately below.
+  const kernel = problems.filter((problem) => problem.startsWith('packages/core/agent.ts:'));
+  assert.equal(kernel.length, 1);
+  assert.match(kernel[0]!, /^packages\/core\/agent\.ts:2: Chinese text produced by the kernel/);
+});
+
+/**
+ * A decision vouches for the text it matches, not for the line that text happens to sit on.
+ *
+ * The rule used to be "some recorded entry matched this line", so a recorded prompt sheltered anything written
+ * beside it: appending to the same literal, or adding a second string after it, kept the gate silent. Both are
+ * text no decision covers. The first line below is the control — the recorded prompt alone has to stay silent, or
+ * the rule would be "no Chinese in the kernel" rather than "no unexamined Chinese".
+ */
+test('a recorded kernel string does not shelter unrecorded text on the same line', async (t) => {
+  const root = await tree({
+    'packages/core/agent.ts': [
+      // The recorded refusal alone on its line. Real characters, not `\uXXXX`: the scan reads source text.
+      "throw new Error('当前连接未启用图片输入，请选择支持视觉的模型。');",
+      // The same literal with unrecorded Chinese appended inside the one string.
+      "throw new Error('当前连接未启用图片输入，请选择支持视觉的模型。这是未登记的补充说明');",
+      // A second string on the same line, which a line-level match used to shelter.
+      "const mixed = '当前连接未启用图片输入，请选择支持视觉的模型。' + '以及后来新增的文案';",
+      '',
+    ].join('\n'),
+  });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const kernel = (await scanI18n(root)).filter((problem) =>
+    problem.startsWith('packages/core/agent.ts:'),
+  );
+  assert.equal(kernel.length, 2, kernel.join('\n'));
+  assert.match(kernel[0]!, /^packages\/core\/agent\.ts:2: Chinese text produced by the kernel/);
+  assert.match(kernel[1]!, /^packages\/core\/agent\.ts:3: Chinese text produced by the kernel/);
+  // The wording says the decision still stands for the text it matches, so the reader knows to extend the line's
+  // text rather than doubt the entry.
+  assert.match(kernel[0]!, /covers only the text it matches/);
+});
+
+test('a kernel decision that matches nothing is reported, so the list cannot go stale', async (t) => {
+  const root = await tree({ 'packages/core/empty.ts': 'export const nothing = 1;\n' });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const problems = await scanI18n(root);
+  // Every problem here is a recorded decision that matched nothing, because this tree's one kernel module holds no
+  // Chinese at all. Nothing is reported as unrecorded text, and each decision names the module it was made about —
+  // which is the whole check: the string it vouched for is gone, so whatever replaced it is unexamined rather than
+  // implicitly approved.
+  assert.ok(problems.length > 0);
+  for (const problem of problems)
+    assert.match(
+      problem,
+      /^scripts\/i18n-gate\.mjs: the CORE_ALLOWED entry for packages\/core\/.* matches nothing/,
+    );
+  // Named by module rather than counted, so this case does not need the list itself imported and cannot pass by
+  // agreeing with a number the test and the gate both read from the same wrong place.
+  for (const file of ['agent.ts', 'session-title.ts', 'task-spec.ts'])
+    assert.ok(
+      problems.some((problem) =>
+        problem.includes(`the CORE_ALLOWED entry for packages/core/${file} `),
+      ),
+      `no decision reported for ${file}`,
+    );
+});
+
+test('a tree with no kernel is not asked about the kernel decisions', async (t) => {
+  // A fixture that builds three modules to test the carrier rule has no `packages/core`, and ten unmatched
+  // decisions there would bury the thing the fixture is about.
+  const root = await tree({ 'packages/carrier/service.ts': 'export const status = "Ready";\n' });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.deepEqual(await scanI18n(root), []);
+});
+
 test('shared carrier modules cannot introduce untranslated copy, including nested modules', async (t) => {
   const root = await tree({
     'packages/carrier/service.ts': "throw new Error('连接断开');\n",

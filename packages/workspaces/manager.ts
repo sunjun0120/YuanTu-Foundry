@@ -134,6 +134,18 @@ export class WorkspaceManager {
     return this.store.workspaceById(bindingId);
   }
 
+  /**
+   * The managed directories of one project whose session is gone.
+   *
+   * The recovery half of the rule the allocation path follows: a directory exists before the session that will use
+   * it, so it has to stay reachable after that session is deleted. Nothing is acted on here — a caller names one
+   * entry by id, and archiving, removing or restoring it then goes through the ordinary snapshot-before-delete
+   * path, which is what keeps "the session is gone" from becoming "the work is gone".
+   */
+  orphaned(projectRoot: string, includeRemoved = false): WorkspaceBinding[] {
+    return this.store.orphanedWorkspaceBindings(projectRoot, includeRemoved);
+  }
+
   /** What a child session of the given role should execute in, as the mode decides. */
   kindFor(
     mode: 'auto' | 'shared' | 'worktree',

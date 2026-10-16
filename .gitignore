@@ -13,3 +13,8 @@ model-settings.json
 
 # Prepared search binaries: the lock file records their identity, and they are fetched at build time.
 build/search-assets/
+
+# Benchmark run configurations are per-machine: they name an absolute workspace path, the manifest hash of the
+# tree they were measured on, and a pre-authorized live-model budget. The tooling beside them (`*.mjs`, `*.ps1`)
+# stays tracked; only the generated configuration is local.
+benchmarks/coding-evaluation/local/*.json

@@ -135,7 +135,11 @@ test('cold automatic readiness waits for policy restore and preserves unselected
     }
   });
   const socket = await connectSocket(host.port);
-  const client = new AgentHostClient({ transport: socketTransport(socket), deferAutomatic: true });
+  const client = new AgentHostClient({
+    transport: socketTransport(socket),
+    authToken: host.authToken,
+    deferAutomatic: true,
+  });
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   await new Promise((r) => setTimeout(r, 300));
@@ -169,7 +173,7 @@ test('normal carrier EOF joins automatic cancellation and persists terminal rece
       store.close();
     }
   });
-  const { client, socket } = await connectClient(host.port);
+  const { client, socket } = await connectClient(host);
   await client.start();
   await until(() => requests === 1);
   const exited = new Promise<number | null>((r) => host.child.once('exit', r));
@@ -204,7 +208,11 @@ test('controller Stop aborts the real automatic provider and pauses future wakes
     }
   });
   const socket = await connectSocket(host.port);
-  const client = new AgentHostClient({ transport: socketTransport(socket), deferAutomatic: true });
+  const client = new AgentHostClient({
+    transport: socketTransport(socket),
+    authToken: host.authToken,
+    deferAutomatic: true,
+  });
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const controller = new SessionController(client);
@@ -251,7 +259,7 @@ test('legacy automatic opt-in without authority waits for explicit policy restor
       store.close();
     }
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   await new Promise((r) => setTimeout(r, 200));

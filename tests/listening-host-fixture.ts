@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { connect, type Socket } from 'node:net';
 import { createInterface } from 'node:readline';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -25,6 +26,7 @@ export interface ListeningHost {
   child: ChildProcess;
   root: string;
   dbPath: string;
+  authToken: string;
   stderr: () => string;
 }
 
@@ -35,6 +37,7 @@ export async function listeningHost(
 ): Promise<ListeningHost> {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-'));
   const dbPath = path.join(root, 'sessions.sqlite');
+  const authToken = env.YUANTU_HOST_TOKEN ?? randomBytes(32).toString('hex');
   seed?.(dbPath);
   const child = spawn(
     process.execPath,
@@ -44,6 +47,7 @@ export async function listeningHost(
       env: {
         ...process.env,
         YUANTU_WORKFLOWS: 'false',
+        YUANTU_HOST_TOKEN: authToken,
         YUANTU_PROTOCOL: 'anthropic',
         YUANTU_API_KEY: 'fixture',
         YUANTU_MODEL: 'fixture',
@@ -88,7 +92,7 @@ export async function listeningHost(
     // cannot be removed while it does.
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
-  return { port, child, root, dbPath, stderr: () => stderr };
+  return { port, child, root, dbPath, authToken, stderr: () => stderr };
 }
 
 /**
@@ -125,9 +129,16 @@ export async function waitForStderr(
 
 /** Connect a socket to the Host and hand it to the client as its transport. */
 export async function connectClient(
-  port: number,
+  host: Pick<ListeningHost, 'port' | 'authToken'>,
   env: NodeJS.ProcessEnv = {},
 ): Promise<{ client: AgentHostClient; socket: Socket }> {
-  const socket = await connectSocket(port);
-  return { client: new AgentHostClient({ transport: socketTransport(socket), env }), socket };
+  const socket = await connectSocket(host.port);
+  return {
+    client: new AgentHostClient({
+      transport: socketTransport(socket),
+      authToken: host.authToken,
+      env,
+    }),
+    socket,
+  };
 }

@@ -190,6 +190,49 @@ async function readDiscoveryError(response: Response, signal?: AbortSignal): Pro
   }
 }
 /**
+ * The largest successful catalogue this probe will read, in bytes.
+ *
+ * A catalogue is a list of model ids, and a megabyte of JSON is already two orders of magnitude more than any
+ * endpoint publishes. The bound belongs to the probe rather than to one caller of it: reading a *successful*
+ * answer with `response.json()` and no limit means a gateway that answers 200 and then keeps writing leaves the
+ * probe — the one piece of code that must not hang — waiting while the body grows without end. The failed-answer
+ * path has always been bounded; this is the same rule for the answer that succeeded. It bounds bytes, not time:
+ * an explicit caller decides its own deadline by passing a signal, and the automatic path already supplies one.
+ */
+const MAX_CATALOGUE_BYTES = 1024 * 1024;
+
+/**
+ * Read a successful answer under the byte bound, releasing the body either way.
+ *
+ * Returned as a `Response` so callers keep reading it exactly as they did: the cap is a property of this probe,
+ * not a second response shape for them to learn.
+ */
+async function readBoundedCatalogue(response: Response): Promise<Response> {
+  const body = response.body;
+  if (!body) return response;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      bytes += value.byteLength;
+      if (bytes > MAX_CATALOGUE_BYTES)
+        throw new Error(`The model list exceeds ${MAX_CATALOGUE_BYTES} bytes`);
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return new Response(bytes ? Buffer.concat(chunks) : null, {
+    status: response.status,
+    headers: response.headers,
+  });
+}
+
+/**
  * Read one connection's catalogue.
  *
  * `fetch` is injectable because a probe is exactly the kind of code that must be testable without a network:
@@ -205,6 +248,13 @@ export async function discoverModels(
   const response = await request(endpoint, {
     method: 'GET',
     headers: discoveryHeaders(config),
+    /**
+     * A catalogue probe carries the operator's credential and asks a URL the operator named, so a redirect is
+     * refused rather than followed: the answer would leave for a host nobody chose, with the key attached. The
+     * automatic path has always refused one; the policy lives here so the explicit path cannot answer the same
+     * question differently.
+     */
+    redirect: 'error',
     ...(options.signal ? { signal: options.signal } : {}),
   });
   if (!response.ok) {
@@ -213,7 +263,7 @@ export async function discoverModels(
       `The endpoint answered ${response.status} for its model list${body.trim() ? `: ${body.trim().slice(0, 300)}` : ''}`,
     );
   }
-  const payload: unknown = await response.json();
+  const payload: unknown = await (await readBoundedCatalogue(response)).json();
   const models: DiscoveredModel[] = [];
   for (const { key, entry } of entries(payload)) {
     const id =

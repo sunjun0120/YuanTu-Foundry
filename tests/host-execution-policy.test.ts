@@ -6,7 +6,7 @@ import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts'
 
 test('the Host advertises and echoes the file and network policy it was given', async (t) => {
   const host = await listeningHost(t, { YUANTU_SANDBOX: 'host' });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   const info = await client.start();
   // The carrier refuses a strict selection unless the Host says it can acknowledge one, so this string is the
@@ -27,7 +27,7 @@ test('the Host advertises and echoes the file and network policy it was given', 
 
 test('unsupported process file policies are rejected before changing the Host selection', async (t) => {
   const host = await listeningHost(t, { YUANTU_SANDBOX: 'host' });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const session = await client.request('session.create', {});
@@ -67,7 +67,7 @@ test(
         );
     });
     const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
     const session = await client.request('session.create', {});
@@ -132,7 +132,7 @@ test(
         );
     });
     const host = await listeningHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
     const session = await client.request('session.create', {});
@@ -192,7 +192,7 @@ test(
         );
     });
     const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
     const session = await client.request('session.create', {});
@@ -245,7 +245,7 @@ test('the Host selects the visible session policy without changing another sessi
       );
   });
   const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   await client.request('permission.update', {

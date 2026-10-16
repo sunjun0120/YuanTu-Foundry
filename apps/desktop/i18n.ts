@@ -5,6 +5,10 @@ type Listener = () => void;
 export type TranslationValues = Record<string, string | number>;
 type Pair = [string, string];
 const carrierMessages: Record<`carrier.${CarrierErrorCode}`, Pair> = {
+  'carrier.workspaceMaintenanceUnsupported': [
+    '当前 Host 不支持孤立工作区维护，请升级 Host。',
+    'This Host does not support orphan workspace maintenance; upgrade the Host.',
+  ],
   'carrier.hostExited': [
     'Agent Host 意外退出，请重新启动应用。',
     'Agent Host exited unexpectedly; restart the application.',
@@ -66,6 +70,24 @@ const carrierMessages: Record<`carrier.${CarrierErrorCode}`, Pair> = {
   ],
 };
 const messages: Record<string, Pair> = {
+  'orphans.title': ['保留的工作区', 'Retained workspaces'],
+  'orphans.note': [
+    '会话删除后保留的隔离目录和恢复记录。归档后可清理目录，已保存的源码可恢复。操作遵循当前会话选择的权限；没有当前会话时使用项目默认权限。',
+    'Isolated directories and recovery records retained after session deletion. Archive before removing a directory; preserved source files can be restored. Operations follow the selected session permissions, or project defaults when no session is selected.',
+  ],
+  'orphans.refresh': ['刷新列表', 'Refresh list'],
+  'orphans.loading': ['正在读取或处理工作区…', 'Loading or updating workspaces…'],
+  'orphans.empty': ['当前项目没有保留的工作区。', 'No retained workspaces in this project.'],
+  'orphans.results': ['{count} 份导出结果', '{count} exported results'],
+  'orphans.confirmRemove': ['确认清理目录', 'Confirm removal'],
+  'orphans.cancel': ['取消', 'Cancel'],
+  'orphans.state.preparing': ['准备中', 'Preparing'],
+  'orphans.state.ready': ['目录可用', 'Available'],
+  'orphans.state.blocked': ['需要检查', 'Needs attention'],
+  'orphans.state.archiving': ['归档中', 'Archiving'],
+  'orphans.state.archived': ['已归档', 'Archived'],
+  'orphans.state.removing': ['清理中', 'Removing'],
+  'orphans.state.removed': ['目录已清理，可恢复', 'Directory removed; recovery available'],
   ...carrierMessages,
   'backup.title': ['数据备份', 'Data backups'],
   'backup.restore': ['恢复所选备份', 'Restore selected backup'],
@@ -492,6 +514,14 @@ const messages: Record<string, Pair> = {
     '会话改动 · {count} 次文件操作',
     'Session changes · {count} file operations',
   ],
+  'ui.editedFiles': ['已编辑 {count} 个文件', 'Edited {count} files'],
+  'ui.previewChanges': ['在侧边栏预览', 'Preview in sidebar'],
+  'ui.allChangedFiles': ['全部 {count} 个文件', 'All {count} files'],
+  'ui.collapseChangedFiles': ['收起文件列表', 'Collapse file list'],
+  'ui.legacyChange': [
+    '这条记录没有恢复快照，仅可查看差异。',
+    'This record has no recovery snapshot; only the diff is available.',
+  ],
   'ui.projectResources': [
     '项目规则 {instructions} · 技能 {skills} · 扩展 {extensions}',
     'Project rules {instructions} · Skills {skills} · Extensions {extensions}',
@@ -822,6 +852,34 @@ const messages: Record<string, Pair> = {
   'ui.findHowToRun': ['找到运行方式', 'Find how to run it'],
   'ui.startWithGuide': ['从项目说明开始 ↗', 'Start with the project guide ↗'],
   'ui.ready': ['准备就绪', 'Ready'],
+  /**
+   * The run status line, one entry per state it can be in.
+   *
+   * These were literals in `renderer.ts` that only the DOM walker could translate, and four of the eleven were
+   * not in this dictionary at all — so an English interface showed `正在处理`, `等待你的确认`, `连接未就绪` and
+   * `正在加载会话…` in Chinese while both gates passed. `idle` reuses `ui.ready` rather than repeating it, because
+   * two entries with the same Chinese source and different English wording is the same bug in a different place.
+   */
+  'ui.runStatus.running': ['正在处理', 'Working'],
+  'ui.runStatus.completed': ['本轮已结束', 'This turn is finished'],
+  'ui.runStatus.needsReview': ['验收未通过，需检查', 'Acceptance failed; review needed'],
+  'ui.runStatus.cancelled': ['已停止', 'Stopped'],
+  'ui.runStatus.limited': ['已达到运行限制', 'The run limit was reached'],
+  'ui.runStatus.failed': ['运行失败', 'The run failed'],
+  'ui.runStatus.compacting': ['正在整理上下文…', 'Tidying up the context…'],
+  'ui.runStatus.awaitingApproval': ['等待你的确认', 'Waiting for your confirmation'],
+  'ui.runStatus.connecting': ['连接未就绪', 'The connection is not ready'],
+  'ui.runStatus.loadingSession': ['正在加载会话…', 'Loading the session…'],
+  /**
+   * The exported conversation.
+   *
+   * A file is the one surface the DOM walker cannot reach, so the words have to be chosen where the file is
+   * written; the export used to be Chinese whatever the interface language was.
+   */
+  'ui.export.untitled': ['新会话', 'New session'],
+  'ui.export.roleUser': ['你', 'You'],
+  'ui.export.roleAssistant': ['助手', 'Assistant'],
+  'ui.export.roleTool': ['工具', 'Tool'],
   'ui.composerHint': [
     'Enter 发送 · Shift + Enter 换行',
     'Enter to send · Shift + Enter for a new line',
@@ -977,6 +1035,46 @@ const messages: Record<string, Pair> = {
     'That format is not supported; use PDF, DOCX, XLSX, XLS or a text or code file',
   ],
   'attach.emptyContent': ['未提取到可读取的文字', 'No readable text was extracted'],
+  /**
+   * The refusals the renderer makes itself, while a person is attaching files.
+   *
+   * They are dictionary entries rather than literals for the same reason the kernel's are: whatever is shown has
+   * to be chosen in the language the interface is in. `attach.rendererFailure` puts the file's own name in front
+   * of one of them, and the separator is part of the pattern rather than a literal concatenation, because which
+   * punctuation separates a name from a sentence is a choice each language makes.
+   */
+  'attach.rendererCount': [
+    '每条消息最多附加 8 个文件（其中图片最多 4 张）',
+    'A message can carry at most 8 files, and at most 4 of them can be images',
+  ],
+  'attach.rendererImageBytes': ['单张图片不能超过 5MB', 'One image cannot be larger than 5MB'],
+  'attach.rendererImageRead': ['图片读取失败', 'Reading the image failed'],
+  'attach.rendererDocumentBytes': ['单个文件不能超过 20MB', 'One file cannot be larger than 20MB'],
+  'attach.rendererFailure': ['{name}：{message}', '{name}: {message}'],
+  /**
+   * The refusals an image gets when the connection cannot accept one.
+   *
+   * Three wordings of the same situation exist, and the dictionary is keyed by the text itself (`domText` is
+   * derived from these entries), so each one needs its own line or the variant that is not listed stays Chinese in
+   * an English interface — which is what happened: the two kernel messages and the renderer's own were all absent
+   * here while every gate passed, because the renderer is exempt from the scan on the grounds that the walker
+   * translates it, and the walker only translates what this file already contains.
+   *
+   * Keeping the kernel's text in Chinese is deliberate rather than an oversight: the CLI reads those errors with
+   * no dictionary in its process and is Chinese-first, so the fix belongs here, where a person's locale is known.
+   */
+  'attach.visionRequired': [
+    '当前连接未启用图片输入，请选择支持视觉的模型。',
+    'This connection has no image input; choose a model that supports vision.',
+  ],
+  'attach.visionRequiredMidRun': [
+    '当前连接未启用图片输入；请切换视觉模型或新建纯文本会话。',
+    'This connection has no image input; switch to a vision model or start a new text-only session.',
+  ],
+  'attach.visionModelRequired': [
+    '当前模型未启用图片输入，请切换支持图片的模型',
+    'This model has no image input; switch to a model that supports images.',
+  ],
   'settingsMain.busy': [
     '请等待当前操作结束后再测试或保存配置。',
     'Wait for the current operation to finish before testing or saving settings.',
@@ -1068,6 +1166,9 @@ export function mainText(key: string, values?: TranslationValues): string {
 }
 const originals = new WeakMap<Node, string>();
 const applied = new WeakMap<Node, string>();
+const attributeSources = new WeakMap<Element, Map<string, { original: string; applied: string }>>();
+const translatedAttributes = ['placeholder', 'aria-label', 'title'];
+const excludedContent = 'script,style,pre,code,.message-content,[translate="no"]';
 let observing = false;
 function translatedText(value: string): string {
   if (language === 'zh-CN') return value;
@@ -1095,7 +1196,7 @@ function translateDocument(root: Node): void {
     while ((n = w.nextNode())) nodes.push(n);
   }
   for (const node of nodes) {
-    if (node.parentElement?.closest('script,style,pre,.message-content')) continue;
+    if (node.parentElement?.closest(excludedContent)) continue;
     const current = node.textContent ?? '';
     if (!originals.has(node) || (applied.has(node) && applied.get(node) !== current))
       originals.set(node, current);
@@ -1109,9 +1210,20 @@ function translateDocument(root: Node): void {
         ? [root, ...root.querySelectorAll('*')]
         : [...(root as Document).querySelectorAll('*')];
     for (const element of elements) {
-      for (const attribute of ['placeholder', 'aria-label', 'title']) {
+      if (element.closest(excludedContent)) continue;
+      let sources = attributeSources.get(element);
+      if (!sources) attributeSources.set(element, (sources = new Map()));
+      for (const attribute of translatedAttributes) {
         const value = element.getAttribute(attribute);
-        if (value) element.setAttribute(attribute, translatedText(value));
+        if (value === null) {
+          sources.delete(attribute);
+          continue;
+        }
+        const previous = sources.get(attribute);
+        const original = !previous || previous.applied !== value ? value : previous.original;
+        const next = translatedText(original);
+        sources.set(attribute, { original, applied: next });
+        if (value !== next) element.setAttribute(attribute, next);
       }
     }
   }
@@ -1127,8 +1239,15 @@ export function setLocale(next: UiLanguage): void {
         for (const r of records) {
           for (const n of r.addedNodes) translateDocument(n);
           if (r.type === 'characterData') translateDocument(r.target);
+          if (r.type === 'attributes') translateDocument(r.target);
         }
-      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+      }).observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: translatedAttributes,
+      });
     }
   }
   for (const listener of listeners) listener();

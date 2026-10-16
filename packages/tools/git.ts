@@ -2,7 +2,7 @@ import { resolveSandboxConfig } from './sandbox.ts';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
-import type { PreparedTool, Tool, ToolContext } from '../protocol/index.ts';
+import type { PreparedTool, Tool, ToolContext, ToolResult } from '../protocol/index.ts';
 import { bounded, MAX_TOOL_OUTPUT } from './registry.ts';
 import { killTree } from './process.ts';
 import { localExecutionEnvironment } from './execution-environment.ts';
@@ -82,19 +82,21 @@ export function gitCommandLine(safeDirectory: string): string[] {
 
 class GitCommandError extends Error {
   readonly exitCode: number | null;
-  constructor(message: string, exitCode: number | null) {
+  readonly truncated: boolean;
+  constructor(message: string, exitCode: number | null, truncated = false) {
     super(message);
     this.name = 'GitCommandError';
     this.exitCode = exitCode;
+    this.truncated = truncated;
   }
 }
 
-async function git(
+async function captureGit(
   root: string,
   args: readonly string[],
   signal: AbortSignal,
   options: { includeGlobal?: boolean; safeDirectory?: string } = {},
-): Promise<string> {
+): Promise<{ content: string; truncated: boolean }> {
   signal.throwIfAborted();
   const config = resolveSandboxConfig();
   const argv = [...gitCommandLine(options.safeDirectory ?? root), ...args];
@@ -169,17 +171,71 @@ async function git(
         if (managed) await managed.closed;
         if (spawnError) throw spawnError;
         if (signal.aborted) return reject(signal.reason);
-        const output =
-          Buffer.concat(chunks).toString('utf8') + (truncated ? '\n[output truncated]' : '');
+        // Keep the capture intact. The registry spills it and reports whether it is partial.
+        const output = Buffer.concat(chunks).toString('utf8');
         if (timedOut) return reject(new Error(`Git command timed out after ${GIT_TIMEOUT_MS}ms`));
         if (code !== 0)
           return reject(
-            new GitCommandError(bounded(output || `git exited with code ${code}`), code),
+            new GitCommandError(output || `git exited with code ${code}`, code, truncated),
           );
-        resolve(bounded(output));
+        resolve({ content: output, truncated });
       })().catch(reject);
     });
   });
+}
+
+/** Internal metadata queries and mutation summaries retain their string interface. */
+async function git(
+  root: string,
+  args: readonly string[],
+  signal: AbortSignal,
+  options: { includeGlobal?: boolean; safeDirectory?: string } = {},
+): Promise<string> {
+  const output = await captureGit(root, args, signal, options);
+  return output.content + (output.truncated ? '\n[output truncated]' : '');
+}
+
+async function readGit(
+  root: string,
+  args: readonly string[],
+  signal: AbortSignal,
+  empty: string,
+  trim = true,
+): Promise<ToolResult> {
+  try {
+    const output = await captureGit(root, args, signal);
+    return {
+      isError: false,
+      content: (trim && !output.truncated ? output.content.trim() : output.content) || empty,
+      ...(output.truncated ? { truncated: true } : {}),
+    };
+  } catch (error) {
+    if (!(error instanceof GitCommandError)) throw error;
+    return {
+      isError: true,
+      content: error.message,
+      ...(error.truncated ? { truncated: true } : {}),
+    };
+  }
+}
+
+/** Mutation failures must preserve partial-capture metadata through the registry's error boundary too. */
+function withGitErrors(prepared: PreparedTool): PreparedTool {
+  return {
+    ...prepared,
+    async execute(context) {
+      try {
+        return await prepared.execute(context);
+      } catch (error) {
+        if (!(error instanceof GitCommandError)) throw error;
+        return {
+          isError: true,
+          content: error.message,
+          ...(error.truncated ? { truncated: true } : {}),
+        };
+      }
+    },
+  };
 }
 
 function requireMetadataWrites(): void {
@@ -311,7 +367,7 @@ async function prepareStage(
   const paths = safePaths(args.paths);
   if (!paths.length) throw new Error('paths must list at least one repository-relative path');
   const unstage = args.unstage === true;
-  return {
+  return withGitErrors({
     approvalDescription: [
       `${unstage ? 'Unstage' : 'Stage'} ${paths.length} path(s): ${describePaths(paths)}`,
       unstage ? 'Runs: git reset -q HEAD -- <paths>' : 'Runs: git add -- <paths>',
@@ -336,7 +392,7 @@ async function prepareStage(
         ),
       };
     },
-  };
+  });
 }
 
 async function prepareCommit(
@@ -351,7 +407,7 @@ async function prepareCommit(
   if (!staged.length) throw new Error('Nothing is staged; run git_stage before git_commit');
   const identity = await commitPreconditions(repository, context.signal);
   const noVerify = args.no_verify === true;
-  return {
+  return withGitErrors({
     approvalDescription: [
       `Commit ${staged.length} staged file(s) as ${identity.name} <${identity.email}>: ${describePaths(staged)}`,
       `Message:\n${message}`,
@@ -380,7 +436,7 @@ async function prepareCommit(
         content: bounded(`${output.trim() || 'Committed'}\nHEAD is now ${head}`),
       };
     },
-  };
+  });
 }
 
 const WORKTREE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -427,7 +483,7 @@ async function prepareWorktreeCreate(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  return {
+  return withGitErrors({
     approvalDescription:
       `Create branch ${branch} from HEAD and check it out at ${target}.` +
       '\nThe current worktree and its uncommitted changes stay in place. Checkout filters may run.',
@@ -453,7 +509,7 @@ async function prepareWorktreeCreate(
         ),
       };
     },
-  };
+  });
 }
 
 export function gitTools(root: string): Tool[] {
@@ -471,12 +527,12 @@ export function gitTools(root: string): Tool[] {
       inputSchema: schema({}),
       async execute(_args, context) {
         const repository = await repositoryRoot(root, context.signal);
-        const output = await git(
+        return readGit(
           repository,
           ['branch', '--list', '--format=%(HEAD) %(refname:short)'],
           context.signal,
+          'No local branches',
         );
-        return { isError: false, content: output.trim() || 'No local branches' };
       },
     },
     {
@@ -486,8 +542,12 @@ export function gitTools(root: string): Tool[] {
       inputSchema: schema({}),
       async execute(_args, context) {
         const repository = await repositoryRoot(root, context.signal);
-        const output = await git(repository, ['worktree', 'list', '--porcelain'], context.signal);
-        return { isError: false, content: output.trim() || 'No worktrees' };
+        return readGit(
+          repository,
+          ['worktree', 'list', '--porcelain'],
+          context.signal,
+          'No worktrees',
+        );
       },
     },
     {
@@ -512,12 +572,12 @@ export function gitTools(root: string): Tool[] {
       inputSchema: schema({}),
       async execute(_args, context) {
         const repository = await repositoryRoot(root, context.signal);
-        const status = await git(
+        return readGit(
           repository,
           ['status', '--porcelain=v2', '--branch', '--untracked-files=all'],
           context.signal,
+          'Working tree clean',
         );
-        return { isError: false, content: status.trim() || 'Working tree clean' };
       },
     },
     {
@@ -538,10 +598,7 @@ export function gitTools(root: string): Tool[] {
         else if (mode === 'head') command.push('HEAD');
         if (args.stat_only === true) command.push('--stat');
         command.push('--', ...safePaths(args.paths));
-        return {
-          isError: false,
-          content: (await git(repository, command, context.signal)) || 'No differences',
-        };
+        return readGit(repository, command, context.signal, 'No differences', false);
       },
     },
     {
@@ -570,8 +627,7 @@ export function gitTools(root: string): Tool[] {
         const command = ['log', `-n${count}`, '--date=short', format];
         const paths = safePaths(args.paths);
         if (paths.length) command.push('--', ...paths);
-        const output = await git(repository, command, context.signal);
-        return { isError: false, content: output.trim() || 'No commits' };
+        return readGit(repository, command, context.signal, 'No commits');
       },
     },
     {

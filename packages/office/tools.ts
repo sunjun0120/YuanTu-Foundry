@@ -1,5 +1,6 @@
 import { link, lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
+import JSZip from 'jszip';
 import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
 import type { Tool, FileChange, PreparedTool } from '../protocol/index.ts';
@@ -10,6 +11,7 @@ import { runOfficeAutomation, type OfficeFormat, type OfficeOperation } from './
 import { readPptxSlides } from './read.ts';
 import { MAX_CREATED_SHEETS } from './spreadsheet.ts';
 import { libreOfficePreview, type OfficePreview } from './preview.ts';
+import { assertExpansionWithinBudget } from './zip-entry.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -23,6 +25,39 @@ const parallelRead = (): true => true;
 
 const formats = ['docx', 'xlsx', 'pptx'] as const;
 const maximum = 20_000_000;
+/**
+ * Expansion ceilings for the inspect path, in uncompressed bytes.
+ *
+ * `office_inspect` is the one Office path that hands a package to a reader this repository does not own —
+ * mammoth for DOCX, SheetJS for XLSX — and neither library consults a limit while inflating. The 20 MB check
+ * below is about the *compressed* file, which is the number the package's author writes, so on its own it
+ * accepts a 24 KB package that inflates to 24 MB. These ceilings are measured on the bytes as they arrive,
+ * exactly like the per-part bounds the PPTX and XLSX edit paths already use.
+ *
+ * They are deliberately generous: a 16 MB part is a document of thousands of pages, and this tool returns at
+ * most 12,000 characters of text, so a package past them is not something it could usefully inspect.
+ */
+const INSPECT_PART_BYTES = 16_000_000;
+const INSPECT_TOTAL_BYTES = 48_000_000;
+/**
+ * Refuse a package that would inflate past those ceilings, before either library reads it.
+ *
+ * A file that is not a zip at all cannot inflate, so the 20 MB input limit is its whole bound: that branch
+ * matters for SheetJS, which also reads spreadsheets that are not OOXML packages.
+ */
+async function assertInspectablePackage(bytes: Buffer, format: OfficeFormat): Promise<void> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch {
+    return;
+  }
+  await assertExpansionWithinBudget(
+    zip,
+    { part: INSPECT_PART_BYTES, total: INSPECT_TOTAL_BYTES },
+    format.toUpperCase() + ' package',
+  );
+}
 const formatOf = (name: string): OfficeFormat => {
   const format = path.extname(name).slice(1).toLowerCase();
   if (!formats.includes(format as OfficeFormat))
@@ -33,6 +68,7 @@ async function inspect(file: string, format: OfficeFormat): Promise<string> {
   const bytes = await readFile(file);
   if (!bytes.length || bytes.length > maximum)
     throw new Error('Office file must be 1 byte to 20 MB');
+  await assertInspectablePackage(bytes, format);
   if (format === 'docx') {
     const result = await mammoth.extractRawText({ buffer: bytes });
     return JSON.stringify({

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,7 +25,7 @@ const hostPath = path.resolve('apps/agent-host/main.ts');
 test('a client with no process of its own drives a Host over a socket', async (t) => {
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('ready')));
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   const info = await client.start();
   assert.equal(info.runtime, 'yuantu');
@@ -47,7 +48,7 @@ test('a client with no process of its own drives a Host over a socket', async (t
 test('live events reach a socket carrier the same way they reach stdio', async (t) => {
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('done')));
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const seen: string[] = [];
@@ -62,7 +63,7 @@ test('live events reach a socket carrier the same way they reach stdio', async (
 
 test('a second carrier is refused rather than sharing one Host', async (t) => {
   const host = await listeningHost(t, {});
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   // The Host holds the approvals, the active runs and the workspace lock for the sessions it serves, so a
@@ -104,7 +105,7 @@ test('a large reply is framed on a socket exactly as it is on stdio', async (t) 
       store.close();
     }
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   // No offset means the whole history: one reply, one JSONL line, and a carrier that framed it wrongly would
@@ -119,7 +120,7 @@ test('a large reply is framed on a socket exactly as it is on stdio', async (t) 
 
 test('a carrier that disappears settles pending work as a disconnection', async (t) => {
   const host = await listeningHost(t, {});
-  const { client, socket } = await connectClient(host.port);
+  const { client, socket } = await connectClient(host);
   await client.start();
   const pending = client.request('session.list', {});
   socket.destroy();
@@ -133,7 +134,7 @@ test('a carrier that disappears settles pending work as a disconnection', async 
 
 test('stopping a socket carrier stops the Host with it', async (t) => {
   const host = await listeningHost(t, {});
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   await client.start();
   const exited = new Promise<number | null>((resolve) =>
     host.child.once('exit', (code) => resolve(code)),
@@ -147,7 +148,7 @@ test('stopping a socket carrier stops the Host with it', async (t) => {
 
 test('a Host that only listens is a real Host: the same dispatch answers on it', async (t) => {
   const host = await listeningHost(t, {});
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const invariants = await client.request('invariants.list', {});
@@ -182,7 +183,11 @@ test('the host-less address the parser accepts is one the carrier can actually b
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-hostless-'));
   const child = spawn(process.execPath, [hostPath, '--workspace', root, '--listen', ':0'], {
     cwd: root,
-    env: { ...process.env, YUANTU_WORKFLOWS: 'false' },
+    env: {
+      ...process.env,
+      YUANTU_WORKFLOWS: 'false',
+      YUANTU_HOST_TOKEN: randomBytes(32).toString('hex'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(async () => {

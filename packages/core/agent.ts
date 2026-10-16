@@ -1,328 +1,82 @@
-import { createChildTurns } from './run-child-turns.ts';
-import { randomUUID } from 'node:crypto';
-import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
+import { memoryContext } from '../knowledge/context.ts';
 import {
-  goalNoticeText,
-  completionContractText,
-  taskDefinitionText,
-  skillsCatalogue,
-} from './agent-notices.ts';
-import { createRunPromptSections } from './run-prompt.ts';
-import { admitVisibleBackground } from './background-deliveries.ts';
+  DeferredApprovalError,
+  RunFailure,
+  failureCodeOf,
+  statusForFailure,
+  type FailureCode,
+} from '../protocol/failure.ts';
+import { admitGoalRound, type Goal } from '../protocol/goals.ts';
+import { validateUserInput } from '../protocol/images.ts';
 import type {
   AgentEvent,
-  AgentEventType,
   Approver,
+  CompletionStep,
   FileChange,
   Message,
-  Plan,
   ModelResponse,
-  Provider,
   Questioner,
   ReasoningEffort,
   RunResult,
   RunStatus,
-  SubAgentTag,
-  SubAgentSummaryReport,
-  TaskStep,
-  TaskTriggerSource,
-  ToolCall,
-  ToolContext,
   ToolSpec,
   Usage,
   UserInput,
 } from '../protocol/index.ts';
-import type { SessionStore } from '../storage/sqlite.ts';
-import { LEASE_RENEW_INTERVAL_MS } from '../protocol/session-lease.ts';
-import { createPlanningTools, type PlanningTools } from './plan-tools.ts';
-import type { ToolRegistry } from '../tools/registry.ts';
-import { setTimeout as delay } from 'node:timers/promises';
-import { redactSecrets } from './errors.ts';
-import { DeferredApprovalError } from '../protocol/failure.ts';
-import type { PermissionPolicyView } from '../protocol/permissions.ts';
-import { memoryContext } from '../knowledge/context.ts';
-import { spillOutput, spillResult } from '../tools/spill.ts';
+import { describeViolations } from '../protocol/invariants.ts';
+import { resolveRunLimits } from '../protocol/settings.ts';
+import { emptyStatistics } from '../protocol/statistics.ts';
+import type { StepEndReason } from '../protocol/steps.ts';
+import { loadInstructions } from '../resources/instructions.ts';
+import { discoverSkills, expandSkill } from '../resources/skills.ts';
+import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
+import { goalTools } from '../tools/goal.ts';
 import { repoMapContext } from '../tools/repo-map.ts';
+import {
+  completionContractText,
+  goalNoticeText,
+  skillsCatalogue,
+  taskDefinitionText,
+} from './agent-notices.ts';
+import type { AgentOptions, AgentRunInput } from './agent-options.ts';
+import { admitVisibleBackground } from './background-deliveries.ts';
 import { cacheKeyFor } from './cache-key.ts';
-import { prepareContext, ContextLimitError } from './context.ts';
+import { TokenCalibration, calibrationRoute } from './calibration.ts';
+import { taskCompletionStepId } from './completion-contract.ts';
 import type { PreparedContext } from './context.ts';
+import { prepareContext } from './context.ts';
 import { envelopeEvent } from './envelope.ts';
+import { redactSecrets } from './errors.ts';
+import { createPlanningTools, type PlanningTools } from './plan-tools.ts';
+import { assemblePrompt, type PromptTrace } from './prompt-sections.ts';
+import { createRunCompletion } from './run-completion.ts';
+import { buildContextInput } from './run-context.ts';
+import { createRunDelegation, registerRunReport } from './run-delegation.ts';
+import { createRunEmit, type RunEmission } from './run-emit.ts';
+import { finalizeRun } from './run-finalization.ts';
+import { createRunInteraction } from './run-interaction.ts';
+import { createRunPromptSections } from './run-prompt.ts';
+import { createProviderMeasurement } from './run-provider.ts';
+import { RunQueue, queuedInput, type InputMode, type QueuedInput } from './run-queue.ts';
+import { requestRunRound } from './run-request.ts';
+import { ResidentTurnSettlements } from './run-residency.ts';
+import { loadRunTask, registerTaskStepTool, startRunTask } from './run-task.ts';
+import { createToolBatch } from './run-tools.ts';
 import {
   lastRuntimeSnapshot,
   runtimeSnapshotMessage,
   runtimeSnapshotText,
   type RuntimeSnapshotSource,
 } from './runtime-context.ts';
+import { sessionQueryTools } from './session-query.ts';
+import { subAgentJobProducer } from './subagent-jobs.ts';
 import {
-  RunFailure,
-  failureCodeOf,
-  isContextWindowExceeded,
-  statusForFailure,
-  type FailureCode,
-} from '../protocol/failure.ts';
-import { RETRY_MAX_WAIT_MS, retryDelayMs, retryable } from '../protocol/retry.ts';
-import { admitGoalRound, changeGoal, type Goal } from '../protocol/goals.ts';
-import type { StepEndReason } from '../protocol/steps.ts';
-import { resolveRunLimits } from '../protocol/settings.ts';
-import { groupToolCalls, runBounded } from './tool-schedule.ts';
-import { WINDOW_EXHAUSTED, hopelessForWindow } from './forecast.ts';
-import { estimateMessageTokens } from './budget.ts';
-import { TokenCalibration, calibrationRoute } from './calibration.ts';
-import { emptyStatistics, emptyRequestTiming, addUsage } from '../protocol/statistics.ts';
-import { RunQueue, queuedInput, type InputMode, type QueuedInput } from './run-queue.ts';
-import { createRunEmit, settleOpenToolSpans, type RunEmission } from './run-emit.ts';
-import { createRunInteraction } from './run-interaction.ts';
-import { createProviderMeasurement } from './run-provider.ts';
-import { createSubAgentProviders } from './run-subagents.ts';
-import { createCoordinator } from './run-coordinator.ts';
-import type { WorkspaceBinding } from '../protocol/workspaces.ts';
-import type { WorkspaceMode } from '../protocol/workspaces.ts';
-import type { WorkspaceManager } from '../workspaces/manager.ts';
-import type { WorkspaceApply, WorkspaceResults } from '../workspaces/results.ts';
-import { createResidentMessageTool } from './run-residency.ts';
-import {
-  REPORT_SCHEMA,
-  SUBMIT_REPORT_DESCRIPTION,
   SubAgentCoordinator,
-  normalizeReport,
   resolveSubAgentOptions,
   type ResolvedSubAgentOptions,
-  type SubAgentOptions,
 } from './subagents.ts';
-import { assemblePrompt, type PromptTrace } from './prompt-sections.ts';
-import type { SubAgentProvider } from './subagent-providers.ts';
-import { workflowTool } from './workflow.ts';
-import { sessionQueryTools } from './session-query.ts';
-import { goalTools } from '../tools/goal.ts';
-import { SubAgentResidency } from './residency.ts';
-import type { InvariantRegistry } from './invariants.ts';
-import { describeViolations } from '../protocol/invariants.ts';
-import { subAgentJobProducer } from './subagent-jobs.ts';
-import { commandJournal } from './command-jobs.ts';
-import { loadInstructions } from '../resources/instructions.ts';
-import { validateUserInput } from '../protocol/images.ts';
-import { discoverSkills, expandSkill } from '../resources/skills.ts';
-import {
-  captureTaskBaselines,
-  verifyCompletionAcceptance,
-  verifyTaskAcceptance,
-  type TaskBaselines,
-} from './task-acceptance.ts';
-import { decideCompletion, failureFingerprint, type CompletionDecision } from './completion.ts';
-import { snapshotCompletionInputs, type CompletionInputSnapshot } from './completion-inputs.ts';
-import {
-  completionDefinitionHash,
-  normalizeCompletionPath,
-  normalizeCompletionRepairPolicy,
-  normalizeCompletionSpec,
-  planCompletionSpec,
-  taskCompletionSpec,
-  taskCompletionStepId,
-} from './completion-contract.ts';
-import { COMPLETION_LIMITS } from '../protocol/index.ts';
-import type {
-  CompletionRepairPolicy,
-  CompletionSpec,
-  CompletionStep,
-  CompletionSummary,
-  TaskStepStatus,
-} from '../protocol/index.ts';
-
-const MAX_AFFECTED_PATHS = COMPLETION_LIMITS.affectedPaths;
-
-export interface AgentOptions {
-  /**
-   * The execution environment this run reports, as a value or as a getter.
-   *
-   * A getter because the environment is *live*: the desktop can switch the sandbox between commands, and both the
-   * prompt and the tool schema have to describe the environment in force when the round is built rather than the
-   * one that was in force when the agent was constructed.
-   */
-  executionEnvironment?: string | (() => string);
-  executionPolicy?: () => import('../protocol/execution.ts').ExecutionPolicy;
-  modelInfo?: { model: string; protocol: string; connectionId?: string };
-  supportsVision?: boolean;
-  store: SessionStore;
-  provider: Provider;
-  tools: ToolRegistry;
-  approve: Approver;
-  /**
-   * How a run asks the human a structured question, when the host can ask one at all.
-   *
-   * Optional unlike `approve`, because asking is not an effect: a host that cannot reach a human (a
-   * scheduled run, an embedded runtime) still runs, and the tool reports the missing answer to the model
-   * instead of failing the call.
-   */
-  question?: Questioner;
-  /**
-   * The permission policy in force, read when a run builds the tool schema it sends.
-   *
-   * A getter rather than the policy itself because the policy can change between runs (the desktop's
-   * permission mode is a setting) while one agent instance is reused. What the run does with it is trim:
-   * a tool the policy denies every call of is not sent, so the schema the model sees is the schema it can
-   * actually use. Hiding it is not the guarantee — the approver still consults the policy — but a run that
-   * can only read should not be offered tools to write with.
-   */
-  permissionPolicy?: () => PermissionPolicyView | undefined;
-  onEvent?: (event: AgentEvent) => void;
-  /** Delegation limits. Sub-agents are enabled by default and capped by `SUBAGENT_DEFAULTS`. */
-  subagents?: SubAgentOptions;
-  /**
-   * Resolves the provider a sub-agent should use when it asked for a specific model, or `undefined`
-   * when this host cannot serve that model. Its presence is what lets the built-in provider advertise
-   * the `agentOptions` capability: without a resolver, a task that names a model is refused loudly
-   * instead of silently running on the default one.
-   */
-  subagentProviderFor?: (model: string) => Provider | undefined;
-  /** Additional sub-agent providers, registered after the built-in `in-process` one. */
-  subagentProviders?: readonly SubAgentProvider[];
-  /** Which sub-agent provider this run delegates to. Defaults to the built-in `in-process`. */
-  subagentProvider?: string;
-  /**
-   * The models this host can actually run a sub-agent on, for the `list_subagent_models` tool.
-   *
-   * Left out by a host with nothing to say, and then the tool is absent rather than empty: the list is a
-   * promise that a named model will resolve, and a host that cannot make that promise must not appear to.
-   */
-  subagentModels?: () => readonly { model: string; note?: string }[];
-  /** Characters of this session's transcript a forked child starts with. Defaults to `RUN_DEFAULTS`. */
-  forkTranscriptChars?: number;
-  /** Messages of this session's transcript a forked child starts with. Defaults to `RUN_DEFAULTS`. */
-  forkTranscriptMessages?: number;
-  /**
-   * Keeps delegated children resident after their first turn, so a later run in the same session can ask
-   * them for more instead of delegating the same ground again.
-   *
-   * Without one, delegation stays one-shot: the child runs, reports, and its activation is gone. The
-   * residency is host-owned because it must outlive runs; see `packages/core/residency.ts` for the
-   * trade-offs it brings (children own their tools, and their usage is attributed to their own sessions).
-   */
-  subagentResidency?: SubAgentResidency;
-  /**
-   * Where this run publishes and checks runtime invariants.
-   *
-   * Host-owned, because the registry outlives any one run and a package other than this one registers into
-   * it. A run contributes the one invariant that is genuinely per-run state — the tool pipeline trace — and
-   * withdraws it when it ends.
-   */
-  invariants?: InvariantRegistry;
-  /**
-   * Builds the tool registry a *resident* child owns for its whole residency.
-   *
-   * A resident child cannot borrow the parent run's registry, because that run ends and closes it. Without
-   * a factory, residency is refused rather than silently degraded to borrowing: a child whose tools vanish
-   * between turns would fail in a way nobody could attribute.
-   */
-  childTools?: (binding?: WorkspaceBinding) => ToolRegistry;
-  /**
-   * Which directory this session actually executes in.
-   *
-   * Absent for an embedder that manages no workspaces, and then a session's directory is its project — the
-   * pre-isolation behaviour, unchanged. Present, it answers for *this session's* binding, which is what lets a
-   * delegated child whose directory is a worktree load the instructions, skills and outline of the tree it is
-   * actually editing rather than the delegator's.
-   *
-   * It is a resolver rather than a string because the binding is durable state: a call that read it once at
-   * construction would keep using a directory that a restart or a restore has since replaced.
-   */
-  workspaceRoots?: (sessionId: string) => { projectRoot: string; executionRoot: string };
-  /**
-   * How this run's delegations decide where a child executes.
-   *
-   * Absent means `shared`, which is exactly what delegation did before isolation existed: every child runs in the
-   * delegator's own directory, and the parent's change list shows its work directly. `auto` is what a shipped
-   * product selects, and `worktree` isolates read-only children as well as writing ones.
-   */
-  workspaceMode?: WorkspaceMode;
-  /** The workspace service, when this host manages isolated directories at all. */
-  workspaceManager?: WorkspaceManager;
-  /** Where a child's frozen results are exported from, by the child's own turn. */
-  workspaceResults?: WorkspaceResults;
-  /** Where those results are previewed and imported, by the parent's tools. */
-  workspaceApply?: WorkspaceApply;
-  /** Appended to the system prompt, to give a delegated child its role. */
-  rolePrompt?: string;
-  /**
-   * This agent's own persona, which **replaces** the deployment's rather than adding to it.
-   *
-   * `rolePrompt` above is additive and sits near the end of the prompt: a child that carries one is told both
-   * what the parent was told about itself and what the child is. That is right for a role and wrong for a
-   * persona — a persona is the paragraph that says who is speaking, and two of them in one prompt is the model
-   * being handed a contradiction to average. This is the same text in a slot that shadows, so a host that
-   * composes per-session personas (a support agent, a reviewer, a specialist child) has one place to put it.
-   */
-  persona?: string;
-  /**
-   * The deployment's persona, as opposed to this agent's.
-   *
-   * Both live in the same prompt slot and {@link persona} shadows this one, so a host can state a default
-   * persona once (on every agent it composes) and let one agent replace it. Registering the deployment's even
-   * when it is not overridden is what lets the prompt trace say which persona was in effect.
-   */
-  deploymentPersona?: string;
-  /** How many delegation levels above this agent. A child is one deeper than its parent. */
-  subagentDepth?: number;
-  /**
-   * Identifies this run as a delegated child, so the effects it causes can name it: the file-change
-   * journal and every approval it raises carry this tag. Without it a sub-agent's write is
-   * indistinguishable from the parent's own work in the session change list.
-   */
-  subagentTag?: SubAgentTag;
-  /**
-   * False for a sub-agent, which borrows its parent's tool registry and provider. Those resources
-   * outlive the child: closing them there would take down the parent's language servers, background
-   * commands and MCP connections mid-run.
-   */
-  ownsToolResources?: boolean;
-  /** Parent task attempt whose effects a delegated child must journal. */
-  taskEffectScope?: { sessionId: string; taskId: string; attemptId: string };
-  maxContextChars?: number;
-  maxContextTokens?: number;
-  /**
-   * The capacity of a model this run may be re-aimed at, when the host can resolve one.
-   *
-   * A window is a property of a *route*, not of a run: a pre-step policy that moves a round onto another model
-   * moves it onto that model's window as well, and measuring the round against the model it is no longer using
-   * is how a run compacts too early on a wide model or overruns a narrow one. The resolver answers for the
-   * model a round will actually use — the connection's declaration, the catalogue this project ships, or
-   * nothing — and `undefined` means "no opinion", which leaves this run's own window in place rather than
-   * inventing a second one.
-   */
-  capacityFor?: (model: string) => { contextWindow: number; maxOutputTokens?: number } | undefined;
-  autoCompactTokens?: number;
-  maxOutputTokens?: number;
-  requestTimeoutMs?: number;
-  /** How many times a round's model request may be re-sent after a transient failure. */
-  maxModelRetries?: number;
-  /** How many sibling tool calls from one assistant message may be in flight at once. */
-  maxParallelToolCalls?: number;
-  /** How many of the newest tool results are never shortened. */
-  toolResultKeepRecent?: number;
-  /** Characters a shortened tool result keeps. */
-  toolResultShrinkTokens?: number;
-  /** Code points a tool result may reach before its middle is dropped. */
-  toolResultPruneThresholdChars?: number;
-  /** Code points a pruned result keeps at its head. */
-  toolResultPruneHeadChars?: number;
-  /** Code points a pruned result keeps at its tail. */
-  toolResultPruneTailChars?: number;
-  /** Share of the window at which old tool results start being shortened. */
-  contextShrinkPercent?: number;
-}
-/**
- * A run's own limit was reached, with the code that says which one.
- *
- * The class already meant "limited" rather than "failed"; what the code adds is *which* limit, so a run
- * result can say "the output limit" instead of leaving a reader to parse the error text. It is a limit on
- * *work* rather than on spend: output produced, not rounds taken — a run has no round cap to reach, and the
- * rounds nobody asked for are counted by the goal that asked for them (see `packages/core/goal-driver.ts`).
- */
-class LimitError extends RunFailure {
-  constructor(code: 'output-limit', message: string) {
-    super(code, message);
-    this.name = 'LimitError';
-  }
-}
+import { captureTaskBaselines, type TaskBaselines } from './task-acceptance.ts';
+export type { AgentOptions } from './agent-options.ts';
 /**
  * A round a pre-step hook refused.
  *
@@ -481,77 +235,7 @@ export class Agent {
     if (!ids.length) return;
     this.options.store.recordEvent(sessionId, 'input.discarded', { ids: [...ids], reason });
   }
-  async run(
-    input: UserInput & {
-      sessionId: string;
-      prompt: string;
-      signal?: AbortSignal;
-      taskId?: string;
-      taskTrigger?: TaskTriggerSource;
-      resumeTask?: boolean;
-      /** Read-only planning phase: the run must end by calling `submit_plan`. */
-      planPhase?: boolean;
-      /** A sub-agent that may investigate but not change anything. */
-      readOnly?: boolean;
-      /**
-       * A delegated child ends by calling `submit_report`, so the parent gets findings it can cite
-       * instead of prose. Only set for a child run: only a child has a parent waiting for the answer.
-       */
-      reportRequired?: boolean;
-      /**
-       * The object this child must come back with, when its caller wants a shape of its own.
-       *
-       * The tool it submits through takes *this* schema as its argument schema, so the answer is validated by
-       * the same Ajv pass every other tool call gets — a call that arrives is a call that conforms. The result
-       * carries it as `data` instead of `report`.
-       */
-      reportSchema?: Record<string, unknown>;
-      /** The `planning` row this run will fill in when `submit_plan` is called. */
-      planId?: string;
-      /** An approved plan to execute. Its approval and hash were checked before the run started. */
-      approvedPlan?: Plan;
-      /**
-       * The completion contract this run is judged against, when it carries one of its own.
-       *
-       * A task's contract is built from the task definition and cannot be supplied here: the operator's
-       * definition of done is not something the caller of a run gets to replace. This field is for an ordinary
-       * request or an approved plan, which have no task row to read a definition from.
-       */
-      completion?: CompletionSpec;
-      /** A previously recorded contract to continue, by id. Conflicts with `completion` and with `taskId`. */
-      resumeCompletionId?: string;
-      /** How much repair this run may spend before it stops. Callers may lower it or raise it to the ceilings. */
-      completionRepairPolicy?: CompletionRepairPolicy;
-      /**
-       * The file range a task's checks are about.
-       *
-       * Only meaningful for a task (its own definition supplies the rest) and only for verification: it says
-       * which files the evidence covers, never what "done" means. Supplying it alongside an explicit
-       * `completion` is a conflict rather than an override.
-       */
-      completionInputs?: string[];
-      /**
-       * Session that owns the file-change journal. A sub-agent sets it to the parent session, so its
-       * writes appear in the session the user is actually looking at and remain undoable there.
-       */
-      journalSessionId?: string;
-      /**
-       * Who asked for this turn, when it is not the user.
-       *
-       * Absent means the user's own request, which is what every entry point's ordinary path is: the CLI's
-       * `run` and `resume`, and the Host serving whatever a person did in a carrier. A round the runtime
-       * started by itself says so, and there are exactly two such paths today — the goal continuations
-       * (`runGoalRounds`) and a task run the clock triggered. The distinction is what the goal tools read to
-       * decide whether they may change *who is in charge* of the goal; see `HUMAN_ONLY_GOAL_ACTIONS`.
-       *
-       * The default is `human` rather than `automatic` on purpose. Defaulting the other way would silently take
-       * the ability to pause or re-aim a goal away from every embedder that has not been told about this field,
-       * including ones whose runs are all requests from a person; defaulting this way leaves the two automatic
-       * paths above to opt in, which is a list short enough to keep true.
-       */
-      authority?: 'human' | 'automatic';
-    },
-  ): Promise<RunResult> {
+  async run(input: AgentRunInput): Promise<RunResult> {
     const { store, provider, tools } = this.options;
     input = { ...input, ...validateUserInput(input) };
     // One owner for the defaults (see `packages/protocol/settings.ts`): the kernel, the Host and the CLI help
@@ -614,14 +298,7 @@ export class Agent {
     if (submitted.block) throw new Error(`Prompt rejected by extension: ${submitted.block}`);
     if (!submitted.prompt.trim()) throw new Error('Prompt hook produced an empty prompt');
     input.prompt = submitted.prompt;
-    const task = input.taskId ? store.getTask(input.sessionId, input.taskId) : undefined;
-    const previousAttempt = task
-      ? store
-          .listTaskAttempts(input.sessionId, task.id)
-          .filter((attempt) => attempt.kind === 'run')
-          .at(-1)
-      : undefined;
-    if (task) task.acceptance = task.acceptance.map((item) => ({ ...item, met: false }));
+    const { task, previousAttempt } = loadRunTask(store, input);
     /**
      * The project a session belongs to, and the directory it works in — two facts, deliberately separate.
      *
@@ -644,29 +321,7 @@ export class Agent {
     const runId = store.beginRun(input.sessionId);
     // The host creates the plan row before the run exists, so the run id is only knowable here.
     if (input.planId) store.linkPlanRun(input.sessionId, input.planId, runId);
-    let taskAttempt: ReturnType<SessionStore['startTaskAttempt']> | undefined;
-    try {
-      taskAttempt = task
-        ? store.startTaskAttempt(input.sessionId, task.id, {
-            kind: 'run',
-            runId,
-            prompt: input.prompt,
-            baselines,
-            ...(input.taskTrigger ? { trigger: input.taskTrigger } : {}),
-            ...(input.resumeTask ? { resume: true } : {}),
-          })
-        : undefined;
-    } catch (cause) {
-      store.finishRun({
-        runId,
-        sessionId: input.sessionId,
-        status: 'failed',
-        text: '',
-        usage: { inputTokens: 0, outputTokens: 0 },
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
-      throw cause;
-    }
+    const taskAttempt = startRunTask(store, input, task, runId, baselines);
     const taskEffectScope =
       task && taskAttempt
         ? { sessionId: input.sessionId, taskId: task.id, attemptId: taskAttempt.id }
@@ -684,7 +339,7 @@ export class Agent {
      */
     for (const tool of sessionQueryTools({
       store,
-      workspace,
+      workspace: project,
       sessionId: input.sessionId,
     }))
       tools.replace(tool);
@@ -702,115 +357,8 @@ export class Agent {
       !input.planPhase &&
       !readOnly;
     if (ownWork) for (const tool of goalTools()) tools.replace(tool);
-    // Starting the attempt re-seeded the step list (a resume keeps completed steps). Re-read just
-    // the steps so the prompt describes the work remaining in this attempt, not the previous one.
-    if (task && taskAttempt) task.steps = store.getTask(input.sessionId, task.id).steps;
-    if (task && taskAttempt) {
-      // Registered only while an attempt is live, so the tool cannot write checkpoints against a
-      // task that is not actually running. `replace` keeps a reused registry from keeping a stale
-      // closure that would checkpoint the previous run's task.
-      const attemptId = taskAttempt.id;
-      tools.replace({
-        name: 'task_step',
-        description:
-          'Record durable progress on the approved task: mark one step in_progress, completed, blocked or skipped before moving on. Call this as you finish each step so an interrupted run can resume from the last completed step instead of repeating it.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            index: { type: 'integer', minimum: 0, maximum: 63 },
-            status: { type: 'string', enum: ['in_progress', 'completed', 'blocked', 'skipped'] },
-            note: { type: 'string', maxLength: 500 },
-          },
-          required: ['index', 'status'],
-          additionalProperties: false,
-        },
-        execute: async (args, context) => {
-          context.signal.throwIfAborted();
-          try {
-            const updated = store.checkpointTaskStep(input.sessionId, task.id, {
-              attemptId,
-              index: Number(args.index),
-              status: String(args.status) as NonNullable<TaskStep['status']>,
-              ...(args.note === undefined ? {} : { note: String(args.note) }),
-            });
-            emit('task.step', { taskId: task.id, steps: updated.steps });
-            return {
-              isError: false,
-              content: updated.steps
-                .map((step, index) => `${index}. [${step.status}] ${step.description}`)
-                .join('\n'),
-            };
-          } catch (error) {
-            return {
-              isError: true,
-              content: error instanceof Error ? error.message : String(error),
-            };
-          }
-        },
-      });
-    }
-    /**
-     * A delegated child ends by submitting a report, and that is a tool call for the same reason the
-     * plan is: the result is structured, validated and storable. It is registered only for a child run,
-     * so it can never appear in a run whose answer goes straight to the user. The holder exists because
-     * the value is assigned inside the tool closure, where control-flow narrowing cannot see it.
-     */
-    const reportHolder: { report?: SubAgentSummaryReport; data?: unknown } = {};
-    if (input.reportRequired) {
-      /**
-       * Which shape this child must come back with.
-       *
-       * The fixed report contract by default; the caller's own schema when the task declared one. The schema is
-       * the tool's *argument* schema either way, which is what makes the promise real rather than aspirational:
-       * the registry validates the call against it before the tool runs, so "the answer matches the schema" is
-       * enforced where every other argument is, and the run cannot end with a shape nobody checked.
-       */
-      const schema = input.reportSchema ?? REPORT_SCHEMA;
-      const custom = input.reportSchema !== undefined;
-      tools.replace({
-        name: 'submit_report',
-        description: custom
-          ? 'Submit the structured result this task asked for and end this run. The arguments are the object described by this tool’ own schema: include every required field, and use the field descriptions to decide what belongs in each. Call this exactly once, when you can answer or you are blocked.'
-          : SUBMIT_REPORT_DESCRIPTION,
-        inputSchema: schema,
-        execute: async (args, context) => {
-          context.signal.throwIfAborted();
-          try {
-            if (custom) {
-              // Kept as submitted: it has already been validated against the caller's schema, and re-shaping
-              // somebody else's object here is how a field they asked for would quietly go missing.
-              reportHolder.data = args;
-              return {
-                isError: false,
-                content:
-                  'Result recorded. This sub-agent run is complete; do not call further tools.',
-              };
-            }
-            reportHolder.report = normalizeReport(args);
-            return {
-              isError: false,
-              content: `Report recorded (${reportHolder.report.findings.length} findings). This sub-agent run is complete; do not call further tools.`,
-            };
-          } catch (error) {
-            return {
-              isError: true,
-              content: error instanceof Error ? error.message : String(error),
-            };
-          }
-        },
-      });
-    } else {
-      /**
-       * A turn that does not require a report must not *offer* the report tool.
-       *
-       * A resident child borrows one registry across every turn it runs, so the `submit_report` a delegation
-       * turn installed is still there when the same child is asked a follow-up question. Offering it was wrong
-       * in the way that matters: the tool's own result says "this completes the run", so a child that was asked
-       * a question answered by calling it — again and again, until it hit its round limit. Removing it makes the
-       * offered tool set agree with what the run accepts, which is what `reportRequired` already meant.
-       */
-      tools.remove('submit_report');
-    }
+    registerTaskStepTool(store, tools, input, task, taskAttempt, (type, data) => emit(type, data));
+    const reportHolder = registerRunReport(tools, input);
     /**
      * The two seams a person is on the other end of, declared before the planning tools can capture `askTool`.
      *
@@ -861,62 +409,7 @@ export class Agent {
        * the common case rather than an error.
        */
       endpointFailure: RunFailure | undefined,
-      acceptance: RunResult['acceptance'],
-      taskVerification: Awaited<ReturnType<typeof verifyTaskAcceptance>> | undefined,
       result!: RunResult;
-    /**
-     * The completion contract and the bounded repair loop's own state.
-     *
-     * All of it is per run and in memory, which is what the plan asks for: the *counters* are persisted on every
-     * round (the `completion.updated` record carries `repairRounds`), so a restart reads them back from the log
-     * rather than resetting a budget by dying. `repairStartedAt` is set when the first failure is decided and
-     * never moved afterwards — a resume must not restart the clock it is being measured against.
-     */
-    const completionPolicy: CompletionRepairPolicy = normalizeCompletionRepairPolicy(
-      input.completionRepairPolicy,
-    );
-    let contractId: string | undefined;
-    let contractDefinitionHash: string | undefined;
-    let contractSpec: CompletionSpec | undefined;
-    let completionSteps: CompletionStep[] = [];
-    /**
-     * The paths this run has declared as the scope of its changes.
-     *
-     * Recorded through the `completion_scope` tool rather than inferred: a refactor that missed a caller is
-     * exactly the failure this list exists to make visible, and a list derived from what the model happened to
-     * edit could never contain the file it never opened.
-     */
-    let affectedPaths: string[] = [];
-    let completionSummary: CompletionSummary | undefined;
-    /** A round that decided "complete" but has not yet survived cleanup, re-fingerprinting and persistence. */
-    let candidateCompletion: CompletionSummary | undefined;
-    let verificationRound = 0;
-    let repairRounds = 0;
-    let repeatedFailures = 0;
-    let repairStartedAt: number | undefined;
-    let previousFailureFingerprint: string | undefined;
-    let lastFailureFingerprint: string | undefined;
-    let previousStepSignature: string | undefined;
-    /**
-     * The fingerprint taken after the last verification round, and the one before it.
-     *
-     * `lastInputSnapshot` is what the final cleanup is compared against (`S1` against `S2`): a resource that is
-     * still writing when the run declares itself done has changed the monitored source, and evidence collected
-     * before that write does not describe what is on disk. `previousInputDigest` is what makes "did the code
-     * change since the last failure" answerable, which is the question the repeat detector asks.
-     */
-    let lastInputSnapshot: CompletionInputSnapshot | undefined;
-    /**
-     * The exact input list the last snapshot covered.
-     *
-     * Kept rather than recomputed, because the digest is a function of the *list* as well as the tree: a final
-     * check that rebuilt the list slightly differently — the task fallback plus the check paths, say — would
-     * compare two different questions and call the difference a workspace change.
-     */
-    let lastMonitoredInputs: string[] = [];
-    let previousInputDigest: string | undefined;
-    /** The message from the last failed fingerprint attempt, reported with the stop rather than swallowed. */
-    let snapshotFailure: string | undefined;
     /** Every event type this run emitted, which is what the protocol invariant checks at the end. */
     const emittedTypes = new Set<string>();
     /**
@@ -954,269 +447,31 @@ export class Agent {
       state: emission,
       onEvent: this.options.onEvent,
     });
-    /**
-     * The contract this run is judged against, resolved before a single model request.
-     *
-     * Everything that can be wrong about a contract is refused here rather than discovered after the model has
-     * been paid to do work: a conflicting source, an invalid body, a task whose definition the caller tried to
-     * replace. There is at most one contract per run, and the conflicts are errors rather than a silent
-     * precedence order — a caller that supplied two different definitions did not mean either one of them.
-     */
-    const taskInputs = input.completionInputs ?? [];
-    if (task && input.completion)
-      throw new Error('A task already carries the acceptance definition for this run');
-    if (task && input.resumeCompletionId)
-      throw new Error('A task run continues its own completion contract');
-    if (input.completion && input.resumeCompletionId)
-      throw new Error('Provide a completion spec or a contract to resume, not both');
-    if (input.completion && input.completionInputs)
-      throw new Error('Completion inputs describe a task contract, not an explicit spec');
-    if (input.resumeCompletionId && input.completionInputs)
-      throw new Error('A resumed contract already records the inputs it was created with');
-    const requestedSpec = input.completion
-      ? input.approvedPlan
-        ? // An approved plan's steps are the ones a person approved, so the caller may add checks and inputs but
-          // not rewrite the steps; `planCompletionSpec` refuses anything that is not byte-identical and in order.
-          planCompletionSpec(input.approvedPlan, {
-            ...(input.completion.constraints ? { constraints: input.completion.constraints } : {}),
-            ...(input.completion.steps ? { steps: input.completion.steps } : {}),
-            acceptance: input.completion.acceptance,
-            inputs: input.completion.inputs,
-          })
-        : normalizeCompletionSpec(input.completion)
-      : undefined;
-    if (requestedSpec) {
-      contractId = input.approvedPlan ? `plan:${input.approvedPlan.id}` : randomUUID();
-      contractDefinitionHash = completionDefinitionHash(requestedSpec);
-      contractSpec = requestedSpec;
-      completionSteps = requestedSpec.steps.map((step) => ({ ...step }));
-      const record = {
-        runId,
-        contractId,
-        source: input.approvedPlan ? ('approved-plan' as const) : ('request' as const),
-        ...(input.approvedPlan
-          ? { planId: input.approvedPlan.id, planHash: input.approvedPlan.hash }
-          : {}),
-        definition: requestedSpec,
-        policy: completionPolicy,
-        steps: completionSteps,
-        affectedPaths,
-        summary: {
-          version: 1 as const,
-          state: 'unverified' as const,
-          reason: 'contract-created',
-          contractId,
-          definitionHash: contractDefinitionHash,
-          verificationRound: 0,
-          repairRounds: 0,
-          repeatedFailures: 0,
-          failedCheckIds: [],
-          unfinishedStepIds: [],
-        },
-      };
-      store.recordEvent(input.sessionId, 'completion.updated', record);
-      emit('completion.updated', record);
-    } else if (input.resumeCompletionId) {
-      /**
-       * Continue a contract this session already recorded.
-       *
-       * What is restored is the *contract* — its definition, its budget, the repair clock and how much of that
-       * budget is spent — and deliberately not the verdict: a `verified` conclusion belongs to the code that was
-       * on disk when it was reached, and a resume happens precisely because something changed or nothing was
-       * finished. Re-running the checks is the only way to earn it again.
-       */
-      const record = store.completionCurrent(input.sessionId);
-      if (!record) throw new Error('No completion contract is recorded for this session');
-      if (record.contractId !== input.resumeCompletionId)
-        throw new Error(
-          'The requested completion contract is not the current one for this session',
-        );
-      if (record.sessionId !== input.sessionId)
-        throw new Error('The requested completion contract belongs to another session');
-      contractId = record.contractId;
-      contractDefinitionHash = record.definitionHash;
-      contractSpec = record.definition;
-      affectedPaths = [...record.affectedPaths];
-      completionSteps = record.steps.map((step) => ({
-        ...step,
-        status: step.status === 'completed' ? 'completed' : 'pending',
-      }));
-      repairRounds = record.summary.repairRounds;
-      repeatedFailures = record.summary.repeatedFailures;
-      if (record.repairStartedAt !== undefined) repairStartedAt = record.repairStartedAt;
-      store.recordEvent(input.sessionId, 'completion.updated', {
-        runId,
-        contractId,
-        ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
-        ...(record.planId === undefined ? {} : { planId: record.planId }),
-        steps: completionSteps,
-        summary: { ...record.summary, state: 'unverified', reason: 'resumed' },
-        ...(record.policy === undefined ? {} : { policy: record.policy }),
-      });
-    } else if (task) {
-      // A task's contract is derived from the definition the operator approved, and its identity is the task:
-      // a resume of the same task continues the same contract rather than minting a second one.
-      const spec = taskCompletionSpec(task, taskInputs);
-      contractId = `task:${task.id}`;
-      contractDefinitionHash = completionDefinitionHash(spec);
-      contractSpec = spec;
-      completionSteps = spec.steps.map((step) => ({ ...step }));
-      const record = {
-        runId,
-        contractId,
-        source: 'task' as const,
-        taskId: task.id,
-        definition: spec,
-        policy: completionPolicy,
-        steps: completionSteps,
-        affectedPaths: [],
-        summary: {
-          version: 1 as const,
-          state: 'unverified' as const,
-          reason: 'contract-created',
-          contractId,
-          definitionHash: contractDefinitionHash,
-          verificationRound: 0,
-          repairRounds: 0,
-          repeatedFailures: 0,
-          failedCheckIds: [],
-          unfinishedStepIds: [],
-        },
-      };
-      store.recordEvent(input.sessionId, 'completion.updated', record);
-      emit('completion.updated', record);
-    }
-    /**
-     * The two tools that speak about the contract, registered only when there is one.
-     *
-     * A planning run, a read-only run and a run with no contract get neither: a tool that records progress on
-     * steps nobody defined, or widens a scope nobody is verifying, is an invitation to believe the runtime is
-     * checking something it is not. `task_step` stays registered for a task as well — it is the compatibility
-     * entry point — and the two cannot disagree, because `completion_step` writes through the *same* checkpoint
-     * call rather than keeping a second list.
-     */
-    if (contractId && !readOnly && !input.planPhase && completionSteps.length) {
-      tools.replace({
-        name: 'completion_step',
-        description:
-          'Record durable progress on this run’ completion steps: mark one step in_progress, completed, blocked or skipped by its id. This is the same list acceptance is judged against, so call it as you finish each step. Use it for progress only — it cannot confirm an acceptance criterion.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', maxLength: 64 },
-            status: {
-              type: 'string',
-              enum: ['pending', 'in_progress', 'completed', 'blocked', 'skipped'],
-            },
-            note: { type: 'string', maxLength: 500 },
-          },
-          required: ['id', 'status'],
-          additionalProperties: false,
-        },
-        execute: async (args, context) => {
-          context.signal.throwIfAborted();
-          try {
-            const id = String(args.id);
-            const index = completionSteps.findIndex((step) => step.id === id);
-            if (index < 0) return { isError: true, content: `Unknown completion step: ${id}` };
-            const status = String(args.status) as TaskStepStatus;
-            const note = args.note === undefined ? undefined : String(args.note);
-            if (task && taskAttempt) {
-              const updated = store.checkpointTaskStep(input.sessionId, task.id, {
-                attemptId: taskAttempt.id,
-                index,
-                status,
-                ...(note === undefined ? {} : { note }),
-              });
-              completionSteps = updated.steps.map((step, position) => ({
-                id: taskCompletionStepId(task.id, position),
-                description: step.description,
-                status: step.status,
-              }));
-              emit('task.step', { taskId: task.id, steps: updated.steps });
-            } else {
-              completionSteps = completionSteps.map((step, position) =>
-                position === index ? { ...step, status } : step,
-              );
-              const update = {
-                runId,
-                contractId,
-                steps: completionSteps,
-                ...(note === undefined ? {} : { note }),
-              };
-              store.recordEvent(input.sessionId, 'completion.updated', update);
-            }
-            return {
-              isError: false,
-              content: completionSteps
-                .map((step) => `[${step.status}] ${step.id} — ${step.description}`)
-                .join('\n'),
-            };
-          } catch (error) {
-            return {
-              isError: true,
-              content: error instanceof Error ? error.message : String(error),
-            };
-          }
-        },
-      });
-      tools.replace({
-        name: 'completion_scope',
-        description:
-          'Declare the workspace paths this change touches, so a missed caller, export, config or test is visible instead of assumed. Declaring a path grants no permission: writes still need their own approval. Use it when a cross-file refactor finds a new reference.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            paths: {
-              type: 'array',
-              minItems: 1,
-              maxItems: 64,
-              items: { type: 'string', maxLength: 4096 },
-            },
-            note: { type: 'string', maxLength: 500 },
-          },
-          required: ['paths'],
-          additionalProperties: false,
-        },
-        execute: async (args, context) => {
-          context.signal.throwIfAborted();
-          try {
-            const raw = Array.isArray(args.paths) ? args.paths : [];
-            const note = args.note === undefined ? undefined : String(args.note);
-            const added: string[] = [];
-            for (const value of raw) {
-              const normalized = normalizeCompletionPath(value, 'scope path');
-              if (normalized === '.' || affectedPaths.includes(normalized)) continue;
-              added.push(normalized);
-            }
-            if (affectedPaths.length + added.length > MAX_AFFECTED_PATHS)
-              return {
-                isError: true,
-                content: `Completion scope is limited to ${String(MAX_AFFECTED_PATHS)} paths; record the remaining ones in your answer instead.`,
-              };
-            affectedPaths = [...affectedPaths, ...added];
-            store.recordEvent(input.sessionId, 'completion.updated', {
-              runId,
-              contractId,
-              affectedPaths,
-              ...(note === undefined ? {} : { note }),
-            });
-            emit('completion.updated', { runId, contractId, affectedPaths });
-            return {
-              isError: false,
-              content: added.length
-                ? `Recorded ${String(added.length)} path(s). Scope now covers ${String(affectedPaths.length)}.`
-                : 'Those paths were already recorded.',
-            };
-          } catch (error) {
-            return {
-              isError: true,
-              content: error instanceof Error ? error.message : String(error),
-            };
-          }
-        },
-      });
-    }
+    const completion = createRunCompletion({
+      store,
+      sessionId: input.sessionId,
+      runId,
+      emit,
+      tools,
+      readOnly,
+      planPhase: input.planPhase === true,
+      task,
+      taskAttempt,
+      workspace,
+      signal,
+      baselines,
+      // Read when the round runs rather than when this factory is called: the interaction adapters below assign
+      // `approveTool`, and the round is reached long after they have.
+      approve: (approval, approvalSignal) => approveTool(approval, approvalSignal),
+      request: {
+        completion: input.completion,
+        resumeCompletionId: input.resumeCompletionId,
+        completionInputs: input.completionInputs,
+        approvedPlan: input.approvedPlan,
+        repairPolicy: input.completionRepairPolicy,
+      },
+    });
+    completion.registerTools();
     /**
      * The wrapper every model call of this run goes through, and the accounting it produces.
      *
@@ -1331,193 +586,32 @@ export class Agent {
      * parent and stops being able to delegate at the depth cap, which is what keeps the tree bounded.
      */
     let coordinator: SubAgentCoordinator | undefined;
+    const residentTurns = new ResidentTurnSettlements();
     const depth = this.options.subagentDepth ?? 0;
     if (this.subagents?.enabled && depth < this.subagents.maxDepth) {
-      const limits = this.subagents;
-      /**
-       * The built-in provider is the closure that used to be the only way to delegate, now one named
-       * provider among however many an embedder registers.
-       *
-       * Its declared capabilities are computed rather than aspirational: `agentOptions` is advertised
-       * only when this host can actually resolve a model for a child, so a host that cannot serve a
-       * requested model refuses the task instead of quietly running it on the default one.
-       */
-      /**
-       * The coordinator's events, plus the durable record of the same facts.
-       *
-       * One call writes both, so the live feed and the parent's log cannot describe different things: a
-       * child that finishes is announced *and* recorded at the same moment. The durable copy deliberately
-       * drops the feed-only fields (`index`, `total`, and the truncated `text`) — the child's transcript
-       * lives in the child's own session, and the card needs the summary, not a copy of the report text.
-       *
-       * `error` is kept, bounded and redacted like every other recorded reason. The card projection already
-       * reads it, and without it a child that was cancelled or failed reaches its parent as a bare status: the
-       * one thing a person needs after "the sub-agent did not finish" is *why*.
-       */
-      const subAgentEmit = (type: AgentEventType, data: Record<string, unknown>): void => {
-        /**
-         * A finished child carries its own work time, read from its session before anyone seals the card.
-         *
-         * The parent's log records one assignment and one end per turn, so the time a resident child spent in
-         * its later turns has no start to subtract from and cannot be folded out of this session at all. The
-         * child's own log has it — so the number is read there, here, while the child's run is still the thing
-         * that just ended. It stays *derived*: the durable record below deliberately does not copy it, and a
-         * reload recomputes the same value from the same events.
-         */
-        if (type === 'subagent.finished') {
-          const childSessionId = String(data.sessionId ?? '');
-          if (childSessionId) {
-            const timing = store.turnTiming(childSessionId);
-            data = { ...data, durationMs: timing.settledMs, runningSince: timing.runningSince };
-          }
-        }
-        if (type !== 'subagent.finished') {
-          emit(type, data);
-          return;
-        }
-        store.recordEvent(input.sessionId, 'subagent.finished', {
-          runId,
-          childRunId: data.sessionId
-            ? store.events(String(data.sessionId)).findLast((e) => e.type === 'run.finished')?.data
-                .runId
-            : undefined,
-          id: data.id,
-          sessionId: data.sessionId,
-          role: data.role,
-          objective: data.objective,
-          status: data.status,
-          rounds: data.rounds,
-          toolCalls: data.toolCalls,
-          usage: data.usage,
-          ...(data.report ? { report: data.report } : {}),
-          ...(data.error ? { error: redactSecrets(String(data.error)).slice(0, 600) } : {}),
-        });
-        emit(type, data);
-      };
-      /**
-       * Everything a child needs to run turns on a session that already exists.
-       *
-       * This used to live inside the provider's `run`, which meant it existed only while a delegation was
-       * starting: a child that had been *delegated* in an earlier process could be seen in the log and in its
-       * own transcript, and still nothing could run a turn on it, because the only code that knew how to build
-       * one was in the call that had already returned. Extracting it is what makes a cold resume possible —
-       * the residency can now open an activation for a child it did not start.
-       *
-       * The signature says what a turn needs and nothing else: the task it belongs to (for the persona, the
-       * read-only rule and the grant), the session to run on, the depth for the lineage, the tag that names it
-       * in approvals and events, and — only when a live delegation is resuming its own child — the
-       * delegation's own signal.
-       */
-      const childTurns = createChildTurns({
+      coordinator = createRunDelegation({
         agent: this.options,
         store,
         tools,
         emit,
         sessionId: input.sessionId,
-        taskEffectScope,
-        createAgent: (options) => new Agent(options),
-        workspaceResults: this.options.workspaceResults,
-      });
-      /**
-       * The providers this run delegates through: the built-in in-process one plus the host's own.
-       *
-       * Built here, after `childTurns`, because the built-in provider *is* that closure — and per run, because
-       * its advertised capabilities are a promise about this host, not about the model (see `run-subagents.ts`).
-       */
-      const providers = createSubAgentProviders({
-        store,
-        parentSessionId: input.sessionId,
-        workspace,
         runId,
-        depth,
-        residency: this.options.subagentResidency,
-        childTurns,
-        workspaceManager: this.options.workspaceManager,
-        resolveProviderFor: this.options.subagentProviderFor,
-        forkTranscriptChars: this.options.forkTranscriptChars,
-        forkTranscriptMessages: this.options.forkTranscriptMessages,
-        extraProviders: this.options.subagentProviders,
-      });
-      /**
-       * The coordinator of this run's children, armed into the emitter so their frames keep their stall
-       * watchdogs alive, and the tools that reach it (see `run-coordinator.ts`).
-       */
-      coordinator = createCoordinator({
-        store,
-        sessionId: input.sessionId,
         workspace,
         depth,
-        limits,
+        limits: this.subagents,
         signal,
         readOnly,
         queue,
-        emit: subAgentEmit,
         usage,
         statistics,
-        providers,
-        providerName: this.options.subagentProvider,
-        models: this.options.subagentModels,
-        tools,
-        ...(this.options.workspaceMode ? { workspaceMode: this.options.workspaceMode } : {}),
-        ...(this.options.workspaceManager ? { workspaces: this.options.workspaceManager } : {}),
-        ...(this.options.workspaceApply ? { results: this.options.workspaceApply } : {}),
+        residentTurns,
+        taskEffectScope,
+        createAgent: (options) => new Agent(options),
         arm: (armed) => {
           emission.coordinator = armed;
         },
+        nextMessageId: () => ++messageCounter,
       });
-      /**
-       * The orchestration tool, on the same admission path as `delegate_task`.
-       *
-       * `runAgent` goes through `runOne`, which admits and schedules exactly like a delegation task: a script's
-       * loop and a model's loop of tool calls meet the same per-run total, the same semaphore and the same
-       * capability checks. That is the whole reason this is wired here rather than built inside the tool.
-       *
-       * `coordinator` is declared outside this block because the run's end has to settle it, and a closure cannot
-       * lean on the narrowing the assignments above establish — hence the local name.
-       */
-      const delegation = coordinator;
-      tools.replace(
-        workflowTool({
-          runAgent: (prompt, options, signal) =>
-            delegation.runOne(
-              {
-                objective: prompt,
-                ...(options.model ? { model: options.model } : {}),
-                ...(options.schema ? { schema: options.schema } : {}),
-              },
-              signal,
-            ),
-        }),
-      );
-      // Registered only when the host supplied the list: a discovery tool with nothing behind it would
-      // teach the model to trust an answer nobody stands behind.
-      if (this.options.subagentModels) tools.replace(coordinator.modelsTool());
-      /**
-       * The control surface for resident children.
-       *
-       * These tools exist only when a residency does, because without one there is nothing to talk to: a
-       * one-shot child is gone the moment it reports. They are scoped to this session's **direct** children,
-       * which is what stops a child from driving its siblings (a grandchild is reachable from its own
-       * parent, which owns that relationship) — the same reasoning that keeps `delegate_task` out of a
-       * child's registry, expressed as a lineage check instead of an allowlist.
-       */
-      const residency = this.options.subagentResidency;
-      if (residency)
-        tools.replace(
-          createResidentMessageTool({
-            store,
-            parentSessionId: input.sessionId,
-            depth,
-            residency,
-            childTurns,
-            resolveProviderFor: this.options.subagentProviderFor,
-            emit: subAgentEmit,
-            statistics,
-            // The serial lives with the run loop, not in the tool: an id it minted per run would repeat across
-            // runs, and the inbox fold cancels an entry *by id*.
-            nextMessageId: () => ++messageCounter,
-          }),
-        );
     }
     /**
      * The step the log currently has open, and the one way it ever closes.
@@ -1530,257 +624,6 @@ export class Agent {
      * throw needs the step it happened in after the loop's own variable is out of scope.
      */
     let openStep: number | null = null;
-    /**
-     * One verification round, for whichever contract this run carries.
-     *
-     * Written once, on purpose. A task's definition, an approved plan's and a request's are three sources and one
-     * decision: if each grew its own round, the plan's guarantee — "Task, ordinary explicit contract and approved
-     * plan all use the same decision maker, with no second driver" — would be a claim about three code paths that
-     * happen to agree today. What differs by source is only where the definition and the progress are *read from*,
-     * and where the round is *recorded*; everything between those two points is here.
-     */
-    const verifyRound = async (): Promise<CompletionDecision | undefined> => {
-      if (!contractId || !contractSpec) return undefined;
-      const taskSubject = task && taskAttempt ? { task, attemptId: taskAttempt.id } : undefined;
-      const currentTask = taskSubject
-        ? store.getTask(input.sessionId, taskSubject.task.id)
-        : undefined;
-      const roundSteps: CompletionStep[] = currentTask
-        ? currentTask.steps.map((step, index) => ({
-            id: taskCompletionStepId(taskSubject!.task.id, index),
-            description: step.description,
-            status: step.status,
-          }))
-        : completionSteps.map((step) => ({ ...step }));
-      const roundAcceptance = currentTask
-        ? currentTask.acceptance.map((item) => ({ ...item, met: false }))
-        : contractSpec.acceptance;
-      // The definition hash is taken over the same normalized body the contract was created with, with the live
-      // acceptance in place: step *statuses* are excluded by the hash itself, so progress does not read as an edit.
-      const roundHash = completionDefinitionHash({ ...contractSpec, acceptance: roundAcceptance });
-      /**
-       * The files this contract's evidence is about.
-       *
-       * An explicit spec states them (and refuses to be empty). A task does not, so it falls back to the whole
-       * execution root minus the derived directories — the honest default for "verify the work", stated here so
-       * that the coverage of a task's evidence is a documented range rather than an assumption.
-       */
-      const inputPaths = contractSpec.inputs.length
-        ? contractSpec.inputs
-        : taskSubject
-          ? ['.']
-          : [];
-      /**
-       * A path a check names is always covered, whatever the declared input range says.
-       *
-       * A `file-exact` check is a statement about one file; a fingerprint that skipped it because the caller's
-       * range did not mention it would let the check's own subject change without the evidence noticing. The
-       * declared range decides what *else* is monitored, never less than what was asserted. A protected path is
-       * still refused rather than included, because refusing is the honest answer to "verify this credential file".
-       */
-      const checkPaths: string[] = [];
-      for (const item of roundAcceptance) {
-        const checkPath = item.check?.path;
-        if (!checkPath) continue;
-        try {
-          const normalized = normalizeCompletionPath(checkPath, 'check path');
-          if (normalized !== '.') checkPaths.push(normalized);
-        } catch {
-          // An unusable check path is already an `invalid-definition` failure from the verifier; the fingerprint
-          // must not turn it into a different error from a different layer.
-        }
-      }
-      const monitored: string[] = [...new Set([...inputPaths, ...checkPaths])].sort(
-        (left, right) => (left < right ? -1 : left > right ? 1 : 0),
-      );
-      const reviewEarly = (reason: string): CompletionDecision => ({
-        action: 'review',
-        summary: {
-          version: 1,
-          state: 'needs_review',
-          reason,
-          contractId: contractId!,
-          definitionHash: roundHash,
-          verificationRound,
-          repairRounds,
-          repeatedFailures,
-          failedCheckIds: [],
-          unfinishedStepIds: [],
-        },
-      });
-      const before = monitored.length
-        ? await snapshotCompletionInputs(workspace, monitored, signal, {
-            runtimeStatePaths: store.databaseFiles(),
-          }).then(
-            (snapshot) => snapshot,
-            (error: unknown) => {
-              // A range that cannot be fingerprinted is not a range that can be declared verified: a digest over
-              // part of the tree would be a digest of a different tree.
-              snapshotFailure = error instanceof Error ? error.message : String(error);
-              return undefined;
-            },
-          )
-        : undefined;
-      if (monitored.length && !before)
-        return reviewEarly(`input-snapshot-failed: ${snapshotFailure ?? 'unknown'}`);
-      const roundEffects = new Map<string, string>();
-      const verification: Awaited<ReturnType<typeof verifyCompletionAcceptance>> =
-        await verifyCompletionAcceptance(
-          workspace,
-          roundAcceptance,
-          roundSteps,
-          baselines,
-          signal,
-          async (approval, approvalSignal) => {
-            const allowed = await approveTool(approval, approvalSignal);
-            // Only a task has an effect ledger to write into; for any other source the acceptance command is
-            // approved exactly like any other command of the run, with no journal to reconcile afterwards.
-            if (allowed && taskSubject) {
-              roundEffects.set(
-                approval.toolCall.id.slice('acceptance:'.length),
-                store.beginTaskEffect(
-                  input.sessionId,
-                  taskSubject.task.id,
-                  taskSubject.attemptId,
-                  approval.toolCall.name,
-                ),
-              );
-            }
-            return allowed;
-          },
-        );
-      taskVerification = verification;
-      acceptance = taskVerification.evidence;
-      verificationRound += 1;
-      const after = before
-        ? await snapshotCompletionInputs(workspace, monitored, signal, {
-            runtimeStatePaths: store.databaseFiles(),
-          }).then(
-            (snapshot) => snapshot,
-            (error: unknown) => {
-              snapshotFailure = error instanceof Error ? error.message : String(error);
-              return undefined;
-            },
-          )
-        : undefined;
-      if (before && !after)
-        return reviewEarly(`input-snapshot-failed: ${snapshotFailure ?? 'unknown'}`);
-      /**
-       * A check that changed the code it was judging has verified nothing.
-       *
-       * The two snapshots bracket the checks, so a difference means the verification command (or a build it
-       * started, or anything else that ran in between) wrote to the monitored range. Whatever the checks said
-       * about the tree they read, that tree is gone; the report is `needs_review`, never a pass.
-       */
-      if (before && after && before.digest !== after.digest)
-        return reviewEarly('verification-changed-monitored-inputs');
-      if (after) {
-        lastInputSnapshot = after;
-        lastMonitoredInputs = [...monitored];
-      }
-      const stepSignature = roundSteps.map((step) => step.status).join(',');
-      const fingerprint = failureFingerprint(taskVerification.evidence, roundSteps);
-      lastFailureFingerprint = fingerprint;
-      const decision = decideCompletion({
-        summary: {
-          version: 1,
-          state: 'unverified',
-          reason: '',
-          contractId,
-          definitionHash: roundHash,
-          verificationRound,
-          repairRounds,
-          repeatedFailures,
-          failedCheckIds: [],
-          unfinishedStepIds: [],
-          ...(after === undefined ? {} : { inputDigest: after.digest }),
-        },
-        steps: roundSteps,
-        evidence: taskVerification.evidence,
-        definitionValid: taskVerification.completionReason !== 'invalid-definition',
-        definitionNonEmpty: roundAcceptance.length > 0,
-        manualPending: taskVerification.completionReason === 'manual-review',
-        pendingEffects: false,
-        definitionChanged: roundHash !== contractDefinitionHash,
-        cancelled: false,
-        now: Date.now(),
-        ...(repairStartedAt === undefined ? {} : { repairStartedAt }),
-        policy: completionPolicy,
-        failureFingerprint: fingerprint,
-        ...(previousFailureFingerprint === undefined ? {} : { previousFailureFingerprint }),
-        // A round that moved the monitored input is progress even when the same check fails again: the code under
-        // test is not the code the previous round judged, and reporting otherwise would stop a run that is working.
-        inputChanged:
-          after !== undefined &&
-          previousInputDigest !== undefined &&
-          after.digest !== previousInputDigest,
-        stepsChanged:
-          previousStepSignature !== undefined && previousStepSignature !== stepSignature,
-      });
-      if (after) previousInputDigest = after.digest;
-      completionSummary = decision.summary;
-      previousStepSignature = stepSignature;
-      if (taskSubject && currentTask) {
-        /**
-         * One write for the round: the evidence and the effects it settled, or nothing at all.
-         *
-         * A round that cannot be recorded must not be followed by another model request — the repair counter
-         * would advance against evidence the journal never accepted, and the attempt would report rounds that do
-         * not exist.
-         */
-        try {
-          store.recordTaskVerificationRound(
-            input.sessionId,
-            currentTask.id,
-            taskSubject.attemptId,
-            {
-              verificationRound,
-              evidence: taskVerification.evidence,
-              resolvedEffectIds: [...roundEffects.values()],
-              summary: decision.summary,
-            },
-          );
-        } catch (recordError) {
-          return {
-            action: 'review',
-            summary: {
-              ...decision.summary,
-              state: 'needs_review',
-              reason:
-                'round-not-recorded: ' +
-                (recordError instanceof Error ? recordError.message : String(recordError)),
-            },
-          };
-        }
-      } else {
-        // No attempt row to write into, so the round's own record *is* the evidence: one durable write, with the
-        // same payload shape the task path produces, so a reader of either sees the same thing.
-        store.recordEvent(input.sessionId, 'completion.updated', {
-          runId,
-          contractId,
-          verificationRound,
-          definitionHash: roundHash,
-          summary: decision.summary,
-          steps: roundSteps,
-          affectedPaths,
-          policy: completionPolicy,
-          ...(repairStartedAt === undefined ? {} : { repairStartedAt }),
-          failureFingerprint: fingerprint,
-        });
-      }
-      emit('completion.updated', {
-        runId,
-        contractId,
-        ...(taskSubject && currentTask
-          ? { taskId: currentTask.id, attemptId: taskSubject.attemptId }
-          : {}),
-        verificationRound,
-        summary: decision.summary,
-        steps: roundSteps,
-        failureFingerprint: fingerprint,
-      });
-      return decision;
-    };
     const endStep = (step: number, reason: StepEndReason): void => {
       openStep = null;
       // Whatever a step opened and never committed — a cancellation, a failure mid-stream — leaves no span
@@ -1884,21 +727,23 @@ export class Agent {
          * read. It is announced from the *live* state (the contract, the current steps, the last round's summary)
          * rather than from the record that created it, so what the model reads is what the evidence says now.
          */
-        if (contractSpec && contractId) {
-          const liveSteps = task ? store.getTask(input.sessionId, task.id).steps : completionSteps;
+        if (completion.state.contractSpec && completion.state.contractId) {
+          const liveSteps = task
+            ? store.getTask(input.sessionId, task.id).steps
+            : completion.state.steps;
           announce(
             'completion',
             completionContractText(
-              contractSpec,
+              completion.state.contractSpec,
               liveSteps.map((step, index) => ({
                 id: task ? taskCompletionStepId(task.id, index) : (step as CompletionStep).id,
                 description: step.description,
                 status: step.status,
               })),
-              completionSummary ?? {
+              completion.state.summary ?? {
                 state: 'unverified',
                 reason: 'no verification round has run yet',
-                repairRounds,
+                repairRounds: completion.state.repairRounds,
                 failedCheckIds: [],
               },
             ),
@@ -1987,6 +832,40 @@ export class Agent {
         catalog: tools.specs({ readOnly, ...(policy ? { policy } : {}), mode: 'native' }),
       });
       let { specs, catalog: catalogSpecs } = buildCatalog();
+      /**
+       * The model tool-call batch, one per run.
+       *
+       * It owns the group scheduler, the bounded pool and the context a call runs in (see `run-tools.ts`); this
+       * run owns the seams it reads. The read-only flag, the round's policies, the approver pair, the human-turn
+       * fact and the program catalog are passed as getters on purpose: every one of them is reassigned between
+       * rounds — or, for the approver, assigned a few lines below — and a call has to run under whatever is in
+       * force when it runs, not under what was in force when this factory was called.
+       */
+      const batch = createToolBatch({
+        store,
+        sessionId: input.sessionId,
+        runId,
+        workspace,
+        signal,
+        emit,
+        tools,
+        queue,
+        maxParallelToolCalls,
+        ownWork,
+        taskEffectScope,
+        journalSessionId,
+        tagChange,
+        invariants: this.options.invariants,
+        completion,
+        readOnly: () => readOnly,
+        executionPolicy: () => executionPolicy,
+        executionPolicyForCall: this.options.executionPolicy,
+        permissionPolicyForCall: this.options.permissionPolicy,
+        approve: () => approveTool,
+        ask: () => askTool,
+        humanTurn: () => humanTurn,
+        catalogSpecs: () => catalogSpecs,
+      });
       const expanded = expandSkill(workspace, input.prompt);
       store.append(input.sessionId, {
         role: 'user',
@@ -2230,7 +1109,7 @@ export class Agent {
           effectiveModel === null ? undefined : this.options.capacityFor?.(effectiveModel);
         const roundContextTokens = resolved?.contextWindow ?? maxContextTokens;
         const roundOutputTokens = resolved?.maxOutputTokens ?? maxOutputTokens;
-        const contextInput: Parameters<typeof prepareContext>[0] = {
+        const contextInput = buildContextInput({
           store,
           sessionId: input.sessionId,
           system: runSystem,
@@ -2251,110 +1130,30 @@ export class Agent {
           // The run this compaction is for: it is what the session's write lease is checked against, before the
           // summary request and again at the write.
           runId,
-          /**
-           * A compression this round cannot produce is reported, not fatal.
-           *
-           * The estimate that decided to compress is a character heuristic, and the endpoint is the authority on
-           * whether a request fits: a run that died here never reached `recoverFromOverflow`, which is the path
-           * that answers a *provider-confirmed* refusal by compressing harder. So the round is sent as it stands
-           * with the reason attached, and the provider's own verdict — accepted, or refused for size — is what
-           * the user finally sees.
-           */
-          compactionFailure: 'send',
           // The model this round aims at, so a compaction records which one produced the summary. Absent when the
           // embedder declared none, which the record then does not claim to know. The provider is recorded beside
           // it for the same reason: a summary is a model answer, and the model name alone does not say which
           // adapter it came back over.
-          ...(aimedModel === null ? {} : { model: aimedModel }),
+          model: aimedModel,
           ...(this.options.modelInfo?.protocol === undefined
             ? {}
             : { protocol: this.options.modelInfo.protocol }),
-          // Shortening needs somewhere to put the full text. Without a spill seam nothing is shortened: a
-          // shortened result whose "read it here" path does not exist is worse than a long result.
-          shrink: {
-            policy: { keepRecent: toolResultKeepRecent, tokens: toolResultShrinkTokens },
-            spill: ({ message, content }) =>
-              spillResult({
-                workspace,
-                sessionId: input.sessionId,
-                key: message.role === 'tool' ? message.toolCallId : 'message',
-                content,
-              }),
-            /**
-             * The round's own price for text, which is what turns the policy's token budget into a character cut.
-             *
-             * A tool message rather than the raw string: that is the shape the estimator prices everywhere else,
-             * images and protocol margin included, and building it here means "shortened to a 400-token budget"
-             * and "this request is 4,000 tokens over" are answers from the same arithmetic.
-             */
-            measure: (text) =>
-              estimateMessageTokens(
-                { role: 'tool', toolCallId: '', content: text, isError: false },
-                calibration?.factor ?? 1,
-              ),
-          },
-          shrinkPercent: contextShrinkPercent,
+          workspace,
+          toolResultKeepRecent,
+          toolResultShrinkTokens,
+          contextShrinkPercent,
+          toolResultPruneThresholdChars,
+          toolResultPruneHeadChars,
+          toolResultPruneTailChars,
           /**
-           * Dropping the middle of an oversized result needs nothing from the host, so this seam is mounted
-           * unconditionally: no spill target to write to, no calibrated measure to convert a budget with, and no
-           * workspace to reach. It is what keeps a session bounded in the cases the shortening seam declines —
-           * a read-only workspace, a full disk, or a spill directory that is gone.
+           * The two accumulators below are the run's own, not this round's: `usage` is what the result reports
+           * and `committedSummaryUsage` is what the session's aggregates claim was stored, so the callbacks have
+           * to write into the objects the loop keeps for the rest of the run.
            */
-          prune: {
-            policy: {
-              thresholdChars: toolResultPruneThresholdChars,
-              headChars: toolResultPruneHeadChars,
-              tailChars: toolResultPruneTailChars,
-            },
-            keepRecent: toolResultKeepRecent,
-          },
-          prunePercent: contextShrinkPercent,
-          onUsage: (response) => {
-            usage.inputTokens += response.usage.inputTokens;
-            usage.outputTokens += response.usage.outputTokens;
-            /**
-             * The cache fields belong here too, or the result lies by omission.
-             *
-             * `statistics` gets them through `addUsage`, but this object is what `RunResult.usage` carries — on
-             * the wire, in `--json`, into the persisted run row, and into a reader like the CLI's usage line.
-             * Hand-summing two fields silently dropped what the provider reported: a fixture whose
-             * `cache_read_input_tokens` moved the input total to 200 arrived at the result with
-             * `cachedInputTokens` undefined. "Unreported" stays unreported (`?? 0` on the accumulator, the field
-             * only exists once something reported it) — the same rule `statistics.ts` keeps with `cacheKnown`.
-             */
-            if (response.usage.cachedInputTokens !== undefined)
-              usage.cachedInputTokens =
-                (usage.cachedInputTokens ?? 0) + response.usage.cachedInputTokens;
-            if (response.usage.cacheWriteInputTokens !== undefined)
-              usage.cacheWriteInputTokens =
-                (usage.cacheWriteInputTokens ?? 0) + response.usage.cacheWriteInputTokens;
-          },
-          onCompaction: (state, coveredMessages, summaryUsage, reason) => {
-            if (state === 'finished' && summaryUsage) addUsage(committedSummaryUsage, summaryUsage);
-            /**
-             * A failed compression is announced as one, and never as a completed one.
-             *
-             * The two states were the whole vocabulary, so a compression that could not be performed had to be
-             * reported as either "started" forever or "compacted" — and the run only reaches here after deciding
-             * what to do about it, which is why the news is live rather than durable: the session log records
-             * compressions that happened, and this one did not. `context.compacted` must not be emitted for it
-             * either: a reader that treats it as "the conversation was replaced" would be told a surface exists
-             * that the store does not have. `summaryUsage` is deliberately not committed: tokens a failed
-             * attempt spent are real, but they bought no summary, and `committedSummaryUsage` is what the
-             * session's aggregates claim was *stored*.
-             */
-            if (state === 'failed') {
-              emit('context.compaction.failed', {
-                ...(coveredMessages === undefined ? {} : { coveredMessages }),
-                ...(reason === undefined ? {} : { reason }),
-              });
-              return;
-            }
-            emit(state === 'started' ? 'context.compacting' : 'context.compacted', {
-              coveredMessages,
-            });
-          },
-        };
+          usage,
+          committedSummaryUsage,
+          emit,
+        });
         let context = await prepareContext(contextInput);
         signal.throwIfAborted();
         /**
@@ -2403,516 +1202,40 @@ export class Agent {
          * two places. There is no default for the main request (a streaming model is making progress; the
          * stream idle timeout is what catches a stalled one), so this is `undefined` unless a limit was set.
          */
-        const requestSignal = limits.requestTimeoutMs
-          ? AbortSignal.any([signal, AbortSignal.timeout(limits.requestTimeoutMs)])
-          : signal;
-        const messageId = `${runId}:${round}`;
-        emit('message.started', { messageId });
-        let streamedText = '';
-        /**
-         * This round's reasoning, on its own accumulator.
-         *
-         * It is kept apart from `streamedText` everywhere — it is not the answer, so it never becomes
-         * `RunResult.text`, never goes back to a provider, and never enters the stream checkpoint (an
-         * interrupted turn preserves what the user can read; half a thought is not that). It is discarded
-         * whole when an attempt is thrown away, so what is stored is the reasoning of the attempt whose
-         * answer was stored.
-         */
-        let streamedReasoning = '';
-        let checkpointChars = 0;
-        let checkpointAt = 0;
-        /**
-         * Captured before the request so the provider's reported usage can be compared against the uncorrected
-         * estimate that admitted this exact request. A recovered round reassigns both, so the calibration
-         * always sees the request that was actually answered rather than the one that was refused.
-         */
-        let rawInputEstimate = 0;
-        /** The sizes that estimate was assembled from, so the endpoint's answer can be read per part. */
-        let roundBytes: { system: number; tools: number; messages: number } | undefined;
-        let requestOutputLimit = 0;
-        /**
-         * How many recoveries from a provider-confirmed context overflow this round has spent.
-         *
-         * The allowance comes from the compaction policy the round resolved — one attempt by default, because a
-         * conversation that still does not fit after the most aggressive compression available cannot be made to
-         * fit by repeating the same decision.
-         */
-        let overflowAttempts = 0;
-        let lastCompactionProblem = context.compactionProblem;
-        /**
-         * Take back the reasoning the user has already seen.
-         *
-         * Reasoning is streamed live (see `message.reasoning`), so an attempt that is thrown away has to take
-         * its thinking with it: otherwise a re-sent round would leave the folded block showing two attempts'
-         * reasoning as one, and the live view would disagree with the message that gets stored. The frame is a
-         * reset rather than a correction because a client cannot un-know deltas it has already rendered.
-         */
-        const resetReasoning = (): void => {
-          if (!streamedReasoning) return;
-          streamedReasoning = '';
-          emit('message.reasoning', { messageId, text: '', reset: true });
-        };
-        /**
-         * Compress the conversation once more, and report whether the round should be sent again.
-         *
-         * `compacted: false` is the answer that decides it: it means there was no boundary left to compress,
-         * so the re-sent request would be byte-for-byte the one that just failed and the original failure
-         * stands. Every caller requires an empty `streamedText` first, so the retry can never duplicate output
-         * the user has already seen.
-         */
-        const recoverFromOverflow = async (): Promise<boolean> => {
-          if (overflowAttempts >= (context.maxOverflowRetries ?? 1)) {
-            // The retry was refused as well. Reporting it is the point: an operator reading this run's stream
-            // sees both the compression that was tried and the refusal that outlived it.
-            emit('context.overflow', {
-              round,
-              recovered: false,
-              coveredMessages: store.contextSurface(input.sessionId)?.coveredMessages ?? 0,
-            });
-            return false;
-          }
-          overflowAttempts++;
-          const before = store.contextSurface(input.sessionId)?.coveredMessages ?? 0;
-          let forced: PreparedContext | undefined;
-          try {
-            forced = await prepareContext({ ...contextInput, forceCompact: true });
-          } catch (cause) {
-            // Compression cannot always even be attempted — a conversation with a single message has no
-            // boundary to compress at, and says so by refusing. That is not a second failure to report: it is
-            // the answer that the request has to stand as it is, so the provider's own failure is what the
-            // user sees.
-            forced = undefined;
-            lastCompactionProblem = cause instanceof Error ? cause.message : String(cause);
-          }
-          const coveredMessages = store.contextSurface(input.sessionId)?.coveredMessages ?? before;
-          if (!forced?.compacted) {
-            lastCompactionProblem = forced?.compactionProblem ?? lastCompactionProblem;
-            emit('context.overflow', { round, recovered: false, coveredMessages });
-            return false;
-          }
-          context = forced;
-          lastCompactionProblem = undefined;
-          // The re-send carries a different envelope — the forced compression changed the summary the request
-          // opens with — so this round writes a second record rather than leaving the log claiming it sent the
-          // prompt that was refused.
-          recordEnvelope(forced);
-          emit('context.overflow', { round, recovered: true, coveredMessages });
-          // The attempt that was refused is discarded whole. Its reasoning was already streamed, so the
-          // reset goes out too: otherwise the folded block would show two attempts' thinking as one, and
-          // the live view would disagree with the message that gets stored.
-          resetReasoning();
-          // Durable, because it is a decision about the conversation that no checkpoint explains: the
-          // compression is recorded, "the provider refused this for size and we answered by compressing" is not.
-          store.recordEvent(input.sessionId, 'context.overflow', {
-            round,
-            recovered: true,
-            coveredMessages,
-          });
-          return true;
-        };
-        /**
-         * Send this round, answering a context overflow once and a transient failure as often as the retry
-         * allowance for this round permits.
-         *
-         * This is the step boundary the retries belong to, and moving them here from the transport is what makes
-         * them worth having. The transport could only ever see an HTTP status before the stream started, could
-         * not retry a stream that broke mid-flight, left nothing in the record, and forgot its count when the
-         * process did. Here the same decision covers a broken stream, the count is a row in the log that the
-         * next process reads back, and the wait is cancelled by the same Stop that cancels everything else.
-         *
-         * Two rules keep a retry from costing more than it buys:
-         *
-         * - **Nothing has been shown yet.** A retry re-sends the request, so any text the user already saw
-         *   would be shown twice — the same rule the overflow recovery follows, extended to reasoning, because
-         *   reasoning is displayed too.
-         * - **The failure is transient by nature** (`retryable`), never a failure that describes the run's own
-         *   room or the request's content: re-sending those buys the same answer at full price.
-         */
-        const retryRequest = async (cause: unknown): Promise<boolean> => {
-          const code = failureCodeOf(cause);
-          if (!retryable(code)) return false;
-          const attempts = store.retryCount(runId, round);
-          if (attempts >= limits.maxModelRetries) return false;
-          const waitMs = retryDelayMs(
-            attempts + 1,
-            cause instanceof RunFailure ? cause.retryAfterMs : undefined,
-          );
-          // The endpoint's own cooldown is never shortened; one longer than we are willing to hold a round
-          // open is not retried at all, because the alternative is ignoring what it asked for.
-          if (waitMs > RETRY_MAX_WAIT_MS) return false;
-          const retry = {
-            runId,
-            round,
-            attempt: attempts + 1,
-            max: limits.maxModelRetries,
-            code,
-            waitMs,
-          };
-          /**
-           * Recorded before the wait, so the record and the count are the same fact: an attempt that is already
-           * written down is one the next process will not make again, whether this one survives the wait or not.
-           */
-          store.recordEvent(input.sessionId, 'llm.retry', retry);
-          emit('llm.retry', retry);
-          const waitStarted = performance.now();
-          try {
-            await delay(waitMs, undefined, { signal: requestSignal });
-          } catch (error) {
-            /**
-             * A cancelled wait reports *why* it was cancelled, not that a timer was cancelled.
-             * `timers/promises` rejects with its own `AbortError`, which would make a request-deadline abort
-             * during the backoff look like an anonymous failure; the signal's own reason is either the
-             * timeout that fired or the Stop that arrived, and both are things the run can name.
-             */
-            requestSignal.throwIfAborted();
-            throw error;
-          } finally {
-            (statistics.requestTiming ??= emptyRequestTiming()).retryWaitMs += Math.max(
-              0,
-              performance.now() - waitStarted,
-            );
-          }
-          return true;
-        };
-        const sendRequest = async (): Promise<ModelResponse> => {
-          for (;;) {
-            /**
-             * The numbers this attempt was decided on, reported so a client and an operator see the same
-             * prediction the run acted on — not a recomputation that may disagree with it. A round that
-             * recovered reports the prediction it was re-sent with.
-             */
-            emit('context.forecast', {
-              round,
-              inputTokens: context.forecast.inputTokens,
-              rawInputTokens: context.forecast.rawInputTokens,
-              outputTokens: context.forecast.outputTokens,
-              windowRoom: context.forecast.windowRoom,
-              // What the estimate is made of. "The request is too big" is not actionable on its own: a catalog
-              // of tool schemas can cost more than the conversation, and this is the number that says so.
-              breakdown: context.forecast.breakdown,
-              shortened: context.shortened,
-              freedChars: context.freedChars,
-              // Reported beside the shortening pair rather than folded into it: the two are different bargains —
-              // a pointer to the full text, or the middle gone with nothing to read back — and an operator
-              // reading a round that made the conversation smaller needs to know which one it got.
-              pruned: context.pruned,
-              prunedChars: context.prunedChars,
-              compacted: context.compacted,
-              // Why proactive compression is off for this route, when it is: a window that cannot carry the
-              // request's output reservation plus the headroom is a configuration mistake, and a reader of the
-              // stream should see that rather than wonder why a small window never compressed.
-              ...(context.policyProblem === undefined
-                ? {}
-                : { policyProblem: context.policyProblem }),
-              // Why the request cannot be sent, when it cannot: without it the stream shows numbers the reader
-              // has to compare by hand to learn the same one word.
-              ...(context.forecast.problem === undefined
-                ? {}
-                : { problem: context.forecast.problem }),
-            });
-            /**
-             * A request the estimate says does not fit is still sent — unless the estimate is far past the window.
-             *
-             * The run is the caller that knows what "does not fit" means, and the answer used to be "fail here",
-             * which made a heuristic the authority on somebody else's endpoint: an uncalibrated estimate can be
-             * wrong by the width of its own clamp. `hopelessForWindow` is where that stops being plausible, and
-             * everything under it is sent: the endpoint answers, or refuses for size and the round compresses and
-             * re-sends. The round is told why it is uncompressed through `compactionProblem` in the frame above.
-             */
-            if (context.forecast.problem && hopelessForWindow(context.forecast, roundContextTokens))
-              throw new ContextLimitError(
-                context.compactionProblem
-                  ? 'Context compaction failed: ' +
-                      context.compactionProblem +
-                      '; ' +
-                      WINDOW_EXHAUSTED
-                  : WINDOW_EXHAUSTED,
-              );
-            rawInputEstimate = context.forecast.rawInputTokens;
-            roundBytes = context.forecast.bytes;
-            requestOutputLimit = context.forecast.outputTokens;
-            let attempt: ModelResponse;
-            /**
-             * While the request is in flight the run is working, and the lease says so.
-             *
-             * The renewal is on a timer rather than only at the boundaries around this request because a model
-             * call can take minutes: without it a healthy run would look idle for the whole of it. It decides
-             * nothing — the timer cannot expire anything, and `LEASE_RENEW_INTERVAL_MS` is not a timeout.
-             */
-            const renewing = setInterval(
-              () => store.renewLease(input.sessionId, runId),
-              LEASE_RENEW_INTERVAL_MS,
-            );
-            renewing.unref?.();
-            try {
-              admitVisibleBackground(store, input.sessionId, context.system);
-              attempt = await measuredProvider.complete({
-                system: context.system,
-                messages: context.messages,
-                tools: specs,
-                // The key of the request this is, from the prompt this request carries — see `cacheKeyOf`.
-                cacheKey: cacheKeyOf(context.system, specs),
-                ...(requestedModel === null ? {} : { model: requestedModel }),
-                ...(requestedEffort === undefined ? {} : { reasoningEffort: requestedEffort }),
-                signal: requestSignal,
-                maxOutputTokens: requestOutputLimit,
-                onText: (delta) => {
-                  // Only text about to become a message.delta is a visible first token. Internal
-                  // summaries share the measured provider but never enter this callback.
-                  if (stepFirstTokenAt === null && delta.length && stepStartedAt !== null) {
-                    stepFirstTokenAt = performance.now();
-                    statistics.firstTokenMs += Math.max(0, stepFirstTokenAt - stepStartedAt);
-                    statistics.firstTokenCount += 1;
-                  }
-                  streamedText += delta;
-                  if (
-                    delta &&
-                    (!checkpointChars ||
-                      streamedText.length - checkpointChars >= 256_000 ||
-                      performance.now() - checkpointAt >= 2_000)
-                  ) {
-                    store.checkpointStream(input.sessionId, runId, messageId, streamedText);
-                    checkpointChars = streamedText.length;
-                    checkpointAt = performance.now();
-                  }
-                  emit('message.delta', { messageId, text: delta });
-                },
-                onReasoning: (delta) => {
-                  streamedReasoning += delta;
-                  emit('message.reasoning', { messageId, text: delta });
-                },
-              });
-            } catch (cause) {
-              // A refused request is recoverable only while nothing has been shown: once text has streamed,
-              // compressing and re-sending would show the beginning of the turn to the user twice.
-              if (!streamedText && isContextWindowExceeded(cause)) {
-                if (await recoverFromOverflow()) continue;
-                if (lastCompactionProblem)
-                  throw new RunFailure(
-                    'context-window-exceeded',
-                    'Provider context window exceeded; context compaction failed: ' +
-                      lastCompactionProblem,
-                    {
-                      cause,
-                      ...(cause instanceof RunFailure
-                        ? {
-                            httpStatus: cause.httpStatus,
-                            requestId: cause.requestId,
-                            retryAfterMs: cause.retryAfterMs,
-                          }
-                        : {}),
-                    },
-                  );
-              }
-              // A transient failure is re-sent under the same rule, and for the same reason.
-              if (!streamedText && (await retryRequest(cause))) {
-                /**
-                 * Only `streamedText` blocks a retry. Reasoning that was displayed belongs to the attempt being
-                 * discarded, and the frame that takes it back already exists — the overflow recovery sends it —
-                 * so a round whose endpoint failed after thinking aloud is retried rather than abandoned. The
-                 * guard used to be `!streamedReasoning` as well, which turned "the endpoint streamed a thought
-                 * and then broke" into a failed run that had produced no answer at all.
-                 */
-                resetReasoning();
-                continue;
-              }
-              // An interrupted stream may have shown useful text before the provider failed. Preserve
-              // exactly those visible deltas, but never persist or execute incomplete tool calls.
-              if (streamedText) {
-                text = streamedText;
-                const message: Message = {
-                  role: 'assistant',
-                  content: streamedText,
-                  toolCalls: [],
-                  interrupted: true,
-                  ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
-                };
-                store.appendStreamMessage(input.sessionId, runId, messageId, message);
-                emit('message.finished', { messageId, message });
-              }
-              throw cause;
-            } finally {
-              clearInterval(renewing);
+        const response = await requestRunRound({
+          store,
+          sessionId: input.sessionId,
+          runId,
+          round,
+          limits,
+          signal,
+          context,
+          contextInput,
+          roundContextTokens,
+          measuredProvider,
+          specs,
+          requestedModel,
+          requestedEffort,
+          cacheKeyOf,
+          recordEnvelope,
+          beforeRequest: (system) => admitVisibleBackground(store, input.sessionId, system),
+          onVisibleText: (delta) => {
+            if (stepFirstTokenAt === null && delta.length && stepStartedAt !== null) {
+              stepFirstTokenAt = performance.now();
+              statistics.firstTokenMs += Math.max(0, stepFirstTokenAt - stepStartedAt);
+              statistics.firstTokenCount += 1;
             }
-            // The same overflow also arrives as a terminal stop reason, on a stream that produced no text.
-            if (
-              attempt.finishReason === 'length' &&
-              attempt.truncation === 'context-window' &&
-              !streamedText
-            ) {
-              if (await recoverFromOverflow()) continue;
-              if (lastCompactionProblem)
-                throw new ContextLimitError(
-                  'Provider context window exceeded; context compaction failed: ' +
-                    lastCompactionProblem,
-                );
-            }
-            /**
-             * A turn that carried nothing at all goes through the same retry decision as a broken stream.
-             *
-             * Where this is judged is the whole point. It used to be judged after `sendRequest` had returned,
-             * which put it outside the retry path entirely: `empty-response` was in the retry table but no
-             * failure could reach it, so an endpoint that closed a turn with an empty body ended the run where a
-             * transport hiccup on the same request would have been re-sent for free.
-             *
-             * "Nothing at all" is the test, and it is deliberately wider than the envelope. Text, tool calls,
-             * streamed text and streamed reasoning all count as something: a thinking model that answered only
-             * in its reasoning channel has still answered, and re-sending it would spend the request again to
-             * throw away the thought the user is reading. What is left is a turn that produced no text, no call
-             * and no thought, which is a hiccup rather than an answer whatever the finish reason says — and
-             * because `carried` is false, nothing has been shown to the user, so a re-send cannot duplicate
-             * output. A `length` turn is not judged here at all: the two branches around this one own it.
-             */
-            const carried =
-              attempt.toolCalls.length > 0 ||
-              attempt.text.trim() !== '' ||
-              streamedText !== '' ||
-              streamedReasoning !== '';
-            if (!carried && attempt.finishReason !== 'length') {
-              const empty = new RunFailure(
-                'empty-response',
-                attempt.finishReason === 'tool_calls'
-                  ? 'Provider returned an empty tool-call turn'
-                  : 'Provider returned a turn with no content',
-              );
-              if (await retryRequest(empty)) continue;
-              throw empty;
-            }
-            return attempt;
-          }
-        };
-        const response = await sendRequest();
-        /**
-         * What the endpoint billed, read as evidence about each part.
-         *
-         * One total, but the round knows how that total was assembled — the system prompt, the catalogue and the
-         * conversation, in bytes — so the residual is attributed to the parts by their share of it. That is what
-         * lets a route whose catalogue is overestimated and whose conversation is underestimated end up with two
-         * weights pointing in opposite directions instead of one average that is wrong for both.
-         */
-        calibration.observe(
-          rawInputEstimate,
-          response.usage.inputTokens,
-          rawInputEstimate > 0 ? roundBytes : undefined,
-        );
-        /**
-         * The measurement is durable, because it is about the endpoint rather than about this run.
-         *
-         * Written per observed round rather than once at the end: a run that is stopped, crashes or is cancelled
-         * keeps what it had already learned, which is the whole reason the reading half exists. Rounds that reported
-         * no usable usage are already filtered out by `observe` — the state simply does not move for them — so this
-         * records the value that was in force for the round, which is what a reader asking "what correction was
-         * this round sized against" needs. The anchor travels with it: the estimate this round was sized from and
-         * the usage that came back are the two numbers that make the correction checkable rather than merely
-         * present.
-         */
-        if (calibrationRouteKey !== undefined)
-          store.recordEvent(input.sessionId, 'context.calibration', {
-            route: calibrationRouteKey,
-            factor: calibration.factor,
-            samples: calibration.observed,
-            parts: calibration.parts,
-            anchor: {
-              rawEstimate: rawInputEstimate,
-              reportedInputTokens: response.usage.inputTokens,
-            },
-          });
-        usage.inputTokens += response.usage.inputTokens;
-        usage.outputTokens += response.usage.outputTokens;
-        // The cache fields ride along, for the reason spelled out on the context builder's `onUsage`: this hand
-        // sum is what `RunResult.usage` is made of, and dropping them made the result under-report what the
-        // provider said — a run whose input was mostly a cache hit arrived looking like it paid for all of it.
-        if (response.usage.cachedInputTokens !== undefined)
-          usage.cachedInputTokens =
-            (usage.cachedInputTokens ?? 0) + response.usage.cachedInputTokens;
-        if (response.usage.cacheWriteInputTokens !== undefined)
-          usage.cacheWriteInputTokens =
-            (usage.cacheWriteInputTokens ?? 0) + response.usage.cacheWriteInputTokens;
-        if (response.finishReason === 'length') {
-          // The text already reached the client through message.delta. Persist it before failing so
-          // the stored transcript and RunResult.text match what the user actually saw, instead of
-          // the answer appearing and then vanishing when the UI rebuilt from history. Any partial
-          // tool calls in a truncated turn are deliberately dropped: they were never executed.
-          text = response.text;
-          if (text.trim()) {
-            store.appendStreamMessage(input.sessionId, runId, messageId, {
-              role: 'assistant',
-              content: text,
-              toolCalls: [],
-              interrupted: true,
-              ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
-            });
-            emit('message.finished', {
-              messageId,
-              message: {
-                role: 'assistant',
-                content: text,
-                toolCalls: [],
-                interrupted: true,
-                ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
-              },
-              usage: response.usage,
-            });
-          }
-          // A truncated answer is still an answer: it assembled a message, so the step spent what it spent.
-          commitStepTiming(response);
-          const details = response.outputDiagnostics;
-          const breakdown = [
-            String(response.usage.outputTokens) +
-              '/' +
-              String(requestOutputLimit) +
-              ' output tokens',
-            ...(details?.reasoningTokens === undefined
-              ? []
-              : [String(details.reasoningTokens) + ' reasoning tokens']),
-            ...(details?.reasoningChars
-              ? [String(details.reasoningChars) + ' reasoning characters']
-              : []),
-            String(details?.visibleChars ?? text.length) + ' visible characters',
-            ...(details?.toolArgumentChars
-              ? [String(details.toolArgumentChars) + ' tool argument characters']
-              : []),
-          ];
-          throw new LimitError(
-            'output-limit',
-            'Model output limit reached (' +
-              breakdown.join(', ') +
-              '); partial tool calls were not executed',
-          );
-        }
-        const ids = new Set<string>();
-        for (const call of response.toolCalls) {
-          if (!call.id || ids.has(call.id)) throw new Error('Invalid or duplicate tool call ID');
-          ids.add(call.id);
-        }
-        // A turn that carried nothing was already refused inside `sendRequest`, where the retry decision could
-        // see it; what is left here is the envelope contradicting itself, which no re-send can repair.
-        if (response.finishReason === 'stop' && response.toolCalls.length > 0)
-          throw new Error('Provider stop reason conflicts with tool calls');
-        text = response.text;
-        store.appendStreamMessage(input.sessionId, runId, messageId, {
-          role: 'assistant',
-          content: text,
-          toolCalls: response.toolCalls,
-          ...(response.providerState ? { providerState: response.providerState } : {}),
-          ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
-        });
-        emit('message.finished', {
-          messageId,
-          // `providerState` stays out of the event — it is the protocol's business, not the client's — while
-          // the reasoning is in it, because the folded block is exactly what the client has to render.
-          message: {
-            role: 'assistant',
-            content: text,
-            toolCalls: response.toolCalls,
-            ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
           },
-          usage: response.usage,
+          onAnswerText: (answer) => {
+            text = answer;
+          },
+          commitStepTiming,
+          statistics,
+          usage,
+          calibration,
+          calibrationRouteKey,
+          emit,
         });
-        // The step's spans close here, with the answer that ends it: the rounds that returned before this
-        // point — a refused request the round recovered from — assembled nothing and are already accounted
-        // for by the step's own start, so no attempt can be charged twice.
-        commitStepTiming(response);
         // An abort after the provider's terminal event must keep the completed text while still
         // refusing to execute any pending tool call.
         signal.throwIfAborted();
@@ -2922,7 +1245,7 @@ export class Agent {
             continue;
           }
           status = 'completed';
-          if (contractId && contractSpec) {
+          if (completion.state.contractId && completion.state.contractSpec) {
             if (
               task &&
               taskAttempt &&
@@ -2933,20 +1256,20 @@ export class Agent {
               endStep(round, 'final');
               break;
             }
-            const decision = await verifyRound();
+            const decision = await completion.verifyRound();
             if (decision?.action === 'repair') {
               // The budget is charged when the next request is about to be made, which is exactly here: a run
               // that stops for any other reason never spent the round it was allowed.
-              repairRounds += 1;
-              repeatedFailures = decision.summary.repeatedFailures;
-              previousFailureFingerprint = lastFailureFingerprint;
-              repairStartedAt ??= Date.now();
+              completion.state.repairRounds += 1;
+              completion.state.repeatedFailures = decision.summary.repeatedFailures;
+              completion.state.previousFailureFingerprint = completion.state.lastFailureFingerprint;
+              completion.state.repairStartedAt ??= Date.now();
               store.append(input.sessionId, { role: 'user', content: decision.feedback });
               // Announced as well as appended: a client watching the run sees that a repair round began rather
               // than reading a silently longer transcript.
               emit('context.injected', {
                 source: 'completion-repair',
-                round: verificationRound,
+                round: completion.state.verificationRound,
               });
               endStep(round, 'queued-input');
               continue;
@@ -2954,15 +1277,17 @@ export class Agent {
             if (decision?.action === 'complete') {
               // A candidate only. Cleanup, the final fingerprint and persistence all still have to succeed
               // before anything may call this verified.
-              candidateCompletion = decision.summary;
+              completion.state.candidate = decision.summary;
             } else if (decision?.action === 'limit') {
               status = 'limited';
               error =
-                taskVerification?.error ?? `Acceptance repair stopped: ${decision.summary.reason}`;
+                completion.state.taskVerification?.error ??
+                `Acceptance repair stopped: ${decision.summary.reason}`;
             } else if (decision) {
               status = 'needs_review';
               error =
-                taskVerification?.error ?? `Acceptance review required: ${decision.summary.reason}`;
+                completion.state.taskVerification?.error ??
+                `Acceptance review required: ${decision.summary.reason}`;
             }
           } else if (task && taskAttempt) {
             // A task run whose contract could not be built still refuses to claim success with an unknown effect
@@ -2975,439 +1300,15 @@ export class Agent {
           endStep(round, 'final');
           break;
         }
-        const injected: { callId: string; notes: string[] }[] = [];
-        const changedGoals: Goal[] = [];
         // The tool calls are about to run. The message that names them is written first, so a crash while a
         // tool is in flight leaves the record that lets recovery report its outcome as unknown rather than
         // letting the call be replayed as if it had never happened. Everything the round appends after this
         // point is written as one batch by the next read or by the end of the run.
         store.flush(input.sessionId);
-        /**
-         * One call, from its own effect journal entry to its own tool result.
-         *
-         * `effectId` is per invocation rather than shared, because two calls of the same batch can be in
-         * flight at once once the group scheduler below overlaps them: a single `let` would let the second
-         * call's journal entry overwrite the first one's, and a task would then be told an effect completed
-         * that it never recorded.
-         */
-        const queuedClock = performance.now();
-        const queuedAt = Date.now();
-        let activeExecutions = 0;
-        let peakConcurrency = 0;
-        const toolTimings = new Map<
-          string,
-          {
-            queuedAt: number;
-            queueMs: number;
-            dispatchMs: number;
-            durationMs: number;
-            attempts: number;
-            finishedAttempts: number;
-            dispatchStartedAt?: number;
-            dispatchFinishedAt?: number;
-            executionStartedAt?: number;
-            executionFinishedAt?: number;
-          }
-        >(
-          response.toolCalls.map((call) => [
-            call.id,
-            {
-              queuedAt,
-              queueMs: 0,
-              dispatchMs: 0,
-              durationMs: 0,
-              attempts: 0,
-              finishedAttempts: 0,
-            },
-          ]),
-        );
-        const runToolCall = async (call: ToolCall) => {
-          const timing = toolTimings.get(call.id)!;
-          const dispatchClock = performance.now();
-          timing.queueMs = Math.max(0, dispatchClock - queuedClock);
-          timing.dispatchStartedAt = Date.now();
-          try {
-            let effectId: string | undefined;
-            const programEffects = new Map<string, string>();
-            /**
-             * The context one call runs in — and the one an *inner* call runs in.
-             *
-             * A `run_code` program is not a second kind of tool call: it reaches its tools through this function
-             * and this registry, one call at a time, carrying the run's own signal, approval seam, journals and
-             * policy. So an inner write is approved by the same person, blocked by the same read-only promise,
-             * bounded by the same deadline and recorded in the same file journal as a write the model asked for
-             * directly. The inner id is derived from the outer one (`<outer>#<n>`) rather than freshly generated,
-             * because what has to survive every seam is the link between a program and what it did.
-             */
-            const toolContext = (callId: string): ToolContext => ({
-              signal,
-              /**
-               * The call's identity and its run's promise. A policy hook that reports about a call has to be
-               * able to name the session, and one that would touch the world outside this process has to be
-               * able to see that this run promised not to.
-               */
-              sessionId: input.sessionId,
-              workspaceRoot: workspace,
-              readOnly,
-              ...(executionPolicy ? { executionPolicy } : {}),
-              /**
-               * The policy *getters*, so a call can be judged by the policy in force when it runs.
-               *
-               * `executionPolicy` above is the snapshot this round was built with — what the prompt and the tool
-               * schema describe — and a snapshot is the right shape for those. It is the wrong shape for a call
-               * that has been waiting: the desktop can switch the sandbox while an approval is open, and the
-               * command that finally runs has to run in the backend that is selected *now*, not the one that was
-               * selected when the model asked. The tool layer reads these per call and rechecks execution.
-               */
-              ...(this.options.executionPolicy
-                ? { executionPolicyForCall: this.options.executionPolicy }
-                : {}),
-              ...(this.options.permissionPolicy
-                ? { permissionPolicyForCall: this.options.permissionPolicy }
-                : {}),
-              // Output too large for a result goes to this session's spill directory. The run supplies it
-              // because the run is what knows the session and, through it, the workspace the file belongs in.
-              spill: ({ tool, content }) =>
-                spillOutput({ workspace, sessionId: input.sessionId, tool, content }),
-              ...(taskEffectScope
-                ? {
-                    effectJournal: {
-                      begin: (effectCall: ToolCall) => {
-                        effectId = store.beginTaskEffect(
-                          taskEffectScope.sessionId,
-                          taskEffectScope.taskId,
-                          taskEffectScope.attemptId,
-                          effectCall.name,
-                        );
-                      },
-                    },
-                  }
-                : {}),
-              fileJournal: {
-                prepare: (change, before, after) =>
-                  store.prepareFileChange(journalSessionId, tagChange(change), before, after),
-                prepareGroup: (change, files) =>
-                  store.prepareFileChangeGroup(journalSessionId, tagChange(change), files),
-                applied: (id) => store.markFileChange(id, 'applied'),
-              },
-              approve: approveTool,
-              ask: askTool,
-              callId,
-              // The registry the executing tools belong to, so a child's `job_*` answers for the child's jobs.
-              jobs: tools.jobs,
-              /**
-               * The checklist lives in this session's log, so the run supplies the seam that writes it: reading
-               * folds the log, writing appends the event and announces it. Doing it here rather than in the tool
-               * is what keeps the tool ignorant of sessions, and what makes the live event exactly as frequent
-               * as an accepted call.
-               */
-              todos: {
-                read: () => store.todos(input.sessionId),
-                write: (items) => {
-                  store.recordEvent(input.sessionId, 'todo.written', { todos: items });
-                  emit('todo.written', { todos: items });
-                  return items;
-                },
-              },
-              /**
-               * The files this session handed over. One write per accepted `present` call, carrying every file
-               * that call named, so the panel's update and the log line are the same event and a call that
-               * presents three files cannot become three partial updates.
-               */
-              deliverables: {
-                read: () => store.deliverables(input.sessionId),
-                write: (files) => {
-                  store.recordEvent(input.sessionId, 'deliverable.presented', { files });
-                  emit('deliverable.presented', { files });
-                },
-              },
-              /**
-               * The session's goal. One write per accepted action, carrying the whole goal, so the fold is a
-               * replacement and a reload needs no replay of the actions that produced it.
-               *
-               * A write says so in the conversation rather than rebuilding the prompt (`announceGoal`): the notice
-               * states the goal's round count, so as a prompt section it made every round of a goal a new cacheable
-               * prefix, and a run whose model completed the goal mid-run would have contradicted its own record for
-               * the rest of the run. Announced, it takes effect from the next round — the boundary the model can
-               * see — and the prefix is untouched.
-               */
-              goals: {
-                read: () => store.goal(input.sessionId),
-                // Read as the context is built, which is once per tool call: a run that consumed a message from
-                // the user mid-flight is the user's turn from that step onwards, and the next call is the one
-                // that has to see it.
-                human: humanTurn,
-                /**
-                 * Whether the completion contract lets this goal be closed as complete.
-                 *
-                 * The binding is deliberate and narrow: a goal only answers to a contract whose objective is
-                 * *exactly* the goal's own. A task the user approved for something else must not be able to close
-                 * a goal it never described, and an unbound goal keeps its old behaviour instead of being held
-                 * retroactively to criteria nobody wrote.
-                 */
-                canComplete: async () => {
-                  const goal = store.goal(input.sessionId);
-                  if (!goal || !contractId || !contractSpec) return { allowed: true };
-                  if (goal.objective !== contractSpec.objective) return { allowed: true };
-                  if (completionSummary?.state === 'verified') return { allowed: true };
-                  return {
-                    allowed: false,
-                    reason:
-                      completionSummary?.reason ??
-                      'no verification round has passed for this contract yet',
-                  };
-                },
-                /**
-                 * A goal the model writes mid-run is *said*, not rebuilt into the prompt.
-                 *
-                 * The prompt is the cacheable prefix, and rebuilding it here invalidated the system prompt and the
-                 * whole tool catalogue one round after the model had paid for them — inside the very run that is
-                 * making progress. The conversation is the right place for a change: it is appended at the tail,
-                 * so everything before it stays byte-identical, and it is the same statement the run-start notice
-                 * makes, so a reader of the transcript sees the goal's history in order.
-                 */
-                write: (action, goal) => {
-                  store.recordEvent(input.sessionId, 'goal.changed', { action, goal });
-                  emit('goal.changed', { action, goal });
-                  // A user notice cannot interrupt an assistant's outstanding tool calls. Keep the
-                  // durable goal change immediate, and publish its notice after the whole batch settles.
-                  if (ownWork) changedGoals.push(goal);
-                },
-              },
-              /**
-               * The session's own record of the background commands it started.
-               *
-               * A command is the one kind of work whose result has nowhere to go when the turn that started it is
-               * over: the process outlives the call, so the exit code and the output are known only to a manager
-               * that keeps them in memory. This seam is what makes them durable — written at start, at settlement
-               * (with the tail of the output, because the ring dies with the process) and when the model reads a
-               * finished one, which is the cursor the notice repeats against.
-               */
-              commandJournal: commandJournal(store, input.sessionId),
-              /**
-               * What a program may call, and the only way it can call it.
-               *
-               * `tools.execute` is the same entry point the model's own calls use, so there is no second dispatch
-               * path to keep in step — a guard, a permission rule or a timeout added for a direct call applies to
-               * an inner one the moment it exists. The registry is *this run's*, which is why a delegated run hands
-               * its program the child's tools and not the parent's.
-               */
-              catalog: {
-                specs: catalogSpecs,
-                invoke: async (inner, innerSignal) => {
-                  const innerContext = toolContext(inner.id);
-                  const result = await tools.execute(inner, {
-                    ...innerContext,
-                    signal: innerSignal ? AbortSignal.any([signal, innerSignal]) : signal,
-                    ...(taskEffectScope
-                      ? {
-                          effectJournal: {
-                            begin: (effectCall: ToolCall) => {
-                              programEffects.set(
-                                inner.id,
-                                store.beginTaskEffect(
-                                  taskEffectScope.sessionId,
-                                  taskEffectScope.taskId,
-                                  taskEffectScope.attemptId,
-                                  effectCall.name,
-                                ),
-                              );
-                            },
-                          },
-                        }
-                      : {}),
-                  });
-                  return result;
-                },
-                // The registry's own classification and the run's own width, so a program cannot overlap what the
-                // model's batches may not overlap, nor fan out wider than the run allows.
-                mode: (inner) => tools.executionMode(inner),
-                parallelLimit: maxParallelToolCalls,
-              },
-              programJournal: {
-                record: (inner, state, result) => {
-                  store.recordEvent(input.sessionId, 'program.call.settled', {
-                    callId: inner.id,
-                    name: inner.name,
-                    state,
-                    ...(result
-                      ? { isError: result.isError, content: result.content.slice(0, 24000) }
-                      : {}),
-                  });
-                  const intent = programEffects.get(inner.id);
-                  if (intent && state === 'known' && result && !result.isError && taskEffectScope) {
-                    store.completeTaskEffect(
-                      taskEffectScope.sessionId,
-                      taskEffectScope.taskId,
-                      intent,
-                    );
-                    programEffects.delete(inner.id);
-                  }
-                },
-              },
-            });
-            const { additionalContext, ...result } = await tools.execute(call, {
-              ...toolContext(call.id),
-              onExecution: ({ phase, attempt, startedAt, finishedAt, durationMs }) => {
-                if (phase === 'started') {
-                  timing.executionStartedAt ??= startedAt;
-                  timing.attempts++;
-                  peakConcurrency = Math.max(peakConcurrency, ++activeExecutions);
-                } else {
-                  timing.executionFinishedAt = finishedAt;
-                  timing.durationMs += durationMs!;
-                  timing.finishedAttempts++;
-                  activeExecutions--;
-                }
-                const measurement = {
-                  callId: call.id,
-                  name: call.name,
-                  attempt,
-                  queuedAt,
-                  queueMs: timing.queueMs,
-                  startedAt,
-                  ...(phase === 'finished'
-                    ? {
-                        finishedAt,
-                        durationMs,
-                      }
-                    : {}),
-                  activeExecutions,
-                  peakConcurrency,
-                  scope: 'model-tool-batch',
-                };
-                const type =
-                  phase === 'started' ? 'tool.execution.started' : 'tool.execution.finished';
-                /**
-                 * The tool's own name rides on the record, and it is the one field a *reader* needs.
-                 *
-                 * Everything else here measures how a call was carried out — how many attempts, how long, how many
-                 * ran at once — which answers "was this run healthy". The name answers "what did it actually do",
-                 * which is the question a workspace result has to be able to answer from durable evidence rather
-                 * than from the model's prose: a result that carried only durations could not say whether a child
-                 * ran the test suite or merely said it had.
-                 */
-                store.recordEvent(input.sessionId, type, {
-                  runId,
-                  tool: call.name,
-                  ...measurement,
-                });
-                emit(type, measurement);
-              },
-            });
-            return { effectId, result, additionalContext };
-          } finally {
-            timing.dispatchFinishedAt = Date.now();
-            timing.dispatchMs = Math.max(0, performance.now() - dispatchClock);
-          }
-        };
-        /**
-         * Which sibling calls may overlap, and the order everything they produce is written in.
-         *
-         * The model asked for these calls in one message, so running two independent reads one after the
-         * other buys nothing — but only a call whose tool *promised* it is safe may overlap a sibling
-         * (`Tool.isConcurrencySafe`), and the promise is checked per call rather than per tool name, because a
-         * tool may read for one argument and write for another.
-         *
-         * What is *not* shared with the dispatch is the record. `tool.started` is emitted for the whole group
-         * up front to announce admission to the group; actual body spans have their own execution events.
-         * Results are appended, announced and journalled strictly
-         * in model order, so the transcript is the transcript the model wrote, whatever order the reads
-         * finished in, and a fast call can never overtake a slow sibling in the log.
-         */
-        const groups = groupToolCalls(response.toolCalls, (call) => tools.executionMode(call));
-        /** A steer retires a pending call with its reason recorded, rather than leaving it looking unanswered. */
-        const retire = (call: ToolCall): void => {
-          const skipped = {
-            isError: true,
-            content: 'Not executed: a new user instruction superseded this pending tool call.',
-          };
-          store.append(input.sessionId, { role: 'tool', toolCallId: call.id, ...skipped });
-          emit('tool.finished', {
-            callId: call.id,
-            ...skipped,
-            timing: {
-              ...toolTimings.get(call.id)!,
-              peakConcurrency,
-              scope: 'model-tool-batch',
-              executionComplete:
-                toolTimings.get(call.id)!.attempts === toolTimings.get(call.id)!.finishedAttempts,
-            },
-          });
-        };
-        /**
-         * The first failure in model order, wrapped rather than held raw: `throw undefined` is a legal throw,
-         * and an `undefined` sentinel would let that call be treated as one that never failed at all.
-         */
-        let failure: { reason: unknown } | undefined;
-        let cancelled = false;
-        for (const group of groups) {
-          if (signal.aborted) signal.throwIfAborted();
-          if (queue.hasSteer) {
-            for (const call of group) retire(call);
-            continue;
-          }
-          for (const call of group) emit('tool.started', { call, queuedAt });
-          /**
-           * A rolling pool bounded by the run's limit, started in model order. `shouldStop` is consulted
-           * before every start and never after one, so a call reported as not started is one that really did
-           * not start; the already-started calls are awaited either way, because a tool cannot be uninvented.
-           */
-          const outcomes = await runBounded(
-            group,
-            maxParallelToolCalls,
-            runToolCall,
-            () => queue.hasSteer || signal.aborted,
-          );
-          for (let index = 0; index < group.length; index++) {
-            const call = group[index]!;
-            const outcome = outcomes[index]!;
-            if (outcome.status === 'skipped') {
-              // A steer says so in the transcript; a cancel leaves the call unresolved, which is what
-              // `resolvePending` below reports as an unknown outcome rather than as a call that never happened.
-              if (queue.hasSteer) retire(call);
-              else cancelled = true;
-              continue;
-            }
-            if (outcome.status === 'rejected') {
-              failure ??= { reason: outcome.reason };
-              continue;
-            }
-            const { effectId, result, additionalContext } = outcome.value;
-            store.append(input.sessionId, { role: 'tool', toolCallId: call.id, ...result });
-            /**
-             * Checked here rather than inside the registry, because this is the layer that can fail the run: a
-             * violated pipeline order means a policy stage ran out of order, and the registry's own handling
-             * turns that into a failed tool result the model reads and moves on from. The trace is this run's
-             * own registry, passed in because the registration that checks it is process-wide.
-             */
-            await this.options.invariants?.assert('tool-execution', {
-              sessionId: input.sessionId,
-              runId,
-              pipeline: tools.pipelineInvariant,
-            });
-            if (effectId && !result.isError && taskEffectScope)
-              store.completeTaskEffect(taskEffectScope.sessionId, taskEffectScope.taskId, effectId);
-            emit('tool.finished', {
-              callId: call.id,
-              ...result,
-              timing: {
-                ...toolTimings.get(call.id)!,
-                peakConcurrency,
-                scope: 'model-tool-batch',
-                executionComplete:
-                  toolTimings.get(call.id)!.attempts === toolTimings.get(call.id)!.finishedAttempts,
-              },
-            });
-            if (additionalContext?.length)
-              injected.push({ callId: call.id, notes: additionalContext });
-          }
-          // A failed or cancelled call ends the batch: later groups are not started at all, exactly as the
-          // serial loop would have stopped at the first one that threw.
-          if (failure !== undefined || cancelled) break;
-        }
-        if (cancelled) signal.throwIfAborted();
-        if (failure !== undefined) throw failure.reason;
+        // The calls run inside the batch that owns their grouping, their effect journal and the order their
+        // results are recorded in (see `run-tools.ts`); what comes back is what the model is told *after* those
+        // results, which is the loop's own step.
+        const { injected, changedGoals } = await batch.run(response.toolCalls);
         for (const goal of changedGoals) announceGoal(goal);
         // Context a post-execute policy asked to inject becomes a persisted user message *after* the
         // batch's tool results, never a field riding along inside a tool block: injected context is
@@ -3507,228 +1408,38 @@ export class Agent {
       }
       error = redactSecrets(error);
     } finally {
-      // A tool still running when the run ends is charged here: the emitter opens a span on the first
-      // `tool.started` and closes it when the last `tool.finished` arrives, and a run that is cancelled or that
-      // throws never sees that finish — so without this the wall time a person spent waiting on those tools
-      // would vanish from the totals. The settlement takes whatever is open and closes it once, so a second call
-      // adds nothing.
-      settleOpenToolSpans(emission);
-      // A background sub-agent must not outlive the run that started it: this run's row is about to be
-      // finalised (so its usage could no longer be attributed) and the tool registry it borrowed is
-      // about to be closed. Cancel first, then await, so the guarantee does not depend on timing.
-      if (coordinator) await coordinator.settle();
-      try {
-        if (this.options.ownsToolResources !== false) await tools.close();
-      } catch {
-        status = 'failed';
-        error = 'Tool resource cleanup failed; an external process may still be running';
-        code = 'tool-cleanup';
-      }
-      if (task && taskAttempt) {
-        try {
-          const persistedTask = store.finishTaskAttempt(input.sessionId, task.id, taskAttempt.id, {
-            // The acceptance commands' effects were settled by the round that ran them
-            // (`recordTaskVerificationRound`), which is what makes a second round possible at all: resolving them
-            // here as well would refuse the ids as already completed, and resolving them *only* here is what left
-            // the first round's effects pending across a repair.
-            resolvedEffectIds: [],
-            status:
-              status === 'completed' || status === 'needs_review'
-                ? status
-                : status === 'cancelled'
-                  ? 'cancelled'
-                  : status === 'limited'
-                    ? 'needs_review'
-                    : 'blocked',
-            ...(taskVerification ? { verification: taskVerification.evidence } : {}),
-            ...(error ? { error } : {}),
-            ...(taskVerification
-              ? { acceptance: taskVerification.acceptance, steps: taskVerification.steps }
-              : {}),
-          });
-          if (status === 'completed' && persistedTask.status === 'needs_review') {
-            status = 'needs_review';
-            error = 'Task side effect outcome unknown; inspect state before retrying.';
-          }
-        } catch {
-          status = 'failed';
-          error = 'Failed to persist task finalization';
-        }
-      }
-      /**
-       * Only now may a candidate completion become `verified`.
-       *
-       * Everything that could still invalidate the evidence has happened: the tool resources are closed, the
-       * sub-agents have settled, the task row has been written. A client that was told `verified` before the
-       * cleanup ran would be told the work was done while a build or a language server was still writing to the
-       * workspace — which is the one ordering this whole loop exists to get right. A run whose cleanup or
-       * persistence failed keeps the check evidence and reports `needs_review` instead.
-       */
-      if (candidateCompletion && status === 'completed' && lastInputSnapshot) {
-        // `S1` was taken after the checks and before the cleanup; `S2` after it. A difference means the closing
-        // phase itself wrote to the monitored source — a background build finishing, a formatter, a language
-        // server — so the evidence describes a tree that no longer exists.
-        const settled = await snapshotCompletionInputs(workspace, lastMonitoredInputs, signal, {
-          runtimeStatePaths: store.databaseFiles(),
-        }).catch((error: unknown) => {
-          snapshotFailure = error instanceof Error ? error.message : String(error);
-          return undefined;
-        });
-        if (
-          !settled ||
-          settled.digest !== lastInputSnapshot.digest ||
-          settled.rootId !== lastInputSnapshot.rootId
-        ) {
-          status = 'needs_review';
-          error =
-            'Monitored inputs changed during finalization' +
-            (snapshotFailure ? `: ${snapshotFailure}` : '') +
-            '; the verification evidence no longer describes this workspace.';
-        }
-      }
-      if (candidateCompletion && status === 'completed') {
-        completionSummary = {
-          ...candidateCompletion,
-          state: 'verified',
-          reason: 'verified',
-        };
-        /**
-         * A bound, still-active goal closes here — in the kernel, without asking the model.
-         *
-         * The goal already did its job: it is what kept the session working across runs. Spending one more model
-         * request to have the model announce what the runtime just proved would be paying for a formality, and it
-         * would be paying with a request whose only possible output is a tool call the runtime has already made.
-         * Only an `active` goal whose objective is unchanged is closed: `paused` belongs to the user, `blocked`
-         * carries a reason a successful run does not erase, and a goal that was re-aimed mid-run is no longer the
-         * objective this contract verified.
-         */
-        const boundGoal = contractSpec ? store.goal(input.sessionId) : null;
-        if (
-          boundGoal &&
-          boundGoal.status === 'active' &&
-          boundGoal.objective === contractSpec?.objective
-        ) {
-          const completedGoal = changeGoal(boundGoal, 'complete', {}, new Date().toISOString());
-          store.recordEvent(input.sessionId, 'goal.changed', {
-            action: 'complete',
-            goal: completedGoal,
-          });
-          emit('goal.changed', { action: 'complete', goal: completedGoal });
-        }
-        if (contractId)
-          emit('completion.updated', { runId, contractId, summary: completionSummary });
-      } else if (candidateCompletion) {
-        completionSummary = {
-          ...candidateCompletion,
-          state: 'needs_review',
-          reason: status === 'failed' ? 'finalization-failed' : 'cleanup-incomplete',
-        };
-      }
-      if (!completionSummary && contractId) {
-        // A contract that never reached a verification round still reports its state rather than nothing: the
-        // absence of a verdict and an unverified verdict are different answers, and only one of them is true.
-        completionSummary = {
-          version: 1,
-          state: 'unverified',
-          reason: error ?? 'not-verified',
-          contractId,
-          ...(contractDefinitionHash === undefined
-            ? {}
-            : { definitionHash: contractDefinitionHash }),
-          verificationRound,
-          repairRounds,
-          repeatedFailures,
-          failedCheckIds: [],
-          unfinishedStepIds: [],
-        };
-      }
-      result = {
-        runId,
+      result = await finalizeRun({
+        agent: this.options,
+        store,
+        tools,
         sessionId: input.sessionId,
+        runId,
+        signal,
+        readOnly,
         status,
+        error,
+        code,
         text,
+        endpointFailure,
         usage,
         statistics,
-        ...(committedSummaryUsage.inputTokens || committedSummaryUsage.outputTokens
-          ? {
-              compactionUsage: {
-                inputTokens: committedSummaryUsage.inputTokens,
-                outputTokens: committedSummaryUsage.outputTokens,
-                cachedInputTokens: committedSummaryUsage.cachedInputTokens,
-                cacheWriteInputTokens: committedSummaryUsage.cacheWriteInputTokens,
-              },
-            }
-          : {}),
-        ...(coordinator?.summaries.length ? { subagents: coordinator.summaries } : {}),
-        ...(reportHolder.report ? { report: reportHolder.report } : {}),
-        ...(reportHolder.data !== undefined ? { data: reportHolder.data } : {}),
-        ...(error ? { error } : {}),
-        ...(code ? { code } : {}),
-        ...(endpointFailure?.httpStatus === undefined
-          ? {}
-          : { httpStatus: endpointFailure.httpStatus }),
-        ...(endpointFailure?.requestId === undefined
-          ? {}
-          : { requestId: endpointFailure.requestId }),
-        ...(acceptance ? { acceptance } : {}),
-        ...(completionSummary ? { completion: completionSummary } : {}),
-      };
-      // Stop hooks observe the finished run and can only annotate it. The effects already happened
-      // and the result is about to be persisted, so a reason here is reported, never a veto.
-      try {
-        const stopped = await underExecutionPolicy(this.options.executionPolicy?.(), () =>
-          tools.extensions.stop(
-            {
-              sessionId: input.sessionId,
-              runId,
-              status,
-              text,
-              readOnly,
-              ...(error ? { error } : {}),
-            },
-            signal,
-          ),
-        );
-        const notices = [
-          ...stopped.reasons,
-          ...stopped.failures.map((failure) => `stop hook failed: ${failure}`),
-        ];
-        if (notices.length)
-          result.text = `${result.text}${result.text ? '\n\n' : ''}${notices
-            .map((notice) => `[Extension stop hook] ${notice}`)
-            .join('\n')}`;
-      } catch {
-        /* A stop hook must never change the outcome of an already-finished run. */
-      }
-      /**
-       * Anything still queued was never folded into a turn, and the run it was queued for is now over. The
-       * record says so — the reason distinguishes "the person pressed Stop" from "the run reached its end
-       * first" — because the alternative, an empty queue nobody wrote about, is exactly the silent loss the
-       * durable inbox exists to remove. What is *not* written here is the crash case: a process that dies
-       * before this point leaves `input.queued` standing, which is how a later reader knows.
-       */
-      this.discard(
-        queue.clear().map((item) => item.id),
-        input.sessionId,
-        status === 'cancelled' ? 'cancelled' : 'run-ended',
-      );
-      this.runs.delete(input.sessionId);
-      emit('queue.changed', { queue: [] });
-      /**
-       * The run-end promises are checked before the result is persisted, so a broken one is reported as a
-       * failed run rather than discovered later against a run that claims to have completed. `failed` is
-       * already part of `RunStatus`, so nothing downstream has to learn a new vocabulary — and a run whose
-       * promises were broken is exactly what `failed` means.
-       */
-      await this.checkRunEnd(result, input.sessionId, runId, [...emittedTypes]);
-      try {
-        store.finishRun(result);
-      } catch {
-        result.status = 'failed';
-        result.error = 'Failed to persist run finalization';
-        store.finishRun(result);
-      }
-      emit('run.finished', { result });
+        committedSummaryUsage,
+        emission,
+        emittedTypes,
+        coordinator,
+        residentTurns,
+        completion,
+        task,
+        taskAttempt,
+        reportHolder,
+        queue,
+        emit,
+        releaseRun: (ids, reason) => {
+          this.discard(ids, input.sessionId, reason);
+          this.runs.delete(input.sessionId);
+        },
+        checkRunEnd: (result, types) => this.checkRunEnd(result, input.sessionId, runId, types),
+      });
     }
     return result;
   }

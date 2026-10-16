@@ -1,4 +1,5 @@
 import type { Message, SpilledOutput } from '../protocol/index.ts';
+import { codePointLength } from './text.ts';
 
 /**
  * Shortening old tool results the model can still see.
@@ -53,30 +54,44 @@ function worthShortening(content: string, tokens: number, measure: MeasureText):
   return measure(content) > tokens * 2 && !content.includes(SHRINK_MARK);
 }
 /**
- * How many characters hold the token budget for *this* text.
+ * How many *characters* hold the token budget for this text.
  *
- * The density is the text's own — `measure` prices it, and dividing by its length gives tokens per character for
- * exactly the content being cut, which is what makes one budget mean one cost in English, in Chinese and in a
- * mixture of both. The result is clamped to the text: a budget larger than the result must not make the head and
- * the tail overlap, and a very small budget must not produce a slice that removes nothing.
+ * The density is the text's own — `measure` prices it, and dividing by its character count gives tokens per
+ * character for exactly the content being cut, which is what makes one budget mean one cost in English, in
+ * Chinese and in a mixture of both. The count is code points rather than UTF-16 units (`prune.ts` makes the same
+ * distinction for the same reason): a budget expressed in characters has to be turned into characters before
+ * anything is sliced, or an emoji counts as two and the cut can land inside it. The result is clamped to the
+ * text: a budget larger than the result must not make the head and the tail overlap, and a very small budget
+ * must not produce a slice that removes nothing.
  */
 function charactersFor(content: string, tokens: number, measure: MeasureText): number {
-  const perCharacter = measure(content) / Math.max(1, content.length);
-  return Math.max(1, Math.min(content.length, Math.floor(tokens / perCharacter)));
+  const characters = codePointLength(content);
+  const perCharacter = measure(content) / Math.max(1, characters);
+  return Math.max(1, Math.min(characters, Math.floor(tokens / perCharacter)));
 }
-/** The head/tail split. Both ends are kept because both ends are load-bearing: a log's context is at the top,
- * its conclusion at the bottom, and a diff's hunk headers at the top with its last hunks at the bottom. */
+/**
+ * The head/tail split, cut on character boundaries.
+ *
+ * `[...content]` iterates characters, so a slice of it can never split a surrogate pair — the failure this
+ * replaces left a lone half at the start of the tail, which every encoder downstream then has to guess about. A
+ * multi-character grapheme cluster can still be split, which is the documented limit of a character budget
+ * rather than a bug in it (the same boundary `prune.ts` states).
+ *
+ * Both ends are kept because both ends are load-bearing: a log's context is at the top, its conclusion at the
+ * bottom, and a diff's hunk headers at the top with its last hunks at the bottom.
+ */
 function shortenedContent(
   content: string,
   characters: number,
   notice: (removed: number, total: number) => string,
 ): string {
+  const points = [...content];
   const head = Math.floor(characters / 2);
   const tail = characters - head;
   return (
-    content.slice(0, head) +
-    notice(content.length - characters, content.length) +
-    content.slice(content.length - tail)
+    points.slice(0, head).join('') +
+    notice(points.length - characters, points.length) +
+    points.slice(points.length - tail).join('')
   );
 }
 /** The line that replaces the removed middle. It says what was cut, and what to do to see it. */
@@ -134,7 +149,8 @@ export function shortenMessages(
     );
     outcome[index] = { ...message, content };
     shortened += 1;
-    freedChars += message.content.length - content.length;
+    // Counted in code points, the unit the budget is stated in, so the reported saving cannot disagree with it.
+    freedChars += codePointLength(message.content) - codePointLength(content);
   }
   return { messages: outcome, shortened, freedChars };
 }

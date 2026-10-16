@@ -60,7 +60,7 @@ test('a symbol past 32KiB of a file body is found', async (t) => {
   const page = await service.symbols({
     query: 'deepSymbol',
     limit: 10,
-    signal: AbortSignal.abort(),
+    signal: new AbortController().signal,
   });
   assert.deepEqual(
     page.symbols.map((symbol) => [symbol.path, symbol.startLine, symbol.kind]),
@@ -126,8 +126,13 @@ test('a changed, renamed or deleted file does not keep answering with its old sy
   const service = await serviceFor(t, root);
   await service.ready();
   assert.equal(
-    (await service.symbols({ query: 'originalName', limit: 10, signal: AbortSignal.abort() }))
-      .symbols.length,
+    (
+      await service.symbols({
+        query: 'originalName',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
+    ).symbols.length,
     1,
   );
 
@@ -137,19 +142,32 @@ test('a changed, renamed or deleted file does not keep answering with its old sy
   await rename(path.join(root, 'two.ts'), path.join(root, 'moved.ts'));
   await service.ready();
   assert.deepEqual(
-    (await service.symbols({ query: 'originalName', limit: 10, signal: AbortSignal.abort() }))
-      .symbols,
+    (
+      await service.symbols({
+        query: 'originalName',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
+    ).symbols,
     [],
   );
   assert.deepEqual(
     (
-      await service.symbols({ query: 'replacementName', limit: 10, signal: AbortSignal.abort() })
+      await service.symbols({
+        query: 'replacementName',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
     ).symbols.map((symbol) => symbol.path),
     ['one.ts'],
   );
   assert.deepEqual(
     (
-      await service.symbols({ query: 'secondName', limit: 10, signal: AbortSignal.abort() })
+      await service.symbols({
+        query: 'secondName',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
     ).symbols.map((symbol) => symbol.path),
     ['moved.ts'],
   );
@@ -157,8 +175,13 @@ test('a changed, renamed or deleted file does not keep answering with its old sy
   await rm(path.join(root, 'moved.ts'));
   await service.ready();
   assert.deepEqual(
-    (await service.symbols({ query: 'secondName', limit: 10, signal: AbortSignal.abort() }))
-      .symbols,
+    (
+      await service.symbols({
+        query: 'secondName',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
+    ).symbols,
     [],
   );
 });
@@ -170,8 +193,13 @@ test('a same-size rewrite inside one timestamp tick is caught by a content check
   const service = await serviceFor(t, root);
   await service.ready();
   assert.equal(
-    (await service.symbols({ query: 'beforeRewrite', limit: 10, signal: AbortSignal.abort() }))
-      .symbols.length,
+    (
+      await service.symbols({
+        query: 'beforeRewrite',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
+    ).symbols.length,
     1,
   );
 
@@ -187,14 +215,23 @@ test('a same-size rewrite inside one timestamp tick is caught by a content check
   await utimes(file, stats.atime, stats.mtime);
   await service.ready({ hash: true });
   assert.deepEqual(
-    (await service.symbols({ query: 'beforeRewrite', limit: 10, signal: AbortSignal.abort() }))
-      .symbols,
+    (
+      await service.symbols({
+        query: 'beforeRewrite',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
+    ).symbols,
     [],
     'the superseded declaration is gone',
   );
   assert.deepEqual(
     (
-      await service.symbols({ query: 'afterrrRewrite', limit: 10, signal: AbortSignal.abort() })
+      await service.symbols({
+        query: 'afterrrRewrite',
+        limit: 10,
+        signal: new AbortController().signal,
+      })
     ).symbols.map((symbol) => symbol.path),
     ['same.ts'],
     'and the current one is there',
@@ -207,7 +244,7 @@ test('a query during a build says building rather than answering as if it had fi
     await writeFile(path.join(root, `f-${index}.ts`), `export function named${index}() {}\n`);
   const service = await serviceFor(t, root);
   // Not awaited: this is the state a query sees while the first build is still running.
-  void service.symbols({ query: 'named0', limit: 10, signal: AbortSignal.abort() });
+  void service.symbols({ query: 'named0', limit: 10, signal: new AbortController().signal });
   const during = service.freshness();
   assert.ok(
     during === 'building' || during === 'validated',
@@ -242,8 +279,8 @@ test('the index and the session database are separate resources', async (t) => {
   await second.ready();
   assert.equal(second.freshness(), 'validated');
   assert.equal(
-    (await second.symbols({ query: 'persisted', limit: 5, signal: AbortSignal.abort() })).symbols
-      .length,
+    (await second.symbols({ query: 'persisted', limit: 5, signal: new AbortController().signal }))
+      .symbols.length,
     1,
   );
   // Closed here rather than only in an after hook: the temporary directory is removed by the first hook
@@ -264,8 +301,8 @@ test('an unwritable index directory downgrades to memory instead of failing', as
   assert.equal(service.persistent, false);
   await service.ready();
   assert.equal(
-    (await service.symbols({ query: 'inMemory', limit: 5, signal: AbortSignal.abort() })).symbols
-      .length,
+    (await service.symbols({ query: 'inMemory', limit: 5, signal: new AbortController().signal }))
+      .symbols.length,
     1,
   );
 });
@@ -322,19 +359,29 @@ test('credentials and dependency directories are not indexed', async (t) => {
   await service.ready();
   for (const name of ['fromDependency', 'fromEnvironment', 'fromKey']) {
     assert.deepEqual(
-      (await service.symbols({ query: name, limit: 5, signal: AbortSignal.abort() })).symbols,
+      (await service.symbols({ query: name, limit: 5, signal: new AbortController().signal }))
+        .symbols,
       [],
       `${name} is not reachable through the index`,
     );
   }
   assert.equal(
-    (await service.symbols({ query: 'fromWorkspace', limit: 5, signal: AbortSignal.abort() }))
-      .symbols.length,
+    (
+      await service.symbols({
+        query: 'fromWorkspace',
+        limit: 5,
+        signal: new AbortController().signal,
+      })
+    ).symbols.length,
     1,
   );
   assert.deepEqual(
     (
-      await service.symbols({ query: 'fromWorkspace', limit: 5, signal: AbortSignal.abort() })
+      await service.symbols({
+        query: 'fromWorkspace',
+        limit: 5,
+        signal: new AbortController().signal,
+      })
     ).symbols.map((symbol) => symbol.path),
     ['ok.ts'],
   );
@@ -379,7 +426,11 @@ test('a TypeScript file is parsed from its syntax tree, with exact declaration s
   );
   const service = await serviceFor(t, root);
   await service.ready();
-  const page = await service.symbols({ query: '', limit: 50, signal: AbortSignal.abort() });
+  const page = await service.symbols({
+    query: '',
+    limit: 50,
+    signal: new AbortController().signal,
+  });
   assert.deepEqual(
     page.symbols.map((symbol) => [symbol.name, symbol.kind, symbol.startLine, symbol.endLine]),
     [

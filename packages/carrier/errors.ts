@@ -11,6 +11,8 @@ const messages = {
     'Agent Host exited unexpectedly and automatic restart failed; restart the application.',
   hostRecovering: 'Agent Host is restarting automatically; please wait.',
   hostNotReady: 'Agent Host is not ready; restart the desktop',
+  workspaceMaintenanceUnsupported:
+    'This Agent Host does not support orphan workspace maintenance; upgrade the Host.',
   policyUnconfirmed:
     'Execution policy is unconfirmed: Agent Host did not acknowledge the last sandbox selection. Select and confirm a preset before running again.',
   modelNotConfigured: 'Open Model settings and enter an endpoint, model ID and API key.',

@@ -25,7 +25,7 @@ test('one-shot Host approval recovery keeps one logical delivery and records aut
     YUANTU_WORKFLOWS: 'true',
     YUANTU_WORKFLOW_INTERVAL_MS: '1000',
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const session = await client.request('session.create', {});

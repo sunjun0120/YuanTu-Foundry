@@ -81,13 +81,13 @@ const discovered = explicit
   : await discoverTests(root);
 // A preview of an explicit file list is a preview of that list, not of the whole suite.
 // The serial baseline must remain usable even if an experimental policy is invalid or stale.
+const policy =
+  schedule === 'partitioned'
+    ? await loadPolicy(root, discovered, { tolerateUnknown: explicit })
+    : null;
 const partition =
   schedule === 'partitioned'
-    ? await partitionTests(discovered, {
-        root,
-        policy: await loadPolicy(root, discovered, { tolerateUnknown: explicit }),
-        strictFiles: !explicit,
-      })
+    ? await partitionTests(discovered, { root, policy, strictFiles: !explicit })
     : { parallel: [], serial: discovered, reasons: {} };
 const filtered = options.some((option) => /^--test-(?:name|skip)-pattern=/.test(option));
 
@@ -100,6 +100,15 @@ if (plan) {
   console.log(
     `Plan: parallel=${partition.parallel.length} serial=${partition.serial.length} total=${discovered.length} parallel-concurrency=${parallelConcurrency}`,
   );
+  /**
+   * The reviewed set and the parallelised set are different numbers, and the gap is the point: the policy drops
+   * a file back to serial as soon as any input it was reviewed against changes, so the entry count always
+   * overstates what actually runs concurrently. Printing only the plan made the two look like one number.
+   */
+  if (policy)
+    console.log(
+      `Policy: entries=${policy.entries.length} parallelised=${partition.parallel.length} awaiting-review=${policy.entries.length - partition.parallel.length}`,
+    );
   process.exit(0);
 }
 
@@ -122,7 +131,7 @@ if (schedule === 'serial') {
     // obtained. It is only *merged to the caller's path* when --timings asked for one.
     timings: path.join(directory, `${runId}-serial-timings.ndjson`),
   });
-  const verified = await verifyPhases([result]);
+  const verified = await verifyPhases([{ ...result, files: discovered }]);
   await mergeTimings(
     verified,
     timings,
@@ -131,6 +140,7 @@ if (schedule === 'serial') {
   );
   printTotals([result], verified.totals);
   if (verified.problem) console.error(verified.problem);
+  reportZeroTestFiles(verified.zeroTestFiles);
   process.exitCode = result.exitCode || (verified.problem ? 1 : 0);
 } else {
   console.log(
@@ -167,8 +177,23 @@ if (schedule === 'serial') {
   );
   printTotals(results, verified.totals);
   if (verified.problem) console.error(verified.problem);
+  reportZeroTestFiles(verified.zeroTestFiles);
   const failed = results.some((r) => r.exitCode !== 0);
   process.exitCode = failed ? 1 : verified.problem ? 1 : 0;
+}
+
+/**
+ * Say that files reported no cases, and whether a filter explains it.
+ *
+ * This is the shape that must not be turned into a failure: `--test-name-pattern` selecting nothing in a
+ * file is a correct run of that file. Printing the count and the filter state is what makes the
+ * difference auditable after the fact.
+ */
+function reportZeroTestFiles(count) {
+  if (!count) return;
+  console.log(
+    `${count} file(s) reported no test cases; a name/skip filter was ${filtered ? '' : 'not '}in effect.`,
+  );
 }
 
 /** Run one harness over one phase and wait for its log and report to be complete. */
@@ -214,11 +239,25 @@ async function runPhase({ phase, files, concurrency, log, timings: timingsPath }
  * Read every phase report and require each one to be complete. A phase that produced no report is a
  * phase that cannot be shown to have run, which is a failed run rather than a successful one with
  * less output.
+ *
+ * Completeness is checked per file as well as per phase, because three shapes look alike from the
+ * outside and are not:
+ *
+ * - a file that ran reports its own `file-summary` with the cases it held;
+ * - a file a `--test-name-pattern`/`--test-skip-pattern` matched nothing in **also** reports a
+ *   `file-summary`, with `tests: 0` — measured, not assumed — so it is legitimate;
+ * - a file that exited before the harness could summarise it reports **no** `file-summary` at all.
+ *
+ * The rule that follows is "a summary must exist", never "a test must exist": the second would fail
+ * exactly the filtered run a developer types to check one case, and a gate that cries wolf gets
+ * deleted. Zero-test files are counted and printed instead, so the shape is visible without being an
+ * error.
  */
 async function verifyPhases(results) {
   const records = [];
   const totals = [];
   let problem = null;
+  let zeroTestFiles = 0;
   for (const result of results) {
     const report = await readReport(result.timingsPath);
     if (!report) {
@@ -227,8 +266,41 @@ async function verifyPhases(results) {
     }
     records.push(...report.records);
     totals.push(report.summary);
+    const summarised = new Map();
+    const statuses = new Map();
+    for (const record of report.records) {
+      if (record.kind === 'file-summary' && record.file)
+        summarised.set(path.resolve(record.file), record.counts ?? {});
+      else if (record.kind === 'case' && record.file)
+        statuses.set(path.resolve(record.file), record.status);
+    }
+    const missing = [];
+    for (const file of result.files ?? []) {
+      const counts = summarised.get(path.resolve(file));
+      if (counts) {
+        if (!counts.tests) zeroTestFiles++;
+        continue;
+      }
+      /**
+       * No per-file summary, and two very different reasons produce that. A file that failed before its first
+       * test is reported as a failed case; a file that declares no tests at all is reported as a passing one,
+       * because the harness counts the file itself. They are named apart rather than merged into one message,
+       * since "it crashed" and "it is empty" send a reader to different files.
+       */
+      const status = statuses.get(path.resolve(file));
+      missing.push(
+        `${path.relative(root, file)} (${status === 'failed' ? 'failed before reporting' : 'declares no tests'})`,
+      );
+    }
+    if (missing.length) {
+      problem =
+        `Phase ${result.phase}: ${missing.length} test file(s) produced no per-file summary (listed with the ` +
+        'reason each was read as): ' +
+        missing.join(', ');
+      break;
+    }
   }
-  return { problem, records, totals };
+  return { problem, records, totals, zeroTestFiles };
 }
 
 /**

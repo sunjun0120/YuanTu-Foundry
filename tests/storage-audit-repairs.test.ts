@@ -60,10 +60,11 @@ test('a cache cannot hide a commit between its event read and version sampling',
   const { store, other, session } = await fixture(t);
   store.append(session.id, { role: 'user', content: 'before' });
   store.flush();
-  const internal = store as unknown as {
-    readEvents: (...args: unknown[]) => unknown;
+  // Interleave at the journal's actual event read, before it publishes the cached fold.
+  const { journal: internal } = store as unknown as {
+    journal: { readEvents: (...args: unknown[]) => unknown };
   };
-  const read = internal.readEvents.bind(store);
+  const read = internal.readEvents.bind(internal);
   let injected = false;
   internal.readEvents = (...args) => {
     const result = read(...args);
@@ -77,6 +78,7 @@ test('a cache cannot hide a commit between its event read and version sampling',
   try {
     // The first read may be the earlier snapshot, but the next read must detect its old version.
     store.messages(session.id);
+    assert.equal(injected, true, 'the second connection committed inside the cache read window');
     assert.deepEqual(
       store.messages(session.id).map((message) => message.content),
       ['before', 'after'],

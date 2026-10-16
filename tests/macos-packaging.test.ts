@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -159,8 +159,35 @@ test('macOS package commands perform preflight first and bind explicit targets t
 test(
   'builder prepack hook leaves Windows packaging alone and rejects macOS builds on a foreign host',
   { skip: process.platform === 'darwin' },
-  async () => {
+  async (t) => {
     assert.equal(typeof config.beforePack, 'function');
+    /**
+     * The Windows branch validates the staged runtime that `scripts/prepare-windows-package.mjs`
+     * publishes at the repository-relative `.scratch/packaging/runtime`, so the hook is driven from a
+     * fixture staged for this test rather than from whatever a previous packaging run left behind.
+     */
+    const previous = process.cwd();
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-prepack-'));
+    t.after(async () => {
+      process.chdir(previous);
+      await rm(root, { recursive: true, force: true });
+    });
+    const runtime = path.join(root, '.scratch/packaging/runtime');
+    await mkdir(runtime, { recursive: true });
+    const node = Buffer.from('staged runtime fixture');
+    const license = 'Node.js is licensed for use as follows:\nfixture license';
+    await writeFile(path.join(runtime, 'node.exe'), node);
+    await writeFile(path.join(runtime, 'LICENSE.node'), license);
+    await writeFile(
+      path.join(runtime, 'runtime.json'),
+      JSON.stringify({
+        selection: 'explicit-or-host',
+        profile: 'upstream-unqualified',
+        sha256: createHash('sha256').update(node).digest('hex'),
+        licenseSha256: createHash('sha256').update(license).digest('hex'),
+      }),
+    );
+    process.chdir(root);
     await config.beforePack({ electronPlatformName: 'win32', arch: 1 });
     await assert.rejects(config.beforePack({ electronPlatformName: 'darwin', arch: 3 }), /macOS/);
   },

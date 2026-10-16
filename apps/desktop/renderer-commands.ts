@@ -13,7 +13,8 @@
  * place where the composer's events are wired.
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
-import { t } from './i18n.ts';
+import { format, locale, t } from './i18n.ts';
+import { conversationMarkdown } from './renderer-export.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -142,14 +143,8 @@ export function setupCommandPalette(actions: {
   function exportConversation(): string {
     const state = actions.getState();
     if (!state) return '';
-    const title =
-      state.sessions.find((item) => item.id === state?.session.sessionId)?.title || '新会话';
-    return `# ${title}\n\n${state.session.messages
-      .map(
-        (message) =>
-          `## ${message.role === 'user' ? '你' : message.role === 'assistant' ? '助手' : '工具'}\n\n${message.content}`,
-      )
-      .join('\n\n')}`;
+    const title = state.sessions.find((item) => item.id === state.session.sessionId)?.title;
+    return conversationMarkdown({ title, messages: state.session.messages });
   }
   function choosePaletteItem(item: PaletteItem): void {
     menuDismissed = true;
@@ -289,7 +284,7 @@ export function setupCommandPalette(actions: {
     const name = slash[1]!.toLowerCase();
     const argument = slash[2]?.trim() || '';
     if ((name === 'goal' || name === 'plan') && !argument)
-      return { error: `/${name} 需要描述内容。` };
+      return { error: format(t('ui.commandNeedsDescription'), { name }) };
     prompt.value = '';
     menuDismissed = true;
     const command: CarrierCommand =
@@ -298,8 +293,8 @@ export function setupCommandPalette(actions: {
         : name === 'export'
           ? { type: 'export', content: exportConversation(), suggestedName: 'yuantu-session.md' }
           : name === 'goal'
-            ? { type: 'goal', prompt: argument }
-            : { type: 'plan', prompt: argument };
+            ? { type: 'goal', prompt: argument, language: locale() }
+            : { type: 'plan', prompt: argument, language: locale() };
     return { command };
   }
   return { render: renderPalette, onInput, onKeydown, submitSlash };

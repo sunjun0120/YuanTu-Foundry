@@ -112,7 +112,7 @@ test('every live frame carries the log position it is ordered against', async (t
 
 test('a session can be replayed from a cursor, and only what is missing comes back', async (t) => {
   const host = await listeningHost(t, {});
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
   const session = await client.request('session.create', {});
@@ -166,7 +166,7 @@ test('a session can be replayed from a cursor, and only what is missing comes ba
 
 test('a client that missed a fact finds out and catches up without the Host restarting', async (t) => {
   const host = await listeningHost(t, {});
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
   const session = await client.request('session.create', {});
@@ -240,7 +240,7 @@ test('a cursor is a position in the log, and it only ever moves forward', async 
 
 test('a client that cannot check assumes a gap rather than reporting a level view', async (t) => {
   const host = await listeningHost(t, {});
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
   const session = await client.request('session.create', {});
@@ -295,7 +295,7 @@ test('a catch-up during a live run leaves the run alone', async (t) => {
     return held.then(() => sendFrames(res, frames('late answer')));
   });
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
   const session = await client.request('session.create', {});
@@ -351,7 +351,7 @@ test('the success assertions above are not vacuous: a run refused by the endpoin
     );
   });
   const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
   const session = await client.request('session.create', {});

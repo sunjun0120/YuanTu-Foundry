@@ -123,6 +123,37 @@ test('the newest results are the ones that stay intact', () => {
   ]);
 });
 
+/**
+ * A cut lands on a character boundary, not on a UTF-16 index.
+ *
+ * `measure` prices text in code units, so a budget stated in characters has to be translated into *characters*
+ * before anything is sliced: an emoji is one character and two code units, and a cut placed on an odd code-unit
+ * offset splits the pair, leaving a lone half that every later encoder has to guess about. `prune.ts` has counted
+ * code points for exactly this reason since it was written; this is the same rule for the shrink path.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+test('a shortened result never cuts through a surrogate pair', () => {
+  const content = '😀'.repeat(3000);
+  const outcome = shorten(withOldResult(content), { keepRecent: 0, tokens: 1001 }, () => ({
+    path: 'full.txt',
+    bytes: 1,
+    lines: 1,
+  }));
+  assert.equal(outcome.shortened, 1);
+  const shortened = outcome.messages[2]!;
+  const text = shortened.role === 'tool' ? shortened.content : '';
+  assert.ok(text.includes(SHRINK_MARK), 'the result was shortened');
+  assert.doesNotMatch(
+    text,
+    LONE_SURROGATE,
+    'the cut landed between the halves of a surrogate pair',
+  );
+  assert.ok(text.startsWith('😀'), 'the head ends on a whole character');
+  assert.ok(text.endsWith('😀'), 'the tail starts on a whole character');
+  // The freed count is in the unit the budget is stated in, so it cannot quietly disagree with what was removed.
+  assert.equal(outcome.freedChars, [...content].length - [...text].length);
+});
+
 test('a result that is already a shortened view is left alone', () => {
   const shortened = `head${SHRINK_MARK} 4000 of 5000 characters removed]tail`;
   const outcome = shorten(withOldResult(shortened), { keepRecent: 0, tokens: 100 }, () => {

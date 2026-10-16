@@ -185,6 +185,7 @@ function hooksFor(
     case 'SessionStart':
       return {
         sessionStart: async (context, signal) => {
+          if (context.readOnly) return;
           await run(
             context.resumed ? 'resume' : 'startup',
             basePayload('SessionStart', context.sessionId, workspace, {
@@ -197,6 +198,7 @@ function hooksFor(
     case 'SessionEnd':
       return {
         sessionEnd: async (context, signal) => {
+          if (context.readOnly) return;
           await run(
             context.reason,
             basePayload('SessionEnd', context.sessionId, workspace, { reason: context.reason }),

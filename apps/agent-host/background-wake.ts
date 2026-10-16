@@ -68,7 +68,7 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
         ctx.closing ||
         ctx.active.size ||
         ctx.restoring ||
-        ctx.manualCompaction ||
+        ctx.manualOperation ||
         !ctx.automaticReady
       )
         return;

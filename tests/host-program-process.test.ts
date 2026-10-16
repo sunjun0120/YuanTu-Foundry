@@ -45,7 +45,7 @@ test(
       YUANTU_BASE_URL: url,
     });
     await writeFile(path.join(host.root, 'seed.txt'), 'seed');
-    const { client } = await connectClient(host.port);
+    const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
     await client.request('permission.update', {

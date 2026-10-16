@@ -58,6 +58,8 @@ export interface SpawnedHostOptions extends HostClientLimits {
  */
 export interface ConnectedHostOptions extends HostClientLimits {
   transport: HostTransport;
+  /** Out-of-band credential for an opt-in loopback TCP Host. Never load it from the workspace. */
+  authToken?: string;
   env?: NodeJS.ProcessEnv;
 }
 export type HostClientOptions = SpawnedHostOptions | ConnectedHostOptions;
@@ -245,7 +247,12 @@ export class AgentHostClient {
       // must not make the handshake fail before a long-running task can start.
       const info = await this.invoke(
         'host.info',
-        { protocolVersions: [...HOST_PROTOCOL_VERSIONS] },
+        {
+          protocolVersions: [...HOST_PROTOCOL_VERSIONS],
+          ...(isConnected(this.options) && this.options.authToken !== undefined
+            ? { authToken: this.options.authToken }
+            : {}),
+        },
         Math.max(this.options.requestTimeoutMs ?? 10_000, 10_000),
       );
       validateHostInfo(info);
@@ -416,7 +423,10 @@ export class AgentHostClient {
     else entry.reject(new Error('Invalid Host response'));
   }
   private redact(message: string): string {
-    return redactSecrets(message, { ...process.env, ...this.options.env });
+    const clean = redactSecrets(message, { ...process.env, ...this.options.env });
+    return isConnected(this.options) && this.options.authToken
+      ? clean.split(this.options.authToken).join('[redacted]')
+      : clean;
   }
   private cleanResult(value: unknown): unknown {
     if (!value || typeof value !== 'object') return value;

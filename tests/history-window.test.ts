@@ -106,7 +106,7 @@ test('a real Host loads recent history and pages backwards without losing messag
     for (let i = 0; i < 350; i++) store.append(sessionId, { role: 'user', content: `Entry ${i}` });
     store.close();
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   const controller = new SessionController(client);
   t.after(async () => {
     controller.dispose();
@@ -166,7 +166,7 @@ test('a bounded history window reconstructs an oversized message without reading
     for (let i = 0; i < 100; i++) store.append(sessionId, { role: 'user', content: `Entry ${i}` });
     store.close();
   });
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   const controller = new SessionController(client);
   t.after(async () => {
     controller.dispose();

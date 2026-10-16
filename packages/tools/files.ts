@@ -58,6 +58,13 @@ function hidden(name: string): boolean {
     excluded.has(name.toLowerCase()) || /^\.env(?:\.|$)/i.test(name) || isCredentialFileName(name)
   );
 }
+/** Apply name rules to both the caller's spelling and the filesystem's canonical spelling. */
+function assertVisiblePath(root: string, target: string, allowSpill: boolean): void {
+  const parts = path.relative(root, target).split(path.sep).filter(Boolean);
+  const spill = allowSpill && parts[0] === '.yuantu' && parts[1] === 'spill';
+  if (parts.some((part, index) => hidden(part) && !(spill && index === 0)))
+    throw new Error('Access to internal or credential paths is blocked');
+}
 /**
  * True for the store's own spilled tool output, which lives under the internal `.yuantu` directory. Reads
  * reach it, writes do not, and scoped instructions are never looked up inside it.
@@ -144,9 +151,7 @@ export class Workspace {
     // Spilled tool output lives under `.yuantu/spill`, which reads may reach — the model has to be able to
     // page through output that did not fit in a result. Nothing else under `.yuantu` opens up, and `allowSpill`
     // is only ever passed by a read.
-    const spill = allowSpill && parts[0] === '.yuantu' && parts[1] === 'spill';
-    if (parts.some((part, index) => hidden(part) && !(spill && index === 0)))
-      throw new Error('Access to internal or credential paths is blocked');
+    assertVisiblePath(root, target, allowSpill);
     // Reject all links, including in-root links, to reduce ambiguity for mutation tools.
     let current = root;
     for (let i = 0; i < parts.length; i++) {
@@ -159,13 +164,21 @@ export class Workspace {
           allowNew &&
           i === parts.length - 1 &&
           (error as NodeJS.ErrnoException).code === 'ENOENT'
-        )
-          return current;
+        ) {
+          const canonical = path.join(
+            await realpath(path.dirname(current)),
+            path.basename(current),
+          );
+          if (!inside(root, canonical)) throw new Error('Resolved path is outside workspace');
+          assertVisiblePath(root, canonical, allowSpill);
+          return canonical;
+        }
         throw error;
       }
     }
     const canonical = await realpath(target);
     if (!inside(root, canonical)) throw new Error('Resolved path is outside workspace');
+    assertVisiblePath(root, canonical, allowSpill);
     return canonical;
   }
   async read(input: string, limit = 256_000, allowSpill = false): Promise<string> {

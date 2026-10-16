@@ -40,7 +40,7 @@ export interface CursorState {
   queryHash: string;
   sourceVersion: string | null;
   /** Where the next page starts: after this path and line. `null` means the beginning. */
-  after: { path: string; line: number } | null;
+  after: { path: string; line: number; index?: number } | null;
   /** The last file of the page before this one, so a change to it is detectable. */
   witness: CursorWitness | null;
 }

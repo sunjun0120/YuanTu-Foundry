@@ -53,7 +53,7 @@ test('cold Host skips stale cron and automatically delivers only the latest occu
       }
     },
   );
-  const { client } = await connectClient(host.port);
+  const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
   const end = Date.now() + 15000;

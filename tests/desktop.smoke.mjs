@@ -13,6 +13,187 @@ import { promisify } from 'node:util';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
 
+test(
+  'finished turns show separate file cards at their ends, with collapsed previews and live changes withheld',
+  { timeout: 60000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-turn-cards-'));
+    await mkdir(path.join(root, '.yuantu'));
+    const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+    const session = store.create(root);
+    const firstRun = store.beginRun(session.id);
+    store.append(session.id, { role: 'user', content: 'FIRST_QUESTION' });
+    for (let index = 0; index < 6; index++) {
+      const name = `file-${index}.ts`;
+      const text = `const value = ${index};\n`;
+      await writeFile(path.join(root, name), text);
+      const id = store.prepareFileChange(
+        session.id,
+        {
+          path: name,
+          kind: 'create',
+          patch: `@@ -0,0 +1 @@\n+${text}`,
+          added: 1,
+          removed: 0,
+          truncated: false,
+        },
+        null,
+        Buffer.from(text),
+      );
+      store.markFileChange(id, 'applied');
+    }
+    store.append(session.id, { role: 'assistant', content: 'FIRST_FINAL', toolCalls: [] });
+    store.finishRun({
+      sessionId: session.id,
+      runId: firstRun,
+      status: 'completed',
+      text: 'FIRST_FINAL',
+      usage: { inputTokens: 0, outputTokens: 0 },
+    });
+    const secondRun = store.beginRun(session.id);
+    store.append(session.id, { role: 'user', content: 'SECOND_QUESTION' });
+    await writeFile(path.join(root, 'second.ts'), 'second');
+    const secondId = store.prepareFileChange(
+      session.id,
+      {
+        path: 'second.ts',
+        kind: 'create',
+        patch: '@@ -0,0 +1 @@\n+second',
+        added: 1,
+        removed: 0,
+        truncated: false,
+      },
+      null,
+      Buffer.from('second'),
+    );
+    store.markFileChange(secondId, 'applied');
+    store.append(session.id, { role: 'assistant', content: 'SECOND_FINAL', toolCalls: [] });
+    store.finishRun({
+      sessionId: session.id,
+      runId: secondRun,
+      status: 'completed',
+      text: 'SECOND_FINAL',
+      usage: { inputTokens: 0, outputTokens: 0 },
+    });
+    store.close();
+    let requests = 0,
+      pending;
+    const endpoint = await httpFixture(t, (_body, response) => {
+      if (++requests === 1)
+        sendFrames(
+          response,
+          frames('', [
+            { id: 'live-write', name: 'write_file', input: { path: 'live.ts', content: 'live\n' } },
+          ]),
+        );
+      else pending = response;
+    });
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_BASE_URL: endpoint,
+      YUANTU_API_KEY: 'fixture-turn-card',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: 'false',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    t.after(async () => {
+      pending?.destroy();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(12000);
+    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.locator(`[data-session-id="${session.id}"]`).first().click();
+    await page.waitForFunction(
+      async () => !(await window.yuantu.invoke({ type: 'snapshot' })).state.session.loading,
+    );
+    await page.locator('.turn-changes').nth(1).waitFor();
+    assert.equal(await page.locator('#changes').count(), 0);
+    assert.deepEqual(await page.locator('.turn-changes-title').allTextContents(), [
+      '已编辑 6 个文件',
+      '已编辑 1 个文件',
+    ]);
+    const first = page.locator('.turn-changes').first();
+    assert.equal(await first.locator('.turn-change-row').count(), 3);
+    assert.equal(
+      await first.evaluate((card) =>
+        card.previousElementSibling.textContent.includes('FIRST_FINAL'),
+      ),
+      true,
+    );
+    assert.equal(
+      await page
+        .locator('.turn-changes')
+        .nth(1)
+        .evaluate((card) => card.previousElementSibling.textContent.includes('SECOND_FINAL')),
+      true,
+    );
+    await first.getByRole('button', { name: '全部 6 个文件', exact: true }).click();
+    assert.equal(await first.locator('.turn-change-row').count(), 6);
+    await first.getByRole('button', { name: '收起文件列表', exact: true }).click();
+    assert.equal(await first.locator('.turn-change-row').count(), 3);
+    if (process.env.CODEX_TURN_CHANGES_SCREENSHOT_DIR) {
+      const output = path.resolve(process.env.CODEX_TURN_CHANGES_SCREENSHOT_DIR);
+      await mkdir(output, { recursive: true });
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate((theme) => {
+          document.documentElement.dataset.theme = theme;
+        }, theme);
+        await first.screenshot({ path: path.join(output, `${theme}.png`) });
+      }
+    }
+    await first.locator('.turn-change-row').first().click();
+    await page.locator('#workspace-preview-body .diff-added').waitFor();
+    assert.match(await page.locator('#workspace-preview-body').textContent(), /const value = 0/);
+    const diffNode = await page.locator('#workspace-preview-body .file-diff').elementHandle();
+    await diffNode.evaluate((diff) => {
+      diff.open = false;
+    });
+    await first.getByRole('button', { name: '全部 6 个文件', exact: true }).click();
+    const firstCardNode = await first.elementHandle();
+    await page.locator('#prompt').fill('THIRD_QUESTION');
+    await page.locator('#send').click();
+    await page.getByRole('button', { name: '允许一次', exact: true }).click();
+    await page.waitForFunction(
+      async () =>
+        (await window.yuantu.invoke({ type: 'snapshot' })).state.session.running &&
+        (await window.yuantu.invoke({ type: 'snapshot' })).state.session.tools.length === 0,
+    );
+    await waitFor(() => Boolean(pending));
+    assert.equal(await page.locator('.turn-changes').count(), 2);
+    assert.equal(await firstCardNode.evaluate((card) => card.isConnected), true);
+    assert.equal(await diffNode.evaluate((diff) => diff.isConnected && !diff.open), true);
+    assert.equal(await first.locator('.turn-change-row').count(), 6);
+    assert.equal(await page.locator('.turn-change-row').filter({ hasText: 'live.ts' }).count(), 0);
+    sendFrames(pending, frames('THIRD_FINAL'));
+    pending = undefined;
+    await page.locator('.turn-changes').nth(2).waitFor();
+    assert.match(await page.locator('.turn-changes').nth(2).textContent(), /live.ts/);
+    assert.equal(await firstCardNode.evaluate((card) => card.isConnected), true);
+    assert.equal(await diffNode.evaluate((diff) => diff.isConnected && !diff.open), true);
+    assert.equal(
+      await page
+        .locator('.turn-changes')
+        .nth(2)
+        .evaluate((card) => card.previousElementSibling.textContent.includes('THIRD_FINAL')),
+      true,
+    );
+  },
+);
+
 // ---- merged from desktop.smoke.mjs ----
 
 test(
@@ -681,14 +862,16 @@ test(
     await page.getByRole('button', { name: '复制代码', exact: true }).click();
     await page.getByRole('button', { name: '已复制', exact: true }).waitFor();
     assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'const count = 2;');
-    assert.match(await page.locator('#changes-count').textContent(), /1 次文件操作/);
+    await page.locator('#messages .turn-changes').waitFor();
+    assert.match(await page.locator('.turn-changes-title').textContent(), /已编辑 1 个文件/);
+    assert.equal(await page.locator('#changes').count(), 0);
     const id = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     await page.locator(`[data-session-id="${id}"]`).click();
-    await page.locator('#changes').waitFor();
-    assert.match(await page.locator('#changes-list').textContent(), /main.ts/);
+    await page.locator('#messages .turn-changes').waitFor();
+    assert.match(await page.locator('.turn-change-row').textContent(), /main.ts/);
     if (process.env.YUANTU_QA_SCREENSHOT) {
       await page.locator('#messages .code-block').scrollIntoViewIfNeeded();
       await page.screenshot({
@@ -696,12 +879,12 @@ test(
         fullPage: true,
       });
     }
-    await page.locator('#changes > summary').click();
-    await page.locator('#changes-list .file-diff > summary').click();
+    await page.locator('.turn-change-row').click();
+    await page.locator('#workspace-preview-body .file-diff').waitFor();
     await page.getByRole('button', { name: '撤销此修改', exact: true }).click();
     await page.getByRole('button', { name: '确认恢复修改前内容', exact: true }).click();
     await page.waitForFunction(() =>
-      document.querySelector('#changes-list').textContent.includes('已撤销'),
+      document.querySelector('#workspace-preview-body').textContent.includes('已撤销'),
     );
     assert.equal(await readFile(path.join(root, 'main.ts'), 'utf8'), 'const count = 1;\n');
     assert.match(await page.locator('#messages').textContent(), /\[Files restored by user\]/);

@@ -27,7 +27,11 @@ async function main(): Promise<void> {
   const { options, workspace } = launch;
   const services = await openHostServices(options, workspace);
   const ctx = createHostState(launch, services);
-  ctx.carrier = new HostCarrier({ listen: options.listen, isClosing: () => ctx.closing });
+  ctx.carrier = new HostCarrier({
+    listen: options.listen,
+    authToken: process.env.YUANTU_HOST_TOKEN,
+    isClosing: () => ctx.closing,
+  });
   const wake = createBackgroundWake(ctx);
   ctx.currentAuthority = wake.currentAuthority;
   ctx.captureAuthority = wake.captureAuthority;

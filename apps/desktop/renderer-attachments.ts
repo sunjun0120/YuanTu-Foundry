@@ -23,6 +23,7 @@ import type { CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import type { ImageAttachment } from '../../packages/protocol/index.ts';
 import { validateImages, MAX_IMAGE_BYTES } from '../../packages/protocol/images.ts';
 import { t } from './i18n.ts';
+import { attachmentFailureLine, attachmentFailureText } from './renderer-attachment-copy.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -144,7 +145,7 @@ export function setupAttachments(actions: {
     actions.requestRender();
     void (async () => {
       if (files.length + attachments.length + documentAttachments.length > 8)
-        throw new Error('每条消息最多附加 8 个文件（其中图片最多 4 张）');
+        throw new Error(attachmentFailureText('count'));
       const nextImages = [...attachments];
       const nextDocuments = [...documentAttachments];
       for (const file of files) {
@@ -161,12 +162,12 @@ export function setupAttachments(actions: {
             imageTypes[extension || ''] || (file.type.startsWith('image/') ? file.type : undefined);
           if (mimeType) {
             if (!actions.getState()?.supportsVision)
-              throw new Error('当前模型未启用图片输入，请切换支持图片的模型');
-            if (file.size > MAX_IMAGE_BYTES) throw new Error('单张图片不能超过 5MB');
+              throw new Error(attachmentFailureText('vision'));
+            if (file.size > MAX_IMAGE_BYTES) throw new Error(attachmentFailureText('imageBytes'));
             const data = await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
               reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-              reader.onerror = () => reject(new Error('图片读取失败'));
+              reader.onerror = () => reject(new Error(attachmentFailureText('imageRead')));
               reader.readAsDataURL(file);
             });
             nextImages.push({
@@ -176,7 +177,8 @@ export function setupAttachments(actions: {
             });
             validateImages(nextImages);
           } else {
-            if (file.size > MAX_DOCUMENT_BYTES) throw new Error('单个文件不能超过 20MB');
+            if (file.size > MAX_DOCUMENT_BYTES)
+              throw new Error(attachmentFailureText('documentBytes'));
             const reply = await window.yuantu.readAttachment({
               name: file.name,
               data: new Uint8Array(await file.arrayBuffer()),
@@ -187,7 +189,10 @@ export function setupAttachments(actions: {
           }
         } catch (error) {
           throw new Error(
-            file.name + '：' + (error instanceof Error ? error.message : String(error)),
+            attachmentFailureLine(
+              file.name,
+              error instanceof Error ? error.message : String(error),
+            ),
           );
         }
       }

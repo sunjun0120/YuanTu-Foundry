@@ -96,6 +96,11 @@ async function invokeHook<T>(
  */
 export class HookRegistry {
   private hooks = new ListenerSet<ExtensionHooks>();
+  private stopObservers = new ListenerSet<(context: Readonly<StopContext>) => void>();
+  /** Trusted synchronous bookkeeping, including cancelled runs. Not exposed to extension hook modules. */
+  observeStop(observer: (context: Readonly<StopContext>) => void): Disposer {
+    return this.stopObservers.use(observer);
+  }
   private guards = new ListenerSet<ToolGuard>();
   /** Contributions installed through `installOnce`, and the keys that stop them being installed twice. */
   private installed = new Set<string>();
@@ -466,6 +471,13 @@ export class HookRegistry {
   ): Promise<{ reasons: string[]; failures: string[] }> {
     const reasons: string[] = [];
     const failures: string[] = [];
+    for (const observer of this.stopObservers.all) {
+      try {
+        observer(structuredClone(context));
+      } catch (error) {
+        failures.push(hookError(error));
+      }
+    }
     for (const hook of this.hooks.all) {
       if (!hook.stop) continue;
       try {

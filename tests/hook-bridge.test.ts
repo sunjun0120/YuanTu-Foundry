@@ -23,6 +23,7 @@ import { resolveRunLimits } from '../packages/protocol/settings.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { ModelResponse, Provider, ToolContext } from '../packages/protocol/index.ts';
+import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
@@ -134,6 +135,44 @@ const preToolUse = (root: string, script: string, matcher = 'write_file') => ({
     PreToolUse: [{ matcher, hooks: [{ type: 'command', command: nodeCommand(root, script) }] }],
   },
 });
+
+for (const event of ['SessionStart', 'SessionEnd'] as const) {
+  test(`the lifecycle bridge skips read-only ${event} commands`, async (t) => {
+    const { root, tools, failures, seen } = await fixture(
+      t,
+      (root) => ({
+        hooks: {
+          [event]: [{ hooks: [{ type: 'command', command: nodeCommand(root, 'hook.mjs') }] }],
+        },
+      }),
+      { 'hook.mjs': RECORD_PAYLOAD },
+    );
+    const invoke = (readOnly: boolean) =>
+      withExecutionPolicy(executionPolicy('host'), () =>
+        event === 'SessionStart'
+          ? tools.extensions.sessionStart(
+              { sessionId: 'session-1', workspace: root, resumed: true, readOnly },
+              new AbortController().signal,
+            )
+          : tools.extensions.sessionEnd(
+              { sessionId: 'session-1', reason: 'shutdown', readOnly },
+              new AbortController().signal,
+            ),
+      );
+    assert.deepEqual(await invoke(true), []);
+    assert.deepEqual(await seen(), [], 'a read-only lifecycle event must not launch the command');
+    assert.deepEqual(failures, []);
+    assert.deepEqual(await invoke(false), []);
+    const payload = (await seen())[0]!;
+    assert.equal(
+      payload.hook_event_name,
+      event,
+      'the writable control really launches the same command',
+    );
+    assert.equal(payload.session_id, 'session-1');
+    assert.deepEqual(failures, []);
+  });
+}
 
 test('a PreToolUse hook that exits 2 blocks the call and its reason reaches the model', async (t) => {
   const { root, tools, failures, seen } = await fixture(t, (root) => preToolUse(root, 'hook.mjs'), {

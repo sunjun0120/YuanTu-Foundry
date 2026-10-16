@@ -852,6 +852,7 @@ async function residentTool(t: test.TestContext) {
     }) as unknown as ChildTurns,
     emit: () => {},
     statistics: store.statistics(session.id),
+    usage: { inputTokens: 0, outputTokens: 0 },
     nextMessageId: () => 1,
   });
   return { root, store, session, residency, tool };

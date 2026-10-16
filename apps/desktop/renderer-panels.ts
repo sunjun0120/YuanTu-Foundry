@@ -21,6 +21,7 @@
  * added last is a switcher the next removal has to go looking for.
  */
 const PANELS = {
+  'workspace-maintenance-content': 'workspace-maintenance-settings',
   'general-settings-content': 'general-settings',
   'model-settings-content': 'model-settings',
   'mcp-panel': 'mcp-settings',

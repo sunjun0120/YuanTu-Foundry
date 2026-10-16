@@ -305,8 +305,9 @@ export class OpenAIProvider implements Provider {
         }
         if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
           if (reason) throw new Error('Duplicate model finish reason');
-          if (choice.finish_reason === 'stop' || choice.finish_reason === 'content_filter')
-            reason = 'stop';
+          if (choice.finish_reason === 'stop') reason = 'stop';
+          // The endpoint's own policy, not an answer and not a budget: see `ModelResponse.finishReason`.
+          else if (choice.finish_reason === 'content_filter') reason = 'content-filter';
           else if (choice.finish_reason === 'tool_calls') reason = 'tool_calls';
           else if (choice.finish_reason === 'length') reason = 'length';
           else throw new Error('Unsupported model finish reason');
@@ -320,7 +321,8 @@ export class OpenAIProvider implements Provider {
     if (!usage)
       throw new Error('Model endpoint omitted token usage; enable streaming usage support');
     const toolCalls: ToolCall[] = [];
-    if (reason !== 'length')
+    // A truncated call is half a JSON document and a filtered one was never allowed to run: neither is a call.
+    if (reason !== 'length' && reason !== 'content-filter')
       for (const [, call] of [...calls].sort(([a], [b]) => a - b)) {
         if (!call.id || !call.name) throw new Error('Incomplete model tool call');
         let args: Record<string, unknown>;

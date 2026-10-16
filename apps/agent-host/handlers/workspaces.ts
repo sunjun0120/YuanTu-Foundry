@@ -2,17 +2,25 @@ import { required, ownedSession } from '../params.ts';
 import { WorkspaceManager } from '../../../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../../../packages/workspaces/results.ts';
 import type { Handler } from '../dispatch.ts';
+import type { HostContext } from '../state.ts';
+import { WorkspaceFailure, type WorkspaceBinding } from '../../../packages/protocol/workspaces.ts';
+import { samePath } from '../../../packages/core/workspace-paths.ts';
 import { nodeDependencyWarning } from '../../../packages/workspaces/dependencies.ts';
+import { ToolRegistry } from '../../../packages/tools/registry.ts';
+import { workspaceResultTools } from '../../../packages/tools/workspaces.ts';
+import { createRunApprover } from '../approvals.ts';
+import { sessionExecutionPolicy } from '../session-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../../../packages/tools/execution-policy.ts';
+import { metadataWritesAllowed } from '../../shared/runtime.ts';
 
 /**
  * What a client can ask about the directories sub-agents work in.
  *
  * Three rules shape every handler here, and the first is the one a reviewer should check hardest:
  *
- * 1. **`ownedSession` comes first.** The workspace tables are not scoped by project the way `sessions` is, so the
- *    path-based ownership check that every other handler relies on has to be made explicitly — and then the service
- *    proves the *binding* belongs to that session as well. A request that names another project's session is
- *    refused before a single row is read.
+ * 1. **Project ownership comes first.** Session-addressed operations start with `ownedSession`. Recovery by binding
+ *    id requires a managed orphan whose project matches this Host; the orphan inventory uses the same project
+ *    scope. A binding id cannot bypass ownership or address a live session's directory.
  * 2. **Nothing here is a second implementation.** The status query and the apply call go through the same
  *    `WorkspaceManager` and `WorkspaceResultsService` the run's own tools use, so a client cannot reach a state
  *    the model could not, and the approval rules are the ones already in force.
@@ -52,6 +60,21 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     };
   },
 
+  /** Session deletion retains managed directories and results; keep them addressable by their own identity. */
+  'workspaces.orphaned': async (ctx, params) => {
+    if (params.includeRemoved !== undefined && typeof params.includeRemoved !== 'boolean')
+      throw new Error('Invalid includeRemoved');
+    const manager = new WorkspaceManager({ store: ctx.store });
+    const entries = [];
+    for (const binding of manager.orphaned(ctx.workspace, params.includeRemoved === true))
+      entries.push({
+        binding,
+        problems: binding.state === 'removed' ? [] : await diagnose(manager, binding),
+        results: ctx.store.workspaceResultsForBinding(binding.id),
+      });
+    return entries;
+  },
+
   /** Every result this session's children produced, newest last. */
   'workspace.results': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
@@ -85,15 +108,17 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before importing a sub-agent result');
     ctx.restoring = true;
+    const controller = new AbortController();
+    ctx.manualOperation = { sessionId, controller };
     try {
       const service = new WorkspaceResultsService({ store: ctx.store });
       const resultId = required(params, 'resultId');
       const expectedDigest = required(params, 'expectedDigest');
-      const preview = await service.previewApply({
+      let preview = await service.previewApply({
         parentSessionId: sessionId,
         resultId,
         expectedDigest,
-        signal: new AbortController().signal,
+        signal: controller.signal,
       });
       if (preview.conflicts.length)
         return {
@@ -101,20 +126,53 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
           conflicts: preview.conflicts,
           files: [] as { path: string; added: number; removed: number }[],
         };
-      const outcome = await service.apply({
-        parentSessionId: sessionId,
-        resultId,
-        expectedDigest,
-        signal: new AbortController().signal,
-        // The RPC path is already inside the Host's own exclusivity guard and has passed `ownedSession`, so the
-        // context it hands the service is the one the guard established rather than a second, weaker check.
-        context: {
-          signal: new AbortController().signal,
-          workspaceRoot: ctx.workspace,
+      let outcome: Awaited<ReturnType<WorkspaceResultsService['apply']>> | undefined;
+      const tools = new ToolRegistry(ctx.hooks);
+      tools.registerExtension(
+        workspaceResultTools({
+          store: ctx.store,
           sessionId,
-          approve: async () => true,
-        } as never,
-      });
+          results: {
+            previewApply: async (input) => (preview = await service.previewApply(input)),
+            reconcile: (signal) => service.reconcile(signal),
+            apply: async (input) => (outcome = await service.apply(input)),
+          },
+        }),
+      );
+      try {
+        const result = await tools.execute(
+          {
+            id: `workspace-apply-${resultId}`,
+            name: 'workspace_result_apply',
+            arguments: { resultId, expectedDigest },
+          },
+          {
+            signal: controller.signal,
+            sessionId,
+            workspaceRoot: ctx.store.workspaceBinding(sessionId).executionRoot,
+            executionPolicyForCall: () => sessionExecutionPolicy(ctx, sessionId),
+            permissionPolicyForCall: () => ctx.permissionPolicy,
+            approve: createRunApprover({
+              options: ctx.options,
+              store: ctx.store,
+              sessionId,
+              policy: () => ctx.permissionPolicy,
+              wake: false,
+              unattendedTaskId: undefined,
+              runId: () => '',
+              approvals: ctx.approvals,
+              approvalSources: ctx.approvalSources,
+              send: (data) => ctx.carrier.send(data),
+            }),
+          },
+        );
+        if (result.isError) throw new Error(result.content);
+        if (!outcome && preview.conflicts.length)
+          return { status: 'conflict' as const, conflicts: preview.conflicts, files: [] };
+        if (!outcome) throw new Error('Workspace import ended without an outcome');
+      } finally {
+        await tools.close();
+      }
       return {
         status: outcome.status,
         ...(outcome.changeId ? { changeId: outcome.changeId } : {}),
@@ -132,6 +190,7 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
         ],
       };
     } finally {
+      ctx.manualOperation = undefined;
       ctx.restoring = false;
     }
   },
@@ -144,19 +203,12 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
    * delegation path uses.
    */
   'workspace.archive': async (ctx, params) => {
-    const sessionId = required(params, 'sessionId');
-    ownedSession(ctx.store, ctx.workspace, sessionId);
+    const { manager, binding } = maintenanceWorkspace(ctx, params);
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before archiving a workspace');
-    const manager = new WorkspaceManager({ store: ctx.store });
-    const binding = manager.resolve(sessionId);
-    const results = new WorkspaceResultsService({ store: ctx.store });
     ctx.restoring = true;
     try {
       await manager.archive(binding.id, new AbortController().signal);
-      // The results are re-read rather than assumed: archiving freezes what the children produced, and a client
-      // that is told "archived" should be able to see what was kept.
-      void results;
       return { archived: true as const, bindingId: binding.id, state: 'archived' as const };
     } finally {
       ctx.restoring = false;
@@ -165,12 +217,9 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
 
   /** Rebuild an archived or removed workspace from its own frozen input, keeping the same identity. */
   'workspace.restore': async (ctx, params) => {
-    const sessionId = required(params, 'sessionId');
-    ownedSession(ctx.store, ctx.workspace, sessionId);
+    const { manager, binding } = maintenanceWorkspace(ctx, params);
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before restoring a workspace');
-    const manager = new WorkspaceManager({ store: ctx.store });
-    const binding = manager.resolve(sessionId);
     ctx.restoring = true;
     try {
       // The restored binding is returned rather than the one that was asked for: a restore re-validates the
@@ -183,12 +232,9 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     }
   },
   'workspace.remove': async (ctx, params) => {
-    const sessionId = required(params, 'sessionId');
-    ownedSession(ctx.store, ctx.workspace, sessionId);
+    const { manager, binding } = maintenanceWorkspace(ctx, params);
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before removing a workspace');
-    const manager = new WorkspaceManager({ store: ctx.store });
-    const binding = manager.resolve(sessionId);
     ctx.restoring = true;
     try {
       await manager.remove(binding.id, new AbortController().signal);
@@ -198,6 +244,53 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     }
   },
 };
+
+/** A binding ID is a recovery address, never an alternative authority over a live session. */
+function maintenanceWorkspace(ctx: HostContext, params: Record<string, unknown>) {
+  if (params.bindingId !== undefined && params.sessionId !== undefined)
+    throw new Error('Specify either a session or a binding');
+  const bindingId = params.bindingId === undefined ? undefined : required(params, 'bindingId');
+  const sessionId = bindingId === undefined ? required(params, 'sessionId') : undefined;
+  if (params.policySessionId !== undefined && bindingId === undefined)
+    throw new Error('Invalid policy context');
+  const policySessionId =
+    params.policySessionId === undefined ? sessionId : required(params, 'policySessionId');
+  if (sessionId !== undefined) ownedSession(ctx.store, ctx.workspace, sessionId);
+  if (policySessionId !== undefined) ownedSession(ctx.store, ctx.workspace, policySessionId);
+  const manager: WorkspaceManager = new WorkspaceManager({
+    store: ctx.store,
+    metadataWritesAllowed: (): boolean => {
+      // Re-read ownership with the operation lease as well: a pending allocation may have acquired a session.
+      if (bindingId !== undefined) ownedOrphan(manager.byId(bindingId), ctx.workspace);
+      if (policySessionId !== undefined) ownedSession(ctx.store, ctx.workspace, policySessionId);
+      const policy =
+        policySessionId !== undefined
+          ? sessionExecutionPolicy(ctx, policySessionId)
+          : executionPolicy(ctx.defaultSandboxMode, {
+              files: ctx.defaultSandboxFiles,
+              network: ctx.defaultSandboxNetwork,
+              image: ctx.launchSandbox.image,
+            });
+      return withExecutionPolicy(policy, () => metadataWritesAllowed());
+    },
+  });
+  return {
+    manager,
+    binding:
+      bindingId !== undefined
+        ? ownedOrphan(manager.byId(bindingId), ctx.workspace)
+        : manager.resolve(sessionId!),
+  };
+}
+
+function ownedOrphan(binding: WorkspaceBinding | null, workspace: string): WorkspaceBinding {
+  if (!binding) throw new WorkspaceFailure('WORKSPACE_NOT_FOUND', 'Unknown workspace binding');
+  if (!samePath(binding.projectRoot, workspace))
+    throw new Error('Workspace binding belongs to a different workspace');
+  if (binding.kind !== 'worktree' || binding.sessionId !== null)
+    throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Binding recovery requires an orphan');
+  return binding;
+}
 
 /**
  * What is wrong with a binding's directory right now, as a list rather than an exception.

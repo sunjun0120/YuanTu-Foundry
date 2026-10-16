@@ -39,6 +39,7 @@ export function setupTranscript(options: {
   getState(): CarrierSnapshot | null;
   /** The hub's message renderer: one message, once per transcript rebuild. */
   messageView(message: Message): HTMLElement;
+  turnChanges?(): Map<number, HTMLElement>;
 }): {
   render(messages: Message[], startIndex: number, runPaused: boolean): void;
   updateRunning(): void;
@@ -138,6 +139,9 @@ export function setupTranscript(options: {
     const views: HTMLElement[] = [];
     const groupSteps = new Map<HTMLDetailsElement, HTMLElement[]>();
     const retainedGroups = new Set<HTMLDetailsElement>();
+    const changeCards = options.turnChanges?.() ?? new Map<number, HTMLElement>();
+    const pendingCards = [...changeCards].sort(([a], [b]) => a - b);
+    let nextCard = 0;
     let group: HTMLDetailsElement | undefined;
     const add = (step: HTMLElement, key: string) => {
       step.dataset.processKey = key;
@@ -186,6 +190,14 @@ export function setupTranscript(options: {
       } else {
         group = undefined;
         views.push(view);
+      }
+      const nextIndex = rows[position + 1]?.index ?? startIndex + messages.length;
+      while (nextCard < pendingCards.length && pendingCards[nextCard]![0] < nextIndex) {
+        const [afterIndex, card] = pendingCards[nextCard++]!;
+        if (afterIndex >= index && afterIndex < nextIndex) {
+          group = undefined;
+          views.push(card);
+        }
       }
     }
     for (const [group, steps] of groupSteps) {
@@ -302,16 +314,22 @@ export function setupTranscript(options: {
     return element;
   }
   function render(messages: Message[], startIndex: number, runPaused: boolean): void {
+    const views = transcriptViews(messages, startIndex);
+    const last = views.at(-1);
+    const footer =
+      last?.classList.contains('turn-changes') || last?.classList.contains('turn-changes-group')
+        ? views.pop()
+        : undefined;
     reconcileChildren(required('messages'), [
-      ...transcriptViews(messages, startIndex),
+      ...views,
       /**
        * Where the run stopped, not at the top of the window: a stop is the end of what happened, so it belongs
        * after the last thing that happened. `renderPaused` is the only place this sentence is written.
        */
       ...(runPaused ? [node('p', t('ui.runPaused'), 'run-paused')] : []),
-      // …and the contract's verdict last, because it is the answer to the question the whole transcript is read
-      // for: whether any of this was verified.
+      // Keep the completion verdict with the final response, before that turn's file summary.
       ...(completionNotice() ? [completionNotice()!] : []),
+      ...(footer ? [footer] : []),
     ]);
     restoreScroll();
   }

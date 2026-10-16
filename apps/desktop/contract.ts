@@ -10,6 +10,10 @@
 import type { AttachmentReply } from './attachment-contract.ts';
 import type { BackupCommand, BackupReply } from './backup-contract.ts';
 import type { FilesCommand, FilesReply } from './files-contract.ts';
+import type {
+  WorkspaceMaintenanceCommand,
+  WorkspaceMaintenanceReply,
+} from './workspace-maintenance-contract.ts';
 import type { McpCommand, McpReply } from './mcp-contract.ts';
 import type {
   CarrierCommand,
@@ -37,6 +41,7 @@ export type DesktopReply =
       errorDetail?: import('../../packages/carrier/errors.ts').CarrierIssue;
     };
 export interface DesktopBridge {
+  workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
   backups(command: BackupCommand): Promise<BackupReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
   /**

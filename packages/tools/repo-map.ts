@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { isCredentialFileName } from './credential-paths.ts';
 import { withRetrievalMetadata } from './retrieval-metadata.ts';
+import { CursorStore, CursorInvalidError, queryHashOf } from '../search/cursor.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -401,6 +402,7 @@ export interface SymbolIndexSource {
     path?: string;
     language?: string;
     limit: number;
+    cursor?: string | null;
     signal: AbortSignal;
   }): Promise<{
     symbols: {
@@ -423,23 +425,31 @@ export function repoMapTools(
   searchWorkspaceSymbols?: WorkspaceSymbolSearch,
   index?: SymbolIndexSource,
 ): Tool[] {
+  const lspCursors = new CursorStore();
   return [
     {
       name: 'repo_map',
       isConcurrencySafe: parallelRead,
       description:
-        'Structural outline of the workspace: every source file and the symbols it declares. Use it to find where something lives before reading files. Pass query to search symbol names; when a language server is already running the search uses its index instead of a text scan.',
+        'Structural outline of the workspace and its declarations. Pass query to search symbol names, limit to bound the page, and the returned nextCursor as cursor with the same query to continue. Results report index freshness and scan coverage. An already-running language server is preferred for a first-page lookup.',
       inputSchema: {
         type: 'object',
         properties: {
           query: { type: 'string', maxLength: 200 },
           limit: { type: 'integer', minimum: 1, maximum: 200 },
+          cursor: { type: 'string', minLength: 1, maxLength: 128 },
         },
         required: [],
         additionalProperties: false,
       },
       async execute(args: Record<string, unknown>, context: ToolContext) {
         const query = typeof args.query === 'string' ? args.query.trim() : '';
+        const cursor = typeof args.cursor === 'string' ? args.cursor : null;
+        const lspCursor = cursor?.startsWith('lsp:') ?? false;
+        if (cursor && (!query || (!lspCursor && !index)))
+          throw new Error(
+            'cursor-invalid: a symbol cursor requires the same query and symbol index',
+          );
         const limit =
           typeof args.limit === 'number' && Number.isSafeInteger(args.limit) ? args.limit : 60;
         if (!query) {
@@ -472,15 +482,37 @@ export function repoMapTools(
         }
         context.signal.throwIfAborted();
         // Prefer the language server: it reports real declarations, not regex guesses.
-        if (searchWorkspaceSymbols) {
+        if (lspCursor && !searchWorkspaceSymbols)
+          throw new CursorInvalidError('the language server is unavailable');
+        if (searchWorkspaceSymbols && (!cursor || lspCursor)) {
           try {
+            const queryHash = queryHashOf({ kind: 'lsp-symbols', query });
+            const previous = lspCursor
+              ? lspCursors.take(cursor!.slice(4), { workspace: root, queryHash })
+              : null;
             const hits = await searchWorkspaceSymbols(query, undefined, context.signal);
-            if (hits?.length)
+            context.signal.throwIfAborted();
+            const sourceVersion = createHash('sha256').update(JSON.stringify(hits)).digest('hex');
+            if (previous && previous.sourceVersion !== sourceVersion)
+              throw new CursorInvalidError('language-server declarations changed');
+            if (hits?.length || previous) {
+              const start = previous ? (previous.after?.index ?? -1) + 1 : 0;
+              const page = hits.slice(start, start + limit);
+              const nextCursor =
+                start + page.length < hits.length
+                  ? 'lsp:' +
+                    lspCursors.issue({
+                      workspace: root,
+                      queryHash,
+                      sourceVersion,
+                      after: { path: '', line: 0, index: start + page.length - 1 },
+                      witness: null,
+                    })
+                  : null;
               return {
                 isError: false,
                 content: withRetrievalMetadata(
-                  hits
-                    .slice(0, limit)
+                  page
                     .map(
                       (hit) =>
                         `${hit.path}${hit.line === undefined ? '' : `:${hit.line}`} ${hit.kind} ${hit.container ? `${hit.container}.` : ''}${hit.name}`,
@@ -488,13 +520,21 @@ export function repoMapTools(
                     .join('\n'),
                   {
                     coverage: { complete: true, reasons: [], bytesRead: null },
-                    sourceVersion: null,
-                    nextCursor: null,
+                    sourceVersion,
+                    nextCursor,
                     freshness: 'validated',
                   },
                 ),
               };
-          } catch {
+            }
+          } catch (error) {
+            context.signal.throwIfAborted();
+            if (lspCursor) {
+              if (error instanceof CursorInvalidError) throw error;
+              throw new CursorInvalidError(
+                'the language server could not refresh its declarations',
+              );
+            }
             /* No running server, or it failed: fall through to the index, then to the heuristic scan. */
           }
         }
@@ -506,7 +546,7 @@ export function repoMapTools(
          * simply did not exist for this tool. The index is built from whole files.
          */
         if (index) {
-          const page = await index.symbols({ query, limit, signal: context.signal });
+          const page = await index.symbols({ query, limit, cursor, signal: context.signal });
           /**
            * A hit from a list that is not current still goes out — with the freshness beside it.
            *
@@ -515,9 +555,12 @@ export function repoMapTools(
            * the current one. The metadata line carries the same value in machine-readable form.
            */
           const note =
-            page.freshness === 'validated'
+            (page.freshness === 'validated'
               ? ''
-              : `\n[symbol index: ${page.freshness}; this list may lag recent writes]`;
+              : `\n[symbol index: ${page.freshness}; this list may lag recent writes]`) +
+            ((page.coverage as { complete?: boolean }).complete === false
+              ? '\n[symbol analysis is incomplete; this list does not cover every source file]'
+              : '');
           if (page.symbols.length)
             return {
               isError: false,
@@ -558,12 +601,17 @@ export function repoMapTools(
             };
           return {
             isError: false,
-            content: withRetrievalMetadata(`No symbols match "${query}" in the indexed scope.`, {
-              coverage: page.coverage,
-              sourceVersion: page.sourceVersion,
-              nextCursor: null,
-              freshness: page.freshness,
-            }),
+            content: withRetrievalMetadata(
+              (page.coverage as { complete?: boolean }).complete === false
+                ? `No symbols match "${query}" in the scanned portion; symbol analysis is incomplete.`
+                : `No symbols match "${query}" in the indexed scope.`,
+              {
+                coverage: page.coverage,
+                sourceVersion: page.sourceVersion,
+                nextCursor: null,
+                freshness: page.freshness,
+              },
+            ),
           };
         }
         const lowered = query.toLowerCase();

@@ -284,8 +284,9 @@ export class AnthropicProvider implements Provider {
         case 'message_delta': {
           const reason = object(event.delta).stop_reason;
           if (reason === 'tool_use') finishReason = 'tool_calls';
-          else if (reason === 'end_turn' || reason === 'stop_sequence' || reason === 'refusal')
-            finishReason = 'stop';
+          else if (reason === 'end_turn' || reason === 'stop_sequence') finishReason = 'stop';
+          // A refusal is the endpoint's policy, not an answer and not a budget: see `ModelResponse.finishReason`.
+          else if (reason === 'refusal') finishReason = 'content-filter';
           else if (reason === 'max_tokens') finishReason = 'length';
           else if (reason === 'model_context_window_exceeded') {
             finishReason = 'length';
@@ -340,8 +341,9 @@ export class AnthropicProvider implements Provider {
        * neither contributes to `text` or to `toolCalls`.
        */
       if (block.kind !== 'tool_use') continue;
-      // A truncated call is not a call: its arguments are half a JSON document, so it is dropped as before.
-      if (finishReason === 'length') continue;
+      // A truncated call is not a call: its arguments are half a JSON document, so it is dropped as before — and
+      // neither is a call from a turn the endpoint refused to finish for policy reasons.
+      if (finishReason === 'length' || finishReason === 'content-filter') continue;
       let args = block.input ?? {};
       if (block.json) {
         try {

@@ -1,4 +1,5 @@
 import type { Acceptance, AcceptanceCheck, TaskStep } from '../protocol/index.ts';
+import type { Language } from '../protocol/language.ts';
 import { MAX_CHECKS } from './acceptance.ts';
 export interface TaskDraft {
   title: string;
@@ -176,15 +177,39 @@ export function normalizeTaskDraft(input: unknown): TaskDraft {
   });
   return { title, description, steps, acceptance };
 }
-export function initialTaskDraft(kind: 'goal' | 'plan', prompt: string): TaskDraft {
+/**
+ * The default steps and acceptance line a draft starts from, per language.
+ *
+ * Generated rather than translated, and the difference matters: a dictionary entry is looked up when something is
+ * *rendered*, and these strings are never rendered — they are written into the fields a person then edits
+ * (`renderer-tasks.ts` puts them in `input.value`, which the DOM walker does not visit). So the language has to be
+ * chosen at the moment they are written, which is why the caller passes one. Chinese is the fallback for a caller
+ * that names none, because that is the wording every client before this has received.
+ */
+const DRAFT_TEXT: Record<Language, { steps: readonly string[]; acceptance: string }> = {
+  'zh-CN': {
+    steps: ['检查相关文件，确认实现范围', '按照需求完成修改', '验证结果并报告证据'],
+    acceptance: '人工检查结果符合任务需求',
+  },
+  'en-US': {
+    steps: [
+      'Check the relevant files and confirm the scope',
+      'Make the change the request asks for',
+      'Verify the result and report the evidence',
+    ],
+    acceptance: 'A person has checked that the result matches the request',
+  },
+};
+export function initialTaskDraft(
+  kind: 'goal' | 'plan',
+  prompt: string,
+  language: Language = 'zh-CN',
+): TaskDraft {
+  const text = DRAFT_TEXT[language] ?? DRAFT_TEXT['zh-CN'];
   return normalizeTaskDraft({
     title: (kind === 'goal' ? 'Goal: ' : 'Plan: ') + prompt.split(/\r?\n/, 1)[0]!.slice(0, 180),
     description: prompt,
-    steps: [
-      { description: '检查相关文件，确认实现范围' },
-      { description: '按照需求完成修改' },
-      { description: '验证结果并报告证据' },
-    ],
-    acceptance: [{ description: '人工检查结果符合任务需求', met: false }],
+    steps: text.steps.map((description) => ({ description })),
+    acceptance: [{ description: text.acceptance, met: false }],
   });
 }

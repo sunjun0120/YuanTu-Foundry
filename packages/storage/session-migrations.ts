@@ -231,6 +231,7 @@ export class SessionMigrations {
       );
       CREATE INDEX IF NOT EXISTS workspace_results_parent ON workspace_results(parent_session_id,created_at);
       CREATE INDEX IF NOT EXISTS workspace_results_child ON workspace_results(child_session_id,status);
+      CREATE INDEX IF NOT EXISTS workspace_results_binding ON workspace_results(binding_id,created_at,id);
       CREATE TABLE IF NOT EXISTS workspace_apply_receipts (
         id TEXT PRIMARY KEY,
         result_id TEXT NOT NULL,

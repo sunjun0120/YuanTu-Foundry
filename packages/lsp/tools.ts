@@ -291,6 +291,21 @@ async function prepareWorkspaceEdit(
     const relative = path.relative(workspace.root, target);
     if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative))
       throw new Error(options.outside);
+    /**
+     * Resolved through the workspace, not merely compared to it.
+     *
+     * `path.relative` above answers a question about the *string* the server sent, and a server that names a
+     * symlink living inside the workspace — pointing at a file elsewhere — passed that test while the read below
+     * opened the file the link named. The contents then went into the approval preview, so what leaked was a file
+     * the operator never granted. `Workspace.resolve` refuses every symbolic link, in-root ones included, and
+     * re-checks the canonical path, so the answer is about the file that will actually be read. A link swapped in
+     * after this point is still caught by the post-approval byte recheck inside `prepareMutation`.
+     */
+    try {
+      await workspace.resolve(target);
+    } catch (error) {
+      throw new Error(`${options.outside}: ${(error as Error).message}`);
+    }
     const before = await readMutationBytes(target);
     const source = before.toString('utf8');
     const after = Buffer.from(applyTextEdits(source, entry.edits));

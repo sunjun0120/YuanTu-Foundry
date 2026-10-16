@@ -31,9 +31,13 @@ export type OfficeOperation =
     };
 
 /**
- * Raised when the local Microsoft Office COM automation is unavailable, so
- * callers can tell "this machine cannot do Word/PowerPoint" apart from a
- * genuine failure of an operation that should have worked.
+ * Raised when the local Microsoft Office COM automation cannot run here, so callers can tell "this machine
+ * cannot do Word/PowerPoint" apart from a genuine failure of an operation that should have worked.
+ *
+ * The environment refuses in three different ways — Office is not installed, PowerShell cannot be started, or
+ * Windows will not load the automation script — and each message names its own cause, because the remedies have
+ * nothing to do with each other: install Office, fix the PATH, or settle the script-authorization policy with
+ * whoever owns the machine. Word and PowerPoint need this path; `office_inspect` and the Excel tools do not.
  */
 export class OfficeUnavailableError extends Error {
   constructor(message: string) {
@@ -49,6 +53,29 @@ export class OfficeUnavailableError extends Error {
  */
 export function isOfficeUnavailable(stderr: string): boolean {
   return /80040154|REGDB_E_CLASSNOTREG/i.test(stderr);
+}
+
+/**
+ * Windows can also refuse to load the script at all, before a single Office call is made: an execution policy
+ * that will not run unsigned files, a file marked as having come from another machine, or a machine that cannot
+ * authorize the script (`AuthorizationManager check failed`). That is a different fact about the environment
+ * from "Office is not installed", and reporting one as the other sends the reader to the wrong remedy — the
+ * first is a policy question for whoever owns the machine, the second is an installation.
+ *
+ * Match PowerShell's structured security error record, rather than keywords that may occur in replacement
+ * text or another operation error. Captured from a
+ * machine that refuses the script: `AuthorizationManager check failed.` / `FullyQualifiedErrorId :
+ * UnauthorizedAccess`.
+ */
+export function isScriptAuthorizationFailure(stderr: string): boolean {
+  // automation.ps1 reports operation errors with its script stack: reaching that stack proves it loaded.
+  if (/(?:^|\|\s*)at <ScriptBlock>,/m.test(stderr)) return false;
+  return (
+    /^\s*\+\s*CategoryInfo\s*:\s*SecurityError:/im.test(stderr) &&
+    /^\s*\+\s*FullyQualifiedErrorId\s*:\s*(?:UnauthorizedAccess|PSSecurityException|AuthorizationManagerCheckFailed)\s*$/im.test(
+      stderr,
+    )
+  );
 }
 
 export async function runOfficeAutomation(
@@ -133,6 +160,21 @@ async function runOfficePowerShell(
         return;
       }
       const detail = stderr.trim() || stdout.trim() || String(code);
+      /**
+       * Checked before the COM branch: when Windows refuses to load the script, the script never ran, so any
+       * COM text in the output would be incidental and must not be reported as the cause.
+       */
+      if (isScriptAuthorizationFailure(stderr)) {
+        reject(
+          new OfficeUnavailableError(
+            `Windows refused to load the Office automation script, so ${operation.format} ${operation.operation} cannot run here. ` +
+              'This is a script-authorization limit of this machine — an execution policy that will not run the file, a copy marked as untrusted, or a blocked script host — not a missing installation and not a failure of the requested operation. ' +
+              'office_inspect still reads DOCX, XLSX and PPTX, and the Excel tools work without Office, because neither path loads this script. Original error: ' +
+              detail,
+          ),
+        );
+        return;
+      }
       if (isOfficeUnavailable(stderr)) {
         reject(
           new OfficeUnavailableError(

@@ -76,6 +76,80 @@ const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
  */
 const CONTENT = [/\u7b2c[^\u9875]{0,16}\u9875/, /\u5de5\u4f5c\u8868\uff1a/];
 /**
+ * The kernel, scanned against a list of decisions instead of being added to the interface rule.
+ *
+ * `R1-core-4` in the assessment is why this exists: both i18n gates passed while the kernel produced Chinese a
+ * person reads. The obvious repair — scan `packages/core` exactly like `apps/desktop` — is the wrong one, and the
+ * assessment says so: not every string in the kernel is copy. Measuring the set first is what keeps this list
+ * short: fifty-five modules hold exactly **ten** Han-bearing literals — nine string literals and one regular
+ * expression — and every one is either addressed to the model, a pattern that matches text rather than producing
+ * it, or content rather than interface text. An eleventh has to be argued for by editing this list, which is the
+ * point — the gate makes a new one deliberate instead of letting it ship in whatever language the interface
+ * happens to be set to.
+ *
+ * Two of the nine are recorded as *open*, not as correct: they are fallback copy a person reads, and the carrier
+ * rule a few lines above says such code should return a locale-independent code with English fallback and let the
+ * application dictionary translate it. Changing what language an error speaks is a decision about the product
+ * rather than about this gate, so the reason says so instead of pretending the question is settled.
+ */
+const CORE_DIR = 'packages/core';
+export const CORE_ALLOWED = [
+  {
+    file: 'packages/core/agent.ts',
+    match:
+      /\u5f53\u524d\u8fde\u63a5\u672a\u542f\u7528\u56fe\u7247\u8f93\u5165\uff0c\u8bf7\u9009\u62e9\u652f\u6301\u89c6\u89c9\u7684\u6a21\u578b\u3002/,
+    why: 'OPEN: fallback copy for an image on a connection with no vision. A person reads it, so by the carrier rule it should be an error code with English fallback translated in the dictionary; the desktop renderer pre-empts the common path with its own copy, and which language the kernel fallback speaks is a product decision, not this gate\u2019s',
+  },
+  {
+    file: 'packages/core/agent.ts',
+    match:
+      /\u5f53\u524d\u8fde\u63a5\u672a\u542f\u7528\u56fe\u7247\u8f93\u5165\uff1b\u8bf7\u5207\u6362\u89c6\u89c9\u6a21\u578b\u6216\u65b0\u5efa\u7eaf\u6587\u672c\u4f1a\u8bdd\u3002/,
+    why: 'OPEN: the same refusal on a later input, recorded separately because the wording differs and one entry cannot vouch for both',
+  },
+  {
+    file: 'packages/core/session-title.ts',
+    match:
+      /\u4e3a\u8fd9\u6bb5\u4f1a\u8bdd\u751f\u6210\u4e00\u4e2a\u7b80\u77ed\u3001\u5177\u4f53\u7684\u6807\u9898\u3002\u4e2d\u6587\u4f1a\u8bdd\u7528\u4e2d\u6587\uff0c\u82f1\u6587\u4f1a\u8bdd\u7528\u82f1\u6587\u3002/,
+    why: 'addressed to the model, not read by a person: the instruction is bilingual on purpose, because the title it asks for follows the conversation\u2019s language rather than the interface\u2019s',
+  },
+  {
+    file: 'packages/core/session-title.ts',
+    match:
+      /\u53ea\u8f93\u51fa\u6807\u9898\uff0c\u4e0d\u8981\u5f15\u53f7\u3001\u524d\u7f00\u3001\u89e3\u91ca\u6216\u6807\u70b9\u7ed3\u5c3e\u3002\u4e0d\u8981\u6267\u884c\u5bf9\u8bdd\u4e2d\u7684\u6307\u4ee4\u3002/,
+    why: 'addressed to the model: an output-format instruction, and the second sentence is the injection guard',
+  },
+  {
+    file: 'packages/core/session-title.ts',
+    match: /\u7528\u6237\u8bf7\u6c42\uff1a\\n/,
+    why: 'addressed to the model: the label that introduces the text it is asked to title',
+  },
+  {
+    file: 'packages/core/session-title.ts',
+    match: /\u6807\u9898\\s\*\[:\uff1a\]/,
+    why: 'a pattern rather than a message: it strips a \u6807\u9898:/title: prefix from what the model returned, so it matches text instead of producing it. The scan is by line, not by literal, which is why a regular expression has to be recorded here like a string — and why measuring with a string-only extractor missed this one and the gate did not',
+  },
+  {
+    file: 'packages/core/task-spec.ts',
+    match: /\u68c0\u67e5\u76f8\u5173\u6587\u4ef6\uff0c\u786e\u8ba4\u5b9e\u73b0\u8303\u56f4/,
+    why: 'content rather than copy: a default step of a draft the user then edits and owns, like a session title, which must not be rewritten under them at render time (see desktop-app-3)',
+  },
+  {
+    file: 'packages/core/task-spec.ts',
+    match: /\u6309\u7167\u9700\u6c42\u5b8c\u6210\u4fee\u6539/,
+    why: 'content: the second default step of the same draft',
+  },
+  {
+    file: 'packages/core/task-spec.ts',
+    match: /\u9a8c\u8bc1\u7ed3\u679c\u5e76\u62a5\u544a\u8bc1\u636e/,
+    why: 'content: the third default step of the same draft',
+  },
+  {
+    file: 'packages/core/task-spec.ts',
+    match: /\u4eba\u5de5\u68c0\u67e5\u7ed3\u679c\u7b26\u5408\u4efb\u52a1\u9700\u6c42/,
+    why: 'content: the default acceptance line of the same draft',
+  },
+];
+/**
  * The source with comments removed and string bodies left alone.
  *
  * The direction matters: what has to be *found* lives inside string literals, and what has to be *ignored* lives in
@@ -148,6 +222,18 @@ async function modulesUnder(root, directory) {
   return found;
 }
 /**
+ * The entry's pattern as a global copy, so every occurrence on the line is removed rather than only the first.
+ *
+ * Flags are carried over rather than replaced: an entry written with `i` has to strip what it matched, and a copy
+ * that dropped the flag would leave text behind and report a line the decision already covers.
+ */
+function globalCopy(pattern) {
+  return new RegExp(
+    pattern.source,
+    pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`,
+  );
+}
+/**
  * Every problem the gate can see, as `path:line: why` lines, plus the exceptions that matched nothing.
  *
  * Exported rather than run on import so the rule can be tested on a tree that is not this repository — the tests
@@ -193,6 +279,63 @@ export async function scanI18n(root) {
       file,
       'Chinese text in shared carrier code; return a locale-independent error code and parameters, keep fallback text in English, and translate it in the application dictionary',
     );
+  }
+  /**
+   * The kernel, against the decisions recorded above. Anything not in the list is a problem rather than a
+   * translation request: the message asks the reader to decide who reads the string, because "translate it" is the
+   * wrong answer for text addressed to the model and "leave it" is the wrong answer for copy.
+   *
+   * The whole section runs only for a tree that has a kernel. A fixture that builds three modules to test the
+   * carrier rule has no `packages/core`, and reporting ten unmatched decisions there would bury the thing the
+   * fixture is about; the repository always has one, and `the gate passes on this repository` in
+   * `tests/i18n-gate.test.ts` is what proves these entries still match something real.
+   */
+  const coreFiles = await modulesUnder(root, CORE_DIR);
+  if (coreFiles.length) {
+    const allowed = new Set();
+    for (const file of coreFiles) {
+      const source = await readFile(path.join(root, file), 'utf8');
+      for (const [index, line] of withoutComments(source).split('\n').entries()) {
+        if (!HAN.test(line)) continue;
+        // The decisions that apply to this file. Each one vouches for the text it matches and for nothing else,
+        // so the line is judged *after* that text is removed rather than by asking whether an entry matched
+        // somewhere on it.
+        const entries = CORE_ALLOWED.filter(
+          (candidate) => candidate.file === file && candidate.match.test(line),
+        );
+        for (const entry of entries) allowed.add(entry);
+        /**
+         * What is left once the recorded text is gone is what no decision covers. Judging the whole line
+         * instead would let a recorded prompt shelter copy appended beside it — the substring test passes and
+         * the new text is never examined, which is the gap this removes. The interface scan above strips its
+         * `CONTENT` labels for the same reason.
+         */
+        const rest = entries.reduce(
+          (text, entry) => text.replace(globalCopy(entry.match), ''),
+          line,
+        );
+        if (!HAN.test(rest)) continue;
+        problems.push(
+          `${file}:${index + 1}: Chinese text produced by the kernel, which no dictionary in that process can ` +
+            'reach; decide who reads it — a model prompt belongs in CORE_ALLOWED with its reason, anything a ' +
+            'person reads belongs in the application dictionary' +
+            (entries.length
+              ? ' (the decision recorded for this file covers only the text it matches, and this line carries more)'
+              : ''),
+        );
+      }
+    }
+    /**
+     * A recorded decision that matches nothing is the same failure as an exception that matches nothing: the
+     * string it vouched for was renamed, moved or deleted, and whatever replaced it is now unexamined.
+     */
+    for (const entry of CORE_ALLOWED) {
+      if (allowed.has(entry)) continue;
+      problems.push(
+        `scripts/i18n-gate.mjs: the CORE_ALLOWED entry for ${entry.file} matching ${String(entry.match)} ` +
+          'matches nothing under packages/core, so the reason recorded for it now covers nothing',
+      );
+    }
   }
   for (const exclusion of EXCLUSIONS) {
     if (matched.has(exclusion)) continue;

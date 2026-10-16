@@ -12,6 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { discoverModels, discoveryHeaders, modelsUrl } from '../packages/providers/discovery.ts';
 import type { ProviderConfig } from '../packages/providers/config.ts';
+import { httpFixture } from './http-fixture.ts';
 
 const config = (over: Partial<ProviderConfig> = {}): ProviderConfig => ({
   apiKey: 'secret',
@@ -274,4 +275,79 @@ test('a cancelled probe stops waiting for the error body it was reading', async 
     clearTimeout(cancelled);
   }
   assert.equal(observed().cancelled, true, 'a cancelled read still releases the body');
+});
+
+test('the probe is the one that refuses redirects, not a caller that remembered to', async () => {
+  const seen: { redirect?: string }[] = [];
+  const impl = (async (_url: string, options: { redirect?: string }) => {
+    seen.push({ redirect: options.redirect });
+    return { ok: true, status: 200, body: null, json: async () => ({ data: [] }) };
+  }) as unknown as typeof fetch;
+  await discoverModels(config(), { fetch: impl });
+  // The policy has to travel with the probe: the automatic path used to install it as a wrapper, which left the
+  // explicit path — the CLI and the desktop entry points — following redirects with the credential attached.
+  assert.equal(seen[0]?.redirect, 'error');
+});
+
+test('explicit discovery refuses a redirect instead of carrying the credential to another host', async (t) => {
+  let elsewhere = 0;
+  const other = await httpFixture(t, (_body, res) => {
+    elsewhere++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: 'm', context_length: 128_000 }] }));
+  });
+  const endpoint = await httpFixture(t, (_body, res) => {
+    res.writeHead(307, { location: `${other}/v1/models` });
+    res.end();
+  });
+  await assert.rejects(() => discoverModels(config({ baseUrl: endpoint })));
+  assert.equal(elsewhere, 0, 'the credential never reached the host the redirect named');
+});
+
+test('a successful catalogue is read under a byte bound, and the rest of its body is released', async () => {
+  const frame = new Uint8Array(64 * 1024).fill(0x78);
+  let pulled = 0;
+  let cancelled = false;
+  const impl = (async () => ({
+    ok: true,
+    status: 200,
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 64) {
+          controller.close();
+          return;
+        }
+        pulled += 1;
+        controller.enqueue(frame);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  })) as unknown as typeof fetch;
+  // Four mebibytes on offer, one mebibyte allowed: the answer that succeeded used to be read with `response.json()`
+  // and no limit at all, so a gateway that answered 200 and kept writing held the probe open indefinitely.
+  await assert.rejects(() => discoverModels(config(), { fetch: impl }), /exceeds 1048576 bytes/);
+  assert.equal(cancelled, true, 'the remainder of a body the probe will not use is released');
+  assert.ok(pulled < 64, 'the reader stopped well before the end of the body');
+});
+
+test('a catalogue that arrives in frames under the bound still reads', async () => {
+  const parts = ['{"data":[{"id":"m",', '"context_length":96000}]}'];
+  let index = 0;
+  const impl = (async () => ({
+    ok: true,
+    status: 200,
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (index >= parts.length) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new TextEncoder().encode(parts[index++]));
+      },
+    }),
+  })) as unknown as typeof fetch;
+  const result = await discoverModels(config(), { fetch: impl });
+  assert.deepEqual(result.models, [{ id: 'm', name: 'm', contextWindow: 96_000 }]);
 });

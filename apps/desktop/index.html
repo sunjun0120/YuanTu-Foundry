@@ -24,7 +24,7 @@
       </button>
       <div class="workspace-box">
         <div class="section-label">工作区</div>
-        <div id="workspace">正在连接…</div>
+        <div id="workspace" translate="no">正在连接…</div>
         <button id="choose-workspace" class="text-button" disabled>
           更换目录 <span aria-hidden="true">↗</span>
         </button>
@@ -75,11 +75,16 @@
     <main id="chat-page">
       <header>
         <div class="chat-heading">
-          <strong id="chat-title">新会话</strong>
+          <strong id="chat-title" translate="no">新会话</strong>
           <span id="chat-breadcrumb-sep" class="chat-breadcrumb-sep" aria-hidden="true" hidden
             >/</span
           >
-          <strong id="subagent-transcript-title" class="chat-breadcrumb-child" hidden></strong>
+          <strong
+            id="subagent-transcript-title"
+            class="chat-breadcrumb-child"
+            translate="no"
+            hidden
+          ></strong>
           <div class="subagent-anchor">
             <button
               id="open-subagents"
@@ -157,18 +162,14 @@
         </div>
         <section id="plan-panel" class="plan-panel" hidden aria-label="计划">
           <header class="plan-head">
-            <strong id="plan-title"></strong>
+            <strong id="plan-title" translate="no"></strong>
             <span id="plan-status" class="plan-status"></span>
           </header>
-          <p id="plan-summary" class="plan-summary"></p>
-          <ol id="plan-steps" class="plan-steps"></ol>
-          <p id="plan-reason" class="plan-reason" hidden></p>
+          <p id="plan-summary" class="plan-summary" translate="no"></p>
+          <ol id="plan-steps" class="plan-steps" translate="no"></ol>
+          <p id="plan-reason" class="plan-reason" translate="no" hidden></p>
           <div id="plan-actions" class="plan-actions"></div>
         </section>
-        <details id="changes" class="changes-summary" hidden>
-          <summary id="changes-count">会话改动</summary>
-          <div id="changes-list"></div>
-        </details>
         <section id="subagents-panel" class="subagents-panel" aria-label="子代理" hidden>
           <div class="subagents-panel-header">
             <h2>子代理</h2>
@@ -210,7 +211,7 @@
             <h2 id="goal-title">会话目标</h2>
             <span id="goal-status" class="goal-status"></span>
           </div>
-          <p id="goal-objective" class="goal-objective"></p>
+          <p id="goal-objective" class="goal-objective" translate="no"></p>
           <p id="goal-meta" class="goal-meta"></p>
         </section>
         <section id="deliverables-panel" class="deliverables-panel" aria-label="交付物" hidden>
@@ -468,8 +469,38 @@
             ></span>
             模型设置
           </button>
+          <button id="workspace-maintenance-settings" type="button">
+            <span aria-hidden="true"
+              ><svg
+                class="settings-nav-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+              >
+                <path
+                  d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"
+                /></svg></span
+            ><span id="workspace-maintenance-label"></span>
+          </button>
         </nav>
       </aside>
+      <section
+        id="workspace-maintenance-content"
+        class="settings-content"
+        aria-labelledby="workspace-maintenance-title"
+        hidden
+      >
+        <div class="settings-page-header">
+          <h2 id="workspace-maintenance-title"></h2>
+          <p id="workspace-maintenance-note"></p>
+        </div>
+        <div class="workspace-maintenance-body">
+          <button id="workspace-maintenance-refresh" class="secondary" type="button"></button>
+          <p id="workspace-maintenance-feedback" role="status" aria-live="polite"></p>
+          <ul id="workspace-maintenance-list" class="workspace-maintenance-list"></ul>
+        </div>
+      </section>
       <section
         id="general-settings-content"
         class="settings-content"

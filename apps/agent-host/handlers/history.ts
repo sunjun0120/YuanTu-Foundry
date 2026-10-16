@@ -14,6 +14,28 @@ import type { Handler } from '../dispatch.ts';
  * History is the one reply big enough to need a transport bound of its own, and the bound is on the *serialized*
  * form, so a page that fits is a page that fits the wire.
  */
+/**
+ * How much one history reply may serialize to, in bytes.
+ *
+ * The bound is on the *serialized* form, so a reply that fits is a reply that fits the wire. It applies to every
+ * shape this module can answer with: a page, a chunk of an oversized message, and — since the compatibility reply
+ * was the one path that could still build a frame nothing would carry — the unpaged reply too.
+ */
+const HISTORY_PAGE_BYTES = 15_000_000;
+/**
+ * How much the *unpaged* reply may serialize to, in bytes.
+ *
+ * The unpaged shape is the compatibility one — callers written before history was paged, and the desktop's own
+ * loader, which asks for a window and then walks older ones. It cannot simply take the page budget: a session
+ * whose transcript is larger than one page is exactly what that path is used with, and
+ * `large-response.test.ts` pins a 16 MB turn coming back through it. What it can take is the ceiling of the
+ * transport that has to carry the reply: `packages/client/host-transport.ts` refuses an incoming frame larger
+ * than 64 MB, so a reply past this could not have been delivered to any client this repository ships. The point
+ * of the bound is that the Host no longer *builds* one — it used to assemble whatever the store held, and the
+ * refusal only happened later, on the far side, after the memory had been spent.
+ */
+const HISTORY_COMPAT_BYTES = 64_000_000;
+
 export const historyHandlers: Readonly<Record<string, Handler>> = {
   'session.get': async (ctx, params) => {
     const id = required(params, 'sessionId');
@@ -27,6 +49,23 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
         params.endOffset !== undefined
       )
         throw new Error('Paged history requires an offset');
+      /**
+       * The compatibility reply is bounded by the ceiling of the transport that carries it.
+       *
+       * It exists for callers written before history was paged, and for every session the wire can carry it
+       * returns exactly what it always returned. Past that, *building* the reply is what costs: the client's own
+       * framer refuses a frame this large, so the old behaviour was to spend the memory here and fail there. The
+       * alternative — returning a silently truncated transcript — would answer a question about the whole session
+       * with part of it, so this refuses and names the paged read instead.
+       */
+      let bytes = 0;
+      for (const message of history) {
+        bytes += Buffer.byteLength(JSON.stringify(message));
+        if (bytes > HISTORY_COMPAT_BYTES)
+          throw new Error(
+            'Session history is larger than one frame; read it with view, offset and endOffset instead',
+          );
+      }
       return {
         session,
         messages: history,
@@ -98,7 +137,7 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
       const message = displayMessage(history[end]!);
       const serialized = JSON.stringify(message);
       const size = Buffer.byteLength(serialized);
-      if (bytes + size > 15_000_000) {
+      if (bytes + size > HISTORY_PAGE_BYTES) {
         if (end !== offset) break;
         if (params.view !== 'display')
           throw new Error('History message exceeds transport page limit');

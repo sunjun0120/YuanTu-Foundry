@@ -112,7 +112,7 @@ export async function startRun(
     : undefined;
   try {
     if (!wake) ctx.captureAuthority(sessionId);
-    await ctx.announceSession(sessionId, true);
+    await ctx.announceSession(sessionId, true, planPhase);
     /**
      * Name a new session as soon as its request is admitted. This uses the configured provider before
      * file reconciliation, agent setup, or the first reply; a failed call leaves the user-text fallback.

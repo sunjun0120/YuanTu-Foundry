@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import type { Approval, ToolContext } from '../packages/protocol/index.ts';
 import { gitCommandLine } from '../packages/tools/git.ts';
 import { createTools } from '../packages/tools/index.ts';
+import { spillOutput } from '../packages/tools/spill.ts';
 
 const execFileAsync = promisify(execFile);
 const call = (name: string, args: Record<string, unknown>) => ({
@@ -262,6 +263,33 @@ test('git_commit refuses repositories that require GPG signing', async (t) => {
   const commit = await tools.execute(call('git_commit', { message: 'signed' }), ctx());
   assert.equal(commit.isError, true);
   assert.match(commit.content, /gpgsign/);
+});
+
+test('a failing commit hook spills its partial capture without claiming completeness', async (t) => {
+  const { root, tools } = await repository(t);
+  await writeFile(path.join(root, 'h.txt'), 'h\n');
+  await tools.execute(call('git_stage', { paths: ['h.txt'] }), ctx());
+  const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+  const nodePath = process.execPath.replaceAll('\\', '/').replaceAll("'", "'\\''");
+  await writeFile(
+    hook,
+    `#!/bin/sh\n'${nodePath}' -e 'process.stderr.write("x".repeat(60000));process.exit(1)'\n`,
+  );
+  await chmod(hook, 0o755);
+  const result = await tools.execute(call('git_commit', { message: 'blocked' }), {
+    ...ctx(),
+    spill: (input) => spillOutput({ workspace: root, sessionId: 'hook', ...input }),
+  });
+  assert.equal(result.isError, true);
+  assert.equal(result.truncated, true);
+  assert.match(result.content, /the captured 48000 bytes/);
+  assert.doesNotMatch(result.content, /the full 48000 bytes/);
+  const relative = /the captured \d+ bytes \/ \d+ lines are in (.+?)(?:,| —)/.exec(
+    result.content,
+  )?.[1];
+  assert.ok(relative);
+  assert.equal(await readFile(path.join(root, relative), 'utf8'), 'x'.repeat(48000));
+  assert.equal((await tools.execute(call('git_log', {}), ctx())).content, 'No commits');
 });
 
 test('git_commit refuses when no author identity resolves', async (t) => {

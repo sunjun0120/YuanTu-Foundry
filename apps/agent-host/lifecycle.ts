@@ -1,5 +1,5 @@
 import { parseSetting } from '../../packages/protocol/settings.ts';
-import { underSessionPolicy } from './session-policy.ts';
+import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import { safeError } from '../shared/runtime.ts';
 import { settleInteraction } from './approvals.ts';
 import type { HostContext } from './state.ts';
@@ -24,7 +24,7 @@ export function createShutdown(ctx: HostContext): () => void {
     ctx.stopObservingBackground();
     ctx.scheduler.stop();
     for (const run of ctx.active.values()) run.controller.abort();
-    ctx.manualCompaction?.abort();
+    ctx.manualOperation?.controller.abort();
     settleInteraction(ctx);
     // Unloading happens after the runs above were aborted: an activation's in-flight turn is stopped by its
     // own run's abort, and disposal then waits for it to unwind before releasing that child's tools.
@@ -113,7 +113,10 @@ export async function serveHost(ctx: HostContext): Promise<void> {
       const failures = await Promise.resolve()
         .then(() =>
           underSessionPolicy(ctx, sessionId, () =>
-            ctx.hooks.sessionEnd({ sessionId, reason: 'shutdown' }, new AbortController().signal),
+            ctx.hooks.sessionEnd(
+              { sessionId, reason: 'shutdown', readOnly: sessionLifecycleReadOnly(ctx, sessionId) },
+              new AbortController().signal,
+            ),
           ),
         )
         .catch((error: unknown) => [safeError(error)]);
@@ -128,6 +131,7 @@ export async function serveHost(ctx: HostContext): Promise<void> {
       });
     }
     ctx.announced.clear();
+    ctx.sessionLifecyclePhases?.clear();
     // Every release is attempted, in order, even when another resource refuses to close.
     await release(() => ctx.terminals.closeAllAndWait());
     await release(() => ctx.background.close());

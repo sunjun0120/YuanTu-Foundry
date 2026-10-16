@@ -71,9 +71,9 @@ test('what may be re-sent and what may not, one decision per code', () => {
   /**
    * Exhaustive on purpose: the table is a `Record<FailureCode, boolean>`, so this list failing to compile after
    * a new code is added is the mechanism that makes somebody decide. Re-sending changes nothing about the
-   * request, so a failure that describes the request itself (auth, a 4xx) or the run's own room (the window,
-   * the output limit) is never retried; a failure that describes the weather is — including a turn the endpoint
-   * closed with nothing in it, which is a hiccup rather than an answer.
+   * request, so a failure that describes the request itself (auth, a 4xx, a policy refusal) or the run's own
+   * room (the window, the output limit) is never retried; a failure that describes the weather is — including a
+   * turn the endpoint closed with nothing in it, which is a hiccup rather than an answer.
    */
   const expected: Record<FailureCode, boolean> = {
     'context-window-exceeded': false,
@@ -88,6 +88,8 @@ test('what may be re-sent and what may not, one decision per code', () => {
     unsupported: false,
     'no-stream': true,
     'tool-cleanup': false,
+    // The endpoint's own policy stopped the turn: the same conversation is filtered again.
+    'content-filtered': false,
   };
   for (const [code, yes] of Object.entries(expected))
     assert.equal(retryable(code as FailureCode), yes, code);

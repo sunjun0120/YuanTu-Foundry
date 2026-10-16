@@ -17,6 +17,7 @@ import {
   rmdirSync,
   rmSync,
   statSync,
+  statfsSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -36,6 +37,38 @@ export interface BackupPolicy {
   maxBytes: number;
 }
 export const DEFAULT_BACKUP_POLICY: BackupPolicy = { maxCount: 5, maxBytes: 512 * 1024 * 1024 };
+/**
+ * Whether one snapshot may exist at all, as opposed to how much history is kept.
+ *
+ * `BackupPolicy` was answering both questions with a single number, and the assessment named the consequence: the
+ * routine 512 MiB budget was the only thing standing between a large session database and a reversible upgrade, so
+ * past that size the upgrade stopped — while the comment beside that call site claimed recovery copies were
+ * exempt. The two questions have different remedies, which is why one number could not serve both. A history
+ * budget that is exceeded is answered by deleting older snapshots, and a migration that cannot back itself up must
+ * not proceed. A *required* copy that cannot exist is answered by the operator instead: free space, trim the data,
+ * or accept a change that cannot be undone.
+ *
+ * So the ceiling is either an explicit number or `null`, and `null` means "whatever this volume can hold right
+ * now" — the honest answer for a copy whose whole purpose is to be the way back, because what should stop it is
+ * the disk rather than a constant that was written about something else.
+ */
+export interface BackupAdmission {
+  maxBytes: number | null;
+}
+/**
+ * Admission for a copy the operation cannot proceed without: against free space, not against a policy number.
+ *
+ * Not "unlimited" — see `RECOVERY_COPY_RESERVE_BYTES`. A snapshot that fills the volume would trade one
+ * irrecoverable state for another.
+ */
+export const RECOVERY_COPY_ADMISSION: BackupAdmission = { maxBytes: null };
+/**
+ * Headroom a free-space admission leaves behind, so taking the copy cannot itself be what fills the volume.
+ *
+ * 256 MiB is enough for the WAL and temporary files of the in-place upgrade that follows a recovery copy, and
+ * small enough not to refuse a copy that would comfortably fit.
+ */
+export const RECOVERY_COPY_RESERVE_BYTES = 256 * 1024 * 1024;
 export interface DatabaseInspection {
   file: string;
   version: number;
@@ -309,9 +342,14 @@ export function createDatabaseBackup(
   policy: DatabasePolicy,
   reason: DatabaseBackup['reason'],
   retention: BackupPolicy = DEFAULT_BACKUP_POLICY,
+  // Defaulting to the history budget keeps every existing caller's behaviour identical: the routine path refuses a
+  // copy bigger than the budget, and only a caller that says otherwise is admitted differently.
+  admission: BackupAdmission = { maxBytes: retention.maxBytes },
 ): DatabaseBackup {
   const source = identity(file);
-  return gated(`${source}.backup`, () => createBackup(db, source, policy, reason, retention));
+  return gated(`${source}.backup`, () =>
+    createBackup(db, source, policy, reason, retention, admission),
+  );
 }
 function createBackup(
   db: DatabaseSync,
@@ -319,6 +357,7 @@ function createBackup(
   policy: DatabasePolicy,
   reason: DatabaseBackup['reason'],
   retention: BackupPolicy,
+  admission: BackupAdmission,
 ): DatabaseBackup {
   if (
     !Number.isSafeInteger(retention.maxCount) ||
@@ -327,6 +366,11 @@ function createBackup(
     retention.maxBytes < 1
   )
     throw new Error('Invalid database backup retention policy');
+  if (
+    admission.maxBytes !== null &&
+    (!Number.isSafeInteger(admission.maxBytes) || admission.maxBytes < 1)
+  )
+    throw new Error('Invalid database backup admission policy');
   const directory = `${source}.backups`;
   if (
     existsSync(directory) &&
@@ -340,8 +384,7 @@ function createBackup(
   try {
     db.prepare('VACUUM main INTO ?').run(stage);
     const inspection = inspectDatabase(stage, policy);
-    if (inspection.bytes > retention.maxBytes)
-      throw new Error(`Snapshot exceeds backup capacity (${retention.maxBytes} bytes): ${source}`);
+    assertCopyAdmitted(inspection.bytes, admission, directory, source);
     syncFile(stage);
     renameSync(stage, destination);
     const backup: DatabaseBackup = {
@@ -374,6 +417,17 @@ function createBackup(
     let bytes = 0;
     for (const [index, entry] of ordered.entries()) {
       bytes += entry.bytes;
+      /**
+       * The snapshot just taken is never removed, whatever the budget says.
+       *
+       * The two branches below must agree on this, and they did not: the count branch happens to spare index 0
+       * only because `maxCount` is at least 1, while the byte branch spared it only because admission used to be
+       * the same number as retention. Separating those numbers makes the hole reachable — a copy admitted against
+       * free space can be larger than the history budget, and deleting it here would return a backup whose file is
+       * already gone, so the caller would either fail copying a missing file or carry on believing it has a way
+       * back. It is skipped before either test is applied, and its size still counts against the budget below.
+       */
+      if (entry.file === destination) continue;
       if (index >= retention.maxCount || bytes > retention.maxBytes) {
         rmSync(entry.file);
         rmSync(`${entry.file}.json`);
@@ -391,11 +445,46 @@ function createBackup(
     });
   }
 }
-export function backupDatabase(file: string, policy: DatabasePolicy): DatabaseBackup {
+export function backupDatabase(
+  file: string,
+  policy: DatabasePolicy,
+  admission: BackupAdmission = { maxBytes: DEFAULT_BACKUP_POLICY.maxBytes },
+): DatabaseBackup {
   return withReadOnlyDatabase(file, (db) => {
     inspectDatabase(file, policy);
-    return createDatabaseBackup(db, file, policy, 'manual');
+    return createDatabaseBackup(db, file, policy, 'manual', DEFAULT_BACKUP_POLICY, admission);
   });
+}
+
+/**
+ * Decide whether this one snapshot may exist, and refuse with the numbers rather than with a category.
+ *
+ * The refusal has to carry the diagnosis *and* the way out, because nothing downstream can recover from it: the
+ * caller asked for a copy it says it cannot proceed without, so this message is the whole remedy. It names how
+ * large the snapshot is, what it failed against, and where it was being written — a budget refusal compares
+ * against the budget, and a free-space refusal against what the volume actually has left after the reserve.
+ */
+function assertCopyAdmitted(
+  bytes: number,
+  admission: BackupAdmission,
+  directory: string,
+  source: string,
+): void {
+  if (admission.maxBytes !== null) {
+    if (bytes > admission.maxBytes)
+      throw new Error(
+        `Snapshot exceeds backup capacity (${bytes} bytes needed, ${admission.maxBytes} allowed): ${source}`,
+      );
+    return;
+  }
+  const volume = statfsSync(directory);
+  const usable = Number(volume.bavail) * Number(volume.bsize) - RECOVERY_COPY_RESERVE_BYTES;
+  if (bytes > usable)
+    throw new Error(
+      `A required recovery copy does not fit on this volume (${bytes} bytes needed, ${Math.max(0, usable)} usable ` +
+        `after a ${RECOVERY_COPY_RESERVE_BYTES} byte reserve): ${source} in ${directory}. Free space on the volume ` +
+        'and retry; without this copy the change cannot be undone.',
+    );
 }
 
 /** Only this database's complete, regular snapshots are eligible for the desktop restore picker. */
@@ -558,5 +647,58 @@ export function recoverDatabase(file: string): RestoreJournal {
     journal.phase = 'rolled-back';
     record(journal);
     return journal;
+  });
+}
+
+/** What one compaction freed, in the units the maintenance command reports. */
+export interface DatabaseCompaction {
+  file: string;
+  beforeBytes: number;
+  afterBytes: number;
+  freedBytes: number;
+}
+/** The database plus whatever is still in its write-ahead log, which is what the file costs on disk. */
+function fileBytes(file: string): number {
+  const wal = `${file}-wal`;
+  return statSync(file).size + (existsSync(wal) ? statSync(wal).size : 0);
+}
+
+/**
+ * Hand back the free pages that deleted records left behind.
+ *
+ * Deleting rows does not shrink a SQLite file: the pages go on a free list and are reused by later writes, so the
+ * file keeps the size of its historical peak. `VACUUM` is the operation that rewrites it — `VACUUM INTO` is for
+ * making a *copy*, which is what the backup and restore paths use — and it is run in place here on purpose: the
+ * file keeps its path and its identity, nothing is swapped and no journal is needed, because an interrupted
+ * `VACUUM` rolls back rather than leaving a half-written database behind.
+ *
+ * Explicit maintainer operation, like `restoreDatabase`: neither a run tool nor Host RPC exposes it. It refuses a
+ * database another process still has open (`assertOffline`) and one whose restore is pending, because compaction
+ * rewrites the very file those paths are already reasoning about. The WAL is checkpointed on both sides so the
+ * number reported is the size on disk rather than a size plus a pending log.
+ */
+export function compactDatabase(file: string): DatabaseCompaction {
+  const target = identity(file);
+  return gated(target, () => {
+    assertOffline(target);
+    if (pendingRestore(target))
+      throw new Error('A previous restore is incomplete; run db-recover before compacting');
+    const beforeBytes = fileBytes(target);
+    const db = new DatabaseSync(target);
+    try {
+      db.exec('PRAGMA busy_timeout=5000');
+      db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').all();
+      db.exec('VACUUM');
+      db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').all();
+    } finally {
+      db.close();
+    }
+    const afterBytes = fileBytes(target);
+    return {
+      file: target,
+      beforeBytes,
+      afterBytes,
+      freedBytes: Math.max(0, beforeBytes - afterBytes),
+    };
   });
 }

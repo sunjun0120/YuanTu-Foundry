@@ -31,6 +31,7 @@ import type {
 } from '../protocol/index.ts';
 import type { ImageAttachment } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
+import type { Language } from '../protocol/language.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import { parseSandboxMode } from '../tools/sandbox-mode.ts';
 import { normalizeTaskDraft } from '../core/task-spec.ts';
@@ -94,7 +95,18 @@ export type CarrierCommand =
   | { type: 'taskVerify'; taskId: string }
   | { type: 'taskRetry'; taskId: string; prompt?: string }
   | { type: 'taskHistory'; taskId: string }
-  | { type: 'goal' | 'plan'; prompt: string }
+  | {
+      type: 'goal' | 'plan';
+      prompt: string;
+      /**
+       * The interface language the draft is written in.
+       *
+       * A draft's default steps are generated content, not dictionary copy — they land in the fields the person
+       * edits — so the carrier, which is the side that knows what language the window is showing, has to say which
+       * one to write. Absent keeps the Chinese wording older clients have always received.
+       */
+      language?: Language;
+    }
   | { type: 'planApprove'; planId: string; hash: string }
   | { type: 'planReject'; planId: string; reason?: string }
   | { type: 'planExecute'; planId: string }

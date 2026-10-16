@@ -262,6 +262,7 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
       );
       CREATE INDEX workspace_results_parent ON workspace_results(parent_session_id,created_at);
       CREATE INDEX workspace_results_child ON workspace_results(child_session_id,status);
+      CREATE INDEX workspace_results_binding ON workspace_results(binding_id,created_at,id);
       -- The idempotency key of one import: the same result, the same digest, the same target directory. Written
       -- in the same transaction as the journal entry it names, so "the change exists" and "this result was
       -- imported" cannot disagree, and a repeated request is answered with what already happened.

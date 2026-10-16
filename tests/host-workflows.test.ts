@@ -38,11 +38,13 @@ async function workspace(t: test.TestContext) {
  * immediately (ENOENT). The budget has to survive the machine the gate runs on rather than the quiet one this
  * was tuned against: at three seconds this fixture failed in two consecutive full-suite runs (4.9 s, 5.1 s)
  * while passing on its own every time, which is a false negative *about the product* — the command does start,
- * only later than the poll allowed. Fifteen seconds is a budget rather than a timing claim: a command that
+ * only later than the poll allowed. Cold sandbox preparation also exceeded the later fifteen-second budget:
+ * an isolated diagnostic observed the PID at 17.257 seconds and then passed the cancellation assertions.
+ * Thirty seconds is a readiness budget rather than a timing claim: a command that
  * never starts still fails here, and the assertion each caller makes afterwards — that this process was killed
  * — is the one that means something.
  */
-test('a foreground readiness check reports early run failure instead of polling for fifteen seconds', async () => {
+test('a foreground readiness check reports early run failure instead of polling until the deadline', async () => {
   const controller = new AbortController();
   const finished = Promise.resolve({
     status: 'failed',

@@ -58,6 +58,7 @@ export const runHandlers: Readonly<Record<string, Handler>> = {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
     const run = ctx.active.get(sessionId);
+    const manual = ctx.manualOperation?.sessionId === sessionId ? ctx.manualOperation : undefined;
     const policy = backgroundState(ctx.store, sessionId).policy;
     if (policy.mode === 'auto')
       setBackgroundPolicy(ctx.store, sessionId, {
@@ -67,8 +68,9 @@ export const runHandlers: Readonly<Record<string, Handler>> = {
         maxRunMs: policy.maxRunMs,
       });
     run?.controller.abort();
+    manual?.controller.abort();
     await ctx.background.close(sessionId);
-    return { cancelled: !!run };
+    return { cancelled: !!run || !!manual };
   },
   'run.start': startRun,
 };

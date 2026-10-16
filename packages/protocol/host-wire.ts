@@ -10,6 +10,11 @@ export const HOST_LONG_REQUESTS = new Set([
   'task.verify',
   'task.confirm',
   'context.compact',
+  'workspace.apply',
+  'workspace.archive',
+  'workspace.remove',
+  'workspace.restore',
+  'workspaces.orphaned',
 ]);
 
 export class HostProtocolError extends Error {

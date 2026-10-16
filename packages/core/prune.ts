@@ -1,5 +1,6 @@
 import type { Message } from '../protocol/index.ts';
 import { assertPrunePolicyFits, pruneNotice } from '../protocol/prune-policy.ts';
+import { codePointLength } from './text.ts';
 import { recentStart } from './shrink.ts';
 
 /**
@@ -59,13 +60,10 @@ export interface PruneOutcome {
 /**
  * Code points in `text`, which is the unit a budget is stated in.
  *
- * Not `.length`: that counts UTF-16 code units, so an emoji or any character outside the basic plane counts as
- * two, and a cut placed on an odd count splits the surrogate pair and produces a lone half that every encoder
- * then has to decide what to do with. Counting code points keeps every cut on a character boundary.
+ * Defined in `text.ts` and re-exported here because this is where its policy callers have always read it from;
+ * the reasoning — and the reason it is not `.length` — lives there.
  */
-export function codePointLength(text: string): number {
-  return [...text].length;
-}
+export { codePointLength };
 /**
  * Whether a result is short enough to leave alone.
  *

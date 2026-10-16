@@ -23,6 +23,7 @@ import {
   restoreDatabase,
   offlineDatabaseOperation,
   beginDesktopRollback,
+  RECOVERY_COPY_ADMISSION,
   type DatabaseBackup,
 } from '../storage/database-maintenance.ts';
 import { SESSION_DATABASE_POLICY } from '../storage/sqlite.ts';
@@ -202,8 +203,16 @@ export function prepareUpgrade(
   if (!lstatSync(path.join(installed, 'YuanTu Agent.exe')).isFile())
     throw new Error('Invalid application directory');
   const policy = { ...SESSION_DATABASE_POLICY, maxVersion: current.maxSchemaVersion };
-  const sourceBackup = offlineDatabaseOperation(db, () => backupDatabase(db, policy));
-  // Upgrade recovery copies are not subject to routine migration backup retention.
+  /**
+   * A recovery copy is required, so it is admitted against free space rather than the routine history budget.
+   *
+   * The comment here used to claim recovery copies were exempt from routine retention while the call took the
+   * default 512 MiB budget, so a large session database made the upgrade stop — the one case where the way back
+   * matters most. `RECOVERY_COPY_ADMISSION` is that exemption, written down where it is used.
+   */
+  const sourceBackup = offlineDatabaseOperation(db, () =>
+    backupDatabase(db, policy, RECOVERY_COPY_ADMISSION),
+  );
   const backupFile = path.join(staged.directory, 'previous-database.sqlite');
   copyFileSync(sourceBackup.file, backupFile);
   copyFileSync(`${sourceBackup.file}.json`, `${backupFile}.json`);

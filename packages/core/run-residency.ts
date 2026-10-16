@@ -1,4 +1,4 @@
-import type { AgentEventType, Provider, Tool, ToolContext } from '../protocol/index.ts';
+import type { AgentEventType, Provider, Tool, ToolContext, Usage } from '../protocol/index.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { addUsage } from '../protocol/statistics.ts';
@@ -34,8 +34,32 @@ export interface ResidentToolOptions {
   emit: (type: AgentEventType, data: Record<string, unknown>) => void;
   /** Folded in place, so a follow-up's spending reaches the run's totals. */
   statistics: SessionStatistics;
+  usage: Usage;
+  /** The parent joins only follow-up turns it owns before persisting its totals. */
+  trackTurn?: (settled: Promise<unknown>, interrupt: () => void) => void;
   /** The process-wide message-id serial, passed in so two runs cannot mint the same id. */
   nextMessageId: () => number;
+}
+
+export class ResidentTurnSettlements {
+  private readonly pending = new Map<Promise<unknown>, () => void>();
+  private failure: { reason: unknown } | undefined;
+
+  track(settled: Promise<unknown>, interrupt: () => void): void {
+    this.pending.set(settled, interrupt);
+    const remove = () => this.pending.delete(settled);
+    void settled.then(remove, (reason: unknown) => {
+      remove();
+      this.failure ??= { reason };
+    });
+  }
+
+  async settle(): Promise<void> {
+    const pending = [...this.pending];
+    for (const [, interrupt] of pending) interrupt();
+    await Promise.allSettled(pending.map(([settled]) => settled));
+    if (this.failure) throw this.failure.reason;
+  }
 }
 
 /**
@@ -68,7 +92,7 @@ async function waitUnlessCancelled<T>(value: Promise<T>, signal: AbortSignal): P
 
 /** The `send_message` tool for one run's residency, returned rather than installed: the caller owns the registry. */
 export function createResidentMessageTool(options: ResidentToolOptions): Tool {
-  const { store, parentSessionId, depth, residency, childTurns, statistics } = options;
+  const { store, parentSessionId, depth, residency, childTurns, statistics, usage } = options;
   /**
    * The children this session delegated to, as the parent's own log remembers them.
    *
@@ -203,6 +227,8 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
          * that is, or "continue your own work and collect it later" would quietly mean "lose the result".
          */
         const settle = (outcome: Awaited<ReturnType<typeof activation.run>>): void => {
+          // A correction only observes a turn. Its initiating delegation or message owns accounting and events.
+          if (delivery.delivered) return;
           options.emit('subagent.finished', {
             id: activation.id,
             sessionId: activation.childSessionId,
@@ -215,6 +241,14 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
             ...(outcome.error ? { error: outcome.error } : {}),
           });
           addUsage(statistics, outcome.usage);
+          usage.inputTokens += outcome.usage.inputTokens;
+          usage.outputTokens += outcome.usage.outputTokens;
+          if (outcome.usage.cachedInputTokens !== undefined)
+            usage.cachedInputTokens =
+              (usage.cachedInputTokens ?? 0) + outcome.usage.cachedInputTokens;
+          if (outcome.usage.cacheWriteInputTokens !== undefined)
+            usage.cacheWriteInputTokens =
+              (usage.cacheWriteInputTokens ?? 0) + outcome.usage.cacheWriteInputTokens;
         };
         /**
          * The hand-off is taken with `wait: false` even when this call *will* wait.
@@ -239,6 +273,15 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
           (delivery.delivered
             ? undefined
             : activation.run(message, false, wait ? signal : undefined));
+        // Settlement belongs to the turn, even when its caller stops waiting before it finishes.
+        const settledTurn = turn?.then((outcome) => {
+          settle(outcome);
+          return outcome;
+        });
+        // A cancelled/background caller no longer awaits this promise; retain its rejection handler.
+        void settledTurn?.catch(() => {});
+        if (settledTurn && !delivery.delivered)
+          options.trackTurn?.(settledTurn, () => activation.interrupt());
         /**
          * The hand-off is recorded only if it actually happened.
          *
@@ -260,7 +303,6 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
           // The outcome is recorded when it lands, not when it is asked for: the parent's next request
           // (or `collect_subagents`) is where it will read it, and a run that ends first stops the child
           // like any other background sub-agent.
-          if (turn) void turn.then(settle).catch(() => {});
           if (!handed)
             return {
               isError: true,
@@ -278,7 +320,7 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
         }
         // The wait is the call's, the turn may not be: a correction folded into a turn somebody else started
         // keeps running when this call is cancelled, and only the waiting ends.
-        const outcome = turn ? await waitUnlessCancelled(turn, signal) : undefined;
+        const outcome = settledTurn ? await waitUnlessCancelled(settledTurn, signal) : undefined;
         if (!outcome)
           // Unreachable in practice (a delivered message always belongs to a turn whose promise the
           // residency holds), and said out loud rather than dressed up as an answer if it ever happens.
@@ -288,7 +330,6 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
           };
         // The follow-up's answer is in this tool result, so the parent has read it: recording delivery
         // here keeps the settlement notice from announcing a result the parent is looking at.
-        settle(outcome);
         store.recordEvent(parentSessionId, 'subagent.collected', {
           ids: [activation.id, activation.childSessionId],
         });

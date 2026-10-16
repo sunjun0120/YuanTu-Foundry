@@ -23,9 +23,13 @@ import {
   nextRunAt,
   normalizeTaskTrigger,
   triggerSource,
+  latestScheduledAt,
 } from '../packages/core/task-trigger.ts';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
-import { nextCalendarRun } from '../packages/core/calendar.ts';
+import { nextCalendarRun, latestCalendarRun } from '../packages/core/calendar.ts';
+
+/** Han characters, for the cases that assert which language a generated string is in. */
+const HAN = /\p{Script=Han}/u;
 import type { AcceptanceSpec } from '../packages/core/acceptance.ts';
 
 // ---- merged from task-spec.test.ts ----
@@ -90,6 +94,46 @@ test('a daily rule fires at the wall time it names, even on the day the clocks s
   assert.deepEqual([ordinary.getHours(), ordinary.getMinutes()], [2, 30]);
 });
 
+test('a catch-up label never names a wall time the clocks skipped', (t) => {
+  /**
+   * The mirror of the case above, on the path that decides *which occurrence a late run is standing in for*.
+   *
+   * `latestScheduledAt` answers with the occurrence a catch-up run is recorded against, and the host-local branch
+   * asked `setHours` for today's wall time — which on a spring-forward day is 03:30 for a rule that says 02:30.
+   * That number is persisted as `scheduledAt`, so the rule ends up naming a time it never fires at. The
+   * zone-aware path has always walked back to the previous day instead, so the property asserted here is the
+   * agreement between the two spellings rather than a hard-coded instant.
+   */
+  const previous = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  t.after(() => {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  });
+  // Noon on the US spring-forward day, so today's 02:30 is already in the past — and does not exist.
+  const now = new Date('2026-03-08T12:00:00-04:00');
+  const dueAt = '2026-03-07T02:30:00-05:00';
+  const trigger: TaskTrigger = { kind: 'daily', enabled: true, atMinutes: 150, misfire: 'latest' };
+  const label = latestScheduledAt(trigger, dueAt, now);
+  assert.equal(
+    label,
+    latestCalendarRun(150, 'America/New_York', now).toISOString(),
+    'the host-local path agrees with the zone-aware one',
+  );
+  assert.equal(
+    label,
+    new Date('2026-03-07T02:30:00-05:00').toISOString(),
+    'the occurrence is the previous day, because the skipped day has no 02:30',
+  );
+  // An ordinary day still labels the same day's occurrence, so this is a skip rather than a shift.
+  const ordinary = latestScheduledAt(
+    trigger,
+    '2026-03-09T02:30:00-04:00',
+    new Date('2026-03-10T12:00:00-04:00'),
+  );
+  assert.equal(ordinary, new Date('2026-03-10T02:30:00-04:00').toISOString());
+});
+
 test('a check byte limit survives being stored', () => {
   /**
    * The `file-exact`/`file-contains` branch rebuilt a literal with only id/kind/path/expected, so an author's
@@ -124,6 +168,32 @@ test('task drafts have explicit pending steps and manual acceptance', () => {
   assert.ok(draft.acceptance.length > 0);
   assert.ok(draft.acceptance.every((x) => !x.met && !x.check));
 });
+
+test('a draft is written in the language its caller names, and Chinese is still the default', () => {
+  /**
+   * The draft's steps and acceptance line are *generated* text, not copy the dictionary can translate: they land
+   * in the fields a person then edits (`renderer-tasks.ts` writes them into `input.value`, which the DOM walker
+   * does not visit), so the language has to be chosen where they are written. It used to be Chinese
+   * unconditionally, which is what an English interface showed in its draft.
+   *
+   * The caller is the carrier command, which knows the interface language; a caller that says nothing keeps the
+   * wording it has always produced, because that is what an older client sends.
+   */
+  const english = initialTaskDraft('plan', 'Implement a settings toggle', 'en-US');
+  for (const step of english.steps) assert.doesNotMatch(step.description, HAN, step.description);
+  assert.doesNotMatch(english.acceptance[0]!.description, HAN);
+  assert.match(english.description, /Implement a settings toggle/, 'the request itself is content');
+
+  const chinese = initialTaskDraft('plan', 'Implement a settings toggle', 'zh-CN');
+  assert.match(chinese.steps[0]!.description, HAN);
+  assert.match(chinese.acceptance[0]!.description, HAN);
+  assert.deepEqual(
+    initialTaskDraft('plan', 'x').steps,
+    chinese.steps,
+    'a caller that names no language keeps the wording it always got',
+  );
+});
+
 test('draft editing cannot grant completion and validates executable checks', () => {
   const draft = normalizeTaskDraft({
     title: 'Task',

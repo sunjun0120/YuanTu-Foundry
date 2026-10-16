@@ -42,6 +42,8 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
       'background-jobs',
       'plan-approval',
       'subagents',
+      'workspace-orphans-v1',
+      'workspace-orphan-policy-context-v1',
       /**
        * The live cursor and the replay that goes with it. Advertised rather than assumed: a client that
        * reconnects to a Host which does not offer it has to re-read the session, and saying so is how the

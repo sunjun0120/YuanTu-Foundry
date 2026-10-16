@@ -260,7 +260,21 @@ export class ResponsesProvider implements Provider {
     if (incomplete) {
       const missing = incompleteText(terminal, streamed);
       if (missing) request.onText(missing);
-      return { text: streamed + missing, toolCalls: [], finishReason: 'length', usage };
+      /**
+       * Why the endpoint stopped early decides what the run does about it.
+       *
+       * `incomplete_details.reason` was never read, so every early stop was reported as a length truncation —
+       * including `content_filter`, which is the endpoint's own policy refusing to continue. That reading sends
+       * the run looking for a smaller request, which is the one remedy a policy refusal does not have. An
+       * unrecognised or missing reason keeps the old answer rather than inventing a new one.
+       */
+      const reason = object(object(terminal).incomplete_details).reason;
+      return {
+        text: streamed + missing,
+        toolCalls: [],
+        finishReason: reason === 'content_filter' ? 'content-filter' : 'length',
+        usage,
+      };
     }
     if (!Array.isArray(terminal.output) || terminal.output.length > 256)
       throw new Error('Invalid Responses output');

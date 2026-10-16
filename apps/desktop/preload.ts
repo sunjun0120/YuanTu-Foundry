@@ -9,6 +9,7 @@ import type {
 } from '../../packages/carrier/contract.ts';
 
 const bridge: DesktopBridge = {
+  workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
   backups: (command) => ipcRenderer.invoke('yuantu:backups', command),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
   files: (command) => ipcRenderer.invoke('yuantu:files', command),

@@ -11,6 +11,11 @@ import { McpSettingsStore } from './mcp-settings.ts';
 import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import { parseMcpCommand, type McpReply } from './mcp-contract.ts';
 import { parseFilesCommand, type FilesReply } from './files-contract.ts';
+import { maintainWorkspace } from './workspace-maintenance.ts';
+import {
+  parseWorkspaceMaintenanceCommand,
+  type WorkspaceMaintenanceReply,
+} from './workspace-maintenance-contract.ts';
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, clipboard, Menu } from 'electron';
 import { writeFile, copyFile, readFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
@@ -765,6 +770,39 @@ void app
         };
       }
     });
+    ipcMain.handle(
+      'yuantu:workspace-maintenance',
+      async (event, input: unknown): Promise<WorkspaceMaintenanceReply> => {
+        try {
+          assertSender(event);
+          const command = parseWorkspaceMaintenanceCommand(input);
+          if (!service || quitting || switching) throw new Error(mainText('desktop.quitting'));
+          const current = service;
+          const workspace = current.snapshot.workspace;
+          if (command.type === 'list')
+            return { ok: true, workspace, items: await current.orphanWorkspaces() };
+          switching = true;
+          try {
+            const sessionId = current.snapshot.session.sessionId;
+            return await maintainWorkspace({
+              service: current,
+              command,
+              workspace,
+              policyReady: following,
+              isCurrent: () =>
+                !quitting &&
+                current === service &&
+                current.snapshot.workspace === workspace &&
+                current.snapshot.session.sessionId === sessionId,
+            });
+          } finally {
+            switching = false;
+          }
+        } catch (error) {
+          return carrierErrorReply(error);
+        }
+      },
+    );
     ipcMain.handle('yuantu:files', async (event, input: unknown): Promise<FilesReply> => {
       try {
         assertSender(event);

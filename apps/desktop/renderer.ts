@@ -8,7 +8,6 @@ import type { DesktopBridge, DesktopReply } from './contract.ts';
 import { carrierErrorText } from './carrier-errors.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import type { Message } from '../../packages/protocol/index.ts';
-import { fileChangeAction, undoConfirmKey } from '../../packages/client/change-actions.ts';
 import { setupModelSettings } from './renderer-settings.ts';
 import { diffView } from './diff-view.ts';
 import { setupAttachments } from './renderer-attachments.ts';
@@ -22,8 +21,11 @@ import { setupQuestions } from './renderer-questions.ts';
 import { setupSessionPanels } from './renderer-session-panels.ts';
 import { setupSessionList } from './renderer-session-list.ts';
 import { setupTranscript } from './renderer-transcript.ts';
+import { setupTurnChanges } from './renderer-changes.ts';
+import { runStatusText } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
+import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
 import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
@@ -59,6 +61,7 @@ function node<K extends keyof HTMLElementTagNameMap>(
 }
 const statisticsView = setupStatistics();
 const workspaceView = setupWorkspace();
+const workspaceMaintenance = setupWorkspaceMaintenance();
 /** What a panel-level slot is given: the carrier snapshot a panel draws from, and nothing else. */
 interface PanelSlotContext {
   readonly session: CarrierSnapshot['session'];
@@ -179,7 +182,6 @@ let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
 let operation = false;
 let approvalBusy = new Set<string>();
 let transcriptKey = '';
-let changesKey = '';
 let approvalKey = '';
 const commandsView = setupCommandPalette({
   getState: () => state,
@@ -257,9 +259,17 @@ async function select(command: CarrierCommand): Promise<CarrierSnapshot | null> 
 }
 let loadingOlderHistory = false;
 
+const turnChangesView = setupTurnChanges({
+  getState: () => state,
+  select,
+  preview: (path, content, key) => workspaceView.previewChanges(path, content, key),
+  refreshPreview: (key, content) => workspaceView.refreshChangePreview(key, content),
+  clearPreviews: () => workspaceView.clearChangePreviews(),
+});
 const transcriptView = setupTranscript({
   getState: () => state,
   messageView: messagesView.messageView,
+  turnChanges: () => turnChangesView.cards(),
 });
 
 const liveView = setupLiveMessage({
@@ -282,6 +292,7 @@ const planView = setupPlanPanel({
 function render(): void {
   if (!state) return;
   const session = state.session;
+  workspaceMaintenance.update(state);
   // Every panel in a slot renders here, in the order the slot decides — the built-ins included. Nothing below
   // this line calls a panel directly; adding one is a `register`, not an edit to this function.
   const slotContext: PanelSlotContext = { session, workspace: state.workspace };
@@ -383,24 +394,13 @@ function render(): void {
     .join('\n');
   element('clear-queue').hidden = !session.queue.length;
   element<HTMLButtonElement>('clear-queue').disabled = composerView.isQueueBusy();
-  const labels = {
-    idle: '准备就绪',
-    running: '正在处理',
-    completed: '本轮已结束',
-    needs_review: '验收未通过，需检查',
-    cancelled: '已停止',
-    limited: '已达到运行限制',
-    failed: '运行失败',
-  };
-  element('run-status').textContent = session.compacting
-    ? '正在整理上下文…'
-    : session.approvals.length
-      ? '等待你的确认'
-      : !state.ready
-        ? '连接未就绪'
-        : session.loading
-          ? '正在加载会话…'
-          : labels[session.status];
+  element('run-status').textContent = runStatusText({
+    status: session.status,
+    compacting: session.compacting,
+    approvals: session.approvals.length,
+    ready: state.ready,
+    loading: session.loading,
+  });
   if (session.running && !session.compacting && !session.approvals.length) {
     const phase = session.statisticsActivity?.phase;
     if (phase === 'reasoning') element('run-status').textContent = t('ui.modelReasoning');
@@ -413,7 +413,8 @@ function render(): void {
   sessionListView.render(state.sessions, session.sessionId, blocked);
   // Message timestamps are locale-formatted, so they follow the language too.
   const paused = session.error === RUN_CANCELLED;
-  const nextTranscriptKey = `${session.sessionId}:${session.messageRevision}:${locale()}:${paused}`;
+  const changesIdentity = turnChangesView.update(blocked);
+  const nextTranscriptKey = `${session.sessionId}:${session.messageRevision}:${locale()}:${paused}:${changesIdentity}`;
   const transcriptChanged = nextTranscriptKey !== transcriptKey;
   if (transcriptChanged) {
     transcriptKey = nextTranscriptKey;
@@ -427,69 +428,6 @@ function render(): void {
      */
     element('live').prepend(element('live-reasoning'));
     transcriptView.render(session.messages, session.historyStart ?? 0, paused);
-  }
-  const nextChangesKey = JSON.stringify([
-    state.changes,
-    session.messages.length,
-    blocked,
-    locale(),
-  ]);
-  if (nextChangesKey !== changesKey) {
-    changesKey = nextChangesKey;
-    const changes = state.changes;
-    const legacy = session.messages.filter(
-      (m): m is Message & { role: 'tool' } =>
-        m.role === 'tool' && !m.isError && Boolean(m.change) && !m.change?.id,
-    );
-    element('changes').hidden = !changes.length && !legacy.length;
-    element('changes-count').textContent = format(t('ui.sessionChanges'), {
-      count: changes.length + legacy.length,
-    });
-    element('changes-list').replaceChildren(
-      ...changes.map((item) => {
-        const panel = diffView(item.change);
-        // A sub-agent's write is journaled against this session, so without the badge it would read as
-        // the parent's own step; the objective is bounded because it is model-written text.
-        if (item.change.subagent)
-          panel.prepend(
-            node(
-              'p',
-              format(t('subagent.attribution'), {
-                objective: item.change.subagent.objective.slice(0, 120),
-              }),
-              'subagent-badge',
-            ),
-          );
-        // The affordance comes from fileChangeAction so the "an interrupted undo can still be
-        // resumed" rule lives in one tested place instead of in this render function.
-        const action = fileChangeAction(item.status);
-        panel.append(node('p', t(action.noticeKey), 'diff-notice'));
-        if (action.kind !== 'none') {
-          const undo = node('button', t(action.actionKey), 'undo-change');
-          undo.disabled = blocked;
-          undo.addEventListener('click', () => {
-            const confirm = node('button', t(undoConfirmKey(item.change.kind)), 'confirm-undo');
-            const cancel = node('button', '取消');
-            confirm.disabled = Boolean(state?.session.running || operation);
-            confirm.addEventListener('click', () => void select({ type: 'undo', id: item.id }));
-            cancel.addEventListener('click', () => {
-              confirm.remove();
-              cancel.remove();
-              undo.hidden = false;
-            });
-            undo.hidden = true;
-            panel.append(confirm, cancel);
-          });
-          panel.append(undo);
-        }
-        return panel;
-      }),
-      ...legacy.map((m) => {
-        const panel = diffView(m.change!);
-        panel.append(node('p', '这条记录没有本会话的恢复快照，仅可查看差异。', 'diff-notice'));
-        return panel;
-      }),
-    );
   }
   liveView.sync();
   planView.render(session.plan);

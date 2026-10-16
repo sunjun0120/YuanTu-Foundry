@@ -1,4 +1,15 @@
-﻿import JSZip from 'jszip';
+import JSZip from 'jszip';
+import { readEntry } from './zip-entry.ts';
+
+/**
+ * Per-part ceilings, in uncompressed bytes.
+ *
+ * Each is far above anything a real package holds — the presentation part is kilobytes and a slide part tens of
+ * kilobytes — and far below the 20 MB package limit, so a bomb is refused without a document being.
+ */
+const PRESENTATION_XML_BYTES = 2_000_000;
+const RELATIONSHIP_XML_BYTES = 1_000_000;
+const SLIDE_XML_BYTES = 2_000_000;
 
 const decodeXml = (value: string): string =>
   value.replace(
@@ -22,8 +33,16 @@ const decodeXml = (value: string): string =>
 export async function readPptxSlides(bytes: Buffer): Promise<string[]> {
   if (bytes.length > 20_000_000) throw new Error('PPTX exceeds 20 MB');
   const zip = await JSZip.loadAsync(bytes);
-  const presentation = await zip.file('ppt/presentation.xml')?.async('string');
-  const rels = await zip.file('ppt/_rels/presentation.xml.rels')?.async('string');
+  const presentation = await readEntry(
+    zip.file('ppt/presentation.xml'),
+    PRESENTATION_XML_BYTES,
+    'PPTX presentation XML',
+  );
+  const rels = await readEntry(
+    zip.file('ppt/_rels/presentation.xml.rels'),
+    RELATIONSHIP_XML_BYTES,
+    'PPTX relationship XML',
+  );
   if (!presentation || !rels) throw new Error('Invalid PPTX presentation relationships');
   const slideTargets = new Map<string, string>();
   for (const tag of rels.match(/<Relationship\b[^>]*\/?\s*>/g) ?? []) {
@@ -40,8 +59,8 @@ export async function readPptxSlides(bytes: Buffer): Promise<string[]> {
   const slides: string[] = [];
   let total = 0;
   for (const name of entries) {
-    const xml = await zip.file(name)!.async('string');
-    if (xml.length > 2_000_000) throw new Error('PPTX slide XML is too large');
+    // The bound is applied while the part is read, so an oversized slide is refused before it is in memory.
+    const xml = (await readEntry(zip.file(name), SLIDE_XML_BYTES, 'PPTX slide XML'))!;
     const text = [...xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)]
       .map((match) => decodeXml(match[1]!))
       .join(' ')

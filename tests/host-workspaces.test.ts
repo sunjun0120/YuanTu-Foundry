@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -9,6 +9,10 @@ import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { PermissionPolicy } from '../packages/core/permissions.ts';
+import type { Approval } from '../packages/protocol/index.ts';
+import { HookRegistry } from '../packages/tools/registry.ts';
+import { AgentHostClient } from '../packages/client/host-client.ts';
 
 /**
  * The workspace RPC surface.
@@ -40,13 +44,16 @@ interface Harness {
   root: string;
   sessionId: string;
   dispatch: ReturnType<typeof createDispatcher>;
+  beforeClose: (() => Promise<void>)[];
 }
 
 async function host(t: test.TestContext): Promise<Harness> {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-host-ws-'));
   const state = `${root}-state`;
   const store = new SessionStore(path.join(state, 'sessions.sqlite'));
+  const beforeClose: (() => Promise<void>)[] = [];
   t.after(async () => {
+    for (const cleanup of beforeClose) await cleanup();
     store.close();
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     await rm(state, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
@@ -62,9 +69,240 @@ async function host(t: test.TestContext): Promise<Harness> {
     workspace: root,
     active: new Map(),
     restoring: false,
+    options: { allowWrite: true },
+    launchSandbox: { mode: 'host' },
+    defaultSandboxMode: 'host',
+    defaultSandboxFiles: 'workspace-write',
+    sessionSandboxes: new Map(),
+    sessionSandboxFiles: new Map(),
+    sessionSandboxNetwork: new Map(),
+    approvals: new Map(),
+    approvalSources: new WeakMap(),
+    carrier: { send() {} },
+    background: { async close() {} },
   } as unknown as HostContext;
-  return { ctx, store, root, sessionId: session.id, dispatch: createDispatcher(ctx) };
+  return { ctx, store, root, sessionId: session.id, dispatch: createDispatcher(ctx), beforeClose };
 }
+
+async function childResult(h: Harness) {
+  const manager = new WorkspaceManager({ store: h.store });
+  const service = new WorkspaceResultsService({ store: h.store });
+  const child = h.store.create(h.root, h.sessionId);
+  const signal = new AbortController().signal;
+  const snapshot = await manager.freeze({
+    parentSessionId: h.sessionId,
+    sourceBinding: manager.resolve(h.sessionId),
+    signal,
+  });
+  const binding = await manager.allocate({
+    parentSessionId: h.sessionId,
+    taskId: 'approval',
+    snapshot,
+    signal,
+  });
+  h.store.attachWorkspaceBinding({ bindingId: binding.id, childSessionId: child.id });
+  await writeFile(path.join(binding.executionRoot, 'made.txt'), 'by the child\n');
+  return service.export({ childSessionId: child.id, signal });
+}
+
+for (const boundary of ['deny', 'read-only', 'revoke-while-approving'] as const) {
+  test(`workspace.apply refuses ${boundary} without changing files or the journal`, async (t) => {
+    const h = await host(t);
+    const result = await childResult(h);
+    const deny = new PermissionPolicy({ version: 1, rules: [{ kind: 'write', effect: 'deny' }] });
+    if (boundary === 'deny') h.ctx.permissionPolicy = deny;
+    if (boundary === 'read-only') h.ctx.sessionSandboxFiles.set(h.sessionId, 'read-only');
+    if (boundary === 'revoke-while-approving') {
+      h.ctx.options.allowWrite = false;
+      h.ctx.carrier.send = (data: unknown) => {
+        const frame = data as { event: { data: { approvalId: string } } };
+        h.ctx.permissionPolicy = deny;
+        void h.dispatch('approval.respond', {
+          approvalId: frame.event.data.approvalId,
+          allow: true,
+        });
+      };
+    }
+    await assert.rejects(
+      h.dispatch('workspace.apply', {
+        sessionId: h.sessionId,
+        resultId: result.id,
+        expectedDigest: result.digest,
+      }),
+      /permission denied|read-only/i,
+    );
+    await assert.rejects(access(path.join(h.root, 'made.txt')));
+    assert.equal(h.store.fileChanges(h.sessionId).length, 0);
+    assert.equal(h.store.workspaceResult(result.id)!.status, 'ready');
+    assert.equal(h.ctx.restoring, false);
+    assert.equal(h.ctx.approvals.size, 0);
+  });
+}
+
+test('workspace.apply waits for the user to approve the pinned result and file preview', async (t) => {
+  const h = await host(t);
+  const result = await childResult(h);
+  h.ctx.options.allowWrite = false;
+  let resolveRequest!: (value: { approvalId: string; approval: Approval }) => void;
+  let rejectRequest!: (reason: unknown) => void;
+  const requested = new Promise<{ approvalId: string; approval: Approval }>((resolve, reject) => {
+    resolveRequest = resolve;
+    rejectRequest = reject;
+  });
+  h.ctx.carrier.send = (data: unknown) => {
+    const frame = data as {
+      event: { type: string; data: { approvalId: string; approval: Approval } };
+    };
+    if (frame.event.type === 'approval.required') resolveRequest(frame.event.data);
+  };
+  const applying = h.dispatch('workspace.apply', {
+    sessionId: h.sessionId,
+    resultId: result.id,
+    expectedDigest: result.digest,
+  });
+  // Observe rejection immediately, even if a regression bypasses the prompt.
+  void applying.catch(rejectRequest);
+  h.beforeClose.push(async () => {
+    for (const entry of h.ctx.approvals.values()) entry.resolve(false);
+    await applying.catch(() => {});
+  });
+  const decision = await Promise.race([
+    requested,
+    applying.then(() => {
+      throw new Error('Import completed without asking for approval');
+    }),
+  ]);
+  assert.equal(decision.approval.kind, 'write');
+  assert.equal(decision.approval.toolCall.name, 'workspace_result_apply');
+  assert.deepEqual(decision.approval.toolCall.arguments, {
+    resultId: result.id,
+    expectedDigest: result.digest,
+  });
+  assert.deepEqual(
+    decision.approval.change!.changes!.map((change) => change.path),
+    ['made.txt'],
+  );
+  await assert.rejects(access(path.join(h.root, 'made.txt')));
+  await h.dispatch('approval.respond', { approvalId: decision.approvalId, allow: true });
+  assert.equal(((await applying) as { status: string }).status, 'applied');
+  assert.equal(await readFile(path.join(h.root, 'made.txt'), 'utf8'), 'by the child\n');
+  assert.equal(h.ctx.approvals.size, 0);
+});
+
+test('run.cancel aborts only the manual operation belonging to that session', async (t) => {
+  const h = await host(t);
+  const other = h.store.create(h.root);
+  const controller = new AbortController();
+  h.ctx.manualOperation = { sessionId: h.sessionId, controller };
+  assert.deepEqual(await h.dispatch('run.cancel', { sessionId: other.id }), { cancelled: false });
+  assert.equal(controller.signal.aborted, false);
+  assert.deepEqual(await h.dispatch('run.cancel', { sessionId: h.sessionId }), { cancelled: true });
+  assert.equal(controller.signal.aborted, true);
+});
+
+test('cancelling workspace.apply settles its approval without importing and releases the Host', async (t) => {
+  const h = await host(t);
+  const result = await childResult(h);
+  h.ctx.options.allowWrite = false;
+  h.ctx.carrier.send = () => {
+    void h.dispatch('run.cancel', { sessionId: h.sessionId });
+  };
+  await assert.rejects(
+    h.dispatch('workspace.apply', {
+      sessionId: h.sessionId,
+      resultId: result.id,
+      expectedDigest: result.digest,
+    }),
+    /abort|cancel/i,
+  );
+  assert.equal(h.ctx.approvals.size, 0);
+  assert.equal(h.ctx.manualOperation, undefined);
+  assert.equal(h.ctx.restoring, false);
+  await assert.rejects(access(path.join(h.root, 'made.txt')));
+  assert.equal(h.store.fileChanges(h.sessionId).length, 0);
+  h.ctx.options.allowWrite = true;
+  assert.equal(
+    (
+      (await h.dispatch('workspace.apply', {
+        sessionId: h.sessionId,
+        resultId: result.id,
+        expectedDigest: result.digest,
+      })) as { status: string }
+    ).status,
+    'applied',
+  );
+});
+
+test('workspace.apply reports a conflict introduced before tool preparation as a structured result', async (t) => {
+  const h = await host(t);
+  const result = await childResult(h);
+  const hooks = new HookRegistry();
+  h.ctx.hooks = hooks;
+  t.after(() => hooks.close());
+  hooks.register({
+    beforeTool: async () => {
+      await writeFile(path.join(h.root, 'made.txt'), 'parent edited it\n');
+    },
+  });
+  const response = (await h.dispatch('workspace.apply', {
+    sessionId: h.sessionId,
+    resultId: result.id,
+    expectedDigest: result.digest,
+  })) as { status: string; conflicts: string[]; files: unknown[] };
+  assert.equal(response.status, 'conflict');
+  assert.deepEqual(response.conflicts, ['made.txt']);
+  assert.deepEqual(response.files, []);
+  assert.equal(await readFile(path.join(h.root, 'made.txt'), 'utf8'), 'parent edited it\n');
+  assert.equal(h.store.fileChanges(h.sessionId).length, 0);
+  assert.equal(h.ctx.restoring, false);
+});
+
+test('a real client keeps workspace.apply pending beyond its ordinary request deadline for approval', async (t) => {
+  const h = await host(t);
+  const result = await childResult(h);
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath: path.resolve('apps/agent-host/main.ts'),
+    workspace: h.root,
+    db: path.join(`${h.root}-state`, 'sessions.sqlite'),
+    requestTimeoutMs: 1000,
+    env: { YUANTU_SANDBOX: 'host', YUANTU_SESSION_TITLES: '0', YUANTU_WORKFLOWS: 'false' },
+  });
+  h.beforeClose.push(() => client.stop());
+  await client.start();
+  let onApproval!: (id: string) => void;
+  const requested = new Promise<string>((resolve) => {
+    onApproval = resolve;
+  });
+  client.subscribe((event) => {
+    if (event.type === 'approval.required') onApproval(String(event.data.approvalId));
+  });
+  const applying = client.request('workspace.apply', {
+    sessionId: h.sessionId,
+    resultId: result.id,
+    expectedDigest: result.digest,
+  });
+  let failure: unknown;
+  void applying.catch((error: unknown) => {
+    failure = error;
+  });
+  const approvalId = await Promise.race([
+    requested,
+    applying.then(() => {
+      throw new Error('Import completed without approval');
+    }),
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.equal(
+    failure,
+    undefined,
+    'the caller must keep waiting while the approval remains pending',
+  );
+  await assert.rejects(access(path.join(h.root, 'made.txt')));
+  await client.request('approval.respond', { approvalId, allow: true });
+  assert.equal((await applying).status, 'applied');
+  assert.equal(await readFile(path.join(h.root, 'made.txt'), 'utf8'), 'by the child\n');
+});
 
 test('a session with no binding reports itself as shared over its own project', async (t) => {
   const h = await host(t);

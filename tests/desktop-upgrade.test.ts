@@ -272,6 +272,53 @@ test('release manifests describe the selected built artifact, including its own 
   assert.equal(manifest.nodeVersion, '24.1.0');
 });
 
+for (const staleStandard of [false, true]) {
+  test(`protected release manifests select the protected installer (ordinary installer present: ${staleStandard})`, (t) => {
+    const f = fixture(t);
+    const output = path.join(f.root, 'protected-build');
+    const app = path.join(output, 'win-unpacked/resources/app');
+    const runtime = path.join(output, 'win-unpacked/resources/runtime');
+    mkdirSync(path.join(app, 'dist/desktop'), { recursive: true });
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(path.join(app, 'package.json'), JSON.stringify({ version: '0.4.0' }));
+    writeFileSync(
+      path.join(app, 'dist/desktop/release.json'),
+      JSON.stringify({ maxSchemaVersion: 20 }),
+    );
+    writeFileSync(path.join(runtime, 'runtime.json'), JSON.stringify({ nodeVersion: '24.1.0' }));
+    const artifact = path.join(output, 'YuanTu-Agent-0.4.0-windows-x64-protected-setup.exe');
+    writeFileSync(artifact, 'protected installer');
+    const ordinary = path.join(output, 'YuanTu-Agent-0.4.0-windows-x64-setup.exe');
+    if (staleStandard) writeFileSync(ordinary, 'stale ordinary installer');
+    const result = spawnSync(
+      process.execPath,
+      ['scripts/write-release-manifest.mjs', output, '--profile=protected', '--arch=x64'],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      fs.existsSync(`${artifact}.json`),
+      true,
+      'the selected protected installer gets the manifest',
+    );
+    const manifest = JSON.parse(readFileSync(`${artifact}.json`, 'utf8'));
+    assert.equal(manifest.artifact, path.basename(artifact));
+    assert.equal(manifest.sha256, createHash('sha256').update('protected installer').digest('hex'));
+    assert.equal(fs.existsSync(`${ordinary}.json`), false);
+    rmSync(artifact);
+    const missing = spawnSync(
+      process.execPath,
+      ['scripts/write-release-manifest.mjs', output, '--profile=protected', '--arch=x64'],
+      { encoding: 'utf8' },
+    );
+    assert.notEqual(
+      missing.status,
+      0,
+      'a missing protected installer must never fall back to an ordinary one',
+    );
+  });
+}
+
 test('application directories nested anywhere in the workspace refuse upgrade preparation', (t) => {
   const f = fixture(t);
   const installed = path.join(f.workspace, 'app');

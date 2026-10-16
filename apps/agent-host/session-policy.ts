@@ -1,13 +1,14 @@
 import { backgroundAuthority } from '../../packages/core/background-deliveries.ts';
 import { executionPolicy, withExecutionPolicy } from '../../packages/tools/execution-policy.ts';
 import type { HostContext } from './state.ts';
+import type { ExecutionPolicy } from '../../packages/protocol/execution.ts';
 
-/** Lifecycle hooks carry the session's live policy, including cold durable authority. */
-export function underSessionPolicy<T>(ctx: HostContext, sessionId: string, action: () => T): T {
+/** Resolve live session authority, including the persisted authority of a cold session. */
+export function sessionExecutionPolicy(ctx: HostContext, sessionId: string): ExecutionPolicy {
   const durable = ctx.sessionSandboxes.has(sessionId)
     ? undefined
     : backgroundAuthority(ctx.store, sessionId);
-  const policy = executionPolicy(
+  return executionPolicy(
     ctx.sessionSandboxes.get(sessionId) ?? durable?.sandboxMode ?? ctx.defaultSandboxMode,
     {
       files:
@@ -18,5 +19,17 @@ export function underSessionPolicy<T>(ctx: HostContext, sessionId: string, actio
       image: ctx.launchSandbox.image,
     },
   );
-  return withExecutionPolicy(policy, action);
+}
+
+/** Lifecycle hooks carry the session's live policy, including cold durable authority. */
+export function underSessionPolicy<T>(ctx: HostContext, sessionId: string, action: () => T): T {
+  return withExecutionPolicy(sessionExecutionPolicy(ctx, sessionId), action);
+}
+
+/** Keep a planning invocation read-only through its end notification, even after it submits its plan. */
+export function sessionLifecycleReadOnly(ctx: HostContext, sessionId: string): boolean {
+  return (
+    sessionExecutionPolicy(ctx, sessionId).files === 'read-only' ||
+    (ctx.sessionLifecyclePhases.get(sessionId) ?? ctx.store.planMode(sessionId) !== null)
+  );
 }

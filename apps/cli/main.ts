@@ -7,6 +7,7 @@ import {
   inspectDatabase,
   restoreDatabase,
   recoverDatabase,
+  compactDatabase,
 } from '../../packages/storage/database-maintenance.ts';
 import { readPermissionPolicy } from '../../packages/core/permissions.ts';
 import { parseArgs } from '../shared/args.ts';
@@ -60,6 +61,7 @@ import { discoverSkills } from '../../packages/resources/skills.ts';
 import { extensionTools } from '../../packages/resources/extensions.ts';
 import { loadHookRegistry } from '../shared/hooks.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
+import { resolveSandboxConfig } from '../../packages/tools/sandbox-provider.ts';
 import { verifyTaskAcceptance, type TaskBaselines } from '../../packages/core/task-acceptance.ts';
 import { normalizeCompletionSpec } from '../../packages/core/completion-contract.ts';
 
@@ -194,7 +196,7 @@ async function main(): Promise<void> {
     throw new Error(
       'The CLI does not serve a socket; start the Agent Host with --listen [host:]port instead',
     );
-  if (['db-backup', 'db-verify', 'db-restore', 'db-recover'].includes(command!)) {
+  if (['db-backup', 'db-verify', 'db-restore', 'db-recover', 'db-compact'].includes(command!)) {
     const takesFile = command === 'db-verify' || command === 'db-restore';
     if (args.length !== (takesFile ? 1 : 0) || (command !== 'db-verify' && !options.db))
       throw new Error(
@@ -207,7 +209,9 @@ async function main(): Promise<void> {
           ? inspectDatabase(args[0]!, SESSION_DATABASE_POLICY)
           : command === 'db-restore'
             ? restoreDatabase(options.db!, args[0]!, SESSION_DATABASE_POLICY)
-            : recoverDatabase(options.db!);
+            : command === 'db-compact'
+              ? compactDatabase(options.db!)
+              : recoverDatabase(options.db!);
     process.stdout.write(JSON.stringify(result, null, options.json ? undefined : 2) + '\n');
     return;
   }
@@ -766,6 +770,11 @@ async function main(): Promise<void> {
     invariants.register(emittedEventTypesInvariant());
     invariants.register(pipelineStagesInvariant());
     let sessionId: string | undefined;
+    let lifecycleReadOnly = false;
+    hooks.observeStop((context) => {
+      if (context.sessionId === sessionId && typeof context.readOnly === 'boolean')
+        lifecycleReadOnly = context.readOnly;
+    });
     /**
      * The plan as the last `todo_write` left it, so a plan change can be described rather than only listed.
      *
@@ -942,6 +951,8 @@ async function main(): Promise<void> {
       );
       const session = existing ?? store.create(workspace);
       sessionId = session.id;
+      lifecycleReadOnly =
+        command === 'plan' || (command === 'resume' && store.planMode(session.id) !== null);
       if (existing) previousPlan = store.todos(session.id);
       const retryTaskId = command === 'task-retry' ? args[1]! : undefined;
       /**
@@ -1021,11 +1032,6 @@ async function main(): Promise<void> {
             })();
       await reconcilePendingFileChanges(store, session.id, workspace);
       if (!options.json) process.stderr.write(`Session: ${session.id}\nWorkspace: ${workspace}\n`);
-      for (const failure of await hooks.sessionStart(
-        { sessionId: session.id, workspace, resumed: Boolean(existing) },
-        controller.signal,
-      ))
-        process.stderr.write(`sessionStart hook failed: ${failure}\n`);
       /**
        * A session that was planning when it stopped is still planning.
        *
@@ -1044,6 +1050,17 @@ async function main(): Promise<void> {
           : resumed?.planId
             ? { id: resumed.planId }
             : undefined;
+      lifecycleReadOnly = plan !== undefined;
+      for (const failure of await hooks.sessionStart(
+        {
+          sessionId: session.id,
+          workspace,
+          resumed: Boolean(existing),
+          readOnly: lifecycleReadOnly || resolveSandboxConfig().files === 'read-only',
+        },
+        controller.signal,
+      ))
+        process.stderr.write(`sessionStart hook failed: ${failure}\n`);
       let result = await agent.run({
         sessionId: session.id,
         prompt,
@@ -1246,7 +1263,14 @@ async function main(): Promise<void> {
         await residency.disposeAll().catch(() => undefined);
         if (sessionId) {
           const failures = await hooks
-            .sessionEnd({ sessionId, reason: 'shutdown' }, new AbortController().signal)
+            .sessionEnd(
+              {
+                sessionId,
+                reason: 'shutdown',
+                readOnly: lifecycleReadOnly || resolveSandboxConfig().files === 'read-only',
+              },
+              new AbortController().signal,
+            )
             .catch(() => []);
           for (const failure of failures)
             process.stderr.write(`sessionEnd hook failed: ${failure}\n`);

@@ -157,7 +157,7 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 | `read_file`    | 读 UTF-8 文本并标注行号，可切起止行；整文件可读，`totalLines` 是真实行数                        | —    |
 | `read_image`   | 读工作区内图片（PNG/JPEG/GIF/WebP，≤5MB）并作为图片返回                                         | —    |
 | `search_files` | 搜索工作区文本；默认字面量、区分大小写、100 条结果；结果说明扫描是否覆盖完整                    | —    |
-| `repo_map`     | 工作区结构大纲（整文件符号索引）；带 `query` 时按符号名检索，并给出索引新鲜度                   | —    |
+| `repo_map`     | 工作区结构大纲；带 `query` 时按符号名检索，支持 `limit`／`cursor` 分页，并给出新鲜度和覆盖状态  | —    |
 | `edit_file`    | 把唯一匹配的 `old_text` 换成 `new_text`，保留其他字节                                           | 写入 |
 | `write_file`   | 在已有目录新建文件；拒绝覆盖                                                                    | 写入 |
 | `apply_patch`  | 对单个文件应用精确 unified diff，审批后重新校验源内容                                           | 写入 |
@@ -375,7 +375,7 @@ Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复
 
 ## 会话、事件与投影
 
-默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置、模型设置与 MCP 服务，不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复与中断恢复通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover` 维护命令提供，备份最多保留 5 份、合计 512 MiB。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
+默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置、模型设置与 MCP 服务，不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复、中断恢复与就地压缩通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover`、`db-compact` 维护命令提供，备份最多保留 5 份、合计 512 MiB。删除记录不会让 SQLite 文件变小——空闲页留在文件里等待复用，文件保持历史峰值——`db-compact` 用一次 `VACUUM` 把这些页还给文件系统，并报告压缩前后的字节数；它同样要求先关闭使用该库的桌面、Host 与 CLI，数据库路径与身份不变。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
 
 桌面会话默认加载最近 100 条展示消息，可按“加载更早记录”每次向前加载 100 条；重用未变化的消息节点，保留阅读位置和操作组展开状态。此分页仅限制展示传输与渲染，模型仍读取完整会话记录。模型设置中的容量、自动压缩阈值和流空闲超时支持编辑；部分保存省略字段时保留旧值，显式清空恢复默认行为。
 
@@ -384,6 +384,8 @@ Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复
 持久事件写在 `session_events`，`seq` 是全局自增游标，同时被复用为客户端的事件游标。界面需要的一切都是**投影**：会话消息、统计、轮次计时、子代理卡片、子代理收件箱、待办清单、交付物、目标、步骤——共 10 个内置投影，其中消息投影刻意不落盘（它便宜到不需要缓存）。投影检查点让重开界面不必从 `seq=0` 重放；检查点版本或 seq 不合法时**退回全量折叠**，写失败也静默——它是派生数据。一条运行时不变式（`storage.log-tables-agree`）在每次运行结束时用字符串比较「日志折叠」「读出的转录」「落盘的行」三者，因此表与事件不可能各说一套。
 
 未知事件类型**拒绝**而不是跳过，只有明确列入「可忽略」的记账类事件例外。
+
+带完成契约的运行只在验收通过、资源清理与停止钩子结束、最终文件指纹确认后进入 `verified`。最终完成摘要、所绑定目标的完成状态与运行结束事件在同一事务内落盘，再发布实时通知；重开数据库后仍能读取同一结果。停止钩子改动了受监测文件时，运行及绑定任务进入 `needs_review`；最终落盘失败也不会发布已验证通知。不带完成契约的 `completed` 仍只表示运行正常结束。
 
 模型**实际看到的内容**也落在日志里，而不只是会话消息：每轮请求的**信封**（`context.envelope`：system 提示词与工具目录各自的摘要与体积、该轮瞄准的模型与限额、以及缓存键）与 `resources.loaded`（本次运行加载了哪些指令文件与技能）都是持久事件。提示词本身只在**该轮发生变化时**再存一份——所以一百轮同一个提示词只占一份拷贝，而读侧（`foldContextEnvelopes`）按摘要把省略的那份补回来；提示词超过 32K 字符时只存前缀并**标记为截断**，`systemBytes` 记录真实体积，截断的副本不会被当成完整提示词。因此「这一轮模型究竟看到了什么」以及「AGENTS.md 改过之后，早先那轮被告诉的是什么」都能从日志回答，而不是只能回答「是不是同一个提示词」。
 
@@ -473,6 +475,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 - **命令写文件也算数**：结果来自**目录本身**而不是文件工具 journal，所以 `run_command` 产生的改动一样会出现在结果里；未通过限制（二进制、模式变化、单文件 >1 MiB、>64 路径）的结果标为 `unsupported`，保留现场供人工处理，**不部分合入**。
 - **合入后可撤销**：导入写成一次分组 journal 记录，属于父会话自己的改动列表，`changes.undo` 按目标绑定的执行根恢复精确字节。
 - **崩溃可收敛**：`preparing` 记录按目录是否存在分类，导入中断按 journal 的 before/after 逐路径判断（第三种字节判 conflict），**不重放审批**，也不会把未验证当作已验证——结果里附带的是工具执行的持久证据，不是模型的自我报告。
+- **会话删除后的维护**：桌面「设置 → 保留的工作区」按当前项目列出孤立目录和已移除目录的恢复记录，可归档、确认清理及恢复，受阻目录也有独立恢复入口。Host 的 `workspaces.orphaned` 默认排除已移除目录，`includeRemoved: true` 可发现恢复目标；`workspace.archive/remove/restore` 支持 `bindingId`，存活会话仍用 `sessionId`。绑定请求可通过 `policySessionId` 使用同项目会话的实时权限，否则使用 Host 默认权限。维护写入仅允许 `host` + `workspace-write`，其他策略返回 `WORKSPACE_POLICY_UNSUPPORTED`；不会隐式更改默认权限。目录移除前保存快照并复查身份，库存按需读取。
 - **设置**：`YUANTU_SUBAGENT_WORKSPACE` / `--subagent-workspace` 取 `auto`（默认；写入型隔离、只读共享）、`shared`（保留旧共享写入行为，**不提供隔离**，界面必须如实标注）、`worktree`（连只读也隔离）。当前执行策略无法安全管理 Git 元数据时返回 `WORKSPACE_POLICY_UNSUPPORTED`，**不降级为 shared**。
 - **边界**：worktree 是代码工作副本隔离，不是 OS 安全隔离；host shell 仍可能访问其他目录，不隔离网络、共享账户或外部数据库。首版不安装依赖，需要跑测试的子代理缺依赖时报 `WORKSPACE_DEPENDENCIES_MISSING`。
 
@@ -528,6 +531,10 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 长驻进程，在 stdin/stdout 或 TCP 上提供 JSONL JSON-RPC。报文只有四种形状：请求 `{id, method, params}`、成功 `{id, result}`、失败 `{id, error}`、事件 `{event}`；此外还有**没有 id 的 error**，表示「拒绝这条链路」而不是回答某个请求。方法数与它的真源见[生成事实](#facts)：下表按域分组，每一行都必须与 `HostMethods` 的方法集合一致，`docs:check` 会逐个核对（多列、漏列、拼错都会失败）。
 
+桌面默认使用 stdio，不需要 TCP 凭据。显式启用 `--listen [host:]port` 时，只允许 IPv4 回环地址 `127.x.x.x`，必须从可信启动环境设置 `YUANTU_HOST_TOKEN`；密钥接受 32–512 个 ASCII 字母、数字、下划线或连字符，建议使用随机生成的 32 字节值。未配置密钥或尝试绑定非回环地址时，在打开数据库前拒绝启动。
+
+TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCarrier({ transport, authToken })` 显式传入相同密钥。首条请求必须是带 `params.authToken` 的 `host.info`；Host 验证并移除密钥后才接入普通 RPC，失败连接不会取得会话控制权。握手帧上限 4 KiB、等待上限 5 秒、最多 8 条待认证连接；认证后单请求帧上限 16 MiB，包含没有换行符的未完成帧。此 TCP 入口不提供直接远程监听或 TLS，远程使用需由外部受保护通道转发到回环地址。
+
 | 域         | 方法                                                                                                                                                                                       |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`permission.update`、`invariants.list`                                                                                                        |
@@ -539,7 +546,7 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 | 后台命令   | `background.list`、`background.state`、`background.policy`、`background.poll`、`background.stop`、`background.clear`                                                                       |
 | 资源与文件 | `resources.list`、`files.list`、`files.read`                                                                                                                                               |
 | 变更       | `changes.list`、`changes.undo`                                                                                                                                                             |
-| 工作区     | `workspaces.get`、`workspace.results`、`workspace.apply`、`workspace.archive`、`workspace.restore`、`workspace.remove`                                                                     |
+| 工作区     | `workspaces.get`、`workspaces.orphaned`、`workspace.results`、`workspace.apply`、`workspace.archive`、`workspace.restore`、`workspace.remove`                                              |
 | 会话附属   | `todos.get`、`deliverables.get`、`completion.current`、`subagents.list`、`goal.get`                                                                                                        |
 
 **同时只接受一个连接**（审批、运行、提问映射与工作区锁都是 per-Host），第二个连接会收到明确的拒绝报文后被关闭。载体断开即走同一个关闭流程——Host 属于拉起它的载体。
@@ -600,12 +607,13 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 <!-- settings:start -->
 
-**由代码算出**：共 65 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 66 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
 | --- | --- | --- |
 | `YUANTU_API_KEY` | `string` | 模型 API 密钥 |
+| `YUANTU_HOST_TOKEN` | `32–512 ASCII letters, digits, _ or -` | TCP Host 认证密钥（仅启用 --listen 时必需） |
 | `YUANTU_BASE_URL` | `string` | 模型端点 |
 | `YUANTU_MODEL` | `string` | 模型 ID |
 | `YUANTU_PROTOCOL` | `anthropic` / `openai` / `openai-responses` | 协议适配器 |
@@ -690,18 +698,18 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 67 个 / 36.5 KB | `createTools().specs()` |
-| 工具（只读运行） | 34 个 / 18.1 KB | `specs({ readOnly: true })` |
+| 工具（空工作区，全部） | 67 个 / 36.6 KB | `createTools().specs()` |
+| 工具（只读运行） | 34 个 / 18.2 KB | `specs({ readOnly: true })` |
 | 工具（折叠为 `run_code`） | 1 个 / 10.6 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 24 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v30 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 45 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 222 个 | `tests/*.test.ts` |
+| 行为测试文件 | 236 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 57 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| Host JSON-RPC 方法 | 58 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->
@@ -724,7 +732,8 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 - **`verify_file_delivery` 校验的是结构而不是语义**：它核对大小、SHA-256 与魔数，不判断页数、能否被 Office 打开、版式或内容是否正确。
 - **检索结果区分「扫描完整」与「扫描不完整」**：`search_files` 零命中时明确说明这是完整扫描的结果，还是预算、读错误或超限导致只扫了一部分；`limited` 可能来自结果上限、输出预算或未完成的枚举，三者含义不同。正文结果里，字面量追加 `[match limit reached]`，正则超时仍按错误返回，不伪装成空匹配。
 - **列表与符号结果带机器可读的覆盖行**：`list_files` 与 `repo_map` 的正文末尾有一行 `Retrieval metadata:`，说明覆盖状态、来源版本、下一页游标与索引新鲜度（`validated`／`building`／`stale`／`unknown`）。索引不新鲜时，符号零命中会说明「索引仍在构建」，而不是断言仓库里没有该符号。
-- **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它；每个索引行记录文件大小、mtime 与内容 SHA-256，写入后由工具主动失效、查询时后台重建。凭据与依赖目录同样不进入索引。
+- **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它。查询会核对源文件清单、大小与 mtime，发现外部新增、删除、重命名或改写后刷新索引；可选完整哈希核对用于大小与 mtime 均未变化的改写。调用方可取消刷新等待，共享构建继续供后续查询使用。单文件超过 8 MiB、读取失败或清单扫描截断时，覆盖状态明确标为不完整；读取失败的文件会在后续查询重试。凭据与依赖目录同样不进入索引。
+- **符号分页绑定查询与来源版本**：将 `repo_map` 返回的 `nextCursor` 作为 `cursor`，保留同一 `query` 即可续页；索引与已启动语言服务器均支持分页。查询、来源版本变化或游标失效后会拒绝续页，应从第一页重新检索。
 - **快速搜索后端需要固定资产**：`literal` + 区分大小写可走固定版本的 ripgrep，仅使用 `build/search-assets.lock.json` 中已记录 SHA-256 且校验通过的二进制；打包时由 `scripts/copy-search-assets.mjs` 核验后放入应用资源。没有可用资产、或执行环境无法安全启动进程时，一律回退内置流式扫描，不回退 host 进程。
 - **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝；AppContainer 原型尚未作为公开模式启用，初始化前置检查不能代替真实增强隔离验收。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
