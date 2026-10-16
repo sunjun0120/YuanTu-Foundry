@@ -41,6 +41,28 @@ async function waitFor(condition: () => boolean, what: string): Promise<void> {
   throw new Error(`Timed out waiting for ${what}`);
 }
 
+test('goal and plan commands accept only supported optional draft languages', () => {
+  for (const type of ['goal', 'plan']) {
+    assert.deepEqual(parseCarrierCommand({ type, prompt: 'Review output' }), {
+      type,
+      prompt: 'Review output',
+    });
+    for (const language of ['zh-CN', 'en-US']) {
+      const command = { type, prompt: 'Review output', language };
+      assert.deepEqual(parseCarrierCommand(command), command);
+    }
+    for (const language of [null, '', 'ja-JP', 1, {}, ['en-US']])
+      assert.throws(
+        () => parseCarrierCommand({ type, prompt: 'Review output', language }),
+        /Invalid carrier command/,
+      );
+    assert.throws(
+      () => parseCarrierCommand({ type, prompt: 'Review output', language: 'en-US', extra: true }),
+      /Invalid carrier command/,
+    );
+  }
+});
+
 test('the carrier package imports neither Electron nor the shell that consumes it', async () => {
   const directory = path.join(projectRoot, 'packages', 'carrier');
   const files = (await readdir(directory)).filter((name) => name.endsWith('.ts')).sort();

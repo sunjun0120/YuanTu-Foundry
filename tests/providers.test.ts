@@ -775,6 +775,37 @@ function events(res: import('node:http').ServerResponse, values: unknown[]) {
   res.writeHead(200, { 'content-type': 'text/event-stream' });
   res.end(values.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join(''));
 }
+for (const details of [
+  undefined,
+  null,
+  {},
+  { reason: 'unknown' },
+  { reason: 'content_filter' },
+  { reason: 'max_output_tokens' },
+])
+  test('Responses accepts optional incomplete details: ' + JSON.stringify(details), async (t) => {
+    const url = await httpFixture(t, (_body, res) => {
+      const event = terminal(
+        [message, { type: 'function_call', name: 'write_file', arguments: '{}' }],
+        'incomplete',
+      );
+      const response = event.response as Record<string, unknown>;
+      if (details === undefined) delete response.incomplete_details;
+      else response.incomplete_details = details;
+      events(res, [event]);
+    });
+    const seen: string[] = [];
+    const provider = new ResponsesProvider({ apiKey: 'fixture', model: 'fixture', baseUrl: url });
+    const result = await provider.complete({ ...request3(), onText: (part) => seen.push(part) });
+    assert.equal(
+      result.finishReason,
+      details?.reason === 'content_filter' ? 'content-filter' : 'length',
+    );
+    assert.equal(result.text, 'Hello');
+    assert.deepEqual(seen, ['Hello']);
+    assert.deepEqual(result.toolCalls, []);
+  });
+
 test('Responses streams text and sends native functions with stateless continuation', async (t) => {
   let calls = 0;
   const reasoning = { id: 'rs', type: 'reasoning', summary: [], encrypted_content: 'opaque-test' };

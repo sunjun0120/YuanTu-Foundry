@@ -2,6 +2,7 @@ import type { Message } from '../../../packages/protocol/index.ts';
 import type { StepRecord } from '../../../packages/protocol/steps.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
+import { HOST_RESPONSE_FRAME_BYTES } from '../../../packages/protocol/host-wire.ts';
 
 /**
  * The paged read side of a session's log: its messages, its audit trail, and its raw events.
@@ -34,7 +35,12 @@ const HISTORY_PAGE_BYTES = 15_000_000;
  * of the bound is that the Host no longer *builds* one — it used to assemble whatever the store held, and the
  * refusal only happened later, on the far side, after the memory had been spent.
  */
-const HISTORY_COMPAT_BYTES = 64_000_000;
+export function assertHistoryFrameBytes(bytes: number): void {
+  if (bytes > HOST_RESPONSE_FRAME_BYTES)
+    throw new Error(
+      'Session history is larger than one frame; read it with view, offset and endOffset instead',
+    );
+}
 
 export const historyHandlers: Readonly<Record<string, Handler>> = {
   'session.get': async (ctx, params) => {
@@ -58,20 +64,22 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
        * alternative — returning a silently truncated transcript — would answer a question about the whole session
        * with part of it, so this refuses and names the paged read instead.
        */
-      let bytes = 0;
-      for (const message of history) {
-        bytes += Buffer.byteLength(JSON.stringify(message));
-        if (bytes > HISTORY_COMPAT_BYTES)
-          throw new Error(
-            'Session history is larger than one frame; read it with view, offset and endOffset instead',
-          );
-      }
-      return {
+      const result = {
         session,
         messages: history,
         statistics: ctx.store.statistics(id),
         steps: ctx.store.stateOf<readonly StepRecord[]>('steps', id),
       };
+      // Count metadata and JSON delimiters without serializing the entire transcript at once.
+      let bytes = Buffer.byteLength(JSON.stringify({ ...result, messages: [] }));
+      assertHistoryFrameBytes(bytes);
+      let separator = 0;
+      for (const message of history) {
+        bytes += separator + Buffer.byteLength(JSON.stringify(message));
+        assertHistoryFrameBytes(bytes);
+        separator = 1;
+      }
+      return result;
     }
     if (
       params.tail !== undefined &&

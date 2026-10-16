@@ -235,8 +235,8 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     taskRetry: ['type', 'taskId', 'prompt'],
     taskHistory: ['type', 'taskId'],
     export: ['type', 'content', 'suggestedName'],
-    goal: ['type', 'prompt'],
-    plan: ['type', 'prompt'],
+    goal: ['type', 'prompt', 'language'],
+    plan: ['type', 'prompt', 'language'],
     copyText: ['type', 'text'],
     openLink: ['type', 'url'],
     load: ['type', 'id'],
@@ -254,6 +254,13 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
   };
   if (typeof value.type !== 'string' || !Object.hasOwn(fields, value.type)) return invalid();
   if (Object.keys(value).some((key) => !fields[value.type as string]!.includes(key)))
+    return invalid();
+  if (
+    (value.type === 'goal' || value.type === 'plan') &&
+    value.language !== undefined &&
+    value.language !== 'zh-CN' &&
+    value.language !== 'en-US'
+  )
     return invalid();
   if (value.type === 'taskSave') {
     if (typeof value.taskId !== 'string' || !value.taskId.trim() || value.taskId.length > 256)

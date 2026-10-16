@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import type { Socket } from 'node:net';
+import { HOST_RESPONSE_FRAME_BYTES } from '../protocol/host-wire.ts';
 
 /**
  * How a carrier reaches an Agent Host.
@@ -233,9 +234,16 @@ export function stdioTransport(options: StdioTransportOptions): HostTransport {
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-  return new StdioTransport(child, options.maxFrameBytes ?? 64_000_000, options.onSpawnError);
+  return new StdioTransport(
+    child,
+    options.maxFrameBytes ?? HOST_RESPONSE_FRAME_BYTES,
+    options.onSpawnError,
+  );
 }
 /** A connection somebody else accepted — a browser's WebSocket bridge, a TCP socket, a test pair. */
-export function socketTransport(socket: Socket, maxFrameBytes = 64_000_000): HostTransport {
+export function socketTransport(
+  socket: Socket,
+  maxFrameBytes = HOST_RESPONSE_FRAME_BYTES,
+): HostTransport {
   return new SocketTransport(socket, maxFrameBytes);
 }

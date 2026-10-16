@@ -116,6 +116,8 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
     YUANTU_API_KEY: 'fixture',
     YUANTU_BASE_URL: url,
     YUANTU_PERMISSION_POLICY: '',
+    // This UI fixture checks shared writes and attribution; native worktree policy is verified separately.
+    YUANTU_SUBAGENT_WORKSPACE: 'shared',
   };
   delete env.ELECTRON_RUN_AS_NODE;
   let app;
@@ -146,7 +148,18 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   await page.locator('#prompt').fill('调查加载器并写好说明');
   await page.locator('#send').click();
   await page.locator('#open-subagents').waitFor();
-  await page.waitForFunction(() => document.querySelectorAll('.subagent-card').length === 2);
+  await page
+    .waitForFunction(() => document.querySelectorAll('.subagent-card').length === 2)
+    .catch(async () => {
+      assert.fail(
+        JSON.stringify(
+          await page.evaluate(async () => {
+            const { state } = await window.yuantu.invoke({ type: 'snapshot' });
+            return state.session.messages.filter((message) => message.role === 'tool');
+          }),
+        ),
+      );
+    });
   assert.equal(await page.locator('#subagents-panel').isHidden(), true);
 
   // The write-capable child asks for permission, and the prompt says whose request it is.
@@ -244,7 +257,8 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   assert.equal(await page.locator('#messages').isVisible(), true);
 
   // The file the child wrote is listed with its author, so the change list is not a lie by omission.
-  const changes = page.locator('#changes-list');
+  await page.locator('.turn-change-row[title="NOTES.md"]').click();
+  const changes = page.locator('.turn-change-preview');
   assert.match(await changes.locator('.subagent-badge').textContent(), /子代理：写入说明文件/);
   assert.match(await readFile(path.join(root, 'NOTES.md'), 'utf8'), /由子代理写入/);
 

@@ -49,7 +49,7 @@ test(
       await page
         .locator('.settings-sidebar nav button')
         .evaluateAll((buttons) => buttons.map((button) => button.id)),
-      ['general-settings', 'model-settings'],
+      ['general-settings', 'model-settings', 'workspace-maintenance-settings'],
     );
     assert.equal(await page.locator('#backup-settings-content,#backup-enabled').count(), 0);
     const initial = await page.evaluate(() => window.yuantu.backups({ type: 'get' }));

@@ -17,10 +17,28 @@ test(
   { timeout: 90000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-editor-'));
+    const profile = await mkdtemp(path.join(tmpdir(), 'yuantu-task-editor-profile-'));
     await writeFile(path.join(root, 'result.txt'), 'expected output');
     let requests = 0;
     const url = await httpFixture(t, (_body, res) => {
       requests++;
+      if (requests === 2) {
+        sendFrames(
+          res,
+          frames('', [
+            {
+              id: 'review-step',
+              name: 'task_step',
+              input: { index: 0, status: 'completed', note: 'Reviewed result.txt' },
+            },
+          ]),
+        );
+        return;
+      }
+      if (requests > 2) {
+        sendFrames(res, frames('Reviewed result.txt; awaiting human confirmation.'));
+        return;
+      }
       sendFrames(
         res,
         frames(
@@ -48,13 +66,11 @@ test(
     t.after(async () => {
       await app?.close();
       await rm(root, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
     });
     app = await electron.launch({
       executablePath: electronPath,
-      args: [
-        path.resolve('dist/desktop/main.cjs'),
-        `--user-data-dir=${path.join(root, 'profile')}`,
-      ],
+      args: [path.resolve('dist/desktop/main.cjs'), `--user-data-dir=${profile}`],
       env,
     });
     const page = await app.firstWindow();
@@ -108,6 +124,9 @@ test(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state,
     );
     assert.ok(requests > proposalRequests);
+    assert.equal(state.tasks[0].status, 'needs_review', JSON.stringify(state.tasks[0]));
+    assert.ok(state.tasks[0].verification, JSON.stringify(state.taskAttempts));
+    assert.equal(state.tasks[0].steps[0].status, 'completed');
     assert.equal(state.tasks[0].acceptance.find((a) => !a.check).met, false);
     await card.locator('input[type=checkbox]').check();
     await card.getByRole('button', { name: '确认勾选的人工结果', exact: true }).click();
@@ -133,6 +152,7 @@ test(
   { timeout: 120000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-trigger-'));
+    const profile = await mkdtemp(path.join(tmpdir(), 'yuantu-task-trigger-profile-'));
     let requests = 0;
     const url = await httpFixture(t, (_body, res) => {
       requests++;
@@ -180,13 +200,11 @@ test(
     t.after(async () => {
       await app?.close();
       await rm(root, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
     });
     app = await electron.launch({
       executablePath: electronPath,
-      args: [
-        path.resolve('dist/desktop/main.cjs'),
-        `--user-data-dir=${path.join(root, 'profile')}`,
-      ],
+      args: [path.resolve('dist/desktop/main.cjs'), `--user-data-dir=${profile}`],
       env,
     });
     const page = await app.firstWindow();
@@ -385,6 +403,7 @@ test(
   { timeout: 120000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-ui-'));
+    const profile = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-profile-'));
     const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
     const session = store.create(root);
     const task = store.createTask(session.id, {
@@ -426,13 +445,11 @@ test(
     t.after(async () => {
       await app?.close();
       await rm(root, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
     });
     app = await electron.launch({
       executablePath: electronPath,
-      args: [
-        path.resolve('dist/desktop/main.cjs'),
-        '--user-data-dir=' + path.join(root, 'profile'),
-      ],
+      args: [path.resolve('dist/desktop/main.cjs'), '--user-data-dir=' + profile],
       env,
     });
     const page = await app.firstWindow();
@@ -482,6 +499,7 @@ test(
   { timeout: 120000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-ui-'));
+    const profile = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-profile-'));
     let calls = 0;
     const url = await httpFixture(t, (_body, res) => {
       calls++;
@@ -518,13 +536,11 @@ test(
     t.after(async () => {
       await app?.close();
       await rm(root, { recursive: true, force: true });
+      await rm(profile, { recursive: true, force: true });
     });
     app = await electron.launch({
       executablePath: electronPath,
-      args: [
-        path.resolve('dist/desktop/main.cjs'),
-        `--user-data-dir=${path.join(root, 'profile')}`,
-      ],
+      args: [path.resolve('dist/desktop/main.cjs'), `--user-data-dir=${profile}`],
       env,
     });
     const page = await app.firstWindow();

@@ -2,6 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import {
   existsSync,
   mkdtempSync,
@@ -27,6 +29,7 @@ import {
   recoverDatabase,
   compactDatabase,
   RECOVERY_COPY_ADMISSION,
+  RECOVERY_COPY_RESERVE_BYTES,
 } from '../packages/storage/database-maintenance.ts';
 import { runCli } from './process-fixture.ts';
 import { spawnSync } from 'node:child_process';
@@ -36,6 +39,49 @@ function fixture(t: test.TestContext) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return { root, file: path.join(root, '浼氳瘽 data.sqlite') };
 }
+
+for (const headroom of [1, 0, -1])
+  test(`required backup checks post-copy reserve without charging the snapshot twice (${headroom})`, (t) => {
+    const { root, file } = fixture(t);
+    const store = new SessionStore(file);
+    const session = store.create(root);
+    store.append(session.id, { role: 'user', content: 'fixture '.repeat(25_000) });
+    store.close();
+    const originalStatfs = fs.statfsSync;
+    let checkedStage = false;
+    const statfs = t.mock.method(fs, 'statfsSync', ((directory: fs.PathLike) => {
+      const volume = originalStatfs(directory);
+      if (path.resolve(String(directory)) !== path.resolve(`${file}.backups`)) return volume;
+      const stage = readdirSync(directory).find((name) => name.endsWith('.tmp'));
+      assert.ok(stage, 'free space is sampled after VACUUM INTO created the snapshot');
+      assert.ok(statSync(path.join(String(directory), stage)).size > 1);
+      checkedStage = true;
+      return { ...volume, bsize: 1, bavail: RECOVERY_COPY_RESERVE_BYTES + headroom };
+    }) as typeof fs.statfsSync);
+    syncBuiltinESMExports();
+    try {
+      if (headroom < 0) {
+        assert.throws(
+          () => backupDatabase(file, SESSION_DATABASE_POLICY, RECOVERY_COPY_ADMISSION),
+          /reserve.*Free space/i,
+        );
+        assert.deepEqual(
+          readdirSync(`${file}.backups`),
+          [],
+          'no partial snapshot or manifest survives refusal',
+        );
+      } else {
+        const backup = backupDatabase(file, SESSION_DATABASE_POLICY, RECOVERY_COPY_ADMISSION);
+        assert.ok(existsSync(backup.file));
+        assert.ok(existsSync(`${backup.file}.json`));
+        assert.equal(inspectDatabase(backup.file, SESSION_DATABASE_POLICY).bytes, backup.bytes);
+      }
+      assert.equal(checkedStage, true);
+    } finally {
+      statfs.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
 
 test('migration creates a verified independent snapshot including committed WAL content', (t) => {
   const { root, file } = fixture(t);
@@ -328,9 +374,7 @@ test('backupDatabase takes the admission its caller chose, and defaults to the r
   // An explicit free-space admission is what the upgrade path now passes: the file must exist afterwards.
   const backup = backupDatabase(file, SESSION_DATABASE_POLICY, RECOVERY_COPY_ADMISSION);
   assert.ok(existsSync(backup.file));
-  // The free-space refusal itself (a copy larger than the volume has room for, less the reserve) cannot be
-  // produced on a machine with free space, so it is not covered here; what is covered is that admission is
-  // consulted at all, by the budget case above.
+  // Reserve boundaries are exercised above by controlling statfs after the real snapshot is staged.
 });
 
 test('restoration preserves attachments, pending approvals, durable tasks and opaque model replay', (t) => {

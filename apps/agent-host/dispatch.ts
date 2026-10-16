@@ -4,7 +4,7 @@ import { safeError } from '../shared/runtime.ts';
 import { backgroundHandlers } from './handlers/background.ts';
 import { compactionHandlers } from './handlers/compaction.ts';
 import { fileHandlers } from './handlers/files.ts';
-import { historyHandlers } from './handlers/history.ts';
+import { assertHistoryFrameBytes, historyHandlers } from './handlers/history.ts';
 import { interactionHandlers } from './handlers/interaction.ts';
 import { runHandlers } from './handlers/runs.ts';
 import { sessionHandlers } from './handlers/sessions.ts';
@@ -96,6 +96,9 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       if (!params || typeof params !== 'object' || Array.isArray(params))
         throw new Error('params must be an object');
       const result = await options.dispatch(request.method, params as Record<string, unknown>);
+      // Only here is the actual (possibly escaped or multibyte) request id available.
+      if (request.method === 'session.get')
+        assertHistoryFrameBytes(Buffer.byteLength(JSON.stringify({ id, result })));
       options.send({ id, result });
     } catch (error) {
       options.send({

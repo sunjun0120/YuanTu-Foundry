@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { historyHandlers } from '../apps/agent-host/handlers/history.ts';
+import { createDispatcher, createRequestHandler } from '../apps/agent-host/dispatch.ts';
+import { lineFramer } from '../packages/client/host-transport.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 
 /**
@@ -36,6 +38,60 @@ async function fixture(t: test.TestContext, messages: number) {
 }
 const get = (ctx: HostContext, params: Record<string, unknown>): Promise<unknown> =>
   historyHandlers['session.get']!(ctx, params);
+
+test('the compatibility bound includes session metadata and steps', async (t) => {
+  const { ctx, history } = await fixture(t, 1);
+  history[0]!.content = 'x'.repeat(63_999_900);
+  await assert.rejects(() => get(ctx, { sessionId: 'session-1' }), /larger than one frame/);
+  history[0]!.content = 'small';
+  ctx.store.stateOf = (() => [{ detail: 'x'.repeat(FRAME_BYTES) }]) as typeof ctx.store.stateOf;
+  await assert.rejects(() => get(ctx, { sessionId: 'session-1' }), /larger than one frame/);
+});
+
+test('the request envelope is budgeted and an oversized reply leaves pagination usable', async (t) => {
+  const { ctx, history } = await fixture(t, 1);
+  history[0]!.content = '';
+  const overhead = Buffer.byteLength(JSON.stringify(await get(ctx, { sessionId: 'session-1' })));
+  history[0]!.content = 'x'.repeat(FRAME_BYTES - overhead - 5);
+  const frames: Record<string, unknown>[] = [];
+  let framingError: unknown;
+  const framer = lineFramer({
+    maxFrameBytes: FRAME_BYTES,
+    onLine: (line) => frames.push(JSON.parse(line)),
+    onError: (error) => {
+      framingError = error;
+    },
+  });
+  const handle = createRequestHandler({
+    dispatch: createDispatcher(ctx),
+    requestIds: new Set(),
+    send: (frame) => framer.write(Buffer.from(JSON.stringify(frame) + '\n')),
+  });
+  await handle(
+    JSON.stringify({
+      id: '边界"request',
+      method: 'session.get',
+      params: { sessionId: 'session-1' },
+    }),
+  );
+  assert.equal(framingError, undefined, 'the client must receive a bounded refusal');
+  assert.match((frames[0]?.error as { message: string }).message, /larger than one frame/);
+  await handle(
+    JSON.stringify({
+      id: 'page',
+      method: 'session.get',
+      params: {
+        sessionId: 'session-1',
+        view: 'display',
+        offset: 0,
+        endOffset: 1,
+      },
+    }),
+  );
+  assert.equal(framingError, undefined);
+  assert.equal(frames[1]?.id, 'page');
+  assert.ok(frames[1]?.result, 'the same connection can read a bounded page');
+});
 
 test('an unpaged reply larger than the transport frame is refused, naming the way to read it', async (t) => {
   const { ctx } = await fixture(t, FRAME_BYTES / MESSAGE_BYTES + 4);

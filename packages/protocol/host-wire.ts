@@ -2,6 +2,8 @@ import path from 'node:path';
 import type { HostInfo } from './rpc.ts';
 
 export const HOST_PROTOCOL_VERSION = 1 as const;
+/** Maximum UTF-8 JSON response frame, excluding its newline delimiter. */
+export const HOST_RESPONSE_FRAME_BYTES = 64_000_000;
 export const HOST_PROTOCOL_VERSIONS = [HOST_PROTOCOL_VERSION] as const;
 export const HOST_LONG_REQUESTS = new Set([
   'run.start',

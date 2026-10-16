@@ -419,7 +419,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       } finally {
         clearInterval(renewing);
       }
-      // The same overflow also arrives as a terminal stop reason, on a stream that produced no text.
+      // A terminal overflow is recoverable only before visible text; later it is persisted and classified below.
       if (
         attempt.finishReason === 'length' &&
         attempt.truncation === 'context-window' &&
@@ -570,9 +570,13 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     );
   }
   if (response.finishReason === 'length') {
-    recordPartialTurn(response);
+    recordPartialTurn({ ...response, text: response.text || streamedText });
     // A truncated answer is still an answer: it assembled a message, so the step spent what it spent.
     commitStepTiming(response);
+    if (response.truncation === 'context-window')
+      throw new ContextLimitError(
+        'Provider context window exceeded after partial output; the request was not re-sent',
+      );
     const details = response.outputDiagnostics;
     const breakdown = [
       String(response.usage.outputTokens) + '/' + String(requestOutputLimit) + ' output tokens',

@@ -235,6 +235,43 @@ test('the same overflow reported as a stop reason is recovered the same way', as
   );
 });
 
+test('a context-window stop after visible text preserves it without retrying or changing the failure code', async (t) => {
+  const { store, session, events } = await fixture(t);
+  let calls = 0;
+  const agent = new Agent({
+    store,
+    tools: new ToolRegistry(),
+    approve: async () => false,
+    maxContextChars: 200_000,
+    maxContextTokens: 20_000,
+    maxOutputTokens: 256,
+    provider: {
+      async complete(call: ModelRequest) {
+        calls++;
+        assert.equal(
+          isSummaryRequest(call),
+          false,
+          'visible output must not be compacted and replayed',
+        );
+        call.onText('Partial answer');
+        return { ...reply('Partial answer'), finishReason: 'length', truncation: 'context-window' };
+      },
+    },
+    onEvent: (event) => events.push(event),
+  });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Continue.' });
+  assert.equal(result.status, 'limited', result.error);
+  assert.equal(result.code, 'context-window-exceeded');
+  assert.equal(calls, 1);
+  assert.equal(result.text, 'Partial answer');
+  const answers = store.messages(session.id).filter((message) => message.role === 'assistant');
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.content, 'Partial answer');
+  assert.equal(answers[0]?.interrupted, true);
+  assert.equal(events.filter((event) => event.type === 'message.finished').length, 1);
+  assert.equal(store.contextSurface(session.id), null);
+});
+
 test('an output-limit truncation is still a hard stop, not a compression', async (t) => {
   const { store, session, events } = await fixture(t);
   let sends = 0;

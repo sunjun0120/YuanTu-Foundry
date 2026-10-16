@@ -1,11 +1,12 @@
 import { createInterface, type Interface } from 'node:readline';
 import { createServer, isIP, type Socket } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
-import { PassThrough, type Readable } from 'node:stream';
+import { PassThrough, type Readable, type Writable } from 'node:stream';
 import { parseListen } from '../shared/args.ts';
 import { hostAuthTokenProblem } from '../../packages/protocol/host-auth.ts';
 import { MAX_INPUT_BYTES } from '../../packages/protocol/images.ts';
 import { lineFramer } from '../../packages/client/host-transport.ts';
+import { HOST_RESPONSE_FRAME_BYTES } from '../../packages/protocol/host-wire.ts';
 
 export interface HostCarrierOptions {
   /** `[host:]port` to serve on, or undefined to serve the protocol on stdin/stdout. */
@@ -28,17 +29,17 @@ export interface HostCarrierOptions {
    * pipe: an embedder that hosts this protocol on a duplex of its own has the same shape.
    */
   stdioInput?: Readable;
+  /** The corresponding reply stream; defaults to process.stdout. */
+  stdioOutput?: Writable;
 }
 
 /**
  * How much this Host will keep handing to a carrier that is not reading it.
  *
- * A synchronous protocol cannot throttle its own callers, so the bound is a count rather than a queue: while the
- * far side's buffer is full, every frame handed to it is added up, and a carrier that has taken this many bytes
- * without ever draining is one that is not reading. 64 MB is the client's own incoming-frame ceiling
- * (`stdioTransport`), so a peer that reaches this number was never going to receive the reply anyway.
+ * A synchronous protocol cannot throttle its callers. Bound the writable queue, including writes below its
+ * high water mark. Allow one maximum client frame and its delimiter.
  */
-const MAX_UNSENT_BYTES = 64_000_000;
+const MAX_UNSENT_BYTES = HOST_RESPONSE_FRAME_BYTES + 1; // Include one frame's newline delimiter.
 
 /** Validate before opening storage or listening, also for embedders constructing a carrier directly. */
 export function validateHostListener(
@@ -73,9 +74,9 @@ export class HostCarrier {
   private readonly authToken: string | undefined;
   /** Where this carrier reads when it serves stdio: `process.stdin` unless somebody handed it another stream. */
   private readonly stdioInput: Readable;
-  /** Bytes handed to a carrier whose own buffer is full, since the last time it drained. */
-  private unsentBytes = 0;
-  private drainArmed = false;
+  private readonly stdioOutput: Writable;
+  /** Unlike normal shutdown, a non-reading peer must never receive another queued byte. */
+  private outputDropped = false;
   /** Where a frame goes, once there is somewhere to put it. */
   private output: ((line: string) => void) | null = null;
   private input: Interface | null = null;
@@ -92,6 +93,7 @@ export class HostCarrier {
     this.isClosing = options.isClosing;
     this.authToken = options.authToken;
     this.stdioInput = options.stdioInput ?? process.stdin;
+    this.stdioOutput = options.stdioOutput ?? process.stdout;
   }
 
   /** True when the protocol is on stdin/stdout rather than on a socket. */
@@ -140,7 +142,7 @@ export class HostCarrier {
       });
       this.stdioInput.on('data', (chunk: Buffer) => frames.write(chunk));
       this.stdioInput.on('end', () => ingress.end());
-      this.output = (line) => this.writeBounded(process.stdout, line);
+      this.output = (line) => this.writeBounded(this.stdioOutput, line);
       this.input = createInterface({ input: ingress, crlfDelay: Infinity });
       return this.input;
     }
@@ -150,33 +152,28 @@ export class HostCarrier {
   /**
    * Hand one frame to a carrier that may not be reading it.
    *
-   * A synchronous protocol cannot throttle its own callers, so this is a bound rather than a queue: while the
-   * far side's own buffer is full, the frames handed to it are added up, and a carrier that has taken this many
-   * bytes without ever draining is one that is not reading. Dropping it is the honest answer — the alternative
-   * is a Host that grows its heap for a client that has gone away. The count resets on `drain`, so a slow but
-   * live reader is never dropped for being slow.
+   * Write UTF-8 buffers so writableLength counts bytes even with decodeStrings=false. A true write result only
+   * means the high water mark was not reached; those pending bytes count too. Reading the current queue also
+   * credits partial drains without waiting for an entirely empty buffer.
    */
   private writeBounded(
-    target: { write(chunk: string): boolean; once(event: 'drain', listener: () => void): unknown },
+    target: { write(chunk: Buffer): boolean; readonly writableLength: number },
     line: string,
   ): void {
-    if (target.write(line)) return;
-    this.unsentBytes += Buffer.byteLength(line);
-    if (this.unsentBytes > MAX_UNSENT_BYTES) {
+    if (this.outputDropped) return;
+    const bytes = Buffer.byteLength(line);
+    if (bytes > MAX_UNSENT_BYTES - target.writableLength) {
+      this.outputDropped = true;
       process.stderr.write('[host] carrier is not reading its replies; closing it\n');
       this.close();
       return;
     }
-    if (this.drainArmed) return;
-    this.drainArmed = true;
-    target.once('drain', () => {
-      this.drainArmed = false;
-      this.unsentBytes = 0;
-    });
+    target.write(Buffer.from(line, 'utf8'));
   }
 
   /** Write one already-framed line, or say out loud that there was nobody to write it to. */
   send(data: unknown): void {
+    if (this.outputDropped) return;
     const line = JSON.stringify(data) + '\n';
     if (this.output) this.output(line);
     // Unreachable while the protocol is request-driven: the scheduler is started only once a carrier is

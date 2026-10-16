@@ -268,7 +268,8 @@ export class ResponsesProvider implements Provider {
        * the run looking for a smaller request, which is the one remedy a policy refusal does not have. An
        * unrecognised or missing reason keeps the old answer rather than inventing a new one.
        */
-      const reason = object(object(terminal).incomplete_details).reason;
+      const details = terminal.incomplete_details;
+      const reason = details == null ? undefined : object(details).reason;
       return {
         text: streamed + missing,
         toolCalls: [],

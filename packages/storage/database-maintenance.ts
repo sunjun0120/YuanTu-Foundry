@@ -462,7 +462,7 @@ export function backupDatabase(
  * The refusal has to carry the diagnosis *and* the way out, because nothing downstream can recover from it: the
  * caller asked for a copy it says it cannot proceed without, so this message is the whole remedy. It names how
  * large the snapshot is, what it failed against, and where it was being written — a budget refusal compares
- * against the budget, and a free-space refusal against what the volume actually has left after the reserve.
+ * against the budget, and a free-space refusal against the reserve left after writing the staged snapshot.
  */
 function assertCopyAdmitted(
   bytes: number,
@@ -478,11 +478,12 @@ function assertCopyAdmitted(
     return;
   }
   const volume = statfsSync(directory);
-  const usable = Number(volume.bavail) * Number(volume.bsize) - RECOVERY_COPY_RESERVE_BYTES;
-  if (bytes > usable)
+  // VACUUM INTO has already allocated this snapshot. Charging its size again rejects valid recovery copies.
+  const remaining = Number(volume.bavail) * Number(volume.bsize);
+  if (remaining < RECOVERY_COPY_RESERVE_BYTES)
     throw new Error(
-      `A required recovery copy does not fit on this volume (${bytes} bytes needed, ${Math.max(0, usable)} usable ` +
-        `after a ${RECOVERY_COPY_RESERVE_BYTES} byte reserve): ${source} in ${directory}. Free space on the volume ` +
+      `A required recovery copy leaves insufficient free space (${bytes} byte snapshot written, ${Math.max(0, remaining)} bytes remaining, ` +
+        `${RECOVERY_COPY_RESERVE_BYTES} byte reserve required): ${source} in ${directory}. Free space on the volume ` +
         'and retry; without this copy the change cannot be undone.',
     );
 }
