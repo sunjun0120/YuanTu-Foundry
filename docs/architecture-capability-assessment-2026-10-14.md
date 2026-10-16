@@ -546,18 +546,18 @@ RED 证据（本机一次性脚本，非套件）：一个 **23,851 字节**的�
 
 ## 9. 证据附录
 
-原始审计与逐条裁决报告归档在 [docs/audit-2026-10-14/](audit-2026-10-14/)（36 份：7 份子系统审计 +
+原始审计与逐条裁决报告归档在 docs/audit-2026-10-14/（历史文档已删除）（36 份：7 份子系统审计 +
 29 份逐条裁决）。本次保留这些文件原文；它们包含已被纠正或需限定的结论，当前结论以本文对应条目为准。
 
-| 子系统                             | 审计报告                                                                                | 裁决文件数 |
-| ---------------------------------- | --------------------------------------------------------------------------------------- | ---------: |
-| 内核                               | [core-kernel.audit.md](audit-2026-10-14/core-kernel.audit.md)                           |          3 |
-| 工具与沙箱                         | [tools-sandbox.audit.md](audit-2026-10-14/tools-sandbox.audit.md)                       |          3 |
-| 存储/协议/载体                     | [storage-protocol-carrier.audit.md](audit-2026-10-14/storage-protocol-carrier.audit.md) |          4 |
-| 桌面端                             | [desktop-app.audit.md](audit-2026-10-14/desktop-app.audit.md)                           |          3 |
-| 宿主与装配                         | [hosts-assembly.audit.md](audit-2026-10-14/hosts-assembly.audit.md)                     |          6 |
-| 集成（providers/MCP/LSP/Office/…） | [integrations.audit.md](audit-2026-10-14/integrations.audit.md)                         |          5 |
-| 构建/CI/测试                       | [build-ci-tests.audit.md](audit-2026-10-14/build-ci-tests.audit.md)                     |          5 |
+| 子系统                             | 审计报告                                            | 裁决文件数 |
+| ---------------------------------- | --------------------------------------------------- | ---------: |
+| 内核                               | core-kernel.audit.md（历史文档已删除）              |          3 |
+| 工具与沙箱                         | tools-sandbox.audit.md（历史文档已删除）            |          3 |
+| 存储/协议/载体                     | storage-protocol-carrier.audit.md（历史文档已删除） |          4 |
+| 桌面端                             | desktop-app.audit.md（历史文档已删除）              |          3 |
+| 宿主与装配                         | hosts-assembly.audit.md（历史文档已删除）           |          6 |
+| 集成（providers/MCP/LSP/Office/…） | integrations.audit.md（历史文档已删除）             |          5 |
+| 构建/CI/测试                       | build-ci-tests.audit.md（历史文档已删除）           |          5 |
 
 **已知缺口**：7 条 `R1-` 项缺少对应报告和独立裁决文件，原作者还提到未取回的汇总内容，但本次无法独立恢复。要补齐其证据，应逐条创建人工夹具，记录触发条件、原始输出与失败断言；不能仅以“另一个验证者确认过”代替可检查的证据。
 

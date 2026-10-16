@@ -52,13 +52,12 @@ export async function copyLockedDependencies({ sourceDirectory, targetDirectory,
     );
     if (lock.packages?.[`node_modules/${relative}`]?.version !== packageMetadata.version)
       throw new Error(`Installed/lock version mismatch for ${relative}`);
-    const files = await inventory(directory, { includeExcluded: true });
-    await copyFiles(
-      directory,
-      path.join(target, 'node_modules', relative),
-      files.filter((file) => !file.path.startsWith('node_modules/')),
-    );
-    if (hash(await inventory(directory, { includeExcluded: true })) !== hash(files))
+    // Nested installations belong to their own lock-bound visit. Do not hash an entire nested
+    // dependency tree here only to discard it before copying, then hash it again in each visit.
+    const inventoryOptions = { includeExcluded: true, pruneDirectories: ['node_modules'] };
+    const files = await inventory(directory, inventoryOptions);
+    await copyFiles(directory, path.join(target, 'node_modules', relative), files);
+    if (hash(await inventory(directory, inventoryOptions)) !== hash(files))
       throw new Error(`Dependency input changed: ${relative}`);
     versions.push({ name: relative, version: packageMetadata.version, filesHash: hash(files) });
     for (const dependency of Object.keys(packageMetadata.dependencies ?? {}))

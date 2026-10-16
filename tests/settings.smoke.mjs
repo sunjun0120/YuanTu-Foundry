@@ -1,3 +1,4 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 // Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
 import { waitForPage } from './page-wait.mjs';
 import test from 'node:test';
@@ -205,7 +206,7 @@ test(
     await page.locator('#ui-language').selectOption('zh-CN');
     await page.locator('#model-settings').click();
     if (process.env.YUANTU_QA_DIR)
-      await page.screenshot({ path: path.join(process.env.YUANTU_QA_DIR, 'settings-page.png') });
+      await page.screenshot({ path: artifactPath('settings-page.png') });
     await page.locator('#settings-back').click();
     assert.equal(await page.locator('#prompt').inputValue(), '保留这份草稿');
     await page.locator('#model').selectOption(saved.a.settings.connectionId);
@@ -227,7 +228,7 @@ test(
     );
     if (process.env.YUANTU_QA_DIR)
       await page.screenshot({
-        path: path.join(process.env.YUANTU_QA_DIR, 'chat-model-picker.png'),
+        path: artifactPath('chat-model-picker.png'),
       });
     await page.locator('#send').click();
     await page.waitForFunction(() => document.querySelector('#send').dataset.mode === 'stop');
@@ -330,8 +331,7 @@ test(
       await readFile(path.join(profile, 'model-settings.json'), 'utf8'),
       /settings-ui-secret/,
     );
-    if (process.env.YUANTU_QA_SCREENSHOT)
-      await page.screenshot({ path: process.env.YUANTU_QA_SCREENSHOT });
+    if (process.env.YUANTU_QA_SCREENSHOT) await page.screenshot({ path: artifactPath('qa.png') });
     await page.locator('#settings-back').click();
     await page.getByRole('textbox', { name: '任务描述' }).fill('配置后开始聊天');
     await page.locator('#send').click();
@@ -653,14 +653,14 @@ test(
       await page.locator('#ui-appearance').selectOption('dark');
       await page.locator('#model-settings').click();
       await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
-      await page.screenshot({ path: path.join(process.env.YUANTU_QA_DIR, 'catalog.png') });
+      await page.screenshot({ path: artifactPath('catalog.png') });
       await page.locator('.settings-model-row').first().locator('[data-action="expand"]').click();
-      await page.screenshot({ path: path.join(process.env.YUANTU_QA_DIR, 'catalog-expanded.png') });
+      await page.screenshot({ path: artifactPath('catalog-expanded.png') });
       await page.locator('.settings-model-row').first().locator('[data-action="expand"]').click();
       await page.locator('#model-settings-content').evaluate((element) => {
         element.scrollTop = 0;
       });
-      await page.screenshot({ path: path.join(process.env.YUANTU_QA_DIR, 'catalog-top.png') });
+      await page.screenshot({ path: artifactPath('catalog-top.png') });
     }
     await page.locator('#settings-back').click();
     await page.locator('#model').selectOption(saved.connections[1].connectionId);
@@ -852,9 +852,9 @@ test(
       }
     };
     let page = await launch();
-    await mkdir(path.resolve('artifacts'), { recursive: true });
+    await mkdir(path.resolve(artifactPath('')), { recursive: true });
     await page.locator('#permission-trigger').click();
-    await page.screenshot({ path: path.resolve('artifacts/permission-presets.png') });
+    await page.screenshot({ path: path.resolve(artifactPath('permission-presets.png')) });
     await page.keyboard.press('Escape');
     /**
      * The form the settings page used to carry is gone, heading and all: the chip is the only control that
@@ -1136,7 +1136,7 @@ test.skip(
     assert.equal(await page.locator('#mcp-oauth-scopes').inputValue(), 'mcp.read, mcp.write');
     assert.equal(await page.locator('#mcp-oauth-redirect-port').inputValue(), '53682');
     assert.equal(await page.locator('#mcp-authorize').isDisabled(), true);
-    await page.screenshot({ path: path.resolve('artifacts/mcp-settings-ui.png') });
+    await page.screenshot({ path: path.resolve(artifactPath('mcp-settings-ui.png')) });
     await page.locator('#model-settings').click();
     assert.equal(await page.locator('#settings-form').isVisible(), true);
     await page.locator('#settings-back').click();
@@ -1194,3 +1194,11 @@ test.skip(
     await assert.rejects(readFile(path.join(other, '.yuantu/mcp.json')), { code: 'ENOENT' });
   },
 );
+
+function artifactPath(relative) {
+  return path.join(
+    process.env.FOUNDRY_TEST_ARTIFACTS ||
+      path.join(tmpdir(), 'yuantu-smoke-artifacts-' + process.pid),
+    relative,
+  );
+}

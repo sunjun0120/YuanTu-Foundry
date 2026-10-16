@@ -1,3 +1,4 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -146,7 +147,7 @@ test(
     await first.getByRole('button', { name: '收起文件列表', exact: true }).click();
     assert.equal(await first.locator('.turn-change-row').count(), 3);
     if (process.env.CODEX_TURN_CHANGES_SCREENSHOT_DIR) {
-      const output = path.resolve(process.env.CODEX_TURN_CHANGES_SCREENSHOT_DIR);
+      const output = artifactPath('turn-changes');
       await mkdir(output, { recursive: true });
       for (const theme of ['dark', 'light']) {
         await page.evaluate((theme) => {
@@ -700,8 +701,7 @@ test(
     );
     assert.equal(invalid.ok, false);
     assert.doesNotMatch(await page.locator('body').innerText(), /ui-fixture-secret/);
-    if (process.env.YUANTU_QA_SCREENSHOT)
-      await page.screenshot({ path: process.env.YUANTU_QA_SCREENSHOT });
+    if (process.env.YUANTU_QA_SCREENSHOT) await page.screenshot({ path: artifactPath('qa.png') });
     const otherRoot = path.join(root, 'other-project');
     await mkdir(otherRoot);
     await app.evaluate(({ dialog }, target) => {
@@ -833,7 +833,7 @@ test(
     assert.equal(await readFile(path.join(root, 'main.ts'), 'utf8'), 'const count = 1;\n');
     if (process.env.YUANTU_QA_SCREENSHOT)
       await page.screenshot({
-        path: process.env.YUANTU_QA_SCREENSHOT.replace(/\.png$/, '-diff.png'),
+        path: artifactPath('qa.png').replace(/\.png$/, '-diff.png'),
       });
     await page.getByRole('button', { name: '允许一次' }).click();
     await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
@@ -875,7 +875,7 @@ test(
     if (process.env.YUANTU_QA_SCREENSHOT) {
       await page.locator('#messages .code-block').scrollIntoViewIfNeeded();
       await page.screenshot({
-        path: process.env.YUANTU_QA_SCREENSHOT.replace(/\.png$/, '-markdown.png'),
+        path: artifactPath('qa.png').replace(/\.png$/, '-markdown.png'),
         fullPage: true,
       });
     }
@@ -1104,8 +1104,8 @@ test(
         'none',
       );
       await page.locator('#general-settings-title').click();
-      await mkdir('artifacts', { recursive: true });
-      await page.screenshot({ path: 'artifacts/settings-general-' + value + '.png' });
+      await mkdir(artifactPath(''), { recursive: true });
+      await page.screenshot({ path: artifactPath('settings-general-') + value + '.png' });
 
       await page.locator('#settings-back').click();
       await logo(value);
@@ -1139,15 +1139,15 @@ test(
       assert.ok(rects.send.right <= rects.width && rects.composer.bottom <= rects.height);
     };
     await fits();
-    await mkdir('artifacts', { recursive: true });
+    await mkdir(artifactPath(''), { recursive: true });
     await page.locator('#prompt').fill('');
-    await page.screenshot({ path: 'artifacts/desktop-layout-dark.png' });
+    await page.screenshot({ path: artifactPath('desktop-layout-dark.png') });
     await page.locator('#prompt').fill('保留这段草稿');
     await theme('light');
     await page.emulateMedia({ colorScheme: 'dark' });
     await logo('light');
     await page.locator('#prompt').fill('');
-    await page.screenshot({ path: 'artifacts/desktop-layout-light.png' });
+    await page.screenshot({ path: artifactPath('desktop-layout-light.png') });
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(900, 620),
     );
@@ -1202,7 +1202,7 @@ test(
       assert.ok(content.x >= sidebar.x + sidebar.width - 1, tab + ' must occupy the right column');
       assert.ok(Math.abs(content.y - sidebar.y) < 1, tab + ' must remain in the first grid row');
     }
-    await page.screenshot({ path: 'artifacts/settings-layout.png' });
+    await page.screenshot({ path: artifactPath('settings-layout.png') });
 
     await page.locator('#settings-back').click();
     await fits();
@@ -1435,8 +1435,8 @@ test(
         ).opacity === '1',
     );
     assert.match(await stopButton.innerText(), /停止任务/);
-    await mkdir('artifacts', { recursive: true });
-    await page.screenshot({ path: 'artifacts/background-hover.png' });
+    await mkdir(artifactPath(''), { recursive: true });
+    await page.screenshot({ path: artifactPath('background-hover.png') });
     await row.evaluate((element) => {
       window.__backgroundRow = element;
     });
@@ -2068,8 +2068,8 @@ test(
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'dark';
     });
-    await mkdir('artifacts/user-message', { recursive: true });
-    await page.screenshot({ path: 'artifacts/user-message/dark.png' });
+    await mkdir(artifactPath('user-message'), { recursive: true });
+    await page.screenshot({ path: artifactPath('user-message/dark.png') });
     await page.locator('#new-session').click();
     await page.waitForFunction(() => !document.querySelector('.message.user'));
     await page.locator('.session-item').filter({ hasText: question }).click();
@@ -2091,7 +2091,7 @@ test(
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'light';
     });
-    await page.screenshot({ path: 'artifacts/user-message/light.png' });
+    await page.screenshot({ path: artifactPath('user-message/light.png') });
   },
 );
 
@@ -2730,7 +2730,7 @@ test(
     await more(other.id).hover();
     await page.getByRole('menuitem', { name: '重命名', exact: true }).waitFor();
     if (process.env.YUANTU_QA_DIR)
-      await page.screenshot({ path: path.join(process.env.YUANTU_QA_DIR, 'session-menu.png') });
+      await page.screenshot({ path: artifactPath('session-menu.png') });
     await page.locator('#prompt').hover();
     await page.getByRole('menu').waitFor({ state: 'hidden' });
     await more(other.id).focus();
@@ -2907,8 +2907,8 @@ test(
     // the label — the label is what the model reads back, so the interface does not edit it to draw one.
     assert.equal(await questions.locator('.question-eyebrow').innerText(), '主题');
     assert.equal(await questions.locator('.question-recommended').innerText(), '推荐');
-    await mkdir('artifacts', { recursive: true });
-    await page.screenshot({ path: 'artifacts/question-panel.png' });
+    await mkdir(artifactPath(''), { recursive: true });
+    await page.screenshot({ path: artifactPath('question-panel.png') });
     await questions.locator('.question-option', { hasText: '红色' }).click();
     await questions.locator('.question-option', { hasText: '蓝色' }).click();
     // One question, one answer: picking the second option has to release the first.
@@ -3404,9 +3404,9 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await row('empty').click();
   await page.locator('#workspace-tree .workspace-note').first().waitFor();
   if (process.env.YUANTU_QA_SCREENSHOT) {
-    await mkdir(path.dirname(process.env.YUANTU_QA_SCREENSHOT), { recursive: true });
+    await mkdir(artifactPath(''), { recursive: true });
     await page.screenshot({
-      path: process.env.YUANTU_QA_SCREENSHOT.replace(/\.png$/, '-tree.png'),
+      path: artifactPath('qa.png').replace(/\.png$/, '-tree.png'),
     });
   }
   // Text preview: the bytes the Host decoded, byte for byte.
@@ -3467,7 +3467,7 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   }
   if (process.env.YUANTU_QA_SCREENSHOT)
     await page.screenshot({
-      path: process.env.YUANTU_QA_SCREENSHOT.replace(/\.png$/, '-tabs.png'),
+      path: artifactPath('qa.png').replace(/\.png$/, '-tabs.png'),
     });
   await page.locator('#workspace-preview-body').evaluate((body) => {
     body.scrollTop = 160;
@@ -3560,8 +3560,8 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   assert.equal(fullBounds.height, viewport.height);
   assert.equal(await fillsPanel(), true);
   if (process.env.YUANTU_QA_SCREENSHOT) {
-    await mkdir(path.dirname(process.env.YUANTU_QA_SCREENSHOT), { recursive: true });
-    await page.screenshot({ path: process.env.YUANTU_QA_SCREENSHOT });
+    await mkdir(artifactPath(''), { recursive: true });
+    await page.screenshot({ path: artifactPath('qa.png') });
   }
   await page.locator('#workspace-preview-body').evaluate((body) => {
     body.scrollTop = 180;
@@ -3585,7 +3585,7 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   if (process.env.YUANTU_QA_SCREENSHOT) {
     await page.locator('#workspace-fullscreen').click();
     await page.screenshot({
-      path: process.env.YUANTU_QA_SCREENSHOT.replace(/\.png$/, '-light.png'),
+      path: artifactPath('qa.png').replace(/\.png$/, '-light.png'),
     });
     await page.locator('#workspace-fullscreen').click();
   }
@@ -3726,3 +3726,11 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
     'preview leaves source unchanged',
   );
 });
+
+function artifactPath(relative) {
+  return path.join(
+    process.env.FOUNDRY_TEST_ARTIFACTS ||
+      path.join(tmpdir(), 'yuantu-smoke-artifacts-' + process.pid),
+    relative,
+  );
+}

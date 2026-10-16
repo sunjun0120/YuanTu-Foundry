@@ -80,10 +80,12 @@ test('a second carrier is refused rather than sharing one Host', async (t) => {
   second.destroy();
   assert.match(refusal, /already has a connected client/);
   // A client that insists anyway settles with the Host's own words rather than a parse error.
-  const socket = connect({ host: '127.0.0.1', port: host.port });
-  await new Promise<void>((resolve) => socket.once('connect', () => resolve()));
-  const rejected = new AgentHostClient({ transport: socketTransport(socket), env: {} });
-  await assert.rejects(rejected.start(), /already has a connected client/);
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const socket = connect({ host: '127.0.0.1', port: host.port });
+    await new Promise<void>((resolve) => socket.once('connect', () => resolve()));
+    const rejected = new AgentHostClient({ transport: socketTransport(socket), env: {} });
+    await assert.rejects(rejected.start(), /already has a connected client/);
+  }
 });
 
 test('a large reply is framed on a socket exactly as it is on stdio', async (t) => {

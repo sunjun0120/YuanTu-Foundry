@@ -7,10 +7,10 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RunFailure } from '../protocol/failure.ts';
+import { userStateDirectory } from '../platform/user-state.ts';
 /**
  * Characters an HTTP header value cannot carry, whatever the endpoint would make of them.
  *
@@ -71,7 +71,7 @@ export function credentialsPath(env: NodeJS.ProcessEnv = process.env): string {
       throw new Error('YUANTU_CREDENTIALS_FILE must be an absolute path');
     return configured;
   }
-  return path.join(homedir(), '.yuantu', 'credentials.json');
+  return path.join(userStateDirectory(env), 'credentials.json');
 }
 /**
  * The credentials in the file, or none when there is no file.

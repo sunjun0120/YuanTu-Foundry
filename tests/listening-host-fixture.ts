@@ -46,6 +46,8 @@ export async function listeningHost(
       cwd: root,
       env: {
         ...process.env,
+        // Protocol fixtures use owned local processes; native backend tests override this explicitly.
+        YUANTU_SANDBOX: 'host',
         YUANTU_WORKFLOWS: 'false',
         YUANTU_HOST_TOKEN: authToken,
         YUANTU_PROTOCOL: 'anthropic',

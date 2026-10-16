@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
+import { testResource } from '../platform/test-lifecycle.ts';
 import {
   appContainerRuntimeError,
   APPCONTAINER_CHILD_STDIO_PROBE,
@@ -70,6 +71,7 @@ async function acl(
   readSid = '',
   files = 'workspace-write',
 ): Promise<void> {
+  testResource('windows-sandbox');
   await execute(
     powershell(),
     [
@@ -98,6 +100,7 @@ const stateRoot = () => path.join(os.userInfo().homedir, '.yuantu', 'sandbox-sta
 let capturedHelper: Promise<string> | undefined;
 async function helper(): Promise<string> {
   if (process.platform !== 'win32') throw new Error('AppContainer is available only on Windows');
+  testResource('windows-sandbox');
   if (!binarySource)
     throw new Error('Bundled AppContainer helper is missing; build Windows sandbox assets');
   return (capturedHelper ??= (async () => {
@@ -153,9 +156,10 @@ let processLease:
 async function acquireProcess(): Promise<() => Promise<void>> {
   processLease ??= (async () => {
     const filename = path.join(stateRoot(), 'workspace-owner.lock');
-    const lock = await open(filename, 'wx').catch(() => {
+    const lock = await open(filename, 'wx').catch((error: NodeJS.ErrnoException) => {
       throw new Error(
-        `Windows ACL is leased by another backend/process or needs recovery: ${filename}`,
+        `Windows ACL lease acquisition failed (${error.code ?? 'unknown'}): ${filename}`,
+        { cause: error },
       );
     });
     await lock.writeFile(JSON.stringify({ pid: process.pid, backend: 'appcontainer' }));

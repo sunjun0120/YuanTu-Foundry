@@ -26,6 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
+import { testResource } from '../platform/test-lifecycle.ts';
 import { WINDOWS_CAPABILITIES } from './execution-capabilities.ts';
 import {
   insideWorkspace,
@@ -477,6 +478,7 @@ function run(
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<{ code: number | null; error: string }> {
+  testResource('windows-sandbox');
   return new Promise((resolve) => {
     const child = spawn(executable, args, {
       cwd: options.cwd,
@@ -499,11 +501,7 @@ function run(
  *
  * Persistent workspace security changes use the journal helper below instead of this disposable grant.
  */
-const granted = new Map<string, Promise<void>>();
-const grantScript = [
-  "$ErrorActionPreference = 'Stop'",
-  "$ProgressPreference = 'SilentlyContinue'",
-  `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
+const scratchGrant = [
   '$sid = [Security.Principal.SecurityIdentifier]::new([string]$spec.sid)',
   '$acl = Get-Acl -LiteralPath ([string]$spec.root)',
   // Only disposable scratch uses a protected DACL. Workspace grants continue to merge user ACLs.
@@ -523,27 +521,6 @@ const grantScript = [
   '& "$env:SystemRoot\\System32\\icacls.exe" ([string]$spec.root) /setintegritylevel "(OI)(CI)L" /Q | Out-Null',
   'if ($LASTEXITCODE -ne 0) { throw "Could not label sandbox scratch Low integrity" }',
 ].join('\n');
-function grant(root: string, sid: string, privateScratch = false): Promise<void> {
-  const pending = granted.get(root);
-  if (pending) return pending;
-  const work = (async () => {
-    const result = await run(powershellPath(), launcherArgs(grantScript), {
-      env: {
-        ...toolEnvironment(),
-        [SPEC_VARIABLE]: encode(JSON.stringify({ root, sid, privateScratch })),
-      },
-    });
-    if (result.code !== 0)
-      throw new Error(
-        `Could not grant the sandbox identity access to the workspace: ${result.error.trim() || `ACL helper exited with ${String(result.code)}`}`,
-      );
-  })();
-  // A failed grant is not remembered as done: the next command should try again rather than inherit a promise
-  // that already rejected, which would turn one transient icacls failure into a permanently broken workspace.
-  work.catch(() => granted.delete(root));
-  granted.set(root, work);
-  return work;
-}
 
 interface WorkspaceLease {
   references: number;
@@ -572,7 +549,13 @@ const aclBootstrap = [
   '$reader = [IO.StreamReader]::new($gzip)',
   '$script = [ScriptBlock]::Create($reader.ReadToEnd())',
   '$reader.Dispose()',
-  '& $script -Operation ([string]$spec.operation) -Root ([string]$spec.root) -Journal ([string]$spec.journal) -Sid ([string]$spec.sid)',
+  '& $script -Operation ([string]$spec.operation) -Root ([string]$spec.root) -Journal ([string]$spec.journal) -Sid ([string]$spec.sid) -ControlRoots ([string[]]$spec.controlRoots)',
+  // Check every control path before granting disposable scratch. One helper launch also compiles YuantuAcl
+  // just once; no successful validation is cached across prepares or TEMP changes.
+  'if ($spec.scratch) {',
+  '  $spec = $spec.scratch',
+  scratchGrant,
+  '}',
 ].join('\n');
 interface ProcessLease {
   references: number;
@@ -633,12 +616,16 @@ async function journalOperation(
   root: string,
   journal: string,
   sid: string,
+  preparation?: {
+    controlRoots: string[];
+    scratch: { root: string; sid: string; privateScratch: true };
+  },
 ): Promise<void> {
   const result = await run(powershellPath(), launcherArgs(aclBootstrap), {
     env: {
       ...toolEnvironment(),
       [ACL_VARIABLE]: aclSource,
-      [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid })),
+      [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid, ...preparation })),
     },
   });
   if (result.code !== 0)
@@ -646,7 +633,7 @@ async function journalOperation(
       `Windows sandbox ACL ${operation} failed; recovery journal ${journal}: ${result.error}`,
     );
 }
-async function acquireWorkspace(root: string, sid: string): Promise<void> {
+async function acquireWorkspace(root: string, sid: string, state: string): Promise<void> {
   for (const existing of workspaceLeases.keys()) {
     const contains = (parent: string, child: string) => {
       const relative = path.relative(parent, child);
@@ -662,18 +649,11 @@ async function acquireWorkspace(root: string, sid: string): Promise<void> {
     const lease = await pending;
     if (lease.closing) {
       await lease.closing;
-      return acquireWorkspace(root, sid);
+      return acquireWorkspace(root, sid, state);
     }
   }
   if (!pending) {
     pending = (async () => {
-      // Account-derived profile, independent of TEMP/USERPROFILE overrides in different Hosts.
-      // Keep this outside MSIX-virtualized AppData/Local, which differs between packaged and CLI Hosts.
-      const state = path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
-      await mkdir(state, { recursive: true });
-      if (path.resolve(await realpath(state)).toLowerCase() !== path.resolve(state).toLowerCase())
-        throw new Error('Windows sandbox refuses redirected ACL state paths');
-      await journalOperation('validate-control', state, '-', '-');
       const releaseProcess = await acquireProcessLease(state);
       const name = createHash('sha256').update(root.toLowerCase()).digest('hex');
       const lockPath = path.join(state, `${name}.lock`);
@@ -744,6 +724,7 @@ export function windowsSandboxAvailable(
     return Promise.resolve(
       'The Windows restricted-token backend only runs on Windows; no command was started',
     );
+  testResource('windows-sandbox');
   availability ??= (async (): Promise<string | null> => {
     const powershell = powershellPath();
     try {
@@ -837,9 +818,11 @@ async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   const sid = workspaceSandboxSid(canonical);
   const dll = launcherPath();
   await mkdir(path.dirname(dll), { recursive: true });
-  const profile = await realpath(os.userInfo().homedir);
-  const fixedState = path.join(profile, '.yuantu', 'sandbox-state', 'windows');
-  const state = await realpath(fixedState).catch(() => fixedState);
+  // Account-derived profile stays independent of TEMP/USERPROFILE and MSIX AppData virtualization.
+  const state = path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
+  await mkdir(state, { recursive: true });
+  if (path.resolve(await realpath(state)).toLowerCase() !== path.resolve(state).toLowerCase())
+    throw new Error('Windows sandbox refuses redirected ACL state paths');
   const cache = await realpath(path.dirname(dll));
   const contains = (target: string) => {
     const relative = path.relative(canonical, target);
@@ -849,20 +832,21 @@ async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
     throw new Error('Windows sandbox refuses a volume root as workspace');
   if (contains(state) || contains(cache))
     throw new Error('Windows sandbox workspace contains trusted control paths; execution refused');
-  await journalOperation('validate-control', path.dirname(dll), '-', '-');
-  const source = await writeLauncherSource(dll);
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'yuantu-sandbox-'));
   let workspaceAcquired = false;
   try {
-    await acquireWorkspace(canonical, sid);
-    workspaceAcquired = true;
     // The scratch directory is granted for the same reason the workspace is: almost every real command writes
     // *somewhere* for temporary files, and a sandbox whose commands cannot use a temp directory fails in ways
     // that look like the tool being broken rather than the sandbox doing its job. It is deliberately outside the
     // workspace — a command's scratch files are not the repository's business — and removed with the plan.
     const scratchSid = workspaceSandboxSid(scratch);
-    await grant(scratch, scratchSid, true);
-    granted.delete(scratch);
+    await journalOperation('validate-control', path.dirname(dll), '-', '-', {
+      controlRoots: [state],
+      scratch: { root: scratch, sid: scratchSid, privateScratch: true },
+    });
+    const source = await writeLauncherSource(dll);
+    await acquireWorkspace(canonical, sid, state);
+    workspaceAcquired = true;
     const env = commandEnvironment(scratch, request.env);
     const plan: SandboxPlan = {
       executable: powershellPath(),

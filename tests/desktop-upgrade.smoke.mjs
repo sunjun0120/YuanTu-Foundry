@@ -1,8 +1,9 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, cp, readFile, readdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,7 +14,7 @@ test(
   'the installed desktop upgrades through its native confirmation and confirms the new Host before retaining its session and encrypted settings',
   { skip: !process.env.UPGRADE_TEST_INSTALLER, timeout: 300000 },
   async (t) => {
-    const root = path.resolve('.scratch/p1', `upgrade-${randomUUID()}`);
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-upgrade-'));
     const installed = path.join(root, '中文 升级目录'),
       profile = path.join(root, '用户 profile'),
       workspace = path.join(root, '用户 workspace');

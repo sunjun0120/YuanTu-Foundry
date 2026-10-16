@@ -1,4 +1,5 @@
 import { killTree } from './process.ts';
+import { testResource } from '../platform/test-lifecycle.ts';
 /**
  * The terminal *seam*: what a PTY backend is, and who decides which one a terminal gets.
  *
@@ -119,7 +120,9 @@ export const nodePtyProvider: PtyProvider = {
     }
   },
   async spawn(request) {
+    const lifecycle = testResource('real-pty');
     const pty = await import('@lydell/node-pty');
+    const started = Date.now();
     const child = pty.spawn(request.file, [...(request.args ?? [])], {
       name: 'xterm-256color',
       cols: request.columns,
@@ -127,9 +130,23 @@ export const nodePtyProvider: PtyProvider = {
       cwd: request.cwd,
       env: request.env as Record<string, string>,
     });
+    let finished: (() => void) | undefined;
+    const register = () => {
+      if (lifecycle && !finished && child.pid > 0) finished = lifecycle.track(child.pid, started);
+    };
+    register();
+    // Windows node-pty obtains its PID asynchronously when ConPTY's data pipe connects.
+    if (lifecycle && !finished) {
+      const native = child as typeof child & {
+        _socket?: { once(event: string, listener: () => void): void };
+      };
+      native._socket?.once('ready_datapipe', register);
+    }
     let exited = false;
     child.onExit(() => {
       exited = true;
+      register();
+      finished?.();
     });
     if (process.platform === 'win32') {
       // node-pty's natural-exit path drains output but leaves the ConPTY input socket

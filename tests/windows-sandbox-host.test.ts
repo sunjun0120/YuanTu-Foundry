@@ -1,3 +1,4 @@
+// @test-serial windows-sandbox: Runs actual Windows Host commands with token and ACL enforcement.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';

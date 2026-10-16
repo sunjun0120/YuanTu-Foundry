@@ -607,7 +607,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 66 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 67 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -657,6 +657,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_TOOL_RESULT_PRUNE_HEAD_CHARS` | `0–1000000` | 丢弃中段时在开头保留的字符数 |
 | `YUANTU_TOOL_RESULT_PRUNE_TAIL_CHARS` | `0–1000000` | 丢弃中段时在结尾保留的字符数 |
 | `YUANTU_MCP_OAUTH_DIR` | `string` | MCP OAuth 令牌目录 |
+| `YUANTU_STATE_DIR` | `string` | 普通用户状态根目录（绝对路径，默认 ~/.yuantu） |
 | `YUANTU_CREDENTIALS_FILE` | `string` | 凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它） |
 | `YUANTU_MEMORY_DIR` | `string` | 用户级记忆目录 |
 | `YUANTU_KNOWLEDGE_DB` | `string` | 知识库数据库路径 |
@@ -705,7 +706,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v30 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 45 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 236 个 | `tests/*.test.ts` |
+| 行为测试文件 | 249 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -751,13 +752,17 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 ## 开发
 
 ```powershell
-npm.cmd run check        # format:check → docs:check → references:check → i18n:check → typecheck → test → build → smoke:client
+npm.cmd run check        # format:check → docs:check → references:check → cycles:check → i18n:check → typecheck → test:isolation:check → test → build → smoke:client
 npm.cmd run check:changed   # 开发时按 Git 改动及传递依赖选择验证；不确定时回退全量
 npm.cmd run check:changed -- --plan   # 只预览改动、选测数量与回退原因
 npm.cmd test             # 全量行为测试：仅输出汇总、跳过原因和失败详情，完整日志落盘
 npm.cmd test -- tests/host-requests.test.ts   # 明确指定测试文件
-npm.cmd run test:partitioned -- --plan   # 只预览已审查的并行组与串行组，不执行测试
-npm.cmd run test:partitioned   # 先跑并行组，再独占执行串行组
+npm.cmd run test:partitioned -- --plan   # 只预览隔离并行组、资源标签与串行组，不执行测试
+npm.cmd run test:serial       # 同一隔离契约，文件并发为 1
+npm.cmd test -- --concurrency=2   # 默认并发 min(4, availableParallelism)，可显式覆盖
+npm.cmd test -- --order=name     # 使用文件名顺序；默认优先运行历史耗时较长的文件
+npm.cmd run test:isolation:check # 检查测试入口和本地 helper 的隔离规则
+npm.cmd run coverage        # 隔离执行后合并原始 V8 ranges，检查全套覆盖率下限
 npm.cmd run test:verbose    # 原始详细输出，排查时使用
 npm.cmd run check:full      # 阶段验收；与 check 相同
 npm.cmd run check:release   # check 加真窗口桌面冒烟；打包另行执行
@@ -768,7 +773,11 @@ npm.cmd run docs:generate   # 重写 README 的生成事实块
 
 开发选测规则见 [选测脚本](scripts/check-changed.mjs)，日志与并发处理见 [测试入口](scripts/run-tests.mjs)。`check:changed` 用于开发反馈，不替代阶段验收或发布前的完整门禁。
 
-[test-parallel-safe.json](test-parallel-safe.json) 是分组测试读取的审查白名单，记录测试文件、审查原因及测试与本地依赖的 SHA-256。只有记录完整且哈希仍匹配的测试可进入并行组；未审查或输入已变化的测试退回串行。缺少该文件时全部串行，格式错误则拒绝分组执行。默认 `npm test` 仍串行；保留此文件才能保留已审查的并行配置，修改源码后不能仅重算哈希来代替重新审查。
+覆盖率入口同样使用隔离调度器，将各 worker 的原始 V8 报告保留至本次独有的覆盖率产物目录，再由 Node 24 自带的覆盖率合并实现按源码范围聚合。全套阈值仍为行 90%、分支 75%、函数 85%，不会逐文件套用全套阈值，也不会把同一源码重复计入分母；没有原始报告或合并失败均拒绝通过。合并器依赖 Node 24 的内部覆盖率 API，升级 Node 主版本时需先核对该接口。
+
+`npm test` 默认把新测试放进隔离并行池：每文件独立 Node 进程、tmp/home/state/cache/artifacts，cwd 保持仓库根且只读；监听使用 loopback 与端口 0。禁止 `process.chdir` 和写出当前 worker 私有根。文件头 `// @test-serial resource: reason` 只用于真实共享机器资源（windows-sandbox、machine-lease、real-pty、desktop-ui、os-credentials），并行池完全结束后才独占执行串行组；标签不关闭私有文件和端口约束。`test:partitioned` 是默认行为的兼容入口；`test:serial` 使用同一隔离契约。`--parallel-concurrency` 与 `--concurrency` 等价，`--plan` 不执行测试。探针违规、报告缺失和清理失败均使运行失败。普通状态通过 `YUANTU_STATE_DIR` 隔离，单项显式覆盖仍优先；原生 Windows 安全控制目录保持真实机器边界。测试日志说明 Node 探针覆盖与外部进程夹具路径约束的区别，此工程隔离不提供恶意代码的操作系统级隔离。
+
+成功且完整的全量运行会将每文件耗时原子保存到 `.scratch/cache`，按操作系统、架构和 Node 主版本区分；覆盖率使用单独记录。后续全量并行运行按历史耗时降序派发，未测量文件优先探索，等耗时按文件名排序；没有历史时按文件名排序。`--order=name` 可固定文件名顺序，`--duration-history=path` 可指定记录文件。显式文件选择、名称过滤与串行模式保留既有派发方式；失败、取消、不完整或过滤运行不更新历史。耗时记录只影响派发顺序，不改变资源分组、隔离或通过标准。
 
 `npm run check` 里的 `docs:check` 会**计算**文档引用的数字并与文档比较，也拒绝那些曾经为真、现在不再为真的说法（`scripts/docs-facts.mjs` 里逐条带原因登记）；`docs:generate` 才会重写生成事实块。因此本 README 里的计数一律以生成块为准，而不是手写。`references:check` 检查本 README、`docs/` 下的顶层 Markdown、工作流与 `package.json` 脚本中的仓库路径和 Markdown 锚点（`scripts/check-references.mjs`）。`docs/` 可以为空；删除文档后仍需清理各处引用，其他目录的说明文件也应单独核对链接。
 

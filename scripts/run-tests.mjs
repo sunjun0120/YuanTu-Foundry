@@ -1,392 +1,245 @@
-/**
- * The entry point the suite is run through.
- *
- * Two invariants shape everything here. First, the default is unchanged: every discovered
- * `tests/*.test.ts` file, one harness, concurrency 1, the same quiet summary and the same spec log,
- * and the child's exit status is the runner's exit status. Second, a phase boundary may never hide
- * a failure: the phases do not overlap, a failure in the first one stops the second from starting,
- * and a missing or truncated report is a failed run rather than a successful one with less output.
- *
- * Use `node scripts/run-tests.mjs [--concurrency=N] [--test-name-pattern=...] [files...]` exactly
- * as before. The additions are `--timings=<path>`, `--schedule=partitioned`,
- * `--parallel-concurrency=N` and `--plan`; see scripts/test-execution-policy.ts for the schedule.
- */
-import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { availableParallelism, tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { discoverTests, loadPolicy, partitionTests } from './test-execution-policy.ts';
+import { fileURLToPath } from 'node:url';
+import { discoverTests, partitionTests } from './test-execution-policy.ts';
+import { runSchedule } from './test-scheduler.mjs';
+import { mergeReports, sumCounts, writeMergedReport } from './test-report-merge.mjs';
+import { sourceFingerprint } from './test-source-fingerprint.mjs';
+import {
+  orderTestsByDuration,
+  readTestDurations,
+  writeTestDurations,
+} from './test-duration-history.ts';
+
+const controller = new AbortController();
+const cancel = () => controller.abort();
+// An IPC parent asks for cleanup; it never has to terminate this lease-owning controller.
+const ipcChild = typeof process.send === 'function';
+const abortMessage = (message) => {
+  if (message?.type === 'foundry-test-abort-v1') cancel();
+};
+if (ipcChild) {
+  process.on('message', abortMessage);
+  process.on('disconnect', cancel);
+  process.channel?.unref();
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const startedAt = new Date().toISOString();
-const wallStart = performance.now();
-const args = process.argv.slice(2);
-const options = [];
-const files = [];
-let concurrency = 1;
-let schedule = 'serial';
-let parallelConcurrency = 2;
-let plan = false;
-let timings;
-
+const startedAt = new Date().toISOString(),
+  wallStart = performance.now();
+const args = process.argv.slice(2),
+  options = [],
+  files = [];
+let concurrency = Math.min(4, availableParallelism()),
+  schedule = 'partitioned',
+  order = 'duration',
+  durationHistory;
+let plan = false,
+  continueOnFailure = false,
+  timings,
+  verbose = false,
+  width;
 for (const arg of args) {
-  if (arg.startsWith('--concurrency=')) {
-    concurrency = Number(arg.slice('--concurrency='.length));
-    if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
-      throw new Error('--concurrency must be a positive integer');
-    }
-  } else if (arg === '--schedule=serial' || arg === '--schedule=partitioned') {
-    schedule = arg.slice('--schedule='.length);
+  const match = /^--(parallel-concurrency|concurrency)=(.*)$/.exec(arg);
+  if (match) {
+    const value = Number(match[2]);
+    if (!Number.isSafeInteger(value) || value < 1)
+      throw Error(`--${match[1]} must be a positive integer`);
+    if (width !== undefined && width !== value) throw Error('Conflicting concurrency options');
+    width = concurrency = value;
   } else if (arg.startsWith('--schedule=')) {
-    throw new Error(`Unsupported schedule: ${arg.slice('--schedule='.length)}`);
-  } else if (arg.startsWith('--parallel-concurrency=')) {
-    parallelConcurrency = Number(arg.slice('--parallel-concurrency='.length));
-    if (!Number.isSafeInteger(parallelConcurrency) || parallelConcurrency < 1) {
-      throw new Error('--parallel-concurrency must be a positive integer');
-    }
-  } else if (arg.startsWith('--timings=')) {
+    schedule = arg.slice('--schedule='.length);
+    if (!['serial', 'partitioned'].includes(schedule))
+      throw Error(`Unsupported schedule: ${schedule}`);
+  } else if (arg.startsWith('--order=')) {
+    order = arg.slice('--order='.length);
+    if (!['duration', 'name'].includes(order)) throw Error(`Unsupported test order: ${order}`);
+  } else if (arg.startsWith('--duration-history=')) {
+    durationHistory = arg.slice('--duration-history='.length);
+    if (!durationHistory.trim()) throw Error('--duration-history requires a path');
+  } else if (arg === '--plan') plan = true;
+  else if (arg === '--verbose') verbose = true;
+  else if (arg === '--continue-on-failure') continueOnFailure = true;
+  else if (arg.startsWith('--timings=')) {
     timings = arg.slice('--timings='.length);
-    if (!timings.trim()) throw new Error('--timings requires a path');
-  } else if (arg === '--plan') {
-    plan = true;
-  } else if (/^--test-(?:name-pattern|skip-pattern|timeout)=/.test(arg)) {
+    if (!timings.trim()) throw Error('--timings requires a path');
+  } else if (/^--test-(?:name-pattern|skip-pattern|timeout)=/.test(arg)) options.push(arg);
+  else if (
+    arg === '--experimental-test-coverage' ||
+    /^--test-coverage-(?:lines|branches|functions)=/.test(arg)
+  )
     options.push(arg);
-  } else if (arg.startsWith('-')) {
-    throw new Error(`Unsupported test option: ${arg}`);
-  } else {
-    files.push(arg);
-  }
+  else if (arg.startsWith('-')) throw Error(`Unsupported test option: ${arg}`);
+  else files.push(arg);
 }
-
-// `--plan` prints the discovered set and the schedule for it. It must not create a log directory or
-// start a harness, so that a preview can never be mistaken for a run.
-if (plan && schedule !== 'partitioned')
-  throw new Error('--plan is only meaningful with --schedule=partitioned');
-if (schedule === 'partitioned' && args.some((arg) => arg.startsWith('--concurrency=')))
-  throw new Error(
-    '--concurrency applies to the serial phases; use --parallel-concurrency with --schedule=partitioned',
-  );
-
+if (schedule === 'serial') {
+  if (width !== undefined && width !== 1) throw Error('--schedule=serial requires concurrency=1');
+  concurrency = 1;
+}
 const explicit = files.length > 0;
-const discovered = explicit
-  ? files.map((file) => {
-      const relative = path.relative(root, path.resolve(root, file));
-      return relative !== '..' &&
-        !relative.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(relative)
-        ? relative.replaceAll('\\', '/')
-        : file;
-    })
-  : await discoverTests(root);
-// A preview of an explicit file list is a preview of that list, not of the whole suite.
-// The serial baseline must remain usable even if an experimental policy is invalid or stale.
-const policy =
-  schedule === 'partitioned'
-    ? await loadPolicy(root, discovered, { tolerateUnknown: explicit })
-    : null;
-const partition =
-  schedule === 'partitioned'
-    ? await partitionTests(discovered, { root, policy, strictFiles: !explicit })
-    : { parallel: [], serial: discovered, reasons: {} };
+const discovered = [
+  ...new Set(
+    explicit
+      ? files.map((file) => {
+          const absolute = path.resolve(root, file),
+            relative = path.relative(root, absolute);
+          return !relative.startsWith('..') && !path.isAbsolute(relative)
+            ? relative.replaceAll('\\', '/')
+            : absolute.replaceAll('\\', '/');
+        })
+      : await discoverTests(root),
+  ),
+];
+const partition = await partitionTests(discovered, { root });
 const filtered = options.some((option) => /^--test-(?:name|skip)-pattern=/.test(option));
-
+// Nested controllers write hints inside their outer owner's artifacts. Coverage has a separate cost profile.
+const historyFile = path.resolve(
+  root,
+  durationHistory ??
+    path.join(
+      process.env.FOUNDRY_TEST_ARTIFACTS ?? path.join(root, '.scratch/cache'),
+      `test-durations-${process.platform}-${process.arch}-node${process.versions.node.split('.')[0]}${process.env.FOUNDRY_TEST_COVERAGE_DIR ? '-coverage' : ''}.json`,
+    ),
+);
+const durations =
+  order === 'duration' && schedule !== 'serial' && !explicit && !filtered
+    ? await readTestDurations(historyFile)
+    : {};
+const parallelFiles =
+  order === 'duration' && !explicit && !filtered
+    ? orderTestsByDuration(partition.parallel, durations)
+    : partition.parallel;
+const phases =
+  schedule === 'serial'
+    ? [{ phase: 'serial', files: discovered, concurrency: 1 }]
+    : [
+        { phase: 'parallel', files: parallelFiles, concurrency },
+        { phase: 'serial', files: partition.serial, concurrency: 1 },
+      ];
 if (plan) {
   console.log(`Discovered ${discovered.length} test file(s)`);
-  for (const file of partition.parallel)
-    console.log(`parallel  ${file}  (${partition.reasons[file]})`);
-  for (const file of partition.serial)
-    console.log(`serial    ${file}  (${partition.reasons[file]})`);
+  for (const phase of phases)
+    for (const file of phase.files)
+      console.log(`${phase.phase.padEnd(8)}  ${file}  (${partition.reasons[file]})`);
   console.log(
-    `Plan: parallel=${partition.parallel.length} serial=${partition.serial.length} total=${discovered.length} parallel-concurrency=${parallelConcurrency}`,
+    `Plan: parallel=${schedule === 'serial' ? 0 : partition.parallel.length} serial=${schedule === 'serial' ? discovered.length : partition.serial.length} total=${discovered.length} parallel-concurrency=${concurrency}`,
   );
-  /**
-   * The reviewed set and the parallelised set are different numbers, and the gap is the point: the policy drops
-   * a file back to serial as soon as any input it was reviewed against changes, so the entry count always
-   * overstates what actually runs concurrently. Printing only the plan made the two look like one number.
-   */
-  if (policy)
-    console.log(
-      `Policy: entries=${policy.entries.length} parallelised=${partition.parallel.length} awaiting-review=${policy.entries.length - partition.parallel.length}`,
-    );
-  process.exit(0);
-}
-
-const directory = path.join(root, '.scratch/test-logs');
-await mkdir(directory, { recursive: true });
-const runId = `${Date.now()}-${process.pid}-${randomUUID()}`;
-const logPath = (phase) => path.join(directory, `${runId}-${phase}.log`);
-const preparationWallMs = Number((performance.now() - wallStart).toFixed(1));
-
-if (schedule === 'serial') {
-  console.log(`Running ${discovered.length} test file(s), concurrency=${concurrency}`);
-  const result = await runPhase({
-    phase: 'serial',
-    files: discovered,
-    // `--concurrency` is the harness's file width and keeps its original meaning for every serial
-    // invocation, including the default full run (whose default is 1).
-    concurrency,
-    log: logPath('serial'),
-    // A report is always produced, because it is how the phase proves it ran and how the totals are
-    // obtained. It is only *merged to the caller's path* when --timings asked for one.
-    timings: path.join(directory, `${runId}-serial-timings.ndjson`),
-  });
-  const verified = await verifyPhases([{ ...result, files: discovered }]);
-  await mergeTimings(
-    verified,
-    timings,
-    { serial: result.wallMs },
-    Number((performance.now() - wallStart).toFixed(1)),
-  );
-  printTotals([result], verified.totals);
-  if (verified.problem) console.error(verified.problem);
-  reportZeroTestFiles(verified.zeroTestFiles);
-  process.exitCode = result.exitCode || (verified.problem ? 1 : 0);
 } else {
-  console.log(
-    `Running ${discovered.length} test file(s) in two phases, parallel-concurrency=${parallelConcurrency}`,
-  );
+  // Nested runners keep controller evidence inside their outer owner's artifact directory.
+  const directory = process.env.FOUNDRY_TEST_ARTIFACTS
+    ? path.join(process.env.FOUNDRY_TEST_ARTIFACTS, 'test-logs')
+    : path.join(root, '.scratch/test-logs');
+  await mkdir(directory, { recursive: true });
+  const runId = `${Date.now()}-${process.pid}-${randomUUID()}`;
+  process.env.FOUNDRY_TEST_MACHINE_LOCK_ROOT ??= path.join(tmpdir(), 'yuantu-test-resource-locks');
+  const preparationWallMs = Number((performance.now() - wallStart).toFixed(1));
+  process.on('SIGINT', cancel);
+  process.on('SIGTERM', cancel);
+  console.log(`Running ${discovered.length} test file(s), concurrency=${concurrency}`);
   console.log(`Run id: ${runId}`);
-  const results = [];
-  const phases = [
-    { phase: 'parallel', files: partition.parallel, concurrency: parallelConcurrency },
-    { phase: 'serial', files: partition.serial, concurrency: 1 },
-  ];
-  for (const spec of phases) {
-    // An empty phase is not started at all: an empty harness writes a report that says nothing and
-    // costs a process.
-    if (!spec.files.length) continue;
-    const result = await runPhase({
-      ...spec,
-      log: logPath(spec.phase),
-      timings: path.join(directory, `${runId}-${spec.phase}-timings.ndjson`),
+  try {
+    const source = timings ? await sourceFingerprint(root) : undefined;
+    const { results, phaseWall, failed } = await runSchedule({
+      root,
+      directory,
+      runId,
+      phases,
+      resources: partition.resources,
+      options,
+      signal: controller.signal,
+      verbose,
+      continueOnFailure,
     });
-    results.push({ ...spec, ...result });
-    if (result.exitCode !== 0) {
-      console.error(`Phase ${spec.phase} failed with exit code ${result.exitCode}; stopping.`);
-      break;
-    }
-  }
-  const phaseWall = Object.fromEntries(results.map((r) => [r.phase, r.wallMs]));
-  const verified = await verifyPhases(results);
-  await mergeTimings(
-    verified,
-    timings,
-    phaseWall,
-    Number((performance.now() - wallStart).toFixed(1)),
-  );
-  printTotals(results, verified.totals);
-  if (verified.problem) console.error(verified.problem);
-  reportZeroTestFiles(verified.zeroTestFiles);
-  const failed = results.some((r) => r.exitCode !== 0);
-  process.exitCode = failed ? 1 : verified.problem ? 1 : 0;
-}
-
-/**
- * Say that files reported no cases, and whether a filter explains it.
- *
- * This is the shape that must not be turned into a failure: `--test-name-pattern` selecting nothing in a
- * file is a correct run of that file. Printing the count and the filter state is what makes the
- * difference auditable after the fact.
- */
-function reportZeroTestFiles(count) {
-  if (!count) return;
-  console.log(
-    `${count} file(s) reported no test cases; a name/skip filter was ${filtered ? '' : 'not '}in effect.`,
-  );
-}
-
-/** Run one harness over one phase and wait for its log and report to be complete. */
-async function runPhase({ phase, files, concurrency, log, timings: timingsPath }) {
-  // A runner invoked by a regression test must start a fresh test harness. Nothing about *this*
-  // runner's own bookkeeping is added to it: the tests under measurement start the Host, the CLI and
-  // the sandbox as children that inherit the environment, and the Host refuses settings it does not
-  // know — its environment check would reject the run before those children ever started. The
-  // reporter's configuration therefore travels in its module URL, which reaches nothing else.
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  if (timingsPath) await rm(timingsPath, { force: true });
-  const reporter = pathToFileURL(path.join(root, 'scripts/test-reporter.mjs'));
-  reporter.searchParams.set('log', log);
-  reporter.searchParams.set('phase', phase);
-  if (timingsPath) reporter.searchParams.set('timings', timingsPath);
-  const reporters = [`--test-reporter=${reporter.href}`, '--test-reporter-destination=stdout'];
-  console.log(`Phase ${phase}: ${files.length} file(s), concurrency=${concurrency}`);
-  console.log(`Log: ${log}`);
-  const start = performance.now();
-  const code = await new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ['--test', `--test-concurrency=${concurrency}`, ...reporters, ...options, ...files],
-      { cwd: root, stdio: 'inherit', windowsHide: true, env },
-    );
-    child.on('error', (error) => {
-      console.error(error);
-      resolve(1);
-    });
-    child.on('exit', (exitCode, signal) => resolve(exitCode ?? (signal ? 1 : 0)));
-  });
-  return {
-    phase,
-    exitCode: code,
-    wallMs: Number((performance.now() - start).toFixed(1)),
-    log,
-    timingsPath,
-  };
-}
-
-/**
- * Read every phase report and require each one to be complete. A phase that produced no report is a
- * phase that cannot be shown to have run, which is a failed run rather than a successful one with
- * less output.
- *
- * Completeness is checked per file as well as per phase, because three shapes look alike from the
- * outside and are not:
- *
- * - a file that ran reports its own `file-summary` with the cases it held;
- * - a file a `--test-name-pattern`/`--test-skip-pattern` matched nothing in **also** reports a
- *   `file-summary`, with `tests: 0` — measured, not assumed — so it is legitimate;
- * - a file that exited before the harness could summarise it reports **no** `file-summary` at all.
- *
- * The rule that follows is "a summary must exist", never "a test must exist": the second would fail
- * exactly the filtered run a developer types to check one case, and a gate that cries wolf gets
- * deleted. Zero-test files are counted and printed instead, so the shape is visible without being an
- * error.
- */
-async function verifyPhases(results) {
-  const records = [];
-  const totals = [];
-  let problem = null;
-  let zeroTestFiles = 0;
-  for (const result of results) {
-    const report = await readReport(result.timingsPath);
-    if (!report) {
-      problem = `Phase ${result.phase} wrote no complete timings report at ${result.timingsPath}`;
-      break;
-    }
-    records.push(...report.records);
-    totals.push(report.summary);
-    const summarised = new Map();
-    const statuses = new Map();
-    for (const record of report.records) {
-      if (record.kind === 'file-summary' && record.file)
-        summarised.set(path.resolve(record.file), record.counts ?? {});
-      else if (record.kind === 'case' && record.file)
-        statuses.set(path.resolve(record.file), record.status);
-    }
-    const missing = [];
-    for (const file of result.files ?? []) {
-      const counts = summarised.get(path.resolve(file));
-      if (counts) {
-        if (!counts.tests) zeroTestFiles++;
-        continue;
-      }
-      /**
-       * No per-file summary, and two very different reasons produce that. A file that failed before its first
-       * test is reported as a failed case; a file that declares no tests at all is reported as a passing one,
-       * because the harness counts the file itself. They are named apart rather than merged into one message,
-       * since "it crashed" and "it is empty" send a reader to different files.
-       */
-      const status = statuses.get(path.resolve(file));
-      missing.push(
-        `${path.relative(root, file)} (${status === 'failed' ? 'failed before reporting' : 'declares no tests'})`,
+    const sourceAfter = timings ? await sourceFingerprint(root) : undefined;
+    const sourceChanged = source?.digest !== sourceAfter?.digest;
+    if (sourceChanged)
+      console.error('Source inputs changed during this run; equivalence evidence is invalid.');
+    const merged = mergeReports(results, phaseWall);
+    const incomplete =
+      results.length !== discovered.length || results.some((result) => result.report.problem);
+    for (const [phase, wallMs] of Object.entries(phaseWall)) {
+      const counts = sumCounts(
+        results.filter((result) => result.phase === phase).map((result) => result.report.summary),
+      );
+      console.log(
+        `Total: ${phase} tests=${counts.tests} pass=${counts.passed} fail=${counts.failed} skip=${counts.skipped} cancelled=${counts.cancelled} todo=${counts.todo} wall=${(wallMs / 1000).toFixed(2)}s`,
       );
     }
-    if (missing.length) {
-      problem =
-        `Phase ${result.phase}: ${missing.length} test file(s) produced no per-file summary (listed with the ` +
-        'reason each was read as): ' +
-        missing.join(', ');
-      break;
+    const zeros = results.reduce((count, result) => count + (result.report.zeroTestFiles ?? 0), 0);
+    if (zeros)
+      console.log(
+        `${zeros} file(s) reported no test cases; a name/skip filter was ${filtered ? '' : 'not '}in effect.`,
+      );
+    if (incomplete)
+      console.error(
+        `Incomplete run: ${results.length}/${discovered.length} files settled; every requested file must have a complete summary.`,
+      );
+    const metadata = {
+      schemaVersion: 1,
+      command: process.argv.slice(1),
+      node: process.version,
+      head: git(['rev-parse', 'HEAD']),
+      dirtyFiles: git(['status', '--porcelain=v1'])?.split('\n').filter(Boolean).length ?? null,
+      schedule,
+      continueOnFailure,
+      order: schedule === 'serial' ? 'input' : explicit || filtered ? 'name' : order,
+      durationHistory: historyFile,
+      measuredFiles: discovered.filter((file) => Object.hasOwn(durations, file)).length,
+      parallelConcurrency: concurrency,
+      filtered,
+      explicit,
+      discovered: discovered.length,
+      parallel: partition.parallel.length,
+      serial: partition.serial.length,
+      startedAt,
+      preparationWallMs,
+      phaseWall,
+      wallMs: Number((performance.now() - wallStart).toFixed(1)),
+      isolationVersion: 1,
+      complete: !incomplete,
+      passed: !failed && !incomplete && !sourceChanged && !controller.signal.aborted,
+      resources: partition.resources,
+      source,
+      sourceAfter,
+      files: results.map(({ report, ...result }) => ({
+        ...result,
+        counts: report.summary?.counts,
+      })),
+      coverage:
+        'Node filesystem/network/SQLite probes; registered subprocess lifecycle; filtered guests and native commands retain their actual environment contracts and rely on fixture path ownership.',
+    };
+    await writeMergedReport(timings, merged, metadata);
+    // Never let a partial, filtered or failed execution teach the next full run artificially short costs.
+    if (metadata.passed && !explicit && !filtered) {
+      try {
+        await writeTestDurations(
+          historyFile,
+          Object.fromEntries(results.map((result) => [result.file, result.wallMs])),
+        );
+      } catch (error) {
+        console.warn(`Could not save test duration history: ${error.message}`);
+      }
+    }
+    process.exitCode = failed || incomplete || sourceChanged || controller.signal.aborted ? 1 : 0;
+  } finally {
+    process.removeListener('SIGINT', cancel);
+    process.removeListener('SIGTERM', cancel);
+    if (ipcChild) {
+      process.removeListener('message', abortMessage);
+      process.removeListener('disconnect', cancel);
+      if (process.connected) process.disconnect();
     }
   }
-  return { problem, records, totals, zeroTestFiles };
 }
-
-/**
- * Merge the verified per-phase reports into the path the caller asked for, together with the run
- * metadata. Nothing is written when no `--timings` path was given: a run that did not ask for a
- * report does not leave one behind.
- */
-async function mergeTimings(verified, target, phaseWall, wallMs) {
-  if (verified.problem || !target) return;
-  const targetPath = path.resolve(target);
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(
-    targetPath,
-    verified.records.map((record) => `${JSON.stringify(record)}\n`).join(''),
-  );
-  await writeRunMetadata(targetPath, { phaseWall, totals: verified.totals, wallMs });
+if (ipcChild && plan) {
+  process.removeListener('message', abortMessage);
+  process.removeListener('disconnect', cancel);
+  if (process.connected) process.disconnect();
 }
-
-/** Read one NDJSON report, requiring the terminal record that says the writer finished. */
-async function readReport(file) {
-  let text;
-  try {
-    text = await readFile(file, 'utf8');
-  } catch {
-    return null;
-  }
-  const records = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      records.push(JSON.parse(line));
-    } catch {
-      return null;
-    }
-  }
-  if (!records.some((record) => record.kind === 'phase-summary')) return null;
-  if (!records.some((record) => record.kind === 'run-summary')) return null;
-  return {
-    records,
-    summary: records.find((record) => record.kind === 'run-summary'),
-  };
-}
-
-/**
- * The run's own account of itself: the command, the runtime, the revision, the schedule actually
- * used, and the phase/whole-run wall clock. Wall clock is read from a monotonic clock, because the
- * sum of case durations is not the time the run took.
- */
-async function writeRunMetadata(targetPath, extra) {
-  const metadata = {
-    schemaVersion: 1,
-    command: process.argv.slice(1),
-    node: process.version,
-    head: git(['rev-parse', 'HEAD']),
-    dirtyFiles: git(['status', '--porcelain=v1'])?.split('\n').filter(Boolean).length ?? null,
-    schedule,
-    parallelConcurrency: schedule === 'partitioned' ? parallelConcurrency : null,
-    filtered,
-    explicit,
-    discovered: discovered.length,
-    parallel: partition.parallel.length,
-    serial: partition.serial.length,
-    startedAt,
-    preparationWallMs,
-    ...extra,
-  };
-  await writeFile(`${targetPath}.meta.json`, `${JSON.stringify(metadata, null, 2)}\n`);
-}
-
-function git(gitArgs) {
-  const result = spawnSync('git', gitArgs, { cwd: root, windowsHide: true, encoding: 'utf8' });
+function git(args) {
+  const result = spawnSync('git', args, { cwd: root, windowsHide: true, encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : null;
-}
-
-function printTotals(results, summaries) {
-  for (const result of results) {
-    const summary = summaries.find((total) => total?.phase === result.phase);
-    const counts = summary?.counts ?? {};
-    console.log(
-      `Total: ${result.phase} tests=${counts.tests ?? '?'} pass=${counts.passed ?? '?'} fail=${
-        counts.failed ?? '?'
-      } skip=${counts.skipped ?? '?'} cancelled=${counts.cancelled ?? '?'} todo=${
-        counts.todo ?? '?'
-      } duration=${((summary?.durationMs ?? 0) / 1000).toFixed(2)}s wall=${(
-        result.wallMs / 1000
-      ).toFixed(2)}s`,
-    );
-  }
 }

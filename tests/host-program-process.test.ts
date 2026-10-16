@@ -1,3 +1,4 @@
+// @test-serial windows-sandbox: Runs the real Windows program runner through a Host.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';

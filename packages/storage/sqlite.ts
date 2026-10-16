@@ -174,14 +174,15 @@ export class SessionStore implements PlanRepository {
    * file that ends that way would silently skip a user's own SQLite resource, which is source.
    */
   databaseFiles(): string[] {
+    if (this.file === ':memory:') return [];
     const file = path.resolve(this.file);
     // `-wal`, `-shm` and `-journal` are SQLite's own sidecars; `.users` is the access-control record the sandbox
     // backend keeps beside the database. All four are written by the runtime rather than by the work.
     return [file, `${file}-wal`, `${file}-shm`, `${file}-journal`, `${file}.users`];
   }
   constructor(file: string, options: { backupRetention?: BackupPolicy } = {}) {
-    mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-    this.file = path.resolve(file);
+    if (file !== ':memory:') mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+    this.file = file === ':memory:' ? file : path.resolve(file);
     this.releaseDatabase = registerDatabase(file);
     try {
       this.db = new DatabaseSync(file);

@@ -1,3 +1,4 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -138,7 +139,9 @@ test(
       'retained child work\n',
     );
     if (process.env.TEST_DESKTOP_SCREENSHOT_PATH)
-      await page.screenshot({ path: process.env.TEST_DESKTOP_SCREENSHOT_PATH });
+      await page.screenshot({
+        path: path.join(process.env.FOUNDRY_TEST_ARTIFACTS || root, 'workspace-maintenance.png'),
+      });
     const rejected = await page.evaluate(() =>
       window.yuantu.workspaceMaintenance({ type: 'remove', bindingId: 'x', workspace: '/other' }),
     );

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { SqlitePlanStore } from '../packages/storage/plans.ts';
 
@@ -9,9 +10,7 @@ const body = { title: 'First proposal', summary: 'Reviewed work', steps: ['First
 const competingBody = { title: 'Competing proposal', summary: 'Other work', steps: ['Other step'] };
 
 function connectedPlans(t: test.TestContext) {
-  const scratch = resolve('.scratch');
-  mkdirSync(scratch, { recursive: true });
-  const directory = mkdtempSync(join(scratch, 'plan-concurrency-'));
+  const directory = mkdtempSync(join(tmpdir(), 'plan-concurrency-'));
   const firstDb = new DatabaseSync(join(directory, 'plans.sqlite'));
   firstDb.exec(`CREATE TABLE plans (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL, run_id TEXT, status TEXT NOT NULL,

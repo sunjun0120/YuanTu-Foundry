@@ -11,6 +11,7 @@ export const WINDOWS_ACCEPTANCE_FILES = [
   'tests/sandbox-windows-assets.test.ts',
   'tests/sandbox-windows-recovery.test.ts',
   'tests/restricted-consumers.test.ts',
+  'tests/restricted-consumers-native.test.ts',
   'tests/native-sandbox-lifecycle.test.ts',
   'tests/native-background-cleanup.test.ts',
   'tests/windows-sandbox-host.test.ts',

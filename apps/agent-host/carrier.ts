@@ -375,6 +375,11 @@ function authenticatedRequest(line: string, expected: string): Record<string, un
 
 function refuse(socket: Socket, code: string, message: string): void {
   if (socket.destroyed) return;
+  // Drain a peer's concurrent handshake so closing with unread input cannot reset the
+  // connection before the refusal reaches it. Bound peers that never close their side.
+  socket.resume();
+  const timer = setTimeout(() => socket.destroy(), 5000);
+  timer.unref();
+  socket.once('close', () => clearTimeout(timer));
   socket.end(JSON.stringify({ id: null, error: { code, message } }) + '\n');
-  socket.destroySoon();
 }

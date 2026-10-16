@@ -1,6 +1,8 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, cp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -11,12 +13,75 @@ test(
   'a retained old desktop refuses a future schema; offline maintenance restores its compatible backup and opens the retained transcript',
   { skip: !process.env.UPGRADE_TEST_JOURNAL, timeout: 120000 },
   async (t) => {
-    const file = path.resolve(process.env.UPGRADE_TEST_JOURNAL);
-    assert.ok(
-      file.startsWith(path.resolve('.scratch') + path.sep),
-      'Rollback smoke must only use isolated evidence',
+    const original = JSON.parse(
+      await readFile(path.resolve(process.env.UPGRADE_TEST_JOURNAL), 'utf8'),
     );
-    const journal = JSON.parse(await readFile(file, 'utf8'));
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-rollback-'));
+    let app;
+    t.after(async () => {
+      try {
+        await app?.close();
+      } finally {
+        await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      }
+    });
+    // Upgrade evidence is read-only input. Clone every mutable application/profile/workspace tree
+    // and rewrite its journal paths before exercising rollback or launching the retained desktop.
+    const originals = [
+      ...new Set([
+        original.profile,
+        original.workspace || path.dirname(path.dirname(original.database)),
+        original.installDirectory,
+      ]),
+    ];
+    const mappings = originals.map((source, index) => [
+      path.resolve(source),
+      path.join(root, `tree-${index}`),
+    ]);
+    for (const [source, target] of mappings)
+      await cp(source, target, { recursive: true, dereference: true });
+    mappings.sort((a, b) => b[0].length - a[0].length);
+    const relocate = (value) => {
+      if (typeof value === 'string' && path.isAbsolute(value)) {
+        for (const [source, target] of mappings) {
+          const relative = path.relative(source, value);
+          if (
+            relative === '' ||
+            (!relative.startsWith('..' + path.sep) &&
+              relative !== '..' &&
+              !path.isAbsolute(relative))
+          )
+            return path.join(target, relative);
+        }
+      }
+      if (Array.isArray(value)) return value.map(relocate);
+      if (value && typeof value === 'object')
+        return Object.fromEntries(
+          Object.entries(value).map(([key, item]) => [key, relocate(item)]),
+        );
+      return value;
+    };
+    const journal = relocate(original);
+    const file = journal.journal;
+    for (const mutable of [
+      file,
+      journal.directory,
+      journal.profile,
+      journal.database,
+      journal.databaseBackup.file,
+      journal.softwareBackup,
+      journal.settingsBackup,
+    ]) {
+      const relative = path.relative(root, mutable);
+      assert.ok(
+        relative &&
+          relative !== '..' &&
+          !relative.startsWith('..' + path.sep) &&
+          !path.isAbsolute(relative),
+        'Rollback paths must belong to this private fixture',
+      );
+    }
+    await writeFile(file, JSON.stringify(journal));
     assert.notEqual(
       journal.phase,
       'rolled-back',
@@ -48,10 +113,6 @@ test(
       });
       return launched;
     };
-    let app;
-    t.after(async () => {
-      await app?.close();
-    });
     app = await launch();
     let page = await app.firstWindow();
     await page.waitForFunction(async () =>

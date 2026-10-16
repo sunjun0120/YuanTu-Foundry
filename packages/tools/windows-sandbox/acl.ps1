@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Operation, [Parameter(Mandatory=$true)][string]$Root, [Parameter(Mandatory=$true)][string]$Journal, [string]$Sid)
+param([Parameter(Mandatory=$true)][string]$Operation, [Parameter(Mandatory=$true)][string]$Root, [Parameter(Mandatory=$true)][string]$Journal, [string]$Sid, [string[]]$ControlRoots = @())
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -122,14 +122,20 @@ trap {
 }
 
 if ($Operation -eq 'validate-control') {
-  # A Low parent with FILE_DELETE_CHILD could replace an otherwise Medium control directory.
-  $parent = $Root
-  while ($parent) {
-    [YuantuAcl]::RequireMediumControl($parent)
-    $directory = [IO.Directory]::GetParent($parent)
-    $parent = if ($directory) { $directory.FullName } else { $null }
+  # Batch independent control checks in one process; retain every check, including shared ancestors.
+  $roots = @($Root)
+  if ($ControlRoots) { $roots += $ControlRoots }
+  foreach ($controlRoot in $roots) {
+    $Root = $controlRoot
+    # A Low parent with FILE_DELETE_CHILD could replace an otherwise Medium control directory.
+    $parent = $Root
+    while ($parent) {
+      [YuantuAcl]::RequireMediumControl($parent)
+      $directory = [IO.Directory]::GetParent($parent)
+      $parent = if ($directory) { $directory.FullName } else { $null }
+    }
+    foreach ($item in (Safe-Tree)) { [YuantuAcl]::RequireMediumControl($item.FullName) }
   }
-  foreach ($item in (Safe-Tree)) { [YuantuAcl]::RequireMediumControl($item.FullName) }
 } elseif ($Operation -eq 'grant') {
   if (Test-Path -LiteralPath $Journal) { throw 'Unrecovered Windows sandbox ACL journal exists' }
   # Validate/pin existing nodes before creating any root metadata reservations.

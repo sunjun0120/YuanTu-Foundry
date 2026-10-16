@@ -432,10 +432,14 @@ for (const scenario of SCENARIOS) {
     // Through JSON and back on both sides: `undefined` properties are simply absent in a file, and a comparison
     // that forgot that would report a difference the file can never express.
     const actual: unknown = JSON.parse(JSON.stringify(snapshot));
-    if (process.env.UPDATE_SNAPSHOTS === '1') {
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, `${JSON.stringify(snapshot, null, 2)}\n`);
-      t.diagnostic(`updated ${file}`);
+    if (process.env.FOUNDRY_TEST_GENERATE_SNAPSHOTS === '1') {
+      const output = path.join(
+        process.env.FOUNDRY_TEST_ARTIFACTS || tmpdir(),
+        `${scenario.name}.json`,
+      );
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(snapshot, null, 2)}\n`);
+      t.diagnostic(`generated ${output}`);
       return;
     }
     const expected: unknown = JSON.parse(await readFile(file, 'utf8'));

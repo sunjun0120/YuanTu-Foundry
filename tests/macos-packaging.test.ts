@@ -166,10 +166,8 @@ test(
      * publishes at the repository-relative `.scratch/packaging/runtime`, so the hook is driven from a
      * fixture staged for this test rather than from whatever a previous packaging run left behind.
      */
-    const previous = process.cwd();
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-prepack-'));
     t.after(async () => {
-      process.chdir(previous);
       await rm(root, { recursive: true, force: true });
     });
     const runtime = path.join(root, '.scratch/packaging/runtime');
@@ -187,8 +185,21 @@ test(
         licenseSha256: createHash('sha256').update(license).digest('hex'),
       }),
     );
-    process.chdir(root);
-    await config.beforePack({ electronPlatformName: 'win32', arch: 1 });
-    await assert.rejects(config.beforePack({ electronPlatformName: 'darwin', arch: 3 }), /macOS/);
+    const child = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+      import assert from 'node:assert/strict';
+      import { createRequire } from 'node:module';
+      const config = createRequire(${JSON.stringify(import.meta.url)})('../electron-builder.config.cjs');
+      await config.beforePack({ electronPlatformName: 'win32', arch: 1 });
+      await assert.rejects(config.beforePack({ electronPlatformName: 'darwin', arch: 3 }), /macOS/);
+    `,
+      ],
+      { cwd: root, encoding: 'utf8' },
+    );
+    assert.equal(child.status, 0, child.stderr || child.stdout);
   },
 );

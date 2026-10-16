@@ -1,0 +1,75 @@
+import { mkdir, mkdtemp, realpath } from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { inside, resolvedTarget } from './paths.mjs';
+
+const bootstrap = pathToFileURL(fileURLToPath(new URL('./bootstrap.mjs', import.meta.url))).href;
+export async function createIsolation(parentRoot, file, resources = [], baseEnv = process.env) {
+  let ancestorProcessPaths = [];
+  if (process.env.FOUNDRY_TEST_ISOLATION) {
+    const owner = JSON.parse(process.env.FOUNDRY_TEST_ISOLATION);
+    if (!inside(owner.root, resolvedTarget(parentRoot)))
+      throw new Error('nested isolation root must belong to its owner');
+    ancestorProcessPaths = [...(owner.ancestorProcessPaths ?? []), owner.processPath];
+  }
+  await mkdir(parentRoot, { recursive: true });
+  const root = await realpath(
+    await mkdtemp(path.join(parentRoot, `${path.basename(file).replace(/[^a-zA-Z0-9.-]/g, '-')}-`)),
+  );
+  const paths = Object.fromEntries(
+    ['tmp', 'home', 'state', 'cache', 'artifacts'].map((name) => [name, path.join(root, name)]),
+  );
+  await Promise.all(Object.values(paths).map((directory) => mkdir(directory, { recursive: true })));
+  const control = path.join(parentRoot, 'control');
+  await mkdir(control, { recursive: true });
+  const id = randomUUID();
+  const violationPath = path.join(control, `${id}-violations.ndjson`);
+  const processPath = path.join(control, `${id}-processes.ndjson`);
+  const env = { ...baseEnv };
+  for (const key of Object.keys(env))
+    if (/^YUANTU_/.test(key) || /^(?:OPENAI|ANTHROPIC|GEMINI|GOOGLE)_API_KEY$/.test(key))
+      delete env[key];
+  delete env.NODE_TEST_CONTEXT;
+  delete env.UPDATE_SNAPSHOTS;
+  // Collection destinations belong to controllers, never descendants or nested runners.
+  delete env.FOUNDRY_TEST_COVERAGE_DIR;
+  if (env.NODE_V8_COVERAGE) {
+    env.NODE_V8_COVERAGE = path.join(root, 'coverage');
+    await mkdir(env.NODE_V8_COVERAGE, { recursive: true });
+  }
+  Object.assign(env, {
+    TMP: paths.tmp,
+    TEMP: paths.tmp,
+    TMPDIR: paths.tmp,
+    HOME: paths.home,
+    USERPROFILE: paths.home,
+    APPDATA: path.join(paths.home, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(paths.home, 'AppData', 'Local'),
+    XDG_CACHE_HOME: paths.cache,
+    XDG_CONFIG_HOME: paths.state,
+    XDG_DATA_HOME: paths.state,
+    XDG_RUNTIME_DIR: paths.tmp,
+    NODE_COMPILE_CACHE: path.join(paths.cache, 'node'),
+    npm_config_cache: path.join(paths.cache, 'npm'),
+    YUANTU_STATE_DIR: paths.state,
+    FOUNDRY_TEST_ROOT: root,
+    FOUNDRY_TEST_ARTIFACTS: paths.artifacts,
+    FOUNDRY_TEST_ISOLATION: JSON.stringify({
+      root,
+      file,
+      resources,
+      violationPath,
+      processPath,
+      ancestorProcessPaths,
+      repository: process.cwd(),
+    }),
+    NODE_OPTIONS: `--import=${bootstrap}`,
+  });
+  await Promise.all(
+    [env.APPDATA, env.LOCALAPPDATA, env.NODE_COMPILE_CACHE, env.npm_config_cache].map((directory) =>
+      mkdir(directory, { recursive: true }),
+    ),
+  );
+  return { root, file, resources, violationPath, processPath, env };
+}

@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import os from 'node:os';
+import { userStateDirectory } from '../platform/user-state.ts';
 import path from 'node:path';
 import {
   auth,
@@ -84,7 +84,7 @@ export function defaultMcpOAuthDirectory(env: NodeJS.ProcessEnv = process.env): 
       throw new Error('YUANTU_MCP_OAUTH_DIR must be an absolute path');
     return path.normalize(configured);
   }
-  return path.join(os.homedir(), '.yuantu', 'mcp-oauth');
+  return path.join(userStateDirectory(env), 'mcp-oauth');
 }
 
 function checkedDirectory(directory: string, create: boolean): string {

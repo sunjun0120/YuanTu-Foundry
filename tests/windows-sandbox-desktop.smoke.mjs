@@ -1,3 +1,5 @@
+// @test-serial windows-sandbox: Exercises real Windows sandbox ACLs and trusted control state.
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';

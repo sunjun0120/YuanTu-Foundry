@@ -118,6 +118,13 @@ if (unmapped.length)
 if (process.argv.includes('--list')) for (const file of chosen) console.log(`  ${file}`);
 if (process.argv.includes('--plan') || !chosen.length) process.exit(0);
 
+const lint = await import('./test-isolation-lint.ts');
+const issues = await lint.lintTestIsolation(root);
+if (issues.length) {
+  for (const issue of issues)
+    console.error(`${issue.file}:${issue.line} [${issue.rule}] ${issue.message}`);
+  process.exit(1);
+}
 const started = performance.now();
 const child = spawn(
   process.execPath,

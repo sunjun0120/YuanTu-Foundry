@@ -1,15 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { cp, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { projectRoot } from './process-fixture.ts';
 
-const exec = promisify(execFile);
+const execAsync = promisify(execFile);
+const exec = (command: string, args: string[], options: { cwd: string; windowsHide: boolean }) =>
+  execAsync(command, args, {
+    ...options,
+    // Synthetic runner fixtures share no real machine resource with other files.
+    env: { ...process.env, FOUNDRY_TEST_MACHINE_LOCK_ROOT: path.join(tmpdir(), 'workflow-locks') },
+  });
 
 async function tree(
   t: { after: (fn: () => Promise<void>) => void },
@@ -35,8 +40,30 @@ async function runnerTree(t: test.TestContext, files: Record<string, string>) {
     'test-reporter.mjs',
     'test-timings.mjs',
     'test-execution-policy.ts',
+    'test-resource-policy.ts',
+    'test-resource-lease.mjs',
+    'test-scheduler.mjs',
+    'test-report-merge.mjs',
+    'test-source-fingerprint.mjs',
+    'test-duration-history.ts',
   ])
     await copyFile(path.join(projectRoot, 'scripts', name), path.join(root, 'scripts', name));
+  await cp(
+    path.join(projectRoot, 'scripts/test-isolation'),
+    path.join(root, 'scripts/test-isolation'),
+    { recursive: true },
+  );
+  const policy = path.join(root, 'scripts/test-resource-policy.ts');
+  await writeFile(
+    policy,
+    (await readFile(policy, 'utf8')).replace(
+      "from 'typescript'",
+      'from ' +
+        JSON.stringify(
+          pathToFileURL(path.join(projectRoot, 'node_modules/typescript/lib/typescript.js')).href,
+        ),
+    ),
+  );
   return root;
 }
 
@@ -46,33 +73,79 @@ const readRecords = async (file: string) =>
     .split('\n')
     .map((line) => JSON.parse(line));
 
-test('serial fallback runs even when the experimental parallel policy is malformed', async (t) => {
+test(
+  'IPC cancellation lets the controller settle workers and release its resource lease',
+  { timeout: 20000 },
+  async (t) => {
+    const root = await runnerTree(t, {
+      'tests/wait.test.ts':
+        "// @test-serial machine-lease: Local fixture exercises cancellation cleanup\nimport test from 'node:test';test('wait',()=>new Promise(()=>{}));setInterval(()=>{},1000);",
+    });
+    const locks = path.join(root, 'locks');
+    const child = spawn(process.execPath, ['scripts/run-tests.mjs'], {
+      cwd: root,
+      env: { ...process.env, FOUNDRY_TEST_MACHINE_LOCK_ROOT: locks },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let stdout = '',
+      stderr = '',
+      requested = false;
+    const closed = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+    t.after(async () => {
+      if (child.connected) child.send({ type: 'foundry-test-abort-v1' }, () => {});
+      await closed;
+    });
+    assert.ok(child.stderr && child.stdout);
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      if (!requested && stdout.includes('Log: ')) {
+        requested = true;
+        child.send({ type: 'foundry-test-abort-v1' });
+      }
+    });
+    assert.equal(await closed, 1, stderr);
+    assert.equal(requested, true, stdout);
+    await assert.rejects(readFile(path.join(locks, 'machine-resources.lock')), { code: 'ENOENT' });
+  },
+);
+
+test('legacy parallel policy is ignored and invalid resource declarations fail every schedule', async (t) => {
   const root = await runnerTree(t, {
-    'tests/pass.test.ts': "import test from 'node:test'; test('passing fixture', () => {});",
-    'test-parallel-safe.json': '{ invalid json',
+    'tests/pass.test.ts': "import test from 'node:test';test('passing fixture',()=>{});",
+    'test-parallel-safe.json': '{invalid',
   });
   const result = await run(process.execPath, ['scripts/run-tests.mjs'], {
     cwd: root,
     windowsHide: true,
   });
   assert.equal(result.code, undefined, result.stderr);
-  assert.match(result.stdout, /Tests: 1 pass=1 fail=0/);
-  const refusal = await run(
-    process.execPath,
-    ['scripts/run-tests.mjs', '--schedule=partitioned', '--plan'],
-    {
-      cwd: root,
-      windowsHide: true,
-    },
-  );
-  assert.equal(refusal.code, 1);
-  assert.match(refusal.stderr, /not valid JSON/);
+  for (const schedule of ['serial', 'partitioned']) {
+    await writeFile(
+      path.join(root, 'tests/pass.test.ts'),
+      '// @test-serial invalid: invalid resource\nexport {};',
+    );
+    const refusal = await run(
+      process.execPath,
+      ['scripts/run-tests.mjs', '--schedule=' + schedule, '--plan'],
+      { cwd: root, windowsHide: true },
+    );
+    assert.equal(refusal.code, 1);
+    assert.match(refusal.stderr, /Invalid test resource/);
+  }
 });
 
 test('the runner retains spec and timing evidence without multiplying event-stream listeners', async (t) => {
   const root = await runnerTree(t, {
     'tests/pass.test.ts': "import test from 'node:test'; test('reporter fixture', () => {});",
   });
+  const logs: string[] = [];
   for (const timed of [false, true]) {
     const result = await run(
       process.execPath,
@@ -82,13 +155,9 @@ test('the runner retains spec and timing evidence without multiplying event-stre
     assert.equal(result.code, undefined, result.stderr);
     assert.match(result.stdout, /Tests: 1 pass=1 fail=0/);
     assert.doesNotMatch(result.stderr, /MaxListenersExceededWarning/);
+    logs.push(...[...result.stdout.matchAll(/^Log: (.+)$/gm)].map((match) => match[1]!.trim()));
   }
-  const logs = await readdir(path.join(root, '.scratch/test-logs'));
-  for (const log of logs)
-    assert.match(
-      await readFile(path.join(root, '.scratch/test-logs', log), 'utf8'),
-      /reporter fixture/,
-    );
+  for (const log of logs) assert.match(await readFile(log, 'utf8'), /reporter fixture/);
   assert.ok(
     (await readRecords(path.join(root, 'timings.ndjson'))).some(
       (record) => record.kind === 'phase-summary',
@@ -122,35 +191,46 @@ test('a spec log that cannot be opened fails promptly instead of waiting forever
   assert.match(outcome.error.code ?? '', /EISDIR|EPERM|EACCES/);
 });
 
-test('explicit reviewed files retain their parallel classification without selecting other entries', async (t) => {
-  const content = "import test from 'node:test'; test('reviewed fixture', () => {});";
-  const root = await runnerTree(t, {
-    'tests/a.test.ts': content,
-    'tests/b.test.ts': content,
-    'test-parallel-safe.json': JSON.stringify({
-      version: 1,
-      entries: ['a', 'b'].map((name) => ({
-        file: `tests/${name}.test.ts`,
-        reason: 'isolated fixture with no shared resources',
-        inputs: [
-          {
-            file: `tests/${name}.test.ts`,
-            sha256: createHash('sha256').update(content).digest('hex'),
-          },
-        ],
-      })),
-    }),
-  });
+test('explicit files default to parallel without selecting unrelated files', async (t) => {
+  const content = "import test from 'node:test';test('fixture',()=>{});";
+  const root = await runnerTree(t, { 'tests/a.test.ts': content, 'tests/b.test.ts': content });
   for (const file of ['tests/a.test.ts', path.join(root, 'tests/a.test.ts')]) {
-    const { stdout } = await exec(
-      process.execPath,
-      ['scripts/run-tests.mjs', '--schedule=partitioned', '--plan', file],
-      { cwd: root, windowsHide: true },
-    );
+    const { stdout } = await exec(process.execPath, ['scripts/run-tests.mjs', '--plan', file], {
+      cwd: root,
+      windowsHide: true,
+    });
     assert.match(stdout, /^parallel\s+tests\/a\.test\.ts/m);
     assert.match(stdout, /parallel=1 serial=0 total=1/);
     assert.doesNotMatch(stdout, /tests\/b\.test\.ts/);
   }
+});
+
+test('continue-on-failure reports every file while preserving a failed exit status', async (t) => {
+  const root = await runnerTree(t, {
+    'tests/a.test.ts':
+      "import test from 'node:test';test('fails',()=>{throw Error('expected failure')});",
+    'tests/b.test.ts': "import test from 'node:test';test('still runs',()=>{});",
+    'tests/c.test.ts':
+      "// @test-serial machine-lease: local continuation fixture\nimport test from 'node:test';test('serial still runs',()=>{});",
+  });
+  const result = await run(
+    process.execPath,
+    [
+      'scripts/run-tests.mjs',
+      '--concurrency=1',
+      '--continue-on-failure',
+      '--timings=timings.ndjson',
+    ],
+    { cwd: root, windowsHide: true },
+  );
+  assert.equal(result.code, 1, result.stdout + result.stderr);
+  const metadata = JSON.parse(await readFile(path.join(root, 'timings.ndjson.meta.json'), 'utf8'));
+  assert.equal(metadata.complete, true);
+  assert.equal(metadata.passed, false);
+  assert.deepEqual(
+    metadata.files.map((file: { file: string }) => file.file),
+    ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'],
+  );
 });
 
 test('skip-pattern exclusion is marked as filtered in measurement metadata', async (t) => {
@@ -170,58 +250,37 @@ test('skip-pattern exclusion is marked as filtered in measurement metadata', asy
   );
 });
 
-test('explicit partitioned execution overlaps reviewed files and waits before the serial file', async (t) => {
-  const parallelSource = (name: string, other: string) => `
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import {writeFile, access} from 'node:fs/promises';
-const exists = async file => access(file).then(() => true, () => false);
-test('handshake ${name}', async () => {
-  await writeFile('${name}.ready', 'ready');
-  const deadline = Date.now() + 5000;
-  while (!(await exists('${other}.ready')) && Date.now() < deadline)
-    await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(await exists('${other}.ready'), true, 'reviewed files did not overlap');
-  assert.equal(await exists('serial.started'), false, 'serial phase overlapped parallel');
-  await writeFile('${name}.done', 'done');
-});`;
-  const sources = { a: parallelSource('a', 'b'), b: parallelSource('b', 'a') };
+test('default scheduling overlaps private files and finishes them before machine resources', async (t) => {
+  const content =
+    "import test from 'node:test';import{writeFile}from'node:fs/promises';import{tmpdir}from'node:os';import path from'node:path';test('private file',async()=>{await writeFile(path.join(tmpdir(),'same.txt'),'owned');await new Promise(r=>setTimeout(r,500));});";
   const root = await runnerTree(t, {
-    'tests/a.test.ts': sources.a,
-    'tests/b.test.ts': sources.b,
-    'tests/c.test.ts': `import test from 'node:test'; import {access,writeFile} from 'node:fs/promises';
-test('serial follows both completed parallel files', async () => {
-  await writeFile('serial.started','started'); await access('a.done'); await access('b.done');
-});`,
-    'test-parallel-safe.json': JSON.stringify({
-      version: 1,
-      entries: (['a', 'b'] as const).map((name) => ({
-        file: `tests/${name}.test.ts`,
-        reason: 'test-only handshake in isolated repository',
-        inputs: [
-          {
-            file: `tests/${name}.test.ts`,
-            sha256: createHash('sha256').update(sources[name]).digest('hex'),
-          },
-        ],
-      })),
-    }),
+    'tests/a.test.ts': content,
+    'tests/b.test.ts': content,
+    'tests/c.test.ts': '// @test-serial machine-lease: exercise resource phase\n' + content,
   });
   const { stdout } = await exec(
     process.execPath,
-    [
-      'scripts/run-tests.mjs',
-      '--schedule=partitioned',
-      '--parallel-concurrency=2',
-      'tests/a.test.ts',
-      'tests/b.test.ts',
-      'tests/c.test.ts',
-    ],
+    ['scripts/run-tests.mjs', '--concurrency=2', '--timings=timings.ndjson'],
     { cwd: root, windowsHide: true },
   );
   assert.match(stdout, /Phase parallel: 2 file\(s\), concurrency=2/);
   assert.match(stdout, /Phase serial: 1 file\(s\), concurrency=1/);
-  await readFile(path.join(root, 'serial.started'), 'utf8');
+  const meta = JSON.parse(await readFile(path.join(root, 'timings.ndjson.meta.json'), 'utf8'));
+  const parallel = meta.files.filter((f: { phase: string }) => f.phase === 'parallel');
+  const serial = meta.files.find((f: { phase: string }) => f.phase === 'serial');
+  assert.ok(
+    Math.max(...parallel.map((f: { startedAt: number }) => f.startedAt)) <
+      Math.min(...parallel.map((f: { finishedAt: number }) => f.finishedAt)),
+  );
+  assert.ok(
+    serial.startedAt >= Math.max(...parallel.map((f: { finishedAt: number }) => f.finishedAt)),
+  );
+  assert.equal(new Set(meta.files.map((f: { isolationRoot: string }) => f.isolationRoot)).size, 3);
+  assert.equal(
+    (await readRecords(path.join(root, 'timings.ndjson'))).filter((r) => r.kind === 'run-summary')
+      .length,
+    1,
+  );
 });
 
 test('timings retain ordinary nested tests and their skip reasons', async (t) => {
@@ -281,8 +340,8 @@ test('whole-run wall time includes preparation before either schedule starts its
   await writeFile(
     path.join(root, 'scripts/test-execution-policy.ts'),
     `
-import { discoverTests as discover, loadPolicy, partitionTests } from './real-policy.ts';
-export { loadPolicy, partitionTests };
+import { discoverTests as discover, partitionTests } from './real-policy.ts';
+export { partitionTests };
 export async function discoverTests(root) {
   await new Promise(resolve => setTimeout(resolve, 300));
   return discover(root);
@@ -394,7 +453,7 @@ test('timings are opt-in, and the run is otherwise identical without them', asyn
   });
   assert.match(stdout, /pass=1 fail=0/);
   // One total line per phase is new; it is the phase's own summary, not a second copy of the run.
-  assert.match(stdout, /^Total: serial tests=1 pass=1 fail=0/m);
+  assert.match(stdout, /^Total: parallel tests=1 pass=1 fail=0/m);
   const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
   assert.ok(log);
   t.after(() => rm(log, { force: true }));
@@ -442,7 +501,7 @@ test('todo case', { todo: 'fixture todo' }, () => {});`,
   ]);
   for (const record of cases) {
     assert.equal(record.schemaVersion, 1);
-    assert.equal(record.phase, 'serial');
+    assert.equal(record.phase, 'parallel');
     assert.ok(Number.isFinite(record.durationMs), `${record.name} has no duration`);
     assert.ok(path.isAbsolute(record.file), `${record.name} carries no absolute file`);
   }
@@ -510,8 +569,8 @@ test('excluded case', () => { throw new Error('must be filtered'); });`,
   t.after(() => rm(log, { force: true }));
   const metadata = JSON.parse(await readFile(`${timings}.meta.json`, 'utf8'));
   assert.equal(metadata.filtered, true);
-  assert.equal(metadata.schedule, 'serial');
-  assert.equal(metadata.parallelConcurrency, null);
+  assert.equal(metadata.schedule, 'partitioned');
+  assert.ok(metadata.parallelConcurrency >= 1);
   assert.equal(metadata.discovered, 1);
   assert.equal(metadata.explicit, true);
   assert.ok(metadata.head, 'the run records the revision it measured');
@@ -547,11 +606,11 @@ test('--plan and the partitioned schedule refuse a schedule they cannot honour',
     return failure.stderr;
   };
   // `--plan` on the serial schedule would print a plan for a run that does not use one.
-  assert.match(await bad(['--plan']), /--plan is only meaningful/);
+  assert.match(await bad(['--schedule=serial', '--concurrency=2']), /requires concurrency=1/);
   // Two different widths for the same idea: the phase width and the harness width.
   assert.match(
-    await bad(['--schedule=partitioned', '--concurrency=4']),
-    /--concurrency applies to the serial phases/,
+    await bad(['--parallel-concurrency=2', '--concurrency=4']),
+    /Conflicting concurrency options/,
   );
   assert.match(await bad(['--schedule=unknown']), /Unsupported schedule/);
   assert.match(
@@ -561,7 +620,7 @@ test('--plan and the partitioned schedule refuse a schedule they cannot honour',
   assert.match(await bad(['--timings=']), /--timings requires a path/);
 });
 
-test('a partitioned run with no reviewed overlap degenerates to one serial phase', async (t) => {
+test('a new file runs in the default parallel phase', async (t) => {
   const root = await tree(t, {
     'pass.test.mjs': "import test from 'node:test'; test('passing case', () => {});",
   });
@@ -578,11 +637,10 @@ test('a partitioned run with no reviewed overlap degenerates to one serial phase
     ],
     { cwd: projectRoot, windowsHide: true },
   );
-  // An unreviewed file is serial, so the parallel phase is empty and is not started at all. The
-  // run still has to prove what it did: one phase, one total line, and a report on disk.
-  assert.doesNotMatch(stdout, /^Phase parallel:/m, 'an empty phase is not started');
-  assert.match(stdout, /^Phase serial: 1 file\(s\), concurrency=1$/m);
-  assert.match(stdout, /^Total: serial tests=1 pass=1 fail=0/m);
+  // New files are parallel by default. Only the nonempty parallel phase should run.
+  assert.doesNotMatch(stdout, /^Phase serial:/m, 'an empty phase is not started');
+  assert.match(stdout, /^Phase parallel: 1 file\(s\), concurrency=2$/m);
+  assert.match(stdout, /^Total: parallel tests=1 pass=1 fail=0/m);
   const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
   assert.ok(log);
   t.after(() => rm(log, { force: true }));
@@ -590,16 +648,16 @@ test('a partitioned run with no reviewed overlap degenerates to one serial phase
     .split('\n')
     .filter((line) => line.trim())
     .map((line) => JSON.parse(line));
-  assert.equal(records.filter((record) => record.phase === 'parallel').length, 0);
-  assert.ok(records.some((record) => record.phase === 'serial' && record.kind === 'case'));
+  assert.equal(records.filter((record) => record.phase === 'serial').length, 0);
+  assert.ok(records.some((record) => record.phase === 'parallel' && record.kind === 'case'));
   const metadata = JSON.parse(await readFile(`${timings}.meta.json`, 'utf8'));
   assert.equal(metadata.schedule, 'partitioned');
   assert.equal(metadata.parallelConcurrency, 2);
-  assert.equal(metadata.parallel, 0);
-  assert.equal(metadata.serial, 1);
+  assert.equal(metadata.parallel, 1);
+  assert.equal(metadata.serial, 0);
 });
 
-test('--concurrency keeps its meaning for a serial run and reaches the harness', async (t) => {
+test('--concurrency controls the isolated worker pool', async (t) => {
   const root = await tree(t, {
     'pass.test.mjs': "import test from 'node:test'; test('passing case', () => {});",
   });
@@ -611,7 +669,7 @@ test('--concurrency keeps its meaning for a serial run and reaches the harness',
   // The runner's own line and the harness phase line must agree, and both must say 4: a width that
   // is silently dropped would make every concurrency experiment measure nothing.
   assert.match(stdout, /^Running 1 test file\(s\), concurrency=4$/m);
-  assert.match(stdout, /^Phase serial: 1 file\(s\), concurrency=4$/m);
+  assert.match(stdout, /^Phase parallel: 1 file\(s\), concurrency=4$/m);
   assert.match(stdout, /pass=1 fail=0/);
   const log = /Log: (.+)/.exec(stdout)?.[1]?.trim();
   assert.ok(log);

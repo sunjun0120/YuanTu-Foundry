@@ -9,33 +9,8 @@ import { validateCodeMessage } from '../packages/tools/code-process.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { workflowTool } from '../packages/core/workflow.ts';
-import type { ToolContext, ToolCatalog } from '../packages/protocol/index.ts';
 
-async function fixture(t: test.TestContext, mode: 'host' | 'windows' = 'host') {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-program-process-'));
-  const tools = createTools(root);
-  t.after(async () => {
-    await tools.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const context: ToolContext = {
-    signal: new AbortController().signal,
-    approve: async () => true,
-    executionPolicy: executionPolicy(mode),
-  };
-  const catalog: ToolCatalog = {
-    specs: tools.specs({ mode: 'native' }),
-    mode: (call) => tools.executionMode(call),
-    parallelLimit: 2,
-    invoke: (call, signal) => tools.execute(call, { ...context, signal: signal ?? context.signal }),
-  };
-  const run = (code: string) =>
-    tools.execute(
-      { id: 'program', name: 'run_code', arguments: { code } },
-      { ...context, catalog },
-    );
-  return { root, tools, context, catalog, run };
-}
+import { fixture } from './program-process-fixture.ts';
 
 test('a VM escape runs in another process', async (t) => {
   const { run } = await fixture(t);
@@ -211,46 +186,6 @@ test('console truncation stays within the RPC log budget', async (t) => {
   assert.equal(result.isError, false, result.content);
   assert.match(result.content, /console output truncated/);
 });
-
-test(
-  'a Windows program uses the selected backend and RPC writes still require approval',
-  { skip: process.platform !== 'win32' },
-  async (t) => {
-    const { tools, context, root } = await fixture(t, 'windows');
-    let approvals = 0;
-    const chosen = {
-      ...context,
-      approve: async () => {
-        approvals++;
-        return true;
-      },
-    };
-    const result = await tools.execute(
-      {
-        id: 'win-program',
-        name: 'run_code',
-        arguments: {
-          code: "await tools.write_file({path:'approved.txt',content:'approved'}); const p=console.log.constructor('return process')(); return p.permission.has('fs.write') + ':' + p.pid;",
-        },
-      },
-      {
-        ...chosen,
-        catalog: {
-          specs: tools.specs({ mode: 'native' }),
-          mode: (call) => tools.executionMode(call),
-          parallelLimit: 2,
-          invoke: (call, signal) =>
-            tools.execute(call, { ...chosen, signal: signal ?? chosen.signal }),
-        },
-      },
-    );
-    assert.equal(result.isError, false, result.content);
-    assert.equal(approvals, 1);
-    assert.equal(await readFile(path.join(root, 'approved.txt'), 'utf8'), 'approved');
-    assert.match(result.content, /^false:\d+/);
-    assert.notEqual(Number(result.content.split(':')[1]?.split('\n')[0]), process.pid);
-  },
-);
 
 for (const mode of ['native', 'ptc'] as const)
   test(`${mode} program records each task effect after its durable receipt`, async (t) => {

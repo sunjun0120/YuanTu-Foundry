@@ -1,3 +1,4 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';

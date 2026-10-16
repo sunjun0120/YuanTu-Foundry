@@ -1,3 +1,4 @@
+// @test-serial windows-sandbox: Exercises real Windows sandbox ACLs and trusted control state.
 /**
  * The Windows backend: the confinement is real, so the tests check it against the operating system.
  *

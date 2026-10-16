@@ -97,7 +97,7 @@ if (preview) {
           '--',
           ...existing,
         ]);
-      for (const name of ['docs:check', 'references:check', 'i18n:check'])
+      for (const name of ['docs:check', 'references:check', 'i18n:check', 'test:isolation:check'])
         await run(name.replace(':', '-'), [npm, 'run', name]);
       if (selection.tests.length) {
         await run('typecheck', [npm, 'run', 'typecheck']);

@@ -54,7 +54,7 @@ const permitted = (p) =>
     ));
 export async function inventory(
   directory,
-  { productionOnly = false, includeExcluded = false } = {},
+  { productionOnly = false, includeExcluded = false, pruneDirectories = [] } = {},
 ) {
   const root = await realpath(directory);
   const files = [];
@@ -63,6 +63,7 @@ export async function inventory(
       (a, b) => (a.name < b.name ? -1 : 1),
     )) {
       const p = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && pruneDirectories.includes(p)) continue;
       if (
         !includeExcluded &&
         (productionOnly

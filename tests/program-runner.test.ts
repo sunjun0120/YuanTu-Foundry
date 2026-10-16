@@ -48,7 +48,18 @@ test(
         `--allow-fs-read=${path.join(root, 'code-worker.js')}`,
         path.join(root, 'code-process-entry.js'),
       ],
-      { cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
+      {
+        cwd: root,
+        // This guest deliberately has no access to the host or its test preload.
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) =>
+              !['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'FOUNDRY_TEST_ISOLATION'].includes(key),
+          ),
+        ),
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
     );
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve, reject) => {

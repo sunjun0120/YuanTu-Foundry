@@ -1,3 +1,4 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import { waitForPage } from './page-wait.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -60,7 +60,7 @@ test('profile separates workspace write effects from private scratch and network
 });
 
 test('workspace inspection refuses preexisting shared-inode aliases and resolves metadata aliases', async (t) => {
-  const fixture = await mkdtemp(path.join(process.cwd(), '.scratch', 'yuantu-seatbelt-links-'));
+  const fixture = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-links-'));
   t.after(() => rm(fixture, { recursive: true, force: true }));
   await mkdir(path.join(fixture, 'nested'));
   await mkdir(path.join(fixture, 'target'));
@@ -123,7 +123,7 @@ test('guest environment drops ambient credentials and loader hooks and pins scra
 });
 
 test('canonical cwd rejects symlink escapes and ordinary outside paths', async (t) => {
-  const fixture = await mkdtemp(path.join(process.cwd(), '.scratch', 'yuantu-seatbelt-paths-'));
+  const fixture = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-paths-'));
   t.after(() => rm(fixture, { recursive: true, force: true }));
   const root = path.join(fixture, 'root');
   const outside = path.join(fixture, 'outside');

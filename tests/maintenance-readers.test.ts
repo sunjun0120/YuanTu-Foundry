@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -16,9 +17,7 @@ import {
 const policy = { application: 'test', applicationId: 42, format: 1, maxVersion: 1 };
 
 function fixture(t: test.TestContext) {
-  const scratch = path.resolve('.scratch');
-  fs.mkdirSync(scratch, { recursive: true });
-  const root = fs.mkdtempSync(path.join(scratch, 'maintenance-readers-'));
+  const root = fs.mkdtempSync(path.join(tmpdir(), 'maintenance-readers-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'target.sqlite');
   const candidate = path.join(root, 'candidate.sqlite');

@@ -422,6 +422,10 @@ export const ENVIRONMENT = {
     description: '丢弃中段时在结尾保留的字符数',
   },
   YUANTU_MCP_OAUTH_DIR: { kind: 'string', description: 'MCP OAuth 令牌目录' },
+  YUANTU_STATE_DIR: {
+    kind: 'string',
+    description: '普通用户状态根目录（绝对路径，默认 ~/.yuantu）',
+  },
   YUANTU_CREDENTIALS_FILE: {
     kind: 'string',
     description: '凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它）',

@@ -1,3 +1,4 @@
+// @test-serial desktop-ui: Launches real Electron windows.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -237,8 +238,8 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   // closes the menu behind itself.
   await page.locator('#open-subagents').click();
   assert.equal(await page.locator('#subagents-popover').isVisible(), true);
-  await mkdir('artifacts/subagents', { recursive: true });
-  await page.screenshot({ path: 'artifacts/subagents/catalog.png' });
+  await mkdir(artifactPath('subagents'), { recursive: true });
+  await page.screenshot({ path: artifactPath('subagents/catalog.png') });
   await catalogRows.nth(1).click();
   await page.locator('#subagent-transcript').waitFor();
   await page.locator('#subagents-popover').waitFor({ state: 'hidden' });
@@ -251,7 +252,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
     'the session title becomes the way back',
   );
   assert.equal(await page.locator('#open-subagents').isVisible(), true);
-  await page.screenshot({ path: 'artifacts/subagents/page.png' });
+  await page.screenshot({ path: artifactPath('subagents/page.png') });
   await page.locator('#chat-title').click();
   await page.locator('#subagent-transcript').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#messages').isVisible(), true);
@@ -456,11 +457,11 @@ test(
       (await page.locator('#statistics-tokens').innerText()).trim(),
       '110 tok · 缓存命中 80%',
     );
-    await mkdir('artifacts/statistics', { recursive: true });
+    await mkdir(artifactPath('statistics'), { recursive: true });
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'dark';
     });
-    await page.screenshot({ path: 'artifacts/statistics/tokens-dark.png' });
+    await page.screenshot({ path: artifactPath('statistics/tokens-dark.png') });
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#statistics-tokens-panel').isVisible(), false);
     await page.locator('#statistics-session').click();
@@ -476,14 +477,14 @@ test(
     assert.equal(sessionRows.length, 3);
     assert.equal(sessionRows[2], '未知');
     assert.equal((await page.locator('#statistics-session').innerText()).trim(), '1 轮 1 步');
-    await page.screenshot({ path: 'artifacts/statistics/session-dark.png' });
+    await page.screenshot({ path: artifactPath('statistics/session-dark.png') });
     await page.locator('#prompt').click({ position: { x: 8, y: 8 } });
     assert.equal(await page.locator('#statistics-session-panel').isVisible(), false);
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'light';
     });
     await page.locator('#statistics-tokens').click();
-    await page.screenshot({ path: 'artifacts/statistics/tokens-light.png' });
+    await page.screenshot({ path: artifactPath('statistics/tokens-light.png') });
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(780, 720));
     await page.locator('#statistics-tokens').hover();
     const box = await page.locator('#statistics-tokens-panel').boundingBox();
@@ -582,10 +583,10 @@ test(
       await page.locator('#permission-menu [data-preset=guarded]').getAttribute('aria-checked'),
       'true',
     );
-    await mkdir('artifacts', { recursive: true });
-    await page.screenshot({ path: 'artifacts/attachment-permission-menu.png' });
+    await mkdir(artifactPath(''), { recursive: true });
+    await page.screenshot({ path: artifactPath('attachment-permission-menu.png') });
     await page.emulateMedia({ colorScheme: 'dark' });
-    await page.screenshot({ path: 'artifacts/attachment-permission-menu-dark.png' });
+    await page.screenshot({ path: artifactPath('attachment-permission-menu-dark.png') });
     await page.emulateMedia({ colorScheme: 'light' });
     await page.keyboard.press('Escape');
     await page.locator('#image-input').setInputFiles({
@@ -630,7 +631,7 @@ test(
     await page.waitForFunction(
       () => document.querySelectorAll('#attachments .attachment').length === 7,
     );
-    await page.screenshot({ path: 'artifacts/attachment-files-ready.png' });
+    await page.screenshot({ path: artifactPath('attachment-files-ready.png') });
     assert.equal(await page.locator('#send').isEnabled(), true);
     await page.locator('#send').click();
     await page.getByText('附件内容已收到。', { exact: true }).waitFor();
@@ -665,7 +666,7 @@ test(
       await page.locator('.message-document').first().innerText(),
       /PDF document secret 529/,
     );
-    await page.screenshot({ path: 'artifacts/attachment-history.png' });
+    await page.screenshot({ path: artifactPath('attachment-history.png') });
     await app.close();
     app = undefined;
     env.YUANTU_SUPPORTS_VISION = 'false';
@@ -1061,17 +1062,17 @@ test(
       ['reasoning', 'read', 'search'].every((kind) => kinds.includes(kind)),
       kinds.join(','),
     );
-    await mkdir('artifacts', { recursive: true });
-    await page.screenshot({ path: 'artifacts/compact-process-expanded.png' });
+    await mkdir(artifactPath(''), { recursive: true });
+    await page.screenshot({ path: artifactPath('compact-process-expanded.png') });
     await group.locator(':scope > summary').click();
-    await page.screenshot({ path: 'artifacts/compact-process-collapsed.png' });
+    await page.screenshot({ path: artifactPath('compact-process-collapsed.png') });
     assert.ok((await group.locator(':scope > summary').boundingBox()).height <= 32);
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'dark';
     });
-    await page.screenshot({ path: 'artifacts/compact-process-dark-collapsed.png' });
+    await page.screenshot({ path: artifactPath('compact-process-dark-collapsed.png') });
     await group.locator(':scope > summary').click();
-    await page.screenshot({ path: 'artifacts/compact-process-dark-expanded.png' });
+    await page.screenshot({ path: artifactPath('compact-process-dark-expanded.png') });
   },
 );
 
@@ -1183,3 +1184,11 @@ test(
     assert.doesNotMatch(await page.locator('#error').innerText(), /4MB|4 MB/);
   },
 );
+
+function artifactPath(relative) {
+  return path.join(
+    process.env.FOUNDRY_TEST_ARTIFACTS ||
+      path.join(tmpdir(), 'yuantu-smoke-artifacts-' + process.pid),
+    relative,
+  );
+}

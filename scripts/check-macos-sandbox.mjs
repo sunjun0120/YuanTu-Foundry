@@ -25,6 +25,7 @@ if (process.platform !== 'darwin') {
       'tests/native-background-cleanup.test.ts',
       'tests/acceptance.test.ts',
       'tests/native-git.test.ts',
+      'tests/native-git-native.test.ts',
     ],
     { cwd: root, stdio: 'inherit', env },
   );

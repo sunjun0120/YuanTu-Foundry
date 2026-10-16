@@ -401,34 +401,6 @@ test('validation discovery is bounded and execution shows resolved argv before a
     true,
   );
 });
-test(
-  'Windows validation runs npm scripts through the native command interpreter',
-  { skip: process.platform !== 'win32' },
-  async (t) => {
-    const { root, tools } = await fixture(t);
-    t.after(() => tools.close());
-    await writeFile(
-      path.join(root, 'package.json'),
-      JSON.stringify({ scripts: { test: 'node fixture.cjs' } }),
-    );
-    await writeFile(
-      path.join(root, 'fixture.cjs'),
-      "require('node:fs').writeFileSync('verified.txt', 'actual execution'); console.log('VALIDATION_MARKER');",
-    );
-    const previous = process.env.YUANTU_SANDBOX;
-    process.env.YUANTU_SANDBOX = 'windows';
-    try {
-      const result = await tools.execute(call('run_validation', { id: 'npm:test' }), ctx());
-      assert.equal(result.isError, false, result.content);
-      assert.match(JSON.parse(result.content).output, /VALIDATION_MARKER/);
-      assert.equal(await readFile(path.join(root, 'verified.txt'), 'utf8'), 'actual execution');
-    } finally {
-      if (previous === undefined) delete process.env.YUANTU_SANDBOX;
-      else process.env.YUANTU_SANDBOX = previous;
-    }
-  },
-);
-
 for (const testScript of ['node --test tests/*.test.mjs', 'node scripts/run-tests.mjs']) {
   test(`targeted validation reports failures and reruns only named failed tests (${testScript})`, async (t) => {
     const { root, tools } = await fixture(t);
