@@ -7,7 +7,11 @@ import { createLibreOfficePreview } from '../packages/office/preview.ts';
 import { officeTools } from '../packages/office/tools.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 
-async function fixture(t: { after(fn: () => Promise<void>): void }, mode = 'ok') {
+async function fixture(
+  t: { after(fn: () => Promise<void>): void },
+  mode = 'ok',
+  terminate?: (pid: number) => Promise<void>,
+) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-preview-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = path.join(root, '中文 source.xlsx');
@@ -36,6 +40,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, mode = 'ok')
       executable: process.execPath,
       prefixArgs: [script],
       timeoutMs: mode === 'hang' ? 300 : 5000,
+      terminate,
     }),
   };
 }
@@ -70,6 +75,29 @@ for (const mode of ['missing', 'invalid', 'hang']) {
     await assert.rejects(readFile(path.join(root, 'preview.pdf')));
   });
 }
+
+test('a failed cleanup after a timeout still reports the timeout', async (t) => {
+  // The cleanup failure is secondary: it used to replace the reason the conversion was stopped, so a timeout
+  // surfaced as "cleanup failed" and sent the investigation the wrong way.
+  let terminated = 0;
+  const { root, source, renderer } = await fixture(t, 'hang', async () => {
+    terminated += 1;
+    throw new Error('simulated termination failure');
+  });
+  await assert.rejects(
+    renderer.render({
+      format: 'xlsx',
+      sourcePath: source,
+      outputPath: path.join(root, 'preview.pdf'),
+    }),
+    (error: Error) => {
+      assert.match(error.message, /timed out/);
+      assert.doesNotMatch(error.message, /cleanup/);
+      return true;
+    },
+  );
+  assert.equal(terminated, 1);
+});
 
 test('tool captures backend before approval and preserves default Excel extension', async (t) => {
   const { root, renderer } = await fixture(t);

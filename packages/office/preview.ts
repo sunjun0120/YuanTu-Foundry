@@ -18,7 +18,13 @@ type Job = { start(): Promise<void> };
 
 /** Trusted deployment configuration, never model-supplied command arguments. */
 export function createLibreOfficePreview(
-  options: { executable?: string; prefixArgs?: string[]; timeoutMs?: number } = {},
+  options: {
+    executable?: string;
+    prefixArgs?: string[];
+    timeoutMs?: number;
+    /** Ends the converter's process tree; replaceable so tests can exercise a failing cleanup. */
+    terminate?: (pid: number) => Promise<void>;
+  } = {},
 ): OfficePreview {
   const configured = parseSetting(process.env, 'YUANTU_LIBREOFFICE_PATH');
   const executable =
@@ -76,7 +82,13 @@ export function createLibreOfficePreview(
               timeoutMs,
             );
             try {
-              await convert(executable, options.prefixArgs ?? [], input, controller.signal);
+              await convert(
+                executable,
+                options.prefixArgs ?? [],
+                input,
+                controller.signal,
+                options.terminate ?? killTree,
+              );
               resolve();
             } catch (error) {
               reject(error);
@@ -100,6 +112,7 @@ async function convert(
   prefixArgs: string[],
   input: { format: OfficeFormat; sourcePath: string; outputPath: string },
   signal: AbortSignal,
+  terminate: (pid: number) => Promise<void>,
 ): Promise<void> {
   signal.throwIfAborted();
   if (!['docx', 'xlsx', 'pptx'].includes(input.format))
@@ -142,6 +155,7 @@ async function convert(
       ],
       pdf,
       signal,
+      terminate,
     );
     signal.throwIfAborted();
     const size = await stat(pdf).catch(() => {
@@ -167,6 +181,7 @@ async function runConverter(
   args: string[],
   pdf: string,
   signal: AbortSignal,
+  terminate: (pid: number) => Promise<void>,
 ): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -182,7 +197,7 @@ async function runConverter(
     const stop = (reason: unknown) => {
       failure ??= reason;
       if (closed || termination || !child.pid) return;
-      termination = killTree(child.pid).catch((error) => {
+      termination = terminate(child.pid).catch((error) => {
         // The termination failure is a second fact, never a replacement: the caller still needs the reason the
         // conversion was stopped for (a timeout, an oversized PDF, a cancellation) to know what happened.
         failure ??= new Error(`Office preview cleanup failed: ${String(error)}`);
