@@ -8,7 +8,7 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 
 test(
-  'a real Host runs Windows PTC with durable receipts and no direct fs write grant',
+  'a real Host runs Windows PTC with durable receipts and no way out of the program VM',
   { skip: process.platform !== 'win32' },
   async (t) => {
     let requests = 0;
@@ -34,7 +34,7 @@ test(
               id: 'program',
               name: 'run_code',
               input: {
-                code: "const text=await tools.read_file({path:'seed.txt'}); await tools.write_file({path:'approved.txt',content:'approved'}); const p=console.log.constructor('return process')(); return text.includes('seed') + ':' + p.permission.has('fs.write');",
+                code: "const text=await tools.read_file({path:'seed.txt'}); await tools.write_file({path:'approved.txt',content:'approved'}); let reached='blocked'; try { reached=String(typeof console.log.constructor('return process')()); } catch {} return text.includes('seed') + ':' + reached;",
               },
             },
           ]),
@@ -56,7 +56,7 @@ test(
     const result = await client.run(session.id, 'Use a program');
     assert.equal(result.status, 'completed', result.error);
     assert.equal(requests, 2);
-    assert.match(output, /true:false/);
+    assert.match(output, /true:blocked/);
     assert.equal(await readFile(path.join(host.root, 'approved.txt'), 'utf8'), 'approved');
     const store = new SessionStore(host.dbPath);
     try {

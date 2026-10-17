@@ -165,7 +165,7 @@ test('Host workflow preserves summary constraints in repaired files and full his
   for (let index = 0; index < 3; index++) {
     seed.append(session.id, {
       role: 'user',
-      content: 'Keep theme blue. ' + 'prior detail '.repeat(3200),
+      content: 'Keep theme blue. ' + 'prior detail '.repeat(4200),
     });
     seed.append(session.id, { role: 'assistant', content: 'Preserve blue.', toolCalls: [] });
   }
@@ -215,11 +215,11 @@ test('Host workflow preserves summary constraints in repaired files and full his
    * `resolveCompactionSpec` resolves **no proactive policy at all** unless the window can carry this
    * request's output reservation plus 65,536 tokens of headroom, so the old 24,000 did not compact "too
    * eagerly" — it never resolved a policy, and compaction was left to the request that stops fitting. The
-   * summary request meanwhile has to carry the main system prompt, the whole tool catalogue (this Host sends
-   * 80 schemas, ~55 KB) *and* the batch inside the window, so at 24,000 the fixed ~19.3 K tokens left no
+   * summary request meanwhile has to carry the main system prompt, the tool catalogue (deferred by default since
+   * `load_tools`, so smaller than the ~55 KB it was) *and* the batch, so at 24,000 the fixed ~19.3 K tokens left no
    * room for a single ~41.6 KB pair and every batch was refused. With 128,000 declared: the threshold is
    * min(0.8 × 128,000, 128,000 − 4,096 − 65,536) = 58,368 tokens, retention keeps 16% of 123,904 = 19,824
-   * tokens verbatim, the three seeded pairs put the round at ~61 K estimated tokens (above the threshold,
+   * tokens verbatim, the three seeded pairs (4,200 repeats each, sized with room to spare so a smaller tool catalogue does not drop the round below the threshold) put it above 58,368 estimated tokens (above the threshold,
    * still inside the window), and a batch plus the fixed part fits with room to spare.
    */
   const client = clientFor(root, url, {

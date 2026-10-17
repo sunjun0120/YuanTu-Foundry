@@ -443,7 +443,7 @@ export class BackgroundCommands {
     return [
       make(
         'start_command',
-        'Start an approved foreground shell command managed in the background. Do not self-daemonize, detach or launch children that outlive their parent; those processes cannot be tracked after parent exit. Returns a job ID; use job_output to read its output and job_kill to stop it. Host jobs survive normal turns, but end on cancellation, session deletion or Host exit. stdin is a pipe, not a terminal.',
+        'Start an approved command as a background job, only for something that keeps running or that you must interact with while it runs (a dev server, a watcher, a long build you poll). For a command that simply finishes, use run_command: it returns the output in one step, where a job costs another call to job_output. Returns a job ID; read output with job_output and stop it with job_kill. Do not self-daemonize or detach children; they cannot be tracked. Jobs survive normal turns but end on cancellation, session deletion or Host exit. stdin is a pipe, not a terminal.',
         {
           command: { type: 'string', minLength: 1, maxLength: 16000 },
           cwd: { type: 'string', minLength: 1, maxLength: 4096 },

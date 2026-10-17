@@ -46,10 +46,37 @@ export async function acquireResourceLease(
         }
         if (!Number.isSafeInteger(owner.pid) || !owner.token)
           throw Error(`Machine resource lease has unknown ownership: ${file}`);
+        let ownerGone = false;
         try {
           process.kill(owner.pid, 0);
-        } catch {
-          throw Error(`Machine resource lease owner is not verifiable; refusing to delete ${file}`);
+        } catch (error) {
+          // A pid the operating system says does not exist is *verifiably* dead — that is exactly what a failed
+          // run leaves behind, and refusing to reclaim it wedged the machine until somebody deleted the file by
+          // hand. Anything else (EPERM: alive but not ours to signal) stays unverifiable and still fails closed.
+          if (error.code === 'ESRCH') ownerGone = true;
+          else
+            throw Error(
+              `Machine resource lease owner is not verifiable; refusing to delete ${file}`,
+            );
+        }
+        if (ownerGone) {
+          // Reclaim only the lease that was just observed: a contender can replace the file between the read and
+          // the unlink, and this must not delete the replacement's lease.
+          let observed;
+          try {
+            observed = JSON.parse(readFileSync(file, 'utf8'));
+          } catch (error) {
+            if (error.code === 'ENOENT') continue;
+            throw error;
+          }
+          if (observed.token === owner.token) {
+            try {
+              unlinkSync(file);
+            } catch (error) {
+              if (error.code !== 'ENOENT') throw error;
+            }
+          }
+          continue;
         }
         if (Date.now() >= deadline)
           throw Error(`Timed out waiting for machine resource lease: ${file}`);

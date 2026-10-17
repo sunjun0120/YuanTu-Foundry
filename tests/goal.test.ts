@@ -422,10 +422,14 @@ test('the goal tools are run-scoped, and only a run that owns the session gets t
     },
   ]) {
     const events: AgentEvent[] = [];
+    // Which runs *have* the goal tools is the question, not how they are presented, so every schema is sent:
+    // under the default `deferred` mode `get_goal` waits for `load_tools` (`tests/deferred-tools.test.ts`).
+    const tools = createTools(root);
+    tools.toolMode = 'native';
     const agent = new Agent({
       store,
       provider,
-      tools: createTools(root),
+      tools,
       approve: async () => true,
       onEvent: (event) => events.push(event),
     });

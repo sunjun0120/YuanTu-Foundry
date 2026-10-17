@@ -997,6 +997,25 @@ const messages: Record<string, Pair> = {
   'desktop.exportTitle': ['导出会话', 'Export session'],
   'desktop.textFilter': ['文本', 'Text'],
   'desktop.chooseWorkspaceTitle': ['选择工作目录', 'Choose a workspace directory'],
+  'hookTrust.title': ['工作区钩子', 'Workspace hooks'],
+  'hookTrust.message': [
+    '此工作区声明了 {count} 条外部钩子命令。是否信任并启用？',
+    'This workspace declares {count} external hook command(s). Trust and enable them?',
+  ],
+  'hookTrust.changed': [
+    '钩子声明在上次信任后发生了变化，需要重新确认。',
+    'The hook declarations changed after you last trusted them and must be confirmed again.',
+  ],
+  'hookTrust.detail': [
+    '工作区：{workspace}\n启用后，这些命令会在会话开始、提交消息、调用工具等时机自动运行，可能读取你的文件或访问网络。只信任你了解其来源的仓库。声明内容一旦改变会再次询问。',
+    'Workspace: {workspace}\nOnce enabled, these commands run automatically when a session starts, a message is sent, a tool is called and so on, and may read your files or use the network. Only trust repositories whose source you know. You will be asked again if the declarations change.',
+  ],
+  'hookTrust.unavailable': [
+    '无法读取或保存信任记录（{detail}），本次不会启用这些钩子。',
+    'The trust record cannot be read or saved ({detail}), so these hooks stay off this time.',
+  ],
+  'hookTrust.trust': ['信任并启用', 'Trust and enable'],
+  'hookTrust.skip': ['本次不启用', 'Not this time'],
   'attach.busy': [
     '正在读取附件，请稍候',
     'An attachment is still being read; try again in a moment.',

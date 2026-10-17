@@ -2,7 +2,7 @@
  * Resource ownership: who closes the index, and when it is safe to.
  *
  * A search index is shared state with a lifecycle longer than the tool set that uses it, which is exactly the
- * shape that produces the two classic defects 鈥?closing it while somebody else is still reading, and never
+ * shape that produces the two classic defects — closing it while somebody else is still reading, and never
  * closing it at all. Both are checked here from the outside: two registries over one workspace, a build running
  * when a close arrives, and a workspace whose service was released and acquired again.
  */
@@ -178,7 +178,7 @@ test('a search result never claims more coverage than the enumeration granted', 
   });
   const page = await service.listingPage({ limit: 10 }, new AbortController().signal);
   assert.equal(page.files.length, 10);
-  // The walk was abandoned at the tenth file, so the coverage is not complete 鈥?and the cursor is the honest
+  // The walk was abandoned at the tenth file, so the coverage is not complete — and the cursor is the honest
   // way to say "there is more", rather than a `complete` flag contradicted by a cursor.
   assert.equal(page.coverage.complete, false);
   assert.ok(page.nextCursor);

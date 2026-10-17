@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/tools/index.ts';
@@ -19,6 +19,12 @@ import {
   hookMatcherMatches,
   loadHookDeclarations,
 } from '../packages/resources/hook-config.ts';
+import {
+  hookDeclarationsDigest,
+  hookTrustFile,
+  trustWorkspaceHooks,
+  workspaceHookTrust,
+} from '../packages/resources/hook-trust.ts';
 import { resolveRunLimits } from '../packages/protocol/settings.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -75,6 +81,10 @@ interface Fixture {
   root: string;
   tools: ReturnType<typeof createTools>;
   failures: string[];
+  /** "Not trusted, so not enabled" notices, in order. */
+  untrusted: string[];
+  /** The user-level trust file this fixture reads, outside the workspace. */
+  trustFile: string;
   /** The calls the hook recorded, in order. Empty when no hook ran. */
   seen(): Promise<Record<string, unknown>[]>;
 }
@@ -88,28 +98,43 @@ async function fixture(
   t: test.TestContext,
   config: (root: string) => Record<string, unknown>,
   scripts: Record<string, string>,
-  options: { enabled?: boolean; timeoutMs?: number; location?: string; scope?: string } = {},
+  options: {
+    enabled?: boolean;
+    timeoutMs?: number;
+    location?: string;
+    scope?: string;
+    /** Record trust for the declarations before building the registry. Defaults to true. */
+    trusted?: boolean;
+  } = {},
 ): Promise<Fixture> {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
+  const state = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-trust-'));
+  const trustFile = hookTrustFile({ YUANTU_STATE_DIR: state });
   const location = options.location ?? '.claude/settings.json';
   await mkdir(path.join(root, path.dirname(location)), { recursive: true });
   await writeFile(path.join(root, location), JSON.stringify(config(root)));
   for (const [name, body] of Object.entries(scripts)) await writeFile(path.join(root, name), body);
+  if (options.trusted ?? true) trustWorkspaceHooks(root, loadHookDeclarations(root), trustFile);
   const failures: string[] = [];
+  const untrusted: string[] = [];
   const tools = createTools(root, undefined, options.scope ?? 'session-1', new HookRegistry(), {
-    ...hookBridgeSettings({}),
+    ...hookBridgeSettings({ YUANTU_STATE_DIR: state }),
     enabled: options.enabled ?? true,
     timeoutMs: options.timeoutMs ?? 5000,
     onFailure: (message) => failures.push(message),
+    onUntrusted: (message) => untrusted.push(message),
   });
   t.after(async () => {
     await tools.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
+    await rm(state, { recursive: true, force: true });
   });
   return {
     root,
     tools,
     failures,
+    untrusted,
+    trustFile,
     seen: async () =>
       existsSync(path.join(root, 'seen.json'))
         ? [
@@ -337,6 +362,8 @@ test('a real Agent run refuses a gated write and shows the model the hook reason
   };
   const tools = createTools(root, undefined, session.id, new HookRegistry(), {
     enabled: true,
+    // The trust gate has its own tests below; this one is about what the model is shown.
+    trustAll: true,
     timeoutMs: 5000,
   });
   const agent = new Agent({ store, provider, tools, approve: async () => true });
@@ -454,6 +481,8 @@ test('the two config locations add up, and Claude’s seconds become our millise
   assert.equal(hookBridgeSettings({}).timeoutMs, resolveRunLimits().hookTimeoutMs);
   assert.equal(hookBridgeSettings({ YUANTU_HOOK_BRIDGE: 'false' }).enabled, false);
   assert.equal(hookBridgeSettings({}).enabled, true);
+  assert.equal(hookBridgeSettings({}).trustAll, false, 'trust is never the default');
+  assert.equal(hookBridgeSettings({ YUANTU_TRUST_WORKSPACE_HOOKS: '1' }).trustAll, true);
   assert.throws(() => hookBridgeSettings({ YUANTU_HOOK_TIMEOUT_MS: 'nope' }), /must be a number/);
 });
 
@@ -555,4 +584,146 @@ test('a matcher is a pattern list over the subject, and an unknown subject never
   // A regex metacharacter in the pattern is literal, not a second pattern language.
   assert.equal(hookMatcherMatches('write_file.v2', 'write_fileXv2'), false);
   assert.equal(hookMatcherMatches('write_file.v2', 'write_file.v2'), true);
+});
+
+/** Every file under `root`, relative, so a test can prove nothing was written into a workspace. */
+async function listTree(root: string): Promise<string[]> {
+  const entries = await readdir(root, { recursive: true });
+  return entries.map((entry) => entry.split(path.sep).join('/')).sort();
+}
+
+test('untrusted workspace hooks are not installed and never run', async (t) => {
+  const { root, tools, failures, untrusted, seen } = await fixture(
+    t,
+    (root) => preToolUse(root, 'hook.mjs'),
+    { 'hook.mjs': SCRIPTS.blocking },
+    { trusted: false },
+  );
+  assert.equal(tools.extensions.size, 0, 'nothing is registered without a trust record');
+  const result = await tools.execute(
+    { id: 'c1', name: 'write_file', arguments: { path: 'a.txt', content: 'a' } },
+    context(),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.equal(await readFile(path.join(root, 'a.txt'), 'utf8'), 'a');
+  assert.deepEqual(await seen(), [], 'the untrusted command never ran');
+  assert.deepEqual(failures, [], 'untrusted is not broken');
+  assert.equal(untrusted.length, 1, 'the operator is told once');
+  assert.match(untrusted[0]!, /\.claude\/settings\.json/);
+  assert.match(untrusted[0]!, /have not been trusted/);
+  assert.match(untrusted[0]!, /YUANTU_TRUST_WORKSPACE_HOOKS=1/);
+});
+
+test('trusting the declarations enables them, and the explicit switch trusts without a record', async (t) => {
+  const { root, tools, untrusted, trustFile } = await fixture(
+    t,
+    (root) => preToolUse(root, 'hook.mjs'),
+    { 'hook.mjs': SCRIPTS.blocking },
+  );
+  assert.deepEqual(untrusted, []);
+  assert.deepEqual(workspaceHookTrust(root, loadHookDeclarations(root), trustFile), {
+    trusted: true,
+  });
+  const denied = await tools.execute(
+    { id: 'c1', name: 'write_file', arguments: { path: 'a.txt', content: 'a' } },
+    context(),
+  );
+  assert.equal(denied.isError, true, 'a trusted hook runs and decides');
+  assert.match(denied.content, /no writes to src\/ without a review/);
+
+  const state = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-trust-'));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  const notices: string[] = [];
+  const forced = createTools(root, undefined, 'session-1', new HookRegistry(), {
+    ...hookBridgeSettings({ YUANTU_STATE_DIR: state, YUANTU_TRUST_WORKSPACE_HOOKS: '1' }),
+    onUntrusted: (message) => notices.push(message),
+  });
+  t.after(() => forced.close().catch(() => undefined));
+  assert.equal(forced.extensions.size, 1, 'the explicit switch installs without any record');
+  assert.deepEqual(notices, []);
+  assert.equal(existsSync(hookTrustFile({ YUANTU_STATE_DIR: state })), false, 'and writes none');
+});
+
+test('changing a declared command, matcher or file revokes trust until it is confirmed again', async (t) => {
+  const { root, trustFile } = await fixture(t, (root) => preToolUse(root, 'hook.mjs'), {
+    'hook.mjs': SCRIPTS.blocking,
+  });
+  const settings = path.join(root, '.claude/settings.json');
+  const state = path.dirname(trustFile);
+  const build = (notices: string[] = []) => {
+    const tools = createTools(root, undefined, 'session-1', new HookRegistry(), {
+      ...hookBridgeSettings({ YUANTU_STATE_DIR: state }),
+      onFailure: () => undefined,
+      onUntrusted: (message) => notices.push(message),
+    });
+    t.after(() => tools.close().catch(() => undefined));
+    return tools;
+  };
+  const trusted = loadHookDeclarations(root);
+
+  await writeFile(settings, JSON.stringify(preToolUse(root, 'other.mjs')));
+  const notices: string[] = [];
+  assert.equal(build(notices).extensions.size, 0, 'a new command is not covered by the old record');
+  assert.match(notices[0]!, /changed since they were trusted/);
+  assert.equal(workspaceHookTrust(root, loadHookDeclarations(root), trustFile).trusted, false);
+
+  await writeFile(settings, JSON.stringify(preToolUse(root, 'hook.mjs', '*')));
+  assert.equal(build().extensions.size, 0, 'a widened matcher is a different declaration');
+
+  await rm(settings);
+  await mkdir(path.join(root, '.yuantu'), { recursive: true });
+  await writeFile(
+    path.join(root, '.yuantu/hooks.json'),
+    JSON.stringify(preToolUse(root, 'hook.mjs')),
+  );
+  assert.notEqual(
+    hookDeclarationsDigest(loadHookDeclarations(root)),
+    hookDeclarationsDigest(trusted),
+    'the source file is part of what is trusted',
+  );
+  assert.equal(build().extensions.size, 0);
+
+  // Restoring exactly what was trusted is trusted again, and confirming the new one replaces the record.
+  await rm(path.join(root, '.yuantu'), { recursive: true });
+  await writeFile(settings, JSON.stringify(preToolUse(root, 'hook.mjs')));
+  assert.equal(build().extensions.size, 1);
+  await writeFile(settings, JSON.stringify(preToolUse(root, 'other.mjs')));
+  trustWorkspaceHooks(root, loadHookDeclarations(root), trustFile);
+  assert.equal(build().extensions.size, 1, 'the new declarations are trusted once confirmed');
+});
+
+test('the trust record lives in the user state directory, never in the workspace', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
+  const state = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-trust-'));
+  t.after(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(state, { recursive: true, force: true });
+  });
+  await mkdir(path.join(root, '.claude'), { recursive: true });
+  await writeFile(
+    path.join(root, '.claude/settings.json'),
+    JSON.stringify(preToolUse(root, 'h.mjs')),
+  );
+  const declarations = loadHookDeclarations(root);
+  const before = await listTree(root);
+  const trustFile = hookTrustFile({ YUANTU_STATE_DIR: state });
+  assert.equal(trustFile, path.join(state, 'hook-trust.json'));
+  trustWorkspaceHooks(root, declarations, trustFile);
+  assert.deepEqual(await listTree(root), before, 'trusting writes nothing into the workspace');
+  const record = JSON.parse(await readFile(trustFile, 'utf8')) as {
+    workspaces: Record<string, { digest: string }>;
+  };
+  assert.deepEqual(
+    Object.values(record.workspaces).map((entry) => entry.digest),
+    [hookDeclarationsDigest(declarations)],
+  );
+
+  // A state directory inside the workspace is refused both ways: a repository cannot ship its own trust.
+  const inside = hookTrustFile({ YUANTU_STATE_DIR: path.join(root, '.yuantu-state') });
+  assert.throws(() => trustWorkspaceHooks(root, declarations, inside), /inside the workspace/);
+  await mkdir(path.dirname(inside), { recursive: true });
+  await writeFile(inside, JSON.stringify({ version: 1, workspaces: record.workspaces }));
+  const planted = workspaceHookTrust(root, declarations, inside);
+  assert.equal(planted.trusted, false, 'a record planted inside the workspace is not honoured');
+  assert.equal(planted.trusted === false && planted.reason, 'unavailable');
 });

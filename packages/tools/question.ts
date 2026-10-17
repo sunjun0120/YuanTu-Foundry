@@ -113,7 +113,7 @@ export function questionTool(): Tool {
   return {
     name: 'ask_user_question',
     description:
-      'Ask the user one to four structured questions and wait for the answer: options to choose from, optional multi-select, optional free text. Use it when a decision only the user can make blocks the work (which of two existing conventions to follow, a credential destination, a scope choice) instead of guessing or stopping. Put the option you would choose first and mark it `recommended: true` (at most one per question) — the interface shows it as a badge and the user may still pick another. The answer arrives as a tool result; if nobody answers in time the result says so and the run continues, so never wait for an answer that has already been reported missing.',
+      'Ask the user 1-4 structured questions and wait for the answer (options, optional multi-select, optional free text). Use it only when a decision only the user can make blocks the work (e.g. which of two conventions to follow, a scope choice), instead of guessing or stopping. Put your preferred option first with `recommended: true` (at most one per question). If nobody answers in time the result says so and the run continues; do not wait for it again.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/tools/index.ts';
@@ -12,25 +12,40 @@ import { workflowTool } from '../packages/core/workflow.ts';
 
 import { fixture } from './program-process-fixture.ts';
 
-test('a VM escape runs in another process', async (t) => {
+test('a program cannot reach the runner process through a host-realm constructor', async (t) => {
   const { run } = await fixture(t);
-  const pid = await run("return console.log.constructor('return process')().pid;");
+  for (const attempt of [
+    "return console.log.constructor('return process')().pid;",
+    "return tools.read_file.constructor('return globalThis')().fetch;",
+    'return typeof escapedProcess;',
+  ]) {
+    const result = await run(attempt);
+    assert.ok(
+      result.isError || /^undefined/.test(result.content),
+      `${attempt} -> ${result.content}`,
+    );
+  }
+});
+
+test('a VM escape runs in another process', async (t) => {
+  const { run } = await fixture(t, 'host', { escaped: true });
+  const pid = await run('return escapedProcess.pid;');
   assert.equal(pid.isError, false, pid.content);
   assert.notEqual(Number(pid.content.split('\n')[0]), process.pid);
 });
 
 test('a VM escape cannot write through node:fs without a tool approval', async (t) => {
-  const { root, run } = await fixture(t);
+  const { root, run } = await fixture(t, 'host', { escaped: true });
   const destination = path.join(root, 'direct.txt');
   const write = await run(
-    `const p = console.log.constructor('return process')(); try { p.getBuiltinModule('fs').writeFileSync(${JSON.stringify(destination)}, 'unapproved'); return 'wrote'; } catch (error) { return error.code; }`,
+    `const p = escapedProcess; try { p.getBuiltinModule('fs').writeFileSync(${JSON.stringify(destination)}, 'unapproved'); return 'wrote'; } catch (error) { return error.code; }`,
   );
   assert.match(write.content, /ERR_ACCESS_DENIED/);
   await assert.rejects(readFile(destination), /ENOENT/);
 });
 
 test('a forged RPC cannot reach a tool outside the exposed catalog', async (t) => {
-  const { tools, context, catalog } = await fixture(t);
+  const { tools, context, catalog } = await fixture(t, 'host', { escaped: true });
   let escaped = false;
   tools.register({
     name: 'hidden_write',
@@ -47,7 +62,7 @@ test('a forged RPC cannot reach a tool outside the exposed catalog', async (t) =
       id: 'program',
       name: 'run_code',
       arguments: {
-        code: "const p = console.log.constructor('return process')(); p.getBuiltinModule('worker_threads').parentPort.postMessage({ type: 'call', id: 99, name: 'hidden_write', args: {} }); await tools.read_file({path: 'missing'}); return 'finished';",
+        code: "const p = escapedProcess; p.getBuiltinModule('worker_threads').parentPort.postMessage({ type: 'call', id: 99, name: 'hidden_write', args: {} }); await tools.read_file({path: 'missing'}); return 'finished';",
       },
     },
     { ...context, catalog },
@@ -58,7 +73,7 @@ test('a forged RPC cannot reach a tool outside the exposed catalog', async (t) =
 });
 
 test('program disconnect preserves known results and waits for an in-flight tool cleanup', async (t) => {
-  const { tools, context, root } = await fixture(t);
+  const { tools, context, root } = await fixture(t, 'host', { escaped: true });
   let cleaned = false;
   tools.register({
     name: 'slow',
@@ -90,7 +105,7 @@ test('program disconnect preserves known results and waits for an in-flight tool
         id: 'program',
         name: 'run_code',
         arguments: {
-          code: "await tools.write_file({path:'known.txt',content:'once'}); const slow = tools.slow({}); await tools.probe({}); console.log.constructor('return process')().exit(88); await slow;",
+          code: "await tools.write_file({path:'known.txt',content:'once'}); const slow = tools.slow({}); await tools.probe({}); escapedProcess.exit(88); await slow;",
         },
       },
       {
@@ -127,7 +142,7 @@ test('unavailable native program backend refuses without host execution', async 
     available: async () => 'Native program runner unavailable',
   });
   t.after(() => registerSandboxProvider(original));
-  const { tools, context, catalog, root } = await fixture(t);
+  const { tools, context, catalog, root } = await fixture(t, 'host', { escaped: true });
   const result = await tools.execute(
     {
       id: 'program',
@@ -169,9 +184,9 @@ test('program RPC rejects duplicate ids, malformed arguments and oversized logs'
 });
 
 test('a raw output flood is stopped before it can become an unbounded Host log', async (t) => {
-  const { run } = await fixture(t);
+  const { run } = await fixture(t, 'host', { escaped: true });
   const result = await run(
-    "console.log.constructor('return process')().stdout.write('x'.repeat(1100000)); await tools.read_file({path:'missing'});",
+    "escapedProcess.stdout.write('x'.repeat(1100000)); await tools.read_file({path:'missing'});",
   );
   assert.equal(result.isError, true);
   assert.match(result.content, /RPC|JSON/);
@@ -179,7 +194,7 @@ test('a raw output flood is stopped before it can become an unbounded Host log',
 });
 
 test('console truncation stays within the RPC log budget', async (t) => {
-  const { run } = await fixture(t);
+  const { run } = await fixture(t, 'host', { escaped: true });
   const result = await run(
     "console.log('x'.repeat(7990)); console.log('y'.repeat(100)); return 'done';",
   );
@@ -257,6 +272,7 @@ for (const mode of ['native', 'ptc'] as const)
 test('a disconnected workflow waits for its child and refuses automatic continuation', async () => {
   let cleaned = false;
   const tool = workflowTool({
+    exposeProcessForTests: true,
     runAgent: async (_prompt, _options, signal) => {
       await new Promise<void>((resolve) =>
         signal.addEventListener('abort', () => resolve(), { once: true }),
@@ -269,7 +285,7 @@ test('a disconnected workflow waits for its child and refuses automatic continua
   await assert.rejects(
     tool.execute(
       {
-        code: "const child=agent('work'); phase('started'); await phase('flushed'); console.log.constructor('return process')().exit(88); await child;",
+        code: "const child=agent('work'); phase('started'); await phase('flushed'); escapedProcess.exit(88); await child;",
       },
       { signal: new AbortController().signal, approve: async () => true },
     ),
@@ -279,14 +295,30 @@ test('a disconnected workflow waits for its child and refuses automatic continua
 });
 
 test('a tool wrapper cannot replace the program workspace identity', async (t) => {
-  const { root, tools, run } = await fixture(t);
+  const { root, tools, run } = await fixture(t, 'host', { escaped: true });
   const other = await mkdtemp(path.join(tmpdir(), 'yuantu-program-other-'));
   t.after(() => rm(other, { recursive: true, force: true }));
   tools.registerHooks({
     aroundTool: async (dispatch, next) =>
       next(dispatch.withScope({ ...dispatch.scope, workspaceRoot: other })),
   });
-  const result = await run("return console.log.constructor('return process')().cwd();");
+  const result = await run(
+    "return escapedProcess.env.YUANTU_PROGRAM_LAUNCH_DIR + '|' + escapedProcess.cwd();",
+  );
   assert.equal(result.isError, false, result.content);
-  assert.equal(result.content.split('\n')[0], root);
+  const [launched, cwd] = result.content.split('\n')[0]!.split('|');
+  assert.equal(launched, root);
+  // The runner leaves the workspace before its worker exists: a worker under `--permission` may read its working
+  // directory, and that directory must not be the one holding `.env`.
+  assert.notEqual(cwd, root);
+});
+
+test('an escaped program cannot read workspace files directly', async (t) => {
+  const { root, run } = await fixture(t, 'host', { escaped: true });
+  await writeFile(path.join(root, '.env'), 'API_KEY=fake-test-value');
+  const result = await run(
+    `try { return escapedProcess.getBuiltinModule('fs').readFileSync(${JSON.stringify(path.join(root, '.env'))}, 'utf8'); } catch (error) { return error.code; }`,
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.match(result.content, /^ERR_ACCESS_DENIED/);
 });

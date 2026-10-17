@@ -969,8 +969,18 @@ test(
     assert.equal(await page.locator('#permission-settings').count(), 0);
     await page.locator('#settings-back').click();
     await page.waitForFunction(() => !document.querySelector('#permission-mode').disabled);
-    assert.equal(await page.locator('#permission-mode').inputValue(), 'guarded');
+    /**
+     * The harness launches this suite with `YUANTU_SANDBOX=host` (25 real windows must not each pay for a native
+     * backend initialization), and a `host` + `ask` pair is deliberately not one of the three presets. The honest
+     * reading is therefore "custom": the value is shown and explained, but it cannot be selected. The default
+     * `guarded` reading is asserted by `tests/agent.smoke.mjs`, which launches with the product default.
+     */
+    assert.equal(await page.locator('#permission-mode').inputValue(), 'custom');
+    // Whatever the launch environment started this session in, cancelling a dialog must leave it exactly there.
+    const initialPreset = await page.locator('#permission-mode').inputValue();
     await page.locator('#permission-trigger').click();
+    // The "custom" reading lives in the open menu: the chip shows the name, the menu explains where it came from.
+    assert.equal(await page.locator('#permission-custom').isVisible(), true);
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), true);
     // The dialog says what changes and asks for one acknowledgement; the × and 取消 are the same way out.
@@ -987,15 +997,15 @@ test(
       /Use it only when you trust the current task\./,
     );
     assert.equal(await page.locator('#full-access-enable').isDisabled(), true);
-    assert.equal(await page.locator('#permission-mode').inputValue(), 'guarded');
+    assert.equal(await page.locator('#permission-mode').inputValue(), initialPreset);
     await page.locator('#full-access-close').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), false);
-    assert.equal(await page.locator('#permission-mode').inputValue(), 'guarded');
+    assert.equal(await page.locator('#permission-mode').inputValue(), initialPreset);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), true);
     await page.locator('#full-access-cancel').click();
-    assert.equal(await page.locator('#permission-mode').inputValue(), 'guarded');
+    assert.equal(await page.locator('#permission-mode').inputValue(), initialPreset);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
     await page.locator('#full-access-acknowledge').check();
@@ -1495,7 +1505,9 @@ test(
     await page.waitForFunction(
       () => document.querySelectorAll('#background-list .background-card').length === 0,
     );
-    assert.equal(await page.locator('#open-background').isVisible(), true);
+    // The trigger belongs to the list it opens: once every job is cleared there is nothing to open, which is the
+    // same state this suite asserts before any job exists. The popover goes with it.
+    assert.equal(await page.locator('#open-background').isHidden(), true);
     assert.equal(
       await page.locator('#background-popover button, #background-popover input').count(),
       0,
@@ -1511,7 +1523,9 @@ test(
     });
     const reopened = await app.firstWindow();
     await reopened.waitForFunction(() => !document.querySelector('#prompt').disabled);
-    assert.equal(await reopened.locator('#open-background').isVisible(), true);
+    // Clearing removed the jobs from the session record too, so the reopened window lists none — and the trigger
+    // that exists only to open that list stays hidden.
+    assert.equal(await reopened.locator('#open-background').isHidden(), true);
   },
 );
 

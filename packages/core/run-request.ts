@@ -70,6 +70,28 @@ export interface RunRequestOptions {
   emit: RunEmit;
 }
 
+/**
+ * Whether the streamed answer should be checkpointed now.
+ *
+ * A checkpoint rewrites the whole text so far (it is what a crashed run's partial answer is recovered from), so
+ * writing it on a fixed clock made the bytes written grow with the square of the answer: a 200 KB answer
+ * streamed over a minute was written thirty times at an average of 100 KB. The rule is now geometric — after two
+ * seconds, write once the text has grown by an eighth of what is already saved (and at least 4 KB) — so the total
+ * written is a small multiple of the answer, not its square. Two bounds keep the recovery promise: the first
+ * fragment is saved at once, and nothing waits longer than 30 seconds or 256 K characters unsaved.
+ */
+export function shouldCheckpointStream(
+  chars: number,
+  checkpointedChars: number,
+  sinceMs: number,
+): boolean {
+  const grown = chars - checkpointedChars;
+  if (grown <= 0) return false;
+  if (checkpointedChars === 0) return true;
+  if (grown >= 256_000 || sinceMs >= 30_000) return true;
+  return sinceMs >= 2_000 && grown >= Math.max(4_096, checkpointedChars / 8);
+}
+
 /** One model round, including bounded recovery and durable streaming. The caller owns run/step state. */
 export async function requestRunRound(options: RunRequestOptions): Promise<ModelResponse> {
   const {
@@ -358,9 +380,11 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             streamedText += delta;
             if (
               delta &&
-              (!checkpointChars ||
-                streamedText.length - checkpointChars >= 256_000 ||
-                performance.now() - checkpointAt >= 2_000)
+              shouldCheckpointStream(
+                streamedText.length,
+                checkpointChars,
+                performance.now() - checkpointAt,
+              )
             ) {
               store.checkpointStream(sessionId, runId, messageId, streamedText);
               checkpointChars = streamedText.length;

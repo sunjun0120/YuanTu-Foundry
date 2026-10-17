@@ -1758,3 +1758,58 @@ test('a policy refusal is one answer, whichever of the three protocols reported 
   }).complete(request3());
   assert.equal(limited.finishReason, 'length');
 });
+
+test('OpenAI accepts an id repeated as empty or unchanged, and still refuses a second id', async (t) => {
+  // Qwen's compatible endpoint sends the id with the first fragment and `"id": ""` with every later one.
+  const stream =
+    (ids: string[]) => async (_body: unknown, res: import('node:http').ServerResponse) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      const fragments = ['{"path"', ':"a.txt"}'];
+      ids.forEach((id, index) =>
+        res.write(
+          `data: ${JSON.stringify({
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id,
+                      type: 'function',
+                      function: {
+                        ...(index === 0 ? { name: 'read_file' } : {}),
+                        arguments: fragments[index] ?? '',
+                      },
+                    },
+                  ],
+                },
+                finish_reason: index === ids.length - 1 ? 'tool_calls' : null,
+              },
+            ],
+          })}\n\n`,
+        ),
+      );
+      res.write(
+        `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 2 } })}\n\n`,
+      );
+      res.end('data: [DONE]\n\n');
+    };
+  const run = async (ids: string[]) =>
+    createProvider({
+      protocol: 'openai',
+      apiKey: 'test',
+      model: 'test',
+      baseUrl: await httpFixture(t, stream(ids)),
+    }).complete(request3());
+  for (const ids of [
+    ['call_q', ''],
+    ['call_q', 'call_q'],
+  ]) {
+    const result = await run(ids);
+    assert.deepEqual(result.toolCalls, [
+      { id: 'call_q', name: 'read_file', arguments: { path: 'a.txt' } },
+    ]);
+  }
+  await assert.rejects(run(['call_q', 'call_other']), /Duplicate tool ID fragment/);
+});

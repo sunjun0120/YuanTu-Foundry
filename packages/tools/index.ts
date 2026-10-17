@@ -26,9 +26,13 @@ import { todoTool } from './todo.ts';
 import { hookBridgeSettings, loadHookDeclarations } from '../resources/hook-config.ts';
 import type { HookBridgeSettings } from '../resources/hook-config.ts';
 import { installHookBridge } from '../resources/hook-bridge.ts';
+import { hookDeclarationsDigest, workspaceHookTrust } from '../resources/hook-trust.ts';
+import type { HookDeclaration } from '../resources/hook-config.ts';
 import { toolDeadlinePolicy } from './timeouts.ts';
 import { fileObservationEnabled } from './fs-observation.ts';
 import { runCodeTool, toolMode } from './run-code.ts';
+import { DEFERRED_TOOLS, loadToolsTool } from './deferred-tools.ts';
+import { parseSetting } from '../protocol/settings.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -50,6 +54,43 @@ const MUTATION_TOOLS = new Set([
   'move_file',
 ]);
 
+/** Workspaces (and digests) already told that their hooks are off, so a notice is not repeated every run. */
+const untrustedNoticesSent = new Set<string>();
+/**
+ * Whether a workspace's declarations may be installed, reporting once when they may not.
+ *
+ * The notice names the files and the two ways forward, because "your hooks did not run" with no next step
+ * reads as a bug; the commands themselves are not repeated here — the desktop's prompt is where they are read.
+ */
+function hookBridgeTrusted(
+  root: string,
+  declarations: readonly HookDeclaration[],
+  bridge: HookBridgeSettings,
+): boolean {
+  if (bridge.trustAll) return true;
+  const state = bridge.trustFile
+    ? workspaceHookTrust(root, declarations, bridge.trustFile)
+    : ({ trusted: false, reason: 'unavailable', detail: 'no user state directory' } as const);
+  if (state.trusted) return true;
+  const key = `${path.resolve(root)}\0${hookDeclarationsDigest(declarations)}`;
+  if (!untrustedNoticesSent.has(key)) {
+    untrustedNoticesSent.add(key);
+    const files = [...new Set(declarations.map((entry) => entry.file))].join(', ');
+    const why =
+      state.reason === 'changed'
+        ? 'changed since they were trusted'
+        : state.reason === 'unavailable'
+          ? `cannot be checked (${state.detail ?? 'trust record unavailable'})`
+          : 'have not been trusted';
+    const message =
+      `Workspace hooks in ${path.resolve(root)} (${declarations.length} command(s) from ${files}) ${why}, ` +
+      'so they are not enabled. Trust them in the desktop app when it asks, or set ' +
+      'YUANTU_TRUST_WORKSPACE_HOOKS=1 to trust workspace hooks without asking.';
+    (bridge.onUntrusted ?? ((text) => process.stderr.write(`[hook] ${text}\n`)))(message);
+  }
+  return false;
+}
+
 export function createTools(
   root: string,
   sharedBackground?: BackgroundCommands,
@@ -65,6 +106,9 @@ export function createTools(
   registry.deadlines = toolDeadlinePolicy();
   // How the catalog reaches the model — one schema per tool, or one `run_code` with a generated declaration list.
   registry.toolMode = toolMode();
+  // Which tools wait for `load_tools` under the `deferred` mode; the other modes ignore the list.
+  registry.deferrable = DEFERRED_TOOLS;
+  registry.register(loadToolsTool((name) => registry.offers(name)));
   const background = sharedBackground ?? new BackgroundCommands(root);
   if (!sharedBackground) registry.onClose(() => background.close());
   for (const tool of background.tools(scope)) registry.register(tool);
@@ -100,7 +144,7 @@ export function createTools(
   registry.onClose(mcp.close);
   for (const tool of mcp.tools) registry.register(tool);
   const lsp = new LspManager(root);
-  const annotate = process.env.YUANTU_LSP_AFTER_EDIT !== '0';
+  const annotate = parseSetting(process.env, 'YUANTU_LSP_AFTER_EDIT') !== false;
   /**
    * The fast search backend, when one is prepared for this platform.
    *
@@ -109,7 +153,7 @@ export function createTools(
    * cost of the lookup in a deployment that has decided never to ship one.
    */
   const searchBackend =
-    process.env.YUANTU_SEARCH_RG === '0' ? undefined : createSearchBackend(root);
+    parseSetting(process.env, 'YUANTU_SEARCH_RG') === '0' ? undefined : createSearchBackend(root);
   /**
    * The symbol index, shared per workspace and released with this registry.
    *
@@ -175,9 +219,14 @@ export function createTools(
    * it, a workspace with one `PreToolUse` hook would run it once more for every run of the session.
    *
    * A workspace that declares nothing pays for one directory listing per destination and nothing else.
+   *
+   * Declarations are installed only when they are trusted (`hook-trust.ts`): a cloned repository's hooks are
+   * somebody else's commands, and running them because a message was sent is exactly what the trust record
+   * exists to prevent. Untrusted hooks are reported once and left off; nothing here asks, because this
+   * registry has no human to ask — the desktop asks before it starts the Host.
    */
-  if (bridge.enabled) {
-    const declarations = loadHookDeclarations(root, bridge.timeoutMs);
+  const declarations = bridge.enabled ? loadHookDeclarations(root, bridge.timeoutMs) : [];
+  if (declarations.length && hookBridgeTrusted(root, declarations, bridge))
     registry.extensions.installOnce(`hook-bridge:${path.resolve(root)}`, () =>
       installHookBridge({
         workspace: root,
@@ -188,7 +237,6 @@ export function createTools(
         onFailure: bridge.onFailure ?? ((message) => process.stderr.write(`[hook] ${message}\n`)),
       }),
     );
-  }
   if (discoverSkills(root).length)
     registry.register({
       name: 'load_skill',

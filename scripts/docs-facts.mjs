@@ -111,8 +111,16 @@ async function facts() {
   const terminals = new TerminalSessions(workspace);
   try {
     const tools = createTools(workspace, undefined, 'standalone', undefined, undefined, terminals);
+    // Measured in the `native` presentation, which is every schema: the default `deferred` one is measured below.
+    tools.toolMode = 'native';
     const all = tools.specs();
     const readOnly = tools.specs({ readOnly: true });
+    /**
+     * What the first request of a fresh session carries by default: the common tools plus `load_tools`, before
+     * anything has been loaded. The comparison with `all` is the reason the mode exists, so it is measured too.
+     */
+    tools.toolMode = 'deferred';
+    const deferred = tools.specs({ loaded: new Set() });
     /**
      * The folded catalog, measured rather than described.
      *
@@ -138,6 +146,8 @@ async function facts() {
       toolsBytes: JSON.stringify(all).length,
       toolsReadOnly: readOnly.length,
       toolsReadOnlyBytes: JSON.stringify(readOnly).length,
+      toolsDeferred: deferred.length,
+      toolsDeferredBytes: JSON.stringify(deferred).length,
       toolsFolded: folded.length,
       toolsFoldedBytes: JSON.stringify(folded).length,
       exploreTools: EXPLORE_TOOLS.length,
@@ -174,6 +184,7 @@ function table(value) {
     '| --- | --- | --- |',
     `| 工具（空工作区，全部） | ${value.toolsAll} 个 / ${kb(value.toolsBytes)} | \`createTools().specs()\` |`,
     `| 工具（只读运行） | ${value.toolsReadOnly} 个 / ${kb(value.toolsReadOnlyBytes)} | \`specs({ readOnly: true })\` |`,
+    `| 工具（默认按需加载，首个请求） | ${value.toolsDeferred} 个 / ${kb(value.toolsDeferredBytes)} | \`specs({ loaded: new Set() })\`（默认 \`YUANTU_TOOL_MODE=deferred\`） |`,
     `| 工具（折叠为 \`run_code\`） | ${value.toolsFolded} 个 / ${kb(value.toolsFoldedBytes)} | \`specs()\`（\`YUANTU_TOOL_MODE=ptc\`） |`,
     `| \`explore\` 白名单条目 | ${value.exploreTools} 条 | \`EXPLORE_TOOLS\` |`,
     `| 会话 schema 版本 | v${value.sessionSchema} | 新建库上的 \`PRAGMA user_version\` |`,

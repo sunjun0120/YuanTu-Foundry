@@ -10,6 +10,8 @@ import { HookRegistry } from '../packages/tools/hooks.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { listeningHost, connectClient } from './listening-host-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
+import { loadHookDeclarations } from '../packages/resources/hook-config.ts';
+import { hookTrustFile, trustWorkspaceHooks } from '../packages/resources/hook-trust.ts';
 
 async function state(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lifecycle-policy-'));
@@ -153,9 +155,17 @@ test('real Host planning lifecycle never launches workspace hooks, including shu
   });
   let continuedId = '',
     explicitId = '';
+  // Trust is read from the user state directory, so the Host gets its own, outside the workspace.
+  const state = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-trust-'));
+  t.after(() => rm(state, { recursive: true, force: true }));
   const host = await listeningHost(
     t,
-    { YUANTU_SANDBOX: 'host', YUANTU_HOOK_BRIDGE: '1', YUANTU_BASE_URL: url },
+    {
+      YUANTU_SANDBOX: 'host',
+      YUANTU_HOOK_BRIDGE: '1',
+      YUANTU_BASE_URL: url,
+      YUANTU_STATE_DIR: state,
+    },
     (dbPath) => {
       const store = new SessionStore(dbPath);
       try {
@@ -187,6 +197,11 @@ appendFileSync('lifecycle.jsonl', Buffer.concat(chunks).toString('utf8') + '\n')
         SessionEnd: [{ hooks: [{ type: 'command', command }] }],
       },
     }),
+  );
+  trustWorkspaceHooks(
+    host.root,
+    loadHookDeclarations(host.root),
+    hookTrustFile({ YUANTU_STATE_DIR: state }),
   );
   const { client } = await connectClient(host);
   let normalId = '';

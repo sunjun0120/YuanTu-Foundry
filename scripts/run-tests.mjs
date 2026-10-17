@@ -47,7 +47,15 @@ let concurrency = Math.min(8, availableParallelism()),
   order = 'duration',
   durationHistory;
 let plan = false,
-  continueOnFailure = false,
+  /**
+   * Whether a failing file stops the dispatch of the rest.
+   *
+   * Locally "stop at the first failure" is the fast loop a developer wants. A gate wants the opposite: one run has
+   * to list every failure, and an unrelated hanging cleanup must not hide the other 140 files. The default stays
+   * fail-fast so `npm test` behaves the way it always has; `FOUNDRY_TEST_CONTINUE_ON_FAILURE=1` (what CI sets)
+   * keeps dispatching while still exiting non-zero.
+   */
+  continueOnFailure = process.env.FOUNDRY_TEST_CONTINUE_ON_FAILURE === '1',
   timings,
   verbose = false,
   width;

@@ -9,6 +9,14 @@ import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
+/**
+ * This suite asserts the product's own sandbox default, so it must not run on the isolation harness's override.
+ *
+ * The harness exports `YUANTU_SANDBOX=host` so portable fixtures never touch a machine-wide backend; a desktop
+ * launched under it honestly reports its permission pair as "custom" (host + ask is no preset). Naming `native`
+ * here is what the packaged app does when nothing is set, and `desktop.smoke.mjs` covers the overridden reading.
+ */
+process.env.YUANTU_SANDBOX = 'native';
 import * as XLSX from 'xlsx';
 import { docxFixture, pdfFixture } from './attachment-fixtures.ts';
 

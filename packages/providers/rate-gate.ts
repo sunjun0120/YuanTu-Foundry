@@ -1,0 +1,98 @@
+import type { ModelRequest, ModelResponse, Provider } from '../protocol/index.ts';
+import { RunFailure } from '../protocol/failure.ts';
+
+/**
+ * Additive-increase / multiplicative-decrease concurrency for model requests that share one endpoint.
+ *
+ * A parent and up to eight sub-agents can each have a request in flight against the same endpoint, and nothing
+ * slowed them down when it answered 429: every run retried on its own schedule, so the endpoint kept seeing the
+ * same burst. The gate is shared by those runs. It does not limit anything until the endpoint objects: the
+ * ceiling is high, and only a `rate-limit` failure halves the limit (from what was actually in flight, so a
+ * single stray 429 does not throttle an idle runtime to one). Each run of `limit` successes then raises it by
+ * one, back towards the ceiling. Requests over the limit wait in order, and a waiting request still honours its
+ * own abort signal.
+ */
+export class AdaptiveConcurrency {
+  private limitValue: number;
+  private inFlight = 0;
+  private successes = 0;
+  private readonly waiting: { resolve: () => void; reject: (reason: unknown) => void }[] = [];
+  private readonly ceiling: number;
+  private readonly floor: number;
+  constructor(ceiling = 64, floor = 1) {
+    this.ceiling = ceiling;
+    this.floor = floor;
+    this.limitValue = ceiling;
+  }
+  /** The current limit, for tests and diagnostics. */
+  get limit(): number {
+    return this.limitValue;
+  }
+  async run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal);
+    const inFlightAtStart = this.inFlight;
+    try {
+      const result = await work();
+      this.succeeded();
+      return result;
+    } catch (error) {
+      if (error instanceof RunFailure && error.code === 'rate-limit') this.limited(inFlightAtStart);
+      throw error;
+    } finally {
+      this.inFlight--;
+      this.drain();
+    }
+  }
+  private acquire(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (this.inFlight < this.limitValue && !this.waiting.length) {
+      this.inFlight++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const entry = {
+        resolve: () => {
+          signal?.removeEventListener('abort', abort);
+          this.inFlight++;
+          resolve();
+        },
+        reject,
+      };
+      const abort = () => {
+        const index = this.waiting.indexOf(entry);
+        if (index >= 0) this.waiting.splice(index, 1);
+        reject(signal!.reason);
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      this.waiting.push(entry);
+    });
+  }
+  private drain(): void {
+    while (this.waiting.length && this.inFlight < this.limitValue) this.waiting.shift()!.resolve();
+  }
+  private succeeded(): void {
+    if (this.limitValue >= this.ceiling) return;
+    this.successes++;
+    if (this.successes >= this.limitValue) {
+      this.successes = 0;
+      this.limitValue++;
+    }
+  }
+  private limited(inFlight: number): void {
+    this.successes = 0;
+    this.limitValue = Math.max(this.floor, Math.floor(Math.min(this.limitValue, inFlight) / 2));
+  }
+}
+
+/**
+ * The same provider, its requests passed through `gate`.
+ *
+ * Built on the provider as its prototype, so anything else the concrete provider exposes (and `this` inside its
+ * own `complete`) is unchanged; only `complete` waits for the gate.
+ */
+export function gatedProvider(provider: Provider, gate: AdaptiveConcurrency): Provider {
+  const gated = Object.create(provider) as Provider;
+  gated.complete = (request: ModelRequest): Promise<ModelResponse> =>
+    gate.run(() => provider.complete(request), request.signal);
+  return gated;
+}

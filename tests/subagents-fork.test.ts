@@ -2,7 +2,7 @@
  * Forking a sub-agent, and discovering which models one may be run on.
  *
  * These drive a real `Agent` with a scripted provider, because the property under test is what the child
- * session contains when its first request is built 鈥?which is only observable through the real loop.
+ * session contains when its first request is built — which is only observable through the real loop.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

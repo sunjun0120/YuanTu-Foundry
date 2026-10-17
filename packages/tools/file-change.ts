@@ -58,6 +58,33 @@ async function readBytes(file: string): Promise<Buffer> {
     await handle.close();
   }
 }
+/**
+ * The edited region as the file now reads, numbered like `read_file`, with a few lines of context.
+ *
+ * Returned with an edit's result because a bare "Updated <path>" left the model to read the file back to see
+ * what its edit produced — in a real-model comparison it did so in two of three runs, a whole extra round each
+ * time. The write already counts as an observation (`settle({ written })`), so the snippet is enough to edit
+ * again. Bounded: a large replacement shows its first and last lines rather than the whole region.
+ */
+export function editSnippet(after: string, index: number, replacement: string): string {
+  const CONTEXT = 3;
+  const EDGE = 12;
+  const lines = after.split('\n');
+  const first = after.slice(0, index).split('\n').length - 1;
+  const last = first + replacement.split('\n').length - 1;
+  const from = Math.max(0, first - CONTEXT);
+  const to = Math.min(lines.length - 1, last + CONTEXT);
+  const show = (start: number, end: number) =>
+    lines
+      .slice(start, end + 1)
+      .map((line, offset) => {
+        const text = line.length > 400 ? line.slice(0, 400) + '…' : line;
+        return `${start + offset + 1}: ${text}`;
+      })
+      .join('\n');
+  if (to - from + 1 <= EDGE * 2 + 1) return show(from, to);
+  return `${show(from, from + EDGE - 1)}\n… (${to - from + 1 - EDGE * 2} lines not shown)\n${show(to - EDGE + 1, to)}`;
+}
 export async function prepareFileChange(
   workspace: Workspace,
   args: Record<string, unknown>,
@@ -75,6 +102,7 @@ export async function prepareFileChange(
     );
   let before: Buffer = Buffer.alloc(0);
   let after: string;
+  let snippet = '';
   if (kind === 'edit') {
     // Before anything is computed from the file's bytes: has this run looked at them? Asked here rather than
     // after the match attempt so a blind edit hears "read it first" instead of a message about `old_text` that
@@ -87,6 +115,7 @@ export async function prepareFileChange(
     if (index < 0 || source.indexOf(old, index + 1) >= 0)
       throw new Error('old_text must match exactly once');
     after = source.slice(0, index) + String(args.new_text) + source.slice(index + old.length);
+    snippet = editSnippet(after, index, String(args.new_text));
   } else {
     try {
       await lstat(file);
@@ -135,7 +164,7 @@ export async function prepareFileChange(
         await gates.observations.settle({ written: [input] });
         return {
           isError: false,
-          content: `Updated ${input}`,
+          content: `Updated ${input}. The edited region now reads:\n${snippet}`,
           change: { ...change, ...(journalId ? { id: journalId } : {}) },
         };
       }

@@ -65,7 +65,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
     permission: 'command',
     output: RUN_COMMAND_OUTPUT,
     description:
-      'Run an approved shell command using the selected execution backend and its file/network policy. Native isolation is platform-dependent; host mode is unrestricted. Use foreground commands, no detached/background jobs. Reports actual stdout, stderr and exit code.',
+      'Run an approved shell command and wait for it: the default for any command that finishes on its own (tests, builds, git, scripts, one-off reads), returning stdout, stderr and exit code in one step. Runs under the selected execution backend and its file/network policy (native isolation is platform-dependent; host mode is unrestricted). Do not detach or background the process; for a server or watcher that keeps running, use start_command.',
     inputSchema: {
       type: 'object',
       properties: {

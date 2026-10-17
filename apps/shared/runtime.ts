@@ -16,6 +16,7 @@ import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
 import type { WorkspaceMode } from '../../packages/protocol/workspaces.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { createProvider, readConfig } from '../../packages/providers/index.ts';
+import { AdaptiveConcurrency, gatedProvider } from '../../packages/providers/rate-gate.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
 import {
   declaredRoutes,
@@ -31,7 +32,7 @@ import {
 import type { SubAgentResidency } from '../../packages/core/residency.ts';
 import type { InvariantRegistry } from '../../packages/core/invariants.ts';
 import type { PermissionPolicyView } from '../../packages/protocol/permissions.ts';
-import type { AgentEvent, Approver, Questioner } from '../../packages/protocol/index.ts';
+import type { AgentEvent, Approver, Provider, Questioner } from '../../packages/protocol/index.ts';
 import type { Options } from './args.ts';
 import { redactSecrets } from '../../packages/core/errors.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
@@ -232,6 +233,22 @@ export function workspaceModeFor(
     `YUANTU_SUBAGENT_WORKSPACE must be auto, shared or worktree (got ${JSON.stringify(raw)})`,
   );
 }
+/**
+ * The compaction summary's own provider, when `YUANTU_SUMMARY_MODEL` names a model other than the run's.
+ *
+ * Same endpoint and credentials, another model id — the same construction `subagentProviderFor` uses. Naming the
+ * run's own model (or nothing) leaves the summary on the run's provider, which is the behaviour before the
+ * setting existed.
+ */
+export function summaryProviderFor(
+  config: ProviderConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): { summaryProvider?: Provider } {
+  const raw = parseSetting(env, 'YUANTU_SUMMARY_MODEL');
+  const model = typeof raw === 'string' ? raw.trim() : '';
+  if (!model || model === config.model) return {};
+  return { summaryProvider: createProvider({ ...config, model }) };
+}
 export function openStore(options: Options): SessionStore {
   return new SessionStore(sessionDatabasePath(options));
 }
@@ -262,7 +279,12 @@ export async function createAgent(
   signal?: AbortSignal,
 ): Promise<Agent> {
   const config = readConfig();
-  const provider = createProvider(config);
+  /**
+   * One rate gate for this runtime's requests to the endpoint, shared by the run and every child it delegates to,
+   * so a 429 slows the whole burst down rather than each run retrying on its own (`../../packages/providers/rate-gate.ts`).
+   */
+  const gate = new AdaptiveConcurrency();
+  const provider = gatedProvider(createProvider(config), gate);
   const capacityFor = await resolveConnectionCapacities(options, config, signal);
   const capacity = capacityFor(config.model);
   const policyForCall =
@@ -290,6 +312,7 @@ export async function createAgent(
     supportsVision: config.supportsVision ?? true,
     tools: createTools(workspace, background, scope, hooks, undefined, terminals),
     provider,
+    ...summaryProviderFor(config),
     /**
      * Per-child model selection, wired to the same configuration the run itself uses.
      *
@@ -300,7 +323,9 @@ export async function createAgent(
      * and a task that names a model is refused instead of silently running on the default one.
      */
     subagentProviderFor: (requested) =>
-      requested === config.model ? provider : createProvider({ ...config, model: requested }),
+      requested === config.model
+        ? provider
+        : gatedProvider(createProvider({ ...config, model: requested }), gate),
     /**
      * What `list_subagent_models` answers with.
      *

@@ -279,9 +279,15 @@ export class OpenAIProvider implements Provider {
             )
               throw new Error('Invalid tool index');
             const value = calls.get(index) ?? { id: '', name: '', json: '' };
-            if (tool.id !== undefined) {
-              if (value.id) throw new Error('Duplicate tool ID fragment');
-              value.id = string(tool.id);
+            /**
+             * Some compatible endpoints repeat the id field on every fragment of a call — Qwen sends the id once
+             * and then `"id": ""` with each argument chunk. An empty id, or the same id again, adds nothing; a
+             * *different* id for the same index is still two calls folded into one, and is refused.
+             */
+            if (tool.id !== undefined && tool.id !== '') {
+              const id = string(tool.id);
+              if (value.id && value.id !== id) throw new Error('Duplicate tool ID fragment');
+              value.id = id;
             }
             if (tool.type !== undefined && tool.type !== 'function')
               throw new Error('Unsupported tool type');

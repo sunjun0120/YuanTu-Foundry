@@ -1,6 +1,7 @@
 import { Ajv } from 'ajv';
 import { isDeepStrictEqual } from 'node:util';
 import {
+  describeExecutionBoundary,
   executionPolicy,
   snapshotExecutionPolicy,
   withExecutionPolicy,
@@ -25,6 +26,8 @@ import type { Disposer } from './dispatch.ts';
 import { ToolPipelineInvariant } from './pipeline.ts';
 import { ToolTimeoutError, resolveToolDeadline, type ToolDeadlinePolicy } from './timeouts.ts';
 import { FOLDED_DESCRIPTION, RUN_CODE, toolSdk, type ToolMode } from './run-code-sdk.ts';
+import { LOAD_TOOLS, deferredCatalog } from './deferred-tools.ts';
+import { presentedSchema } from './presented-schema.ts';
 import type {
   PipelineStage,
   PostToolDecision,
@@ -198,6 +201,11 @@ export class ToolRegistry {
    * delegated run that silently lost the mode would send sixty schemas where its parent sent one.
    */
   toolMode: ToolMode = 'native';
+  /**
+   * The tools whose schema the `deferred` mode holds back until `load_tools` names them (`./deferred-tools.ts`).
+   * Empty for a bare registry, so an embedder's own tool set is never deferred; travels through `forRun`.
+   */
+  deferrable: ReadonlySet<string> = new Set();
   /** The runtime stage-order invariant. Always on: it costs a few array operations per call. */
   readonly pipelineInvariant = new ToolPipelineInvariant();
   constructor(hooks?: HookRegistry, jobs?: JobRegistry) {
@@ -407,17 +415,47 @@ export class ToolRegistry {
    * schemas and have 29 of them refused one by one; the schema it sends now matches what it will allow.
    */
   specs(
-    options: { readOnly?: boolean; policy?: PermissionPolicyView; mode?: ToolMode } = {},
+    options: {
+      readOnly?: boolean;
+      policy?: PermissionPolicyView;
+      mode?: ToolMode;
+      /**
+       * The deferred tools this run's transcript has loaded (`loadedTools`). Only the `deferred` mode reads it,
+       * and only a caller that passes it gets a deferred catalog: without it every tool is sent, which is the
+       * answer a caller asking "what does this registry have" wants.
+       */
+      loaded?: ReadonlySet<string>;
+    } = {},
   ): ToolSpec[] {
-    const visible = [...this.entries.values()]
+    const mode = options.mode ?? this.toolMode;
+    const all = [...this.entries.values()]
       .filter(({ tool }) => this.offers(tool.name))
       .filter(({ tool }) => !options.readOnly || !tool.permission)
       .filter(({ tool }) => !options.policy?.deniesEveryCall(tool))
       .map(({ tool }) => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: tool.inputSchema,
+        inputSchema: presentedSchema(tool.inputSchema),
       }));
+    /**
+     * Deferral, like folding, is a presentation of the same set: a held-back tool is still offered and
+     * executable, and the `load_tools` description names it. `load_tools` itself only appears under this mode —
+     * and, once every deferrable tool is loaded, not even then, since it would have nothing left to load.
+     */
+    const loaded = options.loaded;
+    const hidden =
+      mode === 'deferred' && loaded
+        ? all.filter((spec) => this.deferrable.has(spec.name) && !loaded.has(spec.name))
+        : [];
+    const visible = all
+      .filter((spec) => !hidden.includes(spec))
+      .flatMap((spec) => {
+        if (spec.name !== LOAD_TOOLS) return [spec];
+        if (mode !== 'deferred' || (loaded && !hidden.length)) return [];
+        return hidden.length
+          ? [{ ...spec, description: `${spec.description}\n${deferredCatalog(hidden)}` }]
+          : [spec];
+      });
     /**
      * Folding is a *presentation* of the same set, never a change to it: the declaration list names the tools the
      * model would otherwise have been sent one schema at a time, and each of them stays callable through
@@ -428,7 +466,6 @@ export class ToolRegistry {
      * schema-cost setting. `mode: 'native'` is how the run asks for the set the model may actually call, which is
      * what a program's catalog is built from.
      */
-    const mode = options.mode ?? this.toolMode;
     if (mode !== 'ptc' || !visible.some((spec) => spec.name === RUN_CODE)) return visible;
     return visible
       .filter((spec) => spec.name === RUN_CODE)
@@ -461,6 +498,7 @@ export class ToolRegistry {
     copy.workspaceRoot = this.workspaceRoot;
     // The presentation travels with the tools too: see the field's comment.
     copy.toolMode = this.toolMode;
+    copy.deferrable = this.deferrable;
     /**
      * The run-scoped tools come out by `remove`; the read-only allowlist goes on as a **restriction**.
      *
@@ -662,7 +700,7 @@ export class ToolRegistry {
       const approval = entry.tool.permission
         ? {
             kind: entry.tool.permission,
-            description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}`,
+            description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}${entry.tool.permission === 'command' && context.executionPolicy ? '\n' + describeExecutionBoundary(context.executionPolicy) : ''}`,
             toolCall: call,
             ...(prepared?.change ? { change: prepared.change } : {}),
           }

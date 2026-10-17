@@ -2,23 +2,23 @@ import type { ToolSpec } from '../protocol/index.ts';
 
 /** Metadata for presenting run_code in a tool catalog; safe to import from CJS consumers. */
 export const RUN_CODE = 'run_code';
-/** `ptc` folds the catalog into one generated declaration list without changing available tools. */
-export type ToolMode = 'native' | 'ptc';
+/**
+ * `ptc` folds the catalog into one generated declaration list without changing available tools; `deferred`
+ * sends the common tools and lets the model load the rest by name (`./deferred-tools.ts`).
+ */
+export type ToolMode = 'native' | 'ptc' | 'deferred';
 
 const MAX_HINT_CHARS = 72;
 
 export const BASE_DESCRIPTION = [
-  'Run a JavaScript program that calls tools itself, so several steps cost one round instead of one round each.',
-  '`code` is the body of an async function over `tools`: `await tools.<name>({ ... })` for each call, and `return`',
-  'the answer (a string, or anything JSON-serialisable). Every call is a real call — validated,',
-  'permission-checked and, where the tool requires it, approved exactly as if you had asked for it directly — and',
-  'a call that fails throws, so catch the failures you expect. The injected API is tools and console; the',
-  'program runs in a separate Node process under the selected backend, not a complete malicious-code sandbox.',
-  'Programs use the selected native operating-system sandbox or explicit host backend; unavailable policies refuse without host fallback.',
-  'It cannot call run_code again, and cannot see pictures a tool returns (call that tool',
-  'directly for those). Console output is returned with the answer, and a failure reports the calls that were',
-  'made. Prefer a program for mechanical multi-step work — read several files, filter, aggregate, compare — and',
-  'prefer ordinary calls when a person should see each step.',
+  'Run a JavaScript program that calls tools itself, so several steps cost one round.',
+  '`code` is the body of an async function: `await tools.<name>({ ... })` per call, then `return` the answer',
+  '(a string or anything JSON-serialisable). Each call is validated, permission-checked and approved exactly as',
+  'a direct call; a failed call throws, so catch what you expect. Only `tools` and `console` are injected; it runs',
+  'in a separate Node process under the selected sandbox backend (no host fallback), not a full malicious-code',
+  'sandbox. It cannot call run_code or see images a tool returns. Console output and, on failure, the calls made',
+  'are returned. Use it for mechanical multi-step work (read several files, filter, aggregate, compare); use',
+  'ordinary calls when a person should see each step.',
 ].join(' ');
 
 /** What the tool says when the catalog is folded; the declaration list is appended by `toolSdk`. */

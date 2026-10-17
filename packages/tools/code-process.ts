@@ -72,6 +72,22 @@ export function validateCodeMessage(
   return value as WorkerMessage;
 }
 
+/**
+ * The runner's Node flags. The permission model is defense in depth, not a malicious-code sandbox; the program's
+ * boundary is the realm separation in `code-worker.ts`. No fs write grant, and reads are limited to the runner's
+ * own directory: the entry moves there before starting its worker, because a worker under `--permission` is
+ * implicitly granted its working directory (see `code-process-entry.ts`) and the process starts in the workspace.
+ */
+export function codeProcessArguments(runtime: string, entry: string): string[] {
+  return [
+    '--permission',
+    '--allow-worker',
+    '--disable-warning=SecurityWarning',
+    `--allow-fs-read=${path.resolve(runtime)}`,
+    entry,
+  ];
+}
+
 export async function startCodeProcess(data: CodeWorkerData, context: ToolContext) {
   context.signal.throwIfAborted();
   const config = resolveSandboxConfig();
@@ -87,18 +103,9 @@ export async function startCodeProcess(data: CodeWorkerData, context: ToolContex
     ),
   );
   const env = await localExecutionEnvironment(root, policy);
-  // The permission model is defense in depth, not a malicious-code sandbox. No direct fs write grant.
   const running = await env.processes.start(
     process.execPath,
-    [
-      '--permission',
-      '--allow-worker',
-      '--disable-warning=SecurityWarning',
-      `--allow-fs-read=${path.join(runtime, 'code-process-entry.' + (import.meta.url.endsWith('.ts') ? 'ts' : 'js'))}`,
-      `--allow-fs-read=${path.join(runtime, 'code-worker.' + (import.meta.url.endsWith('.ts') ? 'ts' : 'js'))}`,
-      `--allow-fs-read=${path.join(runtime, 'environment.' + (import.meta.url.endsWith('.ts') ? 'ts' : 'js'))}`,
-      entry,
-    ],
+    codeProcessArguments(runtime, entry),
     '.',
     context.signal,
   );

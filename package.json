@@ -46,6 +46,7 @@
     "test:partitioned": "node scripts/run-tests.mjs --schedule=partitioned",
     "test:verbose": "node scripts/run-tests.mjs --verbose",
     "snapshot:update": "node scripts/update-snapshots.mjs",
+    "tools:usage": "node scripts/deferred-tool-usage.mjs",
     "bench": "node benchmarks/run.mjs",
     "bench:check": "node benchmarks/run.mjs --check",
     "coverage": "node scripts/test-coverage.mjs",

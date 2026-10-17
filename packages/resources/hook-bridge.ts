@@ -18,9 +18,11 @@ import { hookMatcherMatches } from './hook-config.ts';
  * observer-failure handling all apply to an external hook exactly as they do to an in-process one.
  *
  * What it adds is a boundary, and the boundary is the risk. A hook command is arbitrary code execution
- * inside the agent's process tree, so it is gated four ways, and each gate is a decision rather than a
+ * inside the agent's process tree, so it is gated five ways, and each gate is a decision rather than a
  * default:
  *
+ *  - it is installed only when the operator trusted exactly these declarations for this workspace
+ *    (`hook-trust.ts`, checked by `createTools` before this function is called);
  *  - the environment is the same allow-list `run_command` gets (`toolEnvironment`), so a hook cannot read
  *    the model's API key or any other `YUANTU_*` value;
  *  - it runs through `prepareSandbox`, inheriting the call's execution policy; an explicit hook backend

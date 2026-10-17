@@ -38,6 +38,8 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
   delete env.UPDATE_SNAPSHOTS;
   // Collection destinations belong to controllers, never descendants or nested runners.
   delete env.FOUNDRY_TEST_COVERAGE_DIR;
+  // A nested runner's failure semantics are the fixture's own business; only the outer gate decides to continue.
+  delete env.FOUNDRY_TEST_CONTINUE_ON_FAILURE;
   if (env.NODE_V8_COVERAGE) {
     env.NODE_V8_COVERAGE = path.join(root, 'coverage');
     await mkdir(env.NODE_V8_COVERAGE, { recursive: true });

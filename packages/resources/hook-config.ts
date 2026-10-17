@@ -1,5 +1,6 @@
 import { resourceEntries, resourceText } from './files.ts';
 import { RUN_DEFAULTS, parseSetting, resolveRunLimits } from '../protocol/settings.ts';
+import { hookTrustFile } from './hook-trust.ts';
 /**
  * The Claude Code hook contract, as a declaration file.
  *
@@ -46,8 +47,24 @@ export interface HookDeclaration {
   timeoutMs: number;
 }
 export interface HookBridgeSettings {
-  /** Opt-out, not opt-in: a workspace that declares hooks gets them unless an operator says no. */
+  /**
+   * The master switch. Even when it is on, a workspace's hooks are installed only once the operator has
+   * trusted exactly those declarations (`hook-trust.ts`), or `trustAll` says to skip that question.
+   */
   enabled: boolean;
+  /**
+   * Trust every workspace's declarations without a record (`YUANTU_TRUST_WORKSPACE_HOOKS=1`).
+   *
+   * An explicit escape hatch for environments the operator owns end to end (CI, a container built from a
+   * reviewed repository). It is never the default: an unattended Host or CLI that meets hooks nobody has
+   * reviewed leaves them off and says so.
+   */
+  trustAll: boolean;
+  /**
+   * Where trust records are read from. Absent when the user state directory cannot be resolved, in which
+   * case nothing is trusted.
+   */
+  trustFile?: string;
   timeoutMs: number;
   /**
    * Where a hook that misbehaved is reported.
@@ -56,17 +73,27 @@ export interface HookBridgeSettings {
    * Host both want stderr, an embedder wants its own log, and a test wants to read it.
    */
   onFailure?: (message: string) => void;
+  /** Where "hooks were found but not trusted, so they are off" is reported. Defaults to stderr. */
+  onUntrusted?: (message: string) => void;
 }
 /**
- * The bridge's two settings, read through the one table.
+ * The bridge's settings, read through the one table.
  *
  * They are read here rather than being threaded through the run options because a tool registry is built
  * without them (`createTools` has no `Options`), and inventing a second place for the defaults is exactly
  * what `packages/protocol/settings.ts` exists to prevent.
  */
 export function hookBridgeSettings(env: NodeJS.ProcessEnv = process.env): HookBridgeSettings {
+  let trustFile: string | undefined;
+  try {
+    trustFile = hookTrustFile(env);
+  } catch {
+    // An unusable YUANTU_STATE_DIR leaves nothing trusted; the untrusted notice names the consequence.
+  }
   return {
     enabled: parseSetting(env, 'YUANTU_HOOK_BRIDGE') !== false,
+    trustAll: parseSetting(env, 'YUANTU_TRUST_WORKSPACE_HOOKS') === true,
+    ...(trustFile === undefined ? {} : { trustFile }),
     timeoutMs: resolveRunLimits({
       hookTimeoutMs: parseSetting(env, 'YUANTU_HOOK_TIMEOUT_MS') as number | undefined,
     }).hookTimeoutMs,

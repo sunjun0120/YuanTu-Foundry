@@ -191,11 +191,31 @@ export function setupCommandPalette(actions: {
       prompt.focus();
     }
   }
+  /**
+   * What the last render put in the menu.
+   *
+   * The menu is rebuilt on every keystroke by design, but the renderer calls this on every snapshot too — and a
+   * state update that changed nothing used to replace every option node anyway. That detached the element a
+   * person (or a test) was about to click: Playwright waits for a stable target and saw a fresh node each time,
+   * and a real user clicking during a streaming update hit empty space. Identical content is now a no-op, so an
+   * open menu keeps the nodes it has until something it displays actually changes.
+   */
+  let lastPaletteSignature: string | undefined;
   function renderPalette(): void {
     const menu = required('command-menu');
     menu.setAttribute('aria-label', t('ui.commandAndSkills'));
     const items = paletteItems();
     selectedCommand = Math.min(selectedCommand, Math.max(0, items.length - 1));
+    const signature = [
+      menu.getAttribute('aria-label'),
+      String(prompt.disabled),
+      String(selectedCommand),
+      ...items.map(
+        (item) => `${item.kind}\u0001${item.value}\u0001${item.name}\u0001${item.description}`,
+      ),
+    ].join('\u0002');
+    if (signature === lastPaletteSignature) return;
+    lastPaletteSignature = signature;
     menu.hidden = !items.length || prompt.disabled;
     if (items.length) {
       const activeId = `command-option-${selectedCommand}`;

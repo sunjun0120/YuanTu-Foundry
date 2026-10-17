@@ -55,6 +55,12 @@ import type { SandboxMode } from './sandbox-settings.ts';
 import { DailyBackups } from './daily-backups.ts';
 import { parseBackupCommand, type BackupReply } from './backup-contract.ts';
 import type { BackupAction, BackupResult } from './database-backup-worker.ts';
+import {
+  HookTrustReview,
+  type HookTrustAnswer,
+  type HookTrustQuestion,
+} from './hook-trust-review.ts';
+import { describeHookDeclarations } from '../../packages/resources/hook-trust.ts';
 
 let window: BrowserWindow | null = null;
 let service: CarrierService | null = null;
@@ -433,6 +439,56 @@ function attach(next: CarrierService): CarrierService {
 }
 function safeError(error: unknown): string {
   return carrierErrorReply(error).error;
+}
+/**
+ * The workspace-hook trust prompt: every command and the file that declared it, then "trust" or "not now".
+ *
+ * A native dialog rather than a renderer panel because it has to be answered *before* the Host starts — the
+ * first run of a new Host is when an untrusted `SessionStart` would otherwise execute — and the renderer is
+ * not connected to anything yet at that point.
+ */
+async function askHookTrust(question: HookTrustQuestion): Promise<HookTrustAnswer> {
+  const detail = `${mainText('hookTrust.detail', { workspace: question.workspace })}\n\n${describeHookDeclarations(question.declarations)}`;
+  const options = (buttons: string[], message: string): Electron.MessageBoxOptions => ({
+    type: 'warning',
+    title: mainText('hookTrust.title'),
+    message,
+    detail,
+    buttons,
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  const show = (box: Electron.MessageBoxOptions) =>
+    window && !window.isDestroyed()
+      ? dialog.showMessageBox(window, box)
+      : dialog.showMessageBox(box);
+  if (question.reason === 'unavailable') {
+    await show(
+      options(
+        [mainText('hookTrust.skip')],
+        mainText('hookTrust.unavailable', { detail: question.detail ?? '' }),
+      ),
+    );
+    return 'skip';
+  }
+  const message = mainText('hookTrust.message', { count: question.declarations.length });
+  const result = await show(
+    options(
+      [mainText('hookTrust.skip'), mainText('hookTrust.trust')],
+      question.reason === 'changed' ? `${mainText('hookTrust.changed')}\n${message}` : message,
+    ),
+  );
+  return result.response === 1 ? 'trust' : 'skip';
+}
+const hookTrust = new HookTrustReview(askHookTrust);
+/** Asked before every Host start; a failure to ask leaves the hooks off, which the Host enforces anyway. */
+async function reviewWorkspaceHooks(workspace: string): Promise<void> {
+  try {
+    await hookTrust.review(workspace);
+  } catch (error) {
+    console.error(`[desktop] workspace hook review failed: ${safeError(error)}`);
+  }
 }
 /**
  * The pair a session is in, and the pair the live carrier is actually enforcing.
@@ -1151,6 +1207,8 @@ void app
             if (!result.canceled && result.filePaths[0] && !quitting) {
               const selected = realpathSync(result.filePaths[0]);
               if (selected !== state.workspace) {
+                // Before the Host exists: its first run is when an untrusted hook would otherwise execute.
+                await reviewWorkspaceHooks(selected);
                 const next = createService(selected);
                 openingService = next;
                 try {
@@ -1181,6 +1239,9 @@ void app
     await window.loadFile(pagePath);
     window.show();
     // Startup failures remain visible in the chat window; no silent retries of runs.
+    // Asked once the window is visible and before the Host starts, so the prompt has a parent and an
+    // untrusted SessionStart hook has not had a chance to run.
+    if (!quitting) await reviewWorkspaceHooks(workspace);
     if (!quitting)
       await initial
         .start()

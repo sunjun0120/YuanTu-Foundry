@@ -165,11 +165,13 @@ export const RUN_DEFAULTS = Object.freeze({
   maxModelRetries: 5,
   questionTimeoutMs: 120_000,
   /**
-   * Four, not the ten a batch of reads could use: the tools that opt in are local file, git and session
-   * reads, where the win is overlapping I/O waits and the cost of going wider is disk and handle contention
-   * on one machine. An operator with a batch of network reads and a reason to overlap more raises it.
+   * Eight: the tools that opt in are local file, git and session reads, and a model exploring a codebase asks
+   * for several at once — five to eight reads or searches in one message is common, and with four the second
+   * half waited for the first. Writes, commands and anything carrying a permission stay exclusive whatever this
+   * says, so going wider only overlaps more reads; past eight the cost is disk and handle contention on one
+   * machine. An operator with a reason to overlap more (or less) sets `YUANTU_MAX_PARALLEL_TOOLS`.
    */
-  maxParallelToolCalls: 4,
+  maxParallelToolCalls: 8,
   invariantTimeoutMs: 5_000,
   hookTimeoutMs: 30_000,
   forkTranscriptChars: 120_000,
@@ -359,14 +361,19 @@ export const ENVIRONMENT = {
   },
   YUANTU_TOOL_MODE: {
     kind: 'enum',
-    values: ['native', 'ptc'],
-    description: '工具下发方式：native 逐个下发，ptc 折成 run_code + 生成 SDK',
+    values: ['deferred', 'native', 'ptc'],
+    description:
+      '工具下发方式：deferred（默认）常用工具直接下发、其余经 load_tools 按需加载，native 逐个全部下发，ptc 折成 run_code + 生成 SDK',
   },
   YUANTU_PERMISSION_POLICY: { kind: 'string', description: '权限策略文件路径' },
   YUANTU_HOOKS_MODULE: { kind: 'string', description: '扩展钩子模块路径' },
   YUANTU_HOOK_BRIDGE: {
     kind: 'boolean',
     description: '是否加载工作区里声明的外部钩子（.claude/settings.json、.yuantu/hooks.json）',
+  },
+  YUANTU_TRUST_WORKSPACE_HOOKS: {
+    kind: 'boolean',
+    description: '强制信任所有工作区的外部钩子，跳过逐工作区的信任确认（仅用于自己掌控的环境）',
   },
   YUANTU_HOOK_TIMEOUT_MS: {
     kind: 'number',
@@ -386,6 +393,10 @@ export const ENVIRONMENT = {
   YUANTU_SUBAGENT_MODELS: {
     kind: 'string',
     description: '额外的可委派模型 id（逗号分隔），供 list_subagent_models 列出',
+  },
+  YUANTU_SUMMARY_MODEL: {
+    kind: 'string',
+    description: '上下文压缩摘要使用的模型 id（同一端点；未设置则用主模型），其窗口不应小于主模型',
   },
   YUANTU_TOOL_RESULT_KEEP_RECENT: {
     kind: 'number',

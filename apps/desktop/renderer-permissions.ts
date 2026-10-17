@@ -94,6 +94,36 @@ export function setupPermissionSettings(
           ? text('完全权限', 'Full access')
           : text('自定义', 'Custom');
   /**
+   * What the rung's sandbox does and does not stop, as the rung's tooltip.
+   *
+   * The names stay one line (see `label`), but "工作区内修改" on Windows is a partial write boundary that leaves
+   * reads and the network open, and a person choosing it should be able to learn that without opening the README.
+   * A tooltip is the place that keeps the menu a choice while not letting the name promise more than the backend
+   * does. The platform is the renderer's own: the `native` mode resolves to the token backend on Windows and to
+   * Seatbelt on macOS.
+   */
+  const windowsHost = /Windows/i.test(navigator.userAgent);
+  const boundary = (id: PermissionPresetId): string =>
+    id === 'observe'
+      ? text(
+          '只读：不修改文件、不执行命令；读取与搜索工作区无需确认。',
+          'Read only: no file changes and no commands; reading and searching the workspace need no confirmation.',
+        )
+      : id === 'guarded'
+        ? windowsHost
+          ? text(
+              '写入与命令逐项确认。命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。',
+              'Writes and commands are confirmed one by one. Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network.',
+            )
+          : text(
+              '写入与命令逐项确认。命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
+              'Writes and commands are confirmed one by one. Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
+            )
+        : text(
+            '不再逐项确认；命令直接在本机运行，没有任何系统隔离。',
+            'No confirmations; commands run directly on this machine with no operating-system isolation.',
+          );
+  /**
    * One shield per rung, saying what the rung lets through: a check (nothing is written), a pencil (writing is
    * the point), an exclamation (the sandbox is gone). The same shield for all three, so the rows read as one
    * scale rather than three unrelated controls.
@@ -120,6 +150,7 @@ export function setupPermissionSettings(
     const locked = pending || !isReady();
     trigger.replaceChildren(icon(id), document.createTextNode(label(id)));
     trigger.dataset.preset = id;
+    trigger.title = id === CUSTOM_PRESET ? '' : boundary(id);
     select.value = id;
     /**
      * Nothing is disabled but a control that cannot move yet. The launch environment used to *pin* the mode, so
@@ -161,6 +192,7 @@ export function setupPermissionSettings(
         button.type = 'button';
         button.dataset.preset = preset.id;
         button.setAttribute('role', 'menuitemradio');
+        button.title = boundary(preset.id);
         const copy = document.createElement('span');
         copy.className = 'permission-copy';
         copy.textContent = label(preset.id);

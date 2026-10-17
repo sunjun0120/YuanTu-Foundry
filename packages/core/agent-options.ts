@@ -35,6 +35,15 @@ export interface AgentOptions {
   supportsVision?: boolean;
   store: SessionStore;
   provider: Provider;
+  /**
+   * The model that writes compaction summaries, when it is not the run's own.
+   *
+   * A summary is a bounded rewrite of history that blocks the round waiting for it, so a faster, cheaper model is
+   * usually the better trade (`YUANTU_SUMMARY_MODEL`). Its window must hold what a summary request carries: the
+   * batch is cut to fit the *run's* window, so a summary model with a smaller one fails that request. Absent, the
+   * run's provider writes its summaries, as it always did.
+   */
+  summaryProvider?: Provider;
   tools: ToolRegistry;
   approve: Approver;
   /**

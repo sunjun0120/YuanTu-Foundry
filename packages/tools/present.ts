@@ -59,7 +59,7 @@ export function presentTool(root: string): Tool {
   return {
     name: 'present',
     description:
-      'Declare workspace files as the finished deliverables of this task, so the user can open them: a document, spreadsheet, deck, image, report or patch you produced. Use it for the files the user needs, not for files you merely read or created in passing, and not instead of answering. Each path must exist inside the workspace — it is verified (regular, nonempty, size and SHA-256) before it is declared — and declaring is not copying: the files stay where they are. At most 4 per call.',
+      'Declare files you produced (document, spreadsheet, deck, image, report, patch) as the deliverables of this task so the user can open them. Not for files you only read or created in passing, and not instead of answering. Each path must be an existing nonempty workspace file (verified first); files are not copied. At most 4 per call.',
     inputSchema: {
       type: 'object',
       properties: {

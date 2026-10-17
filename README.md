@@ -345,7 +345,7 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 ### 权限策略
 
-用 `--permission-policy <file>` 或 `YUANTU_PERMISSION_POLICY` 指定可信 JSON 规则。`deny` 优先于 `ask`，再优先于 `allow`；deny/ask 覆盖 `--allow-command` 与 `--allow-write`；不匹配则保留原审批行为。规则按 kind、精确工具名和**完整** arguments 对象匹配——arguments 不是命令前缀白名单。CLI 与 Host 用 `--allow-*` 与策略文件表达这四档；桌面把它们和沙箱捆成三档（仅可查看 = 只读、工作区内修改 = 逐项询问、完全权限 = 完全访问 + 宿主执行），只能整档选择。
+用 `--permission-policy <file>` 或 `YUANTU_PERMISSION_POLICY` 指定可信 JSON 规则。`deny` 优先于 `ask`，再优先于 `allow`；deny/ask 覆盖 `--allow-command` 与 `--allow-write`；不匹配则保留原审批行为。规则按 kind、精确工具名和**完整** arguments 对象匹配——arguments 不是命令前缀白名单。需要按模式匹配时改用 `match`（与 `arguments` 互斥）：按参数名给出通配符，`*` 匹配任意串、`?` 匹配单个字符、`\` 转义，所列参数都必须是字符串且全部命中，例如 `{ "effect": "allow", "tool": "run_command", "match": { "command": "npm test*" } }`、`{ "effect": "deny", "kind": "write", "match": { "path": "config/secrets/*" } }`。两类规则的语义刻意不对称：`allow` 区分大小写，并且**永远不会**放行含 shell 控制字符（``; & | ` $ < > ( ) { }``、换行）或 `..` 路径段的值，所以 `npm test*` 放行不了 `npm test; curl … | sh`，`src/*` 也碰不到 `src/../.git/hooks`；`deny`/`ask` 不区分大小写，并同时按归一化路径（`\` 视为 `/`、去掉开头的 `./`、合并重复斜杠）比对。超过 64 KiB 的参数不逐字比对：不会被 allow 模式放行，一律命中 deny/ask 模式。匹配是线性的通配算法，不经正则，不会灾难性回溯。带 `match` 的 deny 只拒绝命中的调用，不会把工具从模型可见的目录里隐藏。命令类审批会附一行 `Isolation:`，按本次调用所用后端**声明**的能力说明它能挡住什么、挡不住什么（例如 Windows 受限令牌只部分限制写入，读取与网络不受限）。CLI 与 Host 用 `--allow-*` 与策略文件表达这四档；桌面把它们和沙箱捆成三档（仅可查看 = 只读、工作区内修改 = 逐项询问、完全权限 = 完全访问 + 宿主执行），只能整档选择。
 
 ### 命令沙箱
 
@@ -369,13 +369,19 @@ Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复
 
 工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。钩子命令通过所选沙箱执行；运行器故障不触发宿主重试。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。
 
+**钩子只在工作区被信任后才安装。** 声明来自仓库，打开一个克隆来的仓库并发出第一条消息不应就执行其中的 `SessionStart`、`UserPromptSubmit` 等命令（默认原生沙箱在 Windows 上不限制读取与网络）。信任记录按工作区保存为全部声明（来源文件、事件、matcher、命令，按声明顺序）的 SHA-256 摘要，存放在用户状态目录的 `hook-trust.json`（默认 `~/.yuantu/hook-trust.json`，随 `YUANTU_STATE_DIR` 移动），从不写入工作区；状态目录落在工作区内时拒绝记录、也不认可其中的记录。只有当前声明的摘要与记录一致时 Host 才安装钩子；任何一处命令、matcher、事件或来源文件变化都会使信任失效（超时秒数不计入摘要）。
+
+- **桌面端**在启动或切换到某工作区、Host 启动之前检查：发现未信任的钩子时弹窗列出每条命令及其来源文件，选择「信任并启用」写入记录，「本次不启用」不写任何记录，本次桌面进程内同一组声明不再询问，下次启动或声明变化后再问。
+- **Host 与 CLI 不交互**：遇到未信任的钩子一律不启用，并在 stderr 打印一次 `[hook] … not enabled` 提示，说明来源文件与处理办法。
+- `YUANTU_TRUST_WORKSPACE_HOOKS=1` 是显式的强制信任开关：跳过逐工作区确认、不写记录，只应在自己掌控的环境（CI、由已审查仓库构建的容器）里使用。
+
 ---
 
 <a id="sessions"></a>
 
 ## 会话、事件与投影
 
-默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置、模型设置与 MCP 服务，不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复、中断恢复与就地压缩通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover`、`db-compact` 维护命令提供，备份最多保留 5 份、合计 512 MiB。删除记录不会让 SQLite 文件变小——空闲页留在文件里等待复用，文件保持历史峰值——`db-compact` 用一次 `VACUUM` 把这些页还给文件系统，并报告压缩前后的字节数；它同样要求先关闭使用该库的桌面、Host 与 CLI，数据库路径与身份不变。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
+默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL 与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置与模型设置（MCP 服务管理随范围开关暂停，页面与 IPC 一并关闭），不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复、中断恢复与就地压缩通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover`、`db-compact` 维护命令提供，备份最多保留 5 份、合计 512 MiB。删除记录不会让 SQLite 文件变小——空闲页留在文件里等待复用，文件保持历史峰值——`db-compact` 用一次 `VACUUM` 把这些页还给文件系统，并报告压缩前后的字节数；它同样要求先关闭使用该库的桌面、Host 与 CLI，数据库路径与身份不变。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
 
 桌面会话默认加载最近 100 条展示消息，可按“加载更早记录”每次向前加载 100 条；重用未变化的消息节点，保留阅读位置和操作组展开状态。此分页仅限制展示传输与渲染，模型仍读取完整会话记录。模型设置中的容量、自动压缩阈值和流空闲超时支持编辑；部分保存省略字段时保留旧值，显式清空恢复默认行为。
 
@@ -437,7 +443,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 | `--max-context-tokens`          | 自动解析 | 手动覆盖上下文预算；发现不可用时默认 1,000,000 token |
 | `--auto-compact-tokens`         | 未设置   | 提前压缩阈值，须小于上下文窗口                       |
 | `--max-context-chars`           | 10000000 | 附加字符保护上限                                     |
-| `--max-parallel-tools`          | 4        | 同一助手消息里可重叠的工具调用数（1 = 严格串行）     |
+| `--max-parallel-tools`          | 8        | 同一助手消息里可重叠的工具调用数（1 = 严格串行）     |
 | `--max-retries`                 | 5        | 步骤边界重发模型请求的次数上限（0–5）                |
 | `--tool-result-keep-recent`     | 6        | 末尾永不缩短的工具结果条数                           |
 | `--tool-result-shrink-tokens`   | 400      | 缩短后保留的 token 数（头尾各半）                    |
@@ -553,9 +559,9 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 ### Electron 桌面
 
-主进程负责窗口、单实例锁、设置存储、IPC 与 Host 子进程的生命周期；preload 用 `contextBridge` 暴露一组 invoke 通道与四条订阅通道（整快照、助手流式文本、子代理增量、统计增量）；渲染层只与 `window.yuantu` 交互。窗口开启 `contextIsolation`、`sandbox`、`nodeIntegration: false`，并拒绝所有窗口打开与导航、拒绝一切会话权限请求，也没有应用菜单加速键——外链只能走系统浏览器，且只接受无凭据的 `http`/`https`。
+主进程负责窗口、单实例锁、设置存储、IPC 与 Host 子进程的生命周期；preload 用 `contextBridge` 暴露一组 invoke 通道与五条订阅通道（整快照、助手流式文本、子代理增量、统计增量、权限预设）；渲染层只与 `window.yuantu` 交互。窗口开启 `contextIsolation`、`sandbox`、`nodeIntegration: false`，并拒绝所有窗口打开与导航、拒绝一切会话权限请求，也没有应用菜单加速键——外链只能走系统浏览器，且只接受无凭据的 `http`/`https`。
 
-渲染层**没有框架也没有状态库**：整个界面是一份 `CarrierSnapshot` 加四条订阅，重绘按区块的 key 做差量，locale 也进 key，因此一次流式增量只改动真正变了的那一块。对话区只画对话：`<runtime-context source="…">`（`workspace-outline` / `memory` / `skills` / `task`）这类**机器写给模型的快照**留在会话与日志里、也照旧发给模型，但不作为消息画出来——它们不是谁说的话，而人滚屏是为了看问答；识别由 `packages/core/runtime-context.ts` 的 `isRuntimeSnapshot()` 提供（与写快照的那一端共用同一个包装标签）。`<compacted-summary>` 不在此列：那是这场对话自己的摘要，读者要看的正是它。
+渲染层**没有框架也没有状态库**：整个界面是一份 `CarrierSnapshot` 加五条订阅，重绘按区块的 key 做差量，locale 也进 key，因此一次流式增量只改动真正变了的那一块。对话区只画对话：`<runtime-context source="…">`（`workspace-outline` / `memory` / `skills` / `task`）这类**机器写给模型的快照**留在会话与日志里、也照旧发给模型，但不作为消息画出来——它们不是谁说的话，而人滚屏是为了看问答；识别由 `packages/core/runtime-context.ts` 的 `isRuntimeSnapshot()` 提供（与写快照的那一端共用同一个包装标签）。`<compacted-summary>` 不在此列：那是这场对话自己的摘要，读者要看的正是它。
 
 | 面板       | 内容                                                                                                                                                                                                             |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -567,7 +573,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 子代理     | 目录含状态点、目标、tokens 与耗时（每秒只改文本不重建行），另有详情卡与整页子代理记录                                                                                                                            |
 | 统计       | 两个 pill：会话统计（模型用时／工具用时／首 token 平均／输出速度）与 Token 用量（缓存命中／未缓存输入／缓存读取／缓存写入／输出）                                                                                |
 
-输入区支持 `/` 唤起指令与技能面板，其中只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行，其余（切换模型、权限设置、新建会话、停止、刷新技能）走面板点击。设置页分通用、模型、MCP 三组。**权限与隔离是 composer 上的一枚 chip，三档**：仅可查看（沙箱内、只读）、工作区内修改（沙箱内、写入前询问，**新会话的默认**）、完全权限（宿主执行、不再询问，需要一次显式确认）。每档一次写入沙箱与批准两件事——不存在只改一半的路径——当前组合不是任何一档时 chip 显示「自定义」并说明它来自启动环境，而「自定义」只能被读出、不能被选中。档位**属于会话**：换了档只影响当前会话，新建会话回到默认，切回旧会话恢复它自己的档。菜单就是三行（盾牌图标 + 名称 + 当前项的对勾），**只在后端不可用时**多一行说明原因。界面文案由 zh/en 双语字典驱动，主进程的设置校验、失败对话框与回执用同一本字典（`apps/desktop/i18n.ts`，见下文的 `i18n:check`），`index.html` 里的静态中文在切换语言时经反向索引翻译并跟随新增节点；主题（跟随系统／浅色／深色）与三档字号写在根元素属性上。
+输入区支持 `/` 唤起指令与技能面板，其中只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行，其余（切换模型、权限设置、新建会话、停止、刷新技能）走面板点击。设置页分通用、模型两组（MCP 服务管理随范围开关暂停，页面与 IPC 一并关闭）。**权限与隔离是 composer 上的一枚 chip，三档**：仅可查看（沙箱内、只读）、工作区内修改（沙箱内、写入前询问，**新会话的默认**）、完全权限（宿主执行、不再询问，需要一次显式确认）。每档一次写入沙箱与批准两件事——不存在只改一半的路径——当前组合不是任何一档时 chip 显示「自定义」并说明它来自启动环境，而「自定义」只能被读出、不能被选中。档位**属于会话**：换了档只影响当前会话，新建会话回到默认，切回旧会话恢复它自己的档。菜单就是三行（盾牌图标 + 名称 + 当前项的对勾），**只在后端不可用时**多一行说明原因。界面文案由 zh/en 双语字典驱动，主进程的设置校验、失败对话框与回执用同一本字典（`apps/desktop/i18n.ts`，见下文的 `i18n:check`），`index.html` 里的静态中文在切换语言时经反向索引翻译并跟随新增节点；主题（跟随系统／浅色／深色）与三档字号写在根元素属性上。
 
 模型密钥用系统 `safeStorage` 加密（系统加密不可用时拒绝保存），配置文件（模型、界面、权限、沙箱）都在 Electron 的应用数据目录；每个接口分组最多 100 个模型。MCP OAuth 凭据在 `mcp-oauth/`，默认使用系统密钥库保存密钥并以 AES-256-GCM 加密，桌面与 Agent Host 共用同一份凭据；CLI 默认存于用户目录 `.yuantu/mcp-oauth/`。Linux 要求可用的 Secret Service。旧文件读取时原子迁移，密钥库不可用时拒绝读取或保存，不回退明文；删除本地凭据仍可执行。
 
@@ -597,7 +603,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 上下文整理   | `YUANTU_TOOL_RESULT_KEEP_RECENT`、`YUANTU_TOOL_RESULT_SHRINK_TOKENS`、`YUANTU_CONTEXT_SHRINK_PERCENT`、`YUANTU_TOOL_MODE`、`YUANTU_REPO_MAP`、`YUANTU_FS_OBSERVATION`、`YUANTU_LSP_AFTER_EDIT` |
 | 子代理       | `YUANTU_SUBAGENTS`、`YUANTU_SUBAGENT_CONCURRENCY`、`YUANTU_SUBAGENT_TIMEOUT_MS`、`YUANTU_SUBAGENT_MODELS`、`YUANTU_FORK_TRANSCRIPT_CHARS`、`YUANTU_FORK_TRANSCRIPT_MESSAGES`                   |
 | 工作区与沙箱 | `YUANTU_WORKSPACE`、`YUANTU_SANDBOX`、`YUANTU_SANDBOX_HOOK`、`YUANTU_SANDBOX_IMAGE`、`YUANTU_SANDBOX_SPEC`、`YUANTU_PTY`、`YUANTU_ALLOW_PRIVATE_NETWORK`、`YUANTU_PERMISSION_POLICY`           |
-| 集成与钩子   | `YUANTU_HOOKS_MODULE`、`YUANTU_HOOK_BRIDGE`、`YUANTU_HOOK_TIMEOUT_MS`、`YUANTU_QUESTION_TIMEOUT_MS`                                                                                            |
+| 集成与钩子   | `YUANTU_HOOKS_MODULE`、`YUANTU_HOOK_BRIDGE`、`YUANTU_TRUST_WORKSPACE_HOOKS`、`YUANTU_HOOK_TIMEOUT_MS`、`YUANTU_QUESTION_TIMEOUT_MS`                                                            |
 | 检索与记忆   | `YUANTU_SEARCH_PROVIDER`、`YUANTU_SEARCH_API_KEY`、`YUANTU_SEARCH_BASE_URL`、`YUANTU_MEMORY_DIR`、`YUANTU_KNOWLEDGE_DB`、`YUANTU_MCP_OAUTH_DIR`                                                |
 | 调度与会话   | `YUANTU_WORKFLOWS`、`YUANTU_WORKFLOW_INTERVAL_MS`、`YUANTU_SESSION_TITLES`                                                                                                                     |
 
@@ -607,7 +613,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 67 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 69 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -642,14 +648,16 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_PTY` | `string` | 终端（terminal_* 工具）使用的 PTY 后端名，默认为内置的 node-pty |
 | `YUANTU_ALLOW_PRIVATE_NETWORK` | `0` / `1` | 是否允许访问私有网段 |
 | `YUANTU_FS_OBSERVATION` | `0` / `1` | 改动文件前是否要求本运行已读过该文件（默认开启，关闭则不检查） |
-| `YUANTU_TOOL_MODE` | `native` / `ptc` | 工具下发方式：native 逐个下发，ptc 折成 run_code + 生成 SDK |
+| `YUANTU_TOOL_MODE` | `deferred` / `native` / `ptc` | 工具下发方式：deferred（默认）常用工具直接下发、其余经 load_tools 按需加载，native 逐个全部下发，ptc 折成 run_code + 生成 SDK |
 | `YUANTU_PERMISSION_POLICY` | `string` | 权限策略文件路径 |
 | `YUANTU_HOOKS_MODULE` | `string` | 扩展钩子模块路径 |
 | `YUANTU_HOOK_BRIDGE` | `0` / `1` | 是否加载工作区里声明的外部钩子（.claude/settings.json、.yuantu/hooks.json） |
+| `YUANTU_TRUST_WORKSPACE_HOOKS` | `0` / `1` | 强制信任所有工作区的外部钩子，跳过逐工作区的信任确认（仅用于自己掌控的环境） |
 | `YUANTU_HOOK_TIMEOUT_MS` | `1000–600000` | 单条外部钩子命令的超时（毫秒） |
 | `YUANTU_FORK_TRANSCRIPT_CHARS` | `1000–10000000` | 分叉子代理继承的父会话转录字符上限 |
 | `YUANTU_FORK_TRANSCRIPT_MESSAGES` | `1–10000` | 分叉子代理继承的父会话消息条数上限 |
 | `YUANTU_SUBAGENT_MODELS` | `string` | 额外的可委派模型 id（逗号分隔），供 list_subagent_models 列出 |
+| `YUANTU_SUMMARY_MODEL` | `string` | 上下文压缩摘要使用的模型 id（同一端点；未设置则用主模型），其窗口不应小于主模型 |
 | `YUANTU_TOOL_RESULT_KEEP_RECENT` | `0–100` | 末尾永不缩短的工具结果条数 |
 | `YUANTU_TOOL_RESULT_SHRINK_TOKENS` | `100–32000` | 缩短后保留的 token 数（头尾各半） |
 | `YUANTU_CONTEXT_SHRINK_PERCENT` | `10–95` | 占窗口（或提前压缩阈值）百分之多少时开始缩短旧工具结果 |
@@ -699,14 +707,15 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 67 个 / 36.6 KB | `createTools().specs()` |
-| 工具（只读运行） | 34 个 / 18.2 KB | `specs({ readOnly: true })` |
-| 工具（折叠为 `run_code`） | 1 个 / 10.6 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
-| `explore` 白名单条目 | 24 条 | `EXPLORE_TOOLS` |
+| 工具（空工作区，全部） | 67 个 / 33.9 KB | `createTools().specs()` |
+| 工具（只读运行） | 34 个 / 16.6 KB | `specs({ readOnly: true })` |
+| 工具（默认按需加载，首个请求） | 30 个 / 16.6 KB | `specs({ loaded: new Set() })`（默认 `YUANTU_TOOL_MODE=deferred`） |
+| 工具（折叠为 `run_code`） | 1 个 / 10.2 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
+| `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v30 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 249 个 | `tests/*.test.ts` |
+| 行为测试文件 | 256 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -740,7 +749,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
-- **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host 与 Windows/macOS 原生执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。VM 和 Node Permission Model 都不是恶意代码沙箱，直接效果仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。旧容器入口已移除，不能回退 host。独立 runner 的构建产物由 `scripts/build-program-runner.mjs` 生成，验收边界需在目标平台实测。
+- **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host 与 Windows/macOS 原生执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。程序**不获得工具之外的能力**：`tools.*`、`console`、`agent()`/`parallel()` 等表面及其返回的 Promise 和 Error 都在 VM 上下文内部构造，跨边界只传字符串、数字和布尔值，桥接函数没有原型链，因此 `tools.read_file.constructor('return process')()` 这类写法拿到的是被禁止字符串生成代码的上下文内 `Function`，而不是 Worker 的 `process`；联网只能经 `web_fetch` 等需审批的工具，读文件只能经遵守凭据排除规则的文件工具。这条边界之下还有两层纵深防御：Worker realm 在程序启动前删除 `fetch`、`WebSocket`、`EventSource`；runner 进程的 `--allow-fs-read` 只放行 runner 自身目录，入口在创建 Worker 前切换到该目录（Node 的 Permission Model 会把 Worker 的工作目录隐式加入可读范围，而 runner 是在工作区里启动的）。以上都依赖 V8 realm 隔离，不能替代对抗恶意代码的 OS 沙箱：直接效果最终仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。旧容器入口已移除，不能回退 host。独立 runner 的构建产物由 `scripts/build-program-runner.mjs` 生成，验收边界需在目标平台实测。
 - **CLI 不是 Host**：它不监听端口，`--listen` 会被明确拒绝。
 - **数据保护由存储层负责**：旧库迁移前自动备份，桌面不再调度每日备份，也不自动恢复。较新 schema 的库仍拒绝打开；维护命令复用离线校验与保全流程。恢复后主对话不自动续跑，已保存的定时/触发任务和目标唤醒仍按现有规则运行。
 - 环境检查只做在 CLI 与 Host，库代码不做——嵌入方进程里可能存在别的 `YUANTU_*` 变量。
@@ -759,8 +768,9 @@ npm.cmd test             # 全量行为测试：仅输出汇总、跳过原因�
 npm.cmd test -- tests/host-requests.test.ts   # 明确指定测试文件
 npm.cmd run test:partitioned -- --plan   # 只预览隔离并行组、资源标签与串行组，不执行测试
 npm.cmd run test:serial       # 同一隔离契约，文件并发为 1
-npm.cmd test -- --concurrency=2   # 默认并发 min(4, availableParallelism)，可显式覆盖
+npm.cmd test -- --concurrency=2   # 默认并发 min(8, availableParallelism)，可显式覆盖
 npm.cmd test -- --order=name     # 使用文件名顺序；默认优先运行历史耗时较长的文件
+npm.cmd test -- --continue-on-failure  # 失败后仍派发其余文件；CI 用 FOUNDRY_TEST_CONTINUE_ON_FAILURE=1 固定这一行为
 npm.cmd run test:isolation:check # 检查测试入口和本地 helper 的隔离规则
 npm.cmd run coverage        # 隔离执行后合并原始 V8 ranges，检查全套覆盖率下限
 npm.cmd run test:verbose    # 原始详细输出，排查时使用
@@ -775,7 +785,7 @@ npm.cmd run docs:generate   # 重写 README 的生成事实块
 
 覆盖率入口同样使用隔离调度器，将各 worker 的原始 V8 报告保留至本次独有的覆盖率产物目录，再由 Node 24 自带的覆盖率合并实现按源码范围聚合。全套阈值仍为行 90%、分支 75%、函数 85%，不会逐文件套用全套阈值，也不会把同一源码重复计入分母；没有原始报告或合并失败均拒绝通过。合并器依赖 Node 24 的内部覆盖率 API，升级 Node 主版本时需先核对该接口。
 
-`npm test` 默认把新测试放进隔离并行池：每文件独立 Node 进程、tmp/home/state/cache/artifacts，cwd 保持仓库根且只读；监听使用 loopback 与端口 0。禁止 `process.chdir` 和写出当前 worker 私有根。文件头 `// @test-serial resource: reason` 只用于真实共享机器资源（windows-sandbox、machine-lease、real-pty、desktop-ui、os-credentials），并行池完全结束后才独占执行串行组；标签不关闭私有文件和端口约束。`test:partitioned` 是默认行为的兼容入口；`test:serial` 使用同一隔离契约。`--parallel-concurrency` 与 `--concurrency` 等价，`--plan` 不执行测试。探针违规、报告缺失和清理失败均使运行失败。普通状态通过 `YUANTU_STATE_DIR` 隔离，单项显式覆盖仍优先；原生 Windows 安全控制目录保持真实机器边界。测试日志说明 Node 探针覆盖与外部进程夹具路径约束的区别，此工程隔离不提供恶意代码的操作系统级隔离。
+`npm test` 默认把新测试放进隔离并行池：每文件独立 Node 进程、tmp/home/state/cache/artifacts，cwd 保持仓库根且只读；监听使用 loopback 与端口 0。禁止 `process.chdir` 和写出当前 worker 私有根。文件头 `// @test-serial resource: reason` 只用于真实共享机器资源（windows-sandbox、machine-lease、real-pty、desktop-ui、os-credentials），并行池完全结束后才独占执行串行组；标签不关闭私有文件和端口约束。`test:partitioned` 是默认行为的兼容入口；`test:serial` 使用同一隔离契约。`--parallel-concurrency` 与 `--concurrency` 等价，`--plan` 不执行测试。探针违规、报告缺失和清理失败均使运行失败。普通状态通过 `YUANTU_STATE_DIR` 隔离，单项显式覆盖仍优先；原生 Windows 安全控制目录保持真实机器边界。被中断的运行若留下机器资源租约，下一次运行会核对 owner 进程：进程已不存在时按 token 校验后回收，进程仍存活（或无法确认）时继续等待而不是删除别人的租约。测试日志说明 Node 探针覆盖与外部进程夹具路径约束的区别，此工程隔离不提供恶意代码的操作系统级隔离。
 
 成功且完整的全量运行会将每文件耗时原子保存到 `.scratch/cache`，按操作系统、架构和 Node 主版本区分；覆盖率使用单独记录。后续全量并行运行按历史耗时降序派发，未测量文件优先探索，等耗时按文件名排序；没有历史时按文件名排序。`--order=name` 可固定文件名顺序，`--duration-history=path` 可指定记录文件。显式文件选择、名称过滤与串行模式保留既有派发方式；失败、取消、不完整或过滤运行不更新历史。耗时记录只影响派发顺序，不改变资源分组、隔离或通过标准。
 
@@ -783,4 +793,4 @@ npm.cmd run docs:generate   # 重写 README 的生成事实块
 
 `i18n:check` 是语言门禁的另一半。渲染层的门禁是**真窗口冒烟**：切到 `en-US` 后遍历可见 DOM，任何还能看到的中文都算失败——这对渲染层是对的，因为它本来就以中文为源文本，由遍历器在渲染时翻译。主进程没有 DOM，它产出的校验文案、失败对话框与设置回执只会被递给可能已经切到英文的页面，所以这里改用静态规则：**人读的模块把词放进 `apps/desktop/i18n.ts`**，这些文件里再出现中文就失败（扫描前先剥掉注释，所以规则针对代码而不是注释；行号按原文给，注释吞掉换行的话报的位置就会漂）。规则本身是**目录扫描**而不是文件清单——`apps/desktop/**/*.ts` 默认全在门禁内，例外只有四条并各带理由（渲染层自己的模块与字典、`session-management.ts`、给模型的 `attachment-contract.ts`），且每条例外必须仍然匹配到文件：改名或被删就会失败，而不是悄悄少扫一个模块（`scripts/i18n-gate.mjs`）。guest worker 另有一条规则：`packages/tools/*worker*.ts` 的文案进的是模型与调用方的日志、不是带语言的人，所以要求是「保持英文」而不是「进字典」；桌面自己的 worker 属于界面进程，仍按界面规则。两个进程读同一本字典，因此设置页的标签和它自己的报错不会各说一种语言。
 
-CI 的 `check` job 直接跑 `npm run check`，新增聚合门禁会随该入口执行。Web 冒烟随 Web 产品入口暂停，当前聚合检查不包含 `smoke:web`。Linux 上的检查、基准与覆盖率明确选择 `host`，只验证通用契约；Windows 上单独跑原生后端回归与桌面冒烟，macOS job 配置了实际 Seatbelt 回归及当前架构的未签名应用打包。部分测试会因平台或外部依赖缺失而**带原因自我跳过**（macOS 内核隔离、真实语言服务器、本机 Office、Playwright 的 Chromium 下载）。跳过不能替代对应平台或依赖的验收；macOS job 也不代替签名、公证及两个架构的发行验收。
+CI 的 `check` job 直接跑 `npm run check`，新增聚合门禁会随该入口执行。CI 还给运行测试的 job 注入 `FOUNDRY_TEST_CONTINUE_ON_FAILURE=1`：门禁要列出全部失败文件，而不是只报第一个；任一步失败仍使退出码非零，本地的 `npm test` 保持失败即停。Web 冒烟随 Web 产品入口暂停，当前聚合检查不包含 `smoke:web`。Linux 上的检查、基准与覆盖率明确选择 `host`，只验证通用契约；Windows 上单独跑原生后端回归与桌面冒烟，macOS job 配置了实际 Seatbelt 回归及当前架构的未签名应用打包。部分测试会因平台或外部依赖缺失而**带原因自我跳过**（macOS 内核隔离、真实语言服务器、本机 Office、Playwright 的 Chromium 下载）。跳过不能替代对应平台或依赖的验收；macOS job 也不代替签名、公证及两个架构的发行验收。

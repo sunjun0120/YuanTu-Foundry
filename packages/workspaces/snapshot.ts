@@ -445,19 +445,51 @@ async function buildTree(
   await rm(indexFile, { force: true });
   const env = { GIT_INDEX_FILE: indexFile };
   const options = { cwd: identity.worktreeRoot, env, ...(signal ? { signal } : {}) };
-  for (const entry of manifest.files) {
-    const blob = (
-      await runWorkspaceGit(['hash-object', '-w', '--no-filters', '--stdin'], {
+  /**
+   * Two Git processes for the whole manifest, not two per file.
+   *
+   * Each entry used to spawn its own `hash-object` and `update-index`; on Windows a Git spawn costs tens of
+   * milliseconds, so a baseline of 800 files took over a minute before the child could start. The bytes are
+   * staged as numbered files under this snapshot's own metadata directory (names this code chose, so
+   * `--stdin-paths` never sees a path with a newline), hashed by one `hash-object --stdin-paths` that answers
+   * one id per line in order, and entered by one `update-index -z --index-info`, whose NUL-terminated records
+   * carry any path Git can store. `--no-filters` keeps the bytes exactly as recorded, as before.
+   */
+  if (manifest.files.length) {
+    const staging = path.join(metadata, 'blobs');
+    await mkdir(staging, { recursive: true });
+    try {
+      const staged: string[] = [];
+      for (const [index, entry] of manifest.files.entries()) {
+        const file = path.join(staging, String(index));
+        await writeFile(file, Buffer.from(entry.blob, 'base64'));
+        staged.push(file);
+      }
+      const blobs = (
+        await runWorkspaceGit(['hash-object', '-w', '--no-filters', '--stdin-paths'], {
+          ...options,
+          input: Buffer.from(staged.join('\n') + '\n', 'utf8'),
+        })
+      ).stdout
+        .toString('utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (
+        blobs.length !== manifest.files.length ||
+        !blobs.every((id) => /^[0-9a-f]{40,64}$/.test(id))
+      )
+        throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not hash every baseline file');
+      const records = manifest.files.map(
+        (entry, index) => `${entry.mode} ${blobs[index]}\t${entry.path}\0`,
+      );
+      await runWorkspaceGit(['update-index', '--add', '-z', '--index-info'], {
         ...options,
-        input: Buffer.from(entry.blob, 'base64'),
-      })
-    ).stdout
-      .toString('utf8')
-      .trim();
-    await runWorkspaceGit(
-      ['update-index', '--add', '--cacheinfo', `${entry.mode},${blob},${entry.path}`],
-      options,
-    );
+        input: Buffer.from(records.join(''), 'utf8'),
+      });
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
   }
   const tree = (await runWorkspaceGit(['write-tree'], options)).stdout.toString('utf8').trim();
   if (!/^[0-9a-f]{40,64}$/.test(tree))

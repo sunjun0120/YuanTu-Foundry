@@ -3,6 +3,7 @@ import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { killTree } from '../tools/process.ts';
+import { parseSetting } from '../protocol/settings.ts';
 import type { OfficeFormat } from './automation.ts';
 
 export interface OfficePreview {
@@ -19,9 +20,10 @@ type Job = { start(): Promise<void> };
 export function createLibreOfficePreview(
   options: { executable?: string; prefixArgs?: string[]; timeoutMs?: number } = {},
 ): OfficePreview {
+  const configured = parseSetting(process.env, 'YUANTU_LIBREOFFICE_PATH');
   const executable =
     options.executable ??
-    process.env.YUANTU_LIBREOFFICE_PATH ??
+    (typeof configured === 'string' ? configured : undefined) ??
     (process.platform === 'win32' ? 'soffice.com' : 'soffice');
   const timeoutMs = options.timeoutMs ?? 120_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Invalid preview timeout');
@@ -181,7 +183,9 @@ async function runConverter(
       failure ??= reason;
       if (closed || termination || !child.pid) return;
       termination = killTree(child.pid).catch((error) => {
-        failure = new Error(`Office preview cleanup failed: ${String(error)}`);
+        // The termination failure is a second fact, never a replacement: the caller still needs the reason the
+        // conversion was stopped for (a timeout, an oversized PDF, a cancellation) to know what happened.
+        failure ??= new Error(`Office preview cleanup failed: ${String(error)}`);
         child.kill();
       });
     };

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
+import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
 import { resourceText } from '../resources/files.ts';
 
@@ -97,7 +98,10 @@ const item = (row: Record<string, unknown>): KnowledgeItem => ({
   updatedAt: String(row.updated_at),
 });
 export function defaultKnowledgePath(): string {
-  return process.env.YUANTU_KNOWLEDGE_DB || path.join(userStateDirectory(), 'knowledge.sqlite');
+  const configured = parseSetting(process.env, 'YUANTU_KNOWLEDGE_DB');
+  return typeof configured === 'string'
+    ? configured
+    : path.join(userStateDirectory(), 'knowledge.sqlite');
 }
 export class KnowledgeStore {
   private db: DatabaseSync;

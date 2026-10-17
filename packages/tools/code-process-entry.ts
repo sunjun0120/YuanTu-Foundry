@@ -1,7 +1,20 @@
 /** Ordinary Node broker; guest code never runs in the Agent Host process. */
 import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 import { guestResourceLimits, PROGRAM_PROTOCOL } from './environment.ts';
 import type { CodeWorkerData } from './code-worker.ts';
+/**
+ * Leave the workspace before any worker exists.
+ *
+ * Under `--permission`, Node grants every Environment implicit read access to its entrypoint (`argv[1]`). A worker
+ * has no entrypoint argument, so that grant is an empty path, which resolves to the process's working directory —
+ * recursively. The host starts this runner *in the workspace*, so a guest worker could read every workspace file,
+ * `.env` included, past the file tools' credential exclusions. Moving to the runner's own directory (the one
+ * directory the host grants for reading) turns that implicit grant into one the runner already has.
+ */
+// Where the host launched this runner — the workspace identity it chose — kept as evidence after the move below.
+process.env.YUANTU_PROGRAM_LAUNCH_DIR = process.cwd();
+process.chdir(fileURLToPath(new URL('.', import.meta.url)));
 let worker: Worker | undefined;
 let buffer = '';
 const send = (value: unknown) => {

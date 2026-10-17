@@ -74,6 +74,8 @@ export interface WorkflowDeps {
     options: { model?: string; schema?: Record<string, unknown> },
     signal: AbortSignal,
   ) => Promise<SubAgentAnswer>;
+  /** Tests only: see `CodeWorkerData.exposeProcessForTests`. The coordinator never sets it. */
+  exposeProcessForTests?: boolean;
 }
 /** The options `agent()` accepts. A key outside this set is refused rather than ignored. */
 const AGENT_OPTION_KEYS = new Set(['model', 'schema']);
@@ -159,6 +161,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
           kind: 'workflow',
           names: ['agent', 'phase'],
           args: args.args ?? null,
+          ...(deps.exposeProcessForTests ? { exposeProcessForTests: true } : {}),
           /**
            * The ceilings travel into the script so its own checks can be synchronous.
            *

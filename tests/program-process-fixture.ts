@@ -4,11 +4,21 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/tools/index.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { runCodeTool } from '../packages/tools/run-code.ts';
 import type { ToolContext, ToolCatalog } from '../packages/protocol/index.ts';
 
-export async function fixture(t: test.TestContext, mode: 'host' | 'windows' = 'host') {
+/**
+ * `escaped`: the program receives this worker's real `process` as `escapedProcess` — what a VM escape would have
+ * yielded — so a test can prove the runner process still holds when the VM boundary is assumed broken.
+ */
+export async function fixture(
+  t: test.TestContext,
+  mode: 'host' | 'windows' = 'host',
+  options: { escaped?: boolean } = {},
+) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-program-process-'));
   const tools = createTools(root);
+  if (options.escaped) tools.replace(runCodeTool({ exposeProcessForTests: true }));
   t.after(async () => {
     await tools.close();
     await rm(root, { recursive: true, force: true });

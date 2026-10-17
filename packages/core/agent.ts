@@ -32,6 +32,7 @@ import { discoverSkills, expandSkill } from '../resources/skills.ts';
 import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
 import { goalTools } from '../tools/goal.ts';
 import { repoMapContext } from '../tools/repo-map.ts';
+import { loadedDeferredTools, sameToolSet } from './run-catalog.ts';
 import {
   completionContractText,
   goalNoticeText,
@@ -491,7 +492,17 @@ export class Agent {
       admittedAt,
     });
     const measuredProvider = measureProvider('answer');
-    const summaryProvider = measureProvider('summary');
+    // A configured summary model is measured by the same clock and statistics, so its time still counts.
+    const summaryProvider = this.options.summaryProvider
+      ? createProviderMeasurement({
+          provider: this.options.summaryProvider,
+          store,
+          sessionId: input.sessionId,
+          runId,
+          statistics,
+          emit,
+        })('summary')
+      : measureProvider('summary');
     /**
      * Close the open step's spans, at the moment its answer was assembled.
      *
@@ -640,6 +651,9 @@ export class Agent {
       statistics.steps += 1;
       statistics.turns = 1;
       store.recordEvent(input.sessionId, 'step.finished', { runId, step, reason });
+      // A step boundary is a stopping point, so a long run checkpoints here too rather than only at its end:
+      // a crash hours into it then reopens from a recent fold instead of the whole log.
+      store.checkpointIfDue(input.sessionId);
       // The panel's counts and wall times change exactly here, so the boundary is what a listener is told
       // about; a client that only saw the live channel would otherwise learn the step count a round late.
       emit('statistics.updated', { statistics: { ...statistics }, activity: null });
@@ -826,8 +840,15 @@ export class Agent {
        * guarantee. Built by a function because approving a plan mid-run changes `readOnly`, and the round after
        * that has to be sent the tools it may now actually use.
        */
+      // The deferred tools the next request carries; see `./run-catalog.ts` for how the set is derived.
+      const loadedNow = () => loadedDeferredTools(store, input.sessionId, tools);
+      let loaded = loadedNow();
       const buildCatalog = (): { specs: ToolSpec[]; catalog: ToolSpec[] } => ({
-        specs: tools.specs({ readOnly, ...(policy ? { policy } : {}) }),
+        specs: tools.specs({
+          readOnly,
+          ...(policy ? { policy } : {}),
+          ...(loaded ? { loaded } : {}),
+        }),
         /**
          * The same trimmed set, never folded: this is what a `run_code` program may call.
          *
@@ -1120,6 +1141,21 @@ export class Agent {
           effectiveModel === null ? undefined : this.options.capacityFor?.(effectiveModel);
         const roundContextTokens = resolved?.contextWindow ?? maxContextTokens;
         const roundOutputTokens = resolved?.maxOutputTokens ?? maxOutputTokens;
+        /**
+         * A `load_tools` call (or a direct call to a held-back tool) in the previous round widens this round's
+         * catalog, and a goal created (or finished) in it adds (or drops) `update_goal`. The transcript part only
+         * grows, so the catalog changes once per load or goal transition, not per round.
+         */
+        if (loaded) {
+          const next = loadedNow();
+          const current = loaded;
+          if (next && !sameToolSet(next, current)) {
+            loaded = next;
+            const rebuilt = buildCatalog();
+            specs = rebuilt.specs;
+            catalogSpecs = rebuilt.catalog;
+          }
+        }
         const requestSpecs = concludeQueries ? [] : specs;
         const contextInput = buildContextInput({
           store,

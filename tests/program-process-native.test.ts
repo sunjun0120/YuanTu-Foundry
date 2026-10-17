@@ -9,7 +9,7 @@ test(
   'a Windows program uses the selected backend and RPC writes still require approval',
   { skip: process.platform !== 'win32' },
   async (t) => {
-    const { tools, context, root } = await fixture(t, 'windows');
+    const { tools, context, root } = await fixture(t, 'windows', { escaped: true });
     let approvals = 0;
     const chosen = {
       ...context,
@@ -23,7 +23,7 @@ test(
         id: 'win-program',
         name: 'run_code',
         arguments: {
-          code: "await tools.write_file({path:'approved.txt',content:'approved'}); const p=console.log.constructor('return process')(); return p.permission.has('fs.write') + ':' + p.pid;",
+          code: "await tools.write_file({path:'approved.txt',content:'approved'}); const p=escapedProcess; return p.permission.has('fs.write') + ':' + p.pid;",
         },
       },
       {

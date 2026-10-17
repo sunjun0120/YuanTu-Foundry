@@ -26,6 +26,9 @@ jobs:
     # Windows and macOS and must not silently fall back on this runner.
     env:
       YUANTU_SANDBOX: host
+      # A gate must report every failing file, not just the first one: fail-fast is the local loop, this is the
+      # run whose output somebody reads to decide what to fix. The exit code is still non-zero on any failure.
+      FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,6 +82,9 @@ jobs:
     needs: check
     runs-on: windows-latest
     continue-on-error: false
+    env:
+      # The UI suites launch real windows one after another; a single flaky assertion must not hide the rest.
+      FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -104,6 +110,8 @@ jobs:
   native-macos:
     needs: check
     runs-on: macos-latest
+    env:
+      FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

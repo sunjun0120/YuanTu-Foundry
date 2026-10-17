@@ -297,9 +297,9 @@ test('retention bounds count and bytes; insufficient capacity leaves migration u
 });
 
 /**
- * 搂7.2.8 鈥?the history budget and the admission of a required copy were one number, and the assessment located
+ * §7.2.8 — the history budget and the admission of a required copy were one number, and the assessment located
  * the consequence: `desktop-upgrade.ts` says recovery copies are exempt from routine retention while the call it
- * makes still took the default 512 MiB budget, so a session database past that size made the *upgrade* stop 鈥?the
+ * makes still took the default 512 MiB budget, so a session database past that size made the *upgrade* stop — the
  * one moment where the way back matters most.
  *
  * The fixtures below model "past that size" with a small budget rather than half a gigabyte of I/O, because what
@@ -347,7 +347,7 @@ test('an admitted copy larger than the history budget is not pruned by that budg
   const db = new DatabaseSync(file);
   // Admission and pruning both used to compare against the same number, which hid this: with `maxBytes` smaller
   // than the copy, the loop deleted the snapshot it had just taken and returned a backup whose file was already
-  // gone 鈥?so the caller either fails copying a missing file or carries on believing it has a way back.
+  // gone — so the caller either fails copying a missing file or carries on believing it has a way back.
   const backup = createDatabaseBackup(
     db,
     file,

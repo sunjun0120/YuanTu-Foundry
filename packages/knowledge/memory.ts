@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
+import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
 import { atomicWriteFile } from '../tools/write-all.ts';
 
@@ -37,12 +38,17 @@ export const memoryLimits = {
 
 export function memoryPaths(
   root: string,
-  globalDir = process.env.YUANTU_MEMORY_DIR || userStateDirectory(),
+  globalDir = configuredGlobalDirectory(),
 ): { workspace: string; global: string } {
   return {
     workspace: path.join(root, '.yuantu', 'memory.md'),
     global: path.join(globalDir, 'memory.md'),
   };
+}
+/** The user-wide directory, read through the one setting reader so its name cannot drift. */
+function configuredGlobalDirectory(): string {
+  const configured = parseSetting(process.env, 'YUANTU_MEMORY_DIR');
+  return typeof configured === 'string' ? configured : userStateDirectory();
 }
 export function parseMemory(text: string): MemoryFile {
   const entries: MemoryEntry[] = [];

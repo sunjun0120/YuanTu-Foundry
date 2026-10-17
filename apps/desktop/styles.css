@@ -1657,8 +1657,9 @@ body[data-subagent-page='open'] #conversation > :not(#subagent-transcript),
 body[data-subagent-page='open'] .composer-area {
   display: none;
 }
+/* The record has no tail to follow: the conversation and its jump control are out of the reader's reach. */
 body[data-subagent-page='open'] #chat-page #jump-to-latest {
-  bottom: 24px;
+  display: none;
 }
 .subagent-transcript-header {
   display: flex;

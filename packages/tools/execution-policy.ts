@@ -74,6 +74,27 @@ export function snapshotExecutionPolicy(policy: ExecutionPolicy): ExecutionPolic
     requestedNetwork: policy.requestedNetwork,
   });
 }
+/**
+ * One sentence, for an approval, of what the backend behind this call will and will not stop.
+ *
+ * Read from the policy's *declared* capabilities rather than from the platform, so it cannot say more than the
+ * backend promises: the Windows token backend is a partial write boundary that leaves reads and the network
+ * open, and a person approving a command there should be told so at the moment they decide, not only in a
+ * README.
+ */
+export function describeExecutionBoundary(policy: ExecutionPolicy): string {
+  const files =
+    policy.processFiles === 'unrestricted'
+      ? 'Runs on the host with no operating-system isolation: it can read and change any file this account can'
+      : policy.processFiles === 'workspace-write-partial'
+        ? 'Runs under a restricted Windows token: writes are only partly confined to the workspace, and it can read files anywhere on this machine'
+        : policy.processFiles === 'read-only'
+          ? 'Runs sandboxed with no file writes'
+          : 'Runs sandboxed: file writes are confined to the workspace';
+  const network =
+    policy.network === 'denied' ? 'network access is blocked' : 'it can reach the network';
+  return `Isolation: ${files}; ${network}.`;
+}
 export function currentExecutionPolicy(): ExecutionPolicy | undefined {
   return calls.getStore();
 }

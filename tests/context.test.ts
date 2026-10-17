@@ -23,6 +23,8 @@ import { estimateInputTokens, estimateMessageTokens } from '../packages/core/bud
 // request's last message now, so `request.system.includes('context summary')` — the criterion these fixtures used
 // to carry — matches nothing at all.
 import { isSummaryBody, isSummaryRequest } from './summary-request.ts';
+import { readConfig } from '../packages/providers/index.ts';
+import { summaryProviderFor } from '../apps/shared/runtime.ts';
 
 // ---- merged from context-budget.test.ts ----
 
@@ -637,6 +639,57 @@ test('overflow summaries retain project constraints and persist without deleting
     reopened.close();
   }
   assert.ok(result.usage.inputTokens >= 10, 'summary usage is included');
+});
+
+test('a configured summary model writes the summary, and the run model only answers', async (t) => {
+  const { store, session } = await setup(t);
+  const answered: ModelRequest[] = [];
+  const summarized: ModelRequest[] = [];
+  const provider: Provider = {
+    async complete(request) {
+      answered.push(request);
+      assert.ok(!isSummaryRequest(request), 'the run model must not be asked for the summary');
+      assert.match(JSON.stringify(request.messages), /blue theme/);
+      return reply2('Continued with the blue theme.');
+    },
+  };
+  const summaryProvider: Provider = {
+    async complete(request) {
+      summarized.push(request);
+      assert.ok(isSummaryRequest(request), 'the summary model is only asked for summaries');
+      return reply2('Retain the blue theme. Source a.txt was inspected.');
+    },
+  };
+  const agent = new Agent({
+    store,
+    provider,
+    summaryProvider,
+    tools: new ToolRegistry(),
+    approve: async () => true,
+    maxContextChars: 100000,
+    maxContextTokens: SUMMARY_WINDOW_TOKENS,
+    maxOutputTokens: 128,
+  });
+  const result = await agent.run({
+    sessionId: session.id,
+    prompt: 'Continue. ' + 'next '.repeat(140),
+  });
+  assert.equal(result.status, 'completed', result.error);
+  assert.ok(summarized.length > 0);
+  assert.ok(answered.length > 0);
+  assert.match(store.contextSurface(session.id)!.summary, /blue theme/);
+});
+
+test('YUANTU_SUMMARY_MODEL builds a separate provider only for another model', () => {
+  const config = readConfig({
+    YUANTU_PROTOCOL: 'openai',
+    YUANTU_BASE_URL: 'http://127.0.0.1:9/v1',
+    YUANTU_MODEL: 'main-model',
+    YUANTU_API_KEY: 'test-key',
+  });
+  assert.deepEqual(summaryProviderFor(config, {}), {});
+  assert.deepEqual(summaryProviderFor(config, { YUANTU_SUMMARY_MODEL: 'main-model' }), {});
+  assert.ok(summaryProviderFor(config, { YUANTU_SUMMARY_MODEL: 'small-model' }).summaryProvider);
 });
 
 test('a summary failure preserves the transcript and sends the round rather than dropping history', async (t) => {

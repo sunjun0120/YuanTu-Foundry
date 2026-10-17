@@ -44,8 +44,7 @@ test(
         '--permission',
         '--allow-worker',
         '--disable-warning=SecurityWarning',
-        `--allow-fs-read=${path.join(root, 'code-process-entry.js')}`,
-        `--allow-fs-read=${path.join(root, 'code-worker.js')}`,
+        `--allow-fs-read=${root}`,
         path.join(root, 'code-process-entry.js'),
       ],
       {

@@ -21,6 +21,11 @@ import { RUN_CODE, toolMode, toolSdk } from '../packages/tools/run-code.ts';
 import { TOOL_TIMEOUT_MARKER } from '../packages/tools/timeouts.ts';
 import { FS_NOT_OBSERVED } from '../packages/tools/fs-observation.ts';
 import { projectRoot } from './process-fixture.ts';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import type { AddressInfo } from 'node:net';
+import { codeProcessArguments, connectCodeProcess } from '../packages/tools/code-process.ts';
+import type { CallRequest, WorkerMessage } from '../packages/tools/code-worker.ts';
 import type {
   AgentEvent,
   Approval,
@@ -297,6 +302,224 @@ test('the program cannot generate code from strings', async (t) => {
   assert.match(result.content, /code generation/i);
 });
 
+/**
+ * Every way a program used to reach the worker's own realm.
+ *
+ * Injected functions, the Promises they returned and the Errors they rejected with all belonged to the worker,
+ * so their `constructor.constructor` was a `Function` outside the context's code-generation ban — and from there
+ * `process`, `fetch` and the filesystem. Each route must now end in the context's own, restricted `Function`.
+ */
+const ESCAPE_ROUTES: [string, string][] = [
+  ['a tool function', 'tools.read_file.constructor'],
+  ['the tools object', 'tools.constructor.constructor'],
+  ['a console function', 'console.log.constructor'],
+  ['the console object', 'console.constructor.constructor'],
+  ['a tool call Promise', "tools.read_file({ path: 'alpha.txt' }).constructor.constructor"],
+  [
+    'a tool call Error',
+    "await tools.read_file({ path: 'missing.txt' }).then(() => null, (e) => e.constructor.constructor)",
+  ],
+  ['the global object', 'globalThis.constructor.constructor'],
+  ['this', 'this.constructor.constructor'],
+  ['a prototype', 'Object.getPrototypeOf(tools.read_file).constructor'],
+];
+for (const [route, expression] of ESCAPE_ROUTES) {
+  test(`a program cannot reach the worker realm through ${route}`, async (t) => {
+    const { tools, context } = await workspaceFixture(t);
+    const result = await runProgram(
+      tools,
+      context,
+      [
+        `const climb = ${expression};`,
+        "if (typeof climb !== 'function') return 'blocked: no constructor';",
+        "try { return 'escaped: ' + typeof climb('return process')(); }",
+        "catch (error) { return 'blocked: ' + error.message; }",
+      ].join('\n'),
+    );
+    assert.equal(result.isError, false, result.content);
+    assert.match(
+      result.content,
+      /^blocked: (no constructor|Code generation from strings disallowed)/,
+    );
+  });
+}
+
+test('stack frames do not hand a program a function of the worker realm', async (t) => {
+  const { tools, context } = await workspaceFixture(t);
+  const result = await runProgram(
+    tools,
+    context,
+    [
+      'const found = [];',
+      'Error.prepareStackTrace = (_error, sites) => {',
+      '  for (const site of sites) for (const value of [site.getFunction(), site.getThis()]) if (value) found.push(value);',
+      "  return '';",
+      '};',
+      'const probe = () => new Error().stack;',
+      "await tools.read_file({ path: 'alpha.txt', toJSON() { probe(); return { path: 'alpha.txt' }; } });",
+      "await tools.read_file({ path: 'alpha.txt' }).then(probe);",
+      "await tools.read_file({ path: 'missing.txt' }).catch(probe);",
+      "console.log({ toJSON() { probe(); return 'x'; } });",
+      'for (const value of found) {',
+      '  try { const p = value.constructor.constructor("return process")(); if (p) return "escaped"; } catch {}',
+      '}',
+      "return 'held ' + found.length;",
+    ].join('\n'),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.match(result.content, /^held \d+/);
+});
+
+test('a program cannot reach the network, directly or through the worker', async (t) => {
+  const { tools, root } = await workspaceFixture(t);
+  await writeFile(path.join(root, '.env'), 'SECRET=hunter2\n');
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? '');
+    response.end('ok');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/leak`;
+  let approvals = 0;
+  const context: ToolContext = {
+    signal: new AbortController().signal,
+    approve: async () => {
+      approvals++;
+      return true;
+    },
+  };
+  const result = await runProgram(
+    tools,
+    context,
+    [
+      'const outcomes = [];',
+      'const candidates = [',
+      '  () => globalThis,',
+      "  () => tools.read_file.constructor('return globalThis')(),",
+      "  () => console.log.constructor('return globalThis')(),",
+      '];',
+      'for (const reach of candidates) {',
+      '  try {',
+      '    const g = reach();',
+      '    await g.fetch(' + JSON.stringify(url) + ", { method: 'POST', body: 'leak' });",
+      "    outcomes.push('sent');",
+      '  } catch (error) {',
+      "    outcomes.push('blocked');",
+      '  }',
+      '}',
+      "return outcomes.join(',');",
+    ].join('\n'),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.match(result.content, /^blocked,blocked,blocked/);
+  assert.deepEqual(requests, []);
+  assert.equal(approvals, 0);
+});
+
+test('a program cannot read a workspace credential file past the file tools', async (t) => {
+  const { tools, context, root } = await workspaceFixture(t);
+  await writeFile(path.join(root, '.env'), 'SECRET=hunter2\n');
+  const target = JSON.stringify(path.join(root, '.env'));
+  const result = await runProgram(
+    tools,
+    context,
+    [
+      'const outcomes = [];',
+      'const attempts = [',
+      "  () => process.getBuiltinModule('fs').readFileSync(" + target + ", 'utf8'),",
+      "  () => tools.read_file.constructor('return process')().getBuiltinModule('fs').readFileSync(" +
+        target +
+        ", 'utf8'),",
+      "  () => tools.constructor.constructor('return process')().getBuiltinModule('fs').readFileSync(" +
+        target +
+        ", 'utf8'),",
+      '];',
+      'for (const attempt of attempts) {',
+      "  try { outcomes.push('read ' + attempt()); } catch { outcomes.push('blocked'); }",
+      '}',
+      "return outcomes.join(',');",
+    ].join('\n'),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.match(result.content, /^blocked,blocked,blocked/);
+  assert.doesNotMatch(result.content, /hunter2/);
+});
+
+/**
+ * The layer under the realm boundary: if a program ever reached the runner's worker, the permission model must
+ * still keep it out of the workspace.
+ *
+ * Node grants a worker implicit read access to the process's working directory, and the host starts the runner in
+ * the workspace — that is how a three-file read grant let an escaped program read `.env`. This launches the real
+ * entry with the real flags from inside a workspace, swapping in a worker that reports what it can read.
+ */
+test('the runner worker cannot read the workspace it was started in', async (t) => {
+  const { root } = await workspaceFixture(t);
+  await writeFile(path.join(root, '.env'), 'SECRET=hunter2\n');
+  const runtime = await mkdtemp(path.join(tmpdir(), 'yuantu-runner-'));
+  t.after(() => rm(runtime, { recursive: true, force: true }));
+  const sources = path.join(projectRoot, 'packages', 'tools');
+  for (const file of ['code-process-entry.ts', 'environment.ts'])
+    await writeFile(path.join(runtime, file), await readFile(path.join(sources, file)));
+  await writeFile(path.join(runtime, 'package.json'), '{"type":"module"}\n');
+  await writeFile(
+    path.join(runtime, 'code-worker.ts'),
+    [
+      "import { parentPort, workerData } from 'node:worker_threads';",
+      'let read = "blocked";',
+      'try { read = process.getBuiltinModule("fs").readFileSync(workerData.code, "utf8"); } catch {}',
+      'parentPort!.postMessage({ type: "result", value: JSON.stringify({',
+      '  permitted: process.permission.has("fs.read", workerData.code),',
+      '  read,',
+      '}), logs: [] });',
+    ].join('\n'),
+  );
+  const entry = path.join(runtime, 'code-process-entry.ts');
+  const child = spawn(process.execPath, codeProcessArguments(runtime, entry), {
+    cwd: root,
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) => !['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'FOUNDRY_TEST_ISOLATION'].includes(key),
+      ),
+    ),
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code, signal) => resolve({ code, signal }));
+    },
+  );
+  void closed.catch(() => {});
+  t.after(async () => {
+    child.kill();
+    await closed;
+  });
+  const channel = await connectCodeProcess(
+    { code: path.join(root, '.env'), names: [] },
+    {
+      child,
+      closed,
+      stop: async () => {
+        child.kill();
+      },
+    },
+    new AbortController().signal,
+  );
+  const message = await new Promise<WorkerMessage | CallRequest>((resolve, reject) => {
+    channel.once('message', resolve);
+    channel.once('error', reject);
+  });
+  await channel.terminate();
+  assert.equal(message.type, 'result');
+  assert.deepEqual(JSON.parse((message as { value: string }).value), {
+    permitted: false,
+    read: 'blocked',
+  });
+});
+
 test('a program cannot start another program', async (t) => {
   const { tools, context } = await workspaceFixture(t);
   const result = await runProgram(tools, context, 'return typeof tools.run_code;');
@@ -525,7 +748,7 @@ test('a registry without run_code is never folded to nothing', async () => {
 });
 
 test('the mode comes from the setting, and a mistyped one is refused', () => {
-  assert.equal(toolMode({}), 'native');
+  assert.equal(toolMode({}), 'deferred');
   assert.equal(toolMode({ YUANTU_TOOL_MODE: 'ptc' }), 'ptc');
   assert.equal(toolMode({ YUANTU_TOOL_MODE: 'native' }), 'native');
   assert.throws(() => toolMode({ YUANTU_TOOL_MODE: 'programmatic' }), /YUANTU_TOOL_MODE/);

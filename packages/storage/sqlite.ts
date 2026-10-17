@@ -1149,6 +1149,29 @@ export class SessionStore implements PlanRepository {
   saveProjectionCheckpoints(sessionId?: string): number {
     return this.checkpoints.saveProjectionCheckpoints(sessionId);
   }
+  /** The log position each session was last checkpointed at by {@link checkpointIfDue}, in this process. */
+  private checkpointMarks = new Map<string, number>();
+  /**
+   * Checkpoint a session once its log has grown `everyEvents` past the last checkpoint this process wrote.
+   *
+   * `finishRun` and `close` checkpoint at their own stopping points; this is for the run that does not stop for
+   * hours — a crash mid-run used to reopen by folding every event since the previous run ended. The first call
+   * for a session only records where the log stands, so a short run never writes here and pays one map lookup
+   * per step. Failures are swallowed like every checkpoint's: this is derived data.
+   */
+  checkpointIfDue(sessionId: string, everyEvents = 2_000): boolean {
+    // `lastSeq` does not count buffered appends, so the log is written out first: the count has to be the log's.
+    this.flush(sessionId);
+    const seq = this.lastSeq(sessionId);
+    const mark = this.checkpointMarks.get(sessionId);
+    if (mark === undefined || seq < mark) {
+      this.checkpointMarks.set(sessionId, seq);
+      return false;
+    }
+    if (seq - mark < everyEvents) return false;
+    this.checkpointMarks.set(sessionId, seq);
+    return this.saveProjectionCheckpoints(sessionId) > 0;
+  }
   statistics(sessionId: string): SessionStatistics {
     return this.stateOf<SessionStatistics>('statistics', sessionId);
   }
