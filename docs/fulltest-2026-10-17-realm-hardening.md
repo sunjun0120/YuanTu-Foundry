@@ -223,3 +223,25 @@ try {
 - **跳过数持平**：113 条（4.2%），与上次全量完全相同，说明新增测试没有靠 skip 换绿。
 - **耗时口径**：本文的「墙钟」是调度器为每个文件 spawn `node --test` 子进程的完整时间（含启动、隔离、清理、进程收敛）；「用例耗时」是 Node 自己报告的单条 `test()` 时长。两者不能混用。
 - **提速来源**：墙钟只比上次多 6.2 s，靠的是新增文件都很快（7 个文件合计 16.2 s）＋按历史耗时降序派发把并行池填充到 99.94%。
+
+---
+
+## 9. 后续：同日第二次全量测试（已转绿）
+
+- 现场：同日 21:26，工作树已提交为 `b77b3ed`（`git status` 干净，`HEAD` 距本文测量的 `3c2e26b` 已有三个提交）
+- 修法（与第 6 节的建议不同，选了「显式测试缝隙」）：`tests/program-process-fixture.ts` 增加 `{ escaped: true }` 选项，程序侧由 `exposeProcessForTests` 注入一个仅测试可见的 `escapedProcess`；同时新增用例「a program cannot reach the runner process through a host-realm constructor」钉住加固本身——三条 constructor 路线都必须 blocked，且默认不注入 `escapedProcess`。
+- 结果：**13 道门禁全绿**
+
+| 门禁                                                                                       | 结果                                          | 耗时                          |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------- | ----------------------------- |
+| 全量测试                                                                                   | **257 文件 / 2,720 用例 / 0 失败 / 112 跳过** | **737.4 s**                   |
+| `format:check`                                                                             | ✅                                            | 58.4 s                        |
+| `docs:check` / `references:check` / `cycles:check` / `i18n:check` / `test:isolation:check` | ✅                                            | 1.8 / 0.7 / 1.8 / 0.8 / 2.1 s |
+| `typecheck` / `build`                                                                      | ✅ / ✅                                       | 4.2 / 10.6 s                  |
+| `smoke:client`                                                                             | ✅ 3/3                                        | 6.0 s                         |
+| `bench:check`                                                                              | ✅ 13 条规则                                  | 9.3 s                         |
+| `check:windows-sandbox`                                                                    | ✅ 54/54                                      | 211.6 s                       |
+| `smoke:desktop`                                                                            | ✅ 56 用例 54 通过 / 2 跳过 / 0 失败          | 323.2 s                       |
+
+- 与第一次的差异：多 1 个测试文件（`tests/session-delete-cleanup.test.ts`）、+37 个用例；`program-process.test.ts` 从 12 个用例增加到 14 个（新增的加固用例，加上原来的逃逸观察用例改用测试缝隙）。
+- 本文第 4、5 节保留的是**第一次运行的现场记录**（`HEAD` = `3c2e26b` + 61 个已改文件 + 16 个新路径），不再代表当前 `HEAD`；结论以本节为准。
