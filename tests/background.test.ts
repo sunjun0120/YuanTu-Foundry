@@ -74,6 +74,51 @@ test('background commands stream logs, accept stdin and preserve actual exit cod
   assert.equal(snapshot.exitCode, 7);
   assert.ok(Date.parse(snapshot.finishedAt ?? '') >= Date.parse(snapshot.createdAt));
 });
+test('a journal that refuses the outcome is reported instead of ending the host', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-background-'));
+  const tools = createTools(root);
+  t.after(async () => {
+    await tools.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const context: ToolContext = {
+    signal: new AbortController().signal,
+    approve: async () => true,
+    commandJournal: {
+      started: () => undefined,
+      settled: () => {
+        throw new Error('journal refused the outcome');
+      },
+      read: () => undefined,
+      record: () => undefined,
+      records: () => [],
+    },
+  };
+  const started = await tools.execute(
+    {
+      id: 'start',
+      name: 'start_command',
+      arguments: { command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"` },
+    },
+    context,
+  );
+  assert.equal(started.isError, false, started.content);
+  const id = JSON.parse(started.content).id as string;
+  // The worker's exit runs `settle()`, which is the write that refuses here. It used to be an unhandled
+  // rejection — the end of the test process — so reaching this assertion at all is the regression proof.
+  let snapshot: { status?: string } = {};
+  for (let index = 0; index < 100; index++) {
+    const result = await tools.execute(
+      { id: 'poll', name: 'job_output', arguments: { id, wait_ms: 50 } },
+      context,
+    );
+    assert.equal(result.isError, false, result.content);
+    snapshot = JSON.parse(result.content) as { status?: string };
+    if (snapshot.status === 'completed' || snapshot.status === 'failed') break;
+  }
+  assert.equal(snapshot.status, 'completed');
+});
+
 test('background start requires approval and denied start never executes', async (t) => {
   const { tools, ctx, root } = await setup(t);
   const result = await tools.execute(

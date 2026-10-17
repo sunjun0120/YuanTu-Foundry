@@ -113,6 +113,21 @@ test('a cursor is refused once the file it ended on has changed', async (t) => {
   );
 });
 
+test('a cursor whose boundary file is gone is refused instead of ending the listing', async (t) => {
+  const root = await tempRoot(t, 'yuantu-page-boundary-');
+  for (let index = 0; index < 6; index++) await writeFile(path.join(root, `f-${index}.txt`), 'x\n');
+  const service = await serviceFor(t, root);
+  const page = await service.listingPage({ limit: 2 }, signal());
+  assert.ok(page.nextCursor);
+  await rm(path.join(root, page.files[page.files.length - 1]!.path));
+  // The boundary is what makes the window stable, so losing it is a stale cursor. It used to end the walk with
+  // nothing found — an empty page with no next cursor, which reads as "there is nothing more in this workspace".
+  await assert.rejects(
+    service.listingPage({ limit: 2, cursor: page.nextCursor }, signal()),
+    (error: Error & { code?: string }) => error.code === CURSOR_INVALID,
+  );
+});
+
 test('a symbol page continues from where it stopped, without repeating a symbol', async (t) => {
   const root = await tempRoot(t, 'yuantu-page-symbols-');
   for (let index = 0; index < 12; index++)

@@ -16,6 +16,7 @@ import type {
 import { RunQueue } from '../packages/core/run-queue.ts';
 import { emptyStatistics, addStatistics, addUsage } from '../packages/protocol/statistics.ts';
 import { redactSecrets } from '../packages/core/errors.ts';
+import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
 
 // ---- merged from core.test.ts ----
 
@@ -45,6 +46,189 @@ async function fixture(t: test.TestContext, provider: Provider, extra = {}) {
   });
   return { root, store, session, agent, events, tools };
 }
+
+test('ordinary questions carry direct-answer and scoped-project lookup rules', async (t) => {
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      requests++;
+      assert.match(request.system, /answer directly without tools/i);
+      assert.match(request.system, /relevant paths and symbols/i);
+      return reply('A closure retains access to its surrounding scope.');
+    },
+  });
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: '什么是闭包？' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(requests, 1);
+  assert.equal(ctx.events.filter((event) => event.type === 'tool.started').length, 0);
+});
+
+for (const mode of ['native', 'program'] as const) {
+  test(`unchanged ${mode} reads converge to an answer without more tools`, async (t) => {
+    let requests = 0;
+    let finalOnly = false;
+    const ctx = await fixture(t, {
+      async complete(request) {
+        requests++;
+        if (request.tools.length === 0) {
+          finalOnly = true;
+          return reply('The file is unchanged; no additional evidence was found.');
+        }
+        if (requests > 6) return reply('Unexpectedly kept rereading.');
+        return {
+          ...reply('Checking'),
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'repeat-' + requests,
+              name: mode === 'native' ? 'read_file' : 'run_code',
+              arguments:
+                mode === 'native'
+                  ? { path: 'a.txt' }
+                  : { code: "return await tools.read_file({path:'a.txt'});" },
+            },
+          ],
+        };
+      },
+    });
+    await writeFile(path.join(ctx.root, 'a.txt'), 'stable content');
+    const result = await ctx.agent.run({
+      sessionId: ctx.session.id,
+      prompt: '解释 a.txt 的内容，不要修改',
+    });
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(finalOnly, true, 'a repeated unchanged query must reach a tool-free conclusion');
+    assert.ok(requests <= 5, `too many requests: ${requests}`);
+    assert.ok(
+      ctx.events.some(
+        (event) => event.type === 'context.injected' && event.data.source === 'tool-progress',
+      ),
+    );
+    assert.equal(
+      ctx.store.messages(ctx.session.id).filter((m) => m.role === 'tool').length,
+      requests - 1,
+    );
+  });
+}
+
+test('query convergence resets for new evidence, mutations, polls and user steering', () => {
+  const guard = new ToolProgressGuard();
+  const query = (name = 'read_file', content = 'stable') => [
+    {
+      call: { id: 'observation', name, arguments: { path: 'a.txt' } },
+      result: { isError: false, content },
+    },
+  ];
+  assert.equal(guard.observeRound(query()), 'continue');
+  assert.equal(guard.observeRound(query()), 'continue');
+  assert.equal(guard.observeRound(query()), 'warn');
+  assert.equal(guard.observeRound(query('read_file', 'new evidence')), 'continue');
+  assert.equal(guard.observeRound(query('write_file')), 'continue');
+  assert.equal(guard.observeRound(query()), 'continue');
+  assert.equal(guard.observeRound(query('job_output')), 'continue');
+  for (let i = 0; i < 8; i++) assert.equal(guard.observeRound(query('job_output')), 'continue');
+  guard.observeRound(query());
+  guard.observeRound(query());
+  guard.observeRound(query());
+  guard.reset();
+  assert.equal(guard.observeRound(query()), 'continue');
+});
+
+test('programs deriving new results from the same file are not unchanged queries', async (t) => {
+  let turns = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      turns++;
+      if (!request.tools.length) return reply('Stopped before all calculations');
+      if (turns > 6) return reply('All calculations finished');
+      return {
+        ...reply(),
+        finishReason: 'tool_calls',
+        toolCalls: [
+          {
+            id: 'calculation-' + turns,
+            name: 'run_code',
+            arguments: {
+              code: `const text=await tools.read_file({path:'a.txt'}); return text.slice(0,${turns});`,
+            },
+          },
+        ],
+      };
+    },
+  });
+  await writeFile(path.join(ctx.root, 'a.txt'), 'abcdefghijklmnop');
+  const result = await ctx.agent.run({
+    sessionId: ctx.session.id,
+    prompt: '逐步分析 a.txt 的内容',
+  });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, 'All calculations finished');
+  assert.equal(turns, 7);
+});
+
+test('a model asking for more tools in the conclusion round cannot execute them', async (t) => {
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete() {
+      if (++requests > 6) return reply('unexpected extra requests');
+      return {
+        ...reply('Reading'),
+        finishReason: 'tool_calls',
+        toolCalls: [{ id: 'same-' + requests, name: 'read_file', arguments: { path: 'a.txt' } }],
+      };
+    },
+  });
+  await writeFile(path.join(ctx.root, 'a.txt'), 'stable');
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: '查看 a.txt' });
+  assert.equal(result.status, 'needs_review', result.error);
+  assert.equal(ctx.events.filter((e) => e.type === 'tool.started').length, 4);
+  assert.equal(ctx.store.get(ctx.session.id).activeRun, null);
+  const messages = ctx.store.messages(ctx.session.id);
+  assert.ok(
+    messages.some((m) => m.role === 'tool' && m.isError && m.content.includes('Not executed')),
+  );
+});
+
+test('a new user instruction restores tools after query convergence', async (t) => {
+  let turns = 0,
+    steered = false;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      if (++turns > 7) return reply('too many turns');
+      if (!request.tools.length) {
+        ctx.agent.enqueue(ctx.session.id, { prompt: '改为读取 b.txt' }, 'steer');
+        steered = true;
+        return reply('Old query summary');
+      }
+      if (steered) {
+        assert.ok(request.tools.some((tool) => tool.name === 'read_file'));
+        if (turns === 6)
+          return {
+            ...reply(),
+            finishReason: 'tool_calls',
+            toolCalls: [{ id: 'new-read', name: 'read_file', arguments: { path: 'b.txt' } }],
+          };
+        return reply('New question answered');
+      }
+      return {
+        ...reply(),
+        finishReason: 'tool_calls',
+        toolCalls: [{ id: 'old-' + turns, name: 'read_file', arguments: { path: 'a.txt' } }],
+      };
+    },
+  });
+  await writeFile(path.join(ctx.root, 'a.txt'), 'old');
+  await writeFile(path.join(ctx.root, 'b.txt'), 'new');
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: '读取 a.txt' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, 'New question answered');
+  assert.ok(
+    ctx.events.some(
+      (event) =>
+        event.type === 'tool.started' && (event.data.call as { id: string }).id === 'new-read',
+    ),
+  );
+});
 
 test('agent executes tools, returns results to provider and persists history across reopen', async (t) => {
   let turn = 0;
@@ -354,6 +538,27 @@ test('finishRun failure is reflected and retried to release the session lock', a
   assert.equal(ctx.store.get(ctx.session.id).activeRun, null);
 });
 
+test('a retry that also fails still returns the run instead of rejecting it', async (t) => {
+  const ctx = await fixture(t, {
+    async complete() {
+      return reply('done');
+    },
+  });
+  let attempts = 0;
+  ctx.store.finishRun = () => {
+    attempts++;
+    throw new Error('persistent finish failure');
+  };
+
+  // The fallback repeats the same write. Rejecting out of the run's `finally` would hand the caller an
+  // exception instead of a result, and no `run.finished` would ever be emitted for the run.
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'hello' });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.status, 'failed');
+  assert.match(result.error!, /persist run finalization/i);
+});
+
 test('task runs complete only after persisted acceptance passes', async (t) => {
   const ctx = await fixture(t, {
     async complete() {
@@ -510,12 +715,13 @@ test('each user turn persists the selected model identity without changing provi
   );
 });
 
-test('default runs continue beyond twenty rounds and cumulative token budget', async (t) => {
+test('default runs with new evidence continue beyond twenty rounds and cumulative token budget', async (t) => {
   let rounds = 0;
   const { root, session, agent, store } = await fixture(t, {
     async complete(request) {
       assert.ok(Number.isFinite(request.maxOutputTokens));
       rounds++;
+      await writeFile(path.join(root, 'a.txt'), 'new content ' + rounds);
       return {
         ...reply(rounds > 24 ? 'Completed long task' : 'Reading'),
         usage: { inputTokens: 12000, outputTokens: 100 },

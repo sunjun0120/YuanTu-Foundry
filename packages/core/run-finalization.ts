@@ -219,7 +219,21 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
         state: 'needs_review',
         reason: 'finalization-failed',
       };
-    store.finishRun(result);
+    /**
+     * The retry is the same write, so it can fail the same way — and a rejection from here would escape the
+     * `finally` that called this, turning a run that has a result into a rejected `run()` with no
+     * `run.finished` at all. The result stays in memory for the caller; the row this could not write is what
+     * the next process's reconciliation converges, and that is the smaller loss of the two.
+     */
+    try {
+      store.finishRun(result);
+    } catch (error) {
+      process.stderr.write(
+        `run ${runId} finalization could not be persisted: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
   }
   if (result.completion && completion.state.contractId)
     emit('completion.updated', {

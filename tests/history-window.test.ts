@@ -108,7 +108,7 @@ test('a real Host loads recent history and pages backwards without losing messag
   });
   const { client } = await connectClient(host);
   const controller = new SessionController(client);
-  t.after(async () => {
+  host.beforeStop(async () => {
     controller.dispose();
     await client.stop();
   });
@@ -168,7 +168,7 @@ test('a bounded history window reconstructs an oversized message without reading
   });
   const { client } = await connectClient(host);
   const controller = new SessionController(client);
-  t.after(async () => {
+  host.beforeStop(async () => {
     controller.dispose();
     await client.stop();
   });

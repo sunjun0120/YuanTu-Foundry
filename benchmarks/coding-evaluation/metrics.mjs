@@ -138,10 +138,12 @@ export function gradeSample({
   /**
    * A cancelled sample is not an invalid one.
    *
-   * The Host answers a cancellation by aborting the run, so `run.start` never resolves a final result and there
-   * is no terminal frame to match. Treating that as `invalid` would erase a real, evidenced cancellation from the
-   * report and blame the harness for a product behaviour; the plan pays for cancellation only in E09's scheduled
-   * phase, so this is a `cancelled` outcome — recorded, never a pass.
+   * The Host answers a cancellation by aborting the run, and what reaches the adapter depends on where the
+   * abort landed: the agent catches an abort taken inside the run and returns a `cancelled` RunResult, while one
+   * that arrives before the run is admitted rejects `run.start` and leaves no result at all. Treating either
+   * shape as `invalid` would erase a real, evidenced cancellation from the report and blame the harness for a
+   * product behaviour; the plan pays for cancellation only in E09's scheduled phase, so this is a `cancelled`
+   * outcome — recorded, never a pass.
    */
   const cancelled = adapter.cancellation !== null && adapter.cancellation !== undefined;
   const cancellationSettled =

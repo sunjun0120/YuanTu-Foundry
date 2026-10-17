@@ -43,7 +43,7 @@ async function desktopPage(t: test.TestContext) {
   const bundle = await build({
     stdin: {
       contents:
-        "export * from './apps/desktop/i18n.ts'; export {setupSessionList} from './apps/desktop/renderer-session-list.ts'; export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupWorkspaceMaintenance} from './apps/desktop/renderer-workspace-maintenance.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts';",
+        "export * from './apps/desktop/i18n.ts'; export {setupSessionList} from './apps/desktop/renderer-session-list.ts'; export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupWorkspaceMaintenance} from './apps/desktop/renderer-workspace-maintenance.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts';",
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -54,6 +54,152 @@ async function desktopPage(t: test.TestContext) {
   });
   await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
   return page;
+}
+
+test(
+  'background entry follows current jobs even after a previous session had jobs',
+  { timeout: 30000 },
+  async (t) => {
+    const page = await desktopPage(t);
+    const states = await page.evaluate<
+      Record<
+        'initial' | 'active' | 'switched' | 'completed' | 'cleared',
+        { hidden: boolean; popoverHidden: boolean; expanded: string }
+      >
+    >(`(() => {
+    Object.defineProperty(window,'localStorage',{configurable:true,value:{getItem:()=> '1',setItem(){}}});
+    let state=null;
+    const view=localeApi.setupBackgroundView({getState:()=>state,invoke:async()=>null});
+    const read=()=>({hidden:document.querySelector('#open-background').hidden,popoverHidden:document.querySelector('#background-popover').hidden,expanded:document.querySelector('#open-background').getAttribute('aria-expanded')});
+    view.render();const initial=read();
+    state={session:{sessionId:'first'},background:[{id:'job',sessionId:'first',command:'node fixture',status:'running',exitCode:null,createdAt:new Date().toISOString()}]};
+    view.render();document.querySelector('#open-background').click();const active=read();
+    state={session:{sessionId:'second'},background:state.background};view.render();const switched=read();
+    state.background=[{id:'done',sessionId:'second',command:'node quick',status:'completed',exitCode:0,createdAt:new Date().toISOString()}];view.render();const completed=read();
+    state.background=[];view.render();const cleared=read();
+    return {initial,active,switched,completed,cleared};
+  })()`);
+    assert.deepEqual(states.initial, { hidden: true, popoverHidden: true, expanded: 'false' });
+    assert.equal(states.active.hidden, false);
+    assert.equal(states.active.popoverHidden, false);
+    assert.deepEqual(states.switched, states.initial);
+    assert.equal(states.completed.hidden, false);
+    assert.deepEqual(states.cleared, states.initial);
+  },
+);
+
+test(
+  'background rows share subagent status markers and the entry has no icon',
+  { timeout: 30000 },
+  async (t) => {
+    const page = await desktopPage(t);
+    await page.setViewportSize({ width: 1100, height: 550 });
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    for (const file of ['styles.css', 'layout.css'])
+      await page.addStyleTag({
+        content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
+      });
+    await page.evaluate(`
+    localeApi.setLocale('zh-CN');
+    document.documentElement.dataset.theme='dark';
+    window.backgroundState={session:{sessionId:'s',running:false,loading:false},background:[
+      {id:'active',sessionId:'s',command:'node scripts/run-tests.mjs',status:'running',exitCode:null,createdAt:new Date().toISOString()},
+      {id:'done',sessionId:'s',command:'powershell.exe -NoProfile -Command fixture',status:'completed',exitCode:0,createdAt:new Date(Date.now()-3000).toISOString(),finishedAt:new Date().toISOString()}
+    ]};
+    window.backgroundTestView=localeApi.setupBackgroundView({getState:()=>backgroundState,invoke:async()=>null});
+    window.subagentTestView=localeApi.setupSubAgents(()=>backgroundState,()=>{},()=>document.createElement('div'));
+    subagentTestView.update(['running','completed'].map((status,index)=>({id:'child-'+index,childSessionId:'child-session-'+index,index,total:2,role:'general',objective:'fixture',status,rounds:1,toolCalls:0,text:''})));
+    backgroundTestView.render();
+    document.querySelector('#open-background').click();
+  `);
+    const read = () =>
+      page.evaluate(`(() => {
+    const top=document.querySelector('#open-background');
+    const icons=[...document.querySelectorAll('.background-dot')];
+    const reference=[...document.querySelectorAll('#subagent-catalog .subagent-row-dot')];
+    const appearance=icon=>{const style=getComputedStyle(icon);return [style.width,style.height,style.backgroundColor,style.animationName]};
+    return {top:top.dataset.status,entryIcons:top.querySelectorAll('.background-icon,.background-chevron').length,
+      labels:icons.map(icon=>icon.getAttribute('aria-label')),
+      animations:icons.map(icon=>getComputedStyle(icon).animationName),
+      shared:icons.every(icon=>icon.classList.contains('subagent-row-dot')),
+      appearance:icons.map(appearance),reference:reference.map(appearance)};
+  })()`) as Promise<{
+        top: string;
+        entryIcons: number;
+        labels: string[];
+        animations: string[];
+        shared: boolean;
+        appearance: string[][];
+        reference: string[][];
+      }>;
+    const active = await read();
+    assert.equal(active.top, 'running');
+    assert.equal(active.entryIcons, 0);
+    assert.equal(active.shared, true);
+    assert.deepEqual(active.appearance, active.reference);
+    assert.deepEqual(active.labels, ['运行中', '已完成']);
+    assert.notEqual(active.animations[0], 'none');
+    assert.equal(active.animations[1], 'none');
+    await page.evaluate(
+      `backgroundState.background[0].status='completed';backgroundState.background[0].exitCode=0;backgroundTestView.render();`,
+    );
+    const finished = await read();
+    assert.equal(finished.top, 'completed');
+    assert.equal(finished.entryIcons, 0);
+    assert.deepEqual(finished.labels, ['已完成', '已完成']);
+    assert.deepEqual(finished.animations, ['none', 'none']);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.evaluate(
+      `backgroundState.background[0].status='running';backgroundTestView.render();`,
+    );
+    assert.equal((await read()).animations[0], 'none');
+  },
+);
+
+for (const surface of ['background', 'workspace']) {
+  test(`failed IPC restores ${surface} actions for retry`, { timeout: 30000 }, async (t) => {
+    const page = await desktopPage(t);
+    const result = (await page.evaluate(`(async () => {
+      window.addEventListener('unhandledrejection', event => event.preventDefault());
+      let calls = 0, rejectAction;
+      const state = {session:{sessionId:'parent',running:false,loading:false},background:[{id:'job',sessionId:'parent',command:'fixture',status:'running',exitCode:null,createdAt:new Date().toISOString()}]};
+      const invoke = () => { calls++; return new Promise((_, reject) => { rejectAction = reject; }); };
+      let button, update;
+      if ('${surface}' === 'background') {
+        const view = localeApi.setupBackgroundView({getState:()=>state,invoke});
+        update = () => view.render(); update();
+        button = () => document.querySelector('.background-stop');
+      } else {
+        const child = {id:'child',childSessionId:'child-session',index:0,total:1,role:'general',objective:'fixture',status:'completed',rounds:1,toolCalls:0,text:'done',workspace:{kind:'worktree',executionRoot:'/fixture',state:'ready'}};
+        state.subagentTranscript={subagentId:child.id,childSessionId:child.childSessionId,objective:child.objective,status:'completed',messages:[],truncated:false};
+        const view = localeApi.setupSubAgents(()=>state, command => command.type==='subagentWorkspace' ? invoke() : undefined, () => document.createElement('div'));
+        update = () => view.update([child]); update();
+        document.querySelector('.subagent-view').click(); update();
+        button = () => document.querySelector('[data-workspace-action="archive"]');
+      }
+      button().click();
+      const pendingDisabled = button().disabled;
+      rejectAction(new Error('fixture IPC rejected'));
+      await new Promise(resolve => setTimeout(resolve,20));
+      const recovered = !button().disabled;
+      button().click();
+      const retried = calls === 2;
+      state.session.running = true;
+      update();
+      rejectAction(new Error('fixture IPC rejected again'));
+      await new Promise(resolve => setTimeout(resolve,20));
+      return {pendingDisabled,recovered,retried,busyDisabled:button()?.disabled};
+    })()`)) as {
+      pendingDisabled: boolean;
+      recovered: boolean;
+      retried: boolean;
+      busyDisabled: boolean;
+    };
+    assert.equal(result.pendingDisabled, true);
+    assert.equal(result.recovered, true);
+    assert.equal(result.retried, true);
+    if (surface === 'workspace') assert.equal(result.busyDisabled, true);
+  });
 }
 
 test(

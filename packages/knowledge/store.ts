@@ -5,6 +5,9 @@ import { userStateDirectory } from '../platform/user-state.ts';
 import path from 'node:path';
 import { resourceText } from '../resources/files.ts';
 
+const DOCUMENT_CHUNK_CHARS = 1600;
+const DOCUMENT_CHUNK_OVERLAP = 200;
+
 export interface KnowledgeItem {
   id: string;
   kind: 'memory' | 'document';
@@ -134,7 +137,15 @@ export class KnowledgeStore {
       this.db.exec('COMMIT');
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        /**
+         * A failed `COMMIT` has already ended the transaction, and SQLite answers the `ROLLBACK` with
+         * "cannot rollback - no transaction is active" — which would replace the failure that actually
+         * happened with a misleading one. The event journal guards its rollback for the same reason.
+         */
+      }
       throw error;
     }
   }
@@ -218,12 +229,24 @@ export class KnowledgeStore {
         )
         .run(id, scope, file, digest, now);
       let chunks = 0;
-      for (let offset = 0; offset < content.length; offset += 1400) {
+      for (
+        let offset = 0;
+        offset < content.length;
+        offset += DOCUMENT_CHUNK_CHARS - DOCUMENT_CHUNK_OVERLAP
+      ) {
         this.db
           .prepare(
             "INSERT INTO knowledge_items(id,scope,kind,title,content,source,document_id,updated_at) VALUES(?,?,'document',?,?,?,?,?)",
           )
-          .run(`${id}:${chunks}`, scope, file, content.slice(offset, offset + 1600), file, id, now);
+          .run(
+            `${id}:${chunks}`,
+            scope,
+            file,
+            content.slice(offset, offset + DOCUMENT_CHUNK_CHARS),
+            file,
+            id,
+            now,
+          );
         chunks++;
       }
       return { path: file, updatedAt: now, chunks };
@@ -319,8 +342,8 @@ export class KnowledgeStore {
     // phrase as a substring, and `updated_at` is demoted to a final tie-break instead of deciding
     // between equally-scored documents.
     //
-    // `chunk_rank` keeps the best-scoring chunk per document: a document is split into 1600-char
-    // chunks, so without it one long file could occupy several of the requested result slots.
+    // `chunk_rank` keeps the best-scoring chunk per document: 1600-character windows overlap by 200
+    // characters to retain boundary context. Without deduplication a long file could occupy several slots.
     const rows = this.db
       .prepare(
         `WITH hits AS (

@@ -325,14 +325,29 @@ export class BackgroundCommands {
       job.status = 'finishing';
       // A worker's serialized plan does not own permission leases. Only this Host can release them.
       // If it vanished without confirming termination, preserve resources and report uncertainty.
-      void this.cleanup(job).then(() => {
-        job.status = job.cleanupFailed ? 'failed' : (job.finalStatus ?? 'failed');
-        try {
-          this.settle(job);
-        } finally {
-          ended();
-        }
-      });
+      void this.cleanup(job)
+        .then(() => {
+          job.status = job.cleanupFailed ? 'failed' : (job.finalStatus ?? 'failed');
+          try {
+            this.settle(job);
+          } finally {
+            ended();
+          }
+        })
+        .catch((error: unknown) => {
+          /**
+           * The outcome is recorded in the session log, and that write is the one step here that can refuse.
+           *
+           * Nobody awaits this chain — the worker's exit is the caller — so a rejection escaping it is an
+           * unhandled rejection, which ends the Host. A failed journal write is worth a diagnostic line and
+           * nothing more: the job's own state is already published, and `ended()` has already released it.
+           */
+          process.stderr.write(
+            `background command ${job.id} could not record its outcome: ${
+              error instanceof Error ? error.message : String(error)
+            }\n`,
+          );
+        });
     });
     markSandboxStarted(plan);
     worker.send(
@@ -368,19 +383,28 @@ export class BackgroundCommands {
     })());
   }
   private async stop(job: Job): Promise<void> {
-    if (['starting', 'running'].includes(job.status)) {
-      if (job.worker.connected) job.worker.send({ type: 'stop' }, () => {});
-      await wait(job.done, 8000);
+    let stopError: unknown;
+    try {
       if (['starting', 'running'].includes(job.status)) {
-        if (job.worker.pid) await killTree(job.worker.pid);
-        await wait(job.done, 1000);
-        job.cleanupFailed = true;
-      }
-    } else await wait(job.done, 8000);
-    await this.cleanup(job);
+        if (job.worker.connected) job.worker.send({ type: 'stop' }, () => {});
+        await wait(job.done, 8000);
+        if (['starting', 'running'].includes(job.status)) {
+          if (job.worker.pid) await killTree(job.worker.pid);
+          await wait(job.done, 1000);
+          job.cleanupFailed = true;
+        }
+      } else await wait(job.done, 8000);
+    } catch (error) {
+      job.cleanupFailed = true;
+      stopError = error;
+    } finally {
+      await this.cleanup(job);
+    }
     if (job.cleanupFailed) {
       this.settle(job);
-      const error = new Error('Background command cleanup failed; processes may still be running');
+      const error = new Error('Background command cleanup failed; processes may still be running', {
+        cause: stopError,
+      });
       error.name = 'ToolCleanupError';
       throw error;
     }

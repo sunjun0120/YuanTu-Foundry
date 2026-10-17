@@ -148,7 +148,7 @@ slots.register('message.actions', {
 });
 const subagentView = setupSubAgents(
   () => state,
-  (command) => void invoke(command),
+  (command) => invoke(command),
   messagesView.messageView,
 );
 const prompt = element<HTMLTextAreaElement>('prompt');
@@ -400,12 +400,9 @@ function render(): void {
     approvals: session.approvals.length,
     ready: state.ready,
     loading: session.loading,
+    activity: session.statisticsActivity,
+    tools: session.tools.length,
   });
-  if (session.running && !session.compacting && !session.approvals.length) {
-    const phase = session.statisticsActivity?.phase;
-    if (phase === 'reasoning') element('run-status').textContent = t('ui.modelReasoning');
-    if (phase === 'tool_call') element('run-status').textContent = t('ui.modelToolCall');
-  }
   element('session-short').textContent = session.sessionId
     ? t('ui.sessionShort', { id: session.sessionId.slice(0, 8) })
     : '';
@@ -589,10 +586,24 @@ window.yuantu.subscribeDelta((delta) => {
 window.yuantu.subscribeSubAgentDelta((delta) => {
   subagentView.delta(delta);
 });
-// Usage and activity, likewise: the numbers change once a second while a model call runs, and the panel
-// that shows them is the only surface that needs the update.
+// Patch progress into the statistics panel and status line without rebuilding the transcript per token.
 window.yuantu.subscribeStatisticsDelta((delta) => {
   statisticsView.delta(delta);
+  if (!state || state.session.sessionId !== delta.sessionId) return;
+  state = {
+    ...state,
+    session: { ...state.session, statistics: delta.statistics, statisticsActivity: delta.activity },
+  };
+  const session = state.session;
+  element('run-status').textContent = runStatusText({
+    status: session.status,
+    compacting: session.compacting,
+    approvals: session.approvals.length,
+    ready: state.ready,
+    loading: session.loading,
+    activity: delta.activity,
+    tools: session.tools.length,
+  });
 });
 // Every other renderer re-renders on a language change; without this the chat
 // surface kept its old locale-formatted timestamps and labels.

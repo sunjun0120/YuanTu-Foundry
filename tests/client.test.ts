@@ -275,6 +275,107 @@ test('a failed link is released before its status is announced, so it reads as r
   assert.equal(failed.recoverable, true, 'so the carrier is told a new Host may be started');
 });
 
+for (const retirement of ['graceful', 'forced', 'unconfirmed'] as const) {
+  test(`restart retires the previous Host before opening another (${retirement})`, async (t) => {
+    const client = new AgentHostClient({
+      nodePath: process.execPath,
+      hostPath: path.join(projectRoot, 'tests/faulty-host.ts'),
+      workspace: projectRoot,
+      shutdownTimeoutMs: 20,
+    });
+    const links: { exit: () => void; fail: () => void; kills: number }[] = [];
+    const internal = client as unknown as {
+      openTransport(generation: number): HostTransport;
+      wireTransport(link: HostTransport, generation: number): HostTransport;
+    };
+    t.mock.method(internal, 'openTransport', (generation: number) => {
+      const first = links.length === 0;
+      const lines = new Set<(line: string) => void>();
+      const errors = new Set<(error: Error) => void>();
+      const exits = new Set<
+        (exit: { code: number | null; signal: NodeJS.Signals | null }) => void
+      >();
+      const control = {
+        exit: () => {
+          for (const fn of exits) fn({ code: 0, signal: null });
+        },
+        fail: () => {
+          for (const fn of errors) fn(Error('fixture broken link'));
+        },
+        kills: 0,
+      };
+      links.push(control);
+      return internal.wireTransport(
+        {
+          label: 'owned fake Host',
+          pid: undefined,
+          writable: true,
+          send(line) {
+            const { id } = JSON.parse(line);
+            queueMicrotask(() => {
+              for (const fn of lines)
+                fn(
+                  JSON.stringify({
+                    id,
+                    result: {
+                      protocolVersion: 1,
+                      runtime: 'yuantu',
+                      workspace: projectRoot,
+                      capabilities: ['sessions'],
+                    },
+                  }),
+                );
+            });
+            return true;
+          },
+          onLine(fn) {
+            lines.add(fn);
+            return () => lines.delete(fn);
+          },
+          onError(fn) {
+            errors.add(fn);
+            return () => errors.delete(fn);
+          },
+          onExit(fn) {
+            exits.add(fn);
+            return () => exits.delete(fn);
+          },
+          onDiagnostic: () => () => {},
+          end() {
+            if (!first) control.exit();
+          },
+          kill() {
+            control.kills++;
+            if (retirement === 'forced') control.exit();
+          },
+        },
+        generation,
+      );
+    });
+    try {
+      await client.start();
+      links[0]!.fail();
+      const restarting = client.start();
+      if (retirement === 'graceful') {
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(links.length, 1, 'old Host must exit before a new one opens');
+        links[0]!.exit();
+      }
+      if (retirement === 'unconfirmed') {
+        await assert.rejects(restarting, /unconfirmed/);
+        assert.equal(links.length, 1);
+        links[0]!.exit();
+        await client.start();
+      } else await restarting;
+      assert.equal(links.length, 2);
+      assert.equal(links[0]!.kills, retirement === 'graceful' ? 0 : 1);
+    } finally {
+      for (const link of links) link.exit();
+      await client.stop();
+    }
+  });
+}
+
 test('request timeout rejects once and the connection remains usable', async (t) => {
   const { client } = await setup(
     t,

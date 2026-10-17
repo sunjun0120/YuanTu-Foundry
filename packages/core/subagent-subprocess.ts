@@ -212,6 +212,15 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
         else stderr += stderrDecoder.write(chunk);
       };
       request.signal.addEventListener('abort', stop, { once: true });
+      /**
+       * A signal that was already aborted never fires its listener.
+       *
+       * Registration happens after the scratch directory and the spawn, and the coordinator can cancel between
+       * checking its own signal and awaiting this call — in which case the child would run to completion (up to
+       * `timeoutMs`) before a cancellation nobody could deliver was reported. The siblings in this package test
+       * `aborted` explicitly for the same reason. `stop()` is safe here: it kills only a child still running.
+       */
+      if (request.signal.aborted) stop();
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill('SIGKILL');

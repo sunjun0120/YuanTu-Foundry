@@ -28,6 +28,8 @@ export interface ListeningHost {
   dbPath: string;
   authToken: string;
   stderr: () => string;
+  /** Close attached clients before this fixture's fallback process kill and directory removal. */
+  beforeStop: (cleanup: () => Promise<void>) => void;
 }
 
 export async function listeningHost(
@@ -87,14 +89,29 @@ export async function listeningHost(
       reject(new Error(`Host exited (code=${code}) before listening. stderr: ${stderr}`));
     });
   });
+  const beforeStop: (() => Promise<void>)[] = [];
   t.after(async () => {
-    lines.close();
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    // The killed Host may hold the database file for a moment after the signal, and a Windows temp directory
-    // cannot be removed while it does.
-    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    try {
+      for (const cleanup of beforeStop) await cleanup();
+    } finally {
+      lines.close();
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      // The killed Host may hold the database file for a moment after the signal, and a Windows temp directory
+      // cannot be removed while it does.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
   });
-  return { port, child, root, dbPath, authToken, stderr: () => stderr };
+  return {
+    port,
+    child,
+    root,
+    dbPath,
+    authToken,
+    stderr: () => stderr,
+    beforeStop: (cleanup) => {
+      beforeStop.push(cleanup);
+    },
+  };
 }
 
 /**

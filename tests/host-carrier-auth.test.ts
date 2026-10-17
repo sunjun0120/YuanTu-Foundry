@@ -331,7 +331,8 @@ for (const configuration of ['missing-token', 'malformed-token', 'non-loopback']
         cwd: root,
         env: { ...process.env, YUANTU_HOST_TOKEN: credential },
         encoding: 'utf8',
-        timeout: 5000,
+        // This bounds cold Host startup; rejection semantics below remain mandatory.
+        timeout: 20000,
         windowsHide: true,
       },
     );

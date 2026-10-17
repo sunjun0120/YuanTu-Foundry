@@ -851,32 +851,53 @@ export class TaskJournal {
         )
         .all(workspace ?? null, workspace ?? null)
         .filter((row) => deadOwner(row.ownerPid));
+      /** How many were actually converged: a child that threw below is not one of them. */
+      let converged = 0;
       for (const row of rows) {
         const childId = String(
           this.port.db.prepare('SELECT session_id FROM runs WHERE id=?').get(String(row.runId))
             ?.session_id,
         );
-        this.port.settleAbandonedRun(
-          childId,
-          String(row.runId),
-          'Previous child run was interrupted. Execution outcome is unknown; inspect current state before retrying.',
-        );
-        // The parent's view of this child is a durable fact too: a reader of the parent's log must be able
-        // to see "this child was interrupted" without reaching into the child's own session. Recorded here
-        // because this is the only place that knows both the parent and the outcome.
-        const parent = this.port.db
-          .prepare(
-            'SELECT parent_session_id AS parentSessionId FROM sessions WHERE id=? AND parent_session_id IS NOT NULL',
-          )
-          .get(childId);
-        if (parent)
-          this.port.recordEvent(String(parent.parentSessionId), 'subagent.interrupted', {
-            runId: String(row.runId),
-            childSessionId: childId,
-            reason: 'Interrupted; inspect the child transcript and current state before retrying.',
-          });
+        /**
+         * One child at a time, and one failure at a time, for the reason the sibling pass records.
+         *
+         * `settleAbandonedRun` parses the child's event log, so a log this build cannot fold — a blob that is
+         * gone, an event type it refuses by design — throws from in here. Letting that escape rolled back every
+         * other child *and* propagated to the caller, which is Host startup: one unreadable child left the whole
+         * workspace unable to open. The child that cannot be converged is named and skipped; a child left
+         * `running` stays hidden from `list()` either way, and that is strictly better than a carrier that
+         * never starts.
+         */
+        try {
+          this.port.settleAbandonedRun(
+            childId,
+            String(row.runId),
+            'Previous child run was interrupted. Execution outcome is unknown; inspect current state before retrying.',
+          );
+          // The parent's view of this child is a durable fact too: a reader of the parent's log must be able
+          // to see "this child was interrupted" without reaching into the child's own session. Recorded here
+          // because this is the only place that knows both the parent and the outcome.
+          const parent = this.port.db
+            .prepare(
+              'SELECT parent_session_id AS parentSessionId FROM sessions WHERE id=? AND parent_session_id IS NOT NULL',
+            )
+            .get(childId);
+          if (parent)
+            this.port.recordEvent(String(parent.parentSessionId), 'subagent.interrupted', {
+              runId: String(row.runId),
+              childSessionId: childId,
+              reason:
+                'Interrupted; inspect the child transcript and current state before retrying.',
+            });
+          converged += 1;
+        } catch (error) {
+          console.error(
+            `[session log] could not converge interrupted child run ${String(row.runId)} in session ` +
+              `${childId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-      return rows.length;
+      return converged;
     });
   }
   /**

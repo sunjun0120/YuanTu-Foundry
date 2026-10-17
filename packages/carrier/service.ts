@@ -206,6 +206,10 @@ export class CarrierService {
         }
       }),
       this.client.subscribe((event) => {
+        if (event.type === 'session.title.updated') {
+          void this.refreshSessionNames().catch(() => {});
+          return;
+        }
         if (event.sessionId !== this.controller.snapshot.sessionId) return;
         if (event.type === 'run.started') void this.refreshSessionNames().catch(() => {});
         // The process record grows during a run, and a decision is only worth reading once it has been made:
@@ -583,12 +587,16 @@ export class CarrierService {
       this.sessions = sessions;
       this.currentSession = all.find((item) => item.id === id) ?? null;
     }
-    this.changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
+    const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
+    // Published under the same guard as the list above: two overlapping refreshes can cross a session switch,
+    // and a stale reply landing last would show the file changes of a session the user has left.
+    if (version === this.searchVersion && id === this.controller.snapshot.sessionId)
+      this.changes = changes;
     await this.refreshAudit(id);
     await this.refreshTasks(id);
     await this.refreshBackground();
   }
-  /** Title generation finishes before run.started, so the sidebar can show it while the reply streams. */
+  /** Refresh independently when a fallback or a background-generated title becomes available. */
   private async refreshSessionNames(): Promise<void> {
     const version = ++this.searchVersion;
     const all = await this.client.request('session.list', {});

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { connect } from 'node:net';
+import { connect, Socket } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,18 @@ import { lineFramer, socketTransport } from '../packages/client/host-transport.t
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { connectClient, listeningHost } from './listening-host-fixture.ts';
+
+test('socket connection errors reach transport consumers and cannot look like clean exits', async () => {
+  const socket = new Socket();
+  const transport = socketTransport(socket);
+  const failure = new Error('fixture ECONNRESET');
+  const errors: Error[] = [];
+  transport.onError((error) => errors.push(error));
+  const closed = new Promise<{ code: number | null }>((resolve) => transport.onExit(resolve));
+  socket.destroy(failure);
+  assert.notEqual((await closed).code, 0);
+  assert.deepEqual(errors, [failure]);
+});
 
 // ---- a carrier that cannot spawn a process ----
 //

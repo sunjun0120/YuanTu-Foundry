@@ -33,7 +33,16 @@ const startedAt = new Date().toISOString(),
 const args = process.argv.slice(2),
   options = [],
   files = [];
-let concurrency = Math.min(4, availableParallelism()),
+/**
+ * How many test files run at once.
+ *
+ * Eight rather than four because the parallel phase is dominated by files that spend their time waiting on
+ * spawned Host processes and file I/O, not on the CPU: on a 16-core machine the same 249 files took 477 s at four
+ * and 348 s at eight, with the same 2563 cases and no failures in either run. The cap still follows
+ * `availableParallelism`, so a smaller machine keeps a smaller default, and `--concurrency=N` remains the way to
+ * pin it. Only the parallel phase is affected: the native sandbox files are serial by construction.
+ */
+let concurrency = Math.min(8, availableParallelism()),
   schedule = 'partitioned',
   order = 'duration',
   durationHistory;

@@ -704,7 +704,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 工具（折叠为 `run_code`） | 1 个 / 10.6 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 24 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v30 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 50 / 45 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
 | 行为测试文件 | 249 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |

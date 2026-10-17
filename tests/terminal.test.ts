@@ -233,6 +233,24 @@ test('a read can wait for output instead of polling', async (t) => {
   assert.match(result.content, /READY/);
   assert.match(result.content, /waited: new output arrived/);
 });
+test('a waiting read ends when the call is cancelled', async (t) => {
+  const { call, tools } = await setup(t);
+  const id = /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const pending = tools.execute(
+    { id: 'read', name: 'terminal_read', arguments: { id, cursor: 0, wait_ms: 20_000 } },
+    { signal: controller.signal, approve: async () => true },
+  );
+  setTimeout(() => controller.abort(new Error('stop waiting')), 50);
+  // The wait was asked for twenty seconds. A cancellation that had to wait it out would hold the run's
+  // slot — and the Host's shutdown — for exactly that long.
+  await assert.rejects(pending, /stop waiting/);
+  assert.ok(
+    Date.now() - startedAt < 5_000,
+    `waited ${Date.now() - startedAt}ms after cancellation`,
+  );
+});
 test('a named program is a program and its arguments are its own argv', async (t) => {
   const { call, fail } = await setup(t);
   const opened = await call('terminal_open', {
@@ -366,7 +384,10 @@ test('a terminal that ignores a graceful signal can still be ended by force', as
   const { call, terminals } = await setup(t, 'confirming');
   const started = async () => /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
   const graceful = await started();
-  terminals.signal(graceful, 'session-a', 'SIGTERM');
+  assert.match(
+    await call('terminal_signal', { id: graceful, signal: 'SIGTERM' }),
+    /Sent SIGTERM.*running/,
+  );
   // The same graceful request twice is one request: the second adds nothing the first did not.
   terminals.signal(graceful, 'session-a', 'SIGTERM');
   assert.deepEqual(confirming[0]!.requested, ['SIGTERM']);
@@ -383,6 +404,65 @@ test('a terminal that ignores a graceful signal can still be ended by force', as
   assert.deepEqual(confirming[1]!.requested, ['SIGTERM', undefined]);
   assert.equal(terminals.list('session-a')[1]!.status, 'exited');
 });
+
+test('a graceful signal waits for delivery acknowledgement but not process exit', async (t) => {
+  const { call, terminals } = await setup(t, 'confirming');
+  const id = /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
+  const child = confirming[0]!;
+  const terminate = child.terminate.bind(child);
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.mock.method(child, 'terminate', async (signal?: NodeJS.Signals) => {
+    if (signal === 'SIGTERM') return waiting;
+    await terminate(signal);
+    release();
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    let settled = false;
+    const delivery = call('terminal_signal', { id, signal: 'SIGTERM' }).then((report) => {
+      settled = true;
+      return report;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, 'must not report delivery before the backend acknowledges it');
+    release();
+    const report = await Promise.race([
+      delivery,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error('signal waited for exit')), 1000);
+      }),
+    ]);
+    assert.match(report, /Sent SIGTERM.*running/);
+    assert.equal(terminals.list('session-a')[0]!.status, 'running');
+  } finally {
+    clearTimeout(timer);
+    await call('terminal_signal', { id, signal: 'SIGKILL' });
+    release();
+  }
+});
+
+for (const asynchronous of [false, true]) {
+  test(`SIGTERM ${asynchronous ? 'asynchronous' : 'synchronous'} delivery failure is reported`, async (t) => {
+    const { call, fail, terminals } = await setup(t, 'confirming');
+    const id = /Terminal (\S+) started/.exec(await call('terminal_open', {}))![1]!;
+    const child = confirming[0]!;
+    const fault = t.mock.method(child, 'terminate', () => {
+      const error = Error('EPERM: signal delivery refused');
+      if (asynchronous) return Promise.reject(error);
+      throw error;
+    });
+    try {
+      assert.match(await fail('terminal_signal', { id, signal: 'SIGTERM' }), /EPERM/);
+      assert.equal(terminals.list('session-a')[0]!.status, 'running');
+    } finally {
+      fault.mock.restore();
+      await call('terminal_signal', { id, signal: 'SIGKILL' });
+    }
+  });
+}
 test('the number of live terminals is capped, and a closed one frees a slot', async (t) => {
   const { call, fail } = await setup(t);
   const opened: string[] = [];

@@ -776,14 +776,20 @@ test('real Host bridge uses only a loopback fixture and settles success/cancel w
       assert.ok(result.events.some((item: any) => item.event.type === 'provider.request.finished'));
     assert.equal(JSON.stringify(result).includes('coding-evaluation-fake-key'), false);
     if (hanging) {
-      // The Host ends a cancelled run by aborting it, so there is no terminal RunResult to match: what has to be
-      // proven is that the cancellation was answered and the run slot was released.
+      // The cancellation is proven by its own evidence — answered, settled, slot released — and by the run it
+      // ended not being a completion. A cancelled run *may* still be reported as a terminal result: the agent
+      // catches its own abort and answers with `status: 'cancelled'` (see `packages/core/agent.ts`, and the
+      // cancellations pinned in `tests/client.test.ts`), so demanding no result at all fails whenever the abort
+      // lands inside the run instead of before it. What must never appear is a run that finished its work.
       assert.equal(result.cancellation.acknowledged, true);
       assert.equal(result.cancellation.runSlotReleased, true);
       assert.equal(result.cancellation.terminalSettled, true);
       // A cancellation the Host answered and settled is an expected end, not an environment failure.
       assert.equal(result.failureClass, null);
-      assert.equal(result.runs.length, 0);
+      assert.ok(
+        result.runs.every((run: any) => run.status === 'cancelled'),
+        `a cancellation must not report a finished run: ${JSON.stringify(result.runs)}`,
+      );
     } else {
       assert.equal(result.cancellation, null);
       assert.equal(result.terminalSeen, true);

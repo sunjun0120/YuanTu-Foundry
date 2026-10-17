@@ -31,6 +31,23 @@ export function assertAcceptanceOutput(output, code) {
     throw new Error(
       'Windows acceptance requires a nonempty passing run with no skips, cancellations or todo',
     );
+  // Every file's summary is checked, not only the last: the run prints one line per acceptance file, so a run
+  // whose final file passed while an earlier one failed would otherwise be accepted on its last line alone.
+  for (const match of matches) {
+    const [, childTests, childPassed, childFailed, childSkipped, childCancelled, childTodo] =
+      match.map(Number);
+    if (
+      childFailed ||
+      childSkipped ||
+      childCancelled ||
+      childTodo ||
+      childPassed < childTests ||
+      childTests < 1
+    )
+      throw new Error(
+        'Every Windows acceptance file has to pass with no skips, cancellations or todo',
+      );
+  }
   return { tests, passed, failed, skipped, cancelled, todo, seconds };
 }
 

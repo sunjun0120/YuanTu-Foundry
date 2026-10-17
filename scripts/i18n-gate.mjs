@@ -109,7 +109,7 @@ export const CORE_ALLOWED = [
   {
     file: 'packages/core/session-title.ts',
     match:
-      /\u4e3a\u8fd9\u6bb5\u4f1a\u8bdd\u751f\u6210\u4e00\u4e2a\u7b80\u77ed\u3001\u5177\u4f53\u7684\u6807\u9898\u3002\u4e2d\u6587\u4f1a\u8bdd\u7528\u4e2d\u6587\uff0c\u82f1\u6587\u4f1a\u8bdd\u7528\u82f1\u6587\u3002/,
+      /为这段会话生成一个简短、具体的标题，中文不超过20个字，英文不超过8个单词。中文会话用中文，英文会话用英文。/,
     why: 'addressed to the model, not read by a person: the instruction is bilingual on purpose, because the title it asks for follows the conversation\u2019s language rather than the interface\u2019s',
   },
   {

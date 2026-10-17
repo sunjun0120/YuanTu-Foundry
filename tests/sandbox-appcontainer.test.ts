@@ -5,11 +5,153 @@ import {
   prepareAppContainer,
 } from '../packages/tools/sandbox-appcontainer.ts';
 import { runInNewContext } from 'node:vm';
+import { stripTypeScriptTypes } from 'node:module';
 import {
   appContainerRuntimeError,
   APPCONTAINER_CHILD_STDIO_PROBE,
 } from '../packages/tools/appcontainer-runtime.ts';
 import { windows } from './sandbox-appcontainer-fixture.ts';
+import { RetryableCleanup } from '../packages/tools/cleanup-sequence.ts';
+import { createOwnedFileLease } from '../packages/tools/owned-file-lease.ts';
+import { finalizeAppContainerProbe } from '../packages/tools/appcontainer-runtime.ts';
+import { mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+test('AppContainer cleanup retains confirmed termination across partial control deletion', async () => {
+  // Execute the production cleanup boundary with OS operations faulted. No machine grants or profiles.
+  const source = await readFile(
+    new URL('../packages/tools/sandbox-appcontainer.ts', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('export async function cleanupAppContainer(');
+  const end = source.indexOf('\nasync function terminated(', start);
+  const markStart = source.indexOf('export function markAppContainerStarted(');
+  const markEnd = source.indexOf('\nexport async function stopAppContainer(', markStart);
+  const plan = {};
+  const resource = {
+    started: true,
+    pooled: true,
+    profile: 'fixture',
+    cleanup: new RetryableCleanup(),
+    control: 'fixture-control',
+    scratch: 'fixture-scratch',
+  };
+  const owned = new Map([[plan, resource]]);
+  const activeProfiles = new Set(['fixture']);
+  let complete = true;
+  let attempts = 0;
+  let confirmations = 0;
+  const { cleanup, mark } = runInNewContext(
+    stripTypeScriptTypes(
+      source.slice(start, end).replace('export ', '') +
+        source.slice(markStart, markEnd).replace('export ', ''),
+    ) + '\n({cleanup: cleanupAppContainer, mark: markAppContainerStarted})',
+    {
+      owned,
+      activeProfiles,
+      releasing: new WeakSet(),
+      terminated: async () => {
+        confirmations++;
+        return complete;
+      },
+      acl: async () => {},
+      releaseWorkspace: async () => {},
+      rm: async (directory: string) => {
+        if (directory !== resource.control) return;
+        complete = false; // complete.json was removed before a later busy entry failed.
+        if (++attempts === 1) throw Error('EPERM: busy control entry');
+      },
+    },
+  ) as { cleanup: (plan: object) => Promise<void>; mark: (plan: object) => void };
+  await assert.rejects(cleanup(plan), /busy control entry/);
+  assert.throws(() => mark(plan), /already released/);
+  assert.equal(activeProfiles.has('fixture'), true);
+  await cleanup(plan);
+  assert.equal(attempts, 2);
+  assert.equal(confirmations, 1);
+  assert.equal(owned.has(plan), false);
+  assert.equal(activeProfiles.size, 0);
+
+  const unknown = { ...resource, cleanup: new RetryableCleanup() };
+  const unknownPlan = {};
+  owned.set(unknownPlan, unknown);
+  activeProfiles.add('fixture');
+  await assert.rejects(cleanup(unknownPlan), /termination was not acknowledged/);
+  assert.throws(() => mark(unknownPlan), /only be started once/);
+  await assert.rejects(cleanup(unknownPlan), /termination was not acknowledged/);
+  assert.equal(attempts, 2, 'unknown termination must not delete resources');
+  assert.equal(owned.has(unknownPlan), true);
+});
+
+test('failed cleanup can retry without releasing a completed workspace lease twice', async () => {
+  const cleanup = new RetryableCleanup();
+  const calls: string[] = [];
+  let fail = true;
+  const steps = [
+    {
+      id: 'workspace',
+      run: async () => {
+        calls.push('workspace');
+      },
+    },
+    {
+      id: 'profile',
+      run: async () => {
+        calls.push('profile');
+        if (fail) throw Error('delete refused');
+      },
+    },
+    {
+      id: 'scratch',
+      run: async () => {
+        calls.push('scratch');
+      },
+    },
+  ];
+  await assert.rejects(cleanup.run(steps), /delete refused/);
+  assert.deepEqual(calls, ['workspace', 'profile']);
+  fail = false;
+  await Promise.all([cleanup.run(steps), cleanup.run(steps)]);
+  assert.deepEqual(calls, ['workspace', 'profile', 'profile', 'scratch']);
+});
+
+test('probe cleanup failure returns an unavailable reason and retains the unconfirmed workspace', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-probe-retention-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await finalizeAppContainerProbe(
+    null,
+    async () => {
+      throw Error('termination not acknowledged');
+    },
+    () => rm(root, { recursive: true, force: true }),
+  );
+  assert.match(result!, /cleanup.*termination not acknowledged/);
+  assert.equal((await stat(root)).isDirectory(), true);
+});
+
+for (const operation of ['writeFile', 'sync'] as const) {
+  test(`a failed lease ${operation} releases only its own newly created lock`, async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lease-failure-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const sample = await open(path.join(root, 'sample'), 'wx');
+    const prototype = Object.getPrototypeOf(sample);
+    await sample.close();
+    const fault = t.mock.method(prototype, operation, async () => {
+      throw Error('fixture disk failure');
+    });
+    const file = path.join(root, 'owner.lock');
+    await assert.rejects(createOwnedFileLease(file, { pid: process.pid }), /fixture disk failure/);
+    fault.mock.restore();
+    await assert.rejects(stat(file), { code: 'ENOENT' });
+    const lease = await createOwnedFileLease(file, { pid: process.pid });
+    await assert.rejects(createOwnedFileLease(file, { pid: 1 }), { code: 'EEXIST' });
+    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { pid: process.pid });
+    await lease.release();
+    await lease.release();
+    await assert.rejects(stat(file), { code: 'ENOENT' });
+  });
+}
 
 test('AppContainer refuses unrestricted networking without fallback', windows, async () => {
   await assert.rejects(

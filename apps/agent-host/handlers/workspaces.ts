@@ -207,10 +207,19 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before archiving a workspace');
     ctx.restoring = true;
+    const controller = new AbortController();
+    // Registered so Stop (for the owning session) and shutdown reach it: archiving rewrites a whole tree, and
+    // passing a controller nobody owns — which is what this used to do — made the manager's abort checks and
+    // `ctx.restoring` into an uncancellable, process-wide refusal.
+    ctx.manualOperation = {
+      ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      controller,
+    };
     try {
-      await manager.archive(binding.id, new AbortController().signal);
+      await manager.archive(binding.id, controller.signal);
       return { archived: true as const, bindingId: binding.id, state: 'archived' as const };
     } finally {
+      ctx.manualOperation = undefined;
       ctx.restoring = false;
     }
   },
@@ -221,13 +230,19 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before restoring a workspace');
     ctx.restoring = true;
+    const controller = new AbortController();
+    ctx.manualOperation = {
+      ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      controller,
+    };
     try {
       // The restored binding is returned rather than the one that was asked for: a restore re-validates the
       // directory and may move the binding's state, and a client that showed the old state would be showing a
       // record that is no longer what the service believes.
-      const restored = await manager.restore(binding.id, new AbortController().signal);
+      const restored = await manager.restore(binding.id, controller.signal);
       return { restored: true as const, binding: restored };
     } finally {
+      ctx.manualOperation = undefined;
       ctx.restoring = false;
     }
   },
@@ -236,10 +251,16 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before removing a workspace');
     ctx.restoring = true;
+    const controller = new AbortController();
+    ctx.manualOperation = {
+      ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
+      controller,
+    };
     try {
-      await manager.remove(binding.id, new AbortController().signal);
+      await manager.remove(binding.id, controller.signal);
       return { removed: true as const, bindingId: binding.id, state: 'removed' as const };
     } finally {
+      ctx.manualOperation = undefined;
       ctx.restoring = false;
     }
   },

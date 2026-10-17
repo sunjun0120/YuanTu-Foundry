@@ -719,7 +719,7 @@ test('a child that works through tools without talking is not mistaken for a sta
         return reply(toolResults(request));
       }
       if (!turn(request).afterTool) {
-        await sleep(90);
+        t.mock.timers.tick(90);
         return {
           text: '',
           finishReason: 'tool_calls',
@@ -727,12 +727,20 @@ test('a child that works through tools without talking is not mistaken for a sta
           usage: { inputTokens: 0, outputTokens: 0 },
         };
       }
-      await sleep(90);
+      t.mock.timers.tick(90);
       return { ...reply('read the listing'), usage: { inputTokens: 0, outputTokens: 0 } };
     },
   };
   const { session, agent } = await fixture(t, provider, { subagents: { timeoutMs: 150 } });
+  // Advance logical gaps only at provider boundaries: real filesystem/scheduling latency must not consume
+  // this deliberately tiny watchdog budget. Total elapsed time still exceeds the original stall window.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let originalWindowElapsed = false;
+  setTimeout(() => {
+    originalWindowElapsed = true;
+  }, 150);
   const result = await agent.run({ sessionId: session.id, prompt: 'Investigate' });
+  assert.equal(originalWindowElapsed, true);
   assert.equal(
     result.subagents?.[0]?.status,
     'completed',
@@ -1902,6 +1910,62 @@ test('crashed child remains reviewable with its transcript and unknown tool outc
   assert.equal(store.reconcileChildRuns(root), 0);
   assert.equal(store.messages(child.id).length, 2);
 });
+test('one unreadable child log does not stop the rest of the workspace from converging', async (t) => {
+  const { root, store, session } = await fixture(t, { complete: async () => reply() });
+  const broken = store.create(root, session.id);
+  const healthy = store.create(root, session.id);
+  const db = new DatabaseSync(path.join(root, 'sessions.sqlite'));
+  for (const [id, childId] of [
+    ['broken-run', broken.id],
+    ['healthy-run', healthy.id],
+  ] as const) {
+    db.prepare(
+      "INSERT INTO runs(id,session_id,owner_pid,status,started_at) VALUES(?,?,?,'running',?)",
+    ).run(id, childId, 2147483647, new Date().toISOString());
+    db.prepare('UPDATE sessions SET active_run=? WHERE id=?').run(id, childId);
+  }
+  // An event type this build refuses to fold is what a log written by another build looks like, and it throws
+  // from inside the convergence. One such child used to abort the whole pass — and Host startup with it.
+  db.prepare('INSERT INTO session_events(session_id,type,data,at) VALUES(?,?,?,?)').run(
+    broken.id,
+    'future.event',
+    '{}',
+    new Date().toISOString(),
+  );
+  db.close();
+
+  assert.equal(store.reconcileChildRuns(root), 1, 'the readable child converged');
+  assert.equal(store.get(healthy.id).activeRun, null);
+  // The unreadable child is named and skipped: it stays `running`, which is what the sibling pass also trades.
+  assert.equal(store.get(broken.id).activeRun, 'broken-run');
+});
+
+test('a deleted child leaves the sub-agent catalog readable without its timing', async (t) => {
+  const { root, store, session } = await fixture(t, { complete: async () => reply() });
+  const child = store.create(root, session.id);
+  store.recordEvent(session.id, 'subagent.assigned', {
+    id: 'gone-1',
+    role: 'general',
+    objective: 'Inspect the project',
+    childSessionId: child.id,
+  });
+  assert.deepEqual(
+    store.subagents(session.id, true).map((card) => card.sessionId),
+    [child.id],
+  );
+  // The card is a fold of the *parent's* log, so it outlives the child's rows: deleting a child (the delete RPC
+  // accepts any id) used to make this lookup throw, and with it the parent's whole catalog — for a session that
+  // was otherwise healthy.
+  store.delete(child.id);
+  const cards = store.subagents(session.id, true);
+  assert.deepEqual(
+    cards.map((card) => card.sessionId),
+    [child.id],
+  );
+  assert.equal(cards[0]!.durationMs, undefined);
+  assert.equal(cards[0]!.runningSince, undefined);
+});
+
 test('delegation can be switched off, and a child session is deleted with its parent', async (t) => {
   const provider: Provider = {
     async complete(request) {

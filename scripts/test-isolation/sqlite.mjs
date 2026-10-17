@@ -1,6 +1,70 @@
 import { createRequire } from 'node:module';
 const sqlite = createRequire(import.meta.url)('node:sqlite');
 
+// Comments and statement boundaries only have meaning outside quoted SQL tokens.
+function statements(sql) {
+  const result = [];
+  let tokens = [],
+    word = '';
+  const flush = () => {
+    if (word) tokens.push(word);
+    word = '';
+  };
+  for (let index = 0; index < sql.length;) {
+    const character = sql[index];
+    if (/\s/.test(character)) {
+      flush();
+      index++;
+    } else if (sql.startsWith('--', index)) {
+      flush();
+      const end = sql.indexOf('\n', index + 2);
+      index = end < 0 ? sql.length : end + 1;
+    } else if (sql.startsWith('/*', index)) {
+      flush();
+      const end = sql.indexOf('*/', index + 2);
+      index = end < 0 ? sql.length : end + 2;
+    } else if (["'", '"', '`', '['].includes(character)) {
+      flush();
+      const start = index++,
+        close = character === '[' ? ']' : character;
+      while (index < sql.length) {
+        if (sql[index++] !== close) continue;
+        if (sql[index] === close) {
+          index++;
+          continue;
+        }
+        break;
+      }
+      tokens.push(sql.slice(start, index));
+    } else if (';=(),.'.includes(character)) {
+      flush();
+      index++;
+      if (character === ';') {
+        result.push(tokens);
+        tokens = [];
+      } else tokens.push(character);
+    } else {
+      word += character;
+      index++;
+    }
+  }
+  flush();
+  if (tokens.length) result.push(tokens);
+  return result;
+}
+
+/** A pragma name as written, with its quoting removed: `"temp_store_directory"` names the same pragma. */
+function pragmaName(token) {
+  if (typeof token !== 'string') return '';
+  if (/^(['"`]).*\1$/.test(token))
+    return token
+      .slice(1, -1)
+      .replaceAll(token[0] + token[0], token[0])
+      .toUpperCase();
+  if (/^\[.*\]$/.test(token)) return token.slice(1, -1).toUpperCase();
+  return token.toUpperCase();
+}
+
 export function installSQLiteProbe(checkWrite, violate) {
   const Original = sqlite.DatabaseSync;
   const backup = sqlite.backup;
@@ -10,14 +74,39 @@ export function installSQLiteProbe(checkWrite, violate) {
   };
   function checkSQL(sql, values = []) {
     // Guard file-producing statements separately: SQLite bypasses the public node:fs entry points.
-    const stripped = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
-    const pattern =
-      /(?:^|;)\s*(?:VACUUM\b[^;]*?\bINTO|ATTACH(?:\s+DATABASE)?|PRAGMA\s+(?:temp_store_directory|data_store_directory)\s*=)\s*([^;]*)/gi;
-    for (const match of stripped.matchAll(pattern)) {
-      const operand = /^(\?\d*|[:@$]\w+|'(?:''|[^'])*'|"(?:""|[^"])*")\s*(.*)$/s.exec(match[1]);
-      if (!operand || (operand[2] && !/^AS\s+/i.test(operand[2])))
+    for (const tokens of statements(sql)) {
+      const keyword = tokens[0]?.toUpperCase();
+      let index;
+      let parenthesized = false;
+      if (keyword === 'VACUUM') {
+        const into = tokens.findIndex((token) => token.toUpperCase() === 'INTO');
+        if (into < 0) continue;
+        index = into + 1;
+      } else if (keyword === 'ATTACH') index = tokens[1]?.toUpperCase() === 'DATABASE' ? 2 : 1;
+      else if (keyword === 'PRAGMA') {
+        const name = tokens[2] === '.' ? 3 : 1;
+        if (!['TEMP_STORE_DIRECTORY', 'DATA_STORE_DIRECTORY'].includes(pragmaName(tokens[name])))
+          continue;
+        // Two spellings set the same directory: `PRAGMA name = 'path'` and SQLite's function-call form
+        // `PRAGMA name('path')`. Reading only the first let the second point SQLite at a directory outside the
+        // worker's ownership with no violation recorded; a quoted pragma name was skipped for the same reason.
+        if (tokens[name + 1] === '=') index = name + 2;
+        else if (tokens[name + 1] === '(' && tokens[name + 3] === ')') {
+          index = name + 2;
+          parenthesized = true;
+        } else continue; // The bare query form reads the directory, and sets nothing.
+      } else continue;
+      const value = tokens[index];
+      const rest = tokens.slice(index + 1);
+      if (parenthesized && rest.length === 1 && rest[0] === ')') rest.pop();
+      if (
+        !value ||
+        !/^(?:\?\d*|[:@$]\w+|'(?:''|[^'])*'|"(?:""|[^"])*")$/.test(value) ||
+        (keyword === 'ATTACH'
+          ? rest.length !== 2 || rest[0].toUpperCase() !== 'AS'
+          : rest.length !== 0)
+      )
         violate('sqlite', 'file-producing SQL requires a direct owned filename, not an expression');
-      const value = operand[1];
       let file;
       if (value.startsWith("'") || value.startsWith('"'))
         file = value.slice(1, -1).replaceAll(value[0].repeat(2), value[0]);

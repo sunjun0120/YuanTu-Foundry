@@ -31,6 +31,10 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     if (/^YUANTU_/.test(key) || /^(?:OPENAI|ANTHROPIC|GEMINI|GOOGLE)_API_KEY$/.test(key))
       delete env[key];
   delete env.NODE_TEST_CONTEXT;
+  // The snapshot regeneration flag is the one variable a worker must never inherit: tests/turn-snapshot reads it
+  // and *records* instead of comparing, so an exported value would make the whole snapshot gate pass
+  // unconditionally. `scripts/update-snapshots.mjs` re-adds it deliberately for the one run that wants it.
+  delete env.FOUNDRY_TEST_GENERATE_SNAPSHOTS;
   delete env.UPDATE_SNAPSHOTS;
   // Collection destinations belong to controllers, never descendants or nested runners.
   delete env.FOUNDRY_TEST_COVERAGE_DIR;
@@ -52,6 +56,9 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     XDG_RUNTIME_DIR: paths.tmp,
     NODE_COMPILE_CACHE: path.join(paths.cache, 'node'),
     npm_config_cache: path.join(paths.cache, 'npm'),
+    // Portable fixtures must not accidentally select a machine-wide native backend.
+    // Native acceptance fixtures select their backend explicitly at the operation boundary.
+    YUANTU_SANDBOX: 'host',
     YUANTU_STATE_DIR: paths.state,
     FOUNDRY_TEST_ROOT: root,
     FOUNDRY_TEST_ARTIFACTS: paths.artifacts,

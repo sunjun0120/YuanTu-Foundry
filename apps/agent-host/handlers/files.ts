@@ -97,7 +97,13 @@ export const fileHandlers: Readonly<Record<string, Handler>> = {
         if (info.size > MAX_IMAGE_BYTES)
           return { path: relative, bytes: info.size, kind: 'unsupported', reason: 'too-large' };
         const bytes = Buffer.alloc(info.size);
-        if (info.size) await handle.read(bytes, 0, info.size, 0);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+          if (!bytesRead)
+            throw new Error('File changed while reading its image preview; reopen it');
+          offset += bytesRead;
+        }
         return {
           path: relative,
           bytes: info.size,

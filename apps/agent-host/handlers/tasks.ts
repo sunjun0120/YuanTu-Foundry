@@ -66,7 +66,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       params.allow,
       required(params, 'approvalId'),
     );
-    if (params.allow) void ctx.scheduler.tick();
+    if (params.allow) ctx.scheduler.wake();
     return task;
   },
   'task.trigger': async (ctx, params) => {

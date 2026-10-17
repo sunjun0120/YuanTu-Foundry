@@ -219,6 +219,12 @@ test('the three protocols put the level where each of them expects it', async (t
     () => anthropicThinkingBudget('high', 1_100),
     /does not fit in this request's output limit/,
   );
+  // A level outside the union is a runtime value, not a type error: without its own check the arithmetic
+  // produced `NaN`, both bounds passed, and the request went out with `budget_tokens: null`.
+  assert.throws(
+    () => anthropicThinkingBudget('minimal' as never, 8_000),
+    /Unknown reasoning effort/,
+  );
 
   const openai = new OpenAIProvider({ apiKey: 'k', model: 'm', baseUrl: url });
   await openai

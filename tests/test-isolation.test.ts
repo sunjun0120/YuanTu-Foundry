@@ -20,18 +20,61 @@ function run(isolation: Awaited<ReturnType<typeof createIsolation>>, code: strin
   });
 }
 
+test('isolated Host fixtures use host without inheriting operator sandbox or permission settings', async (t) => {
+  const parent = await fixture(t);
+  const isolation = await createIsolation(parent, 'host.test.ts', [], {
+    ...process.env,
+    YUANTU_SANDBOX: 'host',
+    YUANTU_PERMISSION_POLICY: 'operator-policy.json',
+  });
+  const result = run(
+    isolation,
+    `
+    import { applySandboxDefaults } from ${JSON.stringify(new URL('../apps/shared/runtime.ts', import.meta.url).href)};
+    applySandboxDefaults(); console.log(process.env.YUANTU_SANDBOX);
+  `,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'host');
+  assert.equal(isolation.env.YUANTU_PERMISSION_POLICY, undefined);
+});
+
+test('SQLite owned filenames preserve quoted comment markers, semicolons and escaped quotes', async (t) => {
+  const parent = await fixture(t);
+  const isolation = await createIsolation(parent, 'quoted-sql.test.ts', [], process.env);
+  const result = run(
+    isolation,
+    `
+    import {DatabaseSync} from 'node:sqlite'; import path from 'node:path';
+    const db=new DatabaseSync(':memory:');
+    for(const name of ['backup--copy.sqlite','semi;colon.sqlite',"quote'--copy.sqlite"]){
+      const target=path.join(process.env.TMP,name).replaceAll("'","''");
+      db.exec("/* before */ VACUUM /* between */ INTO '"+target+"'; -- after");
+    }
+    db.prepare('VACUUM INTO ?').run(path.join(process.env.TMP,'bound--copy.sqlite'));
+    db.close();console.log('owned backups created');
+  `,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /owned backups created/);
+});
+
 test('each file receives distinct temporary and state directories without inheriting credentials', async (t) => {
   const parent = await fixture(t);
   const a = await createIsolation(parent, 'a.test.ts', [], {
     ...process.env,
     YUANTU_API_KEY: 'must-not-inherit',
     OPENAI_API_KEY: 'must-not-inherit',
+    FOUNDRY_TEST_GENERATE_SNAPSHOTS: '1',
   });
   const b = await createIsolation(parent, 'b.test.ts', [], process.env);
   assert.notEqual(a.root, b.root);
   assert.notEqual(a.env.TMP, b.env.TMP);
   assert.equal(a.env.YUANTU_API_KEY, undefined);
   assert.equal(a.env.OPENAI_API_KEY, undefined);
+  // The one variable that would turn a snapshot comparison into a recording: an exported value here makes the
+  // whole snapshot gate pass unconditionally, so a worker must never inherit it.
+  assert.equal(a.env.FOUNDRY_TEST_GENERATE_SNAPSHOTS, undefined);
   for (const isolation of [a, b]) {
     const result = run(
       isolation,
@@ -226,6 +269,27 @@ test('SQLite backup and commented file-producing statements cannot escape', asyn
     assert.equal(result.status, 1, result.stderr);
     const violation = JSON.parse((await readFile(isolation.violationPath, 'utf8')).trim());
     assert.equal(violation.rule, rule);
+  }
+});
+
+test('every spelling that sets a SQLite store directory outside the root is refused', async (t) => {
+  const parent = await fixture(t);
+  // The pragma that points SQLite at a directory produces files there, exactly like `VACUUM INTO`; only the
+  // `name = 'path'` spelling used to be read, so the function-call form and a quoted pragma name slipped past.
+  for (const statement of [
+    `"PRAGMA temp_store_directory='" + target + "'"`,
+    `'PRAGMA temp_store_directory(' + JSON.stringify(target) + ')'`,
+    `'PRAGMA "temp_store_directory" = ' + JSON.stringify(target)`,
+    `"PRAGMA data_store_directory='" + target + "'"`,
+  ]) {
+    const isolation = await createIsolation(parent, 'pragma-target.test.ts', [], process.env);
+    const result = run(
+      isolation,
+      `import{DatabaseSync}from'node:sqlite';const target=${JSON.stringify(path.join(parent, 'outside-store'))};const db=new DatabaseSync(':memory:');try{db.exec(${statement})}catch{}db.close()`,
+    );
+    assert.equal(result.status, 1, `${statement}: ${result.stderr}`);
+    const violation = JSON.parse((await readFile(isolation.violationPath, 'utf8')).trim());
+    assert.equal(violation.rule, 'ownership');
   }
 });
 

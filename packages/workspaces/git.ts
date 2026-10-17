@@ -218,6 +218,10 @@ export async function runWorkspaceGit(
       }
       resolve({ code: code ?? -1, stdout: Buffer.concat(out), stderr });
     });
+    // A child that exits before the payload drains makes stdin report EPIPE, and an unhandled `error` event
+    // on that socket is rethrown by Node as an uncaught exception that would take the Host down. The child's
+    // own exit code and stderr below are the answer; a broken pipe adds nothing to it.
+    child.stdin.on('error', () => {});
     if (options.input !== undefined) child.stdin.end(options.input);
     else child.stdin.end();
   });

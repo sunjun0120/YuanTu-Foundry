@@ -67,6 +67,21 @@ test('two registries over one workspace share the service, and the first to fini
   });
 });
 
+test('closeAllSearchServices closes the shared index instead of dropping it open', async (t) => {
+  const root = await tempRoot(t, 'yuantu-life-close-all-');
+  await writeFile(path.join(root, 'a.ts'), 'export function closedSymbol() {}\n');
+  const service = acquireSearchService(workspaceAccess(new Workspace(root)));
+  assert.ok(service.refCount() >= 1);
+  await closeAllSearchServices();
+  // `close()` reads the ref count: a registry that retained a reference before closing would leave the index
+  // (and its sqlite handle) alive while dropping the map entry, so the point is that the count reached zero.
+  assert.equal(service.refCount(), 0, 'the dropped service is closed, not merely forgotten');
+  assert.throws(() => service.retain(), /closed/);
+  const again = acquireSearchService(workspaceAccess(new Workspace(root)));
+  assert.notEqual(again, service, 'a fresh acquire is a fresh service');
+  await releaseSearchService(again);
+});
+
 test('two workspaces never share an index', async (t) => {
   const first = await tempRoot(t, 'yuantu-life-a-');
   const second = await tempRoot(t, 'yuantu-life-b-');

@@ -194,6 +194,17 @@ export class WorkspaceSearchService {
       }
       files.push(file);
     }
+    /**
+     * A cursor whose boundary file is gone cannot be continued, and must not be answered with an empty page.
+     *
+     * The boundary is what makes the window stable — the walk resumes *after* it rather than at an offset — so a
+     * boundary that no longer exists used to end the walk with nothing found: an empty page, `complete: true`
+     * and no next cursor, which reads to the model as "there is nothing more in this workspace". The anchor is
+     * the cursor's own premise, so losing it is a stale cursor, and that is the answer the caller already knows
+     * how to act on.
+     */
+    if (!started)
+      throw new CursorInvalidError('the page boundary no longer exists; start the listing again');
     return {
       files,
       coverage: stream.coverage(),
@@ -397,6 +408,18 @@ export class WorkspaceSearchService {
     this.refs++;
   }
 
+  /**
+   * Ends the service regardless of outstanding references.
+   *
+   * `close()` is reference-counted, so a registry that wants to drop a shared service has to stop pretending to
+   * hold a reference first: `retain()` + `close()` cancels out and leaves the database open.
+   */
+  async forceClose(): Promise<void> {
+    if (this.closed) return;
+    this.refs = 1;
+    await this.close();
+  }
+
   refCount(): number {
     return this.refs;
   }
@@ -475,6 +498,14 @@ export class WorkspaceSearchService {
       this.access,
       this.inventoryOptions({ path: relativePath }),
     );
+    /**
+     * Whether the *walk* finished, read before this build folds its own per-file refusals into `coverage`.
+     *
+     * `coverage.complete` answers two questions at once — did every path get enumerated, and was every file
+     * analysed in full — and only the first one decides whether an indexed path that this build did not see is
+     * really gone. A file too large to outline is still a file that was visited.
+     */
+    const enumerated = coverage.complete;
     this.lastCoverage = coverage;
     this.inventoryFingerprints = new Map(
       files
@@ -556,12 +587,30 @@ export class WorkspaceSearchService {
         markStop(coverage, 'read-error');
       }
     }
-    for (const known of this.index.paths())
-      if (!seen.has(known)) {
-        this.index.remove(known);
-        this.parsers.delete(known);
-      }
     if (this.cancelledBuild || this.closed) return;
+    /**
+     * A build that did not enumerate the whole tree cannot speak for the rows it never reached.
+     *
+     * The prune below deletes every indexed path this inventory did not name, which is the right reading of an
+     * enumeration that *completed* — and a lie when it stopped at the deadline or the entry cap, because a file
+     * nobody visited is not a file that is gone. `reconcile` already refuses this exact work on this exact
+     * evidence (`!inventory.coverage.complete`); a build is the unattended path, so it is the one that has to be
+     * careful. Leaving the state unvalidated is what makes the next query rebuild instead of trusting a shrunken
+     * index.
+     */
+    if (!enumerated) {
+      // Nothing is committed, so the index stays at `building` — not `validated` — and the next query starts a
+      // build of its own instead of trusting a generation this one could not finish.
+      return;
+    }
+    // A path-scoped build is not evidence about any other path: pruning on it would delete every row outside
+    // the scope, and the next full reconcile would have to put them back.
+    if (relativePath === '.')
+      for (const known of this.index.paths())
+        if (!seen.has(known)) {
+          this.index.remove(known);
+          this.parsers.delete(known);
+        }
     this.index.commit();
   }
 
@@ -669,8 +718,7 @@ export async function releaseSearchService(service: WorkspaceSearchService): Pro
 export async function closeAllSearchServices(): Promise<void> {
   for (const [root, service] of [...shared]) {
     shared.delete(root);
-    service.retain();
-    await service.close();
+    await service.forceClose();
   }
 }
 

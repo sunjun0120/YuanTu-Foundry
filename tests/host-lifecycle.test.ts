@@ -49,6 +49,26 @@ function host(dispose: () => Promise<void>) {
   return { ctx, closed };
 }
 
+test('a rejected carrier request is observed and preserved while Host resources close', async () => {
+  const failure = new Error('fixture reply pipe closed');
+  const { ctx, closed } = host(async () => {});
+  ctx.carrier.attach = async () =>
+    (async function* () {
+      yield 'request';
+      await setImmediate();
+    })();
+  ctx.handle = async () => {
+    throw failure;
+  };
+  await assert.rejects(
+    serveHost(ctx),
+    (error: unknown) =>
+      error === failure || (error instanceof AggregateError && error.errors.includes(failure)),
+  );
+  assert.deepEqual(closed, ['carrier', 'terminals', 'background', 'store', 'hooks']);
+  assert.equal(ctx.tasks.size, 0);
+});
+
 test('Host shutdown waits for resident finalizers before closing its store', async () => {
   let release!: () => void;
   let started!: () => void;

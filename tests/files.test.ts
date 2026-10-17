@@ -19,6 +19,37 @@ import { reconcilePendingFileChanges, undoFileChange } from '../packages/tools/f
 import { writeAll, atomicWriteFile } from '../packages/tools/write-all.ts';
 import { Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
+import { fileHandlers } from '../apps/agent-host/handlers/files.ts';
+import type { HostContext } from '../apps/agent-host/state.ts';
+
+test('image previews complete short reads without inventing zero-filled bytes', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-preview-short-read-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const image = Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    Buffer.from('preview bytes'),
+  ]);
+  const file = path.join(root, 'image.png');
+  await writeFile(file, image);
+  const sample = await open(file, 'r');
+  const prototype = Object.getPrototypeOf(sample);
+  const original = prototype.read;
+  await sample.close();
+  let reads = 0;
+  t.mock.method(prototype, 'read', function (this: unknown, ...args: unknown[]) {
+    // The first read is the sniffing window and must stay whole; every read after it is capped, so the image
+    // branch has to loop to fill its buffer. One unchecked read would leave the tail as NUL bytes and still
+    // report the full length.
+    if (++reads > 1 && Buffer.isBuffer(args[0])) args[2] = Math.min(3, Number(args[2]));
+    return Reflect.apply(original, this, args);
+  });
+  const result = (await fileHandlers['files.read']!({ workspace: root } as HostContext, {
+    path: 'image.png',
+  })) as { bytes: number; data: string };
+  assert.ok(reads > 1, 'the short read was actually exercised');
+  assert.equal(result.bytes, image.length);
+  assert.deepEqual(Buffer.from(result.data, 'base64'), image);
+});
 
 /**
  * This suite is about the *built-in* scanner’s accounting — real bytes read, files read to EOF, the reason a

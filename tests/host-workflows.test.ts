@@ -13,6 +13,9 @@ import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { isSummaryBody } from './summary-request.ts';
 import { projectRoot } from './process-fixture.ts';
 import { commandPid } from './process-pid-fixture.ts';
+import { sessionHandlers } from '../apps/agent-host/handlers/sessions.ts';
+import { startRun } from '../apps/agent-host/run-start.ts';
+import type { HostContext } from '../apps/agent-host/state.ts';
 
 // ---- merged from host-workflows.test.ts ----
 
@@ -830,7 +833,53 @@ test('Host keeps background jobs across turns and stops them on session cancella
   assert.throws(() => process.kill(pid, 0));
 });
 
-test('Host reserves session deletion while asynchronous background cleanup runs', async (t) => {
+test('Host reserves session deletion until a blocked background cleanup actually settles', async (t) => {
+  const root = await workspace(t);
+  const store = new SessionStore(':memory:');
+  t.after(() => store.close());
+  const session = store.create(root);
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const cleaning = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const ctx = {
+    workspace: root,
+    store,
+    active: new Map(),
+    restoring: false,
+    background: {
+      close: async () => {
+        entered();
+        await blocked;
+      },
+    },
+    terminals: { closeAllAndWait: async () => {} },
+    invariants: { run: async () => [] },
+    announced: new Set(),
+    sessionSandboxes: new Map(),
+    sessionSandboxFiles: new Map(),
+    sessionSandboxNetwork: new Map(),
+  } as unknown as HostContext;
+  const deleting = sessionHandlers['session.delete']!(ctx, { sessionId: session.id });
+  await cleaning;
+  try {
+    assert.equal(store.get(session.id).id, session.id);
+    await assert.rejects(
+      startRun(ctx, { sessionId: session.id, prompt: 'overlap' }),
+      /busy|active run/i,
+    );
+  } finally {
+    release();
+    await deleting;
+  }
+  assert.equal(ctx.restoring, false);
+  assert.throws(() => store.get(session.id), /Session not found/);
+});
+
+test('Host deletes a session with managed commands after its background cleanup completes', async (t) => {
   const root = await workspace(t);
   await writeFile(path.join(root, 'managed.cjs'), 'setInterval(()=>{},1000);');
   let step = 0;
@@ -859,8 +908,11 @@ test('Host reserves session deletion while asynchronous background cleanup runs'
   const session = await client.request('session.create', {});
   assert.equal((await client.run(session.id, 'start')).status, 'completed');
   const deleting = client.request('session.delete', { sessionId: session.id });
-  await assert.rejects(client.run(session.id, 'overlapping run'), /busy|active run/i);
   assert.equal((await deleting).deleted, true);
+  await assert.rejects(
+    client.request('session.get', { sessionId: session.id }),
+    /Session not found/,
+  );
 });
 
 test('Host permission policy stays fixed across runs after its source file changes', async (t) => {

@@ -1,3 +1,5 @@
+import { redactSecrets } from '../core/errors.ts';
+
 /**
  * Validate identity metadata only. A libuv version does not prove AppContainer
  * compatibility (including builds with backported upstream #5181 fixes).
@@ -37,4 +39,19 @@ export function appContainerProbeFailure(
   ];
   const phase = typeof stage === 'string' && known.includes(stage) ? stage : 'unknown';
   return `AppContainer enforcement probe ${cancelled ? 'timed out' : 'failed'} during ${phase}: ${String(error).slice(0, 2048)}`;
+}
+
+/** Unknown termination retains its workspace; availability still reports a refusal instead of rejecting. */
+export async function finalizeAppContainerProbe(
+  result: string | null,
+  cleanup: () => Promise<void>,
+  discardWorkspace: () => Promise<void>,
+): Promise<string | null> {
+  try {
+    await cleanup();
+    await discardWorkspace();
+    return result;
+  } catch (error) {
+    return `AppContainer probe cleanup failed; retained resources require recovery: ${redactSecrets(String(error)).slice(0, 2048)}`;
+  }
 }

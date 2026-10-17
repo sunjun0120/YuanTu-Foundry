@@ -112,6 +112,27 @@ function fakeProcesses(script: string): ManagedSearchProcess {
   };
 }
 
+test('ripgrep stops admitting files when the total byte budget is spent', async (t) => {
+  const root = await tempDir(t, 'yuantu-rg-byte-budget-');
+  const script = path.join(root, 'fake-rg.cjs');
+  await writeFile(script, FAKE_RG);
+  for (const name of ['a.txt', 'b.txt']) await writeFile(path.join(root, name), 'needle\n');
+  const options = { ...searchOptions({ query: 'needle' }), maxScanBytes: 7 };
+  const page = await runRipgrep({
+    executable: 'unused',
+    processes: fakeProcesses(script),
+    files: [entry(root, 'a.txt', 7), entry(root, 'b.txt', 7)],
+    options,
+  });
+  assert.deepEqual(
+    page.matches.map((match) => match.path),
+    ['a.txt'],
+  );
+  assert.equal(page.coverage.filesScanned, 1);
+  assert.equal(page.coverage.complete, false);
+  assert.ok(page.coverage.reasons.includes('byte-limit'));
+});
+
 /**
  * The verified binary itself, started without a sandbox.
  *

@@ -307,9 +307,10 @@ export class TerminalSessions {
     scope: string,
     cursor = 0,
     waitMs = 0,
+    signal?: AbortSignal,
   ): Promise<{ snapshot: TerminalSnapshot; waited: boolean }> {
     const terminal = this.get(id, scope);
-    const waited = await this.await(terminal, cursor, clampWait(waitMs));
+    const waited = await this.await(terminal, cursor, clampWait(waitMs), signal);
     return { snapshot: this.snapshot(terminal, cursor), waited };
   }
   /**
@@ -464,18 +465,31 @@ export class TerminalSessions {
    *
    * Returns whether anything happened. A wait that times out is not an error — "nothing has been printed yet"
    * is the answer a REPL gives most of the time — which is why the result says so instead of failing the call.
+   *
+   * The wait also ends when the call is cancelled. `wait_ms` may be two minutes, and a Stop that had to wait
+   * out a timer would keep the run's slot, the session and the Host's shutdown for exactly as long as the
+   * wait was asked for.
    */
-  private async await(terminal: Terminal, cursor: number, waitMs: number): Promise<boolean> {
+  private async await(
+    terminal: Terminal,
+    cursor: number,
+    waitMs: number,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     if (waitMs <= 0 || terminal.status !== 'running' || terminal.total > cursor) return false;
+    if (signal?.aborted) return false;
     return new Promise<boolean>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const done = (waited: boolean) => {
         clearTimeout(timer);
         terminal.listeners.delete(listener);
+        signal?.removeEventListener('abort', abort);
         resolve(waited);
       };
       const listener = () => done(true);
+      const abort = () => done(false);
       terminal.listeners.add(listener);
+      signal?.addEventListener('abort', abort, { once: true });
       timer = setTimeout(() => done(false), waitMs);
     });
   }
@@ -581,6 +595,7 @@ export class TerminalSessions {
             scope,
             Number(args.cursor ?? 0),
             Number(args.wait_ms ?? 0),
+            context.signal,
           );
           const notes = [
             `terminal ${snapshot.id}  ${snapshot.status}${snapshot.status === 'exited' ? ` (exit ${snapshot.exitCode ?? 'unknown'})` : ''}  cursor ${snapshot.nextCursor}`,
@@ -662,12 +677,16 @@ export class TerminalSessions {
             };
           const id = String(args.id).trim();
           this.signal(id, scope, signal);
-          if (signal !== 'SIGINT') await this.join(this.get(id, scope));
           const terminal = this.get(id, scope);
+          const undeliverable = terminal.process.signalAvailable?.(signal) ?? null;
+          if (signal === 'SIGKILL' || (signal === 'SIGTERM' && undeliverable))
+            await this.join(terminal);
+          // The backend must acknowledge delivery (or reject it); a graceful request does
+          // not also wait for terminal.closed, since the program may ignore the signal.
+          else if (signal === 'SIGTERM') await terminal.stopping;
           const snapshot = this.snapshot(terminal, terminal.total);
           // A signal is a request, and a backend that cannot deliver one has to be reported as such: the
           // terminal was ended either way, so saying "Sent SIGTERM" would describe an effect nobody observed.
-          const undeliverable = terminal.process.signalAvailable?.(signal) ?? null;
           return {
             isError: false,
             content: undeliverable

@@ -22,6 +22,8 @@ import {
 } from '../packages/lsp/protocol.ts';
 import { findExecutable, languageForFile, resolveServers } from '../packages/lsp/servers.ts';
 import { LspClient } from '../packages/lsp/client.ts';
+import { LspManager } from '../packages/lsp/manager.ts';
+import { lspTools } from '../packages/lsp/tools.ts';
 import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
 
 // ---- merged from lsp.test.ts ----
@@ -345,6 +347,40 @@ test('a language server starts behind an approval and answers every tool', async
   assert.equal(stopped.content, '{"stopped":true}');
   const afterStop = await tools.execute(call('lsp_diagnostics', { paths: ['main.fake'] }), context);
   assert.match(afterStop.content, /no running language server handles this file/);
+});
+
+test('a failed write to a language server is reported instead of ending the host', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lsp-'));
+  await mkdir(path.join(root, '.yuantu'), { recursive: true });
+  await writeFile(
+    path.join(root, '.yuantu', 'lsp.json'),
+    JSON.stringify({
+      servers: {
+        fake: { command: process.execPath, args: [FIXTURE], extensions: ['.fake'] },
+      },
+    }),
+  );
+  const manager = new LspManager(root);
+  const lsp = lspTools(root, manager);
+  t.after(async () => {
+    await lsp.close().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+  const byName = new Map(lsp.tools.map((tool) => [tool.name, tool]));
+  const started = await byName.get('lsp_start')!.execute({ language: 'fake' }, ctx());
+  assert.equal(started.isError, false, started.content);
+  const client = manager.running('fake');
+  assert.ok(client, 'the fixture server should be running');
+  /**
+   * The stream has no other `'error'` listener, so an escape here is an uncaught event: before the fix this
+   * `emit` threw `ERR_UNHANDLED_ERROR` (the same end a real `EPIPE` produced, one process down). `didOpen`
+   * carries the whole document, so a server that dies while one is written is a reachable race, not a
+   * hypothetical one.
+   */
+  const stdin = (client as unknown as { child: { stdin: NodeJS.WritableStream } }).child.stdin;
+  stdin.emit('error', new Error('write EPIPE'));
+  assert.equal(client.running, false);
+  assert.match(client.lastError ?? '', /Language server input failed: write EPIPE/);
 });
 
 test('diagnostics cannot claim success when no server checked the requested files', async (t) => {

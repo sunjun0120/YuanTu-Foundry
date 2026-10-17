@@ -2,8 +2,7 @@
  * The background jobs card list in the header: the popover it lives in, the entry that opens it, and the one
  * line of state that decides whether the entry is offered at all.
  *
- * The entry is hidden until this window has seen a job, and that fact is remembered across restarts (the
- * storage read is optional — a window with storage disabled simply shows the entry on its first job). The
+ * The entry is offered only while the current session has jobs, including completed ones. The
  * popover is hover/focus-revealed rather than a panel of its own, so its open/close rules are the three
  * listeners below: entering the anchor opens it, leaving it closes after a short grace period so the pointer can
  * cross the gap, and a click anywhere else closes it — the outside-click rule is asserted by the desktop smoke.
@@ -31,12 +30,6 @@ export function setupBackgroundView(actions: {
   getState(): CarrierSnapshot | null;
   invoke(command: CarrierCommand): Promise<CarrierSnapshot | null>;
 }): { render(): void; close(): void } {
-  let backgroundEntrySeen = false;
-  try {
-    backgroundEntrySeen = localStorage.getItem('yuantu.backgroundEntrySeen') === '1';
-  } catch {
-    /* Storage is optional. */
-  }
   function render(): void {
     const list = required('background-list');
     const existing = new Map(
@@ -44,32 +37,41 @@ export function setupBackgroundView(actions: {
         (item) => [item.dataset.jobId, item] as const,
       ),
     );
-    const jobs = actions.getState()?.background ?? [];
+    const state = actions.getState();
+    const jobs = state?.background.filter((job) => job.sessionId === state.session.sessionId) ?? [];
     const openBackground = required<HTMLButtonElement>('open-background');
     const backgroundPopover = required<HTMLElement>('background-popover');
-    if (jobs.length && !backgroundEntrySeen) {
-      backgroundEntrySeen = true;
-      try {
-        localStorage.setItem('yuantu.backgroundEntrySeen', '1');
-      } catch {
-        /* Keep it for this window. */
-      }
-    }
-    openBackground.hidden = !backgroundEntrySeen;
+    openBackground.hidden = jobs.length === 0;
     if (openBackground.hidden) backgroundPopover.hidden = true;
     openBackground.setAttribute('aria-expanded', String(!backgroundPopover.hidden));
     const runningCount = jobs.filter((job) => ['starting', 'running'].includes(job.status)).length;
+    const overall = runningCount
+      ? 'running'
+      : jobs.some((job) => job.status === 'failed')
+        ? 'failed'
+        : jobs.some((job) => job.status === 'cancelled')
+          ? 'cancelled'
+          : jobs.length
+            ? 'completed'
+            : 'idle';
+    const statusLabel = (status: string) =>
+      t(status === 'idle' ? 'background.title' : `background.${status}`);
+    openBackground.dataset.status = overall;
+    openBackground.title = statusLabel(overall);
     required('background-label').textContent = format(
       t(runningCount ? 'background.runningCount' : 'background.totalCount'),
       { count: runningCount || jobs.length },
     );
     if (!jobs.length) required('background-label').textContent = t('background.title');
+    openBackground.setAttribute(
+      'aria-label',
+      `${required('background-label').textContent} · ${statusLabel(overall)}`,
+    );
     if (!jobs.length) {
       list.replaceChildren(node('p', t('background.empty'), 'background-empty'));
       return;
     }
     list.querySelector('.background-empty')?.remove();
-    const statusLabel = (status: string) => t(`background.${status}`);
     const elapsed = (createdAt: string, finishedAt?: string): string => {
       const start = Date.parse(createdAt);
       const end = finishedAt ? Date.parse(finishedAt) : Date.now();
@@ -89,7 +91,7 @@ export function setupBackgroundView(actions: {
         card.dataset.jobId = job.id;
         const header = node('div', '', 'background-card-header');
         header.append(
-          node('span', '', 'background-dot'),
+          node('span', '', 'background-dot subagent-row-dot'),
           node('span', '', 'background-shell'),
           node('span', '', 'background-command'),
           node('span', '', 'background-status'),
@@ -105,8 +107,16 @@ export function setupBackgroundView(actions: {
       command.textContent = job.command;
       command.title = job.command;
       const finished = !['starting', 'running'].includes(job.status);
-      header.querySelector<HTMLElement>('.background-dot')!.className =
-        `background-dot ${job.status}`;
+      const indicator = header.querySelector<HTMLElement>('.background-dot')!;
+      indicator.className = `background-dot subagent-row-dot ${job.status}`;
+      indicator.dataset.state = !finished
+        ? 'ongoing'
+        : job.status === 'completed'
+          ? 'done'
+          : 'idle';
+      indicator.title = statusLabel(job.status);
+      indicator.setAttribute('role', 'img');
+      indicator.setAttribute('aria-label', statusLabel(job.status));
       header.querySelector<HTMLElement>('.background-shell')!.textContent =
         shell ?? t('background.commandLabel');
       const status = header.querySelector<HTMLElement>('.background-status')!;
@@ -133,7 +143,19 @@ export function setupBackgroundView(actions: {
         stop.title = t('background.stop');
         stop.addEventListener('click', () => {
           stop.disabled = true;
-          void actions.invoke({ type: 'stopBackground', id: job.id, sessionId: job.sessionId });
+          void (async () => {
+            try {
+              await actions.invoke({
+                type: 'stopBackground',
+                id: job.id,
+                sessionId: job.sessionId,
+              });
+            } catch {
+              // The invoker presents IPC errors; the control must remain available for retry.
+            } finally {
+              stop.disabled = false;
+            }
+          })();
         });
         header.append(stop);
       }

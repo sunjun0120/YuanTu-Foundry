@@ -470,7 +470,9 @@ export async function prepareContext(input: {
   const fitsSummary = (transcript: Message[]): boolean => {
     const predicted = forecastRequest({
       system: input.system,
-      messages: withSummary(transcript, summary),
+      // The caller hands over a transcript that already carries the running summary (`summaryTranscript`).
+      // Wrapping it again here priced a request nobody sends and refused batches that would have fitted.
+      messages: transcript,
       tools: input.tools,
       maxOutputTokens: summaryOutputBudget(),
       maxContextTokens: input.maxContextTokens,
@@ -480,9 +482,7 @@ export async function prepareContext(input: {
   };
   /** The same request against the character budget, the other ceiling a batch has to clear before it is sent. */
   const summaryCharsFit = (transcript: Message[]): boolean =>
-    input.system.length +
-      JSON.stringify(input.tools).length +
-      contextMessageSize(withSummary(transcript, summary)) <=
+    input.system.length + JSON.stringify(input.tools).length + contextMessageSize(transcript) <=
     limit;
   /**
    * Shorten old tool results, and say how much that bought.

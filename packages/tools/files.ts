@@ -745,8 +745,15 @@ export function fileTools(
             throw new Error(
               `Image is ${Math.round(stat.size / 1024)}KB; the limit is ${MAX_IMAGE_BYTES / (1024 * 1024)}MB`,
             );
+          // Filled to the size that was stat-ed. A short read would otherwise leave the tail as NUL bytes and
+          // hand the model a truncated picture that still passes the header sniff below.
           bytes = Buffer.alloc(Number(stat.size));
-          await handle.read(bytes, 0, bytes.length, 0);
+          let offset = 0;
+          while (offset < bytes.length) {
+            const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+            if (!bytesRead) throw new Error('File changed while reading its image; reopen it');
+            offset += bytesRead;
+          }
         } finally {
           await handle.close();
         }

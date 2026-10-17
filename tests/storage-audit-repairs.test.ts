@@ -169,6 +169,59 @@ test('a scoped retry count ignores malformed retry events from another session',
   assert.equal(scoped('known', 0, session.id), 1);
 });
 
+test('a convergence that cannot read the log writes nothing at all', async (t) => {
+  const { root, store, db, session } = await fixture(t);
+  // One unresolved call, which a successful convergence answers with "outcome unknown"...
+  store.append(session.id, {
+    role: 'assistant',
+    content: '',
+    toolCalls: [{ id: 'never-answered', name: 'run_command', arguments: { command: 'echo' } }],
+  });
+  // ...and one queued input whose payload the inbox fold refuses, which is a read that happens *after* that
+  // answer is appended. The caller's transaction joins rather than nests, so the refusal used to be committed
+  // anyway: the transcript carried the answer while the run row and `active_run` still claimed a dead process
+  // was working, leaving a session that could never be continued, renamed or deleted.
+  db.prepare('INSERT INTO session_events(session_id,type,data,at) VALUES(?,?,?,?)').run(
+    session.id,
+    'input.queued',
+    '{"item":{}}',
+    new Date().toISOString(),
+  );
+  db.prepare(
+    "INSERT INTO runs(id,session_id,owner_pid,status,started_at) VALUES(?,?,?,'running',?)",
+  ).run('dead-run', session.id, 2147483647, new Date().toISOString());
+  db.prepare('UPDATE sessions SET active_run=? WHERE id=?').run('dead-run', session.id);
+  // Counted by content rather than by total rows: reading the inbox flushes the buffered transcript, so the
+  // total moves for reasons that have nothing to do with this convergence.
+  const answers = () =>
+    Number(
+      db
+        .prepare('SELECT COUNT(*) AS n FROM messages WHERE session_id=? AND body LIKE ?')
+        .get(session.id, '%Execution outcome is unknown%')?.n,
+    );
+
+  assert.equal(store.reconcileInterruptedRuns(root), 0, 'the unreadable session was not converged');
+  assert.equal(answers(), 0, 'no answer was appended for the run that could not be read');
+  assert.equal(db.prepare('SELECT status FROM runs WHERE id=?').get('dead-run')?.status, 'running');
+  assert.equal(
+    db.prepare('SELECT active_run FROM sessions WHERE id=?').get(session.id)?.active_run,
+    'dead-run',
+  );
+
+  // The control: with the unreadable record gone the same run converges and does write that answer, so the
+  // assertion above is about this convergence's writes and not about a message that is never written at all.
+  db.prepare('DELETE FROM session_events WHERE session_id=? AND type=?').run(
+    session.id,
+    'input.queued',
+  );
+  assert.equal(store.reconcileInterruptedRuns(root), 1);
+  assert.equal(answers(), 1);
+  assert.equal(
+    db.prepare('SELECT active_run FROM sessions WHERE id=?').get(session.id)?.active_run,
+    null,
+  );
+});
+
 test('audit pagination reads only the requested audit records', async (t) => {
   const { store, db, session } = await fixture(t);
   store.recordEvent(session.id, 'approval.required', { id: 'first' });

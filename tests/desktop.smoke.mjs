@@ -1693,15 +1693,22 @@ test(
 // ---- header interactions and first-run naming ----
 
 test(
-  'a new chat shows the model-generated title before its first reply finishes',
+  'a stalled title allows the reply and later updates the sidebar',
   { timeout: 60_000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-title-before-reply-ui-'));
     let requests = 0;
     let releaseReply;
-    const url = await httpFixture(t, async (_body, res) => {
+    let releaseTitle;
+    let requestsReady;
+    const bothRequests = new Promise((resolve) => (requestsReady = resolve));
+    const url = await httpFixture(t, async (body, res) => {
       requests++;
-      if (requests === 1) return sendFrames(res, frames('修复登录跳转'));
+      if (requests === 2) requestsReady();
+      if (systemText(body.system).includes('为这段会话生成')) {
+        await new Promise((resolve) => (releaseTitle = resolve));
+        return sendFrames(res, frames('修复登录跳转'));
+      }
       await new Promise((resolve) => (releaseReply = resolve));
       sendFrames(res, frames('首轮回复完成'));
     });
@@ -1720,6 +1727,7 @@ test(
     delete env.ELECTRON_RUN_AS_NODE;
     let app;
     t.after(async () => {
+      releaseTitle?.();
       releaseReply?.();
       await app?.close();
       await rm(root, { recursive: true, force: true });
@@ -1737,11 +1745,15 @@ test(
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('登录后跳回首页，请修复');
     await page.locator('#send').click();
-    await page.getByText('修复登录跳转', { exact: true }).first().waitFor();
-    assert.equal(requests, 2, 'title request must precede the still-pending reply request');
+    await page.locator('#run-status').getByText('正在等待模型响应…', { exact: true }).waitFor();
+    await bothRequests;
+    assert.equal(requests, 2, 'the reply starts even with a pending title');
+    assert.equal(await page.getByText('修复登录跳转', { exact: true }).count(), 0);
     assert.equal(await page.getByText('首轮回复完成', { exact: true }).count(), 0);
     releaseReply?.();
     await page.getByText('首轮回复完成', { exact: true }).waitFor();
+    releaseTitle?.();
+    await page.locator('#chat-title').getByText('修复登录跳转', { exact: true }).waitFor();
   },
 );
 

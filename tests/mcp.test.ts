@@ -1272,6 +1272,45 @@ test('MCP OAuth rejects a tampered authorization response state', async (t) => {
   assert.equal(readMcpOAuthStatus(config, store).authorized, false);
 });
 
+test('MCP metadata observation is bounded and does not trust late body origins', async (t) => {
+  const { McpFetchPolicy } = await import('../packages/mcp/oauth.ts');
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            stream = controller;
+          },
+        }),
+        {
+          headers: {
+            'content-type': 'application/json',
+            'www-authenticate': 'Bearer resource_metadata="https://header.example/metadata"',
+          },
+        },
+      ),
+  );
+  const policy = new McpFetchPolicy('https://example.com/mcp', [], { metadataTimeoutMs: 30 });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await Promise.race([
+    policy.fetch('https://example.com/.well-known/oauth-protected-resource'),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), 250);
+    }),
+  ]);
+  clearTimeout(timer);
+  // Complete the fixture even when the old unbounded implementation loses the race.
+  stream.enqueue(new TextEncoder().encode('{"authorization_servers":["https://late.example"]}'));
+  stream.close();
+  assert.ok(outcome, 'observing a stalled metadata body must return within its bound');
+  assert.equal(policy.allows('https://header.example/metadata'), true);
+  assert.equal(policy.allows('https://late.example'), false);
+  await outcome.body?.cancel();
+});
+
 test('MCP rejects every request to a host other than the configured server', async (t) => {
   const root = await setup(t, { remote: { transport: 'http', url: 'https://example.com/mcp' } });
   const { McpFetchPolicy } = await import('../packages/mcp/oauth.ts');

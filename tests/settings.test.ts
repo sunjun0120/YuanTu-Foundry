@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
@@ -918,6 +918,30 @@ test('permission mode defaults to ask and persists only fixed policies', async (
   await recovered.load();
   assert.equal(recovered.view, 'ask');
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), permissionPolicyForMode('ask'));
+});
+
+test('a chosen permission policy is left alone when it is already valid', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-permission-settings-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'permission-policy.json');
+  // Compact canonical JSON rather than the store's pretty form: a rewrite would be visible in these bytes.
+  const compact = JSON.stringify(permissionPolicyForMode('read-only'));
+  await writeFile(file, compact);
+
+  const store = new PermissionSettingsStore(file);
+  await store.load();
+  assert.equal(store.view, 'read-only');
+  // `load()` used to write unconditionally, so every launch was a window in which an interrupted write
+  // replaced the policy the user chose with the default.
+  assert.equal(await readFile(file, 'utf8'), compact);
+
+  // A path that exists but cannot be read is not a policy to replace: the failure is reported, and the
+  // path is left as it is rather than overwritten with a more permissive default.
+  await rm(file, { force: true });
+  await mkdir(file);
+  const blocked = new PermissionSettingsStore(file);
+  await assert.rejects(() => blocked.load(), /Could not read the permission policy/);
+  assert.equal((await stat(file)).isDirectory(), true);
 });
 
 // ---- merged from sandbox-availability.test.ts ----

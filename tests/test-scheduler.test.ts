@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { acquireResourceLease } from '../scripts/test-resource-lease.mjs';
 import { readFileReport } from '../scripts/test-report-merge.mjs';
+import { sourceFingerprint } from '../scripts/test-source-fingerprint.mjs';
 import { projectRoot } from './process-fixture.ts';
 import {
   orderTestsByDuration,
@@ -19,6 +20,26 @@ async function directory(t: test.TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test('source fingerprints include build locks, root packaging and CI configuration but exclude generated assets', async (t) => {
+  const root = await directory(t);
+  for (const file of [
+    'build/windows-runtime.lock.json',
+    'electron-builder.config.cjs',
+    'electron-builder.protected.config.cjs',
+    '.github/workflows/ci.yml',
+  ]) {
+    await mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await writeFile(path.join(root, file), 'before');
+    const before = await sourceFingerprint(root);
+    await writeFile(path.join(root, file), 'after');
+    assert.notEqual((await sourceFingerprint(root)).digest, before.digest, file);
+  }
+  const before = await sourceFingerprint(root);
+  await mkdir(path.join(root, 'build/search-assets'), { recursive: true });
+  await writeFile(path.join(root, 'build/search-assets/rg.exe'), 'generated');
+  assert.equal((await sourceFingerprint(root)).digest, before.digest);
+});
 
 test('duration scheduling starts unknown and slow files early without changing the file set', () => {
   const files = ['fast', 'new', 'slow', 'medium'];

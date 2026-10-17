@@ -24,6 +24,8 @@ export interface RunStatusInput {
   /** Whether the Host connection is usable. */
   ready: boolean;
   loading: boolean;
+  activity?: { kind: 'model' | 'tool'; phase?: 'reasoning' | 'tool_call' | 'text' } | null;
+  tools?: number;
 }
 /** `idle` reuses `ui.ready` so one Chinese source cannot acquire two English wordings. */
 const KEYS: Record<SessionRunStatus, string> = {
@@ -40,5 +42,15 @@ export function runStatusText(input: RunStatusInput): string {
   if (input.approvals) return t('ui.runStatus.awaitingApproval');
   if (!input.ready) return t('ui.runStatus.connecting');
   if (input.loading) return t('ui.runStatus.loadingSession');
+  if (input.status === 'running') {
+    if (input.tools || input.activity?.kind === 'tool') return t('ui.runStatus.tools');
+    if (input.activity?.kind === 'model') {
+      if (input.activity.phase === 'reasoning') return t('ui.modelReasoning');
+      if (input.activity.phase === 'tool_call') return t('ui.modelToolCall');
+      if (input.activity.phase === 'text') return t('ui.runStatus.responding');
+      return t('ui.runStatus.waitingModel');
+    }
+    return t('ui.runStatus.preparing');
+  }
   return t(KEYS[input.status]);
 }

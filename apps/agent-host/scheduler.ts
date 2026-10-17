@@ -9,6 +9,7 @@ import {
   type TaskEvent,
 } from '../../packages/core/task-trigger.ts';
 import { recordTaskDelivery, type TaskDelivery } from '../../packages/core/task-deliveries.ts';
+import { redactSecrets } from '../../packages/core/errors.ts';
 
 export interface SchedulerRun {
   task: Task;
@@ -82,7 +83,20 @@ export class TaskScheduler {
   start(): void {
     if (this.stopped || this.timer) return;
     this.arm();
-    void this.tick();
+    this.wake();
+  }
+  /** Fire-and-forget triggers own their rejection; explicit tick callers still receive failures. */
+  wake(): void {
+    void this.tick().catch((error) => this.report(error));
+  }
+  private report(error: unknown): void {
+    try {
+      process.stderr.write(
+        `scheduler tick failed: ${redactSecrets(error instanceof Error ? error.message : 'Operation failed')}\n`,
+      );
+    } catch {
+      // A closed diagnostic pipe must not turn a handled scheduling failure into another rejection.
+    }
   }
   stop(): void {
     this.stopped = true;
@@ -116,7 +130,13 @@ export class TaskScheduler {
   arm(): void {
     if (this.stopped) return;
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.tick(), this.nextDelayMs());
+    let delay = Math.max(MIN_TICK_MS, this.options.intervalMs ?? DEFAULT_TICK_MS);
+    try {
+      delay = this.nextDelayMs();
+    } catch (error) {
+      this.report(error);
+    }
+    this.timer = setTimeout(() => this.wake(), delay);
     // A pending timer must never be the reason the Host process stays alive.
     this.timer.unref?.();
   }
@@ -285,11 +305,16 @@ export class TaskScheduler {
       error = cause instanceof Error ? cause.message : String(cause);
     } finally {
       // A review grant is valid for this recovery attempt only. A new deferred request remains.
-      this.options.store.clearApprovedTaskApproval(
-        task.sessionId,
-        task.id,
-        task.triggerRevision ?? 'legacy',
-      );
+      try {
+        this.options.store.clearApprovedTaskApproval(
+          task.sessionId,
+          task.id,
+          task.triggerRevision ?? 'legacy',
+        );
+      } catch {
+        // A store that refuses this write must not skip the re-arm below: the grant is a convenience, while
+        // the attempt record is what keeps one broken task from being retried on every tick.
+      }
       // Re-arm the clock even when the run failed, otherwise one broken task would be retried on
       // every tick forever.
       try {

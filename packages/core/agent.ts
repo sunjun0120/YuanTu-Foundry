@@ -62,6 +62,7 @@ import { requestRunRound } from './run-request.ts';
 import { ResidentTurnSettlements } from './run-residency.ts';
 import { loadRunTask, registerTaskStepTool, startRunTask } from './run-task.ts';
 import { createToolBatch } from './run-tools.ts';
+import { ToolProgressGuard, toolProgressNotice } from './tool-progress.ts';
 import {
   lastRuntimeSnapshot,
   runtimeSnapshotMessage,
@@ -236,6 +237,7 @@ export class Agent {
     this.options.store.recordEvent(sessionId, 'input.discarded', { ids: [...ids], reason });
   }
   async run(input: AgentRunInput): Promise<RunResult> {
+    const admittedAt = input.admittedAt ?? Date.now();
     const { store, provider, tools } = this.options;
     input = { ...input, ...validateUserInput(input) };
     // One owner for the defaults (see `packages/protocol/settings.ts`): the kernel, the Host and the CLI help
@@ -486,6 +488,7 @@ export class Agent {
       runId,
       statistics,
       emit,
+      admittedAt,
     });
     const measuredProvider = measureProvider('answer');
     const summaryProvider = measureProvider('summary');
@@ -542,9 +545,13 @@ export class Agent {
      * belongs to has spoken in this very round.
      */
     let humanTurn = input.authority !== 'automatic';
+    const progressGuard = new ToolProgressGuard();
+    let concludeQueries = false;
     const consume = (mode: InputMode): boolean => {
       const item = queue.take(mode);
       if (!item) return false;
+      progressGuard.reset();
+      concludeQueries = false;
       /**
        * A message the user typed is the user's own input, whichever run is carrying it.
        *
@@ -943,6 +950,8 @@ export class Agent {
           JSON.stringify(nextExecutionPolicy) !== JSON.stringify(executionPolicy)
         ) {
           policy = nextPolicy;
+          progressGuard.reset();
+          concludeQueries = false;
           executionPolicy = nextExecutionPolicy;
           runSystem = composeSystem();
           const rebuilt = buildCatalog();
@@ -962,6 +971,8 @@ export class Agent {
          */
         const approved = planning?.takeApproval();
         if (approved) {
+          progressGuard.reset();
+          concludeQueries = false;
           readOnly = false;
           planNotice =
             '\n\nApproved plan (approved by the user during this run; carry it out in this session and report deviations):\n' +
@@ -1109,11 +1120,12 @@ export class Agent {
           effectiveModel === null ? undefined : this.options.capacityFor?.(effectiveModel);
         const roundContextTokens = resolved?.contextWindow ?? maxContextTokens;
         const roundOutputTokens = resolved?.maxOutputTokens ?? maxOutputTokens;
+        const requestSpecs = concludeQueries ? [] : specs;
         const contextInput = buildContextInput({
           store,
           sessionId: input.sessionId,
           system: runSystem,
-          tools: specs,
+          tools: requestSpecs,
           provider: summaryProvider,
           limit: limits.maxContextChars,
           signal,
@@ -1174,7 +1186,7 @@ export class Agent {
             runId,
             round,
             system: prepared.system,
-            tools: specs,
+            tools: requestSpecs,
             model: effectiveModel ?? configuredModel,
             maxOutputTokens: roundOutputTokens,
             ...(roundContextTokens === undefined ? {} : { maxContextTokens: roundContextTokens }),
@@ -1182,7 +1194,7 @@ export class Agent {
             // the request was, not a transport detail. Taken from the prompt being recorded rather than from the
             // one the round began with — `prepareContext` may rewrite the prompt it is handed, and only the prompt
             // it returned is the one the request will carry.
-            cacheKey: cacheKeyOf(prepared.system, specs),
+            cacheKey: cacheKeyOf(prepared.system, requestSpecs),
             ...(lastEnvelopeSystemHash === undefined
               ? {}
               : { previousSystemHash: lastEnvelopeSystemHash }),
@@ -1213,7 +1225,7 @@ export class Agent {
           contextInput,
           roundContextTokens,
           measuredProvider,
-          specs,
+          specs: requestSpecs,
           requestedModel,
           requestedEffort,
           cacheKeyOf,
@@ -1258,6 +1270,8 @@ export class Agent {
             }
             const decision = await completion.verifyRound();
             if (decision?.action === 'repair') {
+              progressGuard.reset();
+              concludeQueries = false;
               // The budget is charged when the next request is about to be made, which is exactly here: a run
               // that stops for any other reason never spent the round it was allowed.
               completion.state.repairRounds += 1;
@@ -1300,6 +1314,16 @@ export class Agent {
           endStep(round, 'final');
           break;
         }
+        if (concludeQueries) {
+          store.resolvePending(
+            input.sessionId,
+            'Not executed: repeated unchanged queries reached the conclusion-only round.',
+          );
+          status = 'needs_review';
+          error = 'Repeated queries produced no new information; further tools were not executed.';
+          endStep(round, 'final');
+          break;
+        }
         // The tool calls are about to run. The message that names them is written first, so a crash while a
         // tool is in flight leaves the record that lets recovery report its outcome as unknown rather than
         // letting the call be replayed as if it had never happened. Everything the round appends after this
@@ -1308,7 +1332,7 @@ export class Agent {
         // The calls run inside the batch that owns their grouping, their effect journal and the order their
         // results are recorded in (see `run-tools.ts`); what comes back is what the model is told *after* those
         // results, which is the loop's own step.
-        const { injected, changedGoals } = await batch.run(response.toolCalls);
+        const { injected, changedGoals, observations } = await batch.run(response.toolCalls);
         for (const goal of changedGoals) announceGoal(goal);
         // Context a post-execute policy asked to inject becomes a persisted user message *after* the
         // batch's tool results, never a field riding along inside a tool block: injected context is
@@ -1323,6 +1347,16 @@ export class Agent {
             notes: entry.notes.length,
             content,
           });
+        }
+        const progress =
+          injected.length || changedGoals.length
+            ? (progressGuard.reset(), 'continue')
+            : progressGuard.observeRound(observations);
+        if (progress !== 'continue') {
+          const content = toolProgressNotice(progress);
+          store.append(input.sessionId, { role: 'user', content });
+          emit('context.injected', { source: 'tool-progress', round, action: progress, content });
+          concludeQueries = progress === 'conclude';
         }
         // Submitting the plan ends the planning run: the next step is a human decision, and letting
         // the loop continue would only burn rounds on a phase that cannot change anything.

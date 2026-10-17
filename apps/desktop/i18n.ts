@@ -257,6 +257,10 @@ const messages: Record<string, Pair> = {
   ],
   'general.save': ['保存设置', 'Save settings'],
   'sandboxSetup.title': ['Windows 增强隔离', 'Windows enhanced isolation'],
+  'sandboxSetup.exitUnconfirmed': [
+    '初始化尚未结束，清理状态未确认。重新打开应用后请检查增强隔离状态。',
+    'Initialization is still pending and cleanup is unconfirmed. Check enhanced isolation status after reopening the app.',
+  ],
   'sandboxSetup.note': [
     '首次初始化需要 Windows 管理员确认。初始化后仍使用当前沙箱模式，增强模式需通过隔离验收后启用。',
     'First initialization requires Windows administrator approval. Your current sandbox mode stays active; enhanced isolation requires further verification before activation.',
@@ -861,6 +865,10 @@ const messages: Record<string, Pair> = {
    * two entries with the same Chinese source and different English wording is the same bug in a different place.
    */
   'ui.runStatus.running': ['正在处理', 'Working'],
+  'ui.runStatus.preparing': ['正在准备请求…', 'Preparing the request…'],
+  'ui.runStatus.waitingModel': ['正在等待模型响应…', 'Waiting for the model…'],
+  'ui.runStatus.responding': ['正在生成回复…', 'Writing the response…'],
+  'ui.runStatus.tools': ['正在执行工具…', 'Running tools…'],
   'ui.runStatus.completed': ['本轮已结束', 'This turn is finished'],
   'ui.runStatus.needsReview': ['验收未通过，需检查', 'Acceptance failed; review needed'],
   'ui.runStatus.cancelled': ['已停止', 'Stopped'],

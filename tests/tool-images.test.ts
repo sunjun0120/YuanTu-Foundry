@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
@@ -338,6 +338,29 @@ test('read_image returns the file as an image the model can look at', async (t) 
   // reads this line, and because it is what a person sees in a terminal.
   assert.match(result.content, /shot\.png/);
   assert.match(result.content, /image\/png/);
+});
+
+test('read_image completes short reads instead of returning zero-filled bytes', async (t) => {
+  const root = await workspace(t);
+  await writeFile(path.join(root, 'shot.png'), PNG);
+  // Every read is capped below the buffer, which is a short read from the tool's point of view: `Buffer.alloc`
+  // leaves the tail as NUL bytes, so a single unchecked `read` would report a truncated, zero-padded picture
+  // that still passes the header sniff.
+  const sample = await open(path.join(root, 'shot.png'), 'r');
+  const prototype = Object.getPrototypeOf(sample);
+  const original = prototype.read;
+  await sample.close();
+  t.mock.method(prototype, 'read', function (this: unknown, ...args: unknown[]) {
+    if (Buffer.isBuffer(args[0])) args[2] = Math.min(3, Number(args[2]));
+    return Reflect.apply(original, this, args);
+  });
+  const tools = createTools(root);
+  const result = await tools.execute(
+    { id: 'img', name: 'read_image', arguments: { path: 'shot.png' } },
+    context(),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.deepEqual(Buffer.from(result.images![0]!.data, 'base64'), PNG);
 });
 
 test('read_image refuses anything that is not really an image', async (t) => {

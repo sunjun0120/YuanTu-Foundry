@@ -1,4 +1,6 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { defaultUiSettings, parseUiSettings, type UiSettings } from './ui-settings.ts';
 
 export class UiSettingsStore {
@@ -19,8 +21,25 @@ export class UiSettingsStore {
       this.value = defaultUiSettings();
     }
   }
+  /**
+   * Written through a temporary file and a rename, like every other store in this directory.
+   *
+   * A plain `writeFile` truncated the file in place, so a process killed part-way through left invalid JSON —
+   * and `load()` reads that as "no settings" and overwrites it with the defaults, turning a crash during a save
+   * into a silent, permanent loss of the user's language, appearance and font size.
+   */
   async save(value: UiSettings): Promise<void> {
     this.value = parseUiSettings(value);
-    await writeFile(this.file, JSON.stringify(this.value, null, 2) + '\n', 'utf8');
+    const temporary = `${this.file}.${randomUUID()}.tmp`;
+    try {
+      await mkdir(path.dirname(this.file), { recursive: true });
+      await writeFile(temporary, JSON.stringify(this.value, null, 2) + '\n', {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
+      await rename(temporary, this.file);
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {});
+    }
   }
 }

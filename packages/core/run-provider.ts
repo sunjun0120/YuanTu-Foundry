@@ -1,4 +1,4 @@
-import type { ModelResponse, Provider } from '../protocol/index.ts';
+import type { ModelProgress, ModelResponse, Provider } from '../protocol/index.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { addUsage, emptyRequestTiming } from '../protocol/statistics.ts';
@@ -33,16 +33,28 @@ export interface ProviderMeasurementOptions {
   runId: string;
   statistics: SessionStatistics;
   emit: RunEmit;
+  admittedAt?: number;
 }
 
 export function createProviderMeasurement(
   options: ProviderMeasurementOptions,
 ): (purpose: 'answer' | 'summary') => Provider {
   const { provider, store, sessionId, runId, statistics, emit } = options;
+  let firstAnswer = true;
   return (purpose) => ({
     complete: async (request) => {
       const startedAt = Date.now();
       const requestStarted = performance.now();
+      const preparationMs =
+        purpose === 'answer' && firstAnswer && options.admittedAt !== undefined
+          ? Math.max(0, startedAt - options.admittedAt)
+          : undefined;
+      if (purpose === 'answer') firstAnswer = false;
+      let firstResponseMs: number | null = null;
+      let firstTextMs: number | null = null;
+      const responseArrived = () => {
+        firstResponseMs ??= Math.max(0, performance.now() - requestStarted);
+      };
       const timing = (statistics.requestTiming ??= emptyRequestTiming());
       const requestId = ++timing.requests;
       if (purpose === 'summary') timing.summaryRequests++;
@@ -50,6 +62,18 @@ export function createProviderMeasurement(
       let failed = false;
       let lastPhase = '';
       let lastProgressAt = 0;
+      let reasoningChars = 0;
+      let visibleChars = 0;
+      const publishActivity = (progress: ModelProgress) => {
+        const now = Date.now();
+        if (progress.phase === lastPhase && now - lastProgressAt < 1000) return;
+        lastPhase = progress.phase;
+        lastProgressAt = now;
+        emit('statistics.updated', {
+          statistics: { ...statistics },
+          activity: { kind: 'model', startedAt, ...progress },
+        });
+      };
       emit('statistics.updated', {
         statistics: { ...statistics },
         activity: { kind: 'model', startedAt },
@@ -58,18 +82,39 @@ export function createProviderMeasurement(
         const response = await provider.complete({
           ...request,
           onText: (delta) => {
+            if (delta) {
+              responseArrived();
+              firstTextMs ??= Math.max(0, performance.now() - requestStarted);
+            }
             request.onText(delta);
+            if (delta) {
+              visibleChars += delta.length;
+              publishActivity({
+                phase: 'text',
+                visibleChars,
+                reasoningChars,
+                toolArgumentChars: 0,
+              });
+            }
+          },
+          onReasoning: (delta) => {
+            if (delta) responseArrived();
+            request.onReasoning?.(delta);
+            if (delta) {
+              reasoningChars += delta.length;
+              publishActivity({
+                phase: 'reasoning',
+                visibleChars,
+                reasoningChars,
+                toolArgumentChars: 0,
+              });
+            }
           },
           onProgress: (progress) => {
+            if (progress.reasoningChars || progress.toolArgumentChars || progress.visibleChars)
+              responseArrived();
             request.onProgress?.(progress);
-            const now = Date.now();
-            if (progress.phase === lastPhase && now - lastProgressAt < 1000) return;
-            lastPhase = progress.phase;
-            lastProgressAt = now;
-            emit('statistics.updated', {
-              statistics: { ...statistics },
-              activity: { kind: 'model', startedAt, ...progress },
-            });
+            publishActivity(progress);
           },
         });
         finishReason = response.finishReason;
@@ -92,6 +137,9 @@ export function createProviderMeasurement(
           startedAt,
           finishedAt: Date.now(),
           durationMs,
+          firstResponseMs,
+          firstTextMs,
+          ...(preparationMs === undefined ? {} : { preparationMs }),
           failed,
           ...(finishReason ? { finishReason } : {}),
         };

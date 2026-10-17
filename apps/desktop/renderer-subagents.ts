@@ -24,7 +24,7 @@ import { formatTokens } from './token-format.ts';
  */
 export function setupSubAgents(
   getState: () => CarrierSnapshot | null,
-  send: (command: CarrierCommand) => void,
+  send: (command: CarrierCommand) => void | Promise<unknown>,
   renderMessage: (message: Message) => HTMLElement,
 ) {
   function required<T extends HTMLElement>(id: string): T {
@@ -547,12 +547,20 @@ export function setupSubAgents(
         button.addEventListener('click', () => {
           if (action === 'remove' && !window.confirm(t('subagent.workspace.removeConfirm'))) return;
           button.disabled = true;
-          send({
-            type: 'subagentWorkspace',
-            subagentId: view.id,
-            childSessionId: view.childSessionId!,
-            action,
-          });
+          void (async () => {
+            try {
+              await send({
+                type: 'subagentWorkspace',
+                subagentId: view.id,
+                childSessionId: view.childSessionId!,
+                action,
+              });
+            } catch {
+              // The invoker owns error presentation, including a rejected IPC call.
+            } finally {
+              button.disabled = Boolean(getState()?.session.running || getState()?.session.loading);
+            }
+          })();
         });
         actions.append(button);
       }

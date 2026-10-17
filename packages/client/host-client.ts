@@ -238,6 +238,14 @@ export class AgentHostClient {
     this.setStatus('starting');
     this.stderrTail = '';
     const generation = ++this.generation;
+    try {
+      await this.retireSpent();
+    } catch (error) {
+      this.setStatus('failed');
+      throw error;
+    }
+    if (this.currentStatus !== 'starting' || this.stopping)
+      throw new Error('Agent Host stopped during startup');
     const transport = this.openTransport(generation);
     this.transport = transport;
     this.spent = null;
@@ -269,6 +277,32 @@ export class AgentHostClient {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(this.redact(diagnosis ? message + '; ' + diagnosis : message));
     }
+  }
+  private async waitForExit(closed: typeof this.closed) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        closed,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), this.options.shutdownTimeoutMs ?? 10_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  /** A failed link remains owned until its process actually reports exit, even after a forced stop. */
+  private async retireSpent(): Promise<void> {
+    const spent = this.spent;
+    if (!spent) return;
+    const closed = this.closed;
+    spent.end();
+    if (!(await this.waitForExit(closed))) {
+      spent.kill();
+      if (!(await this.waitForExit(closed)))
+        throw new Error('Previous Agent Host cleanup is unconfirmed; restart refused');
+    }
+    if (this.spent === spent) this.spent = null;
   }
   /**
    * The link for this generation, however this carrier reaches the Host.
@@ -522,7 +556,6 @@ export class AgentHostClient {
       this.setStatus('stopped');
       return;
     }
-    this.spent = null;
     this.setStatus('stopping');
     transport.end();
     let timer: NodeJS.Timeout | undefined;
@@ -541,6 +574,7 @@ export class AgentHostClient {
       this.setStatus('failed');
       throw new Error('Agent Host shutdown timed out; descendant cleanup could not be confirmed');
     }
+    if (this.spent === transport) this.spent = null;
     if (exit.code !== 0 || exit.signal) {
       this.setStatus('failed');
       throw new Error(

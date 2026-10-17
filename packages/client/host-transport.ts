@@ -185,11 +185,16 @@ class SocketTransport extends TransportBase implements HostTransport {
       onError: (error) => this.announceError(error),
     });
     socket.on('data', (chunk: Buffer) => this.framer.write(chunk));
-    // A socket has no stderr, but it does have OS-level errors (`ECONNRESET` on a Host that was killed);
-    // reporting them as diagnostics keeps one classification path for both carriers.
-    socket.on('error', (error: Error) => this.announceDiagnostic(error.message));
+    let failed = false;
+    socket.on('error', (error: Error) => {
+      failed = true;
+      this.announceDiagnostic(error.message);
+      this.announceError(error);
+    });
     // 'close' rather than 'end': a half-closed peer that never finishes its side must still settle.
-    socket.once('close', () => this.announceExit({ code: 0, signal: null }));
+    socket.once('close', (hadError) =>
+      this.announceExit({ code: failed || hadError ? null : 0, signal: null }),
+    );
   }
   get label(): string {
     return this.socket.remoteAddress

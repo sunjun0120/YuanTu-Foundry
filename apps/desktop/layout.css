@@ -1615,26 +1615,6 @@ body[data-page='background'] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.background-icon {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  background-image: radial-gradient(circle, var(--accent) 1.4px, transparent 1.5px);
-  background-size: 6px 6px;
-}
-.background-chevron {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  margin: -4px 2px 0 3px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  transform: rotate(45deg);
-}
-#open-background[aria-expanded='true'] .background-chevron {
-  margin-top: 4px;
-  transform: rotate(225deg);
-}
 /* The panel toggle says whether the panel is open; a button that looks the same either way is one the
    reader has to click to ask. */
 #open-workspace[aria-expanded='true'] {
@@ -1679,7 +1659,7 @@ body[data-page='background'] {
 }
 #chat-page .background-popover .background-card-header {
   display: grid;
-  grid-template-columns: 16px 32px minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 14px auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 6px;
   min-height: 34px;
@@ -1725,29 +1705,6 @@ body[data-page='background'] {
   opacity: 0.5;
   cursor: default;
 }
-.background-dot {
-  width: 9px;
-  height: 9px;
-  justify-self: center;
-  border-radius: 50%;
-  background: var(--muted);
-}
-.background-dot.running,
-.background-dot.starting {
-  width: 18px;
-  height: 18px;
-  border-radius: 0;
-  background-image: radial-gradient(circle, var(--accent) 1.4px, transparent 1.5px);
-  background-color: transparent;
-  background-size: 6px 6px;
-}
-.background-dot.completed {
-  background: #22c55e;
-  box-shadow: 0 0 0 4px rgb(34 197 94 / 12%);
-}
-.background-dot.failed {
-  background: #ed6565;
-}
 .background-shell {
   color: var(--ink);
   white-space: nowrap;
@@ -1779,7 +1736,7 @@ body[data-page='background'] {
   /* The shell and the status column are dropped here, so the row is the dot, the command, the elapsed time
      and — for a running job — the stop control. */
   #chat-page .background-popover .background-card-header {
-    grid-template-columns: 16px minmax(0, 1fr) auto auto;
+    grid-template-columns: 14px minmax(0, 1fr) auto auto;
     gap: 9px;
   }
   .background-shell,

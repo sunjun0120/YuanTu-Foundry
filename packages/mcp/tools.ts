@@ -79,6 +79,30 @@ export async function closeWithin(close: () => Promise<unknown>, ms: number): Pr
   }
 }
 
+/**
+ * Resolves with `work`, or rejects as soon as `signal` aborts.
+ *
+ * The abandoned work keeps running and its owner closes it; both settlements are observed here, so giving up on
+ * a handshake cannot turn into an unhandled rejection.
+ */
+function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** Error prefixes that are produced locally and therefore safe to show verbatim to the model. */
 const REPORTABLE =
   /^(Missing MCP|Invalid MCP|Unknown MCP|Duplicate MCP|MCP authorization required|MCP server does not)/;
@@ -154,6 +178,14 @@ class Connection {
   private connecting?: Promise<Client>;
   private discovering?: Promise<void>;
   private closing: Promise<void> = Promise.resolve();
+  /**
+   * How many times this connection has been closed.
+   *
+   * `close()` deliberately stops waiting for a handshake it cannot interrupt, so a handshake can outlive the
+   * close that gave up on it. The counter is what lets that late answer be recognised and closed instead of
+   * installed on a connection its caller has already shut down.
+   */
+  private closeGeneration = 0;
   /** Consecutive failures, and the moment this server may be asked again. Cleared by any answer. */
   private failures = 0;
   private retryAt = 0;
@@ -184,8 +216,10 @@ class Connection {
     return bounded(JSON.stringify(walk(value)));
   }
   async close(): Promise<void> {
+    // Bumped before anything else: a handshake already in flight is judged by the value it captured, and the
+    // counter has to have moved by the time it finishes for the late answer to be recognised.
+    this.closeGeneration += 1;
     const connecting = this.connecting;
-    if (connecting) await connecting.catch(() => undefined);
     const client = this.client;
     this.client = undefined;
     this.connecting = undefined;
@@ -196,6 +230,13 @@ class Connection {
     this.discovered = false;
     if (client)
       this.closing = closeWithin(() => client.close(), MCP_CLOSE_TIMEOUT_MS).then(() => undefined);
+    // State is cleared and the published client is closed *before* the handshake is waited on. During a
+    // handshake there is nothing published to close, and awaiting one that never answers is what made `close()`
+    // — and the run trying to shut the server down — hang indefinitely. The wait is bounded for the same reason.
+    if (connecting)
+      await closeWithin(async () => {
+        await connecting.catch(() => undefined);
+      }, MCP_CLOSE_TIMEOUT_MS);
     await this.closing;
   }
   private async connect(signal: AbortSignal): Promise<Client> {
@@ -203,10 +244,22 @@ class Connection {
     if (this.client) return this.client;
     if (this.connecting) return this.connecting;
     signal.throwIfAborted();
+    const closeGeneration = this.closeGeneration;
     const connecting = this.open(signal);
     this.connecting = connecting;
     try {
-      const client = await connecting;
+      const client = await abortable(connecting, signal);
+      /**
+       * A handshake that finished after this connection was closed is closed again rather than published.
+       *
+       * `close()` clears state before waiting for a handshake, because a handshake it cannot interrupt must not
+       * hold a shutdown; that is also what makes a late answer possible. Installing it here would leave the
+       * server's process and its event stream open on a connection its caller has already shut down.
+       */
+      if (closeGeneration !== this.closeGeneration) {
+        await client.close().catch(() => undefined);
+        throw new Error('MCP connection was closed while the server was being opened');
+      }
       this.client = client;
       return client;
     } finally {
@@ -301,6 +354,15 @@ class Connection {
               eventSourceInit: { fetch: scopedFetch },
             });
     }
+    let handshakeTimer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      handshakeTimer = setTimeout(
+        () =>
+          reject(new Error(`MCP handshake did not answer within ${HANDSHAKE_TIMEOUT_MS / 1000}s`)),
+        HANDSHAKE_TIMEOUT_MS,
+      );
+      handshakeTimer.unref?.();
+    });
     try {
       /**
        * The server's own word that its tool list changed.
@@ -317,7 +379,27 @@ class Connection {
       client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
         this.generation += 1;
       });
-      await client.connect(transport, { signal, timeout: HANDSHAKE_TIMEOUT_MS });
+      /**
+       * The handshake needs a bound of its own, and an abort has to close what it abandons.
+       *
+       * `Client.connect` forwards `{ signal, timeout }` to the *initialize* request, but a transport performs its
+       * own start step first — an SSE transport waits there for the `endpoint` event — so a server that opens the
+       * event stream and never announces an endpoint ignored both bounds and held this call, and the run with it,
+       * forever. The race supplies the bound the SDK does not; the abort listener closes the client, because
+       * closing an SSE transport does not by itself settle the start step it is waiting in.
+       */
+      const abandon = () => {
+        void client.close().catch(() => undefined);
+      };
+      signal.addEventListener('abort', abandon, { once: true });
+      try {
+        await Promise.race([
+          client.connect(transport, { signal, timeout: HANDSHAKE_TIMEOUT_MS }),
+          deadline,
+        ]);
+      } finally {
+        signal.removeEventListener('abort', abandon);
+      }
       return client;
     } catch (error) {
       await client.close().catch(() => undefined);
@@ -326,6 +408,8 @@ class Connection {
           `MCP authorization required for server ${config.id}; complete the browser authorization for this server first`,
         );
       throw error;
+    } finally {
+      clearTimeout(handshakeTimer);
     }
   }
   private async page<T>(

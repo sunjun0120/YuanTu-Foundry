@@ -19,6 +19,43 @@ const config = (over: Partial<ProviderConfig> = {}): ProviderConfig => ({
   model: 'chosen-model',
   ...over,
 });
+
+for (const stage of ['headers', 'body'] as const) {
+  test(`explicit discovery has a deadline while waiting for ${stage}`, async () => {
+    let signal: AbortSignal | undefined;
+    let cancelled = false;
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    const request = (async (_input: unknown, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      if (stage === 'headers') return new Promise<Response>(() => {});
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+      );
+    }) as typeof fetch;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      discoverModels(config(), { fetch: request, timeoutMs: 30 }).then(
+        () => 'success',
+        (error) => String(error),
+      ),
+      new Promise<string>((resolve) => {
+        guard = setTimeout(() => resolve('unbounded'), 250);
+      }),
+    ]);
+    clearTimeout(guard);
+    if (stage === 'body' && !cancelled) body.close();
+    assert.match(result, /timed out/i);
+    assert.equal(signal?.aborted, true);
+    if (stage === 'body') assert.equal(cancelled, true);
+  });
+}
 /** A fetch that answers one canned body, and records what it was asked for. */
 function stubFetch(payload: unknown, init: { status?: number; body?: string } = {}) {
   const calls: { url: string; headers: Record<string, string> }[] = [];

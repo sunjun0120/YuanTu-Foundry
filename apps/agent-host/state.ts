@@ -112,13 +112,18 @@ export interface HostContext {
   questions: Map<string, PendingQuestion>;
   /** Request ids currently being served, so a duplicate cannot be answered twice. */
   requestIds: Set<string>;
-  /** In-flight `handle()` calls, awaited before teardown closes anything they are using. */
+  /** In-flight requests and optional title calls, drained before their resources close. */
   tasks: Set<Promise<void>>;
   closing: boolean;
   /** True while a plan is being executed or a change undone: the Host refuses a concurrent run. */
   restoring: boolean;
-  /** An exclusive operation outside a run, cancellable only by its owning session or shutdown. */
-  manualOperation: { sessionId: string; controller: AbortController } | undefined;
+  /**
+   * An exclusive operation outside a run, cancellable by its owning session or by shutdown.
+   *
+   * `sessionId` is absent for an operation addressed by workspace binding (archive, restore or remove of an
+   * orphan) — it has no session to be cancelled from, but shutdown still has to reach it.
+   */
+  manualOperation: { sessionId?: string; controller: AbortController } | undefined;
   /** Sessions a background wake is currently running for. */
   waking: Set<string>;
   wakeQueued: boolean;

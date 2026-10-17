@@ -206,6 +206,17 @@ export class LspClient {
     child.stderr?.on('data', (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString('utf8')).slice(-MAX_STDERR_BYTES);
     });
+    /**
+     * A write to a server that has already gone away is reported here, not thrown.
+     *
+     * Without this listener the stream's `'error'` event is uncaught, and Node turns that into a dead Host:
+     * `didOpen`/`didChange` carry the whole document (up to 2 MB), so a server that exits — or a stop that
+     * kills it — while one is being written is a race that happens, not one that could happen. `fail()` is
+     * idempotent, and an input error during an intentional stop is the stop's own doing, so it is ignored.
+     */
+    child.stdin?.on('error', (error: Error) => {
+      if (!this.stopping) this.fail(new Error(`Language server input failed: ${error.message}`));
+    });
     child.on('error', (error: NodeJS.ErrnoException) => this.fail(this.describeSpawnError(error)));
     child.on('close', (code, signalName) => {
       if (this.stopping) return;

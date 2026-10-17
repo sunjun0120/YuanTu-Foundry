@@ -36,6 +36,51 @@ const answer = (): ModelResponse => ({
   },
 });
 
+test('request timings separate preparation, first model output, visible text and completion', async (t) => {
+  const { store, session } = await fixture(t);
+  const events: AgentEvent[] = [];
+  const result = await new Agent({
+    store,
+    onEvent: (event) => events.push(event),
+    tools: new ToolRegistry(),
+    approve: async () => false,
+    provider: {
+      async complete(request) {
+        request.onReasoning?.('Thinking');
+        assert.equal(
+          (
+            events.filter((e) => e.type === 'statistics.updated').at(-1)?.data.activity as {
+              phase?: string;
+            }
+          )?.phase,
+          'reasoning',
+        );
+        await delay(20);
+        request.onText('Done.');
+        assert.equal(
+          (
+            events.filter((e) => e.type === 'statistics.updated').at(-1)?.data.activity as {
+              phase?: string;
+            }
+          )?.phase,
+          'text',
+        );
+        await delay(20);
+        return answer();
+      },
+    },
+  }).run({ sessionId: session.id, prompt: 'Continue.', admittedAt: Date.now() - 200 });
+  assert.equal(result.status, 'completed', result.error);
+  const event = store
+    .events(session.id)
+    .find((event) => event.type === 'provider.request.finished')!;
+  assert.ok(Number(event.data.preparationMs) >= 200);
+  assert.equal(typeof event.data.firstResponseMs, 'number');
+  assert.equal(typeof event.data.firstTextMs, 'number');
+  assert.ok(Number(event.data.firstResponseMs) < Number(event.data.firstTextMs));
+  assert.ok(Number(event.data.firstTextMs) < Number(event.data.durationMs));
+});
+
 for (const truncated of [false, true]) {
   test(`summary ${truncated ? 'fallback' : 'success'} cannot set the visible first token or decode span`, async (t) => {
     const { store, session } = await fixture(t);

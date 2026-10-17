@@ -7,6 +7,7 @@ import {
   type Stream,
 } from '@agentclientprotocol/sdk';
 import { AgentHostClient, type SpawnedHostOptions } from './index.ts';
+import { samePath } from '../core/workspace-paths.ts';
 import type { AgentEvent, Approval, Message, ToolCall } from '../protocol/index.ts';
 
 /** One connection and one deployment-selected workspace; ACP UI extensions are not implied. */
@@ -37,10 +38,9 @@ export function connectAcp(
     additionalDirectories?: string[];
   }) => {
     checkReady();
-    if (
-      !path.isAbsolute(params.cwd) ||
-      path.resolve(params.cwd) !== path.resolve(options.workspace)
-    )
+    // Compared the way the runtime compares paths, not by string equality: on Windows the same directory
+    // arrives with different case and separators from different clients, and a raw comparison refused those.
+    if (!path.isAbsolute(params.cwd) || !samePath(params.cwd, options.workspace))
       throw RequestError.invalidParams(undefined, 'cwd must match the configured workspace');
     if (params.mcpServers.length || params.additionalDirectories?.length)
       throw RequestError.invalidParams(

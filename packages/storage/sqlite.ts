@@ -534,7 +534,18 @@ export class SessionStore implements PlanRepository {
   }
   /** One child card plus the timing of the session that holds its work. */
   private withTurnTiming(card: SubAgentSummary): SubAgentSummary {
-    const timing = this.turnTiming(card.sessionId);
+    /**
+     * The card comes from the *parent's* log, so it outlives the child's own rows: a deleted child session
+     * (the delete RPC accepts any id) left its card behind, and this lookup then threw "Session not found" —
+     * making the whole catalog unreadable for a parent that was otherwise healthy. A missing child means
+     * "there is no timing left to report", not "the catalog cannot be shown".
+     */
+    let timing: TurnTiming;
+    try {
+      timing = this.turnTiming(card.sessionId);
+    } catch {
+      return { ...card, durationMs: undefined, runningSince: undefined };
+    }
     return { ...card, durationMs: timing.settledMs, runningSince: timing.runningSince };
   }
   /**

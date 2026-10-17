@@ -3,6 +3,7 @@ import { SandboxEnvironment } from './sandbox-environment.ts';
 import {
   WindowsSandboxSetup,
   parseSandboxSetupCommand,
+  waitForSandboxInitialization,
   type SandboxSetupReply,
   type SandboxSetupView,
 } from './sandbox-setup.ts';
@@ -553,12 +554,13 @@ app.on('before-quit', (event) => {
   settingsAbort.abort();
   void (async () => {
     try {
-      await sandboxInitializing?.catch(() => {});
+      const setupSettled = await waitForSandboxInitialization(sandboxInitializing);
       await backupRestoring?.catch(() => {});
       await dailyBackups?.drain();
       await Promise.allSettled([...backupWorkers]);
       const results = await Promise.allSettled([service?.stop(), openingService?.stop()]);
       const failure = results.find((result) => result.status === 'rejected');
+      if (!setupSettled) throw new Error(mainText('sandboxSetup.exitUnconfirmed'));
       if (failure?.status === 'rejected') throw failure.reason;
     } catch (error) {
       dialog.showErrorBox(mainText('desktop.exitFailureTitle'), safeError(error));
@@ -615,12 +617,18 @@ void app
               {
                 label: mainText('upgrade.about'),
                 click: () => {
-                  void desktopRelease().then((release) =>
-                    dialog.showMessageBox({
-                      message: `YuanTu Agent ${release.version}`,
-                      detail: `Channel: ${release.channel}`,
-                    }),
-                  );
+                  // A damaged install can have a missing or unparseable release file, and an unhandled rejection
+                  // here would be an uncaught exception in the main process with no dialog at all.
+                  void desktopRelease()
+                    .then((release) =>
+                      dialog.showMessageBox({
+                        message: `YuanTu Agent ${release.version}`,
+                        detail: `Channel: ${release.channel}`,
+                      }),
+                    )
+                    .catch((error: unknown) =>
+                      dialog.showErrorBox(mainText('upgrade.failed'), safeError(error)),
+                    );
                 },
               },
             ],

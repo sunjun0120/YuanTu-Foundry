@@ -11,6 +11,27 @@ export interface SandboxSetupView {
   reason: 'platform' | 'development' | 'runtime' | 'release' | null;
 }
 export type SandboxSetupReply = { ok: true; view: SandboxSetupView } | { ok: false; error: string };
+/** Bound the UI's wait, without pretending a detached elevated initializer can be cancelled. */
+export async function waitForSandboxInitialization(
+  pending: Promise<unknown> | undefined,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  if (!pending) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 export function parseSandboxSetupCommand(input: unknown): SandboxSetupCommand {
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const value = input as Record<string, unknown>;

@@ -107,6 +107,39 @@ test('after arms once at save and unchanged settings do not refill a consumed on
   }
 });
 
+test('a refused approval grant still re-arms the clock instead of repeating the task', async () => {
+  const store = new SessionStore(':memory:');
+  try {
+    const session = store.create(process.cwd()).id;
+    const task = store.createTask(session, {
+      title: 'Recovery',
+      trigger: { kind: 'interval', enabled: true, everyMinutes: 10 },
+    } as never);
+    store.scheduleImmediateRun(session, task.id);
+    const immediate = store.getTask(session, task.id).nextRunAt;
+    store.clearApprovedTaskApproval = () => {
+      throw new Error('grant write refused');
+    };
+    let runs = 0;
+    const scheduler = new TaskScheduler({
+      store,
+      workspace: process.cwd(),
+      canRun: () => true,
+      run: async () => {
+        runs++;
+      },
+    });
+    // Clearing the grant is a convenience; the attempt record is what stops a broken task being retried on
+    // every tick. A refusal from the first write used to skip the second and throw out of the tick.
+    await scheduler.tick();
+    scheduler.stop();
+    assert.equal(runs, 1);
+    assert.notEqual(store.getTask(session, task.id).nextRunAt, immediate);
+  } finally {
+    store.close();
+  }
+});
+
 test('editing a waiting rule retires its delivery and old completion cannot overwrite the new calendar', async () => {
   const store = new SessionStore(':memory:');
   try {

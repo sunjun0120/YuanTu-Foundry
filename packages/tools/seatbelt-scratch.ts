@@ -22,9 +22,18 @@ export class SeatbeltScratchRegistry {
   async cleanup(plan: object): Promise<void> {
     const owned = this.plans.get(plan);
     if (!owned || owned.started) return;
-    // Keep a weak tombstone: the same plan must never launch after releasing its
-    // scratch, including while asynchronous recursive removal is in flight.
-    owned.releasing ??= rm(owned.directory, { recursive: true, force: true });
+    if (!owned.releasing) {
+      // Keep a weak tombstone: the same plan must never launch after releasing its
+      // scratch, including while asynchronous recursive removal is in flight.
+      // A failed removal is not cached, so a retry runs again instead of rethrowing the
+      // same rejection forever while the directory is still on disk.
+      owned.releasing = rm(owned.directory, { recursive: true, force: true }).catch(
+        (error: unknown) => {
+          owned.releasing = undefined;
+          throw error;
+        },
+      );
+    }
     await owned.releasing;
   }
 }

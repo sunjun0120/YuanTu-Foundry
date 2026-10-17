@@ -122,13 +122,23 @@ export async function verifyFileDelivery(
       hash.update(chunk);
       if (decoder) {
         if (chunk.includes(0)) sawNul = true;
-        decoder.decode(chunk, { stream: true });
+        // "This is a text file" is an assertion about the delivered bytes, so invalid UTF-8 has to fail as one:
+        // letting the decoder's bare TypeError escape classified it as an environment error instead.
+        try {
+          decoder.decode(chunk, { stream: true });
+        } catch {
+          throw new VerificationAssertionError('Delivered text is not valid UTF-8');
+        }
       }
       if (offset < first.length)
         chunk.copy(first, offset, 0, Math.min(bytesRead, first.length - offset));
       offset += bytesRead;
     }
-    decoder?.decode();
+    try {
+      decoder?.decode();
+    } catch {
+      throw new VerificationAssertionError('Delivered text is not valid UTF-8');
+    }
     if (sawNul) throw new VerificationAssertionError('Delivered text contains NUL bytes');
     if (offset !== stat.size || (await handle.stat()).size !== stat.size)
       throw new Error('Delivered file changed during verification');

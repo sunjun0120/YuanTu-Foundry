@@ -69,7 +69,15 @@ export class SessionRuns {
    * this and the five other members named in the port it is constructed with.
    */
   settleAbandonedRun(sessionId: string, runId: string, reason: string): void {
-    const pendingCalls = this.resolvePending(sessionId, reason);
+    /**
+     * Every fallible read happens before the first write.
+     *
+     * `resolvePending` appends an answer per unresolved call, and the caller's transaction joins rather than
+     * nests, so a refusal from a later read (`inFlightStep` parses each step payload, `pendingInputs` parses
+     * queued input) would be committed anyway: the transcript would carry "outcome unknown" answers while the
+     * run row and `sessions.active_run` still claimed the dead run was in flight, and a session in that state
+     * cannot be continued, renamed or deleted. Reading first means a refusal leaves nothing written.
+     */
     const step = this.inFlightStep(sessionId, runId);
     /**
      * Inputs the dead process was holding when it stopped.
@@ -89,6 +97,8 @@ export class SessionRuns {
      * the run that made it is gone. Moving it to `abandoned` keeps the record and drops the promise, and the count
      * rides the interruption record so a reader learns it where they learn about the crash.
      */
+    // The first write of this method, with every fallible read above it: see the note at the top.
+    const pendingCalls = this.resolvePending(sessionId, reason);
     const abandonedPlans = this.port.db
       .prepare(
         "UPDATE plans SET status='abandoned', updated_at=? WHERE run_id=? AND status='planning'",

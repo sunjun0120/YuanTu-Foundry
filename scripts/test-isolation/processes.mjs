@@ -159,6 +159,18 @@ export function readIsolationViolations(isolation) {
   }
 }
 
+/**
+ * How long the operating system may take to create a process `spawn()` has already returned from.
+ *
+ * On Windows `child_process.spawn` returns before the process exists, so the `at` recorded for a spawn is an
+ * upper bound on the *call*, not on the creation: measured on this machine, the child is created 4–6 ms after
+ * `at`, every time. Requiring `creationTime <= at` therefore failed for ordinary children, and an unverified
+ * child is treated as one this run does not own: it stayed in `remaining`, the file reported unconfirmed
+ * cleanup, and the scheduler stopped every remaining test file. The grace keeps the proof's meaning — a pid
+ * reused much later still has a later creation time — while covering process creation itself.
+ */
+const CREATION_GRACE_MS = 2000;
+
 /** Settle only registered children; never infer ownership from unrelated OS processes. */
 export async function settleProcesses(isolation, { terminate, timeoutMs = 3000 } = {}) {
   let records = [];
@@ -205,10 +217,16 @@ export async function settleProcesses(isolation, { terminate, timeoutMs = 3000 }
           '-Command',
           `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CreationDate.ToUniversalTime().ToString('o')`,
         ],
-        { encoding: 'utf8', windowsHide: true, timeout: 5000 },
+        // This is an identity proof, not a performance assertion. Cold WMI startup under
+        // concurrent suites needs more time; a failed proof still forbids termination.
+        { encoding: 'utf8', windowsHide: true, timeout: 20000 },
       );
       const created = Date.parse(result.stdout?.trim());
-      if (result.status === 0 && created >= entry.started && created <= entry.at)
+      if (
+        result.status === 0 &&
+        created >= entry.started &&
+        created <= (Number.isFinite(entry.at) ? entry.at : entry.started) + CREATION_GRACE_MS
+      )
         verified.push(pid);
     }
   }

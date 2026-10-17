@@ -196,7 +196,7 @@ function takeBatch(
     const file = files[index]!;
     const cost = file.absolutePath.length + 3;
     if (batch.length && units + cost > MAX_ARGV_UNITS) break;
-    if (batch.length && admittedBytes + bytes + file.fingerprint.size > maxScanBytes) break;
+    if (admittedBytes + bytes + file.fingerprint.size > maxScanBytes) break;
     units += cost;
     bytes += file.fingerprint.size;
     batch.push(file);
@@ -361,7 +361,12 @@ async function collect(
         return;
       }
     }
-    if (buffered.length > MAX_EVENT_BYTES) oversized = true;
+    if (buffered.length > MAX_EVENT_BYTES) {
+      // The bound has to stop the accumulation, not merely mark it: otherwise the buffer keeps growing to the
+      // whole event and every chunk rescans it from the start, which is the cost this limit exists to avoid.
+      oversized = true;
+      done = true;
+    }
   };
   child.child.stdout?.on('data', onData);
   // Errors are counted from the exit code and the missing summary; stderr is diagnostics, not results, and is

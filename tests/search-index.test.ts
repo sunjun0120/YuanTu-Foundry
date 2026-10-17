@@ -48,6 +48,38 @@ async function serviceFor(t: test.TestContext, root: string): Promise<WorkspaceS
   return service;
 }
 
+test('a build that could not enumerate the tree keeps the rows it never reached', async (t) => {
+  const root = await tempRoot(t, 'yuantu-index-partial-');
+  await writeFile(path.join(root, 'first.ts'), 'export function firstSymbol() { return 1; }\n');
+  await writeFile(path.join(root, 'second.ts'), 'export function secondSymbol() { return 2; }\n');
+  await writeFile(path.join(root, 'third.ts'), 'export function thirdSymbol() { return 3; }\n');
+  const service = await serviceFor(t, root);
+  await service.ready();
+  const internals = service as unknown as {
+    startBuild(relativePath: string): void;
+    build: Promise<void> | null;
+    inventoryOptions(input: object): Record<string, unknown>;
+    index: { paths(): string[]; freshness(): string };
+  };
+  assert.deepEqual(internals.index.paths().sort(), ['first.ts', 'second.ts', 'third.ts']);
+
+  /**
+   * A walk that stopped at its entry budget visited one path and never learned about the others. Pruning on
+   * that evidence deletes rows for files that are still on disk and then commits the shrunken generation as
+   * `validated` — the same thing `reconcile` refuses on identical evidence.
+   */
+  const options = internals.inventoryOptions.bind(service);
+  internals.inventoryOptions = (input: object) => ({ ...options(input), maxEntries: 1 });
+  internals.startBuild('.');
+  await internals.build;
+  assert.deepEqual(internals.index.paths().sort(), ['first.ts', 'second.ts', 'third.ts']);
+  assert.notEqual(
+    internals.index.freshness(),
+    'validated',
+    'a partial walk cannot validate a generation',
+  );
+});
+
 test('a symbol past 32KiB of a file body is found', async (t) => {
   const root = await tempRoot(t, 'yuantu-index-deep-');
   const filler = Array.from({ length: 1_200 }, (_, index) => `const filler${index} = ${index};`);

@@ -4,10 +4,104 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { setTimeout as delay } from 'node:timers/promises';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { runtimeSnapshotMessage } from '../packages/core/runtime-context.ts';
-import { frames, httpFixture, sendFrames } from './http-fixture.ts';
+import { frames, httpFixture, sendFrames, systemText } from './http-fixture.ts';
+import { generateSessionTitle } from '../packages/core/session-title.ts';
+import { OpenAIProvider } from '../packages/providers/openai.ts';
+
+test('title output budget leaves room for reasoning before a short visible title', async (t) => {
+  const url = await httpFixture(t, (body, res) => {
+    const enough = body.max_completion_tokens >= 512;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const events = [
+      {
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning_content: '需要先分析，再给出简短标题。' },
+            finish_reason: null,
+          },
+        ],
+      },
+      ...(enough
+        ? [{ choices: [{ index: 0, delta: { content: '修复标题生成' }, finish_reason: null }] }]
+        : []),
+      {
+        choices: [{ index: 0, delta: {}, finish_reason: enough ? 'stop' : 'length' }],
+        usage: {
+          prompt_tokens: 20,
+          completion_tokens: enough ? 100 : 64,
+          completion_tokens_details: { reasoning_tokens: enough ? 90 : 64 },
+        },
+      },
+    ];
+    res.end(
+      events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('') +
+        'data: [DONE]\n\n',
+    );
+  });
+  const title = await generateSessionTitle(
+    new OpenAIProvider({
+      protocol: 'openai',
+      baseUrl: url,
+      apiKey: 'fixture',
+      model: 'thinking-fixture',
+    }),
+    '当前项目的会话标题生成一直失败，请修复',
+    new AbortController().signal,
+  );
+  assert.equal(title?.title, '修复标题生成');
+});
+
+test('a stalled title cannot hold the reply and a late title is announced after completion', async (t) => {
+  let releaseTitle: (() => void) | undefined;
+  const url = await httpFixture(t, (body, res) => {
+    if (systemText(body.system).includes('为这段会话生成')) {
+      releaseTitle = () => sendFrames(res, frames('修复登录跳转'));
+    } else sendFrames(res, frames('Reply without waiting for a title.'));
+  });
+  const client = await titleHost(t, url);
+  const session = await client.request('session.create', {});
+  let announced!: () => void;
+  const updated = new Promise<void>((resolve) => {
+    announced = resolve;
+  });
+  client.subscribe((event) => {
+    if (event.type === 'session.title.updated' && event.sessionId === session.id) announced();
+  });
+  const run = client.run(session.id, '修复登录跳转');
+  try {
+    const result = await Promise.race([run, delay(4000).then(() => null)]);
+    assert.ok(result, 'the reply must finish while the title response is still withheld');
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal((await client.request('session.list', {}))[0]?.title, '修复登录跳转');
+  } finally {
+    releaseTitle?.();
+  }
+  assert.equal(await Promise.race([updated.then(() => true), delay(2000).then(() => false)]), true);
+  assert.equal((await client.request('session.list', {}))[0]?.title, '修复登录跳转');
+});
+
+test('Host shutdown aborts a title still running after the answer finished', async (t) => {
+  let titleClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    titleClosed = resolve;
+  });
+  const url = await httpFixture(t, (body, res) => {
+    if (systemText(body.system).includes('为这段会话生成')) {
+      res.once('close', titleClosed);
+    } else sendFrames(res, frames('Done.'));
+  });
+  const client = await titleHost(t, url);
+  const session = await client.request('session.create', {});
+  const result = await client.run(session.id, '检查登录流程');
+  assert.equal(result.status, 'completed', result.error);
+  await client.stop();
+  assert.equal(await Promise.race([closed.then(() => true), delay(2000).then(() => false)]), true);
+});
 
 async function titleHost(t: test.TestContext, url: string): Promise<AgentHostClient> {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-title-'));
@@ -114,22 +208,36 @@ test('migration protects names already stored in an older database', async (t) =
   }
 });
 
-test('the configured model generates a title before the first reply', async (t) => {
+test('the configured model names the session once independently of its first reply', async (t) => {
   const requests: unknown[] = [];
   const url = await httpFixture(t, (body, res) => {
     requests.push(body);
     sendFrames(
       res,
-      frames(requests.length === 1 ? '标题：“修复登录跳转”。' : 'I fixed the login redirect.'),
+      frames(
+        systemText(body.system).includes('为这段会话生成')
+          ? '标题：“修复登录跳转”。'
+          : 'I fixed the login redirect.',
+      ),
     );
   });
   const client = await titleHost(t, url);
   const session = await client.request('session.create', {});
+  let titleUpdated!: () => void;
+  const named = new Promise<void>((resolve) => {
+    titleUpdated = resolve;
+  });
+  client.subscribe((event) => {
+    if (event.type === 'session.title.updated' && event.sessionId === session.id) titleUpdated();
+  });
   const first = await client.run(session.id, '登录后会跳回首页，请修复');
   assert.equal(first.status, 'completed', first.error);
+  assert.equal(await Promise.race([named.then(() => true), delay(2000).then(() => false)]), true);
   assert.equal((await client.request('session.list', {}))[0]?.title, '修复登录跳转');
   assert.equal(requests.length, 2);
-  const titleRequest = requests[0] as { tools?: unknown[]; messages?: { content?: string }[] };
+  const titleRequest = requests.find((request) =>
+    systemText((request as { system?: unknown }).system).includes('为这段会话生成'),
+  ) as { tools?: unknown[]; messages?: { content?: string }[] };
   /**
    * The title call is tool-free, and the assertion says that rather than naming one provider's encoding of it.
    *
@@ -165,13 +273,19 @@ test('manual rename prevents model title generation', async (t) => {
   assert.equal(requests, 1);
 });
 
-test('title generation failure keeps the first-message fallback and does not fail the run', async (t) => {
+test('failed naming keeps a fallback and retries the original topic on a later turn', async (t) => {
   let requests = 0;
-  const url = await httpFixture(t, (_, res) => {
+  let titles = 0;
+  const titlePrompts: string[] = [];
+  const url = await httpFixture(t, (body, res) => {
     requests++;
-    if (requests === 1) {
-      res.writeHead(500);
-      res.end();
+    if (systemText(body.system).includes('为这段会话生成')) {
+      titles++;
+      titlePrompts.push(JSON.stringify(body.messages));
+      if (titles === 1) {
+        res.writeHead(500);
+        res.end();
+      } else sendFrames(res, frames('修复登录问题'));
     } else sendFrames(res, frames('The login redirect is fixed.'));
   });
   const client = await titleHost(t, url);
@@ -180,7 +294,17 @@ test('title generation failure keeps the first-message fallback and does not fai
   assert.equal(result.status, 'completed', result.error);
   assert.equal((await client.request('session.list', {}))[0]?.title, '修复登录跳转');
   assert.equal(requests, 2);
+  let titleUpdated!: () => void;
+  const named = new Promise<void>((resolve) => {
+    titleUpdated = resolve;
+  });
+  client.subscribe((event) => {
+    if (event.type === 'session.title.updated' && event.sessionId === session.id) titleUpdated();
+  });
   await client.run(session.id, '继续检查');
-  assert.equal((await client.request('session.list', {}))[0]?.title, '修复登录跳转');
-  assert.equal(requests, 3, 'a later run must not retry title generation after a reply');
+  assert.equal(await Promise.race([named.then(() => true), delay(2000).then(() => false)]), true);
+  assert.equal((await client.request('session.list', {}))[0]?.title, '修复登录问题');
+  assert.equal(requests, 4);
+  assert.match(titlePrompts[1]!, /修复登录跳转/);
+  assert.doesNotMatch(titlePrompts[1]!, /继续检查/);
 });

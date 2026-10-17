@@ -905,6 +905,8 @@ export const AGENT_EVENT_TYPES = [
    */
   'llm.retry',
   'provider.request.finished',
+  /** Session metadata may arrive before or after its answer, independently of any run. */
+  'session.title.updated',
   'context.summary.retry',
   /**
    * How a round's request was shaped: which model and effort served it, recorded when either differs from the

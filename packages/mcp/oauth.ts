@@ -309,7 +309,15 @@ function loopback(hostname: string): boolean {
 export class McpFetchPolicy {
   readonly fetch: typeof fetch;
   private readonly origins = new Set<string>();
-  constructor(serverUrl: string, allowed: string[] = []) {
+  private readonly metadataTimeoutMs: number;
+  constructor(
+    serverUrl: string,
+    allowed: string[] = [],
+    options: { metadataTimeoutMs?: number } = {},
+  ) {
+    this.metadataTimeoutMs = options.metadataTimeoutMs ?? 5_000;
+    if (!Number.isSafeInteger(this.metadataTimeoutMs) || this.metadataTimeoutMs < 1)
+      throw new Error('Invalid MCP metadata timeout');
     this.add(serverUrl);
     for (const value of allowed) this.add(value);
     this.fetch = (input, init) => this.send(input, init);
@@ -339,8 +347,19 @@ export class McpFetchPolicy {
     if (address.username || address.password)
       throw new Error('MCP transport cannot send credentials in the URL');
     if (!this.origins.has(address.origin)) throw new Error('MCP transport cannot change origin');
-    const response = await fetch(input, { ...init, redirect: 'error' });
-    await this.observe(address, response);
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    const signal = address.pathname.includes('/.well-known/')
+      ? AbortSignal.any([
+          AbortSignal.timeout(this.metadataTimeoutMs),
+          ...(callerSignal ? [callerSignal] : []),
+        ])
+      : callerSignal;
+    const response = await fetch(input, {
+      ...init,
+      redirect: 'error',
+      ...(signal ? { signal } : {}),
+    });
+    await this.observe(address, response, signal ?? undefined);
     return response;
   }
   /**
@@ -348,7 +367,7 @@ export class McpFetchPolicy {
    * This must complete before the response is handed back, otherwise the caller could race ahead
    * and request the authorization server before its origin is trusted.
    */
-  private async observe(address: URL, response: Response): Promise<void> {
+  private async observe(address: URL, response: Response, signal?: AbortSignal): Promise<void> {
     const challenge = response.headers.get('www-authenticate');
     if (challenge) {
       const match = challenge.match(/resource_metadata\s*=\s*"([^"]{1,2048})"/i);
@@ -357,8 +376,28 @@ export class McpFetchPolicy {
     if (response.status !== 200) return;
     if (!address.pathname.includes('/.well-known/')) return;
     if (!(response.headers.get('content-type') ?? '').includes('json')) return;
+    const reader = response.clone().body?.getReader();
+    if (!reader) return;
+    let abort: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abort = () => reject(signal?.reason ?? new Error('MCP metadata read aborted'));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener('abort', abort, { once: true });
+    });
     try {
-      const body = (await response.clone().json()) as unknown;
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      for (;;) {
+        const { value, done } = await Promise.race([reader.read(), aborted]);
+        if (done) break;
+        if (!value) continue;
+        bytes += value.byteLength;
+        if (bytes > 65_536) throw new Error('MCP metadata exceeds 64KB');
+        chunks.push(value);
+      }
+      const body: unknown = JSON.parse(
+        new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)),
+      );
       const rows =
         body && typeof body === 'object' && !Array.isArray(body)
           ? (body as Record<string, unknown>)
@@ -368,6 +407,10 @@ export class McpFetchPolicy {
         for (const server of servers) if (typeof server === 'string') this.add(server);
     } catch {
       // Malformed metadata is not fatal here; the SDK reports the real discovery failure.
+    } finally {
+      if (abort) signal?.removeEventListener('abort', abort);
+      // Cancelling a tee branch waits for the consumer's original branch; never await it here.
+      void reader.cancel().catch(() => {});
     }
   }
 }

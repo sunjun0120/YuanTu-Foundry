@@ -328,10 +328,16 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
        * call can take minutes: without it a healthy run would look idle for the whole of it. It decides
        * nothing — the timer cannot expire anything, and `LEASE_RENEW_INTERVAL_MS` is not a timeout.
        */
-      const renewing = setInterval(
-        () => store.renewLease(sessionId, runId),
-        LEASE_RENEW_INTERVAL_MS,
-      );
+      const renewing = setInterval(() => {
+        // A throw from a timer callback is not catchable by the request's own `try`: an unguarded
+        // `SQLITE_BUSY` here would be an uncaught exception that ends the Host mid-run. The renewal is
+        // advisory by design (see above), so a failed one is dropped instead of escalated.
+        try {
+          store.renewLease(sessionId, runId);
+        } catch {
+          /* The lease is re-read at the next boundary; a busy database must not end the run. */
+        }
+      }, LEASE_RENEW_INTERVAL_MS);
       renewing.unref?.();
       try {
         beforeRequest(context.system);

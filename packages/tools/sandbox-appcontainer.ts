@@ -6,7 +6,6 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
-  open,
   readFile,
   realpath,
   rm,
@@ -20,10 +19,13 @@ import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
 import { testResource } from '../platform/test-lifecycle.ts';
+import { RetryableCleanup } from './cleanup-sequence.ts';
+import { createOwnedFileLease } from './owned-file-lease.ts';
 import {
   appContainerRuntimeError,
   APPCONTAINER_CHILD_STDIO_PROBE,
   appContainerProbeFailure,
+  finalizeAppContainerProbe,
 } from './appcontainer-runtime.ts';
 import {
   insideWorkspace,
@@ -156,20 +158,18 @@ let processLease:
 async function acquireProcess(): Promise<() => Promise<void>> {
   processLease ??= (async () => {
     const filename = path.join(stateRoot(), 'workspace-owner.lock');
-    const lock = await open(filename, 'wx').catch((error: NodeJS.ErrnoException) => {
+    const lock = await createOwnedFileLease(filename, {
+      pid: process.pid,
+      backend: 'appcontainer',
+    }).catch((error: NodeJS.ErrnoException) => {
       throw new Error(
         `Windows ACL lease acquisition failed (${error.code ?? 'unknown'}): ${filename}`,
         { cause: error },
       );
     });
-    await lock.writeFile(JSON.stringify({ pid: process.pid, backend: 'appcontainer' }));
-    await lock.sync();
     return {
       references: 0,
-      close: async () => {
-        await lock.close();
-        await rm(filename);
-      },
+      close: lock.release,
     };
   })();
   const pending = processLease;
@@ -187,10 +187,14 @@ async function acquireProcess(): Promise<() => Promise<void>> {
   lease.references++;
   let released = false;
   return async () => {
-    if (released) return;
-    released = true;
-    if (--lease.references === 0) {
-      lease.closing = lease.close().then(() => {
+    if (!released) {
+      released = true;
+      lease.references--;
+    }
+    if (lease.references === 0) {
+      // Cleared on failure as well as on success: a rejected release cached here would be re-awaited by
+      // every later acquire, so nothing could ever retry even after the stale lease file was removed.
+      lease.closing = lease.close().finally(() => {
         if (processLease === pending) processLease = undefined;
       });
       await lease.closing;
@@ -220,16 +224,18 @@ async function acquireWorkspace(root: string, executable: string): Promise<Lease
         const readSid = await identity(executable, 'capability', readName);
         const writeSid = await identity(executable, 'capability', writeName);
         await acl('grant', root, journal, writeSid, readSid);
+        const cleanup = new RetryableCleanup();
         return {
           references: 0,
           root,
           readName,
           writeName,
           journal,
-          close: async () => {
-            await acl('restore', root, journal);
-            await release();
-          },
+          close: () =>
+            cleanup.run([
+              { id: 'acl', run: () => acl('restore', root, journal) },
+              { id: 'process-lease', run: release },
+            ]),
         };
       } catch (error) {
         if (!(await stat(journal).catch(() => undefined))) await release();
@@ -253,7 +259,8 @@ async function acquireWorkspace(root: string, executable: string): Promise<Lease
   return lease;
 }
 async function releaseWorkspace(lease: Lease): Promise<void> {
-  if (--lease.references !== 0) return;
+  if (lease.references > 0) lease.references--;
+  if (lease.references !== 0) return;
   lease.closing = lease.close().then(() => {
     leases.delete(lease.root);
   });
@@ -268,9 +275,10 @@ type Owned = {
   workspace: Lease;
   pooled: boolean;
   started: boolean;
+  cleanup: RetryableCleanup;
 };
 const owned = new WeakMap<SandboxPlan, Owned>();
-const cleanup = new WeakMap<SandboxPlan, Promise<void>>();
+const releasing = new WeakSet<SandboxPlan>();
 const activeProfiles = new Set<string>();
 
 async function poolProfile(executable: string): Promise<{ profile: string; sid: string }> {
@@ -421,6 +429,7 @@ async function prepareContainer(
       workspace,
       pooled: enforceNetwork,
       started: false,
+      cleanup: new RetryableCleanup(),
     });
     return plan;
   } catch (error) {
@@ -438,28 +447,39 @@ async function prepareContainer(
 export async function cleanupAppContainer(plan: SandboxPlan): Promise<void> {
   const resource = owned.get(plan);
   if (!resource) return;
-  if (resource.started && !(await terminated(resource)))
-    throw new Error(
-      'AppContainer termination was not acknowledged; grants and identity remain leased for recovery',
-    );
-  let pending = cleanup.get(plan);
-  if (!pending) {
-    pending = (async () => {
-      await acl('restore', resource.scratch, resource.scratchJournal);
-      await releaseWorkspace(resource.workspace);
-      if (!resource.pooled)
-        await execute(resource.helper, ['delete', resource.profile], {
-          windowsHide: true,
-          env: toolEnvironment(),
-        });
-      await rm(resource.scratch, { recursive: true, force: true });
-      await rm(resource.control, { recursive: true, force: true });
-      activeProfiles.delete(resource.profile);
-      owned.delete(plan);
-    })();
-    cleanup.set(plan, pending);
-  }
-  await pending;
+  await resource.cleanup.run([
+    {
+      id: 'termination',
+      run: async () => {
+        if (resource.started && !(await terminated(resource)))
+          throw new Error(
+            'AppContainer termination was not acknowledged; grants and identity remain leased for recovery',
+          );
+        releasing.add(plan);
+      },
+    },
+    { id: 'scratch-acl', run: () => acl('restore', resource.scratch, resource.scratchJournal) },
+    { id: 'workspace', run: () => releaseWorkspace(resource.workspace) },
+    {
+      id: 'profile',
+      run: async () => {
+        if (!resource.pooled)
+          await execute(resource.helper, ['delete', resource.profile], {
+            windowsHide: true,
+            env: toolEnvironment(),
+          });
+      },
+    },
+    { id: 'scratch', run: () => rm(resource.scratch, { recursive: true, force: true }) },
+    { id: 'control', run: () => rm(resource.control, { recursive: true, force: true }) },
+    {
+      id: 'ownership',
+      run: async () => {
+        activeProfiles.delete(resource.profile);
+        owned.delete(plan);
+      },
+    },
+  ]);
 }
 
 async function terminated(resource: Owned): Promise<boolean> {
@@ -473,7 +493,7 @@ async function terminated(resource: Owned): Promise<boolean> {
 }
 
 export function markAppContainerStarted(plan: SandboxPlan): void {
-  if (cleanup.has(plan)) throw new Error('AppContainer plan was already released');
+  if (releasing.has(plan)) throw new Error('AppContainer plan was already released');
   const resource = owned.get(plan);
   if (!resource) return;
   if (resource.started) throw new Error('AppContainer plan can only be started once');
@@ -512,6 +532,7 @@ export const appcontainerSandboxProvider: SandboxProvider = {
     let directory: string | undefined;
     let plan: SandboxPlan | undefined;
     let cancelled = false;
+    let result: string | null = null;
     try {
       await helper();
       directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-appcontainer-probe-'));
@@ -571,7 +592,6 @@ Promise.all(checks).then(result=>{if(result.length!==9||result.some(value=>!valu
       }
       if (stdout.trim() !== 'ok')
         throw new Error('AppContainer functional enforcement probe failed');
-      return null;
     } catch (error) {
       let stage: unknown;
       if (directory) {
@@ -587,11 +607,17 @@ Promise.all(checks).then(result=>{if(result.length!==9||result.some(value=>!valu
           }
         }
       }
-      return appContainerProbeFailure(stage, cancelled, error);
-    } finally {
-      if (plan) await cleanupAppContainer(plan);
-      if (directory) await rm(directory, { recursive: true, force: true });
+      result = appContainerProbeFailure(stage, cancelled, error);
     }
+    return finalizeAppContainerProbe(
+      result,
+      async () => {
+        if (plan) await cleanupAppContainer(plan);
+      },
+      async () => {
+        if (directory) await rm(directory, { recursive: true, force: true });
+      },
+    );
   },
   prepare: prepareAppContainer,
   started: markAppContainerStarted,

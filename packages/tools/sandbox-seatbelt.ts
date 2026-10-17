@@ -535,8 +535,13 @@ async function seatbeltAvailable(env?: NodeJS.ProcessEnv): Promise<string | null
       } catch (error) {
         return `The macOS Seatbelt sandbox is unavailable: ${String(error)}`;
       } finally {
-        if (plan) await seatbeltSandboxProvider.cleanup(plan);
-        if (directory) await rm(directory, { recursive: true, force: true });
+        // The probe's own directory is removed even when the plan cleanup refuses: otherwise one
+        // `yantu-seatbelt-available-*` directory leaks per failed probe, and the refusal is still reported.
+        try {
+          if (plan) await seatbeltSandboxProvider.cleanup(plan);
+        } finally {
+          if (directory) await rm(directory, { recursive: true, force: true });
+        }
       }
     })();
     availability.set(key, pending);

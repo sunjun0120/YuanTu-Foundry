@@ -8,6 +8,42 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 
 // ---- the Host continues a goal on its own ----
+
+test('query convergence does not restart itself through an active goal', async (t) => {
+  let requests = 0;
+  const url = await httpFixture(t, (body, res) => {
+    requests++;
+    if (requests === 1)
+      sendFrames(
+        res,
+        frames('Goal started', [
+          { id: 'goal', name: 'create_goal', input: { objective: 'Inspect missing.txt' } },
+        ]),
+      );
+    else if (!body.tools?.length || requests > 7)
+      sendFrames(res, frames('No new information; the file could not be found.'));
+    else
+      sendFrames(
+        res,
+        frames('Reading', [
+          { id: 'read-' + requests, name: 'read_file', input: { path: 'missing.txt' } },
+        ]),
+      );
+  });
+  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const { client } = await connectClient(host);
+  t.after(() => client.stop().catch(() => {}));
+  await client.start();
+  let runs = 0;
+  client.subscribe((event) => {
+    if (event.type === 'run.started') runs++;
+  });
+  const session = await client.request('session.create', {});
+  const result = await client.run(session.id, '检查 missing.txt');
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(runs, 1, 'an unchanged-query conclusion cannot buy automatic goal continuations');
+  assert.equal((await client.request('goal.get', { sessionId: session.id }))?.status, 'active');
+});
 //
 // The continuation driver is a loop around ordinary runs, and the Host is what a desktop window talks to: the
 // window asks for one round and the Host is what decides there is a second one. These tests pin that the

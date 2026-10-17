@@ -102,31 +102,46 @@ class BrowserSession {
       throw new Error(MISSING);
     }
     this.browser = browser;
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
-    page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT_MS);
-    this.page = page;
-    await page.route('**/*', async (route) => {
-      try {
-        const parsed = new URL(route.request().url());
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-          // data:/blob:/about: are page-internal; file: and anything else is refused outright.
-          if (['data:', 'blob:', 'about:'].includes(parsed.protocol)) await route.continue();
-          else await route.abort('blockedbyclient');
-          return;
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+      page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT_MS);
+      // Adopted only after its request interception is installed. Caching it first meant a failed registration
+      // left `open()` handing every later browser_* call a page with no per-request guard at all.
+      await page.route('**/*', async (route) => {
+        try {
+          const parsed = new URL(route.request().url());
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            // data:/blob:/about: are page-internal; file: and anything else is refused outright.
+            if (['data:', 'blob:', 'about:'].includes(parsed.protocol)) await route.continue();
+            else await route.abort('blockedbyclient');
+            return;
+          }
+          const reason = await this.approveHost(parsed);
+          if (reason) {
+            this.noteBlocked(parsed, reason);
+            await route.abort('blockedbyclient');
+            return;
+          }
+          await route.continue();
+        } catch {
+          await route.abort('blockedbyclient').catch(() => undefined);
         }
-        const reason = await this.approveHost(parsed);
-        if (reason) {
-          this.noteBlocked(parsed, reason);
-          await route.abort('blockedbyclient');
-          return;
-        }
-        await route.continue();
-      } catch {
-        await route.abort('blockedbyclient').catch(() => undefined);
-      }
-    });
-    return page;
+      });
+      this.page = page;
+      return page;
+    } catch (error) {
+      /**
+       * A page that could not be adopted must not leave its browser behind.
+       *
+       * `open()` never published this launch, so no later `close()` would ever reach the browser it started;
+       * the next call would launch a second chromium and the first would hold the workspace and its sockets
+       * for the life of the Host.
+       */
+      this.browser = undefined;
+      await browser.close().catch(() => undefined);
+      throw error;
+    }
   }
   /** Run one browser step, closing the session if the caller aborts mid-flight. */
   async use<T>(signal: AbortSignal, run: (page: Page) => Promise<T>): Promise<T> {

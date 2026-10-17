@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
@@ -267,28 +267,35 @@ test('a configured total timeout fires, and is reported as a timeout rather than
   assert.match(result.error!, /aborted|timeout/i);
 });
 
-test('a run keeps going while the model keeps asking for tools, for as many rounds as that takes', async (t) => {
+test('a run with new evidence keeps going while the model keeps asking for tools, for as many rounds as that takes', async (t) => {
   /**
    * A run has no round cap. It used to have one — 256 by default, and the run that reached it ended `limited`
    * with the code `rounds` — which cut a long task off mid-way and pushed a task that would have answered on.
-   * What ends a run now is the model (it stops asking for tools), a person (a cancel), or the run's own
-   * ceiling (the window, the output limit, a tool's wall clock). This run crosses the old default, so a cap
-   * that came back would show up here as a `limited` result instead of an answer.
+   * What ends a run now is the model (it stops asking for tools), a person (a cancel), the run's own ceiling
+   * (the window, the output limit, a tool's wall clock), or repeated queries that return nothing new. This run
+   * crosses the old default **with** new evidence every round — the file it reads is rewritten before each
+   * read — so a cap that came back would show up here as a `limited` result instead of an answer, and the
+   * convergence rule, which is what stops a genuinely repetitive run, is not what ends this one.
    */
   let round = 0;
+  let workspace = '';
   const provider: Provider = {
     async complete() {
       round++;
+      await writeFile(path.join(workspace, 'progress.txt'), `round ${round}\n`);
       return round <= 300
         ? {
             ...reply(''),
             finishReason: 'tool_calls',
-            toolCalls: [{ id: `c${round}`, name: 'list_files', arguments: { path: '.' } }],
+            toolCalls: [
+              { id: `c${round}`, name: 'read_file', arguments: { path: 'progress.txt' } },
+            ],
           }
         : reply('Done after many rounds');
     },
   };
-  const { session, agent } = await fixture(t, provider);
+  const { root, session, agent } = await fixture(t, provider);
+  workspace = root;
   const result = await agent.run({
     sessionId: session.id,
     prompt: 'Keep going until you are done',

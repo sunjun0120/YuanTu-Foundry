@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceFailure, type WorkspaceSnapshot } from '../protocol/workspaces.ts';
-import { gitPath, isUnsafeGitPath } from '../core/workspace-paths.ts';
+import { gitPath, isUnsafeGitPath, samePath } from '../core/workspace-paths.ts';
 import {
   repositoryIdentity,
   repositoryReadiness,
@@ -171,7 +171,10 @@ export async function freezeSnapshot(input: FreezeSnapshotInput): Promise<Worksp
    * the delegated work is project-relative, so every path in a result would name a file outside the project the
    * user chose.
    */
-  if (path.resolve(identity.worktreeRoot) !== path.resolve(sourceRoot))
+  // `worktreeRoot` is `realpath` output and `sourceRoot` is whatever the caller was given, so on Windows a
+  // case-only difference (a hand-typed drive letter, a differently-cased folder pick) would refuse the real
+  // repository root. `samePath` is the comparator this repository uses for exactly this question.
+  if (!samePath(identity.worktreeRoot, sourceRoot))
     throw new WorkspaceFailure(
       'WORKSPACE_NOT_A_REPOSITORY',
       `Select the repository root (${identity.worktreeRoot}) rather than a subdirectory of it`,

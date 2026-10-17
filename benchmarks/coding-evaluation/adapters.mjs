@@ -302,11 +302,14 @@ export async function runHostSample(input, signal) {
   /**
    * The request the run is settled by, and the cancellation that may settle it instead.
    *
-   * `run.start` is what carries the reply, so it is also the frame a cancellation replaces: the Host aborts the
-   * run and answers `run.start` with an aborted-request error rather than resolving a `cancelled` RunResult. A
-   * case that is cancelled therefore has no result to record — but it does have evidence (the cancel request was
-   * answered, the run slot was released) and the difference matters, because "cancelled with evidence" and
-   * "the Host died" must not be graded the same way.
+   * `run.start` is what carries the reply, so it is also the frame a cancellation lands on. Where exactly the
+   * abort arrives decides what comes back: an abort taken inside the run is caught by the agent, which answers
+   * with a RunResult whose status is `cancelled` (see `packages/core/agent.ts`), while one that arrives before
+   * the run is admitted rejects `run.start` outright. Both are cancellations, and neither is recorded as a
+   * sample result: what proves the cancellation is its own evidence — the cancel request was answered and the
+   * run slot was released — so "cancelled with evidence" and "the Host died" are never graded the same way.
+   * A run that reports any status other than `cancelled` is a completion that raced the cancel, and it is
+   * treated as one.
    */
   let cancellation = null;
   let cancellationPromise = null;

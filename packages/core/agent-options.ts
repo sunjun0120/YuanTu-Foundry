@@ -202,6 +202,8 @@ export interface AgentOptions {
 }
 
 export type AgentRunInput = UserInput & {
+  /** Host admission epoch time, for measuring preparation before the first answer request. */
+  admittedAt?: number;
   sessionId: string;
   prompt: string;
   signal?: AbortSignal;

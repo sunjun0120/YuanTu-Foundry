@@ -45,13 +45,10 @@ export function createLibreOfficePreview(
         const controller = new AbortController();
         const abort = () =>
           controller.abort(signal?.reason ?? new Error('Office preview cancelled'));
-        const timer = setTimeout(
-          () => controller.abort(new Error('Office preview timed out')),
-          timeoutMs,
-        );
+        let timer: ReturnType<typeof setTimeout> | undefined;
         let started = false;
         const cleanup = () => {
-          clearTimeout(timer);
+          if (timer !== undefined) clearTimeout(timer);
           signal?.removeEventListener('abort', abort);
           controller.signal.removeEventListener('abort', queuedAbort);
         };
@@ -65,6 +62,17 @@ export function createLibreOfficePreview(
         const job: Job = {
           async start() {
             started = true;
+            /**
+             * The budget belongs to the conversion, not to waiting in the queue.
+             *
+             * The timer used to be armed when the job was enqueued, so a preview that queued behind a slow one
+             * could arrive already out of time and be reported as "timed out" without ever having started.
+             * Four queued conversions at the default two minutes made that reachable in ordinary use.
+             */
+            timer = setTimeout(
+              () => controller.abort(new Error('Office preview timed out')),
+              timeoutMs,
+            );
             try {
               await convert(executable, options.prefixArgs ?? [], input, controller.signal);
               resolve();

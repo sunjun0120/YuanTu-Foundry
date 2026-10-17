@@ -15,14 +15,13 @@ import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { PermissionPolicy } from '../../packages/core/permissions.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
-import { generateSessionTitle } from '../../packages/core/session-title.ts';
-import { createProvider, readConfig } from '../../packages/providers/index.ts';
 import { executionPolicy as callExecutionPolicy } from '../../packages/tools/execution-policy.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
 import { createAgent } from '../shared/runtime.ts';
 import { createRunApprover, createRunQuestioner } from './approvals.ts';
 import { ownedSession, required } from './params.ts';
 import type { ActiveRun, HostContext, WakeGrant } from './state.ts';
+import { startSessionTitle } from './session-title.ts';
 
 /**
  * One run of one session, from admitting it to settling the work it started.
@@ -101,6 +100,7 @@ export async function startRun(
   // a scheduler tick) pass the same `active.size` guard; the loser then ran its `finally` and
   // deleted the winner's entry, leaving a live run uncancellable and re-admitting new runs.
   ctx.active.set(sessionId, entry);
+  const admittedAt = Date.now();
   const wakePolicy = wake?.authority.permissionPolicy
     ? new PermissionPolicy(wake.authority.permissionPolicy)
     : undefined;
@@ -114,36 +114,31 @@ export async function startRun(
     if (!wake) ctx.captureAuthority(sessionId);
     await ctx.announceSession(sessionId, true, planPhase);
     /**
-     * Name a new session as soon as its request is admitted. This uses the configured provider before
-     * file reconciliation, agent setup, or the first reply; a failed call leaves the user-text fallback.
+     * Start optional naming alongside the answer. The Host owns and drains this request even when the
+     * answer finishes first; a slow title must never hold reconciliation, agent setup, or visible output.
      *
-     * "Has anybody asked this session anything yet" is asked of the *person's* messages: a runtime snapshot
-     * is a user-role message the runtime wrote to itself, and counting one as a question meant a session
-     * whose first turn announced a snapshot never got a model title at all — and the fallback named it
-     * after the snapshot.
+     * A fallback may be retried on a later turn, using the first person's question rather than "continue".
+     * Runtime snapshots are user-role messages written by the runtime itself, so they cannot name a chat.
      */
-    const askedByUser = ctx.store
+    const firstQuestion = ctx.store
       .messages(sessionId)
-      .some(
+      .find(
         (message) =>
           message.role === 'user' && !isMachineContext(message.displayContent ?? message.content),
       );
     if (
       !wake &&
       parseSetting(process.env, 'YUANTU_SESSION_TITLES') !== false &&
-      ctx.store.canGenerateTitle(sessionId) &&
-      !askedByUser
+      ctx.store.canGenerateTitle(sessionId)
     ) {
-      try {
-        const generated = await generateSessionTitle(
-          createProvider(readConfig()),
-          prompt,
-          controller.signal,
-        );
-        if (generated) ctx.store.setGeneratedTitle(sessionId, generated.title, generated.usage);
-      } catch {
-        // Title generation is optional; the first user message supplies the fallback.
-      }
+      startSessionTitle(
+        ctx,
+        sessionId,
+        firstQuestion?.role === 'user'
+          ? (firstQuestion.displayContent ?? firstQuestion.content)
+          : prompt,
+        controller.signal,
+      );
     }
     await reconcilePendingFileChanges(ctx.store, sessionId, ctx.workspace);
   } catch (error) {
@@ -169,8 +164,18 @@ export async function startRun(
     'completion_scope',
   ]);
   let substantiveToolCalls = 0;
+  let queriesConverged = false;
   const emit = (event: AgentEvent) => {
     runId = event.runId;
+    if (
+      event.type === 'context.injected' &&
+      event.data.source === 'tool-progress' &&
+      event.data.action === 'conclude'
+    ) {
+      queriesConverged = true;
+      substantiveToolCalls = 0;
+    }
+    if (event.type === 'input.consumed') queriesConverged = false;
     if (event.type === 'tool.started') {
       const name = (event.data.call as { name?: string } | undefined)?.name;
       if (name && !NON_SUBSTANTIVE_TOOLS.has(name)) substantiveToolCalls += 1;
@@ -261,6 +266,7 @@ export async function startRun(
     const firstRound = agent.run({
       sessionId,
       prompt,
+      admittedAt,
       taskId: plannedTaskId,
       // A run the clock started is not the user's turn: it may report on the session's goal but not change
       // who is in charge of it (see `HUMAN_ONLY_GOAL_ACTIONS`). A manual retry of the same task is the
@@ -310,7 +316,7 @@ export async function startRun(
      * work wants the answer the session arrived at, and the rounds in between are not hidden — each is a
      * run of its own, so the carrier sees every one of them start and every message land.
      */
-    if (!wake && !planId && !plannedTaskId && !approvedPlan) {
+    if (!wake && !planId && !plannedTaskId && !approvedPlan && !queriesConverged) {
       const rounds = await runGoalRounds({
         /**
          * The host's own bound, not the goal's ceiling.
@@ -343,6 +349,7 @@ export async function startRun(
           });
         },
         runOnce: async (prompt) => {
+          queriesConverged = false;
           // Another round of the same goal, started by the runtime rather than by the user: it may carry
           // the work forward and report on the goal, but not re-aim it or undo a pause.
           //

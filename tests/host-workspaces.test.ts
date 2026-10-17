@@ -533,22 +533,38 @@ test('archive and restore keep the same workspace identity through the RPC surfa
   h.store.attachWorkspaceBinding({ bindingId: binding.id, childSessionId: child.id });
   await writeFile(path.join(binding.executionRoot, 'work.txt'), 'the child wrote this\n');
 
-  const archived = (await h.dispatch('workspace.archive', { sessionId: child.id })) as {
+  const archiving = h.dispatch('workspace.archive', { sessionId: child.id });
+  /**
+   * Registered while it runs, so Stop for this session and the Host's own shutdown can reach it. The handler
+   * used to pass `new AbortController().signal`, whose abort checks the manager honours and no caller can set.
+   */
+  assert.equal(h.ctx.manualOperation?.sessionId, child.id);
+  const archived = (await archiving) as {
     archived: true;
     bindingId: string;
     state: string;
   };
+  const afterArchive = h.ctx.manualOperation;
+  assert.equal(afterArchive, undefined);
   assert.equal(archived.archived, true);
   assert.equal(archived.bindingId, binding.id);
   assert.equal(h.store.workspaceById(binding.id)!.state, 'archived');
-  const removed = (await h.dispatch('workspace.remove', { sessionId: child.id })) as {
+  const removing = h.dispatch('workspace.remove', { sessionId: child.id });
+  assert.equal(h.ctx.manualOperation?.sessionId, child.id);
+  const removed = (await removing) as {
     removed: boolean;
   };
+  const afterRemove = h.ctx.manualOperation;
+  assert.equal(afterRemove, undefined);
   assert.equal(removed.removed, true);
-  const restored = (await h.dispatch('workspace.restore', { sessionId: child.id })) as {
+  const restoring = h.dispatch('workspace.restore', { sessionId: child.id });
+  assert.equal(h.ctx.manualOperation?.sessionId, child.id);
+  const restored = (await restoring) as {
     restored: true;
     binding: { id: string; state: string; executionRoot: string };
   };
+  const afterRestore = h.ctx.manualOperation;
+  assert.equal(afterRestore, undefined);
   assert.equal(restored.restored, true);
   assert.equal(restored.binding.id, binding.id, 'a restore is the same workspace, not a new one');
   assert.equal(restored.binding.state, 'ready');

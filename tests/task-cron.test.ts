@@ -4,10 +4,47 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { spawnSync } from 'node:child_process';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { TaskScheduler, type SchedulerRun } from '../apps/agent-host/scheduler.ts';
 import { recordTaskDelivery, pendingTaskDeliveries } from '../packages/core/task-deliveries.ts';
 import { latestScheduledAt, normalizeTaskTrigger } from '../packages/core/task-trigger.ts';
+
+for (const failure of ['start', 'timer', 'wake', 'rearm'] as const) {
+  test(`background scheduler survives a database read failure during ${failure}`, () => {
+    const source = `
+      import { TaskScheduler } from ${JSON.stringify(new URL('../apps/agent-host/scheduler.ts', import.meta.url).href)};
+      import { SessionStore } from ${JSON.stringify(new URL('../packages/storage/sqlite.ts', import.meta.url).href)};
+      const store = new SessionStore(':memory:');
+      const list = store.listScheduledTasks.bind(store);
+      let calls = 0;
+      let failed = false;
+      store.listScheduledTasks = (...args) => {
+        if (++calls === ${failure === 'rearm' ? 3 : failure === 'timer' ? 2 : 1}) { failed = true; throw Error('fixture database read failed'); }
+        return list(...args);
+      };
+      const scheduler = new TaskScheduler({ store, workspace: process.cwd(), canRun: () => true, run: async () => {}, intervalMs: 1000 });
+      if (${JSON.stringify(failure)} === 'timer') {
+        const immediate = setTimeout;
+        globalThis.setTimeout = (callback, delay, ...args) => immediate(callback, delay === 1000 ? 1 : delay, ...args);
+        scheduler.arm();
+      } else if (${JSON.stringify(failure)} === 'wake') scheduler.wake();
+      else scheduler.start();
+      setTimeout(() => {
+        if (!failed || !scheduler.running) throw Error('scheduler did not recover its timer');
+        scheduler.stop(); store.close(); console.log('scheduler survived');
+      }, 50);
+    `;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /scheduler survived/);
+    assert.match(result.stderr, /fixture database read failed/);
+  });
+}
 
 async function setup(t: TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cron-'));

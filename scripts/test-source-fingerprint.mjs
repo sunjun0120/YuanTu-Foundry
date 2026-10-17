@@ -14,20 +14,36 @@ export async function sourceFingerprint(root) {
       throw error;
     }
     for (const entry of entries) {
-      if (['node_modules', '.git', '.scratch', 'dist', 'artifacts'].includes(entry.name)) continue;
+      if (
+        ['node_modules', '.git', '.scratch', 'dist', 'artifacts', 'target'].includes(entry.name) ||
+        (directory === 'build' && entry.name === 'search-assets')
+      )
+        continue;
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) await walk(file);
       else if (entry.isFile()) files.push(file);
     }
   }
-  for (const directory of ['packages', 'apps', 'scripts', 'tests']) await walk(directory);
-  for (const file of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json'])
-    try {
-      await readFile(path.join(root, file));
-      files.push(file);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
+  for (const directory of [
+    'packages',
+    'apps',
+    'scripts',
+    'tests',
+    'build',
+    '.github',
+    'benchmarks',
+    'sdk',
+    'examples',
+  ])
+    await walk(directory);
+  for (const entry of await readdir(root, { withFileTypes: true }))
+    if (
+      entry.isFile() &&
+      /^(?:package(?:-lock)?\.json|tsconfig(?:\.[\w-]+)*\.json|electron-builder(?:\.[\w-]+)*\.cjs|\.prettier(?:ignore|rc(?:\.json)?)|\.env\.example|README\.md)$/.test(
+        entry.name,
+      )
+    )
+      files.push(entry.name);
   const hash = createHash('sha256');
   for (const file of files.sort()) {
     hash.update(file.replaceAll('\\', '/') + '\0');

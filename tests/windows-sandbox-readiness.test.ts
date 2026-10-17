@@ -103,6 +103,16 @@ test('real Windows acceptance rejects skipped, empty, cancelled, todo and incomp
     summary().replace('Tests: 5 pass=5', 'Tests: 0 pass=0'),
   ])
     assert.throws(() => assertAcceptanceOutput(invalid, 0), /acceptance/i);
+  // A later passing file does not excuse an earlier failing one: the acceptance run prints one summary per
+  // file, so the last line is not the only evidence about the run.
+  assert.throws(
+    () =>
+      assertAcceptanceOutput(
+        `${summary().replace('pass=5', 'pass=4').replace('fail=0', 'fail=1')}\n${summary()}`,
+        0,
+      ),
+    /acceptance/i,
+  );
   assert.throws(() => assertAcceptanceOutput(summary(), 1), /acceptance/i);
 });
 

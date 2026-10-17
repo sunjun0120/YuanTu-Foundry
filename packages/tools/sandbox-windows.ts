@@ -27,6 +27,7 @@ import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
 import { testResource } from '../platform/test-lifecycle.ts';
+import { createOwnedFileLease } from './owned-file-lease.ts';
 import { WINDOWS_CAPABILITIES } from './execution-capabilities.ts';
 import {
   insideWorkspace,
@@ -567,24 +568,17 @@ let processLease: Promise<ProcessLease> | undefined;
 async function acquireProcessLease(state: string): Promise<() => Promise<void>> {
   processLease ??= (async () => {
     const lockPath = path.join(state, 'workspace-owner.lock');
-    const handle = await open(lockPath, 'wx').catch(() => {
-      throw new Error(
-        `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
-      );
-    });
-    try {
-      await handle.writeFile(JSON.stringify({ pid: process.pid }));
-      await handle.sync();
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
+    const lease = await createOwnedFileLease(lockPath, { pid: process.pid }).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+        throw new Error(
+          `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
+        );
+      },
+    );
     return {
       references: 0,
-      release: async () => {
-        await handle.close();
-        await rm(lockPath);
-      },
+      release: lease.release,
     };
   })();
   const pending = processLease;
@@ -664,8 +658,17 @@ async function acquireWorkspace(root: string, sid: string, state: string): Promi
           `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
         );
       });
-      await lock.writeFile(JSON.stringify({ pid: process.pid, root, journal }));
-      await lock.sync();
+      try {
+        await lock.writeFile(JSON.stringify({ pid: process.pid, root, journal }));
+        await lock.sync();
+      } catch (error) {
+        // Publishing failed after the exclusive create: close the handle and remove only the file this attempt
+        // made, so the next prepare retries instead of reading the leftover as "needs recovery" forever.
+        await lock.close().catch(() => undefined);
+        await rm(lockPath, { force: true }).catch(() => undefined);
+        await releaseProcess().catch(() => undefined);
+        throw error;
+      }
       const releaseLock = async () => {
         await lock.close();
         await rm(lockPath);

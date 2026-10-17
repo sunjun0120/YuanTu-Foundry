@@ -3,6 +3,7 @@ import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.t
 import { safeError } from '../shared/runtime.ts';
 import { settleInteraction } from './approvals.ts';
 import type { HostContext } from './state.ts';
+import { cancelSessionTitles } from './session-title.ts';
 
 /** The one resident release started by shutdown, observed immediately and awaited before store close. */
 const residentCleanup = new WeakMap<HostContext, Promise<void>>();
@@ -23,6 +24,7 @@ export function createShutdown(ctx: HostContext): () => void {
     ctx.closing = true;
     ctx.stopObservingBackground();
     ctx.scheduler.stop();
+    cancelSessionTitles(ctx);
     for (const run of ctx.active.values()) run.controller.abort();
     ctx.manualOperation?.controller.abort();
     settleInteraction(ctx);
@@ -95,14 +97,28 @@ export async function serveHost(ctx: HostContext): Promise<void> {
       if (!line.trim()) continue;
       const task = ctx.handle(line);
       ctx.tasks.add(task);
-      void task.finally(() => ctx.tasks.delete(task));
+      void task.then(
+        () => ctx.tasks.delete(task),
+        (error: unknown) => {
+          ctx.tasks.delete(task);
+          failures.push(error);
+          try {
+            shutdown();
+          } catch (shutdownError) {
+            failures.push(shutdownError);
+          }
+        },
+      );
     }
   } catch (error) {
     failures.push(error);
   } finally {
+    // Removed before the long unwinding starts, which is what the contract above promises: while these listeners
+    // are installed, a second interrupt is swallowed by the idempotent shutdown, so a Host waiting on a
+    // minutes-long in-flight request could not be stopped from the console at all.
+    removeSignals();
     await release(shutdown);
     await Promise.allSettled([...ctx.tasks]);
-    removeSignals();
     // A failed release must not skip the remaining resources, but it must not turn shutdown into success.
     await residentCleanup.get(ctx)?.catch((error: unknown) => {
       residentFailed = true;

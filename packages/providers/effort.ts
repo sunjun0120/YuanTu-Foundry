@@ -37,7 +37,15 @@ export function anthropicThinkingBudget(
   maxOutputTokens: number,
 ): number | undefined {
   if (effort === 'none') return undefined;
-  const budget = Math.floor(maxOutputTokens * SHARE[effort]);
+  const share = SHARE[effort as Exclude<ReasoningEffort, 'none'>];
+  /**
+   * A level outside this union is refused before the arithmetic rather than after it: `Math.floor(n * undefined)`
+   * is `NaN`, and `NaN` passes both bounds below, so the request would go out with `budget_tokens: null` and come
+   * back as a generic HTTP failure. Workspace hooks supply this value at runtime, so the type is not a check.
+   */
+  if (share === undefined)
+    throw new RunFailure('unsupported', `Unknown reasoning effort "${String(effort)}"`);
+  const budget = Math.floor(maxOutputTokens * share);
   /**
    * Both of Anthropic's constraints, checked before anything is sent: `budget_tokens >= 1024` and
    * `budget_tokens < max_tokens` (the budget comes *out of* the output limit rather than adding to it, so a

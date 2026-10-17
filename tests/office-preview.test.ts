@@ -150,6 +150,40 @@ test('preview refusal leaves no output and never starts converter', async (t) =>
   await assert.rejects(readFile(path.join(root, 'preview.pdf')));
 });
 
+test('a preview that waited in the queue is not timed out before it starts', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-preview-queue-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'source.xlsx');
+  await writeFile(source, 'fixture');
+  const script = path.join(root, 'slow-renderer.mjs');
+  // Each conversion takes 700ms, and the budget is 1000ms: a job that waited for the first one must still be
+  // inside its own budget while it runs, which is the case the enqueue-time timer made impossible.
+  await writeFile(
+    script,
+    `
+    import { writeFile } from 'node:fs/promises';
+    import path from 'node:path';
+    const args = process.argv.slice(2);
+    const output = args[args.indexOf('--outdir') + 1];
+    const input = args.at(-1);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await writeFile(path.join(output, path.basename(input, path.extname(input)) + '.pdf'),
+      '%PDF-1.4\\nfixture\\n%%EOF');
+  `,
+  );
+  const renderer = createLibreOfficePreview({
+    executable: process.execPath,
+    prefixArgs: [script],
+    timeoutMs: 1000,
+  });
+  await Promise.all([
+    renderer.render({ format: 'xlsx', sourcePath: source, outputPath: path.join(root, '1.pdf') }),
+    renderer.render({ format: 'xlsx', sourcePath: source, outputPath: path.join(root, '2.pdf') }),
+  ]);
+  assert.match(await readFile(path.join(root, '1.pdf'), 'utf8'), /^%PDF-/);
+  assert.match(await readFile(path.join(root, '2.pdf'), 'utf8'), /^%PDF-/);
+});
+
 test('converter refuses oversized input and never overwrites an existing output', async (t) => {
   const { root, source, renderer } = await fixture(t);
   const outputPath = path.join(root, 'preview.pdf');

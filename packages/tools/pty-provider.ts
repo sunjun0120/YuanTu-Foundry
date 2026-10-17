@@ -39,7 +39,8 @@ export interface PtyProcess {
   /** Ends the terminal. `signal` is a name like `SIGINT`; backends that cannot send one may kill instead. */
   kill(signal?: string): void;
   /**
-   * Await termination of the owned OS process tree, delivering `signal` when the backend can.
+   * Without a signal, await termination of the owned OS process tree. With a deliverable named signal,
+   * resolve after delivery, not process exit; reject if delivery fails. The program may ignore SIGTERM.
    *
    * A named signal is a *request*: POSIX delivers it to the terminal's process group, while a Windows console
    * has no signal delivery and has to end the tree by force. `signalAvailable` is where an adapter says which

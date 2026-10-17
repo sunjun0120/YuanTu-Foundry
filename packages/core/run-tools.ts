@@ -9,6 +9,7 @@ import type { InvariantRegistry } from './invariants.ts';
 import type { RunEmit } from './run-emit.ts';
 import type { RunQueue } from './run-queue.ts';
 import { groupToolCalls, runBounded } from './tool-schedule.ts';
+import type { ToolObservation } from './tool-progress.ts';
 
 /**
  * One round's model tool calls: which of them may overlap, the pool that runs them, and the order their results
@@ -108,6 +109,7 @@ export interface RunToolBatch {
   run(calls: readonly ToolCall[]): Promise<{
     injected: { callId: string; notes: string[] }[];
     changedGoals: Goal[];
+    observations: ToolObservation[];
   }>;
 }
 
@@ -149,6 +151,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
     // model changed. Both are published after every call of the batch has settled, by the caller.
     const injected: { callId: string; notes: string[] }[] = [];
     const changedGoals: Goal[] = [];
+    const observations: ToolObservation[] = [];
     /**
      * One call, from its own effect journal entry to its own tool result.
      *
@@ -194,6 +197,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
       timing.queueMs = Math.max(0, dispatchClock - queuedClock);
       timing.dispatchStartedAt = Date.now();
       try {
+        let programCalls = 0;
         let effectId: string | undefined;
         const programEffects = new Map<string, string>();
         /**
@@ -381,6 +385,8 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
                     }
                   : {}),
               });
+              programCalls++;
+              observations.push({ call: inner, result });
               return result;
             },
             // The registry's own classification and the run's own width, so a program cannot overlap what the
@@ -453,6 +459,13 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
             });
             emit(type, measurement);
           },
+        });
+        observations.push({
+          call,
+          result: { ...result, ...(additionalContext?.length ? { additionalContext } : {}) },
+          ...(call.name === 'run_code' && programCalls && !result.isError
+            ? { kind: 'program-output' as const }
+            : {}),
         });
         return { effectId, result, additionalContext };
       } finally {
@@ -566,7 +579,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
     }
     if (cancelled) signal.throwIfAborted();
     if (failure !== undefined) throw failure.reason;
-    return { injected, changedGoals };
+    return { injected, changedGoals, observations };
   };
   return { run };
 }

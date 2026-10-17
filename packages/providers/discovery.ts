@@ -136,6 +136,21 @@ function entries(payload: unknown): { key: string; entry: Record<string, unknown
 /** How much of a failed probe's body is read, and how long that read may take. */
 const MAX_ERROR_BODY_BYTES = 16_384;
 const ERROR_BODY_TIMEOUT_MS = 5_000;
+
+/** Also bounds injected transports and streams that do not implement AbortSignal themselves. */
+async function untilAborted<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let abort!: () => void;
+  const aborted = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    return await Promise.race([operation(), aborted]);
+  } finally {
+    signal.removeEventListener('abort', abort);
+  }
+}
 /**
  * The endpoint's own explanation of a failed probe, bounded in both bytes and time.
  *
@@ -186,7 +201,7 @@ async function readDiscoveryError(response: Response, signal?: AbortSignal): Pro
     return text + decoder.decode();
   } finally {
     if (timer !== undefined) clearTimeout(timer);
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
   }
 }
 /**
@@ -196,8 +211,8 @@ async function readDiscoveryError(response: Response, signal?: AbortSignal): Pro
  * endpoint publishes. The bound belongs to the probe rather than to one caller of it: reading a *successful*
  * answer with `response.json()` and no limit means a gateway that answers 200 and then keeps writing leaves the
  * probe — the one piece of code that must not hang — waiting while the body grows without end. The failed-answer
- * path has always been bounded; this is the same rule for the answer that succeeded. It bounds bytes, not time:
- * an explicit caller decides its own deadline by passing a signal, and the automatic path already supplies one.
+ * path has always been bounded; this is the same rule for the answer that succeeded. The probe's shared
+ * deadline also covers successful body reads, including callers that do not supply a signal.
  */
 const MAX_CATALOGUE_BYTES = 1024 * 1024;
 
@@ -207,7 +222,7 @@ const MAX_CATALOGUE_BYTES = 1024 * 1024;
  * Returned as a `Response` so callers keep reading it exactly as they did: the cap is a property of this probe,
  * not a second response shape for them to learn.
  */
-async function readBoundedCatalogue(response: Response): Promise<Response> {
+async function readBoundedCatalogue(response: Response, signal: AbortSignal): Promise<Response> {
   const body = response.body;
   if (!body) return response;
   const reader = body.getReader();
@@ -215,7 +230,7 @@ async function readBoundedCatalogue(response: Response): Promise<Response> {
   let bytes = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await untilAborted(() => reader.read(), signal);
       if (done) break;
       if (!value) continue;
       bytes += value.byteLength;
@@ -224,7 +239,7 @@ async function readBoundedCatalogue(response: Response): Promise<Response> {
       chunks.push(value);
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
   }
   return new Response(bytes ? Buffer.concat(chunks) : null, {
     status: response.status,
@@ -241,29 +256,52 @@ async function readBoundedCatalogue(response: Response): Promise<Response> {
  */
 export async function discoverModels(
   config: ProviderConfig,
-  options: { signal?: AbortSignal; fetch?: typeof fetch } = {},
+  options: { signal?: AbortSignal; fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<DiscoveryResult> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+    throw new Error('Invalid discovery timeout');
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new Error('Model discovery timed out')), timeoutMs);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, deadline.signal])
+    : deadline.signal;
+  try {
+    return await discoverWithin(config, { ...options, signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function discoverWithin(
+  config: ProviderConfig,
+  options: { signal: AbortSignal; fetch?: typeof fetch },
 ): Promise<DiscoveryResult> {
   const endpoint = modelsUrl(config);
   const request = options.fetch ?? fetch;
-  const response = await request(endpoint, {
-    method: 'GET',
-    headers: discoveryHeaders(config),
-    /**
-     * A catalogue probe carries the operator's credential and asks a URL the operator named, so a redirect is
-     * refused rather than followed: the answer would leave for a host nobody chose, with the key attached. The
-     * automatic path has always refused one; the policy lives here so the explicit path cannot answer the same
-     * question differently.
-     */
-    redirect: 'error',
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
+  const response = await untilAborted(
+    () =>
+      request(endpoint, {
+        method: 'GET',
+        headers: discoveryHeaders(config),
+        /**
+         * A catalogue probe carries the operator's credential and asks a URL the operator named, so a redirect is
+         * refused rather than followed: the answer would leave for a host nobody chose, with the key attached. The
+         * automatic path has always refused one; the policy lives here so the explicit path cannot answer the same
+         * question differently.
+         */
+        redirect: 'error',
+        signal: options.signal,
+      }),
+    options.signal,
+  );
   if (!response.ok) {
     const body = await readDiscoveryError(response, options.signal);
     throw new Error(
       `The endpoint answered ${response.status} for its model list${body.trim() ? `: ${body.trim().slice(0, 300)}` : ''}`,
     );
   }
-  const payload: unknown = await (await readBoundedCatalogue(response)).json();
+  const payload: unknown = await (await readBoundedCatalogue(response, options.signal)).json();
   const models: DiscoveredModel[] = [];
   for (const { key, entry } of entries(payload)) {
     const id =

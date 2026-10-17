@@ -41,6 +41,30 @@ const FAILURES: readonly AttachmentFailure[] = [
   'documentBytes',
 ];
 
+test('running status distinguishes preparation, model waiting, thinking, text and tools', (t) => {
+  t.after(() => setLocale('zh-CN'));
+  setLocale('zh-CN');
+  const say = (over: Partial<Parameters<typeof runStatusText>[0]>) =>
+    runStatusText({
+      status: 'running',
+      compacting: false,
+      approvals: 0,
+      ready: true,
+      loading: false,
+      ...over,
+    });
+  assert.equal(say({}), '正在准备请求…');
+  assert.equal(say({ activity: { kind: 'model' } }), '正在等待模型响应…');
+  assert.equal(say({ activity: { kind: 'model', phase: 'reasoning' } }), '正在推理…');
+  assert.equal(say({ activity: { kind: 'model', phase: 'text' } }), '正在生成回复…');
+  assert.equal(say({ activity: { kind: 'model', phase: 'tool_call' } }), '正在生成工具调用…');
+  assert.equal(say({ activity: { kind: 'tool' } }), '正在执行工具…');
+  assert.equal(say({ tools: 1 }), '正在执行工具…');
+  assert.equal(say({ tools: 1, approvals: 1 }), '等待你的确认');
+  setLocale('en-US');
+  assert.equal(say({ activity: { kind: 'model' } }), 'Waiting for the model…');
+});
+
 test('every run status reads in the interface language', (t) => {
   t.after(() => setLocale('zh-CN'));
   setLocale('en-US');
@@ -90,7 +114,7 @@ test('the conditions the status line reports outrank each other in a fixed order
   assert.equal(say({ approvals: 1, ready: false, loading: true }), 'Waiting for your confirmation');
   assert.equal(say({ ready: false, loading: true }), 'The connection is not ready');
   assert.equal(say({ loading: true }), 'Loading the session…');
-  assert.equal(say({}), 'Working');
+  assert.equal(say({}), 'Preparing the request…');
   // And with nothing else true, the status itself decides.
   assert.equal(say({ status: 'limited' }), 'The run limit was reached');
 });
