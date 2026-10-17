@@ -12,14 +12,17 @@
  *   each inner call is validated, permission-checked, approved by a person where the tool requires it, journalled
  *   and bounded by its own deadline, exactly as if the model had asked for it directly. `run_code` carries no
  *   permission of its own for that reason — a program that only reads needs no approval, and one that writes
- *   triggers the write approval per call, which is also what a person sees.
+ *   triggers the write approval per call, which is also what a person sees. That claim rests on the program
+ *   having no other way out: its whole surface is built inside its own realm and only primitives cross to the
+ *   worker (`code-worker.ts`), so it cannot climb to the worker's `process`, `fetch` or filesystem.
  * - **The catalog is a seam, not a lookup.** The run supplies it (`ToolContext.catalog`), so a read-only child
  *   hands its program the child's trimmed list: a program cannot reach a tool the model itself could not see.
  * - **A failed call throws inside the program.** `try`/`catch` is then how a program handles an expected
  *   failure, and the failure text is the tool's own message rather than something invented here.
  * - **An independent process is not a complete sandbox.** A backend starts ordinary Node, whose worker limits
- *   the guest heap. VM globals and Node permission flags reduce accidental access, but neither protects against
- *   malicious code. Direct effects depend on the selected OS backend. Every RPC is validated against this run's
+ *   the guest heap. Below the realm boundary, the worker has no network globals and Node's permission model keeps
+ *   the runner's reads to its own directory; neither is an OS sandbox, and a V8 flaw would still reach whatever
+ *   the selected OS backend allows. Every RPC is validated against this run's
  *   catalog, and a disconnect during an inner call stops automatic continuation with an unknown outcome.
  */
 import { startCodeProcess } from './code-process.ts';

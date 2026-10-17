@@ -412,6 +412,49 @@ test('a workflow gets the hooks and nothing else', async () => {
   });
 });
 
+test('nothing a workflow is handed leads back to the worker realm', async () => {
+  const stub = stubAgents((prompt) =>
+    prompt === 'fail'
+      ? { status: 'failed', sessionId: 's', answer: '', rounds: 0, error: 'refused' }
+      : completion('x'),
+  );
+  const tool = workflowTool({ runAgent: stub.runAgent });
+  const routes = [
+    'agent.constructor',
+    'phase.constructor',
+    'parallel.constructor.constructor',
+    'pipeline.constructor.constructor',
+    'log.constructor',
+    'console.log.constructor',
+    'args.constructor.constructor',
+    "agent('one').constructor.constructor",
+    "(await agent('fail').then(() => null, (e) => e)).constructor.constructor",
+    '(() => { try { phase(5); } catch (e) { return e; } })().constructor.constructor',
+    'globalThis.constructor.constructor',
+  ];
+  const result = await tool.execute!(
+    {
+      args: { topic: 'x' },
+      code: [
+        `const routes = [${routes.map((route) => `async () => ${route}`).join(', ')}];`,
+        'const outcomes = [];',
+        'for (const route of routes) {',
+        '  const climb = await route();',
+        "  try { outcomes.push('escaped ' + typeof climb('return process')()); }",
+        "  catch { outcomes.push('blocked'); }",
+        '}',
+        'return outcomes;',
+      ].join('\n'),
+    },
+    context(stub.signal),
+  );
+  assert.equal(result.isError, false, result.content);
+  assert.deepEqual(
+    JSON.parse(result.content.split('\n')[0]!),
+    routes.map(() => 'blocked'),
+  );
+});
+
 test('a workflow with no deadline finishes work that outlives a default budget', async () => {
   /**
    * The failure this option exists for, and the reason `workflow` is exempt from the deployment's tool deadline.
