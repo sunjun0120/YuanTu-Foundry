@@ -781,10 +781,10 @@ export class TaskJournal {
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(
-          "SELECT a.id,a.task_id AS taskId,a.session_id AS sessionId,a.run_id AS runId,r.owner_pid AS ownerPid FROM task_attempts a JOIN tasks t ON t.id=a.task_id JOIN sessions s ON s.id=a.session_id LEFT JOIN runs r ON r.id=a.run_id WHERE a.status='in_progress' AND t.status='in_progress' AND (? IS NULL OR s.workspace=?)",
+          "SELECT a.id,a.task_id AS taskId,a.session_id AS sessionId,a.run_id AS runId,r.owner_pid AS ownerPid, r.owner_started_at AS ownerStartedAt FROM task_attempts a JOIN tasks t ON t.id=a.task_id JOIN sessions s ON s.id=a.session_id LEFT JOIN runs r ON r.id=a.run_id WHERE a.status='in_progress' AND t.status='in_progress' AND (? IS NULL OR s.workspace=?)",
         )
         .all(workspace ?? null, workspace ?? null);
-      const interrupted = rows.filter((row) => deadOwner(row.ownerPid));
+      const interrupted = rows.filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
       const now = new Date().toISOString();
       const deadRunIds = new Set<string>();
       for (const row of interrupted) {
@@ -806,10 +806,10 @@ export class TaskJournal {
       }
       const legacy = this.port.db
         .prepare(
-          "SELECT t.id,t.session_id AS sessionId,s.active_run AS activeRun,r.owner_pid AS ownerPid FROM tasks t JOIN sessions s ON s.id=t.session_id LEFT JOIN runs r ON r.id=s.active_run WHERE t.status='in_progress' AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id=t.id AND a.status='in_progress') AND (? IS NULL OR s.workspace=?)",
+          "SELECT t.id,t.session_id AS sessionId,s.active_run AS activeRun,r.owner_pid AS ownerPid, r.owner_started_at AS ownerStartedAt FROM tasks t JOIN sessions s ON s.id=t.session_id LEFT JOIN runs r ON r.id=s.active_run WHERE t.status='in_progress' AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id=t.id AND a.status='in_progress') AND (? IS NULL OR s.workspace=?)",
         )
         .all(workspace ?? null, workspace ?? null)
-        .filter((row) => !row.activeRun || deadOwner(row.ownerPid));
+        .filter((row) => !row.activeRun || deadOwner(row.ownerPid, row.ownerStartedAt));
       for (const row of legacy) {
         if (row.activeRun) deadRunIds.add(String(row.activeRun));
         this.port.db
@@ -847,10 +847,10 @@ export class TaskJournal {
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(
-          "SELECT r.id AS runId, r.owner_pid AS ownerPid FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.parent_session_id IS NOT NULL AND s.fork_message_count IS NULL AND r.status='running' AND (? IS NULL OR s.workspace=?)",
+          "SELECT r.id AS runId, r.owner_pid AS ownerPid, r.owner_started_at AS ownerStartedAt FROM runs r JOIN sessions s ON s.id=r.session_id WHERE s.parent_session_id IS NOT NULL AND s.fork_message_count IS NULL AND r.status='running' AND (? IS NULL OR s.workspace=?)",
         )
         .all(workspace ?? null, workspace ?? null)
-        .filter((row) => deadOwner(row.ownerPid));
+        .filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
       /** How many were actually converged: a child that threw below is not one of them. */
       let converged = 0;
       for (const row of rows) {

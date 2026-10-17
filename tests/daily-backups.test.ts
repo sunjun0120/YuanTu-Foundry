@@ -1,3 +1,11 @@
+/**
+ * The retained, paused daily-backup surface.
+ *
+ * `PRODUCT_SCOPE.backups` is false, so production never constructs `DailyBackups`: the desktop ships no backup
+ * page, no `yuantu:backups` IPC channel and no scheduler (see `tests/product-scope.test.ts`). These cases are kept
+ * on purpose — restoring the scope should start from a tested class rather than an untested one — and they call
+ * the class directly, because the desktop deliberately does not wire it.
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, readFile, writeFile, symlink, readdir } from 'node:fs/promises';

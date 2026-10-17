@@ -6,6 +6,17 @@ import type { BackupView } from './backup-contract.ts';
 import type { BackupAction, BackupResult } from './database-backup-worker.ts';
 
 type Execute = (file: string, operation: BackupAction, id?: string) => Promise<BackupResult>;
+
+/**
+ * The daily-backup scheduler, retained but paused.
+ *
+ * `PRODUCT_SCOPE.backups` is false: the desktop ships no backup page, no `yuantu:backups` IPC channel and no
+ * scheduler, and `main.ts` only constructs this class under that same flag (`tests/product-scope.test.ts` pins
+ * the bridge, the registration and the construction). `tick()`, `load()` and `configure()` consequently have no
+ * production caller today; they are kept together with `tests/daily-backups.test.ts` so that restoring the scope
+ * starts from working, tested code instead of from an untested one. `view()`, `create()` and `drain()` are the
+ * entry points the paused IPC handler would use once the flag is on.
+ */
 export class DailyBackups {
   private enabled = false;
   private configurationError: string | null = null;
@@ -100,6 +111,7 @@ export class DailyBackups {
     await this.job(file, 'create', () => this.execute(file, 'create'));
     return this.view(file);
   }
+  /** Paused: the only caller is `tests/daily-backups.test.ts`; see the class comment for why that is deliberate. */
   async tick(file: string, now = Date.now()): Promise<void> {
     if (!this.enabled) return;
     try {

@@ -155,7 +155,7 @@ const context = vm.createContext(vm.constants.DONT_CONTEXTIFY, {
 
 1. **同一语义已有新测试并全绿**：`tests/run-code.test.ts`（本次被修改）新增 8 条逃逸路线（工具函数、tools 对象、console 函数、console 对象、工具调用的 Promise、工具调用的 Error、`globalThis`、原型），断言 `/^blocked: (no constructor|Code generation from strings disallowed)/`，8 条全部通过。
 2. **这 3 个失败文件不在本次改动里**：`git status` 中没有它们；同一批改动里 `program-runner.test.ts`、`run-code.test.ts`、`deferred-tools` 等都改过并全绿，说明是漏改而不是设计冲突。
-3. **HEAD 上它们是绿的**：`docs/fulltest-2026-10-17.md` 记录 `HEAD` = `3c2e26b` 时 2,629 用例 0 失败；本次同一 `HEAD` 加未提交改动后才出现这 9 个失败，失败断言全部是「逃逸应当成功」。
+3. **HEAD 上它们是绿的**：上一份同日全量记录（`3c2e26b` 时测得 2,629 用例 0 失败；该记录文件已随提交 `e3f524b` 删除，内容仍可从提交 `09cd7fa` 取回）；本次同一 `HEAD` 加未提交改动后才出现这 9 个失败，失败断言全部是「逃逸应当成功」。
 
 ### 5.3 未受影响的同类覆盖
 

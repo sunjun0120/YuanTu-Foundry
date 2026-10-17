@@ -148,6 +148,7 @@ export function createRunApprover(options: RunApproverOptions): Approver {
         resolve(allow);
       };
       approvals.set(approvalId, {
+        sessionId,
         approval: structuredClone(approval),
         resolve: finish,
       });

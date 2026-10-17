@@ -79,6 +79,7 @@ async function host(t: test.TestContext): Promise<Harness> {
     sessionSandboxes: new Map(),
     sessionSandboxFiles: new Map(),
     sessionSandboxNetwork: new Map(),
+    sessionPermissionPolicies: new Map(),
     approvals: new Map(),
     approvalSources: new WeakMap(),
     carrier: { send() {} },
@@ -181,13 +182,11 @@ test('a deleted session leaves a workspace this project can still list, remove a
     [binding.id],
   );
   assert.deepEqual(listed[0]!.problems, []);
-  // The work the child produced is still described: an orphan is not a directory whose contents were forgotten.
-  assert.deepEqual(
-    listed[0]!.results.map((entry) => [entry.id, entry.status]),
-    [[result.id, 'ready']],
-  );
-  assert.deepEqual(listed[0]!.results[0]!.paths, ['made.txt']);
-  assert.match(listed[0]!.results[0]!.digest, /^[0-9a-f]{32,}$/);
+  // The result record went with the sessions it named (session deletion removes results); the directory, and the
+  // bytes the child wrote in it, are what the orphan keeps.
+  assert.deepEqual(listed[0]!.results, []);
+  assert.equal(h.store.workspaceResult(result.id), null);
+  await access(path.join(binding.executionRoot, 'made.txt'));
   // Nothing was merged into the delegator's own directory, which is what makes this work "unmerged" rather than lost.
   await assert.rejects(access(path.join(h.root, 'made.txt')));
 
@@ -292,10 +291,11 @@ test('deleting the delegating session leaves its descendants workspaces listable
     [binding.id],
   );
   assert.deepEqual(
-    listed[0]!.results.map((entry) => entry.id),
-    [result.id],
-    'the exported work is still reachable after both sessions are gone',
+    listed[0]!.results,
+    [],
+    'the result record went with the sessions; the directory below still holds the work',
   );
+  assert.equal(h.store.workspaceResult(result.id), null);
   await h.dispatch('workspace.archive', { bindingId: binding.id });
   await h.dispatch('workspace.remove', { bindingId: binding.id });
   await h.dispatch('workspace.restore', { bindingId: binding.id });
@@ -441,7 +441,8 @@ test('a restarted Host can discover removed orphans and restore their unmerged f
       [binding.id],
     );
     assert.equal(recoverable[0]!.binding.state, 'removed');
-    assert.equal(recoverable[0]!.results.length, 1);
+    // The result record went with the deleted sessions; restoring works from the snapshot, as below shows.
+    assert.equal(recoverable[0]!.results.length, 0);
     await assert.rejects(
       client.request('workspaces.orphaned', { includeRemoved: 'yes' as unknown as boolean }),
       /Invalid includeRemoved/,

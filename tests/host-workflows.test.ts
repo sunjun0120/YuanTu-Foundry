@@ -862,6 +862,7 @@ test('Host reserves session deletion until a blocked background cleanup actually
     sessionSandboxes: new Map(),
     sessionSandboxFiles: new Map(),
     sessionSandboxNetwork: new Map(),
+    sessionPermissionPolicies: new Map(),
   } as unknown as HostContext;
   const deleting = sessionHandlers['session.delete']!(ctx, { sessionId: session.id });
   await cleaning;

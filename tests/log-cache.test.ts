@@ -202,3 +202,97 @@ test('a deleted session leaves nothing in the fold to read', async (t) => {
   assert.deepEqual(store.events(session.id), []);
   assert.throws(() => store.messages(session.id), /Session not found/);
 });
+
+/** The store's journal, for the assertions that are about how a read was answered rather than what it said. */
+interface JournalProbe {
+  readEvents(id: string, afterSeq: number, limit?: number, types?: readonly string[]): unknown[];
+  cachedSessionIds(): string[];
+  cacheBytes: number;
+}
+const journalOf = (store: SessionStore): JournalProbe =>
+  (store as unknown as { journal: JournalProbe }).journal;
+
+test('another connection’s commit is caught up by reading its tail, not by refolding the log', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-tail-'));
+  const file = path.join(root, 'sessions.sqlite');
+  const reader = new SessionStore(file);
+  const writer = new SessionStore(file);
+  t.after(async () => {
+    writer.close();
+    reader.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = reader.create(root);
+  for (let index = 0; index < 20; index++)
+    reader.append(session.id, { role: 'user', content: `mine ${index}` });
+  assert.equal(reader.messages(session.id).length, 20);
+
+  const journal = journalOf(reader);
+  const reads: number[] = [];
+  const original = journal.readEvents.bind(journal);
+  t.mock.method(journal, 'readEvents', (id: string, afterSeq: number, ...rest: []) => {
+    reads.push(afterSeq);
+    return original(id, afterSeq, ...rest);
+  });
+
+  writer.append(session.id, { role: 'user', content: 'theirs' });
+  writer.flush();
+  // A commit to an unrelated session bumps `data_version` too, and must not cost a refold either.
+  writer.append(writer.create(root).id, { role: 'user', content: 'elsewhere' });
+  writer.flush();
+  assert.deepEqual(transcript(reader.messages(session.id)).slice(-1), ['theirs']);
+  // This connection writes after the other did: both land in seq order.
+  reader.append(session.id, { role: 'user', content: 'mine again' });
+  assert.deepEqual(transcript(reader.messages(session.id)).slice(-2), ['theirs', 'mine again']);
+  assert.deepEqual(foldMessages(reader.events(session.id)), reader.messages(session.id));
+  assert.ok(reads.length > 0, 'the tail was read');
+  assert.ok(!reads.includes(0), `no read started from seq 0: ${JSON.stringify(reads)}`);
+});
+
+test('a session another connection deleted is dropped from the fold, not served from it', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-foreign-delete-'));
+  const file = path.join(root, 'sessions.sqlite');
+  const reader = new SessionStore(file);
+  t.after(async () => {
+    reader.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const session = reader.create(root);
+  reader.append(session.id, { role: 'user', content: 'doomed' });
+  assert.deepEqual(transcript(reader.messages(session.id)), ['doomed']);
+  const writer = new SessionStore(file);
+  writer.delete(session.id);
+  writer.close();
+  assert.deepEqual(reader.events(session.id), []);
+  assert.throws(() => reader.messages(session.id), /Session not found/);
+});
+
+test('the fold is bounded by size as well as by count, and keeps the log just read', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-bytes-'));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const journal = journalOf(store);
+  journal.cacheBytes = 30_000;
+  const ids = [0, 1, 2].map((index) => {
+    const session = store.create(root);
+    // About 20 kB each in the estimate: any two together exceed the budget.
+    store.append(session.id, { role: 'user', content: `${index}`.repeat(10_000) });
+    store.messages(session.id);
+    return session.id;
+  });
+  assert.deepEqual(
+    journal.cachedSessionIds(),
+    [ids[2]],
+    'older logs were evicted to fit the budget',
+  );
+  journal.cacheBytes = 1;
+  store.messages(ids[0]!);
+  assert.deepEqual(
+    journal.cachedSessionIds(),
+    [ids[0]],
+    'a log larger than the whole budget is still the one entry kept',
+  );
+});

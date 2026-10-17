@@ -63,7 +63,7 @@ import type {
   TaskCreate,
   TaskUpdate,
 } from './session-schema.ts';
-import { SessionSearch } from './session-search.ts';
+import { SessionSearch, type SessionListPage } from './session-search.ts';
 import { StreamCheckpoints } from './session-streams.ts';
 import { SessionTaskDefinitions } from './session-task-definitions.ts';
 import { TaskJournal } from './session-tasks.ts';
@@ -814,8 +814,8 @@ export class SessionStore implements PlanRepository {
       )
       .all(parentSessionId) as unknown as Session[];
   }
-  list(query = '', workspace?: string): Session[] {
-    return this.search.list(query, workspace);
+  list(query = '', workspace?: string, page?: SessionListPage): Session[] {
+    return this.search.list(query, workspace, page);
   }
   /**
    * Full-text search across this workspace's conversations, with the text that matched.

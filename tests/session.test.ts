@@ -381,3 +381,64 @@ test('session search scopes to one workspace and keeps displayContent precedence
   assert.equal(store.list('parsers', other).length, 0);
   store.close();
 });
+
+test('the session list pages by keyset, newest first, even when sessions share a timestamp', async (t) => {
+  const { root, store } = await fixture(t);
+  // Created back to back, many of these share one millisecond: the page boundary must still be exact.
+  const ids = Array.from({ length: 7 }, () => store.create(root).id).reverse();
+  const child = store.create(root, ids[0]);
+  assert.deepEqual(
+    store.list('', root).map((session) => session.id),
+    ids,
+    'the whole list without a page, child sessions hidden as before',
+  );
+  const pages: string[][] = [];
+  for (let before: string | undefined; ;) {
+    const page = store.list('', root, { limit: 3, ...(before ? { before } : {}) });
+    if (!page.length) break;
+    pages.push(page.map((session) => session.id));
+    before = page.at(-1)!.id;
+  }
+  assert.deepEqual(
+    pages.map((page) => page.length),
+    [3, 3, 1],
+  );
+  assert.deepEqual(pages.flat(), ids, 'every session exactly once, in list order');
+  assert.deepEqual(
+    store.list('', root, { id: ids[3] }).map((session) => session.id),
+    [ids[3]],
+  );
+  assert.deepEqual(
+    store.list('', root, { id: child.id }),
+    [],
+    'the id filter keeps the visibility rule',
+  );
+  assert.deepEqual(store.list('', root, { limit: 3, before: 'no-such-session' }), []);
+  for (const page of [{ limit: 0 }, { limit: 501 }, { limit: 1.5 }])
+    assert.throws(() => store.list('', root, page), /Invalid session page/);
+});
+
+test('the desktop list is a window over the newest sessions that grows on request', async (t) => {
+  let service: CarrierService | undefined;
+  t.after(async () => {
+    await service?.stop();
+  });
+  const { root, file, store } = await fixture(t);
+  for (let index = 0; index < 105; index++) store.create(root);
+  service = new CarrierService({
+    nodePath: process.execPath,
+    hostPath: path.resolve('apps/agent-host/main.ts'),
+    workspace: root,
+    db: file,
+  });
+  await service.start();
+  // Starting opens (or creates) a session of its own, so the workspace holds at least 105.
+  assert.equal(service.snapshot.sessions.length, 100);
+  assert.equal(service.snapshot.sessionsHasMore, true);
+  const opened = service.snapshot.session.sessionId;
+  assert.equal(service.snapshot.currentSession?.id, opened, 'the open session is named');
+  const grown = await service.dispatch({ type: 'loadMoreSessions' });
+  assert.ok(grown.sessions.length >= 105 && grown.sessions.length <= 200);
+  assert.equal(grown.sessionsHasMore, false);
+  assert.equal(new Set(grown.sessions.map((session) => session.id)).size, grown.sessions.length);
+});

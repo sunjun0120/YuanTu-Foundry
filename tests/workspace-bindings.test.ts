@@ -374,7 +374,7 @@ test('results and import receipts are durable, and a receipt is keyed by target'
   assert.deepEqual(store.supersedeWorkspaceResults(child.id), []);
 });
 
-test('a result survives the deletion of the sessions that produced it', async (t) => {
+test('deleting a session takes its results and receipts, except an import interrupted mid-way', async (t) => {
   const harness = await scratch(t);
   const root = harness.root;
   const store = harness.use();
@@ -382,36 +382,52 @@ test('a result survives the deletion of the sessions that produced it', async (t
   await mkdir(project, { recursive: true });
   const parent = store.create(project);
   const child = store.create(project, parent.id);
-  store.recordWorkspaceResult({
-    id: 'result-1',
-    bindingId: 'binding-1',
-    childSessionId: child.id,
-    parentSessionId: parent.id,
-    snapshotId: 'snap-1',
-    comparisonTree: 'b'.repeat(40),
-    resultTree: 'c'.repeat(40),
-    digest: 'd'.repeat(64),
-    paths: ['src/a.ts'],
-    status: 'ready',
-  });
-  store.recordWorkspaceApplyReceipt({
-    resultId: 'result-1',
-    digest: 'd'.repeat(64),
-    targetBindingId: 'binding-1',
-    changeId: 'change-1',
-  });
-  // A child session dies with its parent, and its own child sessions with it; what must not die with them is the
-  // record of what the child changed, because that is the only description of a directory nobody else has.
-  store.delete(parent.id);
-  assert.equal(store.workspaceResult('result-1')?.resultTree, 'c'.repeat(40));
-  assert.equal(
-    store.workspaceApplyReceipt({
-      resultId: 'result-1',
+  const other = store.create(project);
+  const otherChild = store.create(project, other.id);
+  const record = (
+    id: string,
+    childSessionId: string,
+    parentSessionId: string,
+    status: 'ready' | 'applying',
+  ) =>
+    store.recordWorkspaceResult({
+      id,
+      bindingId: `binding-${id}`,
+      childSessionId,
+      parentSessionId,
+      snapshotId: 'snap-1',
+      comparisonTree: 'b'.repeat(40),
+      resultTree: 'c'.repeat(40),
       digest: 'd'.repeat(64),
-      targetBindingId: 'binding-1',
-    })?.changeId,
-    'change-1',
+      paths: ['src/a.ts'],
+      status,
+    });
+  record('done', child.id, parent.id, 'ready');
+  record('interrupted', child.id, parent.id, 'applying');
+  record('unrelated', otherChild.id, other.id, 'ready');
+  for (const resultId of ['done', 'interrupted', 'unrelated'])
+    store.recordWorkspaceApplyReceipt({
+      resultId,
+      digest: 'd'.repeat(64),
+      targetBindingId: 'target',
+      changeId: `change-${resultId}`,
+    });
+  const receipt = (resultId: string) =>
+    store.workspaceApplyReceipt({ resultId, digest: 'd'.repeat(64), targetBindingId: 'target' });
+
+  // The child dies with its parent, and the results between them go too: they named sessions that no longer exist.
+  store.delete(parent.id);
+  assert.equal(store.workspaceResult('done'), null);
+  assert.equal(receipt('done'), null, 'its import receipt with it');
+  // Startup recovery decides an interrupted import from this row; deleting it would leave half-written files unrecorded.
+  assert.equal(store.workspaceResult('interrupted')?.status, 'applying');
+  assert.equal(receipt('interrupted')?.changeId, 'change-interrupted');
+  assert.equal(
+    store.workspaceResult('unrelated')?.status,
+    'ready',
+    'another conversation is untouched',
   );
+  assert.equal(receipt('unrelated')?.changeId, 'change-unrelated');
 });
 
 test('the protocol refuses a row this build cannot interpret', () => {

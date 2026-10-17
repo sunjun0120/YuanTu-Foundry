@@ -106,13 +106,13 @@ export class StreamCheckpoints {
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(
-          `SELECT DISTINCT c.run_id AS runId,c.session_id AS sessionId,r.owner_pid AS ownerPid
+          `SELECT DISTINCT c.run_id AS runId,c.session_id AS sessionId,r.owner_pid AS ownerPid,r.owner_started_at AS ownerStartedAt
              FROM run_stream_checkpoints c JOIN runs r ON r.id=c.run_id
              JOIN sessions s ON s.id=c.session_id
              WHERE (? IS NULL OR s.workspace=?)`,
         )
         .all(workspace ?? null, workspace ?? null)
-        .filter((row) => deadOwner(row.ownerPid));
+        .filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
       for (const row of rows)
         this.persistStreamCheckpoint(String(row.sessionId), String(row.runId));
       return rows.length;

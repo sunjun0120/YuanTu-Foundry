@@ -86,7 +86,7 @@ test('Host restart restores streamed text saved before its process dies', async 
 function checkpointFixture() {
   const db = new DatabaseSync(':memory:');
   db.exec(`
-    CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, owner_pid INTEGER, status TEXT);
+    CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, owner_pid INTEGER, status TEXT, owner_started_at INTEGER);
     CREATE TABLE sessions(id TEXT PRIMARY KEY, workspace TEXT);
     CREATE TABLE run_stream_checkpoints(
       run_id TEXT, session_id TEXT, message_id TEXT, text TEXT, updated_at TEXT,

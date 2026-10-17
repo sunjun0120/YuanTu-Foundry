@@ -170,6 +170,22 @@ export class SessionLifecycle {
       'tasks',
     ])
       this.port.db.prepare('DELETE FROM ' + table + ' WHERE session_id=?').run(id);
+    /**
+     * The results this session produced as a child or received as a parent, and their import receipts.
+     *
+     * They hold no foreign key (`workspace_results` names sessions by plain id), so nothing removed them and a
+     * deleted conversation's sub-agent results stayed forever. A result still `applying` is kept: it is the only
+     * record of an import that was interrupted part-way, and startup recovery needs it to finish that import or to
+     * mark it as a conflict — without it, half-written files would have no record at all.
+     */
+    const doomedResults =
+      "SELECT id FROM workspace_results WHERE (child_session_id=? OR parent_session_id=?) AND status<>'applying'";
+    this.port.db
+      .prepare(`DELETE FROM workspace_apply_receipts WHERE result_id IN (${doomedResults})`)
+      .run(id, id);
+    this.port.db
+      .prepare(`DELETE FROM workspace_results WHERE id IN (${doomedResults})`)
+      .run(id, id);
     this.port.db.prepare('DELETE FROM sessions WHERE id=?').run(id);
   }
   /** Every content address the session's rows and log entries name. */

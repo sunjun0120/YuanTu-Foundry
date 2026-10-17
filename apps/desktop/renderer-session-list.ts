@@ -35,18 +35,34 @@ export function setupSessionList(options: {
   /** The row's own `⋯` menu, built by the module that owns its actions. */
   createMenuButton(item: SessionInfo, disabled: boolean): HTMLButtonElement;
 }): {
-  render(sessions: SessionInfo[], currentId: string | null, blocked: boolean): void;
+  render(
+    sessions: SessionInfo[],
+    currentId: string | null,
+    blocked: boolean,
+    hasMore?: boolean,
+  ): void;
 } {
   const count = required('session-count');
   const list = required('sessions');
   let sessionKey = '';
-  function render(sessions: SessionInfo[], currentId: string | null, blocked: boolean): void {
+  function render(
+    sessions: SessionInfo[],
+    currentId: string | null,
+    blocked: boolean,
+    hasMore = false,
+  ): void {
     // locale() belongs in the key: these rows carry a formatted date and a
     // translated aria-label, so a language switch has to rebuild them.
-    const nextSessionKey = JSON.stringify([sessions, currentId, blocked, locale()]);
+    const nextSessionKey = JSON.stringify([sessions, currentId, blocked, hasMore, locale()]);
     if (nextSessionKey === sessionKey) return;
     sessionKey = nextSessionKey;
-    count.textContent = String(sessions.length);
+    // The list is a window over the newest sessions; `+` says the count is of the window, not of all of them.
+    count.textContent = `${sessions.length}${hasMore ? '+' : ''}`;
+    const more = node('button', t('ui.loadMoreSessions'), 'session-load-more');
+    more.id = 'load-more-sessions';
+    more.type = 'button';
+    more.disabled = blocked;
+    more.addEventListener('click', () => void options.select({ type: 'loadMoreSessions' }));
     list.replaceChildren(
       ...sessions.map((item) => {
         const button = node(
@@ -80,6 +96,7 @@ export function setupSessionList(options: {
         row.append(button, options.createMenuButton(item, blocked));
         return row;
       }),
+      ...(hasMore ? [more] : []),
     );
   }
   required('new-session').addEventListener('click', () => void options.select({ type: 'create' }));

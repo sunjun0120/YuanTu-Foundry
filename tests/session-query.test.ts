@@ -774,3 +774,14 @@ test('a search that returns a page says how big the list it walked was', async (
   assert.equal(page.hits.length, 1);
   assert.equal(page.rankedTotal, 4, 'all four are in the window even though one was returned');
 });
+
+test('a Chinese excerpt spans enough characters to read, not twelve of them', async (t) => {
+  const { workspace, store } = await fixture(t);
+  const sentence =
+    '上周我们排查了一次线上故障，最终确认是数据库迁移脚本在升级时没有处理旧索引，导致查询退化成全表扫描，修复后延迟恢复正常。';
+  record(store, workspace, '故障复盘', [sentence]);
+  const snippet = store.searchSessions('数据库', { workspace }).hits[0]!.matches[0]!.snippet;
+  const shown = snippet.replace(/[«»…]/g, '');
+  assert.ok(shown.length >= 30, `the excerpt is ${shown.length} characters: ${snippet}`);
+  assert.ok(sentence.includes(shown), 'and it is a piece of the message as written');
+});

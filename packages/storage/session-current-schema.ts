@@ -78,9 +78,10 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         renewals INTEGER NOT NULL DEFAULT 0,
         compacting_run_id TEXT
       );
+      -- owner_started_at is the derived column an upgraded database receives as ADD COLUMN (see deadOwner).
       CREATE TABLE runs (
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), owner_pid INTEGER NOT NULL,
-        status TEXT NOT NULL, started_at TEXT NOT NULL, result TEXT
+        status TEXT NOT NULL, started_at TEXT NOT NULL, result TEXT, owner_started_at INTEGER
       );
       CREATE TABLE run_stream_checkpoints (
         run_id TEXT NOT NULL REFERENCES runs(id),
@@ -244,9 +245,9 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         manifest_hash TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
-      -- A child's exported work. The parent session is a plain id and not a reference, so a result survives the
-      -- deletion of the session that produced it: it is the record of what a child changed, and losing it with a
-      -- cascade would lose the only description of a directory nobody else has.
+      -- A child's exported work. The sessions are plain ids rather than references, so deletion removes a session's
+      -- results explicitly (see SessionLifecycle.delete) and keeps the one still 'applying', which startup recovery
+      -- needs to finish an interrupted import.
       CREATE TABLE workspace_results (
         id TEXT PRIMARY KEY,
         binding_id TEXT NOT NULL,

@@ -834,3 +834,30 @@ test('an index written by the old raw-copy triggers is rebuilt once, and the tri
     'the legacy row is in the index in its segmented form',
   );
 });
+
+test('a chunk boundary never splits a character outside the BMP', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-surrogate-'));
+  const file = path.join(root, 'knowledge.sqlite');
+  const store = new KnowledgeStore(file);
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  // Offset 1599 starts an emoji, so the 1600-unit cut lands between its two halves; 1399 does the same for the
+  // next chunk's start (1400).
+  const text = 'a'.repeat(1399) + '😀' + 'b'.repeat(198) + '😀' + 'c'.repeat(800);
+  await writeFile(path.join(root, 'emoji.md'), text);
+  store.pinDocument(root, 'emoji.md');
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const chunks = db
+      .prepare("SELECT content FROM knowledge_items WHERE source='emoji.md' ORDER BY id")
+      .all()
+      .map((row) => String(row.content));
+    assert.ok(chunks.length >= 2);
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const chunk of chunks) assert.doesNotMatch(chunk, lone);
+  } finally {
+    db.close();
+  }
+});

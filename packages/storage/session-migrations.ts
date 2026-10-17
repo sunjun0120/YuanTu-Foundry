@@ -85,7 +85,15 @@ export class SessionMigrations {
         );
       }
     }
-    this.port.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+    /**
+     * `synchronous=NORMAL` is per connection, so it is set on every open. In WAL mode it syncs at checkpoints
+     * rather than at every commit: a power loss can lose the last commits, never corrupt the file, which is the
+     * trade SQLite documents as the right one for WAL. The default (FULL) paid an fsync per commit, and a run
+     * commits at every step boundary and every batch of messages.
+     */
+    this.port.db.exec(
+      'PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;',
+    );
     /**
      * A file with no tables at all is not a version of this schema — it is the absence of one.
      *
@@ -410,6 +418,19 @@ export class SessionMigrations {
         );
       if (!attemptColumns.has('resume'))
         this.port.db.exec('ALTER TABLE task_attempts ADD COLUMN resume INTEGER NOT NULL DEFAULT 0');
+      /**
+       * When the run's owner process started (epoch ms), so a pid the system has since handed to another process
+       * is not mistaken for the owner (see `deadOwner`). Null on rows written before it was recorded, which are
+       * judged by the pid alone, as they always were.
+       */
+      const runColumns = new Set(
+        this.port.db
+          .prepare('PRAGMA table_info(runs)')
+          .all()
+          .map((row) => row.name),
+      );
+      if (!runColumns.has('owner_started_at'))
+        this.port.db.exec('ALTER TABLE runs ADD COLUMN owner_started_at INTEGER');
       // After the derived columns above: `sessions_parent` names one of them.
       createLookupIndexes(this.port.db);
       // Session search index (v10). The projection column is filled by `append`, and the triggers keep

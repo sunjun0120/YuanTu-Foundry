@@ -96,7 +96,12 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'session.list': async (ctx, params) => {
     if (params.query !== undefined && typeof params.query !== 'string')
       throw new Error('Invalid search query');
-    return ctx.store.list(params.query as string | undefined, ctx.workspace);
+    // The store validates the page fields; only the ones the caller sent are passed, so an absent field stays absent.
+    const page: { limit?: number; before?: string; id?: string } = {};
+    if (params.limit !== undefined) page.limit = params.limit as number;
+    if (params.before !== undefined) page.before = params.before as string;
+    if (params.id !== undefined) page.id = params.id as string;
+    return ctx.store.list(params.query as string | undefined, ctx.workspace, page);
   },
   'session.rename': async (ctx, params) => {
     const id = required(params, 'sessionId');
@@ -154,6 +159,7 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
       ctx.sessionSandboxes.delete(id);
       ctx.sessionSandboxFiles.delete(id);
       ctx.sessionSandboxNetwork.delete(id);
+      ctx.sessionPermissionPolicies.delete(id);
       return { deleted: true };
     } finally {
       ctx.restoring = false;

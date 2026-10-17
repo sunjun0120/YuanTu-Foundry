@@ -4,6 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { processAlive, processStartedAt } from '../packages/platform/process-identity.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -169,6 +172,51 @@ test('a dead owner is taken over, and the abandoned run’s lease goes with it',
     events.includes('run.interrupted'),
     'the crash is written down, not silently forgotten',
   );
+});
+
+/**
+ * A pid the system handed to another process is not the owner.
+ *
+ * Windows reuses pids quickly, so "a process with this number exists" kept a crashed Host's session stuck as
+ * running for as long as a stranger held the number. The run row records its owner's start time beside the pid;
+ * a live pid whose process started at a different time is a different process. A live child process stands in
+ * for the stranger, and the recorded start time is moved an hour into its past.
+ */
+test('a reused pid is not mistaken for the owner, and the real owner still holds the session', async (t) => {
+  const { store, sessionId, db } = await fixture(t);
+  const stranger = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  t.after(() => stranger.kill());
+  await once(stranger, 'spawn');
+  const pid = stranger.pid!;
+  const startedAt = processStartedAt(pid);
+  if (startedAt === null) return t.skip('this system does not report process start times');
+
+  const stale = store.beginRun(sessionId);
+  const handle = db();
+  handle
+    .prepare('UPDATE runs SET owner_pid=?, owner_started_at=? WHERE id=?')
+    .run(pid, startedAt, stale);
+  // The genuine owner, alive: refused exactly as before.
+  assert.throws(() => store.beginRun(sessionId), /already running/i);
+  handle.prepare('UPDATE runs SET owner_started_at=? WHERE id=?').run(startedAt - 3_600_000, stale);
+  handle.close();
+
+  const next = store.beginRun(sessionId);
+  assert.notEqual(next, stale, 'the run whose owner is gone was taken over');
+  assert.ok(store.events(sessionId).some((event) => event.type === 'run.interrupted'));
+  assert.equal(processAlive(pid, startedAt), true, 'the stranger itself is untouched and alive');
+});
+
+test('a row written before start times were recorded is judged by its pid alone', async (t) => {
+  const { store, sessionId, db } = await fixture(t);
+  const stale = store.beginRun(sessionId);
+  const handle = db();
+  // This process is alive; with no start time on the row there is nothing to contradict it.
+  handle.prepare('UPDATE runs SET owner_started_at=NULL WHERE id=?').run(stale);
+  handle.close();
+  assert.throws(() => store.beginRun(sessionId), /already running/i);
 });
 
 test('the compaction lock excludes a second writer, and releases for the next one', async (t) => {

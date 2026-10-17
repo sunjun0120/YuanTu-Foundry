@@ -6,6 +6,7 @@ import type { SessionStore } from '../../packages/storage/sqlite.ts';
 import { BackgroundCommands } from '../../packages/tools/background.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { pipelineStagesInvariant } from '../../packages/tools/pipeline.ts';
+import { sweepSpills } from '../../packages/tools/spill.ts';
 import { TerminalSessions } from '../../packages/tools/terminal.ts';
 import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
@@ -65,6 +66,18 @@ export async function openHostServices(options: Options, workspace: string): Pro
    * Both run here rather than per run because they are facts about the *process*: exactly one Host owns these
    * directories, and a pass that ran inside every run would classify the same rows repeatedly and race itself.
    */
+  // Spills of sessions that no longer exist, and a workspace-wide budget; housekeeping, never a startup failure.
+  await sweepSpills({
+    workspace,
+    sessionExists: (sessionId) => {
+      try {
+        store.get(sessionId);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  }).catch(() => undefined);
   const workspaces = new WorkspaceManager({ store });
   const workspaceResults = new WorkspaceResultsService({ store });
   const reconciliation = new AbortController();

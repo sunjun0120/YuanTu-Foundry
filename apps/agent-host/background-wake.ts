@@ -9,6 +9,7 @@ import {
 } from '../../packages/core/background-deliveries.ts';
 import type { RunResult } from '../../packages/protocol/index.ts';
 import { safeError } from '../shared/runtime.ts';
+import { sessionPermissionPolicy } from './session-policy.ts';
 import type { HostContext, WakeGrant } from './state.ts';
 
 /** The wake machinery the Host keeps for its whole lifetime. */
@@ -38,7 +39,7 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
     sandboxMode: ctx.sessionSandboxes.get(sessionId) ?? ctx.defaultSandboxMode,
     sandboxFiles: ctx.sessionSandboxFiles.get(sessionId) ?? ctx.defaultSandboxFiles,
     sandboxNetwork: ctx.sessionSandboxNetwork.get(sessionId) ?? ctx.defaultSandboxNetwork,
-    permissionPolicy: ctx.permissionPolicy?.toJSON() ?? null,
+    permissionPolicy: sessionPermissionPolicy(ctx, sessionId)?.toJSON() ?? null,
   });
   const captureAuthority = (sessionId: string, permissionOnly = false) => {
     const { mode, paused, maxWakeups, maxRunMs } = backgroundState(ctx.store, sessionId).policy;

@@ -9,7 +9,7 @@ import { nodeDependencyWarning } from '../../../packages/workspaces/dependencies
 import { ToolRegistry } from '../../../packages/tools/registry.ts';
 import { workspaceResultTools } from '../../../packages/tools/workspaces.ts';
 import { createRunApprover } from '../approvals.ts';
-import { sessionExecutionPolicy } from '../session-policy.ts';
+import { sessionExecutionPolicy, sessionPermissionPolicy } from '../session-policy.ts';
 import { executionPolicy, withExecutionPolicy } from '../../../packages/tools/execution-policy.ts';
 import { metadataWritesAllowed } from '../../shared/runtime.ts';
 
@@ -60,7 +60,10 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
     };
   },
 
-  /** Session deletion retains managed directories and results; keep them addressable by their own identity. */
+  /**
+   * Session deletion retains managed directories; keep them addressable by their own identity. Their results go
+   * with the session (except one interrupted mid-import), so an orphan usually lists none.
+   */
   'workspaces.orphaned': async (ctx, params) => {
     if (params.includeRemoved !== undefined && typeof params.includeRemoved !== 'boolean')
       throw new Error('Invalid includeRemoved');
@@ -151,12 +154,12 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
             sessionId,
             workspaceRoot: ctx.store.workspaceBinding(sessionId).executionRoot,
             executionPolicyForCall: () => sessionExecutionPolicy(ctx, sessionId),
-            permissionPolicyForCall: () => ctx.permissionPolicy,
+            permissionPolicyForCall: () => sessionPermissionPolicy(ctx, sessionId),
             approve: createRunApprover({
               options: ctx.options,
               store: ctx.store,
               sessionId,
-              policy: () => ctx.permissionPolicy,
+              policy: () => sessionPermissionPolicy(ctx, sessionId),
               wake: false,
               unattendedTaskId: undefined,
               runId: () => '',

@@ -288,7 +288,14 @@ export interface HostMethods {
     result: { applied: true; resolvedApprovals: number };
   };
   'session.create': { params: Record<string, never>; result: SessionInfo };
-  'session.list': { params: { query?: string }; result: SessionInfo[] };
+  /**
+   * Newest first. `limit` (1–500) returns one page and `before` (the last id of the previous page) continues it;
+   * `id` narrows the answer to that one session, or to nothing when it is gone. With neither, the whole list.
+   */
+  'session.list': {
+    params: { query?: string; limit?: number; before?: string; id?: string };
+    result: SessionInfo[];
+  };
   'session.rename': { params: { sessionId: string; title: string }; result: SessionInfo };
   'session.delete': { params: { sessionId: string }; result: { deleted: true } };
   'session.get': {

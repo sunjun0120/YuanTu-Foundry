@@ -29,6 +29,8 @@ export interface ActiveRun {
 
 /** An approval the run is waiting on, keyed by the id the client answers with. */
 export interface PendingApproval {
+  /** The session whose run is waiting, so a policy change re-decides only that session's approvals. */
+  sessionId: string;
   approval: Approval;
   resolve: (allow: boolean) => void;
 }
@@ -98,8 +100,10 @@ export interface HostContext {
   sessionSandboxes: Map<string, SandboxMode>;
   sessionSandboxFiles: Map<string, FileEffect>;
   sessionSandboxNetwork: Map<string, NetworkEffect | undefined>;
-  /** The process's permission policy, replaced wholesale by `permission.update`. */
+  /** The permission policy a session without its own override reads; `permission.update` without a session changes it. */
   permissionPolicy: PermissionPolicy | undefined;
+  /** Per-session permission overrides. A session absent here still reads the process default. */
+  sessionPermissionPolicies: Map<string, PermissionPolicy>;
   /** Violations from the last run, so `invariants.list` can answer "does it currently hold?". */
   lastViolations: InvariantViolation[];
   /**
@@ -211,6 +215,7 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     sessionSandboxFiles: new Map<string, FileEffect>(),
     sessionSandboxNetwork: new Map<string, NetworkEffect | undefined>(),
     permissionPolicy,
+    sessionPermissionPolicies: new Map<string, PermissionPolicy>(),
     lastViolations: [],
     announced,
     active: new Map<string, ActiveRun>(),

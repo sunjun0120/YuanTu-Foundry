@@ -213,6 +213,17 @@ body {
   background: var(--raised);
   color: var(--ink);
 }
+#chat-sidebar .session-load-more {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border-radius: 7px;
+}
+#chat-sidebar .session-load-more:hover:enabled {
+  background: var(--raised);
+  color: var(--ink);
+}
 #chat-sidebar .session-more {
   color: var(--muted);
   top: 9px;

@@ -823,6 +823,11 @@ test('one parser validates the vocabulary every carrier sends', () => {
     /Invalid carrier command/,
   );
   assert.deepEqual(parseCarrierCommand({ type: 'cancel' }), { type: 'cancel' });
+  assert.deepEqual(parseCarrierCommand({ type: 'loadMoreSessions' }), { type: 'loadMoreSessions' });
+  assert.throws(
+    () => parseCarrierCommand({ type: 'loadMoreSessions', limit: 10_000 }),
+    /Invalid carrier command/,
+  );
   assert.deepEqual(parseCarrierCommand({ type: 'copyText', text: 'hi' }), {
     type: 'copyText',
     text: 'hi',

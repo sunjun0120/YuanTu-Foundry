@@ -76,6 +76,7 @@ async function host(t: test.TestContext): Promise<Harness> {
     sessionSandboxes: new Map(),
     sessionSandboxFiles: new Map(),
     sessionSandboxNetwork: new Map(),
+    sessionPermissionPolicies: new Map(),
     approvals: new Map(),
     approvalSources: new WeakMap(),
     carrier: { send() {} },

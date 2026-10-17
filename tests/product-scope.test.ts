@@ -68,6 +68,31 @@ test('paused backups are absent from the preload bridge and their IPC registrati
   assert.equal(registrations, 1);
 });
 
+test('the paused daily-backup scheduler is constructed only under its scope flag', () => {
+  const main = ts.createSourceFile(
+    'main.ts',
+    readFileSync(path.join(projectRoot, 'apps/desktop/main.ts'), 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  let constructions = 0;
+  const visit = (node: ts.Node) => {
+    if (ts.isNewExpression(node) && node.expression.getText(main) === 'DailyBackups') {
+      constructions++;
+      let ancestor: ts.Node | undefined = node.parent;
+      while (ancestor && !ts.isIfStatement(ancestor)) ancestor = ancestor.parent;
+      assert.ok(
+        ancestor && ts.isIfStatement(ancestor),
+        'the paused scheduler must be created inside its scope guard',
+      );
+      assert.equal(ancestor.expression.getText(main), 'PRODUCT_SCOPE.backups');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(main);
+  assert.equal(constructions, 1);
+});
+
 for (const entry of ['apps/cli/main.ts', 'apps/web/main.ts', 'apps/agent-acp/main.ts']) {
   test(`${entry} refuses startup while its public entry is paused`, (t) => {
     const workspace = mkdtempSync(path.join(tmpdir(), 'yuantu-paused-entry-'));

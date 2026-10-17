@@ -23,6 +23,7 @@ import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
 import { createAgent } from '../shared/runtime.ts';
 import { createRunApprover, createRunQuestioner } from './approvals.ts';
 import { ownedSession, required } from './params.ts';
+import { sessionPermissionPolicy } from './session-policy.ts';
 import type { ActiveRun, HostContext, WakeGrant } from './state.ts';
 import { startSessionTitle } from './session-title.ts';
 
@@ -214,7 +215,7 @@ export async function startRun(
     options: ctx.options,
     store: ctx.store,
     sessionId,
-    policy: () => (wake ? wakePolicy : ctx.permissionPolicy),
+    policy: () => (wake ? wakePolicy : sessionPermissionPolicy(ctx, sessionId)),
     wake: Boolean(wake),
     unattendedTaskId,
     runId: () => runId,
@@ -254,7 +255,7 @@ export async function startRun(
       ctx.options,
       approve,
       // Live policy changes affect pending approvals and the next round's tool schema.
-      () => (wake ? wakePolicy : ctx.permissionPolicy),
+      () => (wake ? wakePolicy : sessionPermissionPolicy(ctx, sessionId)),
       emit,
       ctx.background,
       sessionId,

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SpilledOutput } from '../protocol/index.ts';
 
@@ -104,6 +104,77 @@ export async function removeSpills(root: string, sessionId: string): Promise<voi
   if (!sessionId || /[\\/]/.test(sessionId) || sessionId === '.' || sessionId === '..')
     throw new Error('Invalid session id for spill removal');
   await rm(path.join(root, SPILL_DIRECTORY, sessionId), { recursive: true, force: true });
+}
+/** What all sessions' spills under one workspace may occupy together; the oldest files go first beyond it. */
+export const MAX_SPILL_TOTAL_BYTES = 1024 * 1024 * 1024;
+/**
+ * How old an orphaned spill directory must be before the sweep removes it.
+ *
+ * "No session row" is judged against *this* store, and a workspace can be used through a second database
+ * (the `--db` option); a directory that is still being written is never older than this, so the grace keeps a
+ * live session of another store from losing its spills to a sweep that cannot see it.
+ */
+export const ORPHAN_SPILL_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The Host's startup pass over a workspace's spills: orphans first, then the global budget.
+ *
+ * Deleting a session removes its spills (see `removeSpills`), but directories left by sessions deleted before that
+ * existed — or by a delete whose cleanup failed — had no owner and no end. A directory whose session this store does
+ * not know, and which has not been touched for {@link ORPHAN_SPILL_GRACE_MS}, is removed. Then, if what remains is
+ * over {@link MAX_SPILL_TOTAL_BYTES}, files are removed oldest first across every session until it fits: the
+ * per-session cap bounds one conversation, and only this bounds a workspace with many of them.
+ *
+ * Housekeeping, so it never throws: an entry that cannot be read or removed is skipped.
+ */
+export async function sweepSpills(input: {
+  workspace: string;
+  sessionExists: (sessionId: string) => boolean;
+  now?: number;
+  maxTotalBytes?: number;
+}): Promise<{ orphans: number; trimmed: number }> {
+  const root = path.join(input.workspace, SPILL_DIRECTORY);
+  const now = input.now ?? Date.now();
+  const result = { orphans: 0, trimmed: 0 };
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return result;
+  }
+  const files: { file: string; size: number; at: number }[] = [];
+  for (const name of names) {
+    const directory = path.join(root, name);
+    try {
+      const info = await stat(directory);
+      if (!info.isDirectory()) continue;
+      if (!input.sessionExists(name) && now - info.mtimeMs > ORPHAN_SPILL_GRACE_MS) {
+        await rm(directory, { recursive: true, force: true });
+        result.orphans++;
+        continue;
+      }
+      for (const entry of await readdir(directory)) {
+        const file = path.join(directory, entry);
+        const entryInfo = await stat(file);
+        if (entryInfo.isFile()) files.push({ file, size: entryInfo.size, at: entryInfo.mtimeMs });
+      }
+    } catch {
+      /* Housekeeping: an entry that cannot be read is left for the next sweep. */
+    }
+  }
+  let total = files.reduce((sum, file) => sum + file.size, 0);
+  const limit = input.maxTotalBytes ?? MAX_SPILL_TOTAL_BYTES;
+  for (const file of files.sort((a, b) => a.at - b.at)) {
+    if (total <= limit) break;
+    try {
+      await rm(file.file, { force: true });
+      total -= file.size;
+      result.trimmed++;
+    } catch {
+      /* Housekeeping. */
+    }
+  }
+  return result;
 }
 /** Keep the newest `MAX_SPILL_FILES_PER_SESSION` files. Not being able to trim is not a reason to fail. */
 function trimSpills(directory: string): void {

@@ -114,6 +114,8 @@ export type CarrierCommand =
   | { type: 'load' | 'undo' | 'deleteSession'; id: string }
   | { type: 'rename'; id: string; title: string }
   | { type: 'searchSessions'; query: string }
+  /** Show the next page of older sessions in the list. */
+  | { type: 'loadMoreSessions' }
   | { type: 'copyText'; text: string }
   | { type: 'openLink'; url: string }
   | { type: 'send'; prompt: string; images?: ImageAttachment[] }
@@ -180,6 +182,8 @@ export interface CarrierSnapshot {
    */
   hostPid: number | null;
   sessions: SessionInfo[];
+  /** Whether older sessions exist beyond `sessions`; optional for older callers, absent means no. */
+  sessionsHasMore?: boolean;
   background: HostMethods['background.list']['result'];
   backgroundState?: HostMethods['background.state']['result'] | null;
   tasks: Task[];
@@ -243,6 +247,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     rename: ['type', 'id', 'title'],
     deleteSession: ['type', 'id'],
     searchSessions: ['type', 'query'],
+    loadMoreSessions: ['type'],
     undo: ['type', 'id'],
     send: ['type', 'prompt', 'images'],
     enqueue: ['type', 'prompt', 'images', 'mode'],

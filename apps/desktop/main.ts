@@ -77,7 +77,14 @@ let settingsStore: ModelSettingsStore;
 let uiSettingsStore: UiSettingsStore;
 let permissionSettingsStore: PermissionSettingsStore;
 let sandboxEnvironment: SandboxEnvironment;
-let dailyBackups: DailyBackups;
+/**
+ * The paused daily-backup scheduler.
+ *
+ * `PRODUCT_SCOPE.backups` is false, so `whenReady` never assigns this and the class is never constructed; the
+ * only readers are the IPC handler that the same flag registers and `restoreBackup` behind it. Kept as a
+ * module binding so turning the scope back on is one guarded assignment, not a refactor.
+ */
+let dailyBackups: DailyBackups | undefined;
 let backupRestoring: Promise<BackupReply> | undefined;
 let sandboxInitializing: Promise<SandboxSetupView> | undefined;
 const backupWorkers = new Set<Promise<BackupResult>>();
@@ -192,7 +199,7 @@ async function manualUpgrade(): Promise<void> {
     quitting = true;
     settingsAbort.abort();
     await Promise.all([...profileWrites]);
-    await dailyBackups.drain();
+    await dailyBackups?.drain();
     await Promise.allSettled([...backupWorkers]);
     await service.stop();
     stopped = true;
@@ -339,6 +346,17 @@ function executeBackup(file: string, action: BackupAction, id?: string): Promise
   void work.finally(() => backupWorkers.delete(work)).catch(() => {});
   return work;
 }
+/**
+ * The paused scheduler, or an error that names the reason it is missing.
+ *
+ * `whenReady` only constructs it under `PRODUCT_SCOPE.backups`, and every caller below is inside the IPC handler
+ * that the same flag registers (`tests/product-scope.test.ts` pins both). A throw here therefore means the scope
+ * guard was bypassed — worth an error rather than a silent no-op.
+ */
+function pausedBackups(): DailyBackups {
+  if (!dailyBackups) throw new Error('Backup management is outside the current product scope');
+  return dailyBackups;
+}
 async function restoreBackup(file: string, id: string): Promise<BackupReply> {
   if (!service?.snapshot.ready || service.busy || switching || quitting || !window)
     throw new Error(mainText('upgrade.busy'));
@@ -348,7 +366,7 @@ async function restoreBackup(file: string, id: string): Promise<BackupReply> {
   let reopening = false;
   let recoveryDirectory: string | undefined;
   try {
-    await dailyBackups.drain();
+    await dailyBackups?.drain();
     await Promise.allSettled([...backupWorkers]);
     const verified = await executeBackup(file, 'verify', id);
     const selected = verified.backups.find((item) => item.id === id)!;
@@ -362,7 +380,7 @@ async function restoreBackup(file: string, id: string): Promise<BackupReply> {
       cancelId: 0,
     });
     if (confirm.response !== 1)
-      return { ok: true, view: await dailyBackups.view(file), cancelled: true };
+      return { ok: true, view: await pausedBackups().view(file), cancelled: true };
     if (quitting || service.busy) throw new Error(mainText('upgrade.busy'));
     await service.stop();
     stopped = true;
@@ -379,7 +397,7 @@ async function restoreBackup(file: string, id: string): Promise<BackupReply> {
     }
     return {
       ok: true,
-      view: await dailyBackups.view(file),
+      view: await pausedBackups().view(file),
       recoveryDirectory: restored.recoveryDirectory,
     };
   } catch (error) {
@@ -411,6 +429,7 @@ function attach(next: CarrierService): CarrierService {
   unsubscribeStatisticsDelta?.();
   // A replacement Host starts with launch defaults, even when it loads the same session.
   live = undefined;
+  applied = new Map();
   showing = undefined;
   moving = undefined;
   following = undefined;
@@ -501,6 +520,11 @@ async function reviewWorkspaceHooks(workspace: string): Promise<void> {
  */
 const sessions = new Map<string, SessionChoice>();
 let live: SessionChoice | undefined;
+/**
+ * What the Host was last told for each session. The Host keeps both halves per session, so whether a switch can
+ * skip a half depends on what *that* session already has, not on what the previous session was in.
+ */
+let applied = new Map<string, SessionChoice>();
 const defaultChoice = (): SessionChoice => ({
   sandbox: sandboxEnvironment.defaultMode,
   permission: permissionPreset(DEFAULT_PRESET).permission,
@@ -514,19 +538,22 @@ const choiceFor = (sessionId: string | undefined): SessionChoice =>
  * The cached pair is committed only after both settings succeed. Invalidate it on a failure so a retry
  * reapplies both halves instead of assuming a partly completed update left enforcement unchanged.
  */
-async function applyChoice(choice: SessionChoice): Promise<void> {
+async function applyChoice(choice: SessionChoice, sessionId: string | undefined): Promise<void> {
   const target = service;
   if (!target) throw new Error('The desktop is not connected to a carrier yet.');
+  const prior = sessionId ? applied.get(sessionId) : undefined;
   try {
-    if (!live || live.sandbox !== choice.sandbox)
+    if (!prior || prior.sandbox !== choice.sandbox)
       await target.dispatch({ type: 'sandbox', mode: choice.sandbox });
-    if (!live || live.permission !== choice.permission)
+    if (!prior || prior.permission !== choice.permission)
       await target.updatePermissionPolicy(permissionPolicyForMode(choice.permission));
   } catch (error) {
     live = undefined;
+    if (sessionId) applied.delete(sessionId);
     throw error;
   }
   live = { ...choice };
+  if (sessionId) applied.set(sessionId, { ...choice });
   /**
    * The availability of the backend is asked for *after* the switch and never awaited: the answer costs a
    * native enforcement probe, and what a person is waiting for is the switch — a chip that froze for a
@@ -554,7 +581,7 @@ let following: Promise<void> | undefined;
 function followSession(sessionId: string): void {
   if ((sessionId === showing && live !== undefined) || sessionId === moving) return;
   moving = sessionId;
-  following = applyChoice(choiceFor(sessionId))
+  following = applyChoice(choiceFor(sessionId), sessionId)
     .then(() => {
       showing = sessionId;
       pushPresets();
@@ -644,10 +671,16 @@ void app
       },
     );
     await settingsStore.load();
-    dailyBackups = new DailyBackups(
-      path.join(app.getPath('userData'), 'backup-settings.json'),
-      executeBackup,
-    );
+    /**
+     * Paused: the desktop ships no backup page, IPC channel or scheduler while `PRODUCT_SCOPE.backups` is false
+     * (`tests/product-scope.test.ts` pins the preload bridge, the registration and this construction). Turning the
+     * scope back on builds the class here and needs nothing else in this file.
+     */
+    if (PRODUCT_SCOPE.backups)
+      dailyBackups = new DailyBackups(
+        path.join(app.getPath('userData'), 'backup-settings.json'),
+        executeBackup,
+      );
     // Manual maintenance only: legacy daily opt-in files no longer enable scheduling.
     uiSettingsStore = new UiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
     await uiSettingsStore.load();
@@ -773,8 +806,9 @@ void app
           if (quitting || switching || !service?.snapshot.ready)
             throw new Error(mainText('upgrade.busy'));
           const file = sessionDatabase();
-          if (command.type === 'get') return { ok: true, view: await dailyBackups.view(file) };
-          if (command.type === 'create') return { ok: true, view: await dailyBackups.create(file) };
+          if (command.type === 'get') return { ok: true, view: await pausedBackups().view(file) };
+          if (command.type === 'create')
+            return { ok: true, view: await pausedBackups().create(file) };
           const work = restoreBackup(file, command.id);
           backupRestoring = work;
           try {
@@ -994,8 +1028,8 @@ void app
               sandbox: preset.sandbox,
               permission: preset.permission,
             };
-            await applyChoice(choice);
-            const sessionId = service?.snapshot.session.sessionId;
+            const sessionId = service?.snapshot.session.sessionId ?? undefined;
+            await applyChoice(choice, sessionId);
             if (sessionId) sessions.set(sessionId, choice);
             return {
               ok: true,

@@ -407,7 +407,12 @@ function render(): void {
     ? t('ui.sessionShort', { id: session.sessionId.slice(0, 8) })
     : '';
   element('welcome').hidden = Boolean(session.messages.length || session.running);
-  sessionListView.render(state.sessions, session.sessionId, blocked);
+  sessionListView.render(
+    state.sessions,
+    session.sessionId,
+    blocked,
+    state.sessionsHasMore === true,
+  );
   // Message timestamps are locale-formatted, so they follow the language too.
   const paused = session.error === RUN_CANCELLED;
   const changesIdentity = turnChangesView.update(blocked);

@@ -9,6 +9,22 @@ import { resourceText } from '../resources/files.ts';
 
 const DOCUMENT_CHUNK_CHARS = 1600;
 const DOCUMENT_CHUNK_OVERLAP = 200;
+/**
+ * `index`, moved back one unit when it would fall between the two halves of a surrogate pair.
+ *
+ * Chunks are cut at fixed UTF-16 offsets, and an emoji or a rare Han character outside the BMP is two units: a cut
+ * between them left a lone surrogate at the end of one chunk and the start of the next, which renders as a
+ * replacement glyph and makes neither half searchable. Moving back keeps the whole character in the earlier chunk;
+ * the 200-unit overlap means nothing is lost from the later one.
+ */
+function codePointBoundary(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) return index;
+  const unit = text.charCodeAt(index);
+  const previous = text.charCodeAt(index - 1);
+  return unit >= 0xdc00 && unit <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff
+    ? index - 1
+    : index;
+}
 
 export interface KnowledgeItem {
   id: string;
@@ -112,7 +128,8 @@ export class KnowledgeStore {
   constructor(file = defaultKnowledgePath()) {
     mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+    // NORMAL under WAL, as the session store does: durable to the last checkpoint, never corrupt.
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS knowledge_items (
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('memory','document')),
         title TEXT NOT NULL, content TEXT NOT NULL, source TEXT NOT NULL, document_id TEXT,
@@ -277,7 +294,10 @@ export class KnowledgeStore {
         offset < content.length;
         offset += DOCUMENT_CHUNK_CHARS - DOCUMENT_CHUNK_OVERLAP
       ) {
-        const chunk = content.slice(offset, offset + DOCUMENT_CHUNK_CHARS);
+        const chunk = content.slice(
+          codePointBoundary(content, offset),
+          codePointBoundary(content, offset + DOCUMENT_CHUNK_CHARS),
+        );
         const { lastInsertRowid } = this.db
           .prepare(
             "INSERT INTO knowledge_items(id,scope,kind,title,content,source,document_id,updated_at) VALUES(?,?,'document',?,?,?,?,?)",

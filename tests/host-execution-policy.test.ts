@@ -264,3 +264,66 @@ test('the Host selects the visible session policy without changing another sessi
   assert.doesNotMatch(JSON.stringify(results[1]?.content), /SESSION_POLICY_COMMAND/);
   assert.match(systems[2]!, /macOS native Seatbelt/);
 });
+
+test(
+  "changing another session's permission policy leaves a pending approval untouched",
+  { timeout: 15000 },
+  async (t) => {
+    const results: unknown[] = [];
+    const url = await httpFixture(t, (body, response) => {
+      const last = body.messages.at(-1);
+      const result = Array.isArray(last?.content)
+        ? last.content.find((block: { type: string }) => block.type === 'tool_result')
+        : undefined;
+      if (result) {
+        results.push(result);
+        sendFrames(response, frames('done'));
+      } else
+        sendFrames(
+          response,
+          frames('', [
+            {
+              id: 'isolated-command',
+              name: 'run_command',
+              input: { command: 'echo ISOLATED_PENDING_COMMAND' },
+            },
+          ]),
+        );
+    });
+    const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
+    const { client } = await connectClient(host);
+    t.after(() => client.stop().catch(() => {}));
+    await client.start();
+    await client.request('permission.update', { policy: permissionPolicyForMode('ask') });
+    const a = await client.request('session.create', {});
+    const b = await client.request('session.create', {});
+    let arrived!: () => void;
+    const approval = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    const off = client.subscribe((event) => {
+      if (event.type === 'approval.required') arrived();
+    });
+    const run = client.run(a.id, 'run a pending command');
+    void run.catch(() => {});
+    t.after(async () => {
+      off();
+      await client.request('run.cancel', { sessionId: a.id }).catch(() => {});
+      await run.catch(() => {});
+    });
+    await approval;
+    const other = await client.request('permission.update', {
+      sessionId: b.id,
+      policy: permissionPolicyForMode('read-only'),
+    });
+    assert.equal(other.resolvedApprovals, 0);
+    const own = await client.request('permission.update', {
+      sessionId: a.id,
+      policy: permissionPolicyForMode('full-access'),
+    });
+    assert.equal(own.resolvedApprovals, 1);
+    assert.equal((await run).status, 'completed');
+    assert.match(JSON.stringify(results[0]), /ISOLATED_PENDING_COMMAND/);
+    assert.doesNotMatch(JSON.stringify(results[0]), /"is_error":true/);
+  },
+);

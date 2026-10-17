@@ -13,6 +13,7 @@ import type {
   TaskTriggerSource,
 } from '../protocol/index.ts';
 import type { FileChange } from '../protocol/index.ts';
+import { processAlive } from '../platform/process-identity.ts';
 import { ftsIndexText, ftsMatchQuery } from '../protocol/fts-text.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
 import {
@@ -321,15 +322,16 @@ export function ftsQuery(text: string): string | null {
 /**
  * True when the process that owned a run is gone. A live owner means the run is genuinely still
  * running, so recovery must leave it alone; only a dead owner makes a `running` row a leftover.
+ *
+ * `ownerStartedAt` is the owner's recorded start time: with it, a pid that now belongs to a *different*
+ * process counts as dead (see `processAlive`). Without it — a row from before it was recorded — the pid
+ * alone decides, as it always did.
  */
-export function deadOwner(ownerPid: unknown): boolean {
+export function deadOwner(ownerPid: unknown, ownerStartedAt?: unknown): boolean {
   if (ownerPid === null || ownerPid === undefined) return true;
-  try {
-    process.kill(Number(ownerPid), 0);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
-  }
+  const startedAt =
+    ownerStartedAt === null || ownerStartedAt === undefined ? null : Number(ownerStartedAt);
+  return !processAlive(Number(ownerPid), Number.isFinite(startedAt) ? startedAt : null);
 }
 
 /**
@@ -504,6 +506,29 @@ export function frozen<T>(values: T[]): T[] {
  * is showing; a child's log is small, so the memory this buys is mostly the parent's own.
  */
 export const LOG_CACHE_ENTRIES = 24;
+/**
+ * The memory the folded logs may hold together, as an estimate in bytes (see `approximateBytes`).
+ *
+ * The entry count alone bounded the number of sessions and not their size: one entry is a session's *whole* log,
+ * hydrated images included, so a few long sessions with screenshots could hold hundreds of megabytes. Least
+ * recently read entries are evicted until the total fits, except the entry just read — a single log larger than
+ * the budget is still cached, because evicting it would turn every read of that session back into a full refold.
+ */
+export const LOG_CACHE_BYTES = 128 * 1024 * 1024;
+/**
+ * A cheap estimate of the memory a parsed value holds: two bytes per string character plus a small constant per
+ * node. It walks nodes, never characters, so a base64 image costs one step however large it is.
+ */
+export function approximateBytes(value: unknown): number {
+  if (typeof value === 'string') return 2 * value.length + 16;
+  if (!value || typeof value !== 'object') return 8;
+  let total = 16;
+  if (Array.isArray(value)) for (const item of value) total += approximateBytes(item);
+  else
+    for (const [key, item] of Object.entries(value))
+      total += 2 * key.length + approximateBytes(item);
+  return total;
+}
 /** How long ago a lease was renewed, as a phrase, or nothing when the timestamp is unusable. */
 export function ageSuffix(renewedAt: string | undefined): string {
   const at = renewedAt === undefined ? Number.NaN : Date.parse(renewedAt);

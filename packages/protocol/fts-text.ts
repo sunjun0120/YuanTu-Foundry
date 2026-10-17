@@ -33,6 +33,18 @@ export function ftsIndexText(text: string): string {
     .replace(SEPARATORS, SEPARATOR);
 }
 
+/**
+ * How many tokens an FTS5 `snippet()` should span for this query.
+ *
+ * `snippet()` counts tokens, and a Han, kana or Hangul character is a token of its own in these indexes, so the
+ * twelve tokens that make a readable English excerpt were twelve *characters* of a Chinese one — about half a
+ * clause. A query in those scripts is matched mostly against text in them, so it gets a wider window.
+ */
+export function ftsSnippetTokens(query: string): number {
+  UNSPACED.lastIndex = 0;
+  return UNSPACED.test(query) ? 40 : 12;
+}
+
 /** Text cut from an index written by {@link ftsIndexText} (a `snippet()`), as the person wrote it. */
 export function ftsDisplayText(text: string): string {
   return text.replace(SEPARATORS, '');

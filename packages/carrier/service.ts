@@ -69,6 +69,10 @@ function describeSelection(selection: { mode: string; files?: string; network?: 
 }
 /** Keep the newest process records and the final reply within a bounded child history window. */
 const SUBAGENT_TRANSCRIPT_MESSAGES = 200;
+/** How many more sessions the sidebar shows each time it is asked for more. */
+const SESSION_PAGE = 100;
+/** The largest page the Host answers in one `session.list` call (`MAX_SESSION_PAGE` in the store). */
+const SESSION_REQUEST_MAX = 500;
 
 /**
  * The client state machine every carrier shares: sessions, run state, transcript projection, pending
@@ -107,6 +111,15 @@ export class CarrierService {
    */
   private workspace: string;
   private sessions: SessionInfo[] = [];
+  /**
+   * How many sessions the sidebar shows: a window over the newest, grown by `loadMoreSessions`.
+   *
+   * The list used to be read whole on every refresh — twice when a search was active — and copied into every
+   * snapshot, so a workspace with thousands of conversations paid for all of them on each run event. One extra row
+   * is requested to learn whether more exist without counting them.
+   */
+  private sessionLimit = SESSION_PAGE;
+  private sessionsHasMore = false;
   private resources: CarrierSnapshot['resources'] = {
     instructions: [],
     skills: [],
@@ -136,7 +149,8 @@ export class CarrierService {
   private searchVersion = 0;
   private ready = false;
   /** Live settings belong to this carrier and must survive a supervised Host restart. */
-  private permissionPolicy: PermissionPolicySource | undefined;
+  /** Permission policies by session; `''` is the default a session without its own selection reads. */
+  private permissionPolicies = new Map<string, PermissionPolicySource>();
   private sandboxSelections = new Map<
     string,
     { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect }
@@ -259,7 +273,7 @@ export class CarrierService {
   async updatePermissionPolicy(policy: PermissionPolicySource): Promise<void> {
     const sessionId = this.controller.snapshot.sessionId;
     await this.client.request('permission.update', { policy, ...(sessionId ? { sessionId } : {}) });
-    this.permissionPolicy = structuredClone(policy);
+    this.permissionPolicies.set(sessionId ?? '', structuredClone(policy));
   }
   /**
    * Send one sandbox selection, and keep only what the Host confirmed.
@@ -417,6 +431,7 @@ export class CarrierService {
       // whoever launched it, and reporting it would attribute that process's death to this link.
       hostPid: (this.supervisesHost ? this.client.pid : undefined) ?? null,
       sessions: structuredClone(this.sessions),
+      sessionsHasMore: this.sessionsHasMore,
       background: this.background,
       backgroundState: this.backgroundState,
       tasks: structuredClone(this.tasks),
@@ -578,14 +593,12 @@ export class CarrierService {
   }
   private async refresh(): Promise<void> {
     const version = ++this.searchVersion;
-    const all = await this.client.request('session.list', {});
-    const sessions = this.sessionQuery
-      ? await this.client.request('session.list', { query: this.sessionQuery })
-      : all;
     const id = this.controller.snapshot.sessionId;
+    const { sessions, hasMore, current } = await this.sessionWindow(id);
     if (version === this.searchVersion) {
       this.sessions = sessions;
-      this.currentSession = all.find((item) => item.id === id) ?? null;
+      this.sessionsHasMore = hasMore;
+      this.currentSession = current;
     }
     const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
     // Published under the same guard as the list above: two overlapping refreshes can cross a session switch,
@@ -599,15 +612,43 @@ export class CarrierService {
   /** Refresh independently when a fallback or a background-generated title becomes available. */
   private async refreshSessionNames(): Promise<void> {
     const version = ++this.searchVersion;
-    const all = await this.client.request('session.list', {});
-    const sessions = this.sessionQuery
-      ? await this.client.request('session.list', { query: this.sessionQuery })
-      : all;
+    const { sessions, hasMore, current } = await this.sessionWindow(
+      this.controller.snapshot.sessionId,
+    );
     if (version !== this.searchVersion) return;
     this.sessions = sessions;
-    this.currentSession =
-      all.find((item) => item.id === this.controller.snapshot.sessionId) ?? null;
+    this.sessionsHasMore = hasMore;
+    this.currentSession = current;
     this.publish();
+  }
+  /**
+   * The sidebar's page of sessions (searched when a query is active) and the open session's own row.
+   *
+   * The open session is read by id rather than found in the page: it may be older than the window, or filtered out
+   * by the search, and the header still names it.
+   */
+  private async sessionWindow(id: string | null): Promise<{
+    sessions: SessionInfo[];
+    hasMore: boolean;
+    current: SessionInfo | null;
+  }> {
+    // Filled in Host pages: the window may outgrow what one `session.list` call returns.
+    const page: SessionInfo[] = [];
+    while (page.length < this.sessionLimit + 1) {
+      const want = Math.min(SESSION_REQUEST_MAX, this.sessionLimit + 1 - page.length);
+      const next = await this.client.request('session.list', {
+        ...(this.sessionQuery ? { query: this.sessionQuery } : {}),
+        limit: want,
+        ...(page.length ? { before: page.at(-1)!.id } : {}),
+      });
+      page.push(...next);
+      if (next.length < want) break;
+    }
+    const sessions = page.slice(0, this.sessionLimit);
+    const current =
+      (!this.sessionQuery && sessions.find((item) => item.id === id)) ||
+      (id ? ((await this.client.request('session.list', { id }))[0] ?? null) : null);
+    return { sessions, hasMore: page.length > this.sessionLimit, current };
   }
   /**
    * Read the session's process record from the log.
@@ -828,6 +869,8 @@ export class CarrierService {
           const live = new Set(known.map((session) => session.id));
           for (const key of [...this.sandboxSelections.keys()])
             if (key && !live.has(key)) this.sandboxSelections.delete(key);
+          for (const key of [...this.permissionPolicies.keys()])
+            if (key && !live.has(key)) this.permissionPolicies.delete(key);
           for (const key of [...this.unconfirmedPolicies])
             if (key && !live.has(key)) this.unconfirmedPolicies.delete(key);
           // The session this carrier had open goes through the same test: a deleted one is not retried, the
@@ -844,11 +887,14 @@ export class CarrierService {
               sessionId: selectedSession,
             });
           }
-          if (this.permissionPolicy !== undefined)
-            await this.client.request('permission.update', {
-              policy: this.permissionPolicy,
-              ...(open ? { sessionId: open } : {}),
-            });
+          // Each session gets its own policy back; the default first, so overrides land on top of it.
+          const defaultPolicy = this.permissionPolicies.get('');
+          if (defaultPolicy)
+            await this.client.request('permission.update', { policy: defaultPolicy });
+          for (const [policySession, policy] of [...this.permissionPolicies]) {
+            if (!policySession) continue;
+            await this.client.request('permission.update', { policy, sessionId: policySession });
+          }
           // The same order the launch path uses, so a recovered window is in the state a fresh one would be.
           await this.refresh();
           this.resources = await this.client.request('resources.list', {});
@@ -935,13 +981,15 @@ export class CarrierService {
     // stay on screen until the app is restarted again.
     this.recovery = null;
     if (command.type === 'searchSessions') {
-      const version = ++this.searchVersion;
       this.sessionQuery = command.query;
-      const sessions = await this.client.request('session.list', { query: command.query });
-      if (version === this.searchVersion) {
-        this.sessions = sessions;
-        this.publish();
-      }
+      // A new search starts from its first page, whatever window the previous list had grown to.
+      this.sessionLimit = SESSION_PAGE;
+      await this.refreshSessionNames();
+      return this.snapshot;
+    }
+    if (command.type === 'loadMoreSessions') {
+      this.sessionLimit += SESSION_PAGE;
+      await this.refreshSessionNames();
       return this.snapshot;
     }
     if (command.type === 'stopBackground') {
@@ -1018,6 +1066,7 @@ export class CarrierService {
         case 'deleteSession': {
           await this.client.request('session.delete', { sessionId: command.id });
           this.sandboxSelections.delete(command.id);
+          this.permissionPolicies.delete(command.id);
           // The unconfirmed marker goes with it: both describe a session that no longer exists.
           this.unconfirmedPolicies.delete(command.id);
           this.sessionQuery = '';
@@ -1025,7 +1074,7 @@ export class CarrierService {
           // conversation's child while another is on screen.
           this.closeSubAgentTranscript();
           if (this.controller.snapshot.sessionId === command.id) {
-            const remaining = await this.client.request('session.list', {});
+            const remaining = await this.client.request('session.list', { limit: 1 });
             if (remaining[0]) await this.controller.load(remaining[0].id);
             else await this.controller.create();
           }

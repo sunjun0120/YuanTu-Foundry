@@ -17,7 +17,9 @@ import type { Session } from './session-schema.ts';
 import {
   APPEND_BATCH_LIMIT,
   frozen,
+  LOG_CACHE_BYTES,
   LOG_CACHE_ENTRIES,
+  approximateBytes,
   messageSearchText,
 } from './session-schema.ts';
 
@@ -41,6 +43,8 @@ interface LogCacheEntry {
    */
   readable: boolean | null;
   dataVersion: number;
+  /** `approximateBytes` of the events, kept so the cache can be bounded by size without re-walking them. */
+  bytes: number;
 }
 
 /** One message waiting to be written, with the parts of it that are cheaper to compute before the write. */
@@ -105,6 +109,9 @@ export class SessionEventJournal {
    * because an agent-host process outlives the sessions it reads.
    */
   private logCache = new Map<string, LogCacheEntry>();
+
+  /** `LOG_CACHE_BYTES`, as a field so a test can exercise eviction by size without allocating the real budget. */
+  private cacheBytes = LOG_CACHE_BYTES;
 
   /** Events appended inside an open transaction, folded into the cache when that transaction commits. */
   private pendingLog: Map<string, SessionEvent[]> | null = null;
@@ -329,11 +336,13 @@ export class SessionEventJournal {
     // The version is sampled *before* the log is read, so a commit that lands during the read makes this entry
     // stale on its next use instead of being stamped with the newer version and hidden behind it.
     const dataVersion = this.dataVersion();
+    const events = this.readEvents(id, 0);
     const entry: LogCacheEntry = {
-      events: frozen(this.readEvents(id, 0)),
+      events: frozen(events),
       messages: null,
       readable: null,
       dataVersion,
+      bytes: approximateBytes(events),
     };
     // A read inside an open transaction sees that transaction's uncommitted rows, which a rollback would
     // make fiction; only a statement-level read is a read of committed state.
@@ -375,22 +384,68 @@ export class SessionEventJournal {
   private cachedLog(id: string): LogCacheEntry | undefined {
     const entry = this.logCache.get(id);
     if (!entry) return undefined;
-    if (entry.dataVersion !== this.dataVersion()) {
-      // Another connection committed since this fold was taken, so the fold is a prefix of the log rather
-      // than the log. Dropping it is what keeps a second writer's messages from being invisible here.
+    // Another connection committed since this fold was taken, so the fold may be a prefix of the log rather
+    // than the log: it is caught up rather than trusted, which keeps a second writer's events visible here.
+    if (entry.dataVersion !== this.dataVersion()) return this.catchUp(id, entry);
+    this.rememberLog(id, entry); // recency: the entry read most recently is the last one evicted
+    return entry;
+  }
+
+  /**
+   * Bring a cached log up to date by reading only what was written after it, or drop it when that is not possible.
+   *
+   * Any commit by another connection — to any session, not just this one — bumps `data_version`, and the cache
+   * used to answer by throwing the whole entry away. With a second process writing (a Host and the CLI, a parent
+   * and a sub-agent process), every read of a long session therefore re-read and re-folded its log from seq 0.
+   * The log is append-only and `seq` is assigned in commit order, so the events after the entry's last seq are
+   * exactly what it is missing; they are read and folded on, the same way this connection's own appends are.
+   *
+   * The two cases that are not an append are handled by dropping the entry: the session was deleted by the other
+   * connection (its rows are gone, and an entry would keep answering for it), or the tail cannot be folded (an
+   * event this build does not know — the full read that follows refuses it exactly where it always did).
+   */
+  private catchUp(id: string, entry: LogCacheEntry): LogCacheEntry | undefined {
+    // Sampled before the read, as `logOf` does: a commit that lands during it makes this entry stale next time.
+    const dataVersion = this.dataVersion();
+    try {
+      if (!this.port.db.prepare('SELECT 1 FROM sessions WHERE id=?').get(id)) {
+        this.logCache.delete(id);
+        return undefined;
+      }
+      const tail = this.readEvents(id, entry.events.at(-1)?.seq ?? 0);
+      const next: LogCacheEntry = tail.length
+        ? {
+            events: frozen([...entry.events, ...tail]),
+            messages: entry.messages
+              ? frozen(appendFoldedMessages([...entry.messages], tail))
+              : null,
+            // Events another build wrote are not vouched for: the next derived read checks the log again.
+            readable: null,
+            dataVersion,
+            bytes: entry.bytes + approximateBytes(tail),
+          }
+        : { ...entry, dataVersion };
+      this.rememberLog(id, next);
+      return next;
+    } catch {
       this.logCache.delete(id);
       return undefined;
     }
-    this.rememberLog(id, entry); // recency: the entry read most recently is the last one evicted
-    return entry;
   }
 
   private rememberLog(id: string, entry: LogCacheEntry): void {
     this.logCache.delete(id);
     this.logCache.set(id, entry);
-    while (this.logCache.size > LOG_CACHE_ENTRIES) {
+    let bytes = 0;
+    for (const cached of this.logCache.values()) bytes += cached.bytes;
+    // The newest entry is never evicted: `size > 1` keeps the one just read, however large it is.
+    while (
+      this.logCache.size > 1 &&
+      (this.logCache.size > LOG_CACHE_ENTRIES || bytes > this.cacheBytes)
+    ) {
       const oldest = this.logCache.keys().next().value;
       if (oldest === undefined) break;
+      bytes -= this.logCache.get(oldest)!.bytes;
       this.logCache.delete(oldest);
     }
   }
@@ -507,7 +562,9 @@ export class SessionEventJournal {
     const entry = this.logCache.get(id);
     if (!entry) return;
     if (entry.dataVersion !== this.dataVersion()) {
-      this.logCache.delete(id);
+      // Another connection committed first, so its events may sit between the entry and these. The appended
+      // events are already committed, so reading the tail picks them up in seq order together with theirs.
+      this.catchUp(id, entry);
       return;
     }
     const stored = appended.map((event) => ({ ...event, data: structuredClone(event.data) }));
@@ -518,6 +575,7 @@ export class SessionEventJournal {
       // checked; one that has not been checked stays unchecked and pays for the check when a derived read asks.
       readable: entry.readable,
       dataVersion: entry.dataVersion,
+      bytes: entry.bytes + approximateBytes(stored),
     });
   }
 

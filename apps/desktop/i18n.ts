@@ -729,6 +729,7 @@ const messages: Record<string, Pair> = {
   ],
   'ui.stopping': ['正在停止…', 'Stopping...'],
   'ui.sessionShort': ['会话 {id}', 'Session {id}'],
+  'ui.loadMoreSessions': ['加载更早的会话', 'Show older sessions'],
   'ui.commandNeedsDescription': ['/{name} 需要描述内容。', '/{name} requires a description.'],
   'ui.maxImages': ['每条消息最多附加 4 张图片', 'Each message can include at most 4 images'],
   'ui.maxImageTotal': ['图片合计不能超过 10MB', 'Images must total no more than 10 MB'],

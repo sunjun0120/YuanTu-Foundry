@@ -9,6 +9,9 @@ import { addUsage, emptyStatistics } from '../../../packages/protocol/statistics
 import { createProvider, readConfig } from '../../../packages/providers/index.ts';
 import { executionEnvironment, safeError } from '../../shared/runtime.ts';
 import { ownedSession, required, withWaiting } from '../params.ts';
+import { createVerifier } from '../approvals.ts';
+import { sessionPermissionPolicy } from '../session-policy.ts';
+import type { HostContext } from '../state.ts';
 import type { Handler } from '../dispatch.ts';
 
 /**
@@ -21,6 +24,14 @@ import type { Handler } from '../dispatch.ts';
  * whose evidence describes something else. And a restore in progress counts as busy for the same reason: the
  * attempt being written would race the one being read.
  */
+/** Verification honors the policy of the session whose task it checks, not another session's selection. */
+const sessionVerifier = (ctx: HostContext, sessionId: string): Approver =>
+  createVerifier({
+    policy: () => sessionPermissionPolicy(ctx, sessionId),
+    options: ctx.options,
+    approvalSources: ctx.approvalSources,
+  });
+
 export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.create': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
@@ -205,7 +216,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
         task,
         baselines,
         undefined,
-        ctx.verifyApprover,
+        sessionVerifier(ctx, sessionId),
       );
       return ctx.store.finishTaskAttempt(sessionId, taskId, attempt.id, {
         status: verified.passed ? 'completed' : 'needs_review',
@@ -242,7 +253,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
         params.resumeApproval === true
           ? async (approval, signal) => {
               signal.throwIfAborted();
-              const decision = ctx.permissionPolicy?.decide(approval);
+              const decision = sessionPermissionPolicy(ctx, sessionId)?.decide(approval);
               if (decision === 'deny') return false;
               if (ctx.store.consumeTaskApproval(sessionId, taskId, approval)) return true;
               if (
@@ -255,7 +266,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
               ctx.store.deferTaskApproval(sessionId, taskId, approval);
               throw new DeferredApprovalError();
             }
-          : ctx.verifyApprover;
+          : sessionVerifier(ctx, sessionId);
       const verified = await verifyTaskAcceptance(
         ctx.workspace,
         task,

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -9,7 +9,7 @@ import { createHostState } from '../apps/agent-host/state.ts';
 import type { HostServices } from '../apps/agent-host/services.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import { HookRegistry } from '../packages/tools/hooks.ts';
-import { SPILL_DIRECTORY, removeSpills } from '../packages/tools/spill.ts';
+import { SPILL_DIRECTORY, removeSpills, sweepSpills } from '../packages/tools/spill.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { ImageAttachment } from '../packages/protocol/index.ts';
 
@@ -140,4 +140,62 @@ test('deleting a session tree drops the bytes only the tree named, in one pass',
   }
   assert.throws(() => store.get(child.id), 'the child went with its parent');
   assert.equal(store.messages(other.id)[0]?.role, 'user');
+});
+
+test('the startup sweep removes old orphaned spills, keeps live and recent ones, and enforces the budget', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-sweep-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const age = async (target: string, ms: number) => {
+    const at = new Date(now - ms);
+    await utimes(target, at, at);
+  };
+  const live = await spill(root, 'live');
+  const staleOrphan = await spill(root, 'gone-long-ago');
+  const freshOrphan = await spill(root, 'maybe-another-store');
+  await age(live, 10 * day);
+  await age(staleOrphan, 2 * day);
+  await age(freshOrphan, 60_000);
+
+  const swept = await sweepSpills({
+    workspace: root,
+    sessionExists: (id) => id === 'live',
+    now,
+  });
+  assert.equal(swept.orphans, 1);
+  assert.equal(await exists(staleOrphan), false, 'an orphan past the grace period is removed');
+  assert.equal(await exists(freshOrphan), true, 'a recent orphan may belong to another store');
+  assert.equal(await exists(live), true, 'a session that exists keeps its spills however old');
+
+  // Budget: three files of 10 bytes against a 25-byte budget lose the oldest one.
+  const files = ['old', 'mid', 'new'].map((name) => path.join(live, `${name}.txt`));
+  for (const [index, file] of files.entries()) {
+    await writeFile(file, '0123456789');
+    await age(file, (3 - index) * 60_000);
+  }
+  await rm(path.join(live, 'run_command-x.txt'));
+  await rm(freshOrphan, { recursive: true });
+  const trimmed = await sweepSpills({
+    workspace: root,
+    sessionExists: () => true,
+    now,
+    maxTotalBytes: 25,
+  });
+  assert.equal(trimmed.trimmed, 1);
+  assert.deepEqual(
+    await Promise.all(files.map(exists)),
+    [false, true, true],
+    'the oldest file goes first',
+  );
+});
+
+test('the sweep of a workspace with no spill directory is a no-op', async () => {
+  assert.deepEqual(
+    await sweepSpills({
+      workspace: path.join(tmpdir(), 'yuantu-no-such-workspace'),
+      sessionExists: () => false,
+    }),
+    { orphans: 0, trimmed: 0 },
+  );
 });

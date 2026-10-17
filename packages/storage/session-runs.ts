@@ -10,6 +10,7 @@ import type { WorkspaceBinding } from '../protocol/workspaces.ts';
 import { WorkspaceFailure } from '../protocol/workspaces.ts';
 import { type PendingSessionInput, type SessionEventType } from './events.ts';
 import type { Session } from './session-schema.ts';
+import { ownStartedAt } from '../platform/process-identity.ts';
 import { ageSuffix, deadOwner, leaseEvidence, RUN_INTERRUPTED_REASON } from './session-schema.ts';
 
 /** Run lifecycle, interruption recovery and leases. All writes borrow the store transaction and event writer. */
@@ -176,13 +177,14 @@ export class SessionRuns {
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(
-          `SELECT s.id AS sessionId, s.active_run AS runId, r.owner_pid AS ownerPid
+          `SELECT s.id AS sessionId, s.active_run AS runId, r.owner_pid AS ownerPid,
+                  r.owner_started_at AS ownerStartedAt
            FROM sessions s JOIN runs r ON r.id=s.active_run
            WHERE (s.parent_session_id IS NULL OR s.fork_message_count IS NOT NULL)
              AND r.status='running' AND (? IS NULL OR s.workspace=?)`,
         )
         .all(workspace ?? null, workspace ?? null)
-        .filter((row) => deadOwner(row.ownerPid));
+        .filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
       /** How many were actually converged: a session that threw above is not one of them. */
       let converged = 0;
       for (const row of rows) {
@@ -240,16 +242,11 @@ export class SessionRuns {
         );
       if (session.activeRun) {
         const row = this.port.db
-          .prepare('SELECT owner_pid FROM runs WHERE id=?')
+          .prepare('SELECT owner_pid,owner_started_at FROM runs WHERE id=?')
           .get(session.activeRun);
         let alive = false;
         if (row) {
-          try {
-            process.kill(Number(row.owner_pid), 0);
-            alive = true;
-          } catch (error) {
-            alive = (error as NodeJS.ErrnoException).code !== 'ESRCH';
-          }
+          alive = !deadOwner(row.owner_pid, row.owner_started_at);
           // This process ended that run and could not write so: its owner is alive, but the run is not.
           if (Number(row.owner_pid) === process.pid && FORSAKEN_RUNS.has(session.activeRun))
             alive = false;
@@ -265,9 +262,9 @@ export class SessionRuns {
       const runId = randomUUID();
       this.port.db
         .prepare(
-          "INSERT INTO runs(id,session_id,owner_pid,status,started_at) VALUES(?,?,?,'running',?)",
+          "INSERT INTO runs(id,session_id,owner_pid,status,started_at,owner_started_at) VALUES(?,?,?,'running',?,?)",
         )
-        .run(runId, id, process.pid, new Date().toISOString());
+        .run(runId, id, process.pid, new Date().toISOString(), ownStartedAt());
       this.port.db.prepare('UPDATE sessions SET active_run=? WHERE id=?').run(runId, id);
       /**
        * The lease is taken in the same transaction as the run row, so "this session has a writer" and "here is

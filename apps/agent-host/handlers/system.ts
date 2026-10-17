@@ -115,15 +115,23 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
   },
   'permission.update': async (ctx, params) => {
     const next = new PermissionPolicy(params.policy);
-    if (params.sessionId !== undefined)
-      ownedSession(ctx.store, ctx.workspace, required(params, 'sessionId'));
-    ctx.permissionPolicy = next;
-    if (typeof params.sessionId === 'string') ctx.captureAuthority(params.sessionId, true);
-    else
+    const sessionId =
+      params.sessionId === undefined ? undefined : required(params, 'sessionId');
+    if (sessionId !== undefined) ownedSession(ctx.store, ctx.workspace, sessionId);
+    // A session's selection is its own: switching session B must not re-decide what session A is waiting on.
+    if (sessionId !== undefined) {
+      ctx.sessionPermissionPolicies.set(sessionId, next);
+      ctx.captureAuthority(sessionId, true);
+    } else {
+      ctx.permissionPolicy = next;
       for (const session of ctx.store.list('', ctx.workspace))
-        ctx.captureAuthority(session.id, true);
+        if (!ctx.sessionPermissionPolicies.has(session.id)) ctx.captureAuthority(session.id, true);
+    }
+    const affected = (owner: string) =>
+      sessionId !== undefined ? owner === sessionId : !ctx.sessionPermissionPolicies.has(owner);
     let resolvedApprovals = 0;
     for (const pending of [...ctx.approvals.values()]) {
+      if (!affected(pending.sessionId)) continue;
       const decision = next.decide(pending.approval);
       if (decision === 'allow' || decision === 'deny') {
         resolvedApprovals++;

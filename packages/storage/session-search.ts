@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { ftsDisplayText } from '../protocol/fts-text.ts';
+import { ftsDisplayText, ftsSnippetTokens } from '../protocol/fts-text.ts';
 import {
   MAX_SEARCH_MATCHES,
   MAX_SEARCH_SESSIONS,
@@ -8,6 +8,15 @@ import {
   writeSearchCursor,
 } from './session-schema.ts';
 import type { Session, SessionSearchHit, SessionSearchPage } from './session-schema.ts';
+
+/** The most sessions one page of the list may hold. */
+export const MAX_SESSION_PAGE = 500;
+/** Which part of the session list to return; empty is all of it (see `SessionSearch.list`). */
+export interface SessionListPage {
+  limit?: number;
+  before?: string;
+  id?: string;
+}
 
 export interface SessionSearchPort {
   readonly db: DatabaseSync;
@@ -22,8 +31,26 @@ export class SessionSearch {
     this.port = port;
   }
 
-  list(query = '', workspace?: string): Session[] {
+  /**
+   * The workspace's conversations, newest first, optionally one page of them.
+   *
+   * `page` is keyset pagination over the list's own order (`created_at DESC, rowid DESC`): `before` names the last
+   * session of the previous page and the next page starts strictly after it, so a session created while a reader
+   * pages never shifts the rows it has not reached yet, and `limit` bounds what one call returns. Without `page` the
+   * whole list comes back, which is what every caller that needs "all of them" (existence checks, recovery) relies
+   * on. A `before` that names no session is an empty page rather than the first one: the reader's cursor is stale.
+   * `id` narrows the answer to that one session under the same visibility rule — the cheap way to ask "is this
+   * conversation still listed" without reading every other one.
+   */
+  list(query = '', workspace?: string, page: SessionListPage = {}): Session[] {
     if (typeof query !== 'string' || query.length > 200) throw new Error('Invalid session search');
+    if (
+      (page.limit !== undefined &&
+        (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > MAX_SESSION_PAGE)) ||
+      (page.before !== undefined && typeof page.before !== 'string') ||
+      (page.id !== undefined && typeof page.id !== 'string')
+    )
+      throw new Error('Invalid session page');
     // Titles and the full-text index are written with the message, so a list or a search has to see the
     // appends that have not been written yet — a message the user just sent is searchable immediately.
     this.port.flush();
@@ -42,7 +69,10 @@ export class SessionSearch {
              (? IS NOT NULL AND EXISTS (
                SELECT 1 FROM messages m JOIN messages_fts ON messages_fts.rowid=m.seq
                WHERE m.session_id=sessions.id AND messages_fts MATCH ?)))
-         ORDER BY created_at DESC,rowid DESC`,
+           AND (? IS NULL OR (created_at,rowid) < (SELECT created_at,rowid FROM sessions WHERE id=?))
+           AND (? IS NULL OR id=?)
+         ORDER BY created_at DESC,rowid DESC
+         LIMIT ?`,
       )
       .all(
         workspace ?? null,
@@ -51,6 +81,12 @@ export class SessionSearch {
         needle,
         needle ? ftsQuery(needle) : null,
         needle ? ftsQuery(needle) : null,
+        page.before ?? null,
+        page.before ?? null,
+        page.id ?? null,
+        page.id ?? null,
+        // SQLite reads a negative LIMIT as "no limit".
+        page.limit ?? -1,
       ) as unknown as Session[];
   }
 
@@ -154,7 +190,7 @@ export class SessionSearch {
           `SELECT m.session_id AS sessionId, m.seq AS seq,
                   s.workspace,s.created_at AS createdAt,s.active_run AS activeRun,s.title,s.parent_session_id AS parentSessionId,
                   COALESCE(json_extract(m.body,'$.role'),'') AS role,
-                  snippet(messages_fts, 0, '«', '»', '…', 12) AS snippet,
+                  snippet(messages_fts, 0, '«', '»', '…', ${ftsSnippetTokens(needle)}) AS snippet,
                   bm25(messages_fts) AS rank
            FROM messages_fts
            JOIN messages m ON messages_fts.rowid = m.seq

@@ -676,3 +676,19 @@ test('a v30 database has its Chinese messages made searchable, and nothing else 
     db.close();
   }
 });
+
+test('every connection runs WAL with synchronous=NORMAL, which is set per open rather than stored', async (t) => {
+  const root = await scratch(t);
+  const file = path.join(root, 'sync.sqlite');
+  for (const open of ['created', 'reopened']) {
+    const store = new SessionStore(file);
+    try {
+      const db = (store as unknown as { db: DatabaseSync }).db;
+      assert.equal(String(db.prepare('PRAGMA journal_mode').get()?.journal_mode), 'wal', open);
+      // 1 = NORMAL; the default 2 (FULL) would fsync at every commit.
+      assert.equal(Number(db.prepare('PRAGMA synchronous').get()?.synchronous), 1, open);
+    } finally {
+      store.close();
+    }
+  }
+});

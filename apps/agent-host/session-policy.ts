@@ -2,6 +2,15 @@ import { backgroundAuthority } from '../../packages/core/background-deliveries.t
 import { executionPolicy, withExecutionPolicy } from '../../packages/tools/execution-policy.ts';
 import type { HostContext } from './state.ts';
 import type { ExecutionPolicy } from '../../packages/protocol/execution.ts';
+import type { PermissionPolicy } from '../../packages/core/permissions.ts';
+
+/** The permission policy a live session runs under: its own override, else the process default. */
+export function sessionPermissionPolicy(
+  ctx: HostContext,
+  sessionId: string,
+): PermissionPolicy | undefined {
+  return ctx.sessionPermissionPolicies.get(sessionId) ?? ctx.permissionPolicy;
+}
 
 /** Resolve live session authority, including the persisted authority of a cold session. */
 export function sessionExecutionPolicy(ctx: HostContext, sessionId: string): ExecutionPolicy {
