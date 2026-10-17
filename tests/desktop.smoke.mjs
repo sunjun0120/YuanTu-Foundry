@@ -2631,7 +2631,7 @@ if(!$process) { throw 'Launcher child missing' }
 }
 test(
   'actual Windows launcher shows its window and duplicate launch restores the existing instance',
-  { skip: process.platform !== 'win32', timeout: 60000 },
+  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-launch-'));
     const profile = path.join(root, 'profile');

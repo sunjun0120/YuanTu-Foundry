@@ -1,6 +1,6 @@
 import type { PermissionPolicy } from '../../packages/core/permissions.ts';
 import { readPermissionPolicy } from '../../packages/core/permissions.ts';
-import { assertEnvironment } from '../../packages/protocol/settings.ts';
+import { assertEnvironment, parseSetting } from '../../packages/protocol/settings.ts';
 import { resolveSandboxConfig, type SandboxConfig } from '../../packages/tools/sandbox.ts';
 import { parseArgs, type Options } from '../shared/args.ts';
 import { applySandboxDefaults, resolveWorkspace } from '../shared/runtime.ts';
@@ -55,11 +55,15 @@ export function resolveLaunch(argv: string[]): HostLaunch | null {
     return null;
   }
   if (positionals.length) throw new Error('Agent Host accepts options only');
-  validateHostListener(options.listen, process.env.YUANTU_HOST_TOKEN);
+  validateHostListener(
+    options.listen,
+    parseSetting(process.env, 'YUANTU_HOST_TOKEN') as string | undefined,
+  );
   const workspace = resolveWorkspace(options.workspace ?? process.cwd());
   const launchSandbox = resolveSandboxConfig();
   const permissionPolicy = readPermissionPolicy(
-    options.permissionPolicy ?? process.env.YUANTU_PERMISSION_POLICY,
+    options.permissionPolicy ??
+      (parseSetting(process.env, 'YUANTU_PERMISSION_POLICY') as string | undefined),
   );
   return { options, workspace, launchSandbox, permissionPolicy };
 }

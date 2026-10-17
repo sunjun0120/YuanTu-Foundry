@@ -148,6 +148,7 @@ export class OpenAIProvider implements Provider {
                       parameters: tool.inputSchema,
                     },
                   })),
+                  ...(request.toolChoice === 'none' ? { tool_choice: 'none' } : {}),
                 }
               : {}),
           }),

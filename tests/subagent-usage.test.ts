@@ -413,3 +413,60 @@ test('an already rejected background resident turn cannot finalize the parent su
   assert.equal(result.status, 'failed');
   assert.match(result.error!, /Resident sub-agent settlement failed/);
 });
+
+test('a resident follow-up that spends past the child token budget is stopped and says why', async (t) => {
+  const f = await fixture(t);
+  let parentRound = 0,
+    childRequests = 0;
+  const seenByParent: string[] = [];
+  const childTools = () => {
+    const tools = new ToolRegistry();
+    tools.register({
+      name: 'noop',
+      description: 'Does nothing',
+      inputSchema: { type: 'object', properties: {} },
+      async execute() {
+        return { isError: false, content: 'ok' };
+      },
+    });
+    return tools;
+  };
+  const provider: Provider = {
+    async complete(request) {
+      const child = request.system.includes('You are a sub-agent delegated by a parent agent');
+      if (child) {
+        childRequests++;
+        // The first turn answers; every follow-up request keeps working, 1020 tokens at a time.
+        return childRequests === 1
+          ? f.response(true, 'submit_report', {
+              summary: 'checked',
+              findings: [{ statement: 'checked', evidence: 'fixture' }],
+            })
+          : f.response(true, 'noop');
+      }
+      seenByParent.push(request.messages.map((message) => message.content).join('\n'));
+      parentRound++;
+      if (parentRound === 1)
+        return f.response(false, 'delegate_task', { tasks: [{ objective: 'Check the fixture' }] });
+      if (parentRound === 2)
+        return f.response(false, 'send_message', {
+          childSessionId: f.residency.list()[0]!.childSessionId,
+          message: 'Keep going',
+          wait: true,
+        });
+      return f.response(false);
+    },
+  };
+  const result = await new Agent({
+    ...f,
+    provider,
+    tools: new ToolRegistry(),
+    approve: async () => true,
+    subagents: { enabled: true, maxTokens: 4000 },
+    subagentResidency: f.residency,
+    childTools,
+  }).run({ sessionId: f.session.id, prompt: 'Delegate, then ask again' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.ok(childRequests < 10, `the follow-up was stopped (${childRequests} child requests)`);
+  assert.match(seenByParent.at(-1)!, /token budget of 4000/);
+});

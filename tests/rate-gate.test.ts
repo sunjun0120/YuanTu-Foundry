@@ -47,6 +47,32 @@ test('a 429 halves the limit from what was in flight, and successes raise it bac
   assert.equal(gate.limit, 6);
 });
 
+test('eight concurrent 429 responses halve the limit only once per recovery window', async () => {
+  const gate = new AdaptiveConcurrency(64);
+  const hold = deferred();
+  const requests = Array.from({ length: 8 }, () =>
+    gate.run(async () => {
+      await hold.promise;
+      throw limited();
+    }),
+  );
+  const results = Promise.allSettled(requests);
+  hold.resolve();
+  assert.ok((await results).every((result) => result.status === 'rejected'));
+  assert.equal(gate.limit, 4);
+  const next = deferred();
+  const retries = Array.from({ length: 4 }, () =>
+    gate.run(async () => {
+      await next.promise;
+      throw limited();
+    }),
+  );
+  const retried = Promise.allSettled(retries);
+  next.resolve();
+  assert.ok((await retried).every((result) => result.status === 'rejected'));
+  assert.equal(gate.limit, 2, 'new requests may start the next recovery window');
+});
+
 test('requests over the limit wait in order, and a waiting request honours its abort signal', async () => {
   const gate = new AdaptiveConcurrency(64);
   await assert.rejects(

@@ -1,5 +1,5 @@
 import { InvariantRegistry } from '../../packages/core/invariants.ts';
-import { resolveRunLimits } from '../../packages/protocol/settings.ts';
+import { parseSetting, resolveRunLimits } from '../../packages/protocol/settings.ts';
 import { emittedEventTypesInvariant } from '../../packages/protocol/invariants.ts';
 import { logTablesAgreeInvariant } from '../../packages/storage/invariants.ts';
 import type { SessionStore } from '../../packages/storage/sqlite.ts';
@@ -81,7 +81,10 @@ export async function openHostServices(options: Options, workspace: string): Pro
   const terminals = new TerminalSessions(workspace);
   // One hook set for the whole host lifetime, shared with every per-run tool registry: session hooks
   // have to outlive a run, and a per-run registry is rebuilt on each `run.start`.
-  const hooks = await loadHookRegistry(options.hooks ?? process.env.YUANTU_HOOKS_MODULE, workspace);
+  const hooks = await loadHookRegistry(
+    options.hooks ?? (parseSetting(process.env, 'YUANTU_HOOKS_MODULE') as string | undefined),
+    workspace,
+  );
   /**
    * The process's runtime invariant registry.
    *

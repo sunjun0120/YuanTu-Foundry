@@ -20,7 +20,7 @@ const call = (name: string, args: Record<string, unknown>) => ({
 
 test(
   'Windows validation runs npm scripts through the native command interpreter',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     const { root, tools } = await fixture(t);
     t.after(() => tools.close());

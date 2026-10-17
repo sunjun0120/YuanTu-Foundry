@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
+import { ftsIndexText, ftsMatchQuery } from '../protocol/fts-text.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
 import { resourceText } from '../resources/files.ts';
@@ -122,14 +123,52 @@ export class KnowledgeStore {
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, path TEXT NOT NULL, digest TEXT NOT NULL,
         updated_at TEXT NOT NULL, UNIQUE(scope,path)
       );
-      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title,content,tokenize='unicode61');
-      CREATE TRIGGER IF NOT EXISTS knowledge_ai AFTER INSERT ON knowledge_items BEGIN
-        INSERT INTO knowledge_fts(rowid,title,content) VALUES(new.rowid,new.title,new.content); END;
-      CREATE TRIGGER IF NOT EXISTS knowledge_ad AFTER DELETE ON knowledge_items BEGIN
-        DELETE FROM knowledge_fts WHERE rowid=old.rowid; END;
-      CREATE TRIGGER IF NOT EXISTS knowledge_au AFTER UPDATE ON knowledge_items BEGIN
-        DELETE FROM knowledge_fts WHERE rowid=old.rowid;
-        INSERT INTO knowledge_fts(rowid,title,content) VALUES(new.rowid,new.title,new.content); END;`);
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(title,content,tokenize='unicode61');`);
+    this.reindexLegacyFts();
+  }
+  /**
+   * Replace the raw-copy triggers of earlier builds with an index this class writes itself.
+   *
+   * The index holds the segmented form of each row (see `ftsIndexText`), which SQL cannot compute, so
+   * `pinDocument`/`unpinDocument` write `knowledge_fts` beside `knowledge_items` in the same transaction instead
+   * of a trigger copying the columns verbatim. A trigger's presence is the evidence that the index was written the
+   * old way — by a build before this one, or by an older build that reopened the file after it and recreated its
+   * triggers — so finding one is what drops them and rebuilds the whole index from the rows.
+   */
+  private reindexLegacyFts(): void {
+    const legacy = () =>
+      this.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN ('knowledge_ai','knowledge_ad','knowledge_au')",
+        )
+        .all().length > 0;
+    if (!legacy()) return;
+    this.transaction(() => {
+      // Asked again under the write lock: another process may have rebuilt it while this one waited.
+      if (!legacy()) return;
+      this.db.exec(`DROP TRIGGER IF EXISTS knowledge_ai; DROP TRIGGER IF EXISTS knowledge_ad;
+        DROP TRIGGER IF EXISTS knowledge_au; DELETE FROM knowledge_fts;`);
+      const insert = this.db.prepare(
+        'INSERT INTO knowledge_fts(rowid,title,content) VALUES(?,?,?)',
+      );
+      for (const row of this.db
+        .prepare('SELECT rowid AS rid,title,content FROM knowledge_items')
+        .all())
+        insert.run(
+          Number(row.rid),
+          ftsIndexText(String(row.title)),
+          ftsIndexText(String(row.content)),
+        );
+    });
+  }
+  /** Remove a document's chunks and their index rows together; the index has no trigger to do it. */
+  private deleteChunks(id: string): void {
+    this.db
+      .prepare(
+        'DELETE FROM knowledge_fts WHERE rowid IN (SELECT rowid FROM knowledge_items WHERE document_id=?)',
+      )
+      .run(id);
+    this.db.prepare('DELETE FROM knowledge_items WHERE document_id=?').run(id);
   }
   close(): void {
     this.db.close();
@@ -226,7 +265,7 @@ export class KnowledgeStore {
           .get(scope)!.n as number;
         if (count >= 64) throw new Error('Document limit reached (64)');
       }
-      this.db.prepare('DELETE FROM knowledge_items WHERE document_id=?').run(id);
+      this.deleteChunks(id);
       this.db
         .prepare(
           'INSERT INTO knowledge_documents(id,scope,path,digest,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET digest=excluded.digest,updated_at=excluded.updated_at',
@@ -238,19 +277,15 @@ export class KnowledgeStore {
         offset < content.length;
         offset += DOCUMENT_CHUNK_CHARS - DOCUMENT_CHUNK_OVERLAP
       ) {
-        this.db
+        const chunk = content.slice(offset, offset + DOCUMENT_CHUNK_CHARS);
+        const { lastInsertRowid } = this.db
           .prepare(
             "INSERT INTO knowledge_items(id,scope,kind,title,content,source,document_id,updated_at) VALUES(?,?,'document',?,?,?,?,?)",
           )
-          .run(
-            `${id}:${chunks}`,
-            scope,
-            file,
-            content.slice(offset, offset + DOCUMENT_CHUNK_CHARS),
-            file,
-            id,
-            now,
-          );
+          .run(`${id}:${chunks}`, scope, file, chunk, file, id, now);
+        this.db
+          .prepare('INSERT INTO knowledge_fts(rowid,title,content) VALUES(?,?,?)')
+          .run(lastInsertRowid, ftsIndexText(file), ftsIndexText(chunk));
         chunks++;
       }
       return { path: file, updatedAt: now, chunks };
@@ -260,7 +295,7 @@ export class KnowledgeStore {
     const scope = canonical(root),
       id = idFor(scope, documentPath(relative));
     this.transaction(() => {
-      this.db.prepare('DELETE FROM knowledge_items WHERE document_id=?').run(id);
+      this.deleteChunks(id);
       this.db.prepare('DELETE FROM knowledge_documents WHERE id=? AND scope=?').run(id, scope);
     });
   }
@@ -333,18 +368,16 @@ export class KnowledgeStore {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20)
       throw new Error('Invalid knowledge result limit');
     this.refreshDocuments(scope);
-    const words = [...q.matchAll(/[\p{L}\p{N}_]+/gu)].map((match) => match[0]!).slice(0, 8);
-    const match = words.length
-      ? words.map((word) => `"${word}"`).join(' AND ')
-      : `"${q.replaceAll('"', '""')}"`;
+    // Words are segmented the way the index is (see `ftsIndexText`), so a Chinese word matches inside a
+    // sentence and two separated words match the same chunk.
+    const match = ftsMatchQuery(q, 8) ?? `"${ftsIndexText(q).replaceAll('"', '""')}"`;
     // Ranking happens in SQL. The previous version took `LIMIT 120` with no ORDER BY and only then
     // scored title (+4) and content (+2) in JS, ordered by `updatedAt` for ties. Two consequences:
     // the window's contents were decided by the query plan (rows come back in `document_id` hash
     // order, so which documents survived was arbitrary), and FTS5 relevance was never consulted at
     // all. bm25() now supplies real relevance — weighted toward the title column — the explicit
-    // title substring test still runs first because unicode61 tokenisation does not match a CJK
-    // phrase as a substring, and `updated_at` is demoted to a final tie-break instead of deciding
-    // between equally-scored documents.
+    // title substring test still runs first so a title naming the whole query wins, and `updated_at`
+    // is demoted to a final tie-break instead of deciding between equally-scored documents.
     //
     // `chunk_rank` keeps the best-scoring chunk per document: 1600-character windows overlap by 200
     // characters to retain boundary context. Without deduplication a long file could occupy several slots.

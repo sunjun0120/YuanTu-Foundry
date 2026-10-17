@@ -1,7 +1,7 @@
 // @test-serial desktop-ui: Launches real Electron windows.
-// Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
 import { waitForPage } from './page-wait.mjs';
 import test from 'node:test';
+import { PRODUCT_SCOPE } from '../packages/protocol/product-scope.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -983,9 +983,14 @@ test(
 
 // ---- merged from mcp-settings.smoke.mjs ----
 
-test.skip(
+test(
   'desktop MCP settings test drafts, persist servers and expose saved tools to chat',
-  { timeout: 60000 },
+  {
+    skip: PRODUCT_SCOPE.mcpManagement
+      ? false
+      : 'MCP management is outside the current product scope',
+    timeout: 60000,
+  },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-ui-'));
     let turn = 0;

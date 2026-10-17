@@ -7,10 +7,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
-test.skip(
+test(
   'Python SDK runs real Host, streams Unicode, approves writes, reloads and cancels',
-  { timeout: 30000 },
+  { timeout: 30000, skip: pausedSkip('sdk') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-python-'));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -78,9 +79,9 @@ test.skip(
   },
 );
 
-test.skip(
+test(
   'Python SDK failure and cancellation contract regressions',
-  { timeout: 15000 },
+  { timeout: 15000, skip: pausedSkip('sdk') },
   async () => {
     const child = spawn(
       process.env.PYTHON_SDK_EXECUTABLE ?? 'python',

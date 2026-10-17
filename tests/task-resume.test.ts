@@ -601,6 +601,70 @@ test('event triggers fire on matching events and cannot be restarted by their ow
   scheduler.stop();
 });
 
+test('an event that arrives while the Host is busy is not lost', async (t) => {
+  const { store, session } = await fixture(t);
+  const source = store.createTask(session.id, { title: 'Source' });
+  const chained = store.createTask(session.id, {
+    title: 'Chained',
+    trigger: { kind: 'event', enabled: true, on: 'task.completed', taskId: source.id },
+  });
+  let busy = true;
+  const fired: string[] = [];
+  const scheduler = new TaskScheduler({
+    store,
+    workspace: (await fixtureWorkspace(store, session.id)) ?? '',
+    canRun: () => !busy,
+    run: async (scheduled) => {
+      fired.push(scheduled.task.id);
+    },
+  });
+  // Another session holds the Host when the source completes.
+  assert.deepEqual(
+    await scheduler.notify({ name: 'task.completed', sessionId: session.id, taskId: source.id }),
+    [],
+  );
+  assert.deepEqual(fired, []);
+  busy = false;
+  // The next look of any kind starts what had to wait, once.
+  const started = await scheduler.notify({ name: 'run.finished', sessionId: 'elsewhere' });
+  assert.deepEqual(
+    started.map((entry) => entry.task.id),
+    [chained.id],
+  );
+  assert.deepEqual(await scheduler.notify({ name: 'run.finished', sessionId: 'elsewhere' }), []);
+  assert.deepEqual(fired, [chained.id]);
+  scheduler.stop();
+});
+
+test('a task that keeps failing waits before its next automatic start', async (t) => {
+  const { store, session } = await fixture(t);
+  const source = store.createTask(session.id, { title: 'Source' });
+  const failing = store.createTask(session.id, {
+    title: 'Failing',
+    trigger: { kind: 'event', enabled: true, on: 'task.completed', taskId: source.id },
+  });
+  let attempts = 0;
+  const scheduler = new TaskScheduler({
+    store,
+    workspace: (await fixtureWorkspace(store, session.id)) ?? '',
+    canRun: () => true,
+    run: async () => {
+      attempts++;
+      return { status: 'failed' as const, error: 'credential revoked' };
+    },
+  });
+  const event = { name: 'task.completed' as const, sessionId: session.id, taskId: source.id };
+  for (let i = 0; i < 3; i++) await scheduler.notify(event);
+  assert.equal(attempts, 3);
+  assert.deepEqual(await scheduler.notify(event), [], 'the fourth start waits');
+  assert.equal(attempts, 3);
+  // A person editing or approving the task gives it a fresh chance.
+  scheduler.clearFailures(failing.id);
+  await scheduler.notify(event);
+  assert.equal(attempts, 4);
+  scheduler.stop();
+});
+
 async function fixtureWorkspace(
   store: SessionStore,
   sessionId: string,

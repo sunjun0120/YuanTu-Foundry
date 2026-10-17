@@ -276,6 +276,40 @@ test('a workspace that changed between runs appends the outline instead of rewri
   assert.doesNotMatch(requests[0]!.messages.map((m) => m.content).join('\n'), /added\.ts/);
 });
 
+test('edits within one run do not append a fresh outline every round', async (t) => {
+  const { root, store, sessionId } = await fixture(t, {
+    async complete() {
+      return reply('Done');
+    },
+  });
+  const requests: Message[][] = [];
+  let round = 0;
+  const provider: Provider = {
+    async complete(request) {
+      requests.push(request.messages);
+      round++;
+      if (round > 3) return reply('Done');
+      // Each round adds a file with a new symbol, which is what changes the outline.
+      await writeFile(
+        path.join(root, `added${round}.ts`),
+        `export function added${round}() {}
+`,
+      );
+      return {
+        text: '',
+        toolCalls: [{ id: `list-${round}`, name: 'list_files', arguments: { path: '.' } }],
+        finishReason: 'tool_calls',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    },
+  };
+  await new Agent({ store, provider, tools: createTools(root), approve: async () => true }).run({
+    sessionId,
+    prompt: '加几个文件',
+  });
+  assert.equal(snapshotsIn(requests.at(-1)!, 'workspace-outline').length, 1);
+});
+
 test('an unchanged workspace announces nothing, and the second request is the same prefix', async (t) => {
   const { root, store, sessionId } = await fixture(t, {
     async complete() {

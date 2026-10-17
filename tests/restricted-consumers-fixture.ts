@@ -5,10 +5,13 @@ import path from 'node:path';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
 
-export const windows = { skip: process.platform !== 'win32', timeout: 60000 };
+export const windows = { skip: process.platform !== 'win32' && 'needs Windows', timeout: 60000 };
 
 export const native = {
-  skip: process.platform !== 'win32' && process.platform !== 'darwin',
+  skip:
+    process.platform !== 'win32' &&
+    process.platform !== 'darwin' &&
+    'needs Windows or macOS native sandbox',
   timeout: 60000,
 };
 

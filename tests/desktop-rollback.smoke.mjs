@@ -11,7 +11,10 @@ import { _electron as electron } from 'playwright';
 
 test(
   'a retained old desktop refuses a future schema; offline maintenance restores its compatible backup and opens the retained transcript',
-  { skip: !process.env.UPGRADE_TEST_JOURNAL, timeout: 120000 },
+  {
+    skip: !process.env.UPGRADE_TEST_JOURNAL && 'needs UPGRADE_TEST_JOURNAL from an upgrade fixture',
+    timeout: 120000,
+  },
   async (t) => {
     const original = JSON.parse(
       await readFile(path.resolve(process.env.UPGRADE_TEST_JOURNAL), 'utf8'),

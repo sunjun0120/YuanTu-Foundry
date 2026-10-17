@@ -74,6 +74,14 @@ export interface WorkflowDeps {
     options: { model?: string; schema?: Record<string, unknown> },
     signal: AbortSignal,
   ) => Promise<SubAgentAnswer>;
+  /**
+   * The run's own per-run sub-agent total, when it is lower than the workflow ceiling.
+   *
+   * `agent()` is admitted against the same per-run count as `delegate_task`, so a script told it may start 24
+   * children on a run that may start 8 failed at the ninth with a limit it was never shown. The description and
+   * the script-side check use the smaller number, and the coordinator still enforces what is actually left.
+   */
+  maxAgents?: number;
   /** Tests only: see `CodeWorkerData.exposeProcessForTests`. The coordinator never sets it. */
   exposeProcessForTests?: boolean;
 }
@@ -89,6 +97,10 @@ interface AgentCall {
   error?: string;
 }
 export function workflowTool(deps: WorkflowDeps): Tool {
+  const maxAgents = Math.min(
+    WORKFLOW_CEILINGS.maxAgents,
+    deps.maxAgents ?? WORKFLOW_CEILINGS.maxAgents,
+  );
   return {
     name: WORKFLOW,
     cancellationGraceMs: 35000,
@@ -100,7 +112,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
       '`pipeline(items, …stages)` runs every item through the stages in order with no barrier between them, dropping an item that throws; ' +
       '`phase("name")` labels the calls that follow; `log(…)` writes to this result; `args` is the data you passed in. ' +
       'Return a value and it becomes this call’s result. Use it for work with steps or many similar sub-tasks; for a single delegation use `delegate_task`. ' +
-      `A workflow may start at most ${WORKFLOW_CEILINGS.maxAgents} sub-agents, and the whole script runs under this call’s deadline. ` +
+      `A workflow may start at most ${maxAgents} sub-agents, shared with any \`delegate_task\` calls in this run, and the whole script runs under this call’s deadline. ` +
       'This is not the scheduled-task feature: nothing here runs later or on a timer.',
     inputSchema: {
       type: 'object',
@@ -170,7 +182,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
            * knows how many children the *run* has left.
            */
           limits: {
-            maxAgents: WORKFLOW_CEILINGS.maxAgents,
+            maxAgents,
             maxPromptChars: WORKFLOW_CEILINGS.maxPromptChars,
             maxNameChars: WORKFLOW_CEILINGS.maxNameChars,
             maxPhases: WORKFLOW_CEILINGS.maxPhases,
@@ -296,7 +308,7 @@ export function workflowTool(deps: WorkflowDeps): Tool {
           const schema = options.schema as Record<string, unknown> | undefined;
           // Counted before the call rather than after: a `parallel` of twenty agents must not be able to pass the
           // cap twenty times before any of them has finished.
-          if (calls.length >= WORKFLOW_CEILINGS.maxAgents)
+          if (calls.length >= maxAgents)
             return misuse(
               message.id,
               `This workflow has already started ${calls.length} sub-agents, which is its limit; no further agent() call is accepted.`,

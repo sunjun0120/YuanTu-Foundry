@@ -8,7 +8,7 @@ import { WindowsSandboxSetup, parseSandboxSetupCommand } from '../apps/desktop/s
 const helper = fileURLToPath(
   new URL('../packages/tools/windows-sandbox/yuantu-appcontainer.exe', import.meta.url),
 );
-const windows = { skip: process.platform !== 'win32' };
+const windows = { skip: process.platform !== 'win32' && 'needs Windows' };
 
 test(
   'release helper confines dependency DLL loading to System32 and uses static CRT',

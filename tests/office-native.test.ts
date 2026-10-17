@@ -31,7 +31,7 @@ test.before(async () => {
 
 test(
   'Word and PowerPoint creation, template edit and PDF previews retain content',
-  { skip: process.platform !== 'win32', timeout: 240000 },
+  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 240000 },
   async (t) => {
     try {
       const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-workflow-'));
@@ -126,7 +126,7 @@ function officeEnvironmentReason(text: string): string | undefined {
 
 test(
   'Office tools create and verify a PowerPoint file through local Office',
-  { skip: process.platform !== 'win32', timeout: 120000 },
+  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 120000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-ppt-tools-'));
     t.after(() => rm(root, { recursive: true, force: true }));

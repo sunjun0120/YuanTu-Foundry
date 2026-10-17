@@ -369,7 +369,7 @@ Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复
 
 工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。钩子命令通过所选沙箱执行；运行器故障不触发宿主重试。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。
 
-**钩子只在工作区被信任后才安装。** 声明来自仓库，打开一个克隆来的仓库并发出第一条消息不应就执行其中的 `SessionStart`、`UserPromptSubmit` 等命令（默认原生沙箱在 Windows 上不限制读取与网络）。信任记录按工作区保存为全部声明（来源文件、事件、matcher、命令，按声明顺序）的 SHA-256 摘要，存放在用户状态目录的 `hook-trust.json`（默认 `~/.yuantu/hook-trust.json`，随 `YUANTU_STATE_DIR` 移动），从不写入工作区；状态目录落在工作区内时拒绝记录、也不认可其中的记录。只有当前声明的摘要与记录一致时 Host 才安装钩子；任何一处命令、matcher、事件或来源文件变化都会使信任失效（超时秒数不计入摘要）。
+**钩子只在工作区被信任后才安装。** 声明来自仓库，打开一个克隆来的仓库并发出第一条消息不应就执行其中的 `SessionStart`、`UserPromptSubmit` 等命令（默认原生沙箱在 Windows 上不限制读取与网络）。信任记录按工作区保存为全部声明（来源文件、事件、matcher、命令，按声明顺序）以及命令中引用的工作区内已存在常规文件内容哈希（按 token 出现顺序）的 SHA-256 摘要，存放在用户状态目录的 `hook-trust.json`（默认 `~/.yuantu/hook-trust.json`，随 `YUANTU_STATE_DIR` 移动），从不写入工作区；状态目录落在工作区内时拒绝记录、也不认可其中的记录。只有当前摘要与记录一致时 Host 才安装钩子；任何一处命令、matcher、事件、来源文件或被引用文件内容变化都会使信任失效（超时秒数不计入摘要）。文件读取失败或超过 4 MiB 时拒绝信任，不以截断内容代替完整哈希。命令采用支持引号路径的简单分词，不展开变量，也不递归追踪脚本导入。
 
 - **桌面端**在启动或切换到某工作区、Host 启动之前检查：发现未信任的钩子时弹窗列出每条命令及其来源文件，选择「信任并启用」写入记录，「本次不启用」不写任何记录，本次桌面进程内同一组声明不再询问，下次启动或声明变化后再问。
 - **Host 与 CLI 不交互**：遇到未信任的钩子一律不启用，并在 stderr 打印一次 `[hook] … not enabled` 提示，说明来源文件与处理办法。
@@ -613,7 +613,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 69 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 70 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -644,6 +644,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SANDBOX_NETWORK` | `denied` / `unrestricted` | 命令网络权限；不支持所需隔离时拒绝执行 |
 | `YUANTU_SANDBOX_SPEC` | `string` | （内部）沙箱启动器的单次命令载荷 |
 | `YUANTU_SANDBOX_ACL_SOURCE` | `string` | （内部）Host 快照的 ACL helper 载荷；不向客体传递 |
+| `YUANTU_PROGRAM_LAUNCH_DIR` | `string` | （内部）程序运行器离开工作区前记录的启动目录；由运行器覆盖 |
 | `YUANTU_SANDBOX_IMAGE` | `string` | 已停用：仅兼容旧配置，原生沙箱不读取镜像设置 |
 | `YUANTU_PTY` | `string` | 终端（terminal_* 工具）使用的 PTY 后端名，默认为内置的 node-pty |
 | `YUANTU_ALLOW_PRIVATE_NETWORK` | `0` / `1` | 是否允许访问私有网段 |
@@ -712,10 +713,10 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 工具（默认按需加载，首个请求） | 30 个 / 16.6 KB | `specs({ loaded: new Set() })`（默认 `YUANTU_TOOL_MODE=deferred`） |
 | 工具（折叠为 `run_code`） | 1 个 / 10.2 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
-| 会话 schema 版本 | v30 | 新建库上的 `PRAGMA user_version` |
+| 会话 schema 版本 | v31 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 256 个 | `tests/*.test.ts` |
+| 行为测试文件 | 257 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |

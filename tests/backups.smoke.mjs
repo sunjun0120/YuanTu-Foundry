@@ -7,10 +7,14 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { PRODUCT_SCOPE } from '../packages/protocol/product-scope.ts';
 
 test(
   'desktop settings omit backups, ignore legacy daily opt-in and preserve manual restore safeguards',
-  { timeout: 60000 },
+  {
+    skip: !PRODUCT_SCOPE.backups && 'backup management is outside the current product scope',
+    timeout: 60000,
+  },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-backup-ui-'));
     await mkdir(path.join(root, '.yuantu'));

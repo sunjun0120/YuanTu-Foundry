@@ -92,7 +92,7 @@ test('macOS runtime preflight rejects incompatible hosts, Node versions and arch
 
 test(
   'macOS preparation rejects non-macOS before writing or fetching any runtime',
-  { skip: process.platform === 'darwin' },
+  { skip: process.platform === 'darwin' && 'asserts the non-macOS failure path' },
   async (t) => {
     const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-macos-preflight-'));
     t.after(() => rm(directory, { recursive: true, force: true }));
@@ -158,7 +158,7 @@ test('macOS package commands perform preflight first and bind explicit targets t
 
 test(
   'builder prepack hook leaves Windows packaging alone and rejects macOS builds on a foreign host',
-  { skip: process.platform === 'darwin' },
+  { skip: process.platform === 'darwin' && 'asserts the non-macOS failure path' },
   async (t) => {
     assert.equal(typeof config.beforePack, 'function');
     /**

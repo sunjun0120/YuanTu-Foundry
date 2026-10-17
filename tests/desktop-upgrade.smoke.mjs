@@ -12,7 +12,11 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 
 test(
   'the installed desktop upgrades through its native confirmation and confirms the new Host before retaining its session and encrypted settings',
-  { skip: !process.env.UPGRADE_TEST_INSTALLER, timeout: 300000 },
+  {
+    skip:
+      !process.env.UPGRADE_TEST_INSTALLER && 'needs UPGRADE_TEST_INSTALLER from an upgrade fixture',
+    timeout: 300000,
+  },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-upgrade-'));
     const installed = path.join(root, '中文 升级目录'),

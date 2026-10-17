@@ -1,9 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message, RunResult, SubAgentSummary, Usage } from '../protocol/index.ts';
 import { redactSecrets } from '../core/errors.ts';
+import { ftsIndexText } from '../protocol/fts-text.ts';
 import { createDatabaseBackup, type BackupPolicy } from './database-maintenance.ts';
 import { messageEventType } from './events.ts';
-import { createCurrentSessionSchema } from './session-current-schema.ts';
+import { createCurrentSessionSchema, createLookupIndexes } from './session-current-schema.ts';
 import {
   APPLICATION_ID,
   APPLICATION_NAME,
@@ -409,6 +410,8 @@ export class SessionMigrations {
         );
       if (!attemptColumns.has('resume'))
         this.port.db.exec('ALTER TABLE task_attempts ADD COLUMN resume INTEGER NOT NULL DEFAULT 0');
+      // After the derived columns above: `sessions_parent` names one of them.
+      createLookupIndexes(this.port.db);
       // Session search index (v10). The projection column is filled by `append`, and the triggers keep
       // the FTS index in step for every write path, including the backfill below.
       const messageColumns = new Set(
@@ -564,6 +567,7 @@ export class SessionMigrations {
       { from: 28, upTo: 29, run: () => {} },
       // Older hosts do not honour the cross-process workspace cleanup lease.
       { from: 29, upTo: 30, run: () => {} },
+      { from: 30, upTo: 31, run: (from) => this.migrateSegmentedSearchText(from) },
     ];
   }
 
@@ -596,6 +600,27 @@ export class SessionMigrations {
    * session from it (a blank title is the only one that may be retitled). A session nobody has asked anything
    * stays blank, which is the truth about it.
    */
+  /**
+   * The migration that makes Chinese, Japanese and Korean text searchable (see `ftsIndexText`).
+   *
+   * The projection is re-segmented from the column itself rather than re-derived from `body`: the column is
+   * already the conversational text, while the body is the blob that carries base64 images. Segmenting is
+   * idempotent, so a row the v10 backfill just wrote in the new form is left exactly as it is, and only a row
+   * whose text changes is written — the update trigger then re-indexes that row and no other.
+   */
+  private migrateSegmentedSearchText(fromVersion: number): void {
+    if (fromVersion >= 31) return;
+    const rows = this.port.db
+      .prepare("SELECT seq,search_text AS text FROM messages WHERE search_text<>''")
+      .all();
+    const update = this.port.db.prepare('UPDATE messages SET search_text=? WHERE seq=?');
+    for (const row of rows) {
+      const text = String(row.text);
+      const segmented = ftsIndexText(text);
+      if (segmented !== text) update.run(segmented, Number(row.seq));
+    }
+  }
+
   private migrateMachineTitledSessions(fromVersion: number): void {
     if (fromVersion >= 23) return;
     this.port.db

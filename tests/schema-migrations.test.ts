@@ -615,3 +615,64 @@ test('the oldest schema this build still claims to open gets there too', async (
     store.close();
   }
 });
+
+test('a v30 database has its Chinese messages made searchable, and nothing else rewritten', async (t) => {
+  const root = await scratch(t);
+  const file = path.join(root, 'v30.sqlite');
+  const store = new SessionStore(file);
+  const chinese = store.create(root);
+  store.append(chinese.id, { role: 'user', content: '我们修复了数据库迁移的问题' });
+  const english = store.create(root);
+  store.append(english.id, { role: 'user', content: 'the migration is fixed' });
+  store.close();
+  // What v30 wrote: the projection as plain text, which `unicode61` keeps as one token per clause.
+  const old = new DatabaseSync(file);
+  try {
+    old.exec(
+      "UPDATE messages SET search_text=replace(search_text,char(8203),''); PRAGMA user_version=30",
+    );
+    const phrase = '"​数​据​库​"';
+    assert.equal(
+      Number(
+        old.prepare('SELECT count(*) AS n FROM messages_fts WHERE messages_fts MATCH ?').get(phrase)
+          ?.n,
+      ),
+      0,
+      'the fixture reproduces the defect before the upgrade',
+    );
+  } finally {
+    old.close();
+  }
+
+  const upgraded = new SessionStore(file);
+  try {
+    assert.deepEqual(
+      upgraded.list('数据库', root).map((session) => session.id),
+      [chinese.id],
+    );
+    assert.deepEqual(
+      upgraded.list('migration', root).map((session) => session.id),
+      [english.id],
+      'Latin text searches exactly as before',
+    );
+    assert.match(
+      upgraded.searchSessions('迁移', { workspace: root }).hits[0]!.matches[0]!.snippet,
+      /«迁移»/,
+    );
+  } finally {
+    upgraded.close();
+  }
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    assert.equal(Number(db.prepare('PRAGMA user_version').get()?.user_version), SCHEMA_VERSION);
+    assert.equal(
+      String(
+        db.prepare('SELECT search_text FROM messages WHERE session_id=?').get(english.id)
+          ?.search_text,
+      ),
+      'the migration is fixed',
+    );
+  } finally {
+    db.close();
+  }
+});

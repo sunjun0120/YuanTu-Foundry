@@ -481,6 +481,58 @@ test('cancellation wins when a child returns completed while its coordinator is 
   assert.match(coordinator.summaries[0]!.error!, /Cancelled/);
 });
 
+test('a child that keeps working past its token budget is stopped and says why', async () => {
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const providers = new SubAgentProviderRegistry();
+  providers.register(
+    inProcessProvider({
+      capabilities: [...SUBAGENT_CAPABILITIES],
+      run: async ({ signal }) => {
+        started();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return {
+          sessionId: 'child',
+          status: 'cancelled',
+          text: '',
+          rounds: 3,
+          toolCalls: 3,
+          usage: { inputTokens: 900, outputTokens: 200 },
+        };
+      },
+    }),
+  );
+  const coordinator = new SubAgentCoordinator({
+    options: resolveSubAgentOptions({ timeoutMs: 0, maxTokens: 1000 }),
+    signal: new AbortController().signal,
+    readOnly: false,
+    emit: () => {},
+    onUsage: () => {},
+    providers,
+    provider: 'in-process',
+    parent: { sessionId: 'parent', workspace: '/tmp', depth: 0 },
+  });
+  const call = coordinator
+    .tool()
+    .execute(
+      { tasks: [{ objective: 'Sweep' }] },
+      { signal: new AbortController().signal, approve: async () => true },
+    );
+  await running;
+  const id = coordinator.summaries[0]!.id;
+  coordinator.progress(id, { inputTokens: 500, outputTokens: 100 });
+  assert.equal(coordinator.summaries[0]!.status, 'running', 'under budget, the child keeps going');
+  coordinator.progress(id, { inputTokens: 900, outputTokens: 200 });
+  await call;
+  await coordinator.settle();
+  assert.equal(coordinator.summaries[0]!.status, 'cancelled');
+  assert.match(coordinator.summaries[0]!.error!, /token budget of 1000/);
+});
+
 test('a cancelled delegation call stops the children it admitted', async () => {
   /**
    * A cut-off call must not leave work behind that nobody is waiting for.

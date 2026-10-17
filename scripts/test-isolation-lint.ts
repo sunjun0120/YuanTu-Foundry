@@ -211,9 +211,72 @@ export function inspectIsolation(source: string, file: string): IsolationIssue[]
       rule,
       message,
     });
+  const booleanOnly = (expression: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(expression)) return booleanOnly(expression.expression);
+    if ([ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(expression.kind))
+      return true;
+    if (ts.isPrefixUnaryExpression(expression))
+      return expression.operator === ts.SyntaxKind.ExclamationToken;
+    if (ts.isConditionalExpression(expression))
+      return booleanOnly(expression.whenTrue) && booleanOnly(expression.whenFalse);
+    if (ts.isBinaryExpression(expression)) {
+      if (
+        [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(
+          expression.operatorToken.kind,
+        )
+      )
+        return booleanOnly(expression.left) && booleanOnly(expression.right);
+      return [
+        ts.SyntaxKind.EqualsEqualsToken,
+        ts.SyntaxKind.EqualsEqualsEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsEqualsToken,
+        ts.SyntaxKind.LessThanToken,
+        ts.SyntaxKind.LessThanEqualsToken,
+        ts.SyntaxKind.GreaterThanToken,
+        ts.SyntaxKind.GreaterThanEqualsToken,
+        ts.SyntaxKind.InKeyword,
+        ts.SyntaxKind.InstanceOfKeyword,
+      ].includes(expression.operatorToken.kind);
+    }
+    return (
+      ts.isCallExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      expression.expression.text === 'Boolean'
+    );
+  };
   const visit = (node: ts.Node) => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) &&
+      node.name.text === 'skip' &&
+      node.initializer.kind !== ts.SyntaxKind.FalseKeyword &&
+      booleanOnly(node.initializer)
+    )
+      add(
+        node,
+        'skip-reason',
+        'A conditional skip must explain why: use condition && reason or condition ? reason : false',
+      );
     if (ts.isCallExpression(node)) {
       const origin = member(node.expression);
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ['test', 'it', 'describe'].includes(node.expression.expression.getText(ast)) &&
+        node.expression.name.text === 'skip'
+      )
+        add(
+          node,
+          'skip-reason',
+          'Use test(..., { skip: reason }, ...) instead of test.skip/it.skip/describe.skip',
+        );
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.expression.getText(ast) === 't' &&
+        node.expression.name.text === 'skip' &&
+        node.arguments.length === 0
+      )
+        add(node, 'skip-reason', 'A t.skip call must include a reason');
       if (origin?.module === 'process' && origin.name === 'chdir')
         add(node, 'cwd', 'Use a child process with an explicit cwd; process.chdir is prohibited');
       if (

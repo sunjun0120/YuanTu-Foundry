@@ -19,7 +19,7 @@ const powershell = path.join(
 const executeFile = promisify(execFile);
 const run = (executable: string, args: string[]) =>
   executeFile(executable, args, { env: toolEnvironment() });
-const windows = { skip: process.platform !== 'win32' };
+const windows = { skip: process.platform !== 'win32' && 'needs Windows' };
 function aclEvidence(stdout: string): string {
   // icacls separates the ACL/mandatory-label block from its localized process
   // summary by an empty line. Keep every security entry, omit only that footer.

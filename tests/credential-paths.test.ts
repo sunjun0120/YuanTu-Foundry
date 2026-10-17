@@ -59,7 +59,7 @@ function shortPath(file: string): string {
 
 test(
   'Windows short aliases cannot read or edit a credential file',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     const { root, tools } = await fixture(t);
     const file = path.join(root, 'credentials.json');
@@ -93,7 +93,7 @@ test(
 
 test(
   'Windows short directory aliases cannot create files inside a credential directory',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     const { root, tools } = await fixture(t);
     const directory = path.join(root, 'credentials.json');

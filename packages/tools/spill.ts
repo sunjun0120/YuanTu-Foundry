@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SpilledOutput } from '../protocol/index.ts';
 
@@ -89,6 +90,20 @@ export function spillOutput(input: {
     bytes: Buffer.byteLength(text, 'utf8'),
     lines: text.split('\n').length,
   };
+}
+/**
+ * Remove a session's spill directory under one root.
+ *
+ * Spills are only a readable copy of output the log already shortened, so they have no reader once the session is
+ * gone — but nothing else deletes them, and at up to `MAX_SPILL_FILES_PER_SESSION` files of `MAX_SPILL_BYTES` each
+ * a workspace used to keep every deleted conversation's output forever. The session id is checked to be one path
+ * segment before it is joined, because it reaches here from a request.
+ */
+export async function removeSpills(root: string, sessionId: string): Promise<void> {
+  // Both separators on every platform: POSIX `path` would accept `a\b` as one segment, Windows would not.
+  if (!sessionId || /[\\/]/.test(sessionId) || sessionId === '.' || sessionId === '..')
+    throw new Error('Invalid session id for spill removal');
+  await rm(path.join(root, SPILL_DIRECTORY, sessionId), { recursive: true, force: true });
 }
 /** Keep the newest `MAX_SPILL_FILES_PER_SESSION` files. Not being able to trim is not a reason to fail. */
 function trimSpills(directory: string): void {

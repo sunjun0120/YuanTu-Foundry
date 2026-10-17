@@ -1,5 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { userStateDirectory } from '../platform/user-state.ts';
 import type { HookDeclaration } from './hook-config.ts';
@@ -9,7 +17,8 @@ import type { HookDeclaration } from './hook-config.ts';
  * A hook declaration is a command line committed to somebody else's repository, so opening a clone and
  * sending one message must not be enough to run it. The bridge therefore installs a workspace's hooks only
  * when the operator has trusted *exactly these* declarations: the record holds a digest of every file, event,
- * matcher and command, and any change to any of them is a different digest that has to be confirmed again.
+ * matcher, command and referenced workspace file, and any change to any of them is a different digest that
+ * has to be confirmed again.
  *
  * The record lives in the user's state directory and never in the workspace. A trust decision stored next to
  * the thing it vouches for could be committed, cloned or written by the agent that the hooks are policing,
@@ -18,6 +27,7 @@ import type { HookDeclaration } from './hook-config.ts';
 export const HOOK_TRUST_FILE_NAME = 'hook-trust.json';
 /** Bounded: a record is one line per workspace, and nobody trusts this many. */
 const MAX_TRUSTED_WORKSPACES = 1_000;
+const MAX_HOOK_FILE_BYTES = 4 * 1024 * 1024;
 interface TrustRecord {
   digest: string;
   trustedAt: string;
@@ -34,16 +44,49 @@ export function hookTrustFile(env: NodeJS.ProcessEnv = process.env): string {
  * The digest a trust record vouches for.
  *
  * Order is part of it, because order is part of the behaviour: the first hook to block wins. The timeout is
- * not, because it changes how long a command may run, not which command runs.
+ * not, because it changes how long a command may run, not which command runs. Simple shell-like tokenization
+ * preserves quoted paths and Windows separators; this is not a shell interpreter and does not follow imports
+ * or expand variables. Existing regular files inside the workspace contribute their full content hashes in
+ * token order. Unreadable files and files over 4 MiB refuse trust rather than vouching for a partial script.
  */
-export function hookDeclarationsDigest(declarations: readonly HookDeclaration[]): string {
+export function hookDeclarationsDigest(
+  workspace: string,
+  declarations: readonly HookDeclaration[],
+): string {
   const canonical = declarations.map((entry) => [
     entry.file,
     entry.event,
     entry.matcher ?? null,
     entry.command,
+    referencedFilesDigest(workspace, entry.command),
   ]);
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+function referencedFilesDigest(workspace: string, command: string): string[] {
+  const hashes: string[] = [];
+  for (const token of command.match(/(?:[^\s"'|&;<>()]+|"[^"]*"|'[^']*')+/g) ?? []) {
+    const unquoted = token.replace(
+      /"([^"]*)"|'([^']*)'/g,
+      (_match, double, single) => double ?? single,
+    );
+    const file = path.resolve(workspace, unquoted);
+    if (!isInside(workspace, file)) continue;
+    let metadata;
+    try {
+      metadata = statSync(file);
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+      throw error;
+    }
+    if (!metadata.isFile() || !isInside(workspace, realpathSync.native(file))) continue;
+    if (metadata.size > MAX_HOOK_FILE_BYTES)
+      throw new Error(`Hook reference exceeds 4 MiB: ${file}`);
+    const content = readFileSync(file);
+    if (content.byteLength > MAX_HOOK_FILE_BYTES)
+      throw new Error(`Hook reference exceeds 4 MiB: ${file}`);
+    hashes.push(createHash('sha256').update(content).digest('hex'));
+  }
+  return hashes;
 }
 /** One spelling per directory, so a trust record is not lost to a drive-letter case or a symlink. */
 function workspaceKey(workspace: string): string {
@@ -103,8 +146,10 @@ export function workspaceHookTrust(
       detail: `the trust file ${file} is inside the workspace; set YUANTU_STATE_DIR outside it`,
     };
   let document: TrustDocument;
+  let digest: string;
   try {
     document = readDocument(file);
+    digest = hookDeclarationsDigest(workspace, declarations);
   } catch (error) {
     return {
       trusted: false,
@@ -114,9 +159,7 @@ export function workspaceHookTrust(
   }
   const record = document.workspaces[workspaceKey(workspace)];
   if (!record) return { trusted: false, reason: 'untrusted' };
-  return record.digest === hookDeclarationsDigest(declarations)
-    ? { trusted: true }
-    : { trusted: false, reason: 'changed' };
+  return record.digest === digest ? { trusted: true } : { trusted: false, reason: 'changed' };
 }
 /**
  * Records that the operator trusts exactly these declarations for this workspace.
@@ -140,7 +183,7 @@ export function trustWorkspaceHooks(
   const kept = Object.entries(document.workspaces).slice(-(MAX_TRUSTED_WORKSPACES - 1));
   document.workspaces = Object.fromEntries(kept);
   document.workspaces[key] = {
-    digest: hookDeclarationsDigest(declarations),
+    digest: hookDeclarationsDigest(workspace, declarations),
     trustedAt: now.toISOString(),
   };
   mkdirSync(path.dirname(file), { recursive: true });

@@ -66,7 +66,7 @@ test('a plan cannot start while its unused scratch is being released', async (t)
 
 test(
   'macOS kernel acceptance rejects other operating systems rather than passing skipped probes',
-  { skip: process.platform === 'darwin' },
+  { skip: process.platform === 'darwin' && 'asserts the non-macOS failure path' },
   () => {
     const result = spawnSync(process.execPath, ['scripts/check-macos-sandbox.mjs'], {
       cwd: process.cwd(),

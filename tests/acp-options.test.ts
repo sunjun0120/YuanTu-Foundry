@@ -9,6 +9,7 @@ import path from 'node:path';
 import { ClientSideConnection, ndJsonStream } from '@agentclientprotocol/sdk';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
 /**
  * The three parse-and-drop defects this file pins, all of them the same shape: the ACP entry accepts the
@@ -17,9 +18,9 @@ import { projectRoot } from './process-fixture.ts';
  * produced a run that wrote, and a `--db` produced sessions somewhere else entirely. A refusal is an
  * acceptable answer for an adapter; a silent no-op is not, and neither is a promise the adapter does not keep.
  */
-test.skip(
+test(
   'ACP adapter forwards --db and --permission-policy instead of dropping them',
-  { timeout: 30000 },
+  { timeout: 30000, skip: pausedSkip('acp') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-options-'));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -124,9 +125,9 @@ test.skip(
  * and what it wrote is usage rather than a protocol frame.
  */
 for (const flag of ['--help', '-h'])
-  test.skip(
+  test(
     `ACP ${flag} prints its own usage and exits while stdin stays open`,
-    { timeout: 20000 },
+    { timeout: 20000, skip: pausedSkip('acp') },
     async (t) => {
       const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-help-'));
       t.after(() => rm(root, { recursive: true, force: true }));
@@ -188,44 +189,48 @@ for (const flag of ['--help', '-h'])
       await assert.rejects(readFile(unused));
     },
   );
-test.skip('ACP answers --help before it resolves the workspace', { timeout: 20000 }, async (t) => {
-  /**
-   * The ordering, not only the output: a `--workspace` that does not exist must not be able to fail a request for
-   * help. If it can, the adapter validated its deployment before it answered anything, which is the same decision
-   * that turns "print usage" into "start a server and block".
-   */
-  const missing = path.join(tmpdir(), `yuantu-acp-missing-${process.pid}-${Date.now()}`);
-  const child = spawn(
-    process.execPath,
-    [
-      process.env.ACP_ENTRY_PATH ?? path.join(projectRoot, 'apps/agent-acp/main.ts'),
-      '--help',
-      '--workspace',
-      missing,
-    ],
-    { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
-  );
-  t.after(() => {
-    if (child.exitCode === null) child.kill();
-  });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (chunk: Buffer) => {
-    stdout += chunk;
-  });
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderr += chunk;
-  });
-  const code = await new Promise<number | null>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', resolve);
-  });
-  assert.equal(code, 0, stderr);
-  assert.match(stdout, /Usage/);
-});
-test.skip(
+test(
+  'ACP answers --help before it resolves the workspace',
+  { timeout: 20000, skip: pausedSkip('acp') },
+  async (t) => {
+    /**
+     * The ordering, not only the output: a `--workspace` that does not exist must not be able to fail a request for
+     * help. If it can, the adapter validated its deployment before it answered anything, which is the same decision
+     * that turns "print usage" into "start a server and block".
+     */
+    const missing = path.join(tmpdir(), `yuantu-acp-missing-${process.pid}-${Date.now()}`);
+    const child = spawn(
+      process.execPath,
+      [
+        process.env.ACP_ENTRY_PATH ?? path.join(projectRoot, 'apps/agent-acp/main.ts'),
+        '--help',
+        '--workspace',
+        missing,
+      ],
+      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    t.after(() => {
+      if (child.exitCode === null) child.kill();
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk;
+    });
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+    assert.equal(code, 0, stderr);
+    assert.match(stdout, /Usage/);
+  },
+);
+test(
   'ACP adapter refuses attachments instead of ignoring --image',
-  { timeout: 20000 },
+  { timeout: 20000, skip: pausedSkip('acp') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-image-'));
     t.after(() => rm(root, { recursive: true, force: true }));

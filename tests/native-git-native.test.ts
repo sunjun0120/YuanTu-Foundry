@@ -9,7 +9,13 @@ import { fixture } from './native-git-fixture.ts';
 
 test(
   'real platform sandbox Git status preserves the repository index',
-  { skip: process.platform !== 'win32' && process.platform !== 'darwin', timeout: 120000 },
+  {
+    skip:
+      process.platform !== 'win32' &&
+      process.platform !== 'darwin' &&
+      'needs Windows or macOS native sandbox',
+    timeout: 120000,
+  },
   async (t) => {
     const mode = process.platform === 'win32' ? 'windows' : 'seatbelt';
     const provider = sandboxProvider(mode);

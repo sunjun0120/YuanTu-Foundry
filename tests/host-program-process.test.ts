@@ -9,7 +9,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 
 test(
   'a real Host runs Windows PTC with durable receipts and no way out of the program VM',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     let requests = 0;
     let output = '';

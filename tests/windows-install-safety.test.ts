@@ -17,7 +17,7 @@ const SCRIPT_REFUSAL = /AuthorizationManager|UnauthorizedAccess|PSSecurityExcept
 
 test(
   'installer verification rejects unknown or outside NSIS locations and accepts only its own directory',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   (t) => {
     const helper = path.resolve('scripts/windows-install-safety.ps1').replaceAll("'", "''");
     const target = 'C:\\project\\.scratch\\test install';

@@ -7,7 +7,7 @@ import { fixture } from './program-process-fixture.ts';
 
 test(
   'a Windows program uses the selected backend and RPC writes still require approval',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     const { tools, context, root } = await fixture(t, 'windows', { escaped: true });
     let approvals = 0;

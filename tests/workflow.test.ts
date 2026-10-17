@@ -346,6 +346,26 @@ test('misuse kills the script instead of being ignored', async () => {
   assert.deepEqual(stub.prompts, [], 'no sub-agent was started by a rejected call');
 });
 
+test('a run whose per-run total is lower advertises and enforces that total', async () => {
+  const stub = stubAgents((prompt) => completion(prompt));
+  const tool = workflowTool({ runAgent: stub.runAgent, maxAgents: 8 });
+  assert.match(tool.description, /at most 8 sub-agents, shared with any `delegate_task`/);
+  const result = await tool.execute!(
+    {
+      code: [
+        'for (let index = 0; index < 10; index += 1) {',
+        "  await agent('child ' + index);",
+        '}',
+        "return 'finished';",
+      ].join('\n'),
+    },
+    context(stub.signal),
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content, /already started 8 sub-agents/);
+  assert.equal(stub.prompts.length, 8);
+});
+
 test('one workflow cannot start more children than its cap', async () => {
   const stub = stubAgents((prompt) => completion(prompt));
   const tool = workflowTool({ runAgent: stub.runAgent });

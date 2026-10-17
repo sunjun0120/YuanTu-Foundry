@@ -52,7 +52,13 @@ export class HookTrustReview {
       ? workspaceHookTrust(workspace, declarations, settings.trustFile)
       : ({ trusted: false, reason: 'unavailable', detail: 'no user state directory' } as const);
     if (state.trusted) return 'trusted';
-    const key = `${path.resolve(workspace)}\0${hookDeclarationsDigest(declarations)}`;
+    let digest: string;
+    try {
+      digest = hookDeclarationsDigest(workspace, declarations);
+    } catch {
+      return 'error';
+    }
+    const key = `${path.resolve(workspace)}\0${digest}`;
     if (this.skipped.has(key)) return 'skipped';
     const answer = await this.ask({
       workspace,
@@ -61,7 +67,16 @@ export class HookTrustReview {
       ...(state.detail === undefined ? {} : { detail: state.detail }),
     });
     if (answer === 'trust' && settings.trustFile && state.reason !== 'unavailable') {
-      trustWorkspaceHooks(workspace, declarations, settings.trustFile);
+      try {
+        if (
+          hookDeclarationsDigest(workspace, loadHookDeclarations(workspace, settings.timeoutMs)) !==
+          digest
+        )
+          return 'error';
+        trustWorkspaceHooks(workspace, declarations, settings.trustFile);
+      } catch {
+        return 'error';
+      }
       return 'trusted';
     }
     this.skipped.add(key);

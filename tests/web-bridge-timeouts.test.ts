@@ -3,6 +3,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBrowserBridge, type BrowserBridgeOptions } from '../apps/web/bridge-client.ts';
 import type { CarrierCommand } from '../packages/carrier/contract.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
 class FixtureSocket extends EventTarget {
   static OPEN = 1;
@@ -60,52 +61,56 @@ function fixture(t: TestContext, autoOpen = true, requestTimeoutMs: number | nul
 }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-test.skip('default deadlines preserve commands that await long runs and approval waits', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const browser = fixture(t, true, null);
-  const commands: CarrierCommand[] = [
-    { type: 'send', prompt: 'long task' },
-    { type: 'goal', prompt: 'draft' },
-    { type: 'plan', prompt: 'plan' },
-    { type: 'planExecute', planId: 'p' },
-    { type: 'taskStart', taskId: 't' },
-    { type: 'taskPropose', taskId: 't' },
-    { type: 'taskRetry', taskId: 't' },
-    { type: 'taskVerify', taskId: 't' },
-    { type: 'taskConfirm', taskId: 't', indices: [], expectedUpdatedAt: 'fixture' },
-    { type: 'compact' },
-  ];
-  let settled = 0;
-  const replies = commands.map((command) =>
-    browser.invoke(command).then((reply) => {
-      settled++;
-      return reply;
-    }),
-  );
-  const ordinary = browser.invoke({ type: 'snapshot' });
-  const file = browser.files({ type: 'read', path: 'a.txt' });
-  await flush();
-  t.mock.timers.tick(120_001);
-  await flush();
-  assert.equal(
-    settled,
-    0,
-    'a live long operation must not restore the submitted prompt as a failed send',
-  );
-  assert.equal(
-    (await ordinary).ok,
-    false,
-    'ordinary requests still have a finite default deadline',
-  );
-  assert.equal((await file).ok, false, 'file requests keep the same bounded deadline');
-  const live = FixtureSocket.instances[0]!;
-  for (const request of live.sent) live.reply(request.id);
-  assert((await Promise.all(replies)).every((reply) => reply.ok));
-});
+test(
+  'default deadlines preserve commands that await long runs and approval waits',
+  { skip: pausedSkip('web') },
+  async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const browser = fixture(t, true, null);
+    const commands: CarrierCommand[] = [
+      { type: 'send', prompt: 'long task' },
+      { type: 'goal', prompt: 'draft' },
+      { type: 'plan', prompt: 'plan' },
+      { type: 'planExecute', planId: 'p' },
+      { type: 'taskStart', taskId: 't' },
+      { type: 'taskPropose', taskId: 't' },
+      { type: 'taskRetry', taskId: 't' },
+      { type: 'taskVerify', taskId: 't' },
+      { type: 'taskConfirm', taskId: 't', indices: [], expectedUpdatedAt: 'fixture' },
+      { type: 'compact' },
+    ];
+    let settled = 0;
+    const replies = commands.map((command) =>
+      browser.invoke(command).then((reply) => {
+        settled++;
+        return reply;
+      }),
+    );
+    const ordinary = browser.invoke({ type: 'snapshot' });
+    const file = browser.files({ type: 'read', path: 'a.txt' });
+    await flush();
+    t.mock.timers.tick(120_001);
+    await flush();
+    assert.equal(
+      settled,
+      0,
+      'a live long operation must not restore the submitted prompt as a failed send',
+    );
+    assert.equal(
+      (await ordinary).ok,
+      false,
+      'ordinary requests still have a finite default deadline',
+    );
+    assert.equal((await file).ok, false, 'file requests keep the same bounded deadline');
+    const live = FixtureSocket.instances[0]!;
+    for (const request of live.sent) live.reply(request.id);
+    assert((await Promise.all(replies)).every((reply) => reply.ok));
+  },
+);
 
-test.skip(
+test(
   'a stalled handshake expires and a subsequent request opens a fresh connection',
-  { timeout: 500 },
+  { timeout: 500, skip: pausedSkip('web') },
   async (t) => {
     const browser = fixture(t, false);
     const replies = await Promise.all([
@@ -124,9 +129,9 @@ test.skip(
   },
 );
 
-test.skip(
+test(
   'a silent bridge expires commands without replay and ignores late replies',
-  { timeout: 500 },
+  { timeout: 500, skip: pausedSkip('web') },
   async (t) => {
     const browser = fixture(t);
     const expired = await browser.invoke({ type: 'send', prompt: 'may have run' });
@@ -148,26 +153,30 @@ test.skip(
   },
 );
 
-test.skip('a synchronous send failure settles and later requests still work', async (t) => {
-  const browser = fixture(t);
-  const warmup = browser.invoke({ type: 'snapshot' });
-  await flush();
-  const live = FixtureSocket.instances[0]!;
-  live.reply(live.sent[0]!.id);
-  assert((await warmup).ok);
-  live.throwOnSend = true;
-  const failed = await browser.invoke({ type: 'snapshot' });
-  assert(!failed.ok && /执行结果.*未知/.test(failed.error));
-  live.throwOnSend = false;
-  const current = browser.invoke({ type: 'snapshot' });
-  await flush();
-  live.reply(live.sent[1]!.id);
-  assert((await current).ok);
-});
+test(
+  'a synchronous send failure settles and later requests still work',
+  { skip: pausedSkip('web') },
+  async (t) => {
+    const browser = fixture(t);
+    const warmup = browser.invoke({ type: 'snapshot' });
+    await flush();
+    const live = FixtureSocket.instances[0]!;
+    live.reply(live.sent[0]!.id);
+    assert((await warmup).ok);
+    live.throwOnSend = true;
+    const failed = await browser.invoke({ type: 'snapshot' });
+    assert(!failed.ok && /执行结果.*未知/.test(failed.error));
+    live.throwOnSend = false;
+    const current = browser.invoke({ type: 'snapshot' });
+    await flush();
+    live.reply(live.sent[1]!.id);
+    assert((await current).ok);
+  },
+);
 
-test.skip(
+test(
   'connection errors release concurrent callers and permit a fresh attempt',
-  { timeout: 500 },
+  { timeout: 500, skip: pausedSkip('web') },
   async (t) => {
     const browser = fixture(t, false);
     const first = browser.invoke({ type: 'snapshot' });
@@ -191,7 +200,7 @@ for (const terminal of [
   'invalid JSON',
   'null frame',
 ] as const) {
-  test.skip(`bridge timers are removed after ${terminal}`, async (t) => {
+  test(`bridge timers are removed after ${terminal}`, { skip: pausedSkip('web') }, async (t) => {
     const browser = fixture(t);
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const set = globalThis.setTimeout;

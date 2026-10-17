@@ -92,6 +92,15 @@ export interface SubAgentOptions {
    */
   timeoutMs?: number;
   /**
+   * The most tokens (input plus output, as the child reports them) one sub-agent may spend, or `0` for no budget.
+   *
+   * The stall watchdog bounds silence, not spend: a child that keeps producing is never stopped by it, and a child
+   * has no round cap, so a busy loop — edit, test, the same failure — could spend without limit while looking
+   * healthy. This is the bound on that, measured from the child's own progress frames, so it does not depend on
+   * how long the work takes.
+   */
+  maxTokens?: number;
+  /**
    * How long `collect_subagents` waits for running tasks by default. Without a wait the model has
    * nothing to wait *with*: the live run showed it filling the gap with filler shell commands.
    */
@@ -104,6 +113,7 @@ export interface ResolvedSubAgentOptions {
   maxConcurrency: number;
   maxPerRun: number;
   timeoutMs: number;
+  maxTokens: number;
   collectWaitMs: number;
 }
 /**
@@ -132,6 +142,7 @@ export const SUBAGENT_DEFAULTS = {
   // here is the stall watchdog below — ten minutes of *silence*, not ten minutes of life — because the parent run
   // cannot finish while one of its children is wedged (`settle()` joins them in its `finally`).
   timeoutMs: 600_000,
+  maxTokens: 4_000_000,
   collectWaitMs: 5_000,
 } as const;
 /**
@@ -152,7 +163,8 @@ export function resolveSubAgentOptions(options?: SubAgentOptions): ResolvedSubAg
     // Zero is meaningful for the two windows here and means "do not wait": `collectWaitMs` restores "return at
     // once", and `timeoutMs` restores "no wall clock, let the child finish". Every other option is a cap, where
     // a zero limit would silently disable it, so those must stay positive.
-    if ((name === 'collectWaitMs' || name === 'timeoutMs') && value === 0) continue;
+    if ((name === 'collectWaitMs' || name === 'timeoutMs' || name === 'maxTokens') && value === 0)
+      continue;
     if (!Number.isSafeInteger(value) || (value as number) < 1)
       throw new Error(`Invalid sub-agent option ${name}`);
   }
@@ -170,6 +182,9 @@ export function resolveSubAgentOptions(options?: SubAgentOptions): ResolvedSubAg
 function stallMessage(timeoutMs: number): string {
   const window = timeoutMs >= 1_000 ? `${Math.round(timeoutMs / 1_000)}s` : `${timeoutMs}ms`;
   return `Sub-agent made no progress for ${window}`;
+}
+export function budgetMessage(maxTokens: number): string {
+  return `Sub-agent exceeded its token budget of ${maxTokens} tokens`;
 }
 /** A promise that never resolves, for the optional race arms. */
 const NEVER = new Promise<void>(() => {});
@@ -248,6 +263,10 @@ interface ScheduledSubAgent {
   stallTimer?: NodeJS.Timeout;
   /** Aborts this child because it stopped making progress; separate from the run and caller signals. */
   stallController: AbortController;
+  /** Set when the caller of `runOne` (a workflow call) stopped the child, so its error names that cause. */
+  callerStopped?: boolean;
+  /** Aborts this child because it spent its token budget (`SubAgentOptions.maxTokens`). */
+  budgetController: AbortController;
   /**
    * The directory this child was given, once it has one.
    *
@@ -908,6 +927,7 @@ export class SubAgentCoordinator {
       active: false,
       controller: new AbortController(),
       stallController: new AbortController(),
+      budgetController: new AbortController(),
       promise,
       settleTask,
       admitted: task,
@@ -941,8 +961,11 @@ export class SubAgentCoordinator {
      * is the *call* that asked, which for a workflow is one tool invocation with its own deadline. Without this,
      * a workflow whose time ran out would leave its children running.
      */
-    const stop = () => scheduled.controller.abort(signal.reason);
-    if (signal.aborted) scheduled.controller.abort(signal.reason);
+    const stop = () => {
+      scheduled.callerStopped = true;
+      scheduled.controller.abort(signal.reason);
+    };
+    if (signal.aborted) stop();
     else signal.addEventListener('abort', stop, { once: true });
     try {
       await this.run(scheduled);
@@ -1040,12 +1063,19 @@ export class SubAgentCoordinator {
    * The caller decides which frames are progress, not this method: a frame that says nothing about *work* must
    * not re-arm anything, and the frame that reports a running clock is the one that matters most there.
    */
-  progress(id: string): void {
+  progress(id: string, usage?: Pick<Usage, 'inputTokens' | 'outputTokens'>): void {
     if (!id) return;
     const scheduled = this.scheduled.find(
       (task) => task.active && (task.id === id || task.summary.sessionId === id),
     );
-    if (scheduled) this.armStallWatchdog(scheduled);
+    if (!scheduled) return;
+    const budget = this.deps.options.maxTokens;
+    const spent = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+    if (budget > 0 && spent > budget && !scheduled.budgetController.signal.aborted) {
+      scheduled.budgetController.abort(new Error(budgetMessage(budget)));
+      return;
+    }
+    this.armStallWatchdog(scheduled);
   }
   private async execute(scheduled: ScheduledSubAgent): Promise<void> {
     const { summary } = scheduled;
@@ -1071,6 +1101,7 @@ export class SubAgentCoordinator {
     const signal = AbortSignal.any([
       this.deps.signal,
       scheduled.stallController.signal,
+      scheduled.budgetController.signal,
       scheduled.controller.signal,
     ]);
     let outcome: SubAgentOutcome;
@@ -1146,9 +1177,13 @@ export class SubAgentCoordinator {
      */
     const failure = scheduled.stallController.signal.aborted
       ? stallMessage(this.deps.options.timeoutMs)
-      : scheduled.controller.signal.aborted
-        ? 'Cancelled: the run that started this sub-agent ended without collecting it'
-        : outcome.error;
+      : scheduled.budgetController.signal.aborted
+        ? budgetMessage(this.deps.options.maxTokens)
+        : scheduled.controller.signal.aborted
+          ? scheduled.callerStopped
+            ? 'Cancelled: the call that started this sub-agent was stopped or ran out of time'
+            : 'Cancelled: the run that started this sub-agent ended without collecting it'
+          : outcome.error;
     summary.error = boundedError(failure);
     if (signal.aborted) summary.status = 'cancelled';
     else if (summary.error && summary.status === 'completed') summary.status = 'failed';

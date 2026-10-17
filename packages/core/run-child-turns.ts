@@ -15,7 +15,13 @@ import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { ResidentChildInput } from './residency.ts';
 import type { ChildTurns } from './run-subagents.ts';
 import type { RunEmit } from './run-emit.ts';
-import { EXPLORE_TOOLS, subAgentRolePrompt, toolArgumentPreview } from './subagents.ts';
+import {
+  EXPLORE_TOOLS,
+  budgetMessage,
+  resolveSubAgentOptions,
+  subAgentRolePrompt,
+  toolArgumentPreview,
+} from './subagents.ts';
 import { RunQueueFull } from './run-queue.ts';
 import { redactSecrets } from './errors.ts';
 import { nodeDependencyWarning } from '../workspaces/dependencies.ts';
@@ -127,9 +133,19 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
     const childRegistry = buildTools();
     let rounds = 0,
       toolCalls = 0;
+    /**
+     * The child's token budget, enforced per turn against the child session's whole spend.
+     *
+     * Here rather than only in the coordinator, because a resident child's follow-up turns (`send_message`) are not
+     * the coordinator's to watch: the delegation that admitted the child has settled, so a budget checked there
+     * stopped applying after the first answer and a child asked again and again could spend without limit. Every
+     * turn of every child passes through this function, so this is the one place both cases meet.
+     */
+    const maxTokens = resolveSubAgentOptions(options.agent.subagents).maxTokens;
     /** One turn on this child session. A resident child replays it; a one-shot child runs it once. */
     const turn: ResidentChildInput['turn'] = async (prompt, turnSignal, reportRequired, handle) => {
       const names = new Map<string, string>();
+      const overBudget = new AbortController();
       rounds = 0;
       toolCalls = 0;
       /**
@@ -188,6 +204,13 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
            * resident child's second turn does not start its card back at zero.
            */
           const reportProgress = (): void => {
+            const spent =
+              settledUsage.inputTokens +
+              liveUsage.inputTokens +
+              settledUsage.outputTokens +
+              liveUsage.outputTokens;
+            if (maxTokens > 0 && spent > maxTokens && !overBudget.signal.aborted)
+              overBudget.abort(new Error(budgetMessage(maxTokens)));
             const timing = store.turnTiming(childSession.id);
             emit('subagent.progress', {
               id: task.id,
@@ -276,9 +299,11 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
       const started = child.run({
         sessionId: childSession.id,
         prompt,
-        signal: input_.childSignal
-          ? AbortSignal.any([delegationEnded.signal, turnSignal])
-          : turnSignal,
+        signal: AbortSignal.any(
+          input_.childSignal
+            ? [delegationEnded.signal, turnSignal, overBudget.signal]
+            : [turnSignal, overBudget.signal],
+        ),
         readOnly: task.role === 'explore',
         // A child answers through the report tool, so the parent gets findings it can cite; its
         // final prose is the fallback when it never gets that far. A follow-up on a resident child
@@ -379,13 +404,15 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
             });
           }
         }
+        // A turn the budget stopped says so, rather than the anonymous "Run cancelled" its signal produced.
+        const budgetError = overBudget.signal.aborted ? budgetMessage(maxTokens) : undefined;
         return {
           usage: result.usage,
           text: result.text,
-          status: result.status,
+          status: budgetError ? 'failed' : result.status,
           ...(result.report ? { report: result.report } : {}),
           ...(result.data !== undefined ? { data: result.data } : {}),
-          ...(result.error ? { error: result.error } : {}),
+          ...(budgetError || result.error ? { error: budgetError ?? result.error } : {}),
           rounds,
           toolCalls,
         };

@@ -122,7 +122,12 @@ test('original owner receives lifecycle calls after backend mutation and provide
 
 test(
   'native alias binds the actual platform provider before it is replaced',
-  { skip: process.platform !== 'win32' && process.platform !== 'darwin' },
+  {
+    skip:
+      process.platform !== 'win32' &&
+      process.platform !== 'darwin' &&
+      'needs Windows or macOS native sandbox',
+  },
   async (t) => {
     const { root } = await fixture(t);
     const mode = process.platform === 'win32' ? 'windows' : 'seatbelt';

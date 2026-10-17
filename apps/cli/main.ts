@@ -24,6 +24,7 @@ import {
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
 import {
   GOAL_CONTINUATIONS_PER_REQUEST,
+  GOAL_TOKENS_PER_REQUEST,
   exhaustedGoalVerdict,
   goalLine,
 } from '../../packages/protocol/goals.ts';
@@ -1156,6 +1157,7 @@ async function main(): Promise<void> {
           // The same second bound the Host uses, and not the goal's own ceiling: `max_goal_rounds` is a record
           // the model may raise, and a loop bounded only by it is a loop the thing it bounds can extend.
           maxContinuations: GOAL_CONTINUATIONS_PER_REQUEST,
+          maxTokens: GOAL_TOKENS_PER_REQUEST,
           signal: controller.signal,
           goalOf: () => store.goal(session.id),
           /**
@@ -1196,7 +1198,11 @@ async function main(): Promise<void> {
             });
             report(result);
             // Substantive tool activity is what makes a round progress; a round that only talked stops the loop.
-            return { status: result.status, toolCalls: substantiveToolCalls };
+            return {
+              status: result.status,
+              toolCalls: substantiveToolCalls,
+              tokens: result.usage.inputTokens + result.usage.outputTokens,
+            };
           },
         });
         if (rounds.continuations > 0) {

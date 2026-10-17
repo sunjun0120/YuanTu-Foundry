@@ -89,6 +89,28 @@ function record(
   return session;
 }
 
+test('a Chinese word is found inside a sentence, by the session list and by the model', async (t) => {
+  const { workspace, store, tools, context } = await fixture(t);
+  // `unicode61` alone made this whole clause one token, so none of the searches below matched anything.
+  const fixed = record(store, workspace, '修复记录', ['我们修复了SQLite数据库迁移的问题']);
+  const other = record(store, workspace, '别的', ['这里只谈迁移顺序']);
+  const ids = (query: string) => store.list(query, workspace).map((session) => session.id);
+  assert.deepEqual(ids('数据库'), [fixed.id]);
+  assert.deepEqual(ids('迁移').sort(), [fixed.id, other.id].sort(), 'a two-character word matches');
+  assert.deepEqual(ids('数据库 迁移'), [fixed.id], 'two separated words must both appear');
+  assert.deepEqual(ids('SQLite数据库'), [fixed.id], 'a mixed-script word stays one phrase');
+  assert.deepEqual(ids('移迁'), [], 'the characters must be adjacent and in order');
+  const page = store.searchSessions('数据库', { workspace });
+  assert.equal(page.hits[0]?.session.id, fixed.id);
+  const snippet = page.hits[0]!.matches[0]!.snippet;
+  assert.ok(!snippet.includes('​'), 'the index separator never reaches a reader');
+  assert.match(snippet, /«数据库»/);
+  const result = await toolNamed(tools, SEARCH_SESSIONS).execute!({ query: '数据库' }, context);
+  assert.equal(result.isError, false);
+  assert.ok(result.content.includes(fixed.id));
+  assert.ok(!result.content.includes(other.id));
+});
+
 test('a search returns ranked sessions with the text that matched', async (t) => {
   const { workspace, store, session, tools, context } = await fixture(t);
   record(store, workspace, 'unrelated', ['nothing to see here']);

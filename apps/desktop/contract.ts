@@ -42,7 +42,7 @@ export type DesktopReply =
     };
 export interface DesktopBridge {
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
-  backups(command: BackupCommand): Promise<BackupReply>;
+  backups?(command: BackupCommand): Promise<BackupReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
   /**
    * The workspace's files, for the read-only tree and preview.

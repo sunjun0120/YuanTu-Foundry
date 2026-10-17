@@ -23,7 +23,9 @@ import {
   exhaustedGoalVerdict,
   goalExhausted,
   GOAL_CEILINGS,
+  isGoal,
   newGoal,
+  standDownGoal,
 } from '../packages/protocol/goals.ts';
 import type { Goal } from '../packages/protocol/goals.ts';
 import { RUN_SCOPED_TOOLS } from '../packages/tools/registry.ts';
@@ -150,6 +152,25 @@ test('the goal transitions keep their rules in one place', () => {
     /completed goal cannot become blocked/,
   );
 });
+test('a stand-down is recorded on an active goal and cleared by the next round or any change', () => {
+  const start = goal();
+  const stood = standDownGoal(start, 'no-progress', 2, AT)!;
+  assert.deepEqual(stood.standDown, { reason: 'no-progress', continuations: 2, at: AT });
+  assert.equal(isGoal(stood), true, 'the record survives a reload');
+  assert.equal(
+    isGoal({ ...stood, standDown: { reason: 'bored', continuations: 1, at: AT } }),
+    false,
+  );
+  assert.equal(standDownGoal(goal({ status: 'paused' }), 'no-progress', 1, AT), undefined);
+  assert.equal(
+    admitGoalRound(stood, AT).standDown,
+    undefined,
+    'a running round has not stood down',
+  );
+  assert.equal(changeGoal(stood, 'complete', {}, AT).standDown, undefined);
+  assert.equal(changeGoal(stood, 'pause', {}, AT).standDown, undefined);
+});
+
 test('the runtime records the verdict a spent budget implies, even before the blocked floor', () => {
   const spent = exhaustedGoalVerdict(goal({ roundsStarted: 3, maxGoalRounds: 3 }), AT)!;
   assert.equal(spent.status, 'blocked');

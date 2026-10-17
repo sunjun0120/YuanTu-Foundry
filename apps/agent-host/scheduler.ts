@@ -41,6 +41,20 @@ export interface TaskSchedulerOptions {
 /** Event chains are capped so a pair of tasks cannot trigger each other without bound. */
 const MAX_EVENT_DEPTH = 3;
 /**
+ * Consecutive failures a task may have before its next automatic start waits, and how that wait grows.
+ *
+ * A trigger re-arms after every attempt, failed or not, so a task that fails for a reason no retry will fix — a
+ * revoked credential, a deleted file, a model that keeps refusing — used to cost a full run on every occurrence of
+ * its schedule or event. After the third failure in a row it waits 5 minutes, then 10, 20 … up to 6 hours, on top
+ * of its own schedule. In memory on purpose: a restarted Host gives every task a fresh chance, and a success, or
+ * a person starting the task, clears it.
+ */
+const FAILURE_BACKOFF_AFTER = 3;
+const FAILURE_BACKOFF_BASE_MS = 5 * 60_000;
+const FAILURE_BACKOFF_MAX_MS = 6 * 60 * 60_000;
+/** Bounded so a burst of events while the Host is busy cannot grow memory without limit. */
+const MAX_DEFERRED_EVENTS = 256;
+/**
  * The floor and the fallback for how long the scheduler waits.
  *
  * The floor keeps a clock that is due *now* from becoming a spin loop — a due task that cannot run because the
@@ -70,6 +84,11 @@ export class TaskScheduler {
   private eventDepth = 0;
   /** Tasks already started by the current event cascade, which stops A->B->A ping-pong. */
   private chain = new Set<string>();
+  /** Event-matched tasks that waited for a busy Host, by task id, with the cascade depth they were matched at. */
+  private deferred = new Map<string, { event: TaskEvent; depth: number }>();
+  private draining = false;
+  /** Consecutive automatic failures by task id, and when the last one ended. */
+  private failures = new Map<string, { count: number; at: number }>();
   private stopped = false;
   private readonly options: TaskSchedulerOptions;
 
@@ -159,6 +178,7 @@ export class TaskScheduler {
       for (const due of candidates) {
         if (this.stopped) break;
         if (this.skipMissed(due.task, due.source)) continue;
+        if (due.source !== 'recovery' && this.backingOff(due.task.id)) continue;
         if (!this.options.canRun()) {
           // The rest of the queue waits for the Host, and that wait is written down rather than left to be
           // inferred from a late `last_run_at` (`packages/core/task-deliveries.ts`). Recorded here, once per
@@ -169,6 +189,7 @@ export class TaskScheduler {
         const run = await this.execute(due.task, due.source, due.missed);
         if (run) started.push(run);
       }
+      if (!this.stopped) started.push(...(await this.drainDeferred()));
       return started;
     } finally {
       this.ticking = false;
@@ -215,30 +236,91 @@ export class TaskScheduler {
   /**
    * React to a Host event. Event-triggered runs start immediately rather than waiting for the next
    * tick, so a chain of dependent tasks makes progress within one session.
+   *
+   * A task the event matched while the Host was busy is remembered rather than dropped. Unlike a clock trigger,
+   * nothing re-derives an event from the task row later, so a `run.finished` from one session that arrived while
+   * another session was running used to be lost for good. The remembered tasks are started the next time the
+   * scheduler is free (the next event or tick), at the cascade depth they were matched at, so deferral cannot be
+   * used to escape `MAX_EVENT_DEPTH`.
    */
   async notify(event: TaskEvent): Promise<SchedulerRun[]> {
-    if (this.stopped || this.eventDepth >= MAX_EVENT_DEPTH) return [];
-    const matching = this.options.store
+    if (this.stopped) return [];
+    const started = await this.drainDeferred();
+    if (this.eventDepth >= MAX_EVENT_DEPTH) return started;
+    const matching = this.eventCandidates().filter(
+      (task) => task.trigger && matchesEvent(task.trigger, event),
+    );
+    started.push(...(await this.fireEvent(matching, event, this.eventDepth)));
+    return started;
+  }
+  private eventCandidates(): Task[] {
+    return this.options.store
       .listScheduledTasks(this.options.workspace)
-      .filter((task) => task.trigger && matchesEvent(task.trigger, event))
       .filter((task) => task.status !== 'in_progress' && task.status !== 'cancelled')
       .filter((task) => !task.pendingApproval && !task.approvalOutcomeUnknown);
+  }
+  private async fireEvent(tasks: readonly Task[], event: TaskEvent, depth: number) {
     const started: SchedulerRun[] = [];
-    this.eventDepth++;
+    const outer = this.eventDepth;
+    this.eventDepth = depth + 1;
     try {
-      for (const task of matching) {
+      for (const [index, task] of tasks.entries()) {
+        if (this.stopped) break;
         // A run emits `run.finished` while the cascade that started it is still on the stack; the
         // chain keeps a task from being restarted by the very event it just produced.
-        if (this.stopped || this.chain.has(task.id) || !this.options.canRun()) break;
+        if (this.chain.has(task.id) || this.backingOff(task.id)) continue;
+        if (!this.options.canRun()) {
+          for (const waiting of tasks.slice(index))
+            if (!this.chain.has(waiting.id) && this.deferred.size < MAX_DEFERRED_EVENTS)
+              this.deferred.set(waiting.id, { event, depth });
+          break;
+        }
+        this.deferred.delete(task.id);
         this.chain.add(task.id);
         const run = await this.execute(task, 'event', false);
         if (run) started.push(run);
       }
     } finally {
-      this.eventDepth--;
+      this.eventDepth = outer;
       if (this.eventDepth === 0) this.chain.clear();
     }
     return started;
+  }
+  /** Start the event-matched tasks that had to wait for the Host, if it is free now. */
+  private async drainDeferred(): Promise<SchedulerRun[]> {
+    const started: SchedulerRun[] = [];
+    if (this.draining || !this.deferred.size || this.eventDepth > 0 || !this.options.canRun())
+      return started;
+    this.draining = true;
+    try {
+      const candidates = new Map(this.eventCandidates().map((task) => [task.id, task]));
+      for (const [id, entry] of [...this.deferred]) {
+        if (this.stopped || !this.options.canRun()) break;
+        this.deferred.delete(id);
+        const task = candidates.get(id);
+        // Re-matched against the task as it stands now: a trigger edited or disabled meanwhile is not owed a run.
+        if (!task?.trigger || !matchesEvent(task.trigger, entry.event)) continue;
+        if (entry.depth >= MAX_EVENT_DEPTH) continue;
+        started.push(...(await this.fireEvent([task], entry.event, entry.depth)));
+      }
+    } finally {
+      this.draining = false;
+    }
+    return started;
+  }
+  /** Whether this task failed often enough in a row that its next automatic start has to wait. */
+  private backingOff(taskId: string, now = Date.now()): boolean {
+    const failed = this.failures.get(taskId);
+    if (!failed || failed.count < FAILURE_BACKOFF_AFTER) return false;
+    const wait = Math.min(
+      FAILURE_BACKOFF_MAX_MS,
+      FAILURE_BACKOFF_BASE_MS * 2 ** (failed.count - FAILURE_BACKOFF_AFTER),
+    );
+    return now < failed.at + wait;
+  }
+  /** A person starting the task is the decision the backoff was waiting for. */
+  clearFailures(taskId: string): void {
+    this.failures.delete(taskId);
   }
   private skipMissed(task: Task, source: TaskTriggerSource): boolean {
     if (source === 'recovery' || task.lastTriggerError?.startsWith('Host restarted mid-attempt'))
@@ -315,6 +397,10 @@ export class TaskScheduler {
         // A store that refuses this write must not skip the re-arm below: the grant is a convenience, while
         // the attempt record is what keeps one broken task from being retried on every tick.
       }
+      if (error) {
+        const previous = this.failures.get(task.id)?.count ?? 0;
+        this.failures.set(task.id, { count: previous + 1, at: Date.now() });
+      } else this.failures.delete(task.id);
       // Re-arm the clock even when the run failed, otherwise one broken task would be retried on
       // every tick forever.
       try {

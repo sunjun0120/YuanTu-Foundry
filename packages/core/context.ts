@@ -317,6 +317,14 @@ export async function prepareContext(input: {
   ) => void;
   forceCompact?: boolean;
   /**
+   * Skip a compaction the *threshold* alone would start, because a recent attempt failed.
+   *
+   * Only the early trigger is deferred: a request that no longer fits is still compressed, because sending it as
+   * it stands is the one thing known not to work. Without this a failing summary was retried — and paid for, and
+   * waited on for up to `summaryTimeoutMs` — on every round the conversation stayed above the threshold.
+   */
+  deferThresholdCompaction?: boolean;
+  /**
    * How many compressions this call has already paid for, when the convergence retry re-enters.
    *
    * Internal: it exists so the retry can call this same function again — re-reading the surface it just
@@ -664,7 +672,10 @@ export async function prepareContext(input: {
    * window is the second trigger, not the only one — a conversation that grew past the threshold in one step
    * (a huge tool result) must be compressed even though the threshold check was never seen.
    */
-  const compacting = input.forceCompact === true || !fitsNow || aboveThreshold(forecast);
+  const compacting =
+    input.forceCompact === true ||
+    !fitsNow ||
+    (aboveThreshold(forecast) && input.deferThresholdCompaction !== true);
   if (!compacting) {
     return {
       system: input.system,
@@ -845,6 +856,11 @@ export async function prepareContext(input: {
       AbortSignal.timeout(input.summaryTimeoutMs),
     ]);
     let retriesLeft = 1;
+    /**
+     * Set after a summary answered with a tool call instead of text: the catalogue rides along only to share the
+     * cache prefix, so a model that reaches for it is asked once more with tool calls forbidden.
+     */
+    let forbidTools = false;
     while (covered < boundary) {
       input.signal.throwIfAborted();
       let end = covered;
@@ -908,6 +924,7 @@ export async function prepareContext(input: {
             messages: transcript,
             tools: input.tools,
             ...(summaryCacheKey === undefined ? {} : { cacheKey: summaryCacheKey }),
+            ...(forbidTools ? { toolChoice: 'none' as const } : {}),
             maxOutputTokens: summaryForecast.outputTokens,
             signal: summarySignal,
             onText: () => {},
@@ -969,6 +986,10 @@ export async function prepareContext(input: {
             batch = history.slice(covered, end);
             continue;
           }
+        }
+        if (response.toolCalls.length && !forbidTools) {
+          forbidTools = true;
+          continue;
         }
         if (response.finishReason !== 'stop' || response.toolCalls.length || !response.text.trim())
           return abandonCompaction(

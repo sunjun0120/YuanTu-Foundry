@@ -21,7 +21,7 @@ import type { SubAgentCoordinator } from './subagents.ts';
 
 export interface RunFinalizationOptions {
   agent: Pick<AgentOptions, 'ownsToolResources' | 'executionPolicy'>;
-  store: Pick<SessionStore, 'finishTaskAttempt' | 'goal' | 'finishRun'>;
+  store: Pick<SessionStore, 'finishTaskAttempt' | 'goal' | 'finishRun' | 'forsakeRun'>;
   tools: ToolRegistry;
   sessionId: string;
   runId: string;
@@ -228,6 +228,8 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
     try {
       store.finishRun(result);
     } catch (error) {
+      // The run is over whether or not the row says so; without this the session stays locked to it.
+      store.forsakeRun(runId);
       process.stderr.write(
         `run ${runId} finalization could not be persisted: ${
           error instanceof Error ? error.message : String(error)

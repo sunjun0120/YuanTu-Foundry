@@ -16,7 +16,12 @@ import {
   type HookTrustQuestion,
 } from '../apps/desktop/hook-trust-review.ts';
 import { loadHookDeclarations } from '../packages/resources/hook-config.ts';
-import { hookTrustFile, workspaceHookTrust } from '../packages/resources/hook-trust.ts';
+import {
+  hookDeclarationsDigest,
+  hookTrustFile,
+  trustWorkspaceHooks,
+  workspaceHookTrust,
+} from '../packages/resources/hook-trust.ts';
 
 async function workspace(t: test.TestContext, command = 'echo start') {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-desktop-hooks-'));
@@ -87,6 +92,68 @@ test('"not this time" records nothing and is not asked again until the declarati
   const later = asker(['skip']);
   assert.equal(await new HookTrustReview(later.ask, env).review(root), 'skipped');
   assert.equal(later.questions[0]!.reason, 'changed', 'the prompt says the trusted set changed');
+});
+
+test('editing a referenced script invalidates trust even when the command is unchanged', async (t) => {
+  for (const command of [
+    'node .hooks/check.js',
+    'node ".hooks/check file.js"',
+    "node '.hooks/check file.js'",
+  ]) {
+    const { root, env } = await workspace(t, command);
+    const script = path.join(
+      root,
+      '.hooks',
+      command.includes('file') ? 'check file.js' : 'check.js',
+    );
+    await mkdir(path.dirname(script));
+    await writeFile(script, 'console.log("trusted");');
+    const { questions, ask } = asker(['trust', 'skip', 'trust']);
+    const review = new HookTrustReview(ask, env);
+    assert.equal(await review.review(root), 'trusted');
+    await writeFile(script, 'console.log("changed");');
+    assert.deepEqual(workspaceHookTrust(root, loadHookDeclarations(root), hookTrustFile(env)), {
+      trusted: false,
+      reason: 'changed',
+    });
+    assert.equal(await review.review(root), 'skipped');
+    assert.equal(questions[1]!.reason, 'changed');
+    assert.equal(await review.review(root), 'skipped');
+    await writeFile(script, 'console.log("changed again");');
+    assert.equal(
+      await review.review(root),
+      'trusted',
+      'changing the script also invalidates a remembered skip',
+    );
+  }
+});
+
+test('oversized hook references fail closed both when checking and when recording trust', async (t) => {
+  const { root, env } = await workspace(t, 'node check.js');
+  const script = path.join(root, 'check.js');
+  await writeFile(script, 'console.log("trusted");');
+  const declarations = loadHookDeclarations(root);
+  const file = hookTrustFile(env);
+  trustWorkspaceHooks(root, declarations, file);
+  await writeFile(script, Buffer.alloc(4 * 1024 * 1024 + 1));
+  assert.throws(() => hookDeclarationsDigest(root, declarations), /exceeds 4 MiB/);
+  assert.throws(() => trustWorkspaceHooks(root, declarations, file), /exceeds 4 MiB/);
+  const state = workspaceHookTrust(root, declarations, file);
+  assert.equal(state.trusted, false);
+  assert.equal(state.trusted === false && state.reason, 'unavailable');
+  assert.equal(await new HookTrustReview(asker(['trust']).ask, env).review(root), 'error');
+});
+
+test('a script changed while the confirmation is open is not silently trusted', async (t) => {
+  const { root, env } = await workspace(t, 'node check.js');
+  const script = path.join(root, 'check.js');
+  await writeFile(script, 'console.log("reviewed");');
+  const review = new HookTrustReview(async () => {
+    await writeFile(script, 'console.log("not reviewed");');
+    return 'trust';
+  }, env);
+  assert.equal(await review.review(root), 'error');
+  assert.equal(existsSync(hookTrustFile(env)), false);
 });
 
 test('nothing is asked when there are no hooks, the bridge is off, or trust is forced', async (t) => {

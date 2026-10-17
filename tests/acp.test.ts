@@ -13,10 +13,11 @@ import {
 } from '@agentclientprotocol/sdk';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
-test.skip(
+test(
   'official ACP client creates, streams, approves, loads and cancels a real Host session',
-  { timeout: 30000 },
+  { timeout: 30000, skip: pausedSkip('acp') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-'));
     t.after(() => rm(root, { recursive: true, force: true }));

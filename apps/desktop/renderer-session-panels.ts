@@ -153,7 +153,12 @@ export function setupSessionPanels(getState: () => CarrierSnapshot | null): {
         max: goal.maxGoalRounds,
       }),
       goal.blockedReason ? format(t('ui.goalBlockedReason'), { reason: goal.blockedReason }) : '',
-      t('ui.goalNotice'),
+      // An active goal the runtime stopped continuing says why, instead of the notice that more rounds are coming.
+      goal.status === 'active' && goal.standDown
+        ? format(t(`ui.goalStandDown.${goal.standDown.reason}`), {
+            rounds: goal.standDown.continuations,
+          })
+        : t('ui.goalNotice'),
     ].filter(Boolean);
     required('goal-meta').textContent = meta.join(' · ');
   }

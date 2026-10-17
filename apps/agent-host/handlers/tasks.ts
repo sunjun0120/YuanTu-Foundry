@@ -66,7 +66,11 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       params.allow,
       required(params, 'approvalId'),
     );
-    if (params.allow) ctx.scheduler.wake();
+    if (params.allow) {
+      // A person approved the next attempt, which is the decision a failure backoff was waiting for.
+      ctx.scheduler.clearFailures(task.id);
+      ctx.scheduler.wake();
+    }
     return task;
   },
   'task.trigger': async (ctx, params) => {
@@ -75,6 +79,8 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     if (ctx.active.size || ctx.restoring)
       throw new Error('Host is busy; wait before editing tasks');
     const taskId = required(params, 'taskId');
+    // A changed trigger is a new rule, so failures counted under the old one no longer delay it.
+    ctx.scheduler.clearFailures(taskId);
     // `null` clears the trigger; an absent field would be indistinguishable from "unchanged".
     return ctx.store.updateTask(sessionId, taskId, {
       trigger: (params.trigger ?? null) as never,
@@ -94,6 +100,8 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     delete update.expectedUpdatedAt;
     const taskId = required(params, 'taskId');
     const task = ctx.store.getTask(sessionId, taskId);
+    // An edited definition gets a fresh chance; the old one's failures say nothing about it.
+    ctx.scheduler.clearFailures(taskId);
     return ctx.store.replaceTaskDefinition(
       sessionId,
       taskId,

@@ -121,36 +121,45 @@ export class SessionLifecycle {
   delete(id: string): void {
     this.port.transaction(() => {
       this.assertMutable(id);
-      // A sub-agent session is not an independent conversation: leaving it behind would strand a
-      // hidden session whose parent no longer exists. Descendants are removed without the mutability
-      // check, because an interrupted child must never block deleting the session the user asked to
-      // delete.
-      const descendants: string[] = [];
-      for (let level = [id]; level.length;) {
-        const next: string[] = [];
-        for (const parent of level)
-          for (const child of this.port.db
-            // Only delegated children: a session fork points at its source too, and deleting a
-            // conversation must never delete a copy someone else is working in.
-            .prepare(
-              'SELECT id FROM sessions WHERE parent_session_id=? AND fork_message_count IS NULL',
-            )
-            .all(parent))
-            next.push(String(child.id));
-        descendants.push(...next);
-        level = next;
-      }
-      for (const sessionId of [...descendants.reverse(), id]) this.deleteSessionRows(sessionId);
+      // Descendants are removed without the mutability check, because an interrupted child must never block
+      // deleting the session the user asked to delete. Children first, so no row ever names a missing parent.
+      const doomed = this.tree(id).reverse();
+      // Which bytes these sessions were the last to mention is only answerable *before* their rows go, so the
+      // addresses are collected first and the blobs are dropped afterwards if nothing else still names them.
+      const referenced = new Set<string>();
+      for (const sessionId of doomed)
+        for (const hash of this.sessionHashes(sessionId)) referenced.add(hash);
+      for (const sessionId of doomed) this.deleteSessionRows(sessionId);
+      this.dropUnreferencedBlobs(referenced);
     });
+  }
+  /**
+   * The session and every delegated descendant, parents before children — what `delete` removes.
+   *
+   * A sub-agent session is not an independent conversation: leaving it behind would strand a hidden session whose
+   * parent no longer exists. Only delegated children count: a session fork points at its source too, and deleting
+   * a conversation must never delete a copy someone else is working in. Exposed so a caller that owns files
+   * beside the rows (spilled output) can learn which sessions are about to go while their rows still say where.
+   */
+  tree(id: string): string[] {
+    const sessions = [id];
+    const children = this.port.db.prepare(
+      'SELECT id FROM sessions WHERE parent_session_id=? AND fork_message_count IS NULL',
+    );
+    for (let level = [id]; level.length;) {
+      const next: string[] = [];
+      for (const parent of level)
+        for (const child of children.all(parent)) next.push(String(child.id));
+      sessions.push(...next);
+      level = next;
+    }
+    return sessions;
   }
   private deleteSessionRows(id: string): void {
     // The session and its log are about to stop existing, so neither its fold nor its unwritten appends
     // may outlive them: a later flush would write rows for a session that is gone.
     this.port.dropLogCache(id);
     this.port.dropPendingAppends(id);
-    // Which bytes this session was the last to mention is only answerable *before* its rows go, so the
-    // addresses are collected first and the blobs are dropped afterwards if nothing else still names them.
-    const referenced = this.sessionHashes(id);
     for (const table of [
       'file_changes',
       'messages',
@@ -162,9 +171,6 @@ export class SessionLifecycle {
     ])
       this.port.db.prepare('DELETE FROM ' + table + ' WHERE session_id=?').run(id);
     this.port.db.prepare('DELETE FROM sessions WHERE id=?').run(id);
-    for (const hash of referenced)
-      if (!this.blobReferenced(hash))
-        this.port.db.prepare('DELETE FROM attachment_blobs WHERE hash=?').run(hash);
   }
   /** Every content address the session's rows and log entries name. */
   private sessionHashes(id: string): Set<string> {
@@ -183,31 +189,35 @@ export class SessionLifecycle {
     return hashes;
   }
   /**
-   * Whether any row or log entry still names this address.
+   * Drop each of these blobs that no remaining row or log entry names.
    *
-   * The `LIKE` narrows the candidates to rows that contain the digest *at all*, and those few are then read
-   * as JSON — a hash appearing in prose therefore keeps a blob alive rather than being mistaken for a
-   * reference. It runs on session deletion only, which is why a scan is an honest price for not maintaining a
-   * second copy of "who refers to what" that could drift from the rows themselves.
+   * One pass over the rows that can hold a reference at all, however many addresses are asked about: the old
+   * shape ran a `LIKE '%hash%'` over every message and every log entry *per address*, so deleting a session that
+   * mentioned twenty pictures read the whole database twenty times inside the write transaction. An image
+   * reference is a JSON object with a `"hash"` key, so `instr` narrows the rows to those with that key — a check
+   * SQLite does without parsing — and only those are read as JSON. The answer still comes from the rows
+   * themselves rather than from a second copy of "who refers to what" that could drift from them.
    */
-  private blobReferenced(hash: string): boolean {
-    const candidates = [
-      ...this.port.db
-        .prepare("SELECT body AS json FROM messages WHERE body LIKE '%'||?||'%'")
-        .all(hash),
-      ...this.port.db
-        .prepare("SELECT data AS json FROM session_events WHERE data LIKE '%'||?||'%'")
-        .all(hash),
-    ];
-    for (const row of candidates) {
-      const found = new Set<string>();
-      try {
-        hashesIn(JSON.parse(String(row.json)), found);
-      } catch {
-        continue;
+  private dropUnreferencedBlobs(candidates: ReadonlySet<string>): void {
+    if (!candidates.size) return;
+    const orphaned = new Set(candidates);
+    for (const statement of [
+      `SELECT body AS json FROM messages WHERE instr(body,'"hash"')>0`,
+      `SELECT data AS json FROM session_events WHERE instr(data,'"hash"')>0`,
+    ]) {
+      for (const row of this.port.db.prepare(statement).iterate()) {
+        const found = new Set<string>();
+        try {
+          hashesIn(JSON.parse(String(row.json)), found);
+        } catch {
+          // A row that no longer parses names nothing, exactly as `sessionHashes` reads it.
+          continue;
+        }
+        for (const hash of found) orphaned.delete(hash);
+        if (!orphaned.size) return;
       }
-      if (found.has(hash)) return true;
     }
-    return false;
+    const remove = this.port.db.prepare('DELETE FROM attachment_blobs WHERE hash=?');
+    for (const hash of orphaned) remove.run(hash);
   }
 }

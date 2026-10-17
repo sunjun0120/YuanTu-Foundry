@@ -121,6 +121,47 @@ test('a Host keeps running rounds until the session goal is finished', async (t)
   assert.equal(goal?.status, 'completed');
 });
 
+test('a continuation round that only repeats earlier work does not buy another one', async (t) => {
+  let step = 0;
+  const url = await httpFixture(t, (_body, res) => {
+    step++;
+    if (step === 1)
+      sendFrames(
+        res,
+        frames('Creating the goal.', [
+          { id: 'goal-1', name: 'create_goal', input: { objective: 'Find the parser' } },
+        ]),
+      );
+    // Every even request reads the same missing file and gets the same answer; every odd one ends the round.
+    else if (step % 2 === 0)
+      sendFrames(
+        res,
+        frames('Reading.', [
+          { id: `read-${step}`, name: 'read_file', input: { path: 'missing.txt' } },
+        ]),
+      );
+    else sendFrames(res, frames('Still looking.'));
+  });
+  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const { client } = await connectClient(host);
+  t.after(() => client.stop().catch(() => {}));
+  await client.start();
+  let runs = 0;
+  client.subscribe((event) => {
+    if (event.type === 'run.started') runs++;
+  });
+  const session = await client.request('session.create', {});
+  const result = await client.run(session.id, 'Find the parser');
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(runs, 2, 'one continuation, which learned nothing the first round had not');
+  await waitForStderr(host, /\[goal\] stopped after 1 round\(s\): no-progress/);
+  // The goal says so too, so the window does not show an active goal that has silently gone quiet.
+  const goal = await client.request('goal.get', { sessionId: session.id });
+  assert.equal(goal?.status, 'active');
+  assert.equal(goal?.standDown?.reason, 'no-progress');
+  assert.equal(goal?.standDown?.continuations, 1);
+});
+
 test('a continuation round cannot re-aim the goal the runtime started it for', async (t) => {
   /**
    * A continuation is an ordinary run, so the goal tools are in it — and without a check on who was asking, the

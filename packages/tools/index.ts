@@ -72,7 +72,13 @@ function hookBridgeTrusted(
     ? workspaceHookTrust(root, declarations, bridge.trustFile)
     : ({ trusted: false, reason: 'unavailable', detail: 'no user state directory' } as const);
   if (state.trusted) return true;
-  const key = `${path.resolve(root)}\0${hookDeclarationsDigest(declarations)}`;
+  let digest: string;
+  try {
+    digest = hookDeclarationsDigest(root, declarations);
+  } catch {
+    digest = 'unavailable';
+  }
+  const key = `${path.resolve(root)}\0${digest}`;
   if (!untrustedNoticesSent.has(key)) {
     untrustedNoticesSent.add(key);
     const files = [...new Set(declarations.map((entry) => entry.file))].join(', ');

@@ -131,7 +131,7 @@ test('chdir and fixed listener ports are refused while loopback dynamic ports wo
 test(
   'native PTY declaration does not grant arbitrary Windows named pipes',
   {
-    skip: process.platform !== 'win32',
+    skip: process.platform !== 'win32' && 'needs Windows',
   },
   async (t) => {
     const parent = await fixture(t);

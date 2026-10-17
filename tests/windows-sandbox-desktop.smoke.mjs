@@ -30,7 +30,7 @@ const eventually = async (read, timeout = 30000) => {
 
 test(
   'Windows desktop enforces the selected basic sandbox, joins cancellation and exit, and reopens its session',
-  { skip: process.platform !== 'win32', timeout: 180000 },
+  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 180000 },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-desktop-windows-'));
     const outside = await mkdtemp(path.join(os.tmpdir(), 'yuantu-desktop-outside-'));

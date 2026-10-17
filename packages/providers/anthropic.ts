@@ -142,6 +142,9 @@ export class AnthropicProvider implements Provider {
             ...(request.tools.length
               ? { tools: anthropicTools(request.tools, cache.blocks, cache.toolBreakpoint) }
               : {}),
+            ...(request.tools.length && request.toolChoice === 'none'
+              ? { tool_choice: { type: 'none' } }
+              : {}),
           }),
         },
         this.config.streamIdleTimeoutMs ?? 300_000,

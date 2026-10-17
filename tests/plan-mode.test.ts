@@ -12,6 +12,7 @@ import { createTools } from '../packages/tools/index.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { projectRoot, runCli } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 import type {
   AgentEvent,
   ModelResponse,
@@ -52,268 +53,283 @@ const exists = async (file: string) => {
   }
 };
 
-test.skip('the CLI plans read-only, prints the approval witness, and gates execution on it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-cli-'));
-  const url = await httpFixture(t, (_body, res) => {
-    // The planning call tries to write; the execution call answers plainly.
-    if (attempts++ === 0)
-      return sendFrames(
-        res,
-        frames('', [
-          { id: 'w', name: 'write_file', input: { path: 'created.txt', content: 'written' } },
-        ]),
-      );
-    if (attempts === 2)
-      return sendFrames(
-        res,
-        frames('', [
-          {
-            id: 'p',
-            name: 'submit_plan',
-            input: { title: 'CLI plan', summary: 'Two steps', steps: ['First', 'Second'] },
-          },
-        ]),
-      );
-    return sendFrames(res, frames('Executed by CLI'));
-  });
-  let attempts = 0;
-  const db = path.join(root, 'sessions.sqlite');
-  const env = {
-    YUANTU_MODEL: 'fixture',
-    YUANTU_MAX_CONTEXT_TOKENS: '128000',
-    YUANTU_SESSION_TITLES: '0',
-    YUANTU_API_KEY: 'test',
-    YUANTU_PROTOCOL: 'anthropic',
-    YUANTU_BASE_URL: url,
-  };
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const base = ['--workspace', root, '--db', db, '--json'];
-
-  const planned = await runCli(['plan', 'Add the feature', ...base], env);
-  assert.equal(planned.code, 0, planned.stderr);
-  const planLine = planned.stdout
-    .split('\n')
-    .map((line) => {
-      try {
-        return JSON.parse(line) as { type?: string; plan?: Plan; approveCommand?: string };
-      } catch {
-        return {};
-      }
-    })
-    .find((entry) => entry.type === 'plan');
-  assert.ok(planLine?.plan, `expected a plan line, saw: ${planned.stdout}`);
-  const plan = planLine!.plan!;
-  assert.equal(plan.status, 'proposed');
-  assert.deepEqual(
-    plan.steps.map((step) => step.description),
-    ['First', 'Second'],
-  );
-  // A planning run must not have written anything, even though the model asked to.
-  assert.equal(await exists(path.join(root, 'created.txt')), false);
-
-  // The printed command carries the reviewed hash, which is what makes the approval meaningful.
-  assert.match(planLine!.approveCommand!, new RegExp(plan.hash));
-  assert.ok(
-    planLine!.approveCommand!.includes('--db'),
-    'the approval command must preserve the database route',
-  );
-  assert.ok(
-    planLine!.approveCommand!.includes(db),
-    'the same database must contain the reviewed plan',
-  );
-
-  const shown = await runCli(
-    ['plan-show', plan.sessionId, '--workspace', root, '--db', db, '--json'],
-    env,
-  );
-  assert.equal(shown.code, 0, shown.stderr);
-  const shownPlan = JSON.parse(shown.stdout.trim()) as { plan: Plan };
-  assert.equal(shownPlan.plan.hash, plan.hash);
-
-  // A hash the reviewer never saw is refused, and nothing executes.
-  const wrong = await runCli(['plan-execute', plan.sessionId, plan.id, 'nothash', ...base], env);
-  assert.notEqual(wrong.code, 0);
-  assert.match(wrong.stderr, /does not match this plan/);
-  assert.equal(await exists(path.join(root, 'created.txt')), false);
-
-  const executed = await runCli(['plan-execute', plan.sessionId, plan.id, plan.hash, ...base], env);
-  assert.equal(executed.code, 0, executed.stderr);
-  assert.match(executed.stdout, /Executed by CLI/);
-  const store = new SessionStore(db);
-  try {
-    assert.equal(store.getPlan(plan.sessionId, plan.id).status, 'approved');
-  } finally {
-    store.close();
-  }
-});
-
-test.skip('a session that stopped mid-plan resumes as a planning run, not as an ordinary one', async (t) => {
-  /**
-   * Plan mode is a promise that this run cannot change anything, and it lived only in the request that started it:
-   * `plan` created the row and passed `planPhase`, `resume` passed neither — so a session whose planning run ended
-   * without submitting (the user's Stop, a lost terminal, a crash) came back with the full tool set, and a write it
-   * made would have been refused a moment earlier.
-   *
-   * The row is the state, and this is the whole of it: a plan still `planning` means nobody has decided anything
-   * yet, so continuing means continuing to plan. The second run below both asserts the read-only promise (a write
-   * is refused and nothing is created) and ends the way a planning run does, by submitting the plan the first run
-   * never got to.
-   */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-resume-'));
-  let calls = 0;
-  const url = await httpFixture(t, (_body, res) => {
-    calls++;
-    // The first run: a write the planning phase refuses, then an answer that decides nothing — the row stays
-    // `planning`, which is the state a Stop or a lost terminal leaves behind.
-    if (calls === 1)
-      return sendFrames(
-        res,
-        frames('', [
-          { id: 'w', name: 'write_file', input: { path: 'created.txt', content: 'written' } },
-        ]),
-      );
-    if (calls === 2) return sendFrames(res, frames('Still looking around'));
-    // The resumed run submits the plan, and that is only possible if it is a planning run: `submit_plan` is
-    // registered for the planning phase alone, so an ordinary run would answer "Unknown tool" and the row would
-    // stay `planning`.
-    if (calls === 3)
-      return sendFrames(
-        res,
-        frames('', [
-          {
-            id: 'p',
-            name: 'submit_plan',
-            input: { title: 'Resumed plan', summary: 'Still planning', steps: ['First'] },
-          },
-        ]),
-      );
-    return sendFrames(res, frames('Plan recorded, nothing executed'));
-  });
-  const db = path.join(root, 'sessions.sqlite');
-  const env = {
-    YUANTU_MODEL: 'fixture',
-    YUANTU_MAX_CONTEXT_TOKENS: '128000',
-    YUANTU_SESSION_TITLES: '0',
-    YUANTU_API_KEY: 'test',
-    YUANTU_PROTOCOL: 'anthropic',
-    YUANTU_BASE_URL: url,
-  };
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const base = ['--workspace', root, '--db', db, '--json'];
-
-  // A planning run that stops without submitting — the interrupted case, which leaves the row at `planning`.
-  const planned = await runCli(['plan', 'Add the feature', ...base], env);
-  assert.equal(planned.code, 0, planned.stderr);
-  const store = new SessionStore(db);
-  let sessionId = '';
-  let planId = '';
-  try {
-    sessionId = store.list('', root)[0]!.id;
-    const plan = store.latestPlan(sessionId);
-    assert.ok(plan, 'the planning run created its row');
-    planId = plan.id;
-    assert.equal(plan.status, 'planning', 'it never reached a decision');
-  } finally {
-    store.close();
-  }
-  assert.equal(await exists(path.join(root, 'created.txt')), false);
-
-  const resumed = await runCli(['resume', sessionId, 'continue planning', ...base], env);
-  assert.equal(resumed.code, 0, resumed.stderr);
-  const reopened = new SessionStore(db);
-  try {
-    assert.equal(
-      reopened.getPlan(sessionId, planId).status,
-      'proposed',
-      'the resumed run finished the planning it was in the middle of',
-    );
-  } finally {
-    reopened.close();
-  }
-  // The read-only promise held across the restart: the write the model asked for in the resumed run is not there.
-  assert.equal(
-    await exists(path.join(root, 'created.txt')),
-    false,
-    'a resumed planning run is still read-only',
-  );
-});
-
-test.skip('a planning run started by resume does not spend the goal rounds', async (t) => {
-  /**
-   * `resume` is also one of the two front doors the goal loop continues through, and a planning run may not
-   * touch the goal at all: the goal tools are not registered in that phase, so a round started for it would be
-   * spent on work the run cannot do. On the resume path it would be worse than idle — a continuation is an
-   * ordinary run, which is the escape that resuming mid-plan exists to close.
-   *
-   * The seeded goal has exactly one round left, so a continuation the loop should not have started is a round
-   * the loop takes: the second fixture call and the moved `roundsStarted` are both the failure.
-   */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-goal-'));
-  let calls = 0;
-  const url = await httpFixture(t, (_body, res) => {
-    calls++;
-    // The planning run submits its plan, which ends it: submitting is the last act of the phase. Every call
-    // after that one is a goal round this invocation should never have started.
-    if (calls === 1)
-      return sendFrames(
-        res,
-        frames('', [
-          {
-            id: 'p',
-            name: 'submit_plan',
-            input: { title: 'Resumed plan', summary: 'Still planning', steps: ['First'] },
-          },
-        ]),
-      );
-    return sendFrames(res, frames('Carrying the goal forward'));
-  });
-  const db = path.join(root, 'sessions.sqlite');
-  const env = {
-    YUANTU_MODEL: 'fixture',
-    YUANTU_MAX_CONTEXT_TOKENS: '128000',
-    YUANTU_SESSION_TITLES: '0',
-    YUANTU_API_KEY: 'test',
-    YUANTU_PROTOCOL: 'anthropic',
-    YUANTU_BASE_URL: url,
-  };
-  t.after(() => rm(root, { recursive: true, force: true }));
-  // A session that stopped mid-plan *and* is carrying a goal: the plan was never decided, the objective is
-  // still open, and one round of its budget is left.
-  const seeded = new SessionStore(db);
-  let sessionId = '';
-  try {
-    sessionId = seeded.create(root).id;
-    seeded.recordEvent(sessionId, 'goal.changed', {
-      action: 'create',
-      goal: {
-        ...newGoal({ objective: 'Ship the loader', maxGoalRounds: 3 }, new Date().toISOString()),
-        roundsStarted: 2,
-      },
+test(
+  'the CLI plans read-only, prints the approval witness, and gates execution on it',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-cli-'));
+    const url = await httpFixture(t, (_body, res) => {
+      // The planning call tries to write; the execution call answers plainly.
+      if (attempts++ === 0)
+        return sendFrames(
+          res,
+          frames('', [
+            { id: 'w', name: 'write_file', input: { path: 'created.txt', content: 'written' } },
+          ]),
+        );
+      if (attempts === 2)
+        return sendFrames(
+          res,
+          frames('', [
+            {
+              id: 'p',
+              name: 'submit_plan',
+              input: { title: 'CLI plan', summary: 'Two steps', steps: ['First', 'Second'] },
+            },
+          ]),
+        );
+      return sendFrames(res, frames('Executed by CLI'));
     });
-    seeded.createPlan(sessionId);
-    assert.equal(seeded.goal(sessionId)?.roundsStarted, 2);
-  } finally {
-    seeded.close();
-  }
+    let attempts = 0;
+    const db = path.join(root, 'sessions.sqlite');
+    const env = {
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_API_KEY: 'test',
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_BASE_URL: url,
+    };
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const base = ['--workspace', root, '--db', db, '--json'];
 
-  const resumed = await runCli(
-    ['resume', sessionId, 'continue planning', '--db', db, '--json'],
-    env,
-  );
-  assert.equal(resumed.code, 0, resumed.stderr);
-  const after = new SessionStore(db);
-  try {
-    assert.equal(after.goal(sessionId)?.roundsStarted, 2, 'a planning run admits no goal round');
-    assert.equal(
-      after.latestPlan(sessionId)?.status,
-      'proposed',
-      'it was still the planning phase',
+    const planned = await runCli(['plan', 'Add the feature', ...base], env);
+    assert.equal(planned.code, 0, planned.stderr);
+    const planLine = planned.stdout
+      .split('\n')
+      .map((line) => {
+        try {
+          return JSON.parse(line) as { type?: string; plan?: Plan; approveCommand?: string };
+        } catch {
+          return {};
+        }
+      })
+      .find((entry) => entry.type === 'plan');
+    assert.ok(planLine?.plan, `expected a plan line, saw: ${planned.stdout}`);
+    const plan = planLine!.plan!;
+    assert.equal(plan.status, 'proposed');
+    assert.deepEqual(
+      plan.steps.map((step) => step.description),
+      ['First', 'Second'],
     );
-  } finally {
-    after.close();
-  }
-  assert.equal(calls, 1, 'the plan was submitted, and no continuation round was started');
-});
+    // A planning run must not have written anything, even though the model asked to.
+    assert.equal(await exists(path.join(root, 'created.txt')), false);
+
+    // The printed command carries the reviewed hash, which is what makes the approval meaningful.
+    assert.match(planLine!.approveCommand!, new RegExp(plan.hash));
+    assert.ok(
+      planLine!.approveCommand!.includes('--db'),
+      'the approval command must preserve the database route',
+    );
+    assert.ok(
+      planLine!.approveCommand!.includes(db),
+      'the same database must contain the reviewed plan',
+    );
+
+    const shown = await runCli(
+      ['plan-show', plan.sessionId, '--workspace', root, '--db', db, '--json'],
+      env,
+    );
+    assert.equal(shown.code, 0, shown.stderr);
+    const shownPlan = JSON.parse(shown.stdout.trim()) as { plan: Plan };
+    assert.equal(shownPlan.plan.hash, plan.hash);
+
+    // A hash the reviewer never saw is refused, and nothing executes.
+    const wrong = await runCli(['plan-execute', plan.sessionId, plan.id, 'nothash', ...base], env);
+    assert.notEqual(wrong.code, 0);
+    assert.match(wrong.stderr, /does not match this plan/);
+    assert.equal(await exists(path.join(root, 'created.txt')), false);
+
+    const executed = await runCli(
+      ['plan-execute', plan.sessionId, plan.id, plan.hash, ...base],
+      env,
+    );
+    assert.equal(executed.code, 0, executed.stderr);
+    assert.match(executed.stdout, /Executed by CLI/);
+    const store = new SessionStore(db);
+    try {
+      assert.equal(store.getPlan(plan.sessionId, plan.id).status, 'approved');
+    } finally {
+      store.close();
+    }
+  },
+);
+
+test(
+  'a session that stopped mid-plan resumes as a planning run, not as an ordinary one',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    /**
+     * Plan mode is a promise that this run cannot change anything, and it lived only in the request that started it:
+     * `plan` created the row and passed `planPhase`, `resume` passed neither — so a session whose planning run ended
+     * without submitting (the user's Stop, a lost terminal, a crash) came back with the full tool set, and a write it
+     * made would have been refused a moment earlier.
+     *
+     * The row is the state, and this is the whole of it: a plan still `planning` means nobody has decided anything
+     * yet, so continuing means continuing to plan. The second run below both asserts the read-only promise (a write
+     * is refused and nothing is created) and ends the way a planning run does, by submitting the plan the first run
+     * never got to.
+     */
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-resume-'));
+    let calls = 0;
+    const url = await httpFixture(t, (_body, res) => {
+      calls++;
+      // The first run: a write the planning phase refuses, then an answer that decides nothing — the row stays
+      // `planning`, which is the state a Stop or a lost terminal leaves behind.
+      if (calls === 1)
+        return sendFrames(
+          res,
+          frames('', [
+            { id: 'w', name: 'write_file', input: { path: 'created.txt', content: 'written' } },
+          ]),
+        );
+      if (calls === 2) return sendFrames(res, frames('Still looking around'));
+      // The resumed run submits the plan, and that is only possible if it is a planning run: `submit_plan` is
+      // registered for the planning phase alone, so an ordinary run would answer "Unknown tool" and the row would
+      // stay `planning`.
+      if (calls === 3)
+        return sendFrames(
+          res,
+          frames('', [
+            {
+              id: 'p',
+              name: 'submit_plan',
+              input: { title: 'Resumed plan', summary: 'Still planning', steps: ['First'] },
+            },
+          ]),
+        );
+      return sendFrames(res, frames('Plan recorded, nothing executed'));
+    });
+    const db = path.join(root, 'sessions.sqlite');
+    const env = {
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_API_KEY: 'test',
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_BASE_URL: url,
+    };
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const base = ['--workspace', root, '--db', db, '--json'];
+
+    // A planning run that stops without submitting — the interrupted case, which leaves the row at `planning`.
+    const planned = await runCli(['plan', 'Add the feature', ...base], env);
+    assert.equal(planned.code, 0, planned.stderr);
+    const store = new SessionStore(db);
+    let sessionId = '';
+    let planId = '';
+    try {
+      sessionId = store.list('', root)[0]!.id;
+      const plan = store.latestPlan(sessionId);
+      assert.ok(plan, 'the planning run created its row');
+      planId = plan.id;
+      assert.equal(plan.status, 'planning', 'it never reached a decision');
+    } finally {
+      store.close();
+    }
+    assert.equal(await exists(path.join(root, 'created.txt')), false);
+
+    const resumed = await runCli(['resume', sessionId, 'continue planning', ...base], env);
+    assert.equal(resumed.code, 0, resumed.stderr);
+    const reopened = new SessionStore(db);
+    try {
+      assert.equal(
+        reopened.getPlan(sessionId, planId).status,
+        'proposed',
+        'the resumed run finished the planning it was in the middle of',
+      );
+    } finally {
+      reopened.close();
+    }
+    // The read-only promise held across the restart: the write the model asked for in the resumed run is not there.
+    assert.equal(
+      await exists(path.join(root, 'created.txt')),
+      false,
+      'a resumed planning run is still read-only',
+    );
+  },
+);
+
+test(
+  'a planning run started by resume does not spend the goal rounds',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    /**
+     * `resume` is also one of the two front doors the goal loop continues through, and a planning run may not
+     * touch the goal at all: the goal tools are not registered in that phase, so a round started for it would be
+     * spent on work the run cannot do. On the resume path it would be worse than idle — a continuation is an
+     * ordinary run, which is the escape that resuming mid-plan exists to close.
+     *
+     * The seeded goal has exactly one round left, so a continuation the loop should not have started is a round
+     * the loop takes: the second fixture call and the moved `roundsStarted` are both the failure.
+     */
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-goal-'));
+    let calls = 0;
+    const url = await httpFixture(t, (_body, res) => {
+      calls++;
+      // The planning run submits its plan, which ends it: submitting is the last act of the phase. Every call
+      // after that one is a goal round this invocation should never have started.
+      if (calls === 1)
+        return sendFrames(
+          res,
+          frames('', [
+            {
+              id: 'p',
+              name: 'submit_plan',
+              input: { title: 'Resumed plan', summary: 'Still planning', steps: ['First'] },
+            },
+          ]),
+        );
+      return sendFrames(res, frames('Carrying the goal forward'));
+    });
+    const db = path.join(root, 'sessions.sqlite');
+    const env = {
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_API_KEY: 'test',
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_BASE_URL: url,
+    };
+    t.after(() => rm(root, { recursive: true, force: true }));
+    // A session that stopped mid-plan *and* is carrying a goal: the plan was never decided, the objective is
+    // still open, and one round of its budget is left.
+    const seeded = new SessionStore(db);
+    let sessionId = '';
+    try {
+      sessionId = seeded.create(root).id;
+      seeded.recordEvent(sessionId, 'goal.changed', {
+        action: 'create',
+        goal: {
+          ...newGoal({ objective: 'Ship the loader', maxGoalRounds: 3 }, new Date().toISOString()),
+          roundsStarted: 2,
+        },
+      });
+      seeded.createPlan(sessionId);
+      assert.equal(seeded.goal(sessionId)?.roundsStarted, 2);
+    } finally {
+      seeded.close();
+    }
+
+    const resumed = await runCli(
+      ['resume', sessionId, 'continue planning', '--db', db, '--json'],
+      env,
+    );
+    assert.equal(resumed.code, 0, resumed.stderr);
+    const after = new SessionStore(db);
+    try {
+      assert.equal(after.goal(sessionId)?.roundsStarted, 2, 'a planning run admits no goal round');
+      assert.equal(
+        after.latestPlan(sessionId)?.status,
+        'proposed',
+        'it was still the planning phase',
+      );
+    } finally {
+      after.close();
+    }
+    assert.equal(calls, 1, 'the plan was submitted, and no continuation round was started');
+  },
+);
 
 test('a session whose plan is still planning continues planning, not writing', async (t) => {
   /**

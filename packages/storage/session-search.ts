@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { ftsDisplayText } from '../protocol/fts-text.ts';
 import {
   MAX_SEARCH_MATCHES,
   MAX_SEARCH_SESSIONS,
@@ -193,7 +194,7 @@ export class SessionSearch {
           hit.matches.push({
             seq: Number(row.seq),
             role: String(row.role),
-            snippet: String(row.snippet).replace(/\s+/g, ' ').trim(),
+            snippet: ftsDisplayText(String(row.snippet)).replace(/\s+/g, ' ').trim(),
           });
       }
       /**

@@ -1,4 +1,5 @@
 import type { Agent } from '../../packages/core/agent.ts';
+import { parseSetting } from '../../packages/protocol/settings.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import type { BackgroundAuthority } from '../../packages/core/background-deliveries.ts';
 import type { PermissionPolicy } from '../../packages/core/permissions.ts';
@@ -195,7 +196,8 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     launchSandbox,
     // How often the scheduler re-checks for due tasks. Only the tick cadence is configurable; the
     // schedule itself always lives on the task row.
-    workflowIntervalMs: Number(process.env.YUANTU_WORKFLOW_INTERVAL_MS) || undefined,
+    workflowIntervalMs: parseSetting(process.env, 'YUANTU_WORKFLOW_INTERVAL_MS') as
+      number | undefined,
     store,
     background: services.background,
     terminals: services.terminals,

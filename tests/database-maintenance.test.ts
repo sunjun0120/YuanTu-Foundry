@@ -31,6 +31,7 @@ import {
   RECOVERY_COPY_ADMISSION,
   RECOVERY_COPY_RESERVE_BYTES,
 } from '../packages/storage/database-maintenance.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 import { runCli } from './process-fixture.ts';
 import { spawnSync } from 'node:child_process';
 
@@ -136,55 +137,63 @@ test('a backup failure refuses migration before changing the original schema or 
   original.close();
 });
 
-test.skip('maintenance CLI backs up, verifies and restores without credentials, preserving current data', async (t) => {
-  const { root, file } = fixture(t);
-  let store = new SessionStore(file);
-  const session = store.create(root);
-  store.append(session.id, { role: 'user', content: 'original message' });
-  store.close();
-  const backed = await runCli(['db-backup', '--db', file, '--json']);
-  assert.equal(backed.code, 0, backed.stderr);
-  const backup = JSON.parse(backed.stdout);
-  const verified = await runCli(['db-verify', backup.file, '--json']);
-  assert.equal(verified.code, 0, verified.stderr);
-  store = new SessionStore(file);
-  store.append(session.id, { role: 'user', content: 'after backup' });
-  store.close();
-  const restored = await runCli(['db-restore', backup.file, '--db', file, '--json']);
-  assert.equal(restored.code, 0, restored.stderr);
-  const report = JSON.parse(restored.stdout);
-  store = new SessionStore(file);
-  assert.equal(store.messages(session.id).at(-1)?.content, 'original message');
-  store.close();
-  const preserved = new SessionStore(path.join(report.recoveryDirectory, 'database.sqlite'));
-  assert.equal(preserved.messages(session.id).at(-1)?.content, 'after backup');
-  preserved.close();
-});
+test(
+  'maintenance CLI backs up, verifies and restores without credentials, preserving current data',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    const { root, file } = fixture(t);
+    let store = new SessionStore(file);
+    const session = store.create(root);
+    store.append(session.id, { role: 'user', content: 'original message' });
+    store.close();
+    const backed = await runCli(['db-backup', '--db', file, '--json']);
+    assert.equal(backed.code, 0, backed.stderr);
+    const backup = JSON.parse(backed.stdout);
+    const verified = await runCli(['db-verify', backup.file, '--json']);
+    assert.equal(verified.code, 0, verified.stderr);
+    store = new SessionStore(file);
+    store.append(session.id, { role: 'user', content: 'after backup' });
+    store.close();
+    const restored = await runCli(['db-restore', backup.file, '--db', file, '--json']);
+    assert.equal(restored.code, 0, restored.stderr);
+    const report = JSON.parse(restored.stdout);
+    store = new SessionStore(file);
+    assert.equal(store.messages(session.id).at(-1)?.content, 'original message');
+    store.close();
+    const preserved = new SessionStore(path.join(report.recoveryDirectory, 'database.sqlite'));
+    assert.equal(preserved.messages(session.id).at(-1)?.content, 'after backup');
+    preserved.close();
+  },
+);
 
-test.skip('restore refuses an active store and rejects corrupt or incompatible candidates without mutation', async (t) => {
-  const { root, file } = fixture(t);
-  const store = new SessionStore(file);
-  store.create(root);
-  const backed = await runCli(['db-backup', '--db', file, '--json']);
-  assert.equal(backed.code, 0, backed.stderr);
-  const candidate = JSON.parse(backed.stdout).file;
-  const busy = await runCli(['db-restore', candidate, '--db', file, '--json']);
-  assert.notEqual(busy.code, 0);
-  assert.match(busy.stderr, /open|active|close/i);
-  store.close();
-  const original = readFileSync(file);
-  const bad = path.join(root, 'bad.sqlite');
-  writeFileSync(bad, 'corrupted');
-  const corrupt = await runCli(['db-restore', bad, '--db', file]);
-  assert.notEqual(corrupt.code, 0);
-  assert.deepEqual(readFileSync(file), original);
-  const future = new DatabaseSync(candidate);
-  future.exec(`PRAGMA user_version=${SCHEMA_VERSION + 1}`);
-  future.close();
-  const incompatible = await runCli(['db-restore', candidate, '--db', file]);
-  assert.notEqual(incompatible.code, 0);
-  assert.deepEqual(readFileSync(file), original);
-});
+test(
+  'restore refuses an active store and rejects corrupt or incompatible candidates without mutation',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    const { root, file } = fixture(t);
+    const store = new SessionStore(file);
+    store.create(root);
+    const backed = await runCli(['db-backup', '--db', file, '--json']);
+    assert.equal(backed.code, 0, backed.stderr);
+    const candidate = JSON.parse(backed.stdout).file;
+    const busy = await runCli(['db-restore', candidate, '--db', file, '--json']);
+    assert.notEqual(busy.code, 0);
+    assert.match(busy.stderr, /open|active|close/i);
+    store.close();
+    const original = readFileSync(file);
+    const bad = path.join(root, 'bad.sqlite');
+    writeFileSync(bad, 'corrupted');
+    const corrupt = await runCli(['db-restore', bad, '--db', file]);
+    assert.notEqual(corrupt.code, 0);
+    assert.deepEqual(readFileSync(file), original);
+    const future = new DatabaseSync(candidate);
+    future.exec(`PRAGMA user_version=${SCHEMA_VERSION + 1}`);
+    future.close();
+    const incompatible = await runCli(['db-restore', candidate, '--db', file]);
+    assert.notEqual(incompatible.code, 0);
+    assert.deepEqual(readFileSync(file), original);
+  },
+);
 
 test('compaction returns the pages deleted records left behind, and keeps what remains', (t) => {
   /**
@@ -477,23 +486,27 @@ test('migration failure is recoverable from its pre-migration snapshot', (t) => 
   reopened.close();
 });
 
-test.skip('parallel online backups publish under one retention lock', async (t) => {
-  const { root, file } = fixture(t);
-  const store = new SessionStore(file);
-  store.create(root);
-  const results = await Promise.all([
-    runCli(['db-backup', '--db', file, '--json']),
-    runCli(['db-backup', '--db', file, '--json']),
-  ]);
-  store.close();
-  for (const result of results) {
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(
-      inspectDatabase(JSON.parse(result.stdout).file, SESSION_DATABASE_POLICY).version,
-      SCHEMA_VERSION,
-    );
-  }
-});
+test(
+  'parallel online backups publish under one retention lock',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    const { root, file } = fixture(t);
+    const store = new SessionStore(file);
+    store.create(root);
+    const results = await Promise.all([
+      runCli(['db-backup', '--db', file, '--json']),
+      runCli(['db-backup', '--db', file, '--json']),
+    ]);
+    store.close();
+    for (const result of results) {
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(
+        inspectDatabase(JSON.parse(result.stdout).file, SESSION_DATABASE_POLICY).version,
+        SCHEMA_VERSION,
+      );
+    }
+  },
+);
 
 test('a stale maintenance lock is refused without deleting another ownership record', (t) => {
   const { root, file } = fixture(t);

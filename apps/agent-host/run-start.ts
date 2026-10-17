@@ -1,6 +1,8 @@
 import {
   exhaustedGoalVerdict,
+  standDownGoal,
   GOAL_CONTINUATIONS_PER_REQUEST,
+  GOAL_TOKENS_PER_REQUEST,
 } from '../../packages/protocol/goals.ts';
 import { isMachineContext } from '../../packages/protocol/context.ts';
 import { validateImages } from '../../packages/protocol/images.ts';
@@ -15,6 +17,7 @@ import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { PermissionPolicy } from '../../packages/core/permissions.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
+import { RoundEvidence } from '../../packages/core/goal-progress.ts';
 import { executionPolicy as callExecutionPolicy } from '../../packages/tools/execution-policy.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
 import { createAgent } from '../shared/runtime.ts';
@@ -164,6 +167,15 @@ export async function startRun(
     'completion_scope',
   ]);
   let substantiveToolCalls = 0;
+  /**
+   * What this request's rounds have already learned, across all of them (see `packages/core/goal-progress.ts`).
+   *
+   * A round is progress when it changed a file or produced a result no earlier round of this request produced.
+   * Counting calls alone let a goal whose model re-read the same files and re-ran the same failing command every
+   * round look busy until its whole budget was gone.
+   */
+  const evidence = new RoundEvidence();
+  const startedCalls = new Map<string, { name: string; arguments: unknown }>();
   let queriesConverged = false;
   const emit = (event: AgentEvent) => {
     runId = event.runId;
@@ -177,8 +189,18 @@ export async function startRun(
     }
     if (event.type === 'input.consumed') queriesConverged = false;
     if (event.type === 'tool.started') {
-      const name = (event.data.call as { name?: string } | undefined)?.name;
-      if (name && !NON_SUBSTANTIVE_TOOLS.has(name)) substantiveToolCalls += 1;
+      const call = event.data.call as
+        { id?: string; name?: string; arguments?: unknown } | undefined;
+      if (call?.id && call.name && !NON_SUBSTANTIVE_TOOLS.has(call.name))
+        startedCalls.set(call.id, { name: call.name, arguments: call.arguments });
+    }
+    if (event.type === 'tool.finished') {
+      const callId = typeof event.data.callId === 'string' ? event.data.callId : '';
+      const call = startedCalls.get(callId);
+      if (call) {
+        startedCalls.delete(callId);
+        if (evidence.observe(call.name, call.arguments, event.data)) substantiveToolCalls += 1;
+      }
     }
     // Kept for `invariants.list`: the run reports its own failure, but a host outlives the run and an
     // operator asking "does this deployment currently satisfy its promises" needs an answer afterwards.
@@ -327,6 +349,7 @@ export async function startRun(
          * run unattended. See `GOAL_CONTINUATIONS_PER_REQUEST`.
          */
         maxContinuations: GOAL_CONTINUATIONS_PER_REQUEST,
+        maxTokens: GOAL_TOKENS_PER_REQUEST,
         signal: controller.signal,
         goalOf: () => ctx.store.goal(sessionId),
         onRound: (continuation) => {
@@ -365,13 +388,53 @@ export async function startRun(
             authority: 'automatic',
             ...(contract ? { resumeCompletionId: contract.contractId } : {}),
           });
-          return { status: outcome.status, toolCalls: substantiveToolCalls };
+          return {
+            status: outcome.status,
+            toolCalls: substantiveToolCalls,
+            tokens: outcome.usage.inputTokens + outcome.usage.outputTokens,
+          };
         },
       });
       if (rounds.continuations > 0)
         process.stderr.write(
           `[goal] stopped after ${rounds.continuations} round(s): ${rounds.stopped}\n`,
         );
+      /**
+       * The two stops that leave the goal active with nothing coming next are written onto the goal itself.
+       *
+       * stderr is for an operator; the person looking at an "active" goal banner needs to know that the runtime
+       * stood down and why, or the session reads as still working. A goal that finished, was blocked or paused
+       * says so in its own status, and a round that failed or was cancelled says so in the run's.
+       */
+      if (
+        rounds.stopped === 'no-progress' ||
+        rounds.stopped === 'rounds' ||
+        rounds.stopped === 'tokens'
+      ) {
+        const current = ctx.store.goal(sessionId);
+        const stood = current
+          ? standDownGoal(
+              current,
+              rounds.stopped === 'rounds'
+                ? 'request-limit'
+                : rounds.stopped === 'tokens'
+                  ? 'token-limit'
+                  : 'no-progress',
+              rounds.continuations,
+              new Date().toISOString(),
+            )
+          : undefined;
+        if (stood) {
+          ctx.store.recordEvent(sessionId, 'goal.changed', { action: 'stand-down', goal: stood });
+          emit({
+            type: 'goal.changed',
+            sessionId,
+            runId,
+            seq: ctx.store.lastSeq(sessionId),
+            data: { action: 'stand-down', goal: stood },
+          });
+        }
+      }
     }
     return outcome;
   } finally {

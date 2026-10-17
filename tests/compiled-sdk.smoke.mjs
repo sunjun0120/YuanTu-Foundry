@@ -6,10 +6,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
-test.skip(
+test(
   'public compiled SDK example streams a response and exits its Host',
-  { timeout: 20000 },
+  { timeout: 20000, skip: pausedSkip('sdk') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-sdk-'));
     t.after(() => rm(root, { recursive: true, force: true }));

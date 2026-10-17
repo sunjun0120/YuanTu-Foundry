@@ -5,6 +5,55 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+test('conditional skips explain their reason without rejecting reason variables or disabled skips', () => {
+  for (const expression of [
+    'true',
+    "process.platform !== 'win32'",
+    "process.platform !== 'win32' && process.platform !== 'darwin'",
+    '!process.env.OPTIONAL_FIXTURE',
+    'Boolean(enabled)',
+    '(enabled ? true : false)',
+  ])
+    assert.equal(
+      inspectIsolation(
+        `test('case', { skip: ${expression} }, () => {});`,
+        'tests/fixture.ts',
+      ).filter((issue) => issue.rule === 'skip-reason').length,
+      1,
+      expression,
+    );
+  for (const expression of [
+    'false',
+    "process.platform !== 'win32' && 'needs Windows'",
+    "condition ? 'missing optional fixture' : false",
+    "condition ? false : 'missing optional fixture'",
+    'someReasonVariable',
+    'unavailable ?? false',
+    "'paused product surface'",
+  ])
+    assert.deepEqual(
+      inspectIsolation(`test('case', { skip: ${expression} }, () => {});`, 'tests/fixture.ts'),
+      [],
+      expression,
+    );
+});
+
+test('skip calls explain their reason at the call site', () => {
+  for (const source of [
+    "test.skip('case', () => {});",
+    "it.skip('case', () => {});",
+    "describe.skip('case', () => {});",
+    "test.skip('case', { skip: 'reason' }, () => {});",
+    't.skip();',
+  ])
+    assert.ok(
+      inspectIsolation(source, 'tests/fixture.ts').some((issue) => issue.rule === 'skip-reason'),
+      source,
+    );
+  for (const source of ["t.skip('reason');", 't.skip(reason);'])
+    assert.deepEqual(inspectIsolation(source, 'tests/fixture.ts'), [], source);
+});
+
 test('isolation lint catches cwd changes including imported and assigned aliases', () => {
   for (const code of [
     'process.chdir(root);',

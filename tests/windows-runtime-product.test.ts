@@ -105,7 +105,7 @@ test('source lock verification rejects modified cached archives before extractio
 
 test(
   'candidate packaging consumes local provenance and license and rejects tampering before publishing',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     const { prepareWindowsRuntime } = await moduleScript('prepare-windows-package.mjs');
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-local-candidate-'));
@@ -190,7 +190,7 @@ test('protected installer configuration requires an explicit production invocati
 
 test(
   'returning to an upstream runtime removes obsolete candidate provenance',
-  { skip: process.platform !== 'win32' },
+  { skip: process.platform !== 'win32' && 'needs Windows' },
   async (t) => {
     const { prepareWindowsRuntime } = await moduleScript('prepare-windows-package.mjs');
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-upstream-runtime-'));

@@ -1,9 +1,11 @@
 /** Temporarily paused product surfaces. Keep their implementation for later restoration. */
 export const PRODUCT_SCOPE = {
   mcpManagement: false,
+  backups: false,
   cli: false,
   web: false,
   acp: false,
+  sdk: false,
 } as const;
 
 export function requireProductEntry(entry: 'cli' | 'web' | 'acp'): void {

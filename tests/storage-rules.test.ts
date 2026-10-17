@@ -18,6 +18,7 @@ import {
   storedMessage,
 } from '../packages/storage/session-blobs.ts';
 import type { Message, TaskStep, TaskStepStatus } from '../packages/protocol/index.ts';
+import { ftsDisplayText, ftsIndexText } from '../packages/protocol/fts-text.ts';
 
 /**
  * The storage layer's pure rules, tested without a database.
@@ -62,10 +63,29 @@ test('free text becomes a quoted AND query, and unindexable text becomes null', 
   assert.equal(ftsQuery('a" OR "b'), '"a" AND "OR" AND "b"');
   assert.equal(ftsQuery('NEAR(a b)'), '"NEAR" AND "a" AND "b"');
   assert.equal(ftsQuery('-x:y'), '"x" AND "y"');
-  assert.equal(ftsQuery('中文搜索'), '"中文搜索"');
+  // A word in a script without spaces is one phrase of one-character tokens (see the CJK test below).
+  assert.equal(ftsQuery('中文搜索'), '"​中​文​搜​索​"');
   assert.equal(ftsQuery('snake_case9'), '"snake_case9"');
   assert.equal(ftsQuery('!!! *** :::'), null);
   assert.equal(ftsQuery(''), null);
+});
+
+test('Chinese, Japanese and Korean text is indexed one character per token, and read back unchanged', () => {
+  const sentence = '我们修复了SQLite数据库迁移的问题';
+  const indexed = ftsIndexText(sentence);
+  // Latin runs stay whole; every Han character stands alone between separators.
+  assert.equal(indexed, '​我​们​修​复​了​SQLite​数​据​库​迁​移​的​问​题​');
+  assert.equal(ftsDisplayText(indexed), sentence);
+  // Idempotent, which is what lets the v31 migration re-segment a row the backfill already wrote.
+  assert.equal(ftsIndexText(indexed), indexed);
+  assert.equal(ftsIndexText('かな カナ 한국어'), '​か​な​ ​カ​ナ​ ​한​국​어​');
+  assert.equal(ftsIndexText('plain english'), 'plain english');
+  // A mixed word stays one phrase, so its parts must be adjacent.
+  assert.equal(ftsQuery('SQLite数据库'), '"SQLite​数​据​库​"');
+  assert.equal(
+    messageSearchText({ role: 'user', content: '数据库\n迁移' } as Message),
+    '​数​据​库​ ​迁​移​',
+  );
 });
 
 test('a query is capped at twelve words so one search cannot become an expensive statement', () => {

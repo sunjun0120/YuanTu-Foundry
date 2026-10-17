@@ -8,13 +8,17 @@ import { ClientSideConnection, type AnyMessage } from '@agentclientprotocol/sdk'
 import { connectAcp } from '../packages/sdk/acp.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { projectRoot } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
-test.skip('concurrent cold loads reserve a single session before Host startup awaits', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-load-'));
-  const script = path.join(root, 'host.mjs');
-  await writeFile(
-    script,
-    `
+test(
+  'concurrent cold loads reserve a single session before Host startup awaits',
+  { skip: pausedSkip('acp') },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-load-'));
+    const script = path.join(root, 'host.mjs');
+    await writeFile(
+      script,
+      `
     import { createInterface } from 'node:readline';
     for await (const line of createInterface({input: process.stdin})) {
       const request = JSON.parse(line);
@@ -25,44 +29,45 @@ test.skip('concurrent cold loads reserve a single session before Host startup aw
       console.log(JSON.stringify({id:request.id,result}));
     }
   `,
-  );
-  const toAgent = new TransformStream<AnyMessage>();
-  const toClient = new TransformStream<AnyMessage>();
-  const adapter = connectAcp(
-    { readable: toAgent.readable, writable: toClient.writable },
-    { nodePath: process.execPath, hostPath: script, workspace: root },
-  );
-  t.after(async () => {
-    await adapter.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const texts: string[] = [];
-  const client = new ClientSideConnection(
-    () => ({
-      sessionUpdate(event) {
-        if (
-          event.update.sessionUpdate === 'user_message_chunk' &&
-          event.update.content.type === 'text'
-        )
-          texts.push(event.update.content.text);
-      },
-      requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
-    }),
-    { readable: toClient.readable, writable: toAgent.writable },
-  );
-  await client.initialize({ protocolVersion: 1 });
-  const results = await Promise.allSettled([
-    client.loadSession({ cwd: root, sessionId: 'known', mcpServers: [] }),
-    client.loadSession({ cwd: root, sessionId: 'known', mcpServers: [] }),
-  ]);
-  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
-  assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
-  assert.deepEqual(texts, ['once']);
-});
+    );
+    const toAgent = new TransformStream<AnyMessage>();
+    const toClient = new TransformStream<AnyMessage>();
+    const adapter = connectAcp(
+      { readable: toAgent.readable, writable: toClient.writable },
+      { nodePath: process.execPath, hostPath: script, workspace: root },
+    );
+    t.after(async () => {
+      await adapter.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const texts: string[] = [];
+    const client = new ClientSideConnection(
+      () => ({
+        sessionUpdate(event) {
+          if (
+            event.update.sessionUpdate === 'user_message_chunk' &&
+            event.update.content.type === 'text'
+          )
+            texts.push(event.update.content.text);
+        },
+        requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
+      }),
+      { readable: toClient.readable, writable: toAgent.writable },
+    );
+    await client.initialize({ protocolVersion: 1 });
+    const results = await Promise.allSettled([
+      client.loadSession({ cwd: root, sessionId: 'known', mcpServers: [] }),
+      client.loadSession({ cwd: root, sessionId: 'known', mcpServers: [] }),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+    assert.deepEqual(texts, ['once']);
+  },
+);
 
-test.skip(
+test(
   'real Host chunked history continues with messages after the oversized one',
-  { timeout: 30000 },
+  { timeout: 30000, skip: pausedSkip('acp') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acp-chunks-'));
     await mkdir(path.join(root, '.yuantu'));

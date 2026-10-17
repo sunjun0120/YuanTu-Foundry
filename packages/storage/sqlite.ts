@@ -942,6 +942,10 @@ export class SessionStore implements PlanRepository {
   delete(id: string): void {
     this.lifecycle.delete(id);
   }
+  /** The session and its delegated descendants: exactly the sessions `delete(id)` removes. */
+  sessionTree(id: string): string[] {
+    return this.lifecycle.tree(id);
+  }
   messages(id: string): Message[] {
     return this.journal.messages(id);
   }
@@ -1065,6 +1069,9 @@ export class SessionStore implements PlanRepository {
   }
   releaseLease(sessionId: string, runId: string): boolean {
     return this.runJournal.releaseLease(sessionId, runId);
+  }
+  forsakeRun(runId: string): void {
+    this.runJournal.forsakeRun(runId);
   }
   claimCompaction(sessionId: string, runId?: string): void {
     return this.runJournal.claimCompaction(sessionId, runId);

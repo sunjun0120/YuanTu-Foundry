@@ -27,6 +27,9 @@ export interface SessionRunsPort {
   saveProjectionCheckpoints(id?: string): number;
 }
 
+/** Runs this process ended without managing to persist their end; see `forsakeRun`. */
+const FORSAKEN_RUNS = new Set<string>();
+
 export class SessionRuns {
   private readonly port: SessionRunsPort;
 
@@ -208,6 +211,19 @@ export class SessionRuns {
     });
   }
 
+  /**
+   * Record that this process has finished with a run whose end it could not persist.
+   *
+   * The lease is decided by the owner's pid and never by age, which is right for a run that is working and wrong
+   * for one that is over: when `finishRun` itself keeps failing, the row still names this live process and every
+   * later run of the session was refused until the Host restarted. The note is process memory on purpose — it is
+   * this process vouching for its own run, which no other process could do — and `beginRun` then converges the
+   * row exactly as it does a crashed owner's.
+   */
+  forsakeRun(runId: string): void {
+    FORSAKEN_RUNS.add(runId);
+  }
+
   beginRun(id: string): string {
     return this.port.transaction(() => {
       const session = this.port.get(id);
@@ -234,6 +250,9 @@ export class SessionRuns {
           } catch (error) {
             alive = (error as NodeJS.ErrnoException).code !== 'ESRCH';
           }
+          // This process ended that run and could not write so: its owner is alive, but the run is not.
+          if (Number(row.owner_pid) === process.pid && FORSAKEN_RUNS.has(session.activeRun))
+            alive = false;
         }
         if (alive)
           throw new Error(

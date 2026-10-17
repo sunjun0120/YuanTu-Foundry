@@ -17,12 +17,14 @@ import {
   RUN_DEFAULTS,
   assertEnvironment,
   environmentProblems,
+  parseSetting,
   promptCacheMode,
   resolveRunLimits,
 } from '../packages/protocol/settings.ts';
 import { readConfig } from '../packages/providers/config.ts';
 import { parseArgs, parseListen } from '../apps/shared/args.ts';
 import { projectRoot } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
 /** The CLI's own help output, rendered by the code rather than read from a file. */
 async function runCli(args: string[]): Promise<string> {
@@ -45,6 +47,29 @@ async function runCli(args: string[]): Promise<string> {
   assert.equal(code, 0, `the CLI exited ${code}`);
   return stdout;
 }
+
+test('workflow polling uses the registered integer range instead of accepting arbitrary numbers', () => {
+  assert.equal(parseSetting({}, 'YUANTU_WORKFLOW_INTERVAL_MS'), undefined);
+  assert.equal(
+    parseSetting({ YUANTU_WORKFLOW_INTERVAL_MS: '' }, 'YUANTU_WORKFLOW_INTERVAL_MS'),
+    undefined,
+  );
+  for (const value of ['1000', '86400000'])
+    assert.equal(
+      parseSetting({ YUANTU_WORKFLOW_INTERVAL_MS: value }, 'YUANTU_WORKFLOW_INTERVAL_MS'),
+      Number(value),
+    );
+  for (const value of ['0', '999', '-1000', '1000.5', '86400001'])
+    assert.throws(
+      () => parseSetting({ YUANTU_WORKFLOW_INTERVAL_MS: value }, 'YUANTU_WORKFLOW_INTERVAL_MS'),
+      /YUANTU_WORKFLOW_INTERVAL_MS must be an integer between 1000 and 86400000/,
+    );
+  for (const value of ['Infinity', 'not-a-number'])
+    assert.throws(
+      () => parseSetting({ YUANTU_WORKFLOW_INTERVAL_MS: value }, 'YUANTU_WORKFLOW_INTERVAL_MS'),
+      /YUANTU_WORKFLOW_INTERVAL_MS must be a number/,
+    );
+});
 
 test('a mistyped name is reported with the one it probably meant', () => {
   const problems = environmentProblems({ YUANTU_MODELS: 'fixture-model', YUANTU_MODEL: 'fixture' });
@@ -124,36 +149,40 @@ test('the main request has no timeout unless one is asked for, and the summary a
   assert.throws(() => resolveRunLimits({ requestTimeoutMs: 0 }), /Invalid requestTimeoutMs/);
 });
 
-test.skip('the documented defaults are the defaults the code uses', async () => {
-  // The help text is rendered from the constants, so this checks the *rendered* output: a literal number in
-  // the help is exactly the drift this module exists to prevent.
-  const help = await runCli(['--help']);
-  for (const [flag, expected] of [
-    ['max-context-chars', RUN_DEFAULTS.maxContextChars],
-    ['max-output-tokens', RUN_DEFAULTS.maxOutputTokens],
-  ] as const) {
-    const line = help.split('\n').find((entry) => entry.includes(`--${flag} <n>`));
-    assert.ok(line, `the help text documents --${flag}`);
-    assert.match(line, new RegExp(`default: ${expected}\\b`));
-  }
-  // Omitting the window uses the capacity resolver; the flag remains an explicit override.
-  // Help must describe automatic resolution without presenting one endpoint-specific number as universal.
-  const windowLine = help.split('\n').find((entry) => entry.includes('--max-context-tokens <n>'));
-  assert.ok(windowLine, 'the help text documents --max-context-tokens');
-  assert.match(windowLine, /omit.*resolved automatically/);
-  assert.doesNotMatch(
-    windowLine,
-    /default:/,
-    'the help should explain resolution rather than hard-code a universal window',
-  );
-  const source = await readFile(path.join(projectRoot, 'apps/cli/main.ts'), 'utf8');
-  // A round cap used to be documented here with a default. It is not a limit any more, and a flag for it
-  // would be a bound the kernel has no place to enforce.
-  assert.ok(
-    !/--max-rounds/.test(source),
-    'the help text must not offer a round cap the kernel does not have',
-  );
-});
+test(
+  'the documented defaults are the defaults the code uses',
+  { skip: pausedSkip('cli') },
+  async () => {
+    // The help text is rendered from the constants, so this checks the *rendered* output: a literal number in
+    // the help is exactly the drift this module exists to prevent.
+    const help = await runCli(['--help']);
+    for (const [flag, expected] of [
+      ['max-context-chars', RUN_DEFAULTS.maxContextChars],
+      ['max-output-tokens', RUN_DEFAULTS.maxOutputTokens],
+    ] as const) {
+      const line = help.split('\n').find((entry) => entry.includes(`--${flag} <n>`));
+      assert.ok(line, `the help text documents --${flag}`);
+      assert.match(line, new RegExp(`default: ${expected}\\b`));
+    }
+    // Omitting the window uses the capacity resolver; the flag remains an explicit override.
+    // Help must describe automatic resolution without presenting one endpoint-specific number as universal.
+    const windowLine = help.split('\n').find((entry) => entry.includes('--max-context-tokens <n>'));
+    assert.ok(windowLine, 'the help text documents --max-context-tokens');
+    assert.match(windowLine, /omit.*resolved automatically/);
+    assert.doesNotMatch(
+      windowLine,
+      /default:/,
+      'the help should explain resolution rather than hard-code a universal window',
+    );
+    const source = await readFile(path.join(projectRoot, 'apps/cli/main.ts'), 'utf8');
+    // A round cap used to be documented here with a default. It is not a limit any more, and a flag for it
+    // would be a bound the kernel has no place to enforce.
+    assert.ok(
+      !/--max-rounds/.test(source),
+      'the help text must not offer a round cap the kernel does not have',
+    );
+  },
+);
 
 test('the provider config reports a bad value with the table’s own words', () => {
   // There is one validator, not two that agree: `readConfig` goes through `parseSetting`, so the message it

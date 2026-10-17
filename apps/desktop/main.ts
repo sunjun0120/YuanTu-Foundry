@@ -765,26 +765,27 @@ void app
       )
         throw new Error('Untrusted desktop sender');
     };
-    ipcMain.handle('yuantu:backups', async (event, input: unknown): Promise<BackupReply> => {
-      try {
-        assertSender(event);
-        const command = parseBackupCommand(input);
-        if (quitting || switching || !service?.snapshot.ready)
-          throw new Error(mainText('upgrade.busy'));
-        const file = sessionDatabase();
-        if (command.type === 'get') return { ok: true, view: await dailyBackups.view(file) };
-        if (command.type === 'create') return { ok: true, view: await dailyBackups.create(file) };
-        const work = restoreBackup(file, command.id);
-        backupRestoring = work;
+    if (PRODUCT_SCOPE.backups)
+      ipcMain.handle('yuantu:backups', async (event, input: unknown): Promise<BackupReply> => {
         try {
-          return await work;
-        } finally {
-          if (backupRestoring === work) backupRestoring = undefined;
+          assertSender(event);
+          const command = parseBackupCommand(input);
+          if (quitting || switching || !service?.snapshot.ready)
+            throw new Error(mainText('upgrade.busy'));
+          const file = sessionDatabase();
+          if (command.type === 'get') return { ok: true, view: await dailyBackups.view(file) };
+          if (command.type === 'create') return { ok: true, view: await dailyBackups.create(file) };
+          const work = restoreBackup(file, command.id);
+          backupRestoring = work;
+          try {
+            return await work;
+          } finally {
+            if (backupRestoring === work) backupRestoring = undefined;
+          }
+        } catch (error) {
+          return { ok: false, error: safeError(error) };
         }
-      } catch (error) {
-        return { ok: false, error: safeError(error) };
-      }
-    });
+      });
     let readingAttachment = false;
     ipcMain.handle('yuantu:attachment', async (event, input): Promise<AttachmentReply> => {
       try {

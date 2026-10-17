@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import type { RunResult, Task, TaskAttempt } from '../../packages/protocol/index.ts';
+import { parseSetting } from '../../packages/protocol/settings.ts';
 import { safeError } from '../shared/runtime.ts';
 import { createVerifier } from './approvals.ts';
 import { createBackgroundWake } from './background-wake.ts';
@@ -29,7 +30,7 @@ async function main(): Promise<void> {
   const ctx = createHostState(launch, services);
   ctx.carrier = new HostCarrier({
     listen: options.listen,
-    authToken: process.env.YUANTU_HOST_TOKEN,
+    authToken: parseSetting(process.env, 'YUANTU_HOST_TOKEN') as string | undefined,
     isClosing: () => ctx.closing,
   });
   const wake = createBackgroundWake(ctx);

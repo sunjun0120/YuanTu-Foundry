@@ -56,7 +56,10 @@ export function goalContinuation(goal: Goal | null | undefined): GoalContinuatio
  */
 export async function runGoalRounds(input: {
   /** Start one run with this prompt and answer with its status and how much substantive tool work it did. */
-  runOnce: (prompt: string, round: number) => Promise<{ status: string; toolCalls?: number }>;
+  runOnce: (
+    prompt: string,
+    round: number,
+  ) => Promise<{ status: string; toolCalls?: number; tokens?: number }>;
   /** The goal as it now stands — read from the durable log, not from a cache. */
   goalOf: () => Goal | null | undefined;
   /** Called before each continuation, so a caller can log or observe the round it is about to start. */
@@ -77,12 +80,21 @@ export async function runGoalRounds(input: {
    * be the only one passes its ceiling.
    */
   maxContinuations: number;
+  /**
+   * The most tokens (input plus output, as each round reports them) the continuations of one request may spend.
+   *
+   * The round count bounds how many runs start, not what they cost: a round has no token cap of its own, so a
+   * handful of rounds over a large context could cost more than the whole budget a person had in mind. Checked
+   * after each round, so the round that crosses it finishes — what is bounded is starting another one.
+   */
+  maxTokens?: number;
   signal?: AbortSignal;
 }): Promise<{
   continuations: number;
-  stopped: 'goal' | 'rounds' | 'run' | 'cancelled' | 'no-progress';
+  stopped: 'goal' | 'rounds' | 'run' | 'cancelled' | 'no-progress' | 'tokens';
 }> {
   let continuations = 0;
+  let tokens = 0;
   const reportExhausted = (goal: Goal | null | undefined): void => {
     if (goal?.status === 'active' && goalExhausted(goal)) input.onExhausted?.(goal);
   };
@@ -98,6 +110,7 @@ export async function runGoalRounds(input: {
     input.onRound?.(continuation);
     const result = await input.runOnce(continuation.prompt, continuation.round);
     continuations++;
+    tokens += result.tokens ?? 0;
     if (result.status !== 'completed') return { continuations, stopped: 'run' };
     /**
      * A round that finished the goal is reported as the goal stopping, not as the round being quiet.
@@ -121,10 +134,16 @@ export async function runGoalRounds(input: {
      * `completion_step`/`completion_scope` are excluded before it gets here, because recording state is not doing
      * work, and a round that only rewrote its own checklist would otherwise look busy forever.
      *
+     * The Host's count is stricter still: a result is counted only when it changed a file or is one no earlier
+     * round of the request produced, so re-reading the same files or re-running the same failing command every
+     * round is not progress either.
+     *
      * A missing count stops the loop too. Absent data is not evidence of progress, and the conservative reading
      * of "I cannot tell whether this round did anything" is to stop rather than to keep paying — a person can
      * always continue deliberately.
      */
     if ((result.toolCalls ?? 0) <= 0) return { continuations, stopped: 'no-progress' };
+    if (input.maxTokens !== undefined && input.maxTokens > 0 && tokens >= input.maxTokens)
+      return { continuations, stopped: 'tokens' };
   }
 }

@@ -16,11 +16,12 @@ import {
   FrameDecoder,
   MessageAssembler,
 } from '../apps/web/websocket.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
 for (const outcome of ['success', 'failure', 'file'] as const) {
-  test.skip(
+  test(
     `a disconnected page's late ${outcome} reply stays on its original connection`,
-    { timeout: 15_000 },
+    { timeout: 15_000, skip: pausedSkip('web') },
     async (t) => {
       const root = await mkdtemp(path.join(tmpdir(), 'yuantu-browser-origin-'));
       const bridge = await startBridge({
@@ -107,9 +108,9 @@ for (const outcome of ['success', 'failure', 'file'] as const) {
   );
 }
 
-test.skip(
+test(
   'concurrent browser startup requests deliver each real Host delta once',
-  { timeout: 15_000 },
+  { timeout: 15_000, skip: pausedSkip('web') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-browser-startup-'));
     let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
@@ -160,9 +161,9 @@ test.skip(
   },
 );
 
-test.skip(
+test(
   'a dropped browser request settles and concurrent reconnect requests share one event stream',
-  { timeout: 10_000 },
+  { timeout: 10_000, skip: pausedSkip('web') },
   async (t) => {
     const server = createServer();
     const sockets = new Set<Socket>();
@@ -234,9 +235,9 @@ test.skip(
   },
 );
 
-test.skip(
+test(
   'reconnecting during a close handshake settles the old request without rejecting the new one',
-  { timeout: 10_000 },
+  { timeout: 10_000, skip: pausedSkip('web') },
   async (t) => {
     const clients = new Set<WebSocket>();
     const nativeSend = WebSocket.prototype.send;

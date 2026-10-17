@@ -16,6 +16,7 @@ export class AdaptiveConcurrency {
   private limitValue: number;
   private inFlight = 0;
   private successes = 0;
+  private epoch = 0;
   private readonly waiting: { resolve: () => void; reject: (reason: unknown) => void }[] = [];
   private readonly ceiling: number;
   private readonly floor: number;
@@ -31,12 +32,14 @@ export class AdaptiveConcurrency {
   async run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     await this.acquire(signal);
     const inFlightAtStart = this.inFlight;
+    const epoch = this.epoch;
     try {
       const result = await work();
       this.succeeded();
       return result;
     } catch (error) {
-      if (error instanceof RunFailure && error.code === 'rate-limit') this.limited(inFlightAtStart);
+      if (error instanceof RunFailure && error.code === 'rate-limit')
+        this.limited(inFlightAtStart, epoch);
       throw error;
     } finally {
       this.inFlight--;
@@ -78,7 +81,10 @@ export class AdaptiveConcurrency {
       this.limitValue++;
     }
   }
-  private limited(inFlight: number): void {
+  /** One burst can finish many requests with 429; only its first failure starts a new recovery window. */
+  private limited(inFlight: number, epoch: number): void {
+    if (epoch !== this.epoch) return;
+    this.epoch++;
     this.successes = 0;
     this.limitValue = Math.max(this.floor, Math.floor(Math.min(this.limitValue, inFlight) / 2));
   }

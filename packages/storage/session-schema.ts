@@ -13,6 +13,7 @@ import type {
   TaskTriggerSource,
 } from '../protocol/index.ts';
 import type { FileChange } from '../protocol/index.ts';
+import { ftsIndexText, ftsMatchQuery } from '../protocol/fts-text.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
 import {
   normalizeTaskDraft,
@@ -296,8 +297,12 @@ export function messageSearchText(message: Message): string {
   const text =
     message.role === 'user' ? (message.displayContent ?? message.content) : message.content;
   // Control characters would end up in the index and make MATCH behave oddly; collapse whitespace so
-  // a phrase query can still line up across the newlines of a multi-line message.
-  return typeof text === 'string' ? text.replace(/[\x00-\x1f\x7f]+/g, ' ').trim() : '';
+  // a phrase query can still line up across the newlines of a multi-line message. The column holds the
+  // *indexed* form (see `ftsIndexText`): the triggers copy it into `messages_fts` verbatim, and nothing
+  // reads it back for display — snippets are cut by FTS5 and passed through `ftsDisplayText`.
+  return typeof text === 'string'
+    ? ftsIndexText(text.replace(/[\x00-\x1f\x7f]+/g, ' ').trim())
+    : '';
 }
 /**
  * Turn free-form search text into an FTS5 query, or null when there is nothing indexable to match.
@@ -307,11 +312,11 @@ export function messageSearchText(message: Message): string {
  * and each is quoted, so punctuation is literal, and they are AND-joined to keep the previous
  * "all words must appear" behaviour of the substring scan. Text with no word characters at all
  * returns null so the caller can skip the MATCH clause entirely — an empty FTS5 phrase is itself a
- * syntax error.
+ * syntax error. Each word is segmented the way the index is (see `ftsMatchQuery`), which is what lets a
+ * Chinese word match inside a sentence.
  */
 export function ftsQuery(text: string): string | null {
-  const words = [...text.matchAll(/[\p{L}\p{N}_]+/gu)].map((match) => match[0]!).slice(0, 12);
-  return words.length ? words.map((word) => `"${word}"`).join(' AND ') : null;
+  return ftsMatchQuery(text, 12);
 }
 /**
  * True when the process that owned a run is gone. A live owner means the run is genuinely still
@@ -393,7 +398,7 @@ export function projectionFoldIdentity(projection: SessionProjection<unknown>): 
  * of the constructor have to agree, and the failure they would produce apart is silent in one direction (an
  * older build opening a newer file) and fatal in the other.
  */
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 31;
 /**
  * Every table this build creates, so "is this file ours?" can be answered without guessing.
  *
@@ -490,9 +495,15 @@ export function frozen<T>(values: T[]): T[] {
 }
 /**
  * How many sessions' transcripts one store keeps folded. A store is shared by a host that outlives the
- * sessions it reads, so the cache is bounded; eight covers the sessions a reader is actually working with.
+ * sessions it reads, so the cache is bounded.
+ *
+ * The bound has to cover the sessions that are read *in turn*, because the cache is LRU and a working set one
+ * larger than it misses on every read: a parent fanning out to its full concurrency (8 children) plus itself was
+ * nine sessions round-robin against eight entries, so every round of every one of them re-read and re-folded its
+ * whole log from SQLite. 24 covers the parent, a full fan-out, the resident children and a few sessions a window
+ * is showing; a child's log is small, so the memory this buys is mostly the parent's own.
  */
-export const LOG_CACHE_ENTRIES = 8;
+export const LOG_CACHE_ENTRIES = 24;
 /** How long ago a lease was renewed, as a phrase, or nothing when the timestamp is unusable. */
 export function ageSuffix(renewedAt: string | undefined): string {
   const at = renewedAt === undefined ? Number.NaN : Date.parse(renewedAt);

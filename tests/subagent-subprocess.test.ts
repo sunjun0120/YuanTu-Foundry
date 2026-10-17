@@ -23,6 +23,7 @@ import {
   reportFromChild,
   subprocessProvider,
 } from '../packages/core/subagent-subprocess.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 import type { ResolvedSubAgentStartRequest } from '../packages/core/subagent-providers.ts';
 
 /** A start request as the coordinator would build it, with only what this provider reads. */
@@ -74,41 +75,49 @@ const providerFor = (url: string, extra: { timeoutMs?: number; maxContextTokens?
     },
   });
 
-test.skip('a child runs in its own process and its answer comes back as a composed report', async (t) => {
-  const bodies: unknown[] = [];
-  const url = await httpFixture(t, (body, res) => {
-    bodies.push(body);
-    sendFrames(res, frames('The answer is 42.'));
-  });
-  const started: string[] = [];
-  const outcome = await providerFor(url).start(request({ started: (id) => started.push(id) }));
-  assert.equal(outcome.status, 'completed', outcome.error);
-  assert.equal(outcome.text.trim(), 'The answer is 42.');
-  // The request really reached the endpoint from the *child* process, which is what makes this out of process.
-  assert.ok(bodies.length >= 1, 'the child made its own model request');
-  // No `started()`: the child session lives in the child's own database, so there is no session here to name. The
-  // provider reports its id in the outcome instead, and `started` is reserved for a child this process can reach.
-  assert.deepEqual(started, []);
-  assert.match(outcome.sessionId, /\S/, 'the child session id comes back in the outcome');
-  // The report is composed, and says where its evidence came from rather than implying it was verified here.
-  assert.equal(outcome.report?.findings.length, 1);
-  assert.match(outcome.report!.findings[0]!.evidence, /The answer is 42\./);
-  assert.match(outcome.report!.unverified![0]!, /ran in its own process and workspace/);
-  assert.ok(outcome.usage, 'the child reports what it spent, and the parent folds that in');
-});
+test(
+  'a child runs in its own process and its answer comes back as a composed report',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    const bodies: unknown[] = [];
+    const url = await httpFixture(t, (body, res) => {
+      bodies.push(body);
+      sendFrames(res, frames('The answer is 42.'));
+    });
+    const started: string[] = [];
+    const outcome = await providerFor(url).start(request({ started: (id) => started.push(id) }));
+    assert.equal(outcome.status, 'completed', outcome.error);
+    assert.equal(outcome.text.trim(), 'The answer is 42.');
+    // The request really reached the endpoint from the *child* process, which is what makes this out of process.
+    assert.ok(bodies.length >= 1, 'the child made its own model request');
+    // No `started()`: the child session lives in the child's own database, so there is no session here to name. The
+    // provider reports its id in the outcome instead, and `started` is reserved for a child this process can reach.
+    assert.deepEqual(started, []);
+    assert.match(outcome.sessionId, /\S/, 'the child session id comes back in the outcome');
+    // The report is composed, and says where its evidence came from rather than implying it was verified here.
+    assert.equal(outcome.report?.findings.length, 1);
+    assert.match(outcome.report!.findings[0]!.evidence, /The answer is 42\./);
+    assert.match(outcome.report!.unverified![0]!, /ran in its own process and workspace/);
+    assert.ok(outcome.usage, 'the child reports what it spent, and the parent folds that in');
+  },
+);
 
-test.skip('a write-capable task is refused, because the child cannot affect this workspace', async (t) => {
-  // The honest half of "the child owns its world": the in-process provider promises that a child's file changes
-  // are journalled against the parent session, and this one cannot, so it must say so instead of running a
-  // `general` child somewhere its writes mean nothing.
-  const url = await httpFixture(t, (_body, res) => sendFrames(res, frames('unreachable')));
-  const outcome = await providerFor(url).start(request({ role: 'general' }));
-  assert.equal(outcome.status, 'failed');
-  assert.match(String(outcome.error), /runs the child in its own workspace/);
-  assert.match(String(outcome.error), /write-capable task is refused/);
-  assert.doesNotMatch(String(outcome.error), /ask for an `explore`/);
-  assert.match(String(outcome.error), /default provider/);
-});
+test(
+  'a write-capable task is refused, because the child cannot affect this workspace',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    // The honest half of "the child owns its world": the in-process provider promises that a child's file changes
+    // are journalled against the parent session, and this one cannot, so it must say so instead of running a
+    // `general` child somewhere its writes mean nothing.
+    const url = await httpFixture(t, (_body, res) => sendFrames(res, frames('unreachable')));
+    const outcome = await providerFor(url).start(request({ role: 'general' }));
+    assert.equal(outcome.status, 'failed');
+    assert.match(String(outcome.error), /runs the child in its own workspace/);
+    assert.match(String(outcome.error), /write-capable task is refused/);
+    assert.doesNotMatch(String(outcome.error), /ask for an `explore`/);
+    assert.match(String(outcome.error), /default provider/);
+  },
+);
 
 test('the refusal never recommends explore through a provider that cannot enforce its capabilities', async () => {
   const provider = subprocessProvider({ script: 'unused', maxContextTokens: 128000 });
@@ -181,71 +190,83 @@ test('subprocess output exactly at its byte budget preserves a final Unicode res
   assert.equal(result.text, '边界输出');
 });
 
-test.skip('a child that never answers is killed on its budget and says which budget it was', async (t) => {
-  /**
-   * A process that exits without a `result` frame did not answer, and reporting that as an empty report would be
-   * the "accepted and ignored" shape this whole seam refuses.
-   *
-   * The fixture holds the request open rather than failing it: an endpoint that *errors* still lets the CLI finish
-   * and print a result frame — a failed run is still a result, which this file asserts elsewhere. The case worth
-   * testing is a child that never gets there, and it is also the case the design called out: a separate process can
-   * only be stopped, not asked to wind down. So the budget is a hard kill, and the message says which limit it was
-   * instead of blaming the child.
-   */
-  const url = await httpFixture(t, (_body, res) => {
-    // Never answer and never end: the child stays inside a model request until it is killed.
-    void res;
-  });
-  const outcome = await providerFor(url, { timeoutMs: 800 }).start(request());
-  assert.equal(outcome.status, 'failed');
-  assert.match(String(outcome.error), /killed after 800ms without reporting a result/);
-  assert.match(String(outcome.error), /hard limit rather than a cooperative one/);
-  assert.equal(outcome.report, undefined);
-});
+test(
+  'a child that never answers is killed on its budget and says which budget it was',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    /**
+     * A process that exits without a `result` frame did not answer, and reporting that as an empty report would be
+     * the "accepted and ignored" shape this whole seam refuses.
+     *
+     * The fixture holds the request open rather than failing it: an endpoint that *errors* still lets the CLI finish
+     * and print a result frame — a failed run is still a result, which this file asserts elsewhere. The case worth
+     * testing is a child that never gets there, and it is also the case the design called out: a separate process can
+     * only be stopped, not asked to wind down. So the budget is a hard kill, and the message says which limit it was
+     * instead of blaming the child.
+     */
+    const url = await httpFixture(t, (_body, res) => {
+      // Never answer and never end: the child stays inside a model request until it is killed.
+      void res;
+    });
+    const outcome = await providerFor(url, { timeoutMs: 800 }).start(request());
+    assert.equal(outcome.status, 'failed');
+    assert.match(String(outcome.error), /killed after 800ms without reporting a result/);
+    assert.match(String(outcome.error), /hard limit rather than a cooperative one/);
+    assert.equal(outcome.report, undefined);
+  },
+);
 
-test.skip('aborting the call kills the child and reports cancellation, not a failed child', async (t) => {
-  // The only stop this provider has is a signal to the process, and a parent that cancelled the work must not read
-  // its own decision back as the child's fault.
-  const url = await httpFixture(t, (_body, res) => {
-    // Never answer: the child stays in a model request until it is killed.
-    void res;
-  });
-  const controller = new AbortController();
-  const pending = providerFor(url, { timeoutMs: 60_000 }).start(
-    request({ signal: controller.signal }),
-  );
-  setTimeout(() => controller.abort(), 300);
-  const outcome = await pending;
-  assert.equal(outcome.status, 'cancelled');
-  assert.match(String(outcome.error), /aborted, which kills the process/);
-});
+test(
+  'aborting the call kills the child and reports cancellation, not a failed child',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    // The only stop this provider has is a signal to the process, and a parent that cancelled the work must not read
+    // its own decision back as the child's fault.
+    const url = await httpFixture(t, (_body, res) => {
+      // Never answer: the child stays in a model request until it is killed.
+      void res;
+    });
+    const controller = new AbortController();
+    const pending = providerFor(url, { timeoutMs: 60_000 }).start(
+      request({ signal: controller.signal }),
+    );
+    setTimeout(() => controller.abort(), 300);
+    const outcome = await pending;
+    assert.equal(outcome.status, 'cancelled');
+    assert.match(String(outcome.error), /aborted, which kills the process/);
+  },
+);
 
-test.skip('a child completes in a scratch world even when this checkout has a database of its own', async (t) => {
-  /**
-   * The regression the first version of this provider hit, kept as a test because the failure is silent otherwise.
-   *
-   * The CLI resolves its workspace from `--workspace` — an environment variable is *not* read for it — and its
-   * database from `<workspace>/.yuantu/sessions.sqlite`. Spawned with neither, a child inherits the parent's
-   * workspace and opens the parent's database; the first version did exactly that and died on a database format its
-   * own build had not written, while the parent's database sat unchanged beside it. A checkout with no database, or
-   * with one whose format happened to match, would have hidden that.
-   *
-   * What this asserts is the consequence: the child starts, runs and answers regardless of what is in this
-   * repository — and reaches the endpoint itself, which is what makes it out of process rather than a second call
-   * from here. The mechanism (both paths passed explicitly at the spawn site) is documented there.
-   */
-  const url = await httpFixture(t, (_body, res) => {
-    sendFrames(res, frames('SCRATCH-OK'));
-  });
-  const outcome = await providerFor(url).start(
-    request({ objective: 'Answer with the probe word' }),
-  );
-  assert.equal(outcome.status, 'completed', outcome.error);
-  assert.equal(outcome.text.trim(), 'SCRATCH-OK');
-  // The child's session id belongs to its scratch database, so nothing here can look it up — which is the only
-  // thing "out of process" can mean if it means anything.
-  assert.match(outcome.sessionId, /\S/);
-});
+test(
+  'a child completes in a scratch world even when this checkout has a database of its own',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    /**
+     * The regression the first version of this provider hit, kept as a test because the failure is silent otherwise.
+     *
+     * The CLI resolves its workspace from `--workspace` — an environment variable is *not* read for it — and its
+     * database from `<workspace>/.yuantu/sessions.sqlite`. Spawned with neither, a child inherits the parent's
+     * workspace and opens the parent's database; the first version did exactly that and died on a database format its
+     * own build had not written, while the parent's database sat unchanged beside it. A checkout with no database, or
+     * with one whose format happened to match, would have hidden that.
+     *
+     * What this asserts is the consequence: the child starts, runs and answers regardless of what is in this
+     * repository — and reaches the endpoint itself, which is what makes it out of process rather than a second call
+     * from here. The mechanism (both paths passed explicitly at the spawn site) is documented there.
+     */
+    const url = await httpFixture(t, (_body, res) => {
+      sendFrames(res, frames('SCRATCH-OK'));
+    });
+    const outcome = await providerFor(url).start(
+      request({ objective: 'Answer with the probe word' }),
+    );
+    assert.equal(outcome.status, 'completed', outcome.error);
+    assert.equal(outcome.text.trim(), 'SCRATCH-OK');
+    // The child's session id belongs to its scratch database, so nothing here can look it up — which is the only
+    // thing "out of process" can mean if it means anything.
+    assert.match(outcome.sessionId, /\S/);
+  },
+);
 
 test('the child result reader takes the last result frame and survives frames it cannot parse', async () => {
   /**

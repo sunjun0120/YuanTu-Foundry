@@ -277,6 +277,7 @@ export function createRunDelegation(options: RunDelegationOptions): SubAgentCoor
   const delegation = coordinator;
   tools.replace(
     workflowTool({
+      maxAgents: limits.maxPerRun,
       runAgent: (prompt, options, signal) =>
         delegation.runOne(
           {

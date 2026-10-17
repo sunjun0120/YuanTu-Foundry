@@ -35,8 +35,24 @@ export interface Goal {
   roundsStarted: number;
   maxGoalRounds: number;
   blockedReason?: string;
+  /**
+   * Why the runtime stopped continuing this goal on its own while leaving it active, when it did.
+   *
+   * An active goal tells the user rounds are coming; after the Host stands down (a round that learned nothing
+   * new, or this request's continuation limit) none are, until the user sends something. Recording it on the goal
+   * is what lets a window — including one opened later — say so instead of showing an active goal that has gone
+   * quiet. The next admitted round, or any change to the goal, clears it.
+   */
+  standDown?: GoalStandDown;
   createdAt: string;
   updatedAt: string;
+}
+export const GOAL_STAND_DOWN_REASONS = ['no-progress', 'request-limit', 'token-limit'] as const;
+export interface GoalStandDown {
+  reason: (typeof GOAL_STAND_DOWN_REASONS)[number];
+  /** Continuation rounds the request ran before it stopped. */
+  continuations: number;
+  at: string;
 }
 export const GOAL_CEILINGS = {
   /**
@@ -71,11 +87,20 @@ export const GOAL_DEFAULTS = {
  * bound wearing two names — a model that edited `max_goal_rounds` to the ceiling also decided how many rounds
  * the host would run unattended. This one is not reachable from a tool call at all.
  *
- * Its value is the shipped default budget, which is the amount of unattended work a user who never thought
- * about the question has already agreed to: a goal that asks for more than this gets another request from the
- * user, which is the cheap way to spend more than somebody agreed to.
+ * Deliberately far below the goal's default budget. Each continuation is a whole run with no round or token cap
+ * of its own, so 256 of them behind one request was an unbounded bill in practice; a goal that needs more gets
+ * another request from the user, which is the cheap way to check in before spending more than somebody agreed
+ * to. The goal's own count carries across requests, so the next request continues where this one stopped.
  */
-export const GOAL_CONTINUATIONS_PER_REQUEST = GOAL_DEFAULTS.maxGoalRounds;
+export const GOAL_CONTINUATIONS_PER_REQUEST = 32;
+/**
+ * The most tokens the automatic continuations of one request may spend, input and output together.
+ *
+ * The round cap above bounds how many runs start; this bounds what they cost, since a single round over a large
+ * context can spend millions of tokens. Like the round cap it is not reachable from a tool call, and the next
+ * request from the user starts a fresh allowance.
+ */
+export const GOAL_TOKENS_PER_REQUEST = 20_000_000;
 /**
  * The goal actions only a person's own turn may take.
  *
@@ -126,14 +151,14 @@ export interface GoalChange {
   blockedReason?: unknown;
 }
 /**
- * Every label a recorded change can carry: the five a tool can ask for, plus the two the runtime performs.
+ * Every label a recorded change can carry: the five a tool can ask for, plus the three the runtime performs.
  *
  * `create` and `round` are not actions the model may request — they are what the runtime does when a goal is
- * declared and when a later run is admitted to it. They are labels on the same event because a reader of the
+ * declared and when a later run is admitted to it; `stand-down` is the Host recording that it stopped continuing. They are labels on the same event because a reader of the
  * log should see the goal's whole history in one shape, and because a projection that folded two event types
  * would have two chances to disagree.
  */
-export type GoalChangeAction = GoalAction | 'create' | 'round';
+export type GoalChangeAction = GoalAction | 'create' | 'round' | 'stand-down';
 export class GoalError extends Error {
   constructor(message: string) {
     super(message);
@@ -189,6 +214,8 @@ export function newGoal(input: { objective: unknown; maxGoalRounds?: unknown }, 
  */
 export function changeGoal(goal: Goal, action: GoalAction, input: GoalChange, now: string): Goal {
   const next: Goal = { ...goal, updatedAt: now };
+  // Any accepted change is somebody deciding what happens next, which is what a stand-down was waiting for.
+  delete next.standDown;
   switch (action) {
     case 'edit': {
       if (input.objective !== undefined) next.objective = objective(input.objective);
@@ -245,7 +272,20 @@ export function changeGoal(goal: Goal, action: GoalAction, input: GoalChange, no
  */
 export function admitGoalRound(goal: Goal, now: string): Goal {
   if (goal.status !== 'active' || goal.roundsStarted >= goal.maxGoalRounds) return goal;
-  return { ...goal, roundsStarted: goal.roundsStarted + 1, updatedAt: now };
+  const next: Goal = { ...goal, roundsStarted: goal.roundsStarted + 1, updatedAt: now };
+  // A round is running again, so the runtime has not stood down any more.
+  delete next.standDown;
+  return next;
+}
+/** The goal with the runtime's stand-down recorded, or `undefined` when there is nothing to record. */
+export function standDownGoal(
+  goal: Goal,
+  reason: GoalStandDown['reason'],
+  continuations: number,
+  now: string,
+): Goal | undefined {
+  if (goal.status !== 'active') return undefined;
+  return { ...goal, updatedAt: now, standDown: { reason, continuations, at: now } };
 }
 /** Whether the goal has spent every round it was given. */
 export function goalExhausted(goal: Goal): boolean {
@@ -297,7 +337,18 @@ export function isGoal(value: unknown): value is Goal {
     typeof goal.updatedAt === 'string' &&
     (goal.blockedReason === undefined ||
       (typeof goal.blockedReason === 'string' &&
-        goal.blockedReason.length <= GOAL_CEILINGS.blockedReasonChars))
+        goal.blockedReason.length <= GOAL_CEILINGS.blockedReasonChars)) &&
+    (goal.standDown === undefined || isStandDown(goal.standDown))
+  );
+}
+function isStandDown(value: unknown): value is GoalStandDown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const standDown = value as Record<string, unknown>;
+  return (
+    (GOAL_STAND_DOWN_REASONS as readonly unknown[]).includes(standDown.reason) &&
+    Number.isSafeInteger(standDown.continuations) &&
+    (standDown.continuations as number) >= 0 &&
+    typeof standDown.at === 'string'
   );
 }
 /** One line for a tool result, a notice or a log line: the state first, because that decides what to do. */

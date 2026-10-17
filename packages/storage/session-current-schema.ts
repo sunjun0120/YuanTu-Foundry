@@ -276,6 +276,7 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         UNIQUE(result_id,digest,target_binding_id)
       );
     `);
+  createLookupIndexes(db);
   // The session search index. The projection column is filled by `append`, and these triggers keep the index in
   // step for every write path. They are part of "the current schema" rather than of a migration: a database
   // created today has to be searchable, and a database upgraded today has to be searchable in exactly the same
@@ -290,4 +291,24 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         DELETE FROM messages_fts WHERE rowid=old.seq;
         INSERT INTO messages_fts(rowid,search_text)
           SELECT new.seq,new.search_text WHERE new.search_text <> ''; END;`);
+}
+
+/**
+ * The indexes behind lookups that used to scan a whole table.
+ *
+ * Each serves a query that runs by key: a session's delegated children (deletion walks them level by level, and
+ * the session list filters on them), a workspace's sessions in creation order (the session list and the
+ * scheduler), a session's runs (status and recovery), and a session's stream checkpoints. The first and the last
+ * two are also the child keys of `sessions` foreign keys, so a session's deletion no longer scans `runs` and
+ * `run_stream_checkpoints` to check them.
+ *
+ * Shared by both entries and written `IF NOT EXISTS`: a new database and an upgraded one must have the same
+ * indexes (the parity regression compares them), and an index changes no reader's answer, so an older build can
+ * still open a file that has them and no version fence is needed.
+ */
+export function createLookupIndexes(db: DatabaseSync): void {
+  db.exec(`CREATE INDEX IF NOT EXISTS sessions_parent ON sessions(parent_session_id);
+      CREATE INDEX IF NOT EXISTS sessions_workspace ON sessions(workspace,created_at);
+      CREATE INDEX IF NOT EXISTS runs_session ON runs(session_id,started_at);
+      CREATE INDEX IF NOT EXISTS run_stream_checkpoints_session ON run_stream_checkpoints(session_id,run_id);`);
 }

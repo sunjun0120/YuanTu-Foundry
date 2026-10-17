@@ -9,6 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { goalContinuation, runGoalRounds } from '../packages/core/goal-driver.ts';
+import { RoundEvidence } from '../packages/core/goal-progress.ts';
 import type { Goal } from '../packages/protocol/goals.ts';
 
 const goal = (over: Partial<Goal> = {}): Goal => ({
@@ -190,4 +191,47 @@ test('cancellation stops the loop before it starts another round', async () => {
   });
   assert.deepEqual(outcome, { continuations: 1, stopped: 'cancelled' });
   assert.equal(rounds, 1);
+});
+
+test('continuations stop once a request has spent its token budget', async () => {
+  let rounds = 0;
+  const outcome = await runGoalRounds({
+    runOnce: async () => {
+      rounds++;
+      return { status: 'completed', toolCalls: 1, tokens: 400 };
+    },
+    goalOf: () => goal({ roundsStarted: 1 + rounds }),
+    maxContinuations: 10,
+    maxTokens: 1000,
+  });
+  // 400 + 400 is under; the third round crosses it, finishes, and no fourth one starts.
+  assert.deepEqual(outcome, { continuations: 3, stopped: 'tokens' });
+});
+
+test('a repeated query is new only after the workspace changed, and noise does not make output new', () => {
+  const evidence = new RoundEvidence();
+  const search = { query: 'parser' };
+  assert.equal(evidence.observe('search_files', search, { content: 'a.ts:1' }), true);
+  // The transcript grew, so the hits differ — but the files did not, so it is the same answer.
+  assert.equal(evidence.observe('search_files', search, { content: 'a.ts:1\nlog:2' }), false);
+  assert.equal(
+    evidence.observe('write_file', { path: 'a.ts' }, { content: 'ok', change: {} }),
+    true,
+  );
+  assert.equal(
+    evidence.observe('search_files', search, { content: 'a.ts:1' }),
+    true,
+    'after an edit',
+  );
+  const test = { command: 'npm test' };
+  const failed = (ms: number) => ({
+    isError: true,
+    content: `FAIL parser at 2026-10-17T10:00:0${ms % 10}Z in ${ms}ms`,
+  });
+  assert.equal(evidence.observe('run_command', test, failed(120)), true);
+  assert.equal(evidence.observe('run_command', test, failed(135)), false, 'only the clock moved');
+  assert.equal(
+    evidence.observe('run_command', test, { isError: true, content: 'FAIL lexer' }),
+    true,
+  );
 });

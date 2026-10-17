@@ -346,6 +346,10 @@ export const ENVIRONMENT = {
     kind: 'string',
     description: '（内部）Host 快照的 ACL helper 载荷；不向客体传递',
   },
+  YUANTU_PROGRAM_LAUNCH_DIR: {
+    kind: 'string',
+    description: '（内部）程序运行器离开工作区前记录的启动目录；由运行器覆盖',
+  },
   YUANTU_SANDBOX_IMAGE: {
     kind: 'string',
     description: '已停用：仅兼容旧配置，原生沙箱不读取镜像设置',

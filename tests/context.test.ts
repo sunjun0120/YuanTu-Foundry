@@ -521,6 +521,98 @@ test('auto-compaction threshold summarizes before the context window is full', a
   assert.equal(result.status, 'completed', result.error);
   assert.ok(summaries > 0);
 });
+/** The conversation and limits of the threshold test above: the threshold, not the window, asks for a summary. */
+function thresholdAgent(
+  store: SessionStore,
+  sessionId: string,
+  provider: Provider,
+  tools = new ToolRegistry(),
+): Agent {
+  for (let i = 0; i < 3; i++) {
+    store.append(sessionId, { role: 'user', content: 'history '.repeat(1100) });
+    store.append(sessionId, { role: 'assistant', content: 'Recorded.', toolCalls: [] });
+  }
+  return new Agent({
+    store,
+    tools,
+    approve: async () => true,
+    maxContextChars: 100000,
+    maxContextTokens: 66000,
+    autoCompactTokens: 11000,
+    maxOutputTokens: 128,
+    provider,
+  });
+}
+test('a summary that reaches for a tool is asked once more with tool calls forbidden', async (t) => {
+  const { store, session } = await fixture(t);
+  const summaries: ModelRequest[] = [];
+  const agent = thresholdAgent(store, session.id, {
+    async complete(request) {
+      if (!isSummaryRequest(request)) return reply();
+      summaries.push(request);
+      return summaries.length === 1
+        ? {
+            text: '',
+            toolCalls: [{ id: 'stray', name: 'read_file', arguments: { path: 'a' } }],
+            finishReason: 'tool_calls',
+            usage: { inputTokens: 5, outputTokens: 3 },
+          }
+        : reply();
+    },
+  });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Continue.' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(summaries.length, 2);
+  assert.equal(
+    summaries[0]!.toolChoice,
+    undefined,
+    'the first attempt keeps the cached prefix as is',
+  );
+  assert.equal(summaries[1]!.toolChoice, 'none');
+  assert.ok(store.contextSurface(session.id), 'the retry produced the compaction');
+});
+test('a failed threshold compaction waits a few rounds before it is tried again', async (t) => {
+  const { store, session } = await fixture(t);
+  let summaries = 0;
+  let rounds = 0;
+  const tools = new ToolRegistry();
+  tools.register({
+    name: 'noop',
+    description: 'Does nothing',
+    inputSchema: { type: 'object', properties: {} },
+    async execute() {
+      return { isError: false, content: 'ok' };
+    },
+  });
+  const agent = thresholdAgent(
+    store,
+    session.id,
+    {
+      async complete(request) {
+        if (isSummaryRequest(request)) {
+          summaries++;
+          throw new Error('summary unavailable');
+        }
+        rounds++;
+        return rounds < 6
+          ? {
+              text: '',
+              toolCalls: [{ id: `call-${rounds}`, name: 'noop', arguments: {} }],
+              finishReason: 'tool_calls',
+              usage: { inputTokens: 13000, outputTokens: 3 },
+            }
+          : reply(13000);
+      },
+    },
+    tools,
+  );
+  // Usage in line with the estimate, so the calibration does not talk the threshold away between rounds.
+  const result = await agent.run({ sessionId: session.id, prompt: 'Continue.' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(rounds, 6);
+  // Round 0 tries and fails; rounds 1-3 wait; round 4 tries again; round 5 waits.
+  assert.equal(summaries, 2);
+});
 test('a small explicit context window clips default output instead of rejecting a short prompt', async (t) => {
   const { store, session } = await fixture(t);
   let allowance = 0;

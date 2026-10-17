@@ -12,7 +12,7 @@ import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 
 export const execute = promisify(execFile);
 
-export const windows = { skip: process.platform !== 'win32', timeout: 120000 };
+export const windows = { skip: process.platform !== 'win32' && 'needs Windows', timeout: 120000 };
 
 export async function fixture() {
   const parent = await mkdtemp(path.join(os.tmpdir(), 'yuantu-appcontainer-test-'));

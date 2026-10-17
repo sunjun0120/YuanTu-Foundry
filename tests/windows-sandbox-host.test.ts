@@ -10,7 +10,7 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { quoteWindowsArgument } from '../packages/tools/sandbox-windows.ts';
 
-const windows = { skip: process.platform !== 'win32', timeout: 90000 };
+const windows = { skip: process.platform !== 'win32' && 'needs Windows', timeout: 90000 };
 async function waitFor<T>(read: () => Promise<T | undefined>, timeout = 30000): Promise<T> {
   const deadline = Date.now() + timeout;
   for (;;) {

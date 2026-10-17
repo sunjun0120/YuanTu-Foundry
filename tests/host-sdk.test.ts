@@ -4,25 +4,30 @@ import test from 'node:test';
 import { negotiateHostVersion, validateHostInfo } from '../packages/protocol/host-wire.ts';
 import { AgentHostClient, HostRequestError } from '../packages/sdk/index.ts';
 import type { HostTransport } from '../packages/client/host-transport.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
-test.skip('v1 accepts legacy and additive metadata but rejects incompatible versions', () => {
-  assert.equal(negotiateHostVersion({}), 1);
-  assert.equal(negotiateHostVersion({ protocolVersions: [2, 1] }), 1);
-  assert.throws(() => negotiateHostVersion({ protocolVersions: [2] }), /protocol/);
-  for (const versions of [[], [0], ['1'], 1])
-    assert.throws(() => negotiateHostVersion({ protocolVersions: versions }));
-  const info = {
-    protocolVersion: 1,
-    runtime: 'yuantu',
-    workspace: process.cwd(),
-    capabilities: ['sessions'],
-    extra: true,
-  };
-  assert.equal(validateHostInfo(info), info);
-  assert.throws(() => validateHostInfo({ ...info, capabilities: [123] }));
-  assert.throws(() => validateHostInfo({ ...info, protocolVersion: 2 }));
-  assert.throws(() => validateHostInfo(null));
-});
+test(
+  'v1 accepts legacy and additive metadata but rejects incompatible versions',
+  { skip: pausedSkip('sdk') },
+  () => {
+    assert.equal(negotiateHostVersion({}), 1);
+    assert.equal(negotiateHostVersion({ protocolVersions: [2, 1] }), 1);
+    assert.throws(() => negotiateHostVersion({ protocolVersions: [2] }), /protocol/);
+    for (const versions of [[], [0], ['1'], 1])
+      assert.throws(() => negotiateHostVersion({ protocolVersions: versions }));
+    const info = {
+      protocolVersion: 1,
+      runtime: 'yuantu',
+      workspace: process.cwd(),
+      capabilities: ['sessions'],
+      extra: true,
+    };
+    assert.equal(validateHostInfo(info), info);
+    assert.throws(() => validateHostInfo({ ...info, capabilities: [123] }));
+    assert.throws(() => validateHostInfo({ ...info, protocolVersion: 2 }));
+    assert.throws(() => validateHostInfo(null));
+  },
+);
 
 function transport(reply: (packet: { id: string; method: string; params: unknown }) => unknown) {
   let line: (line: string) => void = () => {};
@@ -73,37 +78,47 @@ function transport(reply: (packet: { id: string; method: string; params: unknown
   return { link, sends: () => sends };
 }
 
-test.skip('SDK exposes typed remote errors and never retries uncertain timeouts', async () => {
-  const remote = transport(() => ({ error: { message: 'not supported', code: 'UNSUPPORTED' } }));
-  const client = new AgentHostClient({ transport: remote.link, requestTimeoutMs: 20 });
-  await client.start();
-  await assert.rejects(
-    client.request('session.create', {}),
-    (error: unknown) =>
-      error instanceof HostRequestError &&
-      error.code === 'UNSUPPORTED' &&
-      error.method === 'session.create' &&
-      !error.outcomeUnknown,
-  );
-  await client.stop();
-  const silent = transport(() => null);
-  const next = new AgentHostClient({ transport: silent.link, requestTimeoutMs: 20 });
-  await next.start();
-  await assert.rejects(
-    next.request('session.create', {}),
-    (error: unknown) =>
-      error instanceof HostRequestError && error.code === 'REQUEST_TIMEOUT' && error.outcomeUnknown,
-  );
-  assert.equal(silent.sends(), 2);
-  await next.stop();
-});
+test(
+  'SDK exposes typed remote errors and never retries uncertain timeouts',
+  { skip: pausedSkip('sdk') },
+  async () => {
+    const remote = transport(() => ({ error: { message: 'not supported', code: 'UNSUPPORTED' } }));
+    const client = new AgentHostClient({ transport: remote.link, requestTimeoutMs: 20 });
+    await client.start();
+    await assert.rejects(
+      client.request('session.create', {}),
+      (error: unknown) =>
+        error instanceof HostRequestError &&
+        error.code === 'UNSUPPORTED' &&
+        error.method === 'session.create' &&
+        !error.outcomeUnknown,
+    );
+    await client.stop();
+    const silent = transport(() => null);
+    const next = new AgentHostClient({ transport: silent.link, requestTimeoutMs: 20 });
+    await next.start();
+    await assert.rejects(
+      next.request('session.create', {}),
+      (error: unknown) =>
+        error instanceof HostRequestError &&
+        error.code === 'REQUEST_TIMEOUT' &&
+        error.outcomeUnknown,
+    );
+    assert.equal(silent.sends(), 2);
+    await next.stop();
+  },
+);
 
-test.skip('synchronous transport send failure is settled without leaving a pending timer', async () => {
-  const remote = transport(() => {
-    throw new Error('send failed');
-  });
-  const client = new AgentHostClient({ transport: remote.link, requestTimeoutMs: 20 });
-  await client.start();
-  await assert.rejects(client.request('session.create', {}), /send failed/);
-  await client.stop();
-});
+test(
+  'synchronous transport send failure is settled without leaving a pending timer',
+  { skip: pausedSkip('sdk') },
+  async () => {
+    const remote = transport(() => {
+      throw new Error('send failed');
+    });
+    const client = new AgentHostClient({ transport: remote.link, requestTimeoutMs: 20 });
+    await client.start();
+    await assert.rejects(client.request('session.create', {}), /send failed/);
+    await client.stop();
+  },
+);

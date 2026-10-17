@@ -237,6 +237,14 @@ export interface ModelRequest {
    * own beyond a digest, and must never contain credentials.
    */
   cacheKey?: string;
+  /**
+   * `none` forbids tool calls while still sending the catalogue.
+   *
+   * The catalogue stays because it is part of the cacheable prefix a summary request replays; the choice is
+   * set only on a retry after a summary answered with a tool call, since changing it can invalidate the
+   * provider's message cache. Omitted means the protocol's own default (`auto`).
+   */
+  toolChoice?: 'none';
 }
 export interface Provider {
   complete(request: ModelRequest): Promise<ModelResponse>;

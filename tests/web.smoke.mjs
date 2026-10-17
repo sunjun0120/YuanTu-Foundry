@@ -19,6 +19,7 @@ import { connect } from 'node:net';
 import { chromium } from 'playwright';
 import { startBridge } from '../apps/web/main.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 
 /** A page-shaped client: one socket, frames in, one promise per request id. */
 function pageClient(url) {
@@ -71,13 +72,15 @@ async function until(client, predicate, what, timeoutMs = 20_000) {
 }
 const socketUrl = (url) => url.replace('http://', 'ws://').replace('/?', '/ws?');
 
-test.skip(
+test(
   'the built page completes a real Chromium turn and restores it after reload',
   {
     timeout: 30_000,
-    skip: existsSync(chromium.executablePath())
-      ? false
-      : 'Chromium is not installed; run npx playwright install chromium',
+    skip:
+      pausedSkip('web') ||
+      (existsSync(chromium.executablePath())
+        ? false
+        : 'Chromium is not installed; run npx playwright install chromium'),
   },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-page-'));
@@ -150,9 +153,9 @@ for (const [name, input, expectedCode] of [
   ],
   ['invalid UTF-8 text', Buffer.from([129, 129, 0, 0, 0, 0, 255]), 1007],
 ]) {
-  test.skip(
+  test(
     `${name} closes only its page with code ${expectedCode}`,
-    { timeout: 15_000 },
+    { timeout: 15_000, skip: pausedSkip('web') },
     async (t) => {
       const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-frame-limit-'));
       const bridge = await startBridge({
@@ -214,9 +217,9 @@ for (const [name, input, expectedCode] of [
   );
 }
 
-test.skip(
+test(
   'a close frame prevents subsequent requests from creating a real Host session',
-  { timeout: 15_000 },
+  { timeout: 15_000, skip: pausedSkip('web') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-close-boundary-'));
     const bridge = await startBridge({
@@ -281,124 +284,138 @@ test.skip(
   },
 );
 
-test.skip('a page drives a real Host through the bridge: handshake, one turn, events', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-'));
-  const url = await httpFixture(t, (_body, res) =>
-    sendFrames(res, frames('Hello from the bridge.')),
-  );
-  const bridge = await startBridge({
-    workspace: root,
-    port: 0,
-    token: 'smoke-token',
-    page: path.resolve('apps/web/dist'),
-    env: {
-      YUANTU_PROTOCOL: 'anthropic',
-      YUANTU_API_KEY: 'web-fixture',
-      YUANTU_MODEL: 'fixture',
-      YUANTU_MAX_CONTEXT_TOKENS: '128000',
-      YUANTU_SESSION_TITLES: '0',
-      YUANTU_BASE_URL: url,
-    },
-  });
-  t.after(async () => {
-    await bridge.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const client = pageClient(socketUrl(bridge.url));
-  t.after(() => client.close());
-  const send = (command) => client.request({ kind: 'command', command });
+test(
+  'a page drives a real Host through the bridge: handshake, one turn, events',
+  { skip: pausedSkip('web') },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-'));
+    const url = await httpFixture(t, (_body, res) =>
+      sendFrames(res, frames('Hello from the bridge.')),
+    );
+    const bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'smoke-token',
+      page: path.resolve('apps/web/dist'),
+      env: {
+        YUANTU_PROTOCOL: 'anthropic',
+        YUANTU_API_KEY: 'web-fixture',
+        YUANTU_MODEL: 'fixture',
+        YUANTU_MAX_CONTEXT_TOKENS: '128000',
+        YUANTU_SESSION_TITLES: '0',
+        YUANTU_BASE_URL: url,
+      },
+    });
+    t.after(async () => {
+      await bridge.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const client = pageClient(socketUrl(bridge.url));
+    t.after(() => client.close());
+    const send = (command) => client.request({ kind: 'command', command });
 
-  // The first frame after the handshake is the state, so a page shows the session without asking for it.
-  await until(client, (seen) => seen.some((frame) => frame.kind === 'state'), 'the opening state');
-  for (const mode of ['host', 'native', 'seatbelt', 'windows']) {
-    const refused = await send({ type: 'sandbox', mode });
-    assert.equal(refused.ok, false, `the page cannot override the launch sandbox with ${mode}`);
-    assert.match(refused.error, /sandbox.*launch|沙箱.*启动/i);
-  }
-  const created = await send({ type: 'send', prompt: 'hello from the web' });
-  assert.equal(created.ok, true, JSON.stringify(created));
-  assert.equal(created.value.ready, true);
+    // The first frame after the handshake is the state, so a page shows the session without asking for it.
+    await until(
+      client,
+      (seen) => seen.some((frame) => frame.kind === 'state'),
+      'the opening state',
+    );
+    for (const mode of ['host', 'native', 'seatbelt', 'windows']) {
+      const refused = await send({ type: 'sandbox', mode });
+      assert.equal(refused.ok, false, `the page cannot override the launch sandbox with ${mode}`);
+      assert.match(refused.error, /sandbox.*launch|沙箱.*启动/i);
+    }
+    const created = await send({ type: 'send', prompt: 'hello from the web' });
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.equal(created.value.ready, true);
 
-  // The run's answer arrives as state and as deltas — the same two channels the desktop subscribes to.
-  await until(
-    client,
-    (seen) =>
-      seen.some((frame) => frame.kind === 'delta') ||
-      seen.some(
-        (frame) =>
-          frame.kind === 'state' && JSON.stringify(frame.state).includes('Hello from the bridge.'),
-      ),
-    'the answer',
-    30_000,
-  );
-  await until(
-    client,
-    (seen) =>
-      seen.some(
-        (frame) =>
-          frame.kind === 'state' && JSON.stringify(frame.state).includes('Hello from the bridge.'),
-      ),
-    'the answer in a snapshot',
-    30_000,
-  );
+    // The run's answer arrives as state and as deltas — the same two channels the desktop subscribes to.
+    await until(
+      client,
+      (seen) =>
+        seen.some((frame) => frame.kind === 'delta') ||
+        seen.some(
+          (frame) =>
+            frame.kind === 'state' &&
+            JSON.stringify(frame.state).includes('Hello from the bridge.'),
+        ),
+      'the answer',
+      30_000,
+    );
+    await until(
+      client,
+      (seen) =>
+        seen.some(
+          (frame) =>
+            frame.kind === 'state' &&
+            JSON.stringify(frame.state).includes('Hello from the bridge.'),
+        ),
+      'the answer in a snapshot',
+      30_000,
+    );
 
-  // The workspace-files channel is the bridge's own, not a carrier command: it answers without a snapshot.
-  const listing = await client.request({ kind: 'files', command: { type: 'list', path: '' } });
-  assert.equal(listing.ok, true, JSON.stringify(listing));
+    // The workspace-files channel is the bridge's own, not a carrier command: it answers without a snapshot.
+    const listing = await client.request({ kind: 'files', command: { type: 'list', path: '' } });
+    assert.equal(listing.ok, true, JSON.stringify(listing));
 
-  // A second page is refused in the Host's own words — approvals and runs are per Host, so this is the honest
-  // answer rather than a queue nobody drains.
-  const second = pageClient(socketUrl(bridge.url));
-  t.after(() => second.close());
-  await until(
-    second,
-    (seen) =>
-      seen.some(
-        (frame) =>
-          frame.kind === 'refused' && String(frame.reason).includes('one connection at a time'),
-      ),
-    'the second page to be refused',
-    10_000,
-  );
-});
+    // A second page is refused in the Host's own words — approvals and runs are per Host, so this is the honest
+    // answer rather than a queue nobody drains.
+    const second = pageClient(socketUrl(bridge.url));
+    t.after(() => second.close());
+    await until(
+      second,
+      (seen) =>
+        seen.some(
+          (frame) =>
+            frame.kind === 'refused' && String(frame.reason).includes('one connection at a time'),
+        ),
+      'the second page to be refused',
+      10_000,
+    );
+  },
+);
 
-test.skip('the bridge refuses a wrong token, and serves the page and its health check', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-auth-'));
-  const bridge = await startBridge({
-    workspace: root,
-    port: 0,
-    token: 'right-token',
-    page: path.resolve('apps/web/dist'),
-  });
-  t.after(async () => {
-    await bridge.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  // A wrong token is refused at the handshake, so the socket never opens.
-  const denied = new WebSocket(`${socketUrl(bridge.url)}wrong`);
-  const outcome = await new Promise((resolve) => {
-    denied.addEventListener('open', () => resolve('opened'));
-    denied.addEventListener('error', () => resolve('refused'));
-    denied.addEventListener('close', () => resolve('refused'));
-  });
-  assert.equal(outcome, 'refused');
-  // The page the bridge serves is the desktop's own page, wired to the web bundle.
-  const page = await fetch(bridge.url);
-  assert.equal(page.status, 200);
-  const html = await page.text();
-  assert.match(html, /<script type="module" src="\.\/app\.js"><\/script>/);
-  assert(html.includes(`connect-src ${new URL(socketUrl(bridge.url)).origin};`));
-  const health = await fetch(new URL('/health', bridge.url));
-  assert.deepEqual(await health.json(), { ok: true });
-  // The bundle really is the renderer: it asks for the bridge, which only the desktop renderer does.
-  const bundle = await fetch(new URL('/app.js', bridge.url));
-  assert.equal(bundle.status, 200);
-  assert.match(await bundle.text(), /yuantu/);
-});
+test(
+  'the bridge refuses a wrong token, and serves the page and its health check',
+  { skip: pausedSkip('web') },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-auth-'));
+    const bridge = await startBridge({
+      workspace: root,
+      port: 0,
+      token: 'right-token',
+      page: path.resolve('apps/web/dist'),
+    });
+    t.after(async () => {
+      await bridge.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    // A wrong token is refused at the handshake, so the socket never opens.
+    const denied = new WebSocket(`${socketUrl(bridge.url)}wrong`);
+    const outcome = await new Promise((resolve) => {
+      denied.addEventListener('open', () => resolve('opened'));
+      denied.addEventListener('error', () => resolve('refused'));
+      denied.addEventListener('close', () => resolve('refused'));
+    });
+    assert.equal(outcome, 'refused');
+    // The page the bridge serves is the desktop's own page, wired to the web bundle.
+    const page = await fetch(bridge.url);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.match(html, /<script type="module" src="\.\/app\.js"><\/script>/);
+    assert(html.includes(`connect-src ${new URL(socketUrl(bridge.url)).origin};`));
+    const health = await fetch(new URL('/health', bridge.url));
+    assert.deepEqual(await health.json(), { ok: true });
+    // The bundle really is the renderer: it asks for the bridge, which only the desktop renderer does.
+    const bundle = await fetch(new URL('/app.js', bridge.url));
+    assert.equal(bundle.status, 200);
+    assert.match(await bundle.text(), /yuantu/);
+  },
+);
 
-test.skip(
+test(
   'malformed asset URLs are refused without terminating the bridge',
-  { timeout: 15_000 },
+  { timeout: 15_000, skip: pausedSkip('web') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-malformed-url-'));
     const bridge = await startBridge({
@@ -429,9 +446,9 @@ test.skip(
   },
 );
 
-test.skip(
+test(
   'malformed upgrade URLs are refused without terminating the bridge',
-  { timeout: 15_000 },
+  { timeout: 15_000, skip: pausedSkip('web') },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-web-malformed-upgrade-'));
     const bridge = await startBridge({

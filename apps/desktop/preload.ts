@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import type { DesktopBridge } from './contract.ts';
 import type { PermissionPresetView } from './permission-presets.ts';
 import type {
@@ -10,7 +11,9 @@ import type {
 
 const bridge: DesktopBridge = {
   workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
-  backups: (command) => ipcRenderer.invoke('yuantu:backups', command),
+  ...(PRODUCT_SCOPE.backups
+    ? { backups: (command) => ipcRenderer.invoke('yuantu:backups', command) }
+    : {}),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
   files: (command) => ipcRenderer.invoke('yuantu:files', command),
   mcp: (command) => ipcRenderer.invoke('yuantu:mcp', command),

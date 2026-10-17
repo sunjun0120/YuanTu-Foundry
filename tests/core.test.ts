@@ -134,6 +134,28 @@ test('query convergence resets for new evidence, mutations, polls and user steer
   assert.equal(guard.observeRound(query()), 'continue');
 });
 
+test('the same failure after edits in between is noticed, then concluded', () => {
+  const guard = new ToolProgressGuard();
+  const edit = {
+    call: { id: 'edit', name: 'write_file', arguments: { path: 'a.ts' } },
+    result: { isError: false, content: 'written' },
+  };
+  const test = (output = 'FAIL expected 1, got 2') => ({
+    call: { id: 'test', name: 'run_command', arguments: { command: 'npm test' } },
+    result: { isError: true, content: output },
+  });
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'repeat-failure');
+  // A failure that changed is progress, and does not move the count of the old one.
+  assert.equal(guard.observeRound([edit, test('FAIL expected 1, got 3')]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'conclude');
+  // A person stepping in starts the count over.
+  guard.reset();
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+});
+
 test('programs deriving new results from the same file are not unchanged queries', async (t) => {
   let turns = 0;
   const ctx = await fixture(t, {
@@ -1198,5 +1220,15 @@ test('diagnostics keep numeric token limits while redacting credential values', 
   assert.equal(
     redactSecrets(message + '; github-secret', env),
     '100/100 output tokens; key is [redacted]; [redacted]',
+  );
+});
+
+test('the transcript cache holds a full fan-out and the residents beside their parent', async () => {
+  // An LRU smaller than the set of sessions read in turn misses on every read; see `LOG_CACHE_ENTRIES`.
+  const { LOG_CACHE_ENTRIES } = await import('../packages/storage/session-schema.ts');
+  const { SUBAGENT_CEILINGS } = await import('../packages/core/subagents.ts');
+  const { RESIDENCY_DEFAULTS } = await import('../packages/core/residency.ts');
+  assert.ok(
+    LOG_CACHE_ENTRIES >= 1 + SUBAGENT_CEILINGS.maxConcurrency + RESIDENCY_DEFAULTS.maxResident,
   );
 });

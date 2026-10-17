@@ -816,6 +816,18 @@ const messages: Record<string, Pair> = {
     '目标跨轮次保留：只要它还处于活动状态，运行结束后会自动开始下一轮；轮数用完或你让它停下为止。',
     'The goal survives the run: while it stays active, the runtime starts the next round on its own until the budget or the user stops it.',
   ],
+  'ui.goalStandDown.no-progress': [
+    '自动续跑已停止：最近一轮没有新的进展（共续跑 {rounds} 轮）。发送消息即可继续。',
+    'Automatic rounds stopped: the last round made no new progress ({rounds} round(s) run). Send a message to continue.',
+  ],
+  'ui.goalStandDown.request-limit': [
+    '自动续跑已停止：本次请求已续跑 {rounds} 轮，达到单次上限。发送消息即可继续。',
+    'Automatic rounds stopped: this request ran {rounds} round(s), its limit. Send a message to continue.',
+  ],
+  'ui.goalStandDown.token-limit': [
+    '自动续跑已停止：本次请求的续跑轮次已用完 token 预算（共续跑 {rounds} 轮）。发送消息即可继续。',
+    'Automatic rounds stopped: this request’s rounds spent their token budget ({rounds} round(s) run). Send a message to continue.',
+  ],
   'ui.deliverablesTitle': ['交付物', 'Deliverables'],
   /**
    * The completion contract, in the words a person decides with.
@@ -1003,12 +1015,12 @@ const messages: Record<string, Pair> = {
     'This workspace declares {count} external hook command(s). Trust and enable them?',
   ],
   'hookTrust.changed': [
-    '钩子声明在上次信任后发生了变化，需要重新确认。',
-    'The hook declarations changed after you last trusted them and must be confirmed again.',
+    '钩子声明或其引用的工作区文件在上次信任后发生了变化，需要重新确认。',
+    'The hook declarations or their referenced workspace files changed after you last trusted them and must be confirmed again.',
   ],
   'hookTrust.detail': [
-    '工作区：{workspace}\n启用后，这些命令会在会话开始、提交消息、调用工具等时机自动运行，可能读取你的文件或访问网络。只信任你了解其来源的仓库。声明内容一旦改变会再次询问。',
-    'Workspace: {workspace}\nOnce enabled, these commands run automatically when a session starts, a message is sent, a tool is called and so on, and may read your files or use the network. Only trust repositories whose source you know. You will be asked again if the declarations change.',
+    '工作区：{workspace}\n启用后，这些命令会在会话开始、提交消息、调用工具等时机自动运行，可能读取你的文件或访问网络。只信任你了解其来源的仓库。声明或其引用的工作区文件内容一旦改变会再次询问。',
+    'Workspace: {workspace}\nOnce enabled, these commands run automatically when a session starts, a message is sent, a tool is called and so on, and may read your files or use the network. Only trust repositories whose source you know. You will be asked again if the declarations or their referenced workspace file contents change.',
   ],
   'hookTrust.unavailable': [
     '无法读取或保存信任记录（{detail}），本次不会启用这些钩子。',

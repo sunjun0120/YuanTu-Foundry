@@ -52,7 +52,7 @@ export function modelInfoFor(config: ProviderConfig): {
   return {
     model: redactSecrets(config.model),
     protocol: config.protocol ?? 'anthropic',
-    connectionId: process.env.YUANTU_CONNECTION_ID || undefined,
+    connectionId: parseSetting(process.env, 'YUANTU_CONNECTION_ID') as string | undefined,
   };
 }
 
@@ -131,7 +131,9 @@ export function capacityResolver(
 ): (model: string) => RouteCapacity {
   const base = config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl };
   const declared = declaredRoute(options, config);
-  const routes = declaredRoutes(process.env.YUANTU_MODEL_CAPACITIES);
+  const routes = declaredRoutes(
+    parseSetting(process.env, 'YUANTU_MODEL_CAPACITIES') as string | undefined,
+  );
   const configuredLabel = modelInfoFor(config).model;
   return (model) => {
     // The kernel holds a redacted display label; capacity lookup needs the configured route ID.
@@ -169,7 +171,9 @@ export async function resolveConnectionCapacities(
     model: config.model,
     baseUrl: config.baseUrl,
     declared: declaredRoute(options, config),
-    routes: declaredRoutes(process.env.YUANTU_MODEL_CAPACITIES),
+    routes: declaredRoutes(
+      parseSetting(process.env, 'YUANTU_MODEL_CAPACITIES') as string | undefined,
+    ),
   });
   const automatic = known
     ? new Map<string, RouteCapacity>()

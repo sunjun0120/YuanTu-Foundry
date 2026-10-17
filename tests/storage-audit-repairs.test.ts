@@ -7,6 +7,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { runCli } from './process-fixture.ts';
+import { pausedSkip } from './product-scope-skip.ts';
 import type { FileChange } from '../packages/protocol/index.ts';
 
 async function fixture(t: test.TestContext) {
@@ -125,31 +126,43 @@ test('generated title and its accounting event roll back together on a write fai
   assert.equal(store.statistics(session.id).inputTokens, 5);
 });
 
-test.skip('CLI startup recovers dead tasks and streamed text once while preserving live owners', async (t) => {
-  const { store, other, db, root, file, session } = await fixture(t);
-  const task = store.createTask(session.id, { title: 'interrupted work' });
-  const run = store.beginRun(session.id);
-  store.startTaskAttempt(session.id, task.id, { kind: 'run', runId: run });
-  store.checkpointStream(session.id, run, 'partial', 'saved before crash');
-  db.prepare('UPDATE runs SET owner_pid=? WHERE id=?').run(2147483647, run);
-  const live = other.create(root);
-  const liveTask = other.createTask(live.id, { title: 'still working' });
-  const liveRun = other.beginRun(live.id);
-  other.startTaskAttempt(live.id, liveTask.id, { kind: 'run', runId: liveRun });
-  other.checkpointStream(live.id, liveRun, 'live-partial', 'still streaming');
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await runCli(['tasks', session.id, '--db', file, '--workspace', root, '--json']);
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(store.getTask(session.id, task.id).status, 'needs_review');
-    assert.equal(
-      store.messages(session.id).filter((message) => message.content === 'saved before crash')
-        .length,
-      1,
-    );
-    assert.equal(other.getTask(live.id, liveTask.id).status, 'in_progress');
-    assert.equal(other.messages(live.id).length, 0);
-  }
-});
+test(
+  'CLI startup recovers dead tasks and streamed text once while preserving live owners',
+  { skip: pausedSkip('cli') },
+  async (t) => {
+    const { store, other, db, root, file, session } = await fixture(t);
+    const task = store.createTask(session.id, { title: 'interrupted work' });
+    const run = store.beginRun(session.id);
+    store.startTaskAttempt(session.id, task.id, { kind: 'run', runId: run });
+    store.checkpointStream(session.id, run, 'partial', 'saved before crash');
+    db.prepare('UPDATE runs SET owner_pid=? WHERE id=?').run(2147483647, run);
+    const live = other.create(root);
+    const liveTask = other.createTask(live.id, { title: 'still working' });
+    const liveRun = other.beginRun(live.id);
+    other.startTaskAttempt(live.id, liveTask.id, { kind: 'run', runId: liveRun });
+    other.checkpointStream(live.id, liveRun, 'live-partial', 'still streaming');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await runCli([
+        'tasks',
+        session.id,
+        '--db',
+        file,
+        '--workspace',
+        root,
+        '--json',
+      ]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(store.getTask(session.id, task.id).status, 'needs_review');
+      assert.equal(
+        store.messages(session.id).filter((message) => message.content === 'saved before crash')
+          .length,
+        1,
+      );
+      assert.equal(other.getTask(live.id, liveTask.id).status, 'in_progress');
+      assert.equal(other.messages(live.id).length, 0);
+    }
+  },
+);
 
 test('a scoped retry count ignores malformed retry events from another session', async (t) => {
   const { store, db, session, root } = await fixture(t);

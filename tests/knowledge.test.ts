@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { KnowledgeStore } from '../packages/knowledge/store.ts';
-import { writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { riskWorker } from './risk-concurrency.ts';
 import { knowledgeTools } from '../packages/knowledge/tools.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -756,5 +756,81 @@ test('a document that cannot be re-read keeps its index entry; a deleted one is 
   assert.deepEqual(
     store.listDocuments(root).map((document) => document.path),
     ['kept.md'],
+  );
+});
+
+test('Chinese words separated in a query match a pinned document, with no substring of the whole query', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-cjk-'));
+  const store = new KnowledgeStore(path.join(root, 'knowledge.sqlite'));
+  // One hook, closing first: Windows refuses to delete a database file that is still open.
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await writeFile(path.join(root, 'notes.md'), '上线前先执行数据库迁移，再运行冒烟测试。');
+  await writeFile(path.join(root, 'other.md'), '迁移脚本放在 scripts 目录。');
+  store.pinDocument(root, 'notes.md');
+  store.pinDocument(root, 'other.md');
+  // Neither query is a substring of either file, so only the index can answer: it used to hold each
+  // clause as one token, and both came back empty.
+  assert.deepEqual(
+    store.search(root, '数据库 冒烟').map((item) => item.source),
+    ['notes.md'],
+  );
+  assert.deepEqual(
+    store.search(root, '迁移 脚本').map((item) => item.source),
+    ['other.md'],
+  );
+  // The stored chunk is the document as written; only the index is segmented.
+  assert.equal(
+    store.search(root, '数据库')[0]?.content,
+    '上线前先执行数据库迁移，再运行冒烟测试。',
+  );
+  store.unpinDocument(root, 'notes.md');
+  assert.deepEqual(store.search(root, '数据库 冒烟'), []);
+});
+
+test('an index written by the old raw-copy triggers is rebuilt once, and the triggers do not come back', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-cjk-legacy-'));
+  const file = path.join(root, 'knowledge.sqlite');
+  await writeFile(path.join(root, 'notes.md'), '上线前先执行数据库迁移，再运行冒烟测试。');
+  // The shape an earlier build left: triggers copying the columns verbatim into the index.
+  const first = new KnowledgeStore(file);
+  first.close();
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge_items BEGIN
+      INSERT INTO knowledge_fts(rowid,title,content) VALUES(new.rowid,new.title,new.content); END;
+    CREATE TRIGGER knowledge_ad AFTER DELETE ON knowledge_items BEGIN
+      DELETE FROM knowledge_fts WHERE rowid=old.rowid; END;`);
+  legacy
+    .prepare(
+      "INSERT INTO knowledge_documents(id,scope,path,digest,updated_at) VALUES('d',?,'notes.md','x','2026-01-01')",
+    )
+    .run(realpathSync(root));
+  legacy
+    .prepare(
+      "INSERT INTO knowledge_items(id,scope,kind,title,content,source,document_id,updated_at) VALUES('d:0',?,'document','notes.md',?,'notes.md','d','2026-01-01')",
+    )
+    .run(realpathSync(root), '上线前先执行数据库迁移，再运行冒烟测试。');
+  legacy.close();
+
+  const store = new KnowledgeStore(file);
+  const db = new DatabaseSync(file, { readOnly: true });
+  t.after(async () => {
+    db.close();
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  assert.equal(
+    db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='trigger'").get()?.n,
+    0,
+  );
+  assert.equal(db.prepare('SELECT count(*) AS n FROM knowledge_fts').get()?.n, 1);
+  assert.equal(
+    db
+      .prepare('SELECT count(*) AS n FROM knowledge_fts WHERE knowledge_fts MATCH ?')
+      .get('"​数​据​库​"')?.n,
+    1,
+    'the legacy row is in the index in its segmented form',
   );
 });

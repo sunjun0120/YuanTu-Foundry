@@ -339,3 +339,80 @@ test('a compaction holds the session while its summary request is in flight', as
   assert.ok(store.contextSurface(sessionId), 'and the compaction was recorded by the holder');
   assert.equal(store.leaseOf(sessionId), null, 'the lock and the lease both end with the run');
 });
+
+/**
+ * A throw between `beginRun` and the round loop must not leave the session locked.
+ *
+ * The lease is never expired by time, so a run row left open under the Host's own live pid refused every later
+ * run until the process restarted. The calibration read is one of the seams built in that window.
+ */
+test('a run that fails while it is being set up releases the session', async (t) => {
+  const { store, sessionId } = await fixture(t);
+  const original = store.newestPayload.bind(store);
+  let broken = true;
+  store.newestPayload = ((id, type) => {
+    if (broken && type === 'context.calibration') throw new Error('calibration record unreadable');
+    return original(id, type);
+  }) as typeof store.newestPayload;
+  const agent = new Agent({
+    store,
+    tools: new ToolRegistry(),
+    approve: async () => false,
+    provider: {
+      async complete() {
+        return {
+          text: 'Done.',
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    },
+  });
+  await assert.rejects(agent.run({ sessionId, prompt: 'First.' }), /calibration record unreadable/);
+  assert.equal(store.get(sessionId).activeRun, null, 'the run row is closed');
+  assert.equal(store.leaseOf(sessionId), null, 'the lease is released');
+  assert.throws(() => agent.enqueue(sessionId, { prompt: 'late' }, 'follow-up'), /not running/);
+  broken = false;
+  const next = await agent.run({ sessionId, prompt: 'Second.' });
+  assert.equal(next.status, 'completed', next.error);
+});
+
+test('a run whose end could not be persisted does not lock the session for the rest of the process', async (t) => {
+  const { store, sessionId } = await fixture(t);
+  const finish = store.finishRun.bind(store);
+  let broken = true;
+  store.finishRun = ((...args: Parameters<typeof finish>) => {
+    if (broken) throw new Error('disk full');
+    return finish(...args);
+  }) as typeof store.finishRun;
+  const agent = new Agent({
+    store,
+    tools: new ToolRegistry(),
+    approve: async () => false,
+    provider: {
+      async complete() {
+        return {
+          text: 'Done.',
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    },
+  });
+  const first = await agent.run({ sessionId, prompt: 'First.' });
+  assert.equal(first.status, 'failed');
+  assert.ok(store.get(sessionId).activeRun, 'the row still names the run it could not close');
+  broken = false;
+  const next = await agent.run({ sessionId, prompt: 'Second.' });
+  assert.equal(next.status, 'completed', next.error);
+});
+
+test('a live run of this process that was not forsaken is still refused', async (t) => {
+  const { store, sessionId } = await fixture(t);
+  const runId = store.beginRun(sessionId);
+  assert.throws(() => store.beginRun(sessionId), /already running/);
+  store.forsakeRun(runId);
+  assert.notEqual(store.beginRun(sessionId), runId);
+});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { build } from 'esbuild';
+import { build, type BuildOptions } from 'esbuild';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -11,6 +11,15 @@ import { runInNewContext } from 'node:vm';
 const { commonJsModuleUrl } = await import(
   new URL('../scripts/commonjs-module-url.mjs', import.meta.url).href
 );
+
+async function bundleTo(options: BuildOptions) {
+  const result = await build({ ...options, write: false });
+  for (const output of result.outputFiles ?? []) {
+    await mkdir(path.dirname(output.path), { recursive: true });
+    await writeFile(output.path, output.contents);
+  }
+  return result;
+}
 
 test('CommonJS desktop bundle loads native providers and their packaged helper', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-native-bundle-'));
@@ -51,26 +60,6 @@ test('CommonJS desktop bundle loads native providers and their packaged helper',
   );
 });
 
-/**
- * Why the bundler cannot write its output here, or `undefined` when it can.
- *
- * esbuild runs as its own executable, so it inherits whatever the filesystem says about it. On a checkout whose
- * integrity label marks `node_modules` Low, the bundler is refused when it writes into an ordinary temporary
- * directory and the build fails with an OS denial rather than a bundling error. That is a fact about the
- * machine, reproducible without changing it: pointing `ESBUILD_BINARY_PATH` at a copy of `esbuild.exe` outside
- * the labelled tree makes this same test pass.
- *
- * Only an OS write denial counts. A genuine bundling failure — a bad import, unsupported syntax — still fails,
- * which is what keeps this rule from turning a broken bundle into a green run.
- */
-function bundlerEnvironmentReason(error: unknown): string | undefined {
-  const message = error instanceof Error ? error.message : String(error);
-  if (!/Failed to write to output file/i.test(message)) return undefined;
-  if (!/Access is denied|EPERM|EACCES/i.test(message)) return undefined;
-  const detail = message.split('\n').find((line) => /Failed to write/i.test(line)) ?? message;
-  return `the bundler cannot write its output in this environment (${detail.trim()})`;
-}
-
 test('CommonJS desktop regex search loads its packaged worker from another cwd', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search #%-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -93,24 +82,19 @@ test('CommonJS desktop regex search loads its packaged worker from another cwd',
     ['I', 'i', 'İ', 'ı', '中文', 'a+b[0]', 'S', 'ſ'].join('\n') + '\n',
   );
   await copyFile('packages/tools/windows-sandbox/acl.ps1', path.join(assets, 'acl.ps1'));
-  try {
-    await build({
-      entryPoints: ['packages/tools/search-worker.ts'],
-      outfile: path.join(root, 'dist/packages/tools/search-worker.js'),
-      bundle: true,
-      platform: 'node',
-      format: 'esm',
-      target: 'node24',
-      logLevel: 'silent',
-    });
-  } catch (error) {
-    const reason = bundlerEnvironmentReason(error);
-    if (reason) {
-      t.skip(reason);
-      return;
-    }
-    throw error;
-  }
+  /**
+   * Keep esbuild from writing into the temporary fixture directly; the test process writes its in-memory output so
+   * the regression runs consistently even when the esbuild executable has restricted filesystem integrity labels.
+   */
+  await bundleTo({
+    entryPoints: ['packages/tools/search-worker.ts'],
+    outfile: path.join(root, 'dist/packages/tools/search-worker.js'),
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node24',
+    logLevel: 'silent',
+  });
   const entry = path.join(desktop, 'search.cjs');
   /**
    * The plan is computed here, not in the fixture, so the escape rule under test is written once and in the
@@ -125,7 +109,7 @@ test('CommonJS desktop regex search loads its packaged worker from another cwd',
       pattern: escape(query),
     })),
   );
-  const result = await build({
+  const result = await bundleTo({
     stdin: {
       contents: `import { fileTools } from './packages/tools/files.ts';
         const plan = JSON.parse(process.argv[3]);

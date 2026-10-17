@@ -480,6 +480,40 @@ test('anthropic caches the stable prefix and the newest message when given a cac
   assert.equal(result.finishReason, 'stop');
 });
 
+test('every adapter forbids tool calls only when the request says none, and keeps the catalogue', async (t) => {
+  const seen: Record<string, unknown>[] = [];
+  const anthropic = await httpFixture(t, (body, res) => {
+    seen.push(body);
+    sendFrames(res, frames('ok'));
+  });
+  const chat = await httpFixture(t, (body, res) => {
+    seen.push(body);
+    openAiStream(res);
+  });
+  const responses = await httpFixture(t, (body, res) => {
+    seen.push(body);
+    responsesStream(res);
+  });
+  const providers: Provider[] = [
+    new AnthropicProvider({ apiKey: 'k', model: 'm', baseUrl: anthropic }),
+    new OpenAIProvider({ apiKey: 'k', model: 'm', baseUrl: chat }),
+    new ResponsesProvider({ apiKey: 'k', model: 'm', baseUrl: responses }),
+  ];
+  for (const provider of providers) {
+    await provider.complete({ ...base(), tools: toolSpecs });
+    await provider.complete({ ...base(), tools: toolSpecs, toolChoice: 'none' });
+  }
+  const [aAuto, aNone, cAuto, cNone, rAuto, rNone] = seen as {
+    tools: unknown[];
+    tool_choice?: unknown;
+  }[];
+  for (const body of [aAuto, cAuto, rAuto]) assert.equal(body!.tool_choice, undefined);
+  assert.deepEqual(aNone!.tool_choice, { type: 'none' });
+  assert.equal(cNone!.tool_choice, 'none');
+  assert.equal(rNone!.tool_choice, 'none');
+  for (const body of [aNone, cNone, rNone]) assert.equal(body!.tools.length, toolSpecs.length);
+});
+
 test('anthropic sends the original request shape when no cache key is supplied', async (t) => {
   const url = await httpFixture(t, (body, res) => {
     assert.equal(body.system, 'You are YuanTu', 'system stays a plain string');

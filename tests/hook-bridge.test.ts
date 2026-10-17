@@ -677,8 +677,8 @@ test('changing a declared command, matcher or file revokes trust until it is con
     JSON.stringify(preToolUse(root, 'hook.mjs')),
   );
   assert.notEqual(
-    hookDeclarationsDigest(loadHookDeclarations(root)),
-    hookDeclarationsDigest(trusted),
+    hookDeclarationsDigest(root, loadHookDeclarations(root)),
+    hookDeclarationsDigest(root, trusted),
     'the source file is part of what is trusted',
   );
   assert.equal(build().extensions.size, 0);
@@ -715,7 +715,7 @@ test('the trust record lives in the user state directory, never in the workspace
   };
   assert.deepEqual(
     Object.values(record.workspaces).map((entry) => entry.digest),
-    [hookDeclarationsDigest(declarations)],
+    [hookDeclarationsDigest(root, declarations)],
   );
 
   // A state directory inside the workspace is refused both ways: a repository cannot ship its own trust.

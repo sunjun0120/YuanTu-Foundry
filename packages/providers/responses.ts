@@ -174,6 +174,9 @@ export class ResponsesProvider implements Provider {
               parameters: tool.inputSchema,
               strict: false,
             })),
+            ...(request.tools.length && request.toolChoice === 'none'
+              ? { tool_choice: 'none' }
+              : {}),
           }),
         },
         this.config.streamIdleTimeoutMs ?? 300_000,

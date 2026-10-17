@@ -1,4 +1,5 @@
 import { undoFileChange } from '../../../packages/tools/file-undo.ts';
+import { removeSpills } from '../../../packages/tools/spill.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from '../session-policy.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
@@ -135,7 +136,20 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
         for (const failure of failures)
           process.stderr.write(`sessionEnd hook failed: ${failure}\n`);
       }
+      // Where each doomed session spilled is only answerable while its rows still exist: the project, and the
+      // execution root a delegated child worked in when that was a directory of its own.
+      const spills = ctx.store.sessionTree(id).flatMap((sessionId) => {
+        const binding = ctx.store.workspaceBinding(sessionId);
+        const roots = new Set([ctx.store.get(sessionId).workspace, binding.executionRoot]);
+        return [...roots].map((root) => ({ root, sessionId }));
+      });
       ctx.store.delete(id);
+      for (const spill of spills)
+        await removeSpills(spill.root, spill.sessionId).catch((error: unknown) =>
+          process.stderr.write(
+            `spill cleanup failed for ${spill.sessionId}: ${(error as Error).message}\n`,
+          ),
+        );
       ctx.sessionLifecyclePhases?.delete(id);
       ctx.sessionSandboxes.delete(id);
       ctx.sessionSandboxFiles.delete(id);
