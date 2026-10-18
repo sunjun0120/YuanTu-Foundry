@@ -232,6 +232,12 @@ test('the registry lists providers and refuses unknown names and duplicates', ()
     },
   ]);
   assert.throws(() => registry.register(provider), /Duplicate sub-agent provider: fake/);
+  // An unknown capability in a declaration is refused at registration, so `describe()` cannot report a promise
+  // the validator would never check.
+  assert.throws(
+    () => registry.register({ ...provider, name: 'bad', capabilities: ['nonsense'] as never }),
+    /Unknown sub-agent capability/,
+  );
   assert.equal(registry.resolve('fake', {}).name, 'fake');
   assert.throws(() => registry.resolve('missing', {}), UnknownSubAgentProviderError);
   dispose();
@@ -252,13 +258,6 @@ test('a request for something the provider cannot honour is refused by capabilit
       error.provider === 'limited' &&
       /UNSUPPORTED_CAPABILITY/.test(error.message),
   );
-});
-
-test('an empty or blank request value is not asserted against a capability', () => {
-  const registry = new SubAgentProviderRegistry();
-  registry.register(recordingProvider([], 'bare').provider);
-  assert.equal(registry.resolve('bare', {}).name, 'bare');
-  assert.equal(registry.resolve('bare', { toolFilter: [], persona: '   ' }).name, 'bare');
 });
 
 /** Every tool result the run persisted, joined: a refusal is reported to the model, not in final text. */

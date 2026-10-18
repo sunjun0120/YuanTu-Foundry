@@ -348,33 +348,7 @@ test('a child with no persona keeps the deployment persona', async (t) => {
   assert.match(childSystem[0]!, /You are the deployment default\./);
 });
 
-// What a host needs to decide whether delegation is configured the way it means; the capabilities are the same
-// list the registry validates requests against, so a reader cannot be told about a promise nobody keeps.
-test('the registered providers are discoverable, with what each one can honour', async (t) => {
-  const alt = stubProvider('alternate', ['outputSchema', 'contextFork']);
-  const { tools } = await fixture(t, parentProvider([{ objective: 'Investigate' }]), [alt]);
-  void tools;
-  const { SubAgentProviderRegistry } = await import('../packages/core/subagent-providers.ts');
-  const registry = new SubAgentProviderRegistry();
-  registry.register(alt);
-  assert.deepEqual(registry.describe(), [
-    {
-      name: 'alternate',
-      description: 'alternate for tests',
-      capabilities: ['outputSchema', 'contextFork'],
-    },
-  ]);
-  assert.deepEqual(registry.names(), ['alternate']);
-  // A duplicate name is a programming error rather than a precedence puzzle.
-  assert.throws(() => registry.register(alt), /Duplicate sub-agent provider/);
-  // An unknown capability in a declaration is refused at registration, so `describe()` cannot report a promise
-  // the validator would never check.
-  assert.throws(
-    () => registry.register({ ...alt, name: 'bad', capabilities: ['nonsense'] as never }),
-    /Unknown sub-agent capability/,
-  );
-});
-
+// Registration, `describe()`, duplicates and unknown capabilities are pinned in subagents-seams.test.ts.
 test('an option in its off position asks for nothing', () => {
   const registry = new SubAgentProviderRegistry();
   registry.register(stubProvider('plain', []));
