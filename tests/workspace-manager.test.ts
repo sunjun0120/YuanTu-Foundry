@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore, WorkspaceFailure } from '../packages/storage/sqlite.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
-import { readManifest, snapshotFileBytes } from '../packages/workspaces/snapshot.ts';
+import {
+  readManifest,
+  snapshotFileBytes,
+  snapshotMetadataRoot,
+} from '../packages/workspaces/snapshot.ts';
 import {
   isManagedWorktreePath,
   registeredWorktrees,
@@ -167,6 +171,65 @@ test('two allocations hold the same baseline in different directories', async (t
       .filter(Boolean),
     ['M same.txt'],
   );
+});
+
+test('a stored file changed after one allocation used it is refused by the next', async (t) => {
+  // Later allocations of a snapshot skip re-hashing stored bytes an earlier one already checked; that shortcut must
+  // end the moment the stored file changes, or a second child would receive bytes nobody froze.
+  const harness = await fixture(t);
+  const identity = (await repositoryIdentity(harness.root))!;
+  const manifest = (await readManifest(identity.repositoryRoot, harness.snapshotId))!;
+  const entry = manifest.files.find((candidate) => candidate.path === 'same.txt')!;
+  const stored = path.join(
+    snapshotMetadataRoot(identity.repositoryRoot, harness.snapshotId),
+    'files',
+    entry.sha256.slice(0, 32),
+  );
+  // Same length as 'dirty base\n', so only the content and the file's times differ.
+  await writeFile(stored, 'tampered!!\n');
+  await assert.rejects(
+    harness.manager.allocate({
+      parentSessionId: harness.parentSessionId,
+      taskId: 'task-2',
+      snapshot: harness.store.workspaceSnapshot(harness.snapshotId)!,
+      signal: new AbortController().signal,
+    }),
+    (error: unknown) => error instanceof WorkspaceFailure && error.code === 'WORKSPACE_INTEGRITY',
+  );
+});
+
+test('files that share bytes are each filled, and editing one leaves the stored copy intact', async (t) => {
+  const { root, store, manager } = await base(t);
+  await mkdir(path.join(root, 'a', 'deep'), { recursive: true });
+  await writeFile(path.join(root, 'a', 'deep', 'twin.txt'), 'same bytes\n');
+  await writeFile(path.join(root, 'twin.txt'), 'same bytes\n');
+  const session = store.create(root);
+  const signal = new AbortController().signal;
+  const snapshot = await manager.freeze({
+    parentSessionId: session.id,
+    sourceBinding: manager.resolve(session.id),
+    signal,
+  });
+  const first = await manager.allocate({
+    parentSessionId: session.id,
+    taskId: 't1',
+    snapshot,
+    signal,
+  });
+  assert.equal(await readFile(path.join(first.executionRoot, 'twin.txt'), 'utf8'), 'same bytes\n');
+  assert.equal(
+    await readFile(path.join(first.executionRoot, 'a', 'deep', 'twin.txt'), 'utf8'),
+    'same bytes\n',
+  );
+  // A child editing in place must not reach the stored copy the next child is filled from.
+  await writeFile(path.join(first.executionRoot, 'twin.txt'), 'edited by child\n', { flag: 'r+' });
+  const second = await manager.allocate({
+    parentSessionId: session.id,
+    taskId: 't2',
+    snapshot,
+    signal,
+  });
+  assert.equal(await readFile(path.join(second.executionRoot, 'twin.txt'), 'utf8'), 'same bytes\n');
 });
 
 test('the allocated directory is a detached worktree Git itself reports', async (t) => {

@@ -225,17 +225,38 @@ unsafe fn run(request: Run, control: &std::path::Path) -> Result<u32> {
         }
         handles.push(Handle(target));
     }
+    let job = Handle(unsafe { CreateJobObjectW(null(), null()) });
+    if job.0.is_null() {
+        return Err("Create Job Object failed".into());
+    }
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    unsafe {
+        win(
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const c_void,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ),
+            "Set Job containment",
+        )?;
+    }
     let inherited: Vec<_> = handles.iter().map(|h| h.0).collect();
+    // The guest is created inside the job rather than assigned to it afterwards: create-then-assign leaves a
+    // moment where a killed launcher strands a suspended guest that belongs to no job and that nobody resumes or
+    // kills, holding the stdio pipes it inherited.
+    let job_list = [job.0];
     let mut length = 0;
     unsafe {
-        InitializeProcThreadAttributeList(null_mut(), 2, 0, &mut length);
+        InitializeProcThreadAttributeList(null_mut(), 3, 0, &mut length);
     }
     // Vec<usize> supplies pointer alignment required by the native opaque list.
     let mut allocation = vec![0usize; length.div_ceil(size_of::<usize>())];
     let attributes = allocation.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
     unsafe {
         win(
-            InitializeProcThreadAttributeList(attributes, 2, 0, &mut length),
+            InitializeProcThreadAttributeList(attributes, 3, 0, &mut length),
             "Initialize process attributes",
         )?;
     }
@@ -265,22 +286,17 @@ unsafe fn run(request: Run, control: &std::path::Path) -> Result<u32> {
             ),
             "Set inherited stdio list",
         )?;
-    }
-    let job = Handle(unsafe { CreateJobObjectW(null(), null()) });
-    if job.0.is_null() {
-        return Err("Create Job Object failed".into());
-    }
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    unsafe {
         win(
-            SetInformationJobObject(
-                job.0,
-                JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const c_void,
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            UpdateProcThreadAttribute(
+                attributes.0,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                job_list.as_ptr() as *const c_void,
+                size_of::<HANDLE>(),
+                null_mut(),
+                null(),
             ),
-            "Set Job containment",
+            "Set Job membership",
         )?;
     }
     let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
@@ -332,12 +348,6 @@ unsafe fn run(request: Run, control: &std::path::Path) -> Result<u32> {
     }
     let process = Handle(info.hProcess);
     let thread = Handle(info.hThread);
-    if unsafe { AssignProcessToJobObject(job.0, process.0) } == 0 {
-        unsafe {
-            TerminateProcess(process.0, 1);
-        }
-        return Err("Assign AppContainer to Job failed; suspended process terminated".into());
-    }
     // Do not infer isolation from CreateProcess success. Verify the kernel token
     // while the guest is still suspended and already owned by the killing job.
     let mut token = null_mut();

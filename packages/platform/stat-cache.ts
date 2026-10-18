@@ -19,7 +19,7 @@ export function statKey(stat: Stats): StatKey {
   return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino };
 }
 
-function sameKey(left: StatKey, right: StatKey): boolean {
+export function sameStatKey(left: StatKey, right: StatKey): boolean {
   return (
     left.size === right.size &&
     left.mtimeMs === right.mtimeMs &&
@@ -37,7 +37,7 @@ export class StatCache<T> {
   /** The value for `file` at `key`, computed by `read` only when the file is new to the cache or changed. */
   get(file: string, key: StatKey, read: () => T): T {
     const cached = this.entries.get(file);
-    if (cached && sameKey(cached.key, key)) {
+    if (cached && sameStatKey(cached.key, key)) {
       // Refreshed to the newest position, so the bound evicts the file read least recently.
       this.entries.delete(file);
       this.entries.set(file, cached);

@@ -519,6 +519,69 @@ test('the exit code is the command’s, not the launcher’s', { skip: reason },
   }
 });
 test(
+  'a launcher killed while starting its command takes the command with it',
+  { skip: reason },
+  async (t) => {
+    // Found as an `agent.smoke` hang: quitting the desktop killed the availability probe's launcher after
+    // `CreateProcessAsUser` had made a suspended child but before the child was in the kill-on-close job. The child
+    // stayed suspended forever, holding inherited pipes, and Playwright's `app.close()` waited for them to close.
+    // The launcher's test pause widens that window from microseconds to seconds so the kill can land inside it.
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-winsandbox-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const plan = await prepareSandbox(root, root, 'ping -n 30 127.0.0.1 >nul', undefined, config);
+    const launcher = spawn(plan.executable, plan.args, {
+      cwd: plan.cwd,
+      env: { ...plan.env, YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS: '20000' },
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    const exited = new Promise((resolve) => launcher.once('exit', resolve));
+    const childrenOf = async (pid: number) => {
+      const { stdout } = await promisify(execFile)(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | ForEach-Object { $_.ProcessId }) -join ','`,
+        ],
+        { windowsHide: true },
+      );
+      return stdout.trim().split(',').filter(Boolean).map(Number);
+    };
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let started: number[] = [];
+    try {
+      const deadline = Date.now() + 15_000;
+      while (!started.length && Date.now() < deadline) {
+        started = (await childrenOf(launcher.pid!)).filter(
+          // conhost belongs to the launcher's own console, not to the command.
+          (pid) => pid !== launcher.pid,
+        );
+        if (!started.length) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assert.ok(started.length, 'the launcher started its command within 15 s');
+      // Only the launcher, not its tree: this is the kill a parent's job or a crash delivers.
+      launcher.kill();
+      await exited;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      assert.deepEqual(started.filter(alive), [], 'no process the launcher started outlives it');
+    } finally {
+      for (const pid of started) if (alive(pid)) process.kill(pid);
+      if (launcher.exitCode === null) launcher.kill();
+      await cleanupSandbox(plan);
+    }
+  },
+);
+test(
   'the starter script is identical for every command, so the platform does not re-scan it',
   { skip: reason },
   async (t) => {

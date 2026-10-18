@@ -610,7 +610,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 70 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 71 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -640,6 +640,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SANDBOX_FILES` | `read-only` / `workspace-write` | 工作区文件权限 |
 | `YUANTU_SANDBOX_NETWORK` | `denied` / `unrestricted` | 命令网络权限；不支持所需隔离时拒绝执行 |
 | `YUANTU_SANDBOX_SPEC` | `string` | （内部）沙箱启动器的单次命令载荷 |
+| `YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS` | `string` | （测试）沙箱启动器创建命令后、恢复前暂停的毫秒数 |
 | `YUANTU_SANDBOX_ACL_SOURCE` | `string` | （内部）Host 快照的 ACL helper 载荷；不向客体传递 |
 | `YUANTU_PROGRAM_LAUNCH_DIR` | `string` | （内部）程序运行器离开工作区前记录的启动目录；由运行器覆盖 |
 | `YUANTU_SANDBOX_IMAGE` | `string` | 已停用：仅兼容旧配置，原生沙箱不读取镜像设置 |
@@ -713,7 +714,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v31 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 254 个 | `tests/*.test.ts` |
+| 行为测试文件 | 255 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 6 个 | `CLI_MAINTENANCE_COMMANDS` |

@@ -81,6 +81,9 @@ public static class YuantuSandbox
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct STARTUPINFOEX { public STARTUPINFO StartupInfo; public IntPtr lpAttributeList; }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
     [StructLayout(LayoutKind.Sequential)]
     public struct SID_AND_ATTRIBUTES { public IntPtr sid; public uint attributes; }
@@ -96,16 +99,19 @@ public static class YuantuSandbox
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     static extern bool ConvertStringSidToSidW(string sid, out IntPtr result);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    static extern bool CreateProcessAsUserW(IntPtr token, string application, string commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string currentDirectory, ref STARTUPINFO startup, out PROCESS_INFORMATION info);
+    static extern bool CreateProcessAsUserW(IntPtr token, string application, string commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string currentDirectory, ref STARTUPINFOEX startup, out PROCESS_INFORMATION info);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returned);
+    [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
     [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
     [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
     [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateJobObjectW(IntPtr attributes, IntPtr name);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int kind, ref JOB_LIMITS limits, uint length);
-    [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
     [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
-    [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint code);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool QueryInformationJobObject(IntPtr job, int kind, out JOB_ACCOUNTING accounting, uint length, IntPtr returned);
     [StructLayout(LayoutKind.Sequential)] struct BASIC_LIMITS {
@@ -167,33 +173,51 @@ public static class YuantuSandbox
         SetLowIntegrity(restricted);
         foreach (string identity in restrictingSids) GrantDefaultDacl(restricted, identity);
         IntPtr block = EnvironmentBlock(environment);
-        var startup = new STARTUPINFO();
-        startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+        var startup = new STARTUPINFOEX();
+        startup.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
         // The child writes straight into the pipes this process was given, so output streams while it runs
         // instead of arriving in one piece at the end.
-        startup.dwFlags = STARTF_USESTDHANDLES;
-        startup.hStdInput = GetStdHandle(-10);
-        startup.hStdOutput = GetStdHandle(-11);
-        startup.hStdError = GetStdHandle(-12);
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = GetStdHandle(-10);
+        startup.StartupInfo.hStdOutput = GetStdHandle(-11);
+        startup.StartupInfo.hStdError = GetStdHandle(-12);
         IntPtr job = CreateJobObjectW(IntPtr.Zero, IntPtr.Zero);
         if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Create sandbox job");
         PROCESS_INFORMATION info = new PROCESS_INFORMATION();
+        IntPtr attributes = IntPtr.Zero;
+        IntPtr jobs = Marshal.AllocHGlobal(IntPtr.Size);
+        bool attributesReady = false;
         try {
         var limits = new JOB_LIMITS();
         limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE; breakaway is never permitted.
         if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(JOB_LIMITS))))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Set sandbox job limits");
-        // The child cannot create descendants before it belongs to our job.
-        if (!CreateProcessAsUserW(restricted, null, commandLine, IntPtr.Zero, IntPtr.Zero, true, CREATE_UNICODE_ENVIRONMENT | 0x4, block, directory, ref startup, out info))
+        /*
+         * The child is created *inside* the job (PROC_THREAD_ATTRIBUTE_JOB_LIST), not assigned to it afterwards.
+         *
+         * Create-then-assign leaves a moment in which the child exists but belongs to no job of ours. A launcher
+         * killed in that moment (its parent quitting, for instance) left a suspended child nobody would resume or
+         * kill, holding the pipes it inherited. Created in the job, the child dies with this process's job handle.
+         */
+        IntPtr size = IntPtr.Zero;
+        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+        attributes = Marshal.AllocHGlobal(size);
+        if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Initialize sandbox attributes");
+        attributesReady = true;
+        Marshal.WriteIntPtr(jobs, job);
+        const int PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x2000D;
+        if (!UpdateProcThreadAttribute(attributes, 0, (IntPtr)PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs, (IntPtr)IntPtr.Size, IntPtr.Zero, IntPtr.Zero))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Set sandbox job attribute");
+        startup.lpAttributeList = attributes;
+        const uint EXTENDED_STARTUPINFO_PRESENT = 0x80000;
+        // Suspended as well, so nothing runs before this process holds the handles it waits on.
+        if (!CreateProcessAsUserW(restricted, null, commandLine, IntPtr.Zero, IntPtr.Zero, true, CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | 0x4, block, directory, ref startup, out info))
             // The number and the system's own sentence, because this is the one failure a caller cannot diagnose
             // from anything else: "CreateProcessAsUser" alone says neither what went wrong nor which of the two
             // ways in (shell text vs program+argv) was taken.
             throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser " + new Win32Exception(Marshal.GetLastWin32Error()).Message);
-        if (!AssignProcessToJobObject(job, info.hProcess)) {
-            int error = Marshal.GetLastWin32Error();
-            TerminateProcess(info.hProcess, 1);
-            throw new Win32Exception(error, "Assign sandbox job");
-        }
+        TestLaunchPause();
         if (ResumeThread(info.hThread) == 0xFFFFFFFF)
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Resume sandbox process");
         WaitForSingleObject(info.hProcess, 0xFFFFFFFF);
@@ -211,6 +235,9 @@ public static class YuantuSandbox
         }
         return (int)code;
         } finally {
+            if (attributesReady) DeleteProcThreadAttributeList(attributes);
+            if (attributes != IntPtr.Zero) Marshal.FreeHGlobal(attributes);
+            Marshal.FreeHGlobal(jobs);
             CloseHandle(job);
             if (info.hThread != IntPtr.Zero) CloseHandle(info.hThread);
             if (info.hProcess != IntPtr.Zero) CloseHandle(info.hProcess);
@@ -218,6 +245,15 @@ public static class YuantuSandbox
             CloseHandle(restricted);
             CloseHandle(current);
         }
+    }
+
+    // Tests widen the moment between creating the command and resuming it, so a launcher kill can be aimed there.
+    // The variable is read from the launcher's own environment, which a sandboxed command cannot set.
+    static void TestLaunchPause()
+    {
+        int ms;
+        if (int.TryParse(Environment.GetEnvironmentVariable("YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS"), out ms) && ms > 0)
+            System.Threading.Thread.Sleep(Math.Min(ms, 60000));
     }
 
     static void SetLowIntegrity(IntPtr token)

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rm, rmdir, writeFile, rename } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile, mkdir, readFile, readdir, rm, rmdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionStore } from '../storage/sqlite.ts';
 import {
@@ -25,6 +26,7 @@ import {
 } from './git.ts';
 import {
   snapshotFileBytes,
+  verifiedSnapshotFile,
   collectFileDigests,
   freezeSnapshot,
   readManifest,
@@ -33,6 +35,9 @@ import {
   type SnapshotManifest,
   type SnapshotManifestEntry,
 } from './snapshot.ts';
+
+/** How many snapshot files a worktree fill copies at once. */
+const FILL_CONCURRENCY = 8;
 
 /**
  * The workspace service: what owns the directories a sub-agent works in.
@@ -330,22 +335,78 @@ export class WorkspaceManager {
     signal.throwIfAborted();
     const expected = new Map(manifest.files.map((entry) => [entry.path, entry]));
     await this.removeUnexpected(identity, target, expected, '', signal);
+    // Each directory once, rather than a recursive `mkdir` per file.
+    const directories = new Set<string>();
     for (const entry of manifest.files) {
-      signal.throwIfAborted();
-      const absolute = path.join(target, ...entry.path.split('/'));
-      const info = await plainFileInfo(absolute);
-      if (!info.ok && info.reason !== 'missing')
-        throw new WorkspaceFailure(
-          'WORKSPACE_UNSUPPORTED_FILE_TYPE',
-          `A worktree path is not a plain file: ${entry.path}`,
-        );
-      // One file at a time: the bytes come from the digest-addressed store beside the manifest, not from a manifest
-      // that would have loaded the whole snapshot to answer this loop.
-      await writeFileExact(
-        absolute,
-        await snapshotFileBytes(identity.repositoryRoot, snapshotId, entry),
-      );
+      const parents = entry.path.split('/').slice(0, -1);
+      if (parents.length) directories.add(path.join(target, ...parents));
     }
+    for (const directory of directories) await mkdir(directory, { recursive: true });
+    /**
+     * A few files at a time: each one is a handful of small filesystem calls, so one at a time spent most of the
+     * fill waiting. A failure stops the others from taking new files, and every write in flight settles before
+     * the error leaves, so the caller's cleanup never races a write into the directory it is removing.
+     */
+    let next = 0;
+    let failed = false;
+    const worker = async () => {
+      while (!failed && next < manifest.files.length) {
+        const entry = manifest.files[next++]!;
+        try {
+          signal.throwIfAborted();
+          await this.fillFile(identity, target, entry, snapshotId);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
+      }
+    };
+    const settled = await Promise.allSettled(
+      Array.from({ length: Math.min(FILL_CONCURRENCY, manifest.files.length) }, worker),
+    );
+    const failure = settled.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
+  }
+
+  /**
+   * Writes one snapshot file into a worktree.
+   *
+   * A format-3 file is copied from the digest-addressed store by the filesystem itself: a clone where the volume
+   * supports one (no bytes duplicated on disk), an in-kernel copy otherwise — never a read into memory and a write
+   * back out. The stored file is digest-checked first; a later allocation of the same snapshot skips the re-hash
+   * only while the stored file is unchanged (see `verifiedSnapshotFile`).
+   */
+  private async fillFile(
+    identity: RepositoryIdentity,
+    target: string,
+    entry: SnapshotManifestEntry,
+    snapshotId: string,
+  ): Promise<void> {
+    const absolute = path.join(target, ...entry.path.split('/'));
+    const info = await plainFileInfo(absolute);
+    if (!info.ok && info.reason !== 'missing')
+      throw new WorkspaceFailure(
+        'WORKSPACE_UNSUPPORTED_FILE_TYPE',
+        `A worktree path is not a plain file: ${entry.path}`,
+      );
+    const stored = await verifiedSnapshotFile(identity.repositoryRoot, snapshotId, entry);
+    if (stored && !info.ok) {
+      // EXCL: a path that appeared since the check above is not silently replaced.
+      await copyFile(stored, absolute, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+      const copied = await plainFileInfo(absolute);
+      if (!copied.ok || copied.size !== entry.size)
+        throw new WorkspaceFailure(
+          'WORKSPACE_INTEGRITY',
+          `The copied bytes for ${entry.path} do not match the snapshot`,
+          { path: entry.path },
+        );
+      return;
+    }
+    // A format-2 entry, or a file the worktree already holds: compare and write as before.
+    await writeFileExact(
+      absolute,
+      await snapshotFileBytes(identity.repositoryRoot, snapshotId, entry),
+    );
   }
 
   /**

@@ -4,13 +4,15 @@ import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import { WorkspaceFailure, type WorkspaceSnapshot } from '../protocol/workspaces.ts';
 import { gitPath, isUnsafeGitPath, samePath } from '../platform/workspace-paths.ts';
+import { sameStatKey, statKey, type StatKey } from '../platform/stat-cache.ts';
 import {
   repositoryIdentity,
   repositoryReadiness,
   runWorkspaceGit,
   withRepositoryLock,
   workspaceGit,
-  writeBlob,
+  openBlobBatch,
+  writeBlobs,
   WORKSPACE_GIT_IDENTITY,
   type RepositoryIdentity,
   type TreeEntry,
@@ -537,7 +539,8 @@ export async function collectStagedTree(
  *
  * The export compares trees by object id, so the bytes only have to reach the object store once. Writing each
  * file's blob as the walk reads it keeps the peak at one file, where collecting the tree first held every file
- * base64-encoded (about 1.3 times the tree) and then decoded a second copy to hand to `writeTree`.
+ * base64-encoded (about 1.3 times the tree) and then decoded a second copy to hand to `writeTree`. The blobs share
+ * one `fast-import` stream rather than one `hash-object` process each, which took 72 s for 2000 files on Windows.
  */
 export async function collectTreeBlobs(
   repositoryRoot: string,
@@ -545,15 +548,19 @@ export async function collectTreeBlobs(
   signal?: AbortSignal,
   limits: { maxTotalBytes?: number } = {},
 ): Promise<TreeEntry[]> {
-  const entries: TreeEntry[] = [];
-  await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
-    entries.push({
-      path: relative,
-      mode: modeOf(info),
-      blob: await writeBlob(repositoryRoot, bytes, signal),
+  const files: { path: string; mode: '100644' | '100755' }[] = [];
+  const batch = openBlobBatch(repositoryRoot, signal);
+  try {
+    await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
+      files.push({ path: relative, mode: modeOf(info) });
+      await batch.add(bytes);
     });
-  });
-  return entries;
+  } catch (error) {
+    batch.abort();
+    throw error;
+  }
+  const blobs = await batch.finish();
+  return files.map((file, index): TreeEntry => ({ ...file, blob: blobs[index]! }));
 }
 
 /**
@@ -646,10 +653,10 @@ async function buildTree(
    *
    * Each entry used to spawn its own `hash-object` and `update-index`; on Windows a Git spawn costs tens of
    * milliseconds, so a baseline of 800 files took over a minute before the child could start. The bytes are the
-   * content-addressed files the freeze staged beside this manifest (names this code chose, so `--stdin-paths` never
-   * sees a path with a newline), hashed by one `hash-object --stdin-paths` that answers one id per line in order,
-   * and entered by one `update-index -z --index-info`, whose NUL-terminated records carry any path Git can store.
-   * `--no-filters` keeps the bytes exactly as recorded.
+   * content-addressed files the freeze staged beside this manifest, written by one `fast-import` (`writeBlobs`)
+   * that answers one id per file in order, and entered by one `update-index -z --index-info`, whose NUL-terminated
+   * records carry any path Git can store. `hash-object --stdin-paths` was one process too, but it wrote a loose
+   * object file per blob, which was 15 of a 2000-file freeze's 19 s on Windows.
    */
   if (manifest.files.length) {
     const filesDirectory = path.join(metadata, 'files');
@@ -662,16 +669,14 @@ async function buildTree(
       );
     });
     try {
-      const blobs = (
-        await runWorkspaceGit(['hash-object', '-w', '--no-filters', '--stdin-paths'], {
-          ...options,
-          input: Buffer.from(staged.join('\n') + '\n', 'utf8'),
-        })
-      ).stdout
-        .toString('utf8')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
+      // One file in memory at a time: each staged file is read as the stream reaches it.
+      const blobs = await writeBlobs(
+        identity.repositoryRoot,
+        (async function* () {
+          for (const file of staged) yield await readFile(file);
+        })(),
+        signal,
+      );
       if (
         blobs.length !== manifest.files.length ||
         !blobs.every((id) => /^[0-9a-f]{40,64}$/.test(id))
@@ -843,6 +848,45 @@ function assertSameTree(
         { path: before.path },
       );
   }
+}
+
+/**
+ * Stored files whose digest has been checked, with the stat that was true at the time.
+ *
+ * Every child of a delegation is filled from the same snapshot, so without this each one re-reads and re-hashes
+ * every stored file. A file is trusted again only while its size, times and inode are what they were when it was
+ * hashed; a rewrite or replacement changes at least one of them and sends it back through the full check.
+ */
+const verifiedFiles = new Map<string, { key: StatKey; sha256: string }>();
+const VERIFIED_FILE_LIMIT = 200_000;
+
+/**
+ * The stored file behind a format-3 entry, checked against the entry's digest; `null` for a format-2 entry.
+ *
+ * Returning a path rather than bytes lets the caller copy it with the filesystem's own copy (a clone where the
+ * volume supports it) instead of holding the file in memory between a read and a write.
+ */
+export async function verifiedSnapshotFile(
+  repositoryRoot: string,
+  snapshotId: string,
+  entry: SnapshotManifestEntry,
+): Promise<string | null> {
+  if (entry.blob !== undefined) return null;
+  const files = path.join(snapshotMetadataRoot(repositoryRoot, snapshotId), 'files');
+  for (const file of [path.join(files, blobName(entry.sha256)), path.join(files, entry.sha256)]) {
+    const info = await lstat(file).catch(() => null);
+    if (!info?.isFile()) continue;
+    const key = statKey(info);
+    const known = verifiedFiles.get(file);
+    if (known && known.sha256 === entry.sha256 && sameStatKey(known.key, key)) return file;
+    await snapshotFileBytes(repositoryRoot, snapshotId, entry);
+    if (verifiedFiles.size >= VERIFIED_FILE_LIMIT) verifiedFiles.clear();
+    verifiedFiles.set(file, { key, sha256: entry.sha256 });
+    return file;
+  }
+  // Neither name exists: the full read reports it the same way it always has.
+  await snapshotFileBytes(repositoryRoot, snapshotId, entry);
+  return null;
 }
 
 /**

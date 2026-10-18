@@ -342,6 +342,10 @@ export const ENVIRONMENT = {
   // PowerShell script text, because a script whose text changes per command is re-scanned by the platform on
   // every command, which measured 2.1s against 0.43s for a script whose text never changes.
   YUANTU_SANDBOX_SPEC: { kind: 'string', description: '（内部）沙箱启动器的单次命令载荷' },
+  YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS: {
+    kind: 'string',
+    description: '（测试）沙箱启动器创建命令后、恢复前暂停的毫秒数',
+  },
   YUANTU_SANDBOX_ACL_SOURCE: {
     kind: 'string',
     description: '（内部）Host 快照的 ACL helper 载荷；不向客体传递',

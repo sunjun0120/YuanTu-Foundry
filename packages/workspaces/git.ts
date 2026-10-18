@@ -586,25 +586,129 @@ export async function pathExists(target: string): Promise<boolean> {
 }
 
 /**
- * Writes one blob into the repository and answers with its object id.
+ * Many blobs through one `git fast-import`, with their ids answered in the order they were added.
  *
- * `--no-filters` for the same reason the freeze uses it: a `clean` filter declared in `.gitattributes` is a
- * repository-controlled program, and a result's stored bytes must be the bytes the child actually produced.
+ * `hash-object -w` writes one loose object file per blob, and on Windows creating that file (and its fan-out
+ * directory) costs milliseconds each; one `hash-object` process per blob costs tens more. A 2000-file tree took
+ * about 15 s through `--stdin-paths` and 72 s through one process per file. `fast-import` streams every blob into
+ * one pack (a small batch is exploded into loose objects by Git itself, per `fastimport.unpackLimit`) and runs no
+ * filter, hook or attribute lookup, so the stored bytes are exactly the bytes given. The ids come back on standard
+ * output through `get-mark`, so nothing is written beside the repository to read them.
+ *
+ * Bytes are written as they are added and the stream honours back-pressure, so a caller walking a tree holds one
+ * file at a time, as it did with one process per file.
  */
-export async function writeBlob(
-  repositoryRoot: string,
-  bytes: Buffer,
-  signal?: AbortSignal,
-): Promise<string> {
-  const output = await runWorkspaceGit(['hash-object', '-w', '--no-filters', '--stdin'], {
+export interface BlobBatch {
+  add(bytes: Buffer): Promise<void>;
+  /** Closes the stream and answers one id per `add`, in order. */
+  finish(): Promise<string[]>;
+  /** Ends the process without answering; for a caller whose own work failed. */
+  abort(): void;
+}
+
+export function openBlobBatch(repositoryRoot: string, signal?: AbortSignal): BlobBatch {
+  signal?.throwIfAborted();
+  const child = spawn('git', [...MASKING_CONFIG, 'fast-import', '--quiet', '--done'], {
     cwd: repositoryRoot,
-    input: bytes,
-    ...(signal ? { signal } : {}),
+    env: workspaceGitEnvironment(),
+    shell: false,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
-  const blob = output.stdout.toString('utf8').trim();
-  if (!/^[0-9a-f]{40,64}$/.test(blob))
-    throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not write a blob');
-  return blob;
+  const out: Buffer[] = [];
+  const errors: Buffer[] = [];
+  let failure: Error | undefined;
+  let count = 0;
+  child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+  child.stderr.on('data', (chunk: Buffer) => {
+    if (errors.reduce((total, entry) => total + entry.length, 0) < 64 * 1024) errors.push(chunk);
+  });
+  // As in `runWorkspaceGit`: a child that exits early makes stdin report EPIPE, and the exit code is the answer.
+  child.stdin.on('error', () => {});
+  const closed = new Promise<number | null>((resolve) => {
+    child.once('error', (error) => {
+      failure ??= error;
+      resolve(null);
+    });
+    child.once('close', (code) => resolve(code));
+  });
+  const stop = () => {
+    failure ??=
+      signal?.reason instanceof Error ? signal.reason : new Error('Git command cancelled');
+    child.kill();
+  };
+  signal?.addEventListener('abort', stop, { once: true });
+  const write = async (chunk: Buffer | string) => {
+    if (failure) throw failure;
+    if (!child.stdin.write(chunk))
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          child.stdin.off('drain', done);
+          child.off('close', done);
+          resolve();
+        };
+        child.stdin.once('drain', done);
+        child.once('close', done);
+      });
+    if (failure) throw failure;
+  };
+  return {
+    async add(bytes) {
+      count++;
+      await write(`blob\nmark :${count}\ndata ${bytes.length}\n`);
+      await write(bytes);
+      await write('\n');
+    },
+    async finish() {
+      let requests = '';
+      for (let mark = 1; mark <= count; mark++) requests += `get-mark :${mark}\n`;
+      await write(`${requests}done\n`);
+      child.stdin.end();
+      const timer = setTimeout(stop, DEFAULT_TIMEOUT_MS);
+      const code = await closed;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+      if (failure) throw failure;
+      if (code !== 0) {
+        const detail =
+          Buffer.concat(errors).toString('utf8').trim() || `git exited with code ${code}`;
+        throw new WorkspaceGitError(
+          `git fast-import failed: ${detail.slice(0, 2_000)}`,
+          code,
+          detail,
+        );
+      }
+      const ids = Buffer.concat(out)
+        .toString('utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (ids.length !== count || !ids.every((id) => /^[0-9a-f]{40,64}$/.test(id)))
+        throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not write every blob');
+      return ids;
+    },
+    abort() {
+      signal?.removeEventListener('abort', stop);
+      failure ??= new Error('Blob batch abandoned');
+      child.kill();
+    },
+  };
+}
+
+/** Writes every buffer as a blob in one process; see {@link openBlobBatch}. */
+export async function writeBlobs(
+  repositoryRoot: string,
+  sources: AsyncIterable<Buffer> | Iterable<Buffer>,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const batch = openBlobBatch(repositoryRoot, signal);
+  try {
+    for await (const bytes of sources) await batch.add(bytes);
+  } catch (error) {
+    batch.abort();
+    throw error;
+  }
+  return await batch.finish();
 }
 
 /** Reads one object back as bytes, with no filter or textconv in the way. */
@@ -643,6 +747,16 @@ export async function writeTree(
   signal?: AbortSignal,
 ): Promise<string> {
   const root: TreeNode = { files: [], directories: new Map() };
+  // Entries that arrive with bytes rather than an id share one blob stream instead of one process each.
+  const pending = entries.filter((entry) => entry.blob === undefined);
+  const written = pending.length
+    ? await writeBlobs(
+        repositoryRoot,
+        pending.map((entry) => entry.bytes ?? Buffer.alloc(0)),
+        signal,
+      )
+    : [];
+  const ids = new Map(pending.map((entry, index) => [entry, written[index]!]));
   for (const entry of entries) {
     const segments = entry.path.split('/');
     let node = root;
@@ -655,8 +769,7 @@ export async function writeTree(
       node = next;
     }
     const name = segments[segments.length - 1]!;
-    const blob =
-      entry.blob ?? (await writeBlob(repositoryRoot, entry.bytes ?? Buffer.alloc(0), signal));
+    const blob = entry.blob ?? ids.get(entry)!;
     node.files.push({ name, mode: entry.mode, blob });
   }
   return await materializeTree(repositoryRoot, root, signal);
