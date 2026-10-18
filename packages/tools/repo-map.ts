@@ -2,7 +2,7 @@ import { readdirSync, readSync, openSync, closeSync, statSync, lstatSync } from 
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Tool, ToolContext } from '../protocol/index.ts';
-import { isCredentialFileName } from './credential-paths.ts';
+import { isCredentialFileName } from '../platform/credential-paths.ts';
 import { withRetrievalMetadata } from './retrieval-metadata.ts';
 import { CursorStore, CursorInvalidError, queryHashOf } from '../search/cursor.ts';
 

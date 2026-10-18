@@ -13,6 +13,12 @@ import type { AgentHostClient } from './host-client.ts';
 import { readDisplayHistory } from './display-history.ts';
 import type { InputMode, QueuedInput } from '../core/run-queue.ts';
 import { validateUserInput } from '../protocol/images.ts';
+import type {
+  CompletionRepairPolicy,
+  CompletionSpec,
+  PlanVerification,
+  RunVerification,
+} from '../protocol/completion.ts';
 import { isTodoItem } from '../protocol/index.ts';
 import { emptyStatistics, addStatistics, type SessionStatistics } from '../protocol/statistics.ts';
 import { todoDiff } from '../protocol/todos.ts';
@@ -47,6 +53,11 @@ import type {
   SubAgentDelta,
   SubAgentView,
 } from './session-view.ts';
+/** The completion fields a run request carries to the host, exactly as `run.start` names them. */
+type RunContract =
+  | { completion: CompletionSpec; completionRepairPolicy?: CompletionRepairPolicy }
+  | { resumeCompletionId: string; completionRepairPolicy?: CompletionRepairPolicy };
+
 export type {
   ContextBudgetView,
   MessageDelta,
@@ -648,24 +659,74 @@ export class SessionController {
     this.assertActive();
     return this.sendInternal(prompt, undefined, undefined, { phase: 'plan' });
   }
-  /** Executes an approved plan; the host re-checks the approval and the body digest. */
-  async executePlan(planId: string): Promise<RunResult> {
+  /**
+   * Executes an approved plan; the host re-checks the approval and the body digest.
+   *
+   * With `verification` the run is judged against the plan's own steps plus the checks a person added, so its end
+   * can be `verified` rather than only `completed`. The steps are restated from the plan the window shows, and the
+   * host refuses them unless they are the approved ones byte for byte — a stale panel cannot run a different plan.
+   */
+  async executePlan(planId: string, verification?: PlanVerification): Promise<RunResult> {
     this.assertActive();
+    const plan = this.state.plan;
+    let contract: RunContract | undefined;
+    if (verification) {
+      if (!plan || plan.id !== planId)
+        throw new Error('The plan to verify is not the one this session shows');
+      contract = {
+        completion: {
+          version: 1,
+          objective: plan.title,
+          constraints: verification.constraints ?? [],
+          steps: plan.steps.map((step, index) => ({
+            id: `plan:${plan.id}:${String(index)}`,
+            description: step.description,
+            status: 'pending' as const,
+          })),
+          acceptance: verification.acceptance.map((item) => ({ ...item, met: false })),
+          inputs: verification.inputs ?? [],
+        },
+        ...(verification.repairPolicy ? { completionRepairPolicy: verification.repairPolicy } : {}),
+      };
+    }
     return this.sendInternal(
-      this.state.plan?.title || 'Execute the approved plan',
+      plan?.title || 'Execute the approved plan',
       undefined,
       undefined,
       { planId },
+      contract,
     );
   }
-  async send(prompt: string, images?: ImageAttachment[], taskId?: string): Promise<RunResult> {
-    return this.sendInternal(prompt, images, taskId);
+  /**
+   * Sends a request. `verification` turns it into a run with a completion contract — stated here, or the session's
+   * recorded one resumed — while an omitted one keeps the ordinary chat turn, which is never reported as verified.
+   */
+  async send(
+    prompt: string,
+    images?: ImageAttachment[],
+    taskId?: string,
+    verification?: RunVerification,
+  ): Promise<RunResult> {
+    if (verification && taskId)
+      throw new Error('A task already carries the acceptance definition for this run');
+    const contract: RunContract | undefined = verification
+      ? {
+          ...('completion' in verification
+            ? { completion: verification.completion }
+            : { resumeCompletionId: verification.resumeCompletionId }),
+          ...(verification.repairPolicy
+            ? { completionRepairPolicy: verification.repairPolicy }
+            : {}),
+        }
+      : undefined;
+    return this.sendInternal(prompt, images, taskId, undefined, contract);
   }
   private async sendInternal(
     prompt: string,
     images?: ImageAttachment[],
     taskId?: string,
     plan?: { phase: 'plan' } | { planId: string },
+    contract?: RunContract,
   ): Promise<RunResult> {
     this.assertIdle();
     if (!this.state.sessionId) throw new Error('Create or load a session first');
@@ -693,6 +754,7 @@ export class SessionController {
       input.images,
       taskId,
       plan,
+      contract,
     );
     try {
       return await this.active;
@@ -712,6 +774,7 @@ export class SessionController {
     images?: ImageAttachment[],
     taskId?: string,
     plan?: { phase: 'plan' } | { planId: string },
+    contract?: RunContract,
   ): Promise<RunResult> {
     let ownedRunId: string | null | undefined;
     const owns = () =>
@@ -722,6 +785,7 @@ export class SessionController {
         images,
         taskId,
         ...(plan ?? {}),
+        ...(contract ?? {}),
       });
       ownedRunId = result.runId;
       if (owns()) {

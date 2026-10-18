@@ -179,3 +179,96 @@ test('a task whose stop hook changed verified inputs remains open for review', a
   assert.equal(store.getTask(session.id, task.id)?.status, 'needs_review');
   assert.equal(store.listTaskAttempts(session.id, task.id)[0]?.status, 'needs_review');
 });
+
+function declaredPaths(store: SessionStore, sessionId: string): string[] {
+  return store
+    .events(sessionId)
+    .flatMap((event) =>
+      event.type === 'completion.updated' && Array.isArray(event.data.affectedPaths)
+        ? (event.data.affectedPaths as string[])
+        : [],
+    );
+}
+
+/** The shared contract with one step, which is what makes the completion tools available to the model. */
+const steppedDefinition: CompletionSpec = {
+  ...definition,
+  steps: [{ id: 'write', description: 'Write the output', status: 'pending' }],
+};
+
+/** A provider that declares `paths` through `completion_scope` once, then finishes. */
+function scopeDeclaringProvider(paths: string[]): Provider {
+  let turn = 0;
+  return {
+    async complete() {
+      turn += 1;
+      if (turn === 1)
+        return {
+          text: '',
+          toolCalls: [
+            { id: 'scope-1', name: 'completion_scope', arguments: { paths } },
+            {
+              id: 'step-1',
+              name: 'completion_step',
+              arguments: { id: 'write', status: 'completed' },
+            },
+          ],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'tool_calls',
+        };
+      return {
+        text: 'Done.',
+        toolCalls: [],
+        usage: { inputTokens: 10, outputTokens: 5 },
+        finishReason: 'stop',
+      };
+    },
+  };
+}
+
+test('a stop hook that changes a declared affected path invalidates final verification', async (t) => {
+  const { root, store, session } = await fixture(t);
+  await writeFile(path.join(root, 'b.txt'), 'declared original');
+  const hooks = new HookRegistry();
+  hooks.register({
+    async stop() {
+      await writeFile(path.join(root, 'b.txt'), 'changed after checks');
+    },
+  });
+  const result = await new Agent({
+    store,
+    tools: createTools(root, undefined, 'standalone', hooks),
+    approve: async () => true,
+    provider: scopeDeclaringProvider(['b.txt']),
+  }).run({ sessionId: session.id, prompt: 'Verify', completion: steppedDefinition });
+  assert.ok(
+    declaredPaths(store, session.id).includes('b.txt'),
+    'the scope must have been recorded',
+  );
+  assert.equal(result.status, 'needs_review');
+  assert.equal(result.completion?.state, 'needs_review');
+});
+
+test('a declared affected path that stays put still verifies', async (t) => {
+  const { root, store, session } = await fixture(t);
+  await writeFile(path.join(root, 'b.txt'), 'declared original');
+  const result = await new Agent({
+    store,
+    tools: createTools(root),
+    approve: async () => true,
+    provider: scopeDeclaringProvider(['b.txt']),
+  }).run({ sessionId: session.id, prompt: 'Verify', completion: steppedDefinition });
+  assert.equal(result.completion?.state, 'verified');
+});
+
+test('completion_scope refuses a protected path instead of monitoring it', async (t) => {
+  const { root, store, session } = await fixture(t);
+  const result = await new Agent({
+    store,
+    tools: createTools(root),
+    approve: async () => true,
+    provider: scopeDeclaringProvider(['.env']),
+  }).run({ sessionId: session.id, prompt: 'Verify', completion: steppedDefinition });
+  assert.deepEqual(declaredPaths(store, session.id), []);
+  assert.equal(result.completion?.state, 'verified');
+});

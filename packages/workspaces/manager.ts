@@ -8,10 +8,17 @@ import {
   type WorkspaceBinding,
   type WorkspaceSnapshot,
 } from '../protocol/workspaces.ts';
-import { canonicalKey, isWithin, realPathOrNull, samePath } from '../platform/workspace-paths.ts';
+import {
+  canonicalKey,
+  isUnsafeGitPath,
+  isWithin,
+  realPathOrNull,
+  samePath,
+} from '../platform/workspace-paths.ts';
 import {
   isManagedWorktreePath,
   linkedWorktreeName,
+  managedWorktreeParents,
   managedWorktreeRoot,
   pathExists,
   plainFileInfo,
@@ -21,6 +28,7 @@ import {
   runWorkspaceGit,
   withRepositoryLock,
   workspaceGit,
+  workspaceGitList,
   writeFileExact,
   type RepositoryIdentity,
 } from './git.ts';
@@ -116,7 +124,7 @@ export class WorkspaceManager {
     // because either would present a lower level of protection as the one that was asked for.
     throw new WorkspaceFailure(
       'WORKSPACE_POLICY_UNSUPPORTED',
-      'Managed worktrees currently require host execution with workspace-write file access; the current session policy does not permit Git metadata writes. Read-only exploration can use auto or shared mode',
+      'Managed worktrees require a session policy with workspace-write file access; the current policy is read-only, so no worktree can be registered. Read-only exploration can use auto or shared mode',
     );
   }
 
@@ -383,6 +391,13 @@ export class WorkspaceManager {
     snapshotId: string,
   ): Promise<void> {
     const absolute = path.join(target, ...entry.path.split('/'));
+    // `readManifest` already refuses paths that leave the tree; this is the last word before a write.
+    if (isUnsafeGitPath(entry.path) || !isWithin(target, absolute) || samePath(target, absolute))
+      throw new WorkspaceFailure(
+        'WORKSPACE_INTEGRITY',
+        `A snapshot path leaves the workspace: ${entry.path}`,
+        { path: entry.path },
+      );
     const info = await plainFileInfo(absolute);
     if (!info.ok && info.reason !== 'missing')
       throw new WorkspaceFailure(
@@ -750,14 +765,10 @@ export class WorkspaceManager {
         throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Removal snapshot is missing');
       const expected = new Set(manifest.files.map((entry) => entry.path));
       const assertPreserved = async () => {
-        const names = (
-          await workspaceGit(['ls-files', '--cached', '--others', '-z'], {
-            cwd: binding.executionRoot,
-            signal,
-          })
-        )
-          .split('\0')
-          .filter(Boolean);
+        const names = await workspaceGitList(['ls-files', '--cached', '--others', '-z'], {
+          cwd: binding.executionRoot,
+          signal,
+        });
         const omitted: string[] = [];
         for (const name of names) {
           if (expected.has(name)) continue;
@@ -948,9 +959,9 @@ export function sameDirectory(left: string, right: string): boolean {
   return canonicalKey(a) === canonicalKey(b);
 }
 
-/** Whether a directory is inside the managed worktree root of the given repository. */
+/** Whether a directory is inside a managed worktree parent of the given repository, current or legacy layout. */
 export function insideManagedRoot(repositoryRoot: string, target: string): boolean {
-  return isWithin(managedWorktreeRoot(repositoryRoot, 'x').replace(/[\\/]x$/, ''), target);
+  return managedWorktreeParents(repositoryRoot).some((parent) => isWithin(parent, target));
 }
 
 /** Reads a file out of a workspace, used by the results service for a diff of one path. */

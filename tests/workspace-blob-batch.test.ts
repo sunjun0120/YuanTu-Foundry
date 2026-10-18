@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { openBlobBatch, readBlob, writeBlobs } from '../packages/workspaces/git.ts';
+import { openBlobBatch, readBlob, writeBlobs, writeTree } from '../packages/workspaces/git.ts';
 
 /**
  * The one-process blob writer behind freezes and result exports.
@@ -82,4 +82,26 @@ test('a source that throws abandons the batch and rethrows', async (t) => {
     ),
     /walk failed/,
   );
+});
+
+test('a tree takes any name Git allows, including newlines and a leading quote', async (t) => {
+  const root = await repository(t);
+  const [blob] = await writeBlobs(root, [Buffer.from('content\n')]);
+  const names = [
+    'normal.txt',
+    'new\nline.txt',
+    '"leading-quote.txt',
+    'tab\there.txt',
+    '中文 名称.txt',
+  ];
+  const tree = await writeTree(root, [
+    ...names.map((name) => ({ path: name, mode: '100644' as const, blob: blob! })),
+    { path: 'dir/"quoted"\nchild.txt', mode: '100644', blob: blob! },
+  ]);
+  const listed = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', tree], { cwd: root })
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(listed, [...names, 'dir/"quoted"\nchild.txt'].sort());
 });

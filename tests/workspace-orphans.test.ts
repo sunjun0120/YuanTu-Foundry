@@ -317,8 +317,10 @@ test('orphan maintenance rechecks the live Host file and execution policy', asyn
     ['workspace.remove', 'archived'],
     ['workspace.restore', 'removed'],
   ] as const) {
+    // Only the file policy decides: a native default with workspace-write may maintain a worktree (the Host runs
+    // the Git plumbing itself), and a read-only one may not, whichever backend enforces it.
     for (const [mode, files] of [
-      ['native', 'workspace-write'],
+      ['native', 'read-only'],
       ['host', 'read-only'],
     ] as const) {
       h.ctx.defaultSandboxMode = mode;
@@ -330,7 +332,7 @@ test('orphan maintenance rechecks the live Host file and execution policy', asyn
       );
       assert.equal(h.store.workspaceById(binding.id)!.state, expectedState);
     }
-    h.ctx.defaultSandboxMode = 'host';
+    h.ctx.defaultSandboxMode = method === 'workspace.remove' ? 'native' : 'host';
     h.ctx.defaultSandboxFiles = 'workspace-write';
     await h.dispatch(method, { bindingId: binding.id });
   }
@@ -348,19 +350,21 @@ test('session maintenance uses its current selection rather than the Host defaul
     delete: false,
   });
   h.ctx.sessionSandboxes.set(childId, 'native');
-  await assert.rejects(
-    h.dispatch('workspace.archive', { sessionId: childId }),
-    /WORKSPACE_POLICY_UNSUPPORTED/,
-  );
-  h.ctx.sessionSandboxes.set(childId, 'host');
   h.ctx.sessionSandboxFiles.set(childId, 'read-only');
   await assert.rejects(
     h.dispatch('workspace.archive', { sessionId: childId }),
     /WORKSPACE_POLICY_UNSUPPORTED/,
   );
+  h.ctx.sessionSandboxes.set(childId, 'host');
+  await assert.rejects(
+    h.dispatch('workspace.archive', { sessionId: childId }),
+    /WORKSPACE_POLICY_UNSUPPORTED/,
+  );
   assert.equal(h.store.workspaceById(binding.id)!.state, 'ready');
+  // The session's own selection wins over a read-only Host default.
+  h.ctx.sessionSandboxes.set(childId, 'native');
   h.ctx.sessionSandboxFiles.set(childId, 'workspace-write');
-  h.ctx.defaultSandboxMode = 'native';
+  h.ctx.defaultSandboxFiles = 'read-only';
   await h.dispatch('workspace.archive', { sessionId: childId });
   assert.equal(h.store.workspaceById(binding.id)!.state, 'archived');
 });

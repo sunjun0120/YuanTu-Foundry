@@ -92,6 +92,27 @@ export interface CompletionRepairPolicy {
   repairTimeoutMs: number;
 }
 
+/**
+ * How a desktop request asks to be verified rather than merely answered.
+ *
+ * Exactly one source: a contract stated with the request, or the session's recorded contract to continue. A plain
+ * chat turn omits this, which is what keeps "the turn ended" distinct from "the task was accepted". The carrier
+ * checks only the envelope; the Host normalizes the body with the same validator every other source goes through.
+ */
+export type RunVerification =
+  | { completion: CompletionSpec; repairPolicy?: CompletionRepairPolicy }
+  | { resumeCompletionId: string; repairPolicy?: CompletionRepairPolicy };
+/**
+ * The checks an approved plan's execution is judged against. The steps are the approved ones and cannot be
+ * restated here; a person adds what "done" means for them, and the range of files the evidence covers.
+ */
+export interface PlanVerification {
+  acceptance: import('./index.ts').Acceptance[];
+  inputs?: string[];
+  constraints?: string[];
+  repairPolicy?: CompletionRepairPolicy;
+}
+
 export const COMPLETION_REPAIR_DEFAULTS: CompletionRepairPolicy = {
   maxRepairRounds: 3,
   maxRepeatedFailures: 2,

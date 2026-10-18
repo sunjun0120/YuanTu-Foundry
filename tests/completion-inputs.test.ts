@@ -17,6 +17,7 @@ import {
   snapshotCompletionInputs,
 } from '../packages/core/completion-inputs.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { WORKSPACE_SCALE_LIMITS } from '../packages/protocol/workspaces.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 const signal = new AbortController().signal;
@@ -194,12 +195,24 @@ test('a cancelled snapshot stops rather than reporting a partial tree', async (t
 
 test('a range that is too large is refused, not truncated', async (t) => {
   const root = await fixture(t);
-  // 20 001 empty files is slow to create; the single-file bound is the same rule and cheap to exercise, so both
+  // 200 001 empty files is slow to create; the single-file bound is the same rule and cheap to exercise, so both
   // the class of error and the refusal itself are asserted without building a quarter of a million files.
-  await writeFile(path.join(root, 'huge.bin'), Buffer.alloc(16 * 1024 * 1024 + 1, 0));
+  await writeFile(
+    path.join(root, 'huge.bin'),
+    Buffer.alloc(WORKSPACE_SCALE_LIMITS.fileBytes + 1, 0),
+  );
   await assert.rejects(
     snapshotCompletionInputs(root, ['huge.bin'], signal),
     (error: unknown) =>
       error instanceof CompletionInputLimitError && /per-file limit/.test(error.message),
   );
+});
+
+test('the fingerprint accepts any file the workspace snapshot accepts', async (t) => {
+  const root = await fixture(t);
+  // 17 MiB: above the fingerprint's former 16 MiB bound, below the bound the workspace snapshot shares with it.
+  await writeFile(path.join(root, 'asset.bin'), Buffer.alloc(17 * 1024 * 1024, 1));
+  const first = await snapshotCompletionInputs(root, ['.'], signal);
+  assert.ok(first.bytes >= 17 * 1024 * 1024);
+  assert.equal((await snapshotCompletionInputs(root, ['.'], signal)).digest, first.digest);
 });

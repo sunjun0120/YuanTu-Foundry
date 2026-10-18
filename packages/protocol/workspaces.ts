@@ -21,6 +21,19 @@
  * for it deliberately; `worktree` isolates every child, including read-only ones.
  */
 export const WORKSPACE_MODES = ['auto', 'shared', 'worktree'] as const;
+/**
+ * How much working tree the runtime will hold evidence about, in one place.
+ *
+ * A child's frozen snapshot and a completion contract's fingerprint describe the same tree, so they share one budget:
+ * a tree that can be frozen for a delegated task can also be verified when the task ends, and a large unrelated asset
+ * is refused (or accepted) by both rather than passing one and sending the other to review.
+ */
+export const WORKSPACE_SCALE_LIMITS = {
+  /** One file larger than this is not a source file these features were built for. */
+  fileBytes: 64 * 1024 * 1024,
+  files: 200_000,
+  totalBytes: 512 * 1024 * 1024,
+} as const;
 export type WorkspaceMode = (typeof WORKSPACE_MODES)[number];
 export function isWorkspaceMode(value: unknown): value is WorkspaceMode {
   return typeof value === 'string' && (WORKSPACE_MODES as readonly string[]).includes(value);

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { WORKSPACE_SCALE_LIMITS } from '../protocol/workspaces.ts';
 import { normalizeCompletionPath } from './completion-contract.ts';
 
 /**
@@ -62,9 +63,13 @@ export class CompletionInputUnstableError extends Error {
   }
 }
 
-const MAX_FILES = 20_000;
-const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+/**
+ * The same budget a child's frozen snapshot uses, so a tree that can be delegated can also be verified: a fingerprint
+ * that refused a file the snapshot accepted sent an unrelated large asset to review at the end of a task.
+ */
+const MAX_FILES = WORKSPACE_SCALE_LIMITS.files;
+const MAX_TOTAL_BYTES = WORKSPACE_SCALE_LIMITS.totalBytes;
+const MAX_FILE_BYTES = WORKSPACE_SCALE_LIMITS.fileBytes;
 
 /**
  * Directory names the default source range never descends into.
@@ -111,7 +116,7 @@ function isProtectedSegment(segment: string): boolean {
   return FORBIDDEN_SEGMENTS.includes(lower) || lower.startsWith('.env');
 }
 
-function assertReadable(relative: string): void {
+export function assertCompletionInputReadable(relative: string): void {
   for (const segment of relative.split('/')) {
     if (isProtectedSegment(segment))
       throw new CompletionInputLimitError(
@@ -150,25 +155,25 @@ async function hashFile(
   // reader that loaded each file into memory to decide would reach the limit the hard way.
   const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
-    const chunks: Buffer[] = [];
+    // Hashed as it is read, so memory stays one buffer whatever the file's size. A file that moves while it is read
+    // throws, and a throw discards the whole snapshot, so a half-hashed file can never reach a digest.
     const buffer = Buffer.alloc(64 * 1024);
     let offset = 0;
+    state.hash.update('file\0').update(relative).update('\0');
     for (;;) {
       signal.throwIfAborted();
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
       if (!bytesRead) break;
-      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      state.hash.update(buffer.subarray(0, bytesRead));
       offset += bytesRead;
     }
     const after = await handle.stat();
-    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs)
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || offset !== before.size)
       throw new CompletionInputUnstableError(
         `Completion input changed while it was being read: ${relative}`,
       );
     state.files += 1;
     state.bytes += offset;
-    state.hash.update('file\0').update(relative).update('\0');
-    for (const chunk of chunks) state.hash.update(chunk);
     state.hash.update('\0');
   } finally {
     await handle.close();
@@ -239,7 +244,7 @@ export async function snapshotCompletionInputs(
   const normalized = [
     ...new Set(
       inputs.map((input) => {
-        assertReadable(input);
+        assertCompletionInputReadable(input);
         return normalizeCompletionPath(input, 'input');
       }),
     ),

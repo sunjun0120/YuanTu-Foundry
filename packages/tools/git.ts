@@ -7,6 +7,8 @@ import { bounded, MAX_TOOL_OUTPUT } from './registry.ts';
 import { killTree } from './process.ts';
 import { localExecutionEnvironment } from './execution-environment.ts';
 import { currentExecutionPolicy, executionPolicy } from './execution-policy.ts';
+import { samePath } from '../platform/workspace-paths.ts';
+import { repositoryWorktreeParent } from '../platform/worktree-home.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -251,11 +253,32 @@ function contained(parent: string, target: string): boolean {
   );
 }
 
-async function managedWorktreeMetadata(repository: string, metadata: string): Promise<boolean> {
+/**
+ * The repository that owns a delegated child's worktree, derived from the worktree's *location* rather than from
+ * anything the worktree's own `.git` file says.
+ *
+ * Two layouts: the current one under the worktree home (`<home>/<key>/<id>`), where the owner is the repository
+ * whose metadata directory holds the link *and* whose key names the worktree's parent; and the legacy one inside the
+ * owner (`<owner>/.yuantu/worktrees/<id>`).
+ */
+function worktreeOwner(repository: string, metadata: string): string | null {
   const worktrees = path.dirname(repository);
   const state = path.dirname(worktrees);
-  if (path.basename(worktrees) !== 'worktrees' || path.basename(state) !== '.yuantu') return false;
-  const owner = path.dirname(state);
+  if (path.basename(worktrees) === 'worktrees' && path.basename(state) === '.yuantu')
+    return path.dirname(state);
+  // `<owner>/.git/worktrees/<name>`: the candidate owner is read off the metadata path, then has to be the
+  // repository whose key the worktree's parent is named after — a crafted `.git` file cannot choose both.
+  const commonWorktrees = path.dirname(metadata);
+  const common = path.dirname(commonWorktrees);
+  if (path.basename(commonWorktrees) !== 'worktrees' || path.basename(common) !== '.git')
+    return null;
+  const owner = path.dirname(common);
+  return samePath(path.dirname(repository), repositoryWorktreeParent(owner)) ? owner : null;
+}
+
+async function managedWorktreeMetadata(repository: string, metadata: string): Promise<boolean> {
+  const owner = worktreeOwner(repository, metadata);
+  if (!owner) return false;
   try {
     const commonWorktrees = await realpath(path.join(owner, '.git', 'worktrees'));
     if (!contained(commonWorktrees, metadata) || commonWorktrees === metadata) return false;

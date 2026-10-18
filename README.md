@@ -488,8 +488,9 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 - **命令写文件也算数**：结果来自**目录本身**而不是文件工具 journal，所以 `run_command` 产生的改动一样会出现在结果里；未通过限制（二进制、模式变化、单文件 >1 MiB、>64 路径）的结果标为 `unsupported`，保留现场供人工处理，**不部分合入**。
 - **合入后可撤销**：导入写成一次分组 journal 记录，属于父会话自己的改动列表，`changes.undo` 按目标绑定的执行根恢复精确字节。
 - **崩溃可收敛**：`preparing` 记录按目录是否存在分类，导入中断按 journal 的 before/after 逐路径判断（第三种字节判 conflict），**不重放审批**，也不会把未验证当作已验证——结果里附带的是工具执行的持久证据，不是模型的自我报告。
-- **会话删除后的维护**：桌面「设置 → 保留的工作区」按当前项目列出孤立目录和已移除目录的恢复记录，可归档、确认清理及恢复，受阻目录也有独立恢复入口。Host 的 `workspaces.orphaned` 默认排除已移除目录，`includeRemoved: true` 可发现恢复目标；`workspace.archive/remove/restore` 支持 `bindingId`，存活会话仍用 `sessionId`。绑定请求可通过 `policySessionId` 使用同项目会话的实时权限，否则使用 Host 默认权限。维护写入仅允许 `host` + `workspace-write`，其他策略返回 `WORKSPACE_POLICY_UNSUPPORTED`；不会隐式更改默认权限。目录移除前保存快照并复查身份，库存按需读取。
-- **设置**：`YUANTU_SUBAGENT_WORKSPACE` / `--subagent-workspace` 取 `auto`（默认；写入型隔离、只读共享）、`shared`（保留旧共享写入行为，**不提供隔离**，界面必须如实标注）、`worktree`（连只读也隔离）。当前执行策略无法安全管理 Git 元数据时返回 `WORKSPACE_POLICY_UNSUPPORTED`，**不降级为 shared**。
+- **会话删除后的维护**：桌面「设置 → 保留的工作区」按当前项目列出孤立目录和已移除目录的恢复记录，可归档、确认清理及恢复，受阻目录也有独立恢复入口。Host 的 `workspaces.orphaned` 默认排除已移除目录，`includeRemoved: true` 可发现恢复目标；`workspace.archive/remove/restore` 支持 `bindingId`，存活会话仍用 `sessionId`。绑定请求可通过 `policySessionId` 使用同项目会话的实时权限，否则使用 Host 默认权限。维护写入要求 `workspace-write` 文件权限（host 与原生沙箱均可），只读策略返回 `WORKSPACE_POLICY_UNSUPPORTED`；不会隐式更改默认权限。目录移除前保存快照并复查身份，库存按需读取。
+- **设置**：`YUANTU_SUBAGENT_WORKSPACE` / `--subagent-workspace` 取 `auto`（默认；写入型隔离、只读共享）、`shared`（保留旧共享写入行为，**不提供隔离**，界面必须如实标注）、`worktree`（连只读也隔离）。会话策略为只读时返回 `WORKSPACE_POLICY_UNSUPPORTED`，**不降级为 shared**。
+- **工作树位置与原生沙箱**：隔离工作树建在仓库之外的用户数据目录（Windows `%LOCALAPPDATA%\YuanTu\worktrees`、macOS `~/Library/Application Support/YuanTu/worktrees`、Linux `$XDG_DATA_HOME/yuantu/worktrees`，按仓库路径摘要分目录；`YUANTU_WORKTREE_DIR` 可改为其他绝对路径）。这条路径不含任何受保护片段，所以原生沙箱下的写入型子代理能写自己的工作树，委派者的沙箱也够不到它。Git 元数据（工作树登记、快照私有引用）由 Host 以固定参数直接执行，属于受控基础设施操作；子运行仍按自己的原生策略受限。早期版本建在 `<仓库>/.yuantu/worktrees/` 下的绑定仍可校验、归档、清理与恢复，但不再新建。
 - **边界**：worktree 是代码工作副本隔离，不是 OS 安全隔离；host shell 仍可能访问其他目录，不隔离网络、共享账户或外部数据库。首版不安装依赖，需要跑测试的子代理缺依赖时报 `WORKSPACE_DEPENDENCIES_MISSING`。
 
 ### 持久任务与目标
@@ -610,7 +611,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 71 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 72 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -665,6 +666,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_TOOL_RESULT_PRUNE_TAIL_CHARS` | `0–1000000` | 丢弃中段时在结尾保留的字符数 |
 | `YUANTU_MCP_OAUTH_DIR` | `string` | MCP OAuth 令牌目录 |
 | `YUANTU_STATE_DIR` | `string` | 普通用户状态根目录（绝对路径，默认 ~/.yuantu） |
+| `YUANTU_WORKTREE_DIR` | `string` | 子代理隔离工作树的根目录（绝对路径；默认在用户数据目录下，位于仓库之外且不含受保护的路径片段） |
 | `YUANTU_CREDENTIALS_FILE` | `string` | 凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它） |
 | `YUANTU_MEMORY_DIR` | `string` | 用户级记忆目录 |
 | `YUANTU_KNOWLEDGE_DB` | `string` | 知识库数据库路径 |
@@ -714,7 +716,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v31 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 255 个 | `tests/*.test.ts` |
+| 行为测试文件 | 257 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 6 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -736,7 +738,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **不提供 `push`、`amend`、`rebase`、`reset --hard`**：它们需要凭据、改写历史或丢弃工作成果，不能由模型顺带推断。
 - **文件工具不是并发安全边界**：它们拒绝工作区外路径与符号链接，但不对抗有意绕过它的进程。
 - **浏览器工具依赖可选的 `playwright`**；Office 文件的创建、编辑、读取与 `.html` 预览都是纯 JS；只有 `.pdf` 预览需要本机 Microsoft Office（Windows）或另行安装的 LibreOffice，真实引擎、字体、版式和公式计算仍需独立验收。
-- **语言服务器支持 host 与 Windows/macOS 原生执行后端**；后端不可用或不能满足文件、网络要求时拒绝启动。服务器保留创建策略，切换后需要停止并重新启动才能继续请求。服务器不会自动重启，也没有空闲回收，必须显式 `lsp_start`。没有格式化工具，而语言服务器返回的 `WorkspaceEdit` 里除了文本编辑还可能带**建文件/改名/删文件类资源操作**——这些一律拒绝整份编辑，而不是只应用文本那一半（否则引用被改名而文件没动，调用方还会以为重命名成功了）。
+- **语言服务器支持 host 与 Windows/macOS 原生执行后端**；后端不可用或不能满足文件、网络要求时拒绝启动。服务器保留创建策略，切换后需要停止并重新启动才能继续请求。服务器不会自动重启，也没有空闲回收，必须显式 `lsp_start`。没有格式化工具。语言服务器返回的 `WorkspaceEdit` 里的文本编辑与**建文件/改名/删文件类资源操作**按顺序在内存中合成为一组前后快照，经一次审批与写后复核，作为同一个日志组写入（逐文件落盘，中途失败按不确定状态记入日志，不会只应用文本而丢掉文件移动）；针对目录的操作、改名覆盖已有文件（未声明 overwrite）等无法以文件粒度完成的情况整份拒绝。
 - **MCP 没有命令允许名单，也没有域名白名单**：约束是「HTTPS 或回环」加上来源白名单，stdio 传输额外要求 host 沙箱。运行时的授权请求不会自动弹浏览器，必须显式完成一次授权；远端返回的 schema、提示词与内容一律当作不可信数据。工具目录在连接建立时读取一次，此后只在服务器自己发出 `notifications/tools/list_changed` 时按需重读——用已经开着的连接重读，不重握手，也不因为收到通知就立刻发起请求。
 - **`verify_file_delivery` 校验的是结构而不是语义**：它核对大小、SHA-256 与魔数，不判断页数、能否被 Office 打开、版式或内容是否正确。
 - **检索结果区分「扫描完整」与「扫描不完整」**：`search_files` 零命中时明确说明这是完整扫描的结果，还是预算、读错误或超限导致只扫了一部分；`limited` 可能来自结果上限、输出预算或未完成的枚举，三者含义不同。正文结果里，字面量追加 `[match limit reached]`，正则超时仍按错误返回，不伪装成空匹配。

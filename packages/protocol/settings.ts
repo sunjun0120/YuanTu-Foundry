@@ -445,6 +445,11 @@ export const ENVIRONMENT = {
     kind: 'string',
     description: '普通用户状态根目录（绝对路径，默认 ~/.yuantu）',
   },
+  YUANTU_WORKTREE_DIR: {
+    kind: 'string',
+    description:
+      '子代理隔离工作树的根目录（绝对路径；默认在用户数据目录下，位于仓库之外且不含受保护的路径片段）',
+  },
   YUANTU_CREDENTIALS_FILE: {
     kind: 'string',
     description: '凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它）',

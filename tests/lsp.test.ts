@@ -1121,7 +1121,7 @@ test('lsp_rename applies a multi-file WorkspaceEdit atomically and journals it',
   assert.equal(result.change?.changes?.length, 2);
 });
 
-test('a WorkspaceEdit that also moves a file is refused whole, not half-applied', async (t) => {
+test('a WorkspaceEdit that also moves a file applies the move and the edit as one change', async (t) => {
   const { root, tools } = await workspace(t);
   await writeFile(path.join(root, 'main.fake'), 'TARGET = 1;\nRENAMEFILE\n');
   await tools.execute(call('lsp_start', { language: 'fake' }), ctx());
@@ -1131,15 +1131,53 @@ test('a WorkspaceEdit that also moves a file is refused whole, not half-applied'
     context,
   );
   /**
-   * The server asked for a file move *and* a text edit. Only the text half can be applied here, so the whole
-   * edit has to be refused: renaming the references while leaving the file where it was is a workspace state
-   * nobody asked for, and the caller would be told the rename succeeded.
+   * The server asked for a file move *and* a text edit that still names the old URI. Both land, or neither: the
+   * references are renamed in the moved file, the old path is gone, and one approval covered the whole edit.
    */
+  assert.equal(result.isError, false, result.content);
+  assert.equal(await readFile(path.join(root, 'moved.fake'), 'utf8'), 'RENAMED = 1;\nRENAMEFILE\n');
+  await assert.rejects(() => stat(path.join(root, 'main.fake')));
+  assert.equal(approvals.length, 1);
+  assert.match(approvals[0]!.description, /moved\.fake/);
+  assert.deepEqual(result.change?.changes?.map((change) => [change.path, change.kind]).sort(), [
+    ['main.fake', 'delete'],
+    ['moved.fake', 'create'],
+  ]);
+});
+
+test('a WorkspaceEdit that moves a file onto an existing one is refused whole', async (t) => {
+  const { root, tools } = await workspace(t);
+  await writeFile(path.join(root, 'main.fake'), 'TARGET = 1;\nRENAMEONTO\n');
+  await writeFile(path.join(root, 'second.fake'), 'KEEP\n');
+  await tools.execute(call('lsp_start', { language: 'fake' }), ctx());
+  const { context, approvals } = recording();
+  const result = await tools.execute(
+    call('lsp_rename', { path: 'main.fake', line: 1, character: 1, new_name: 'RENAMED' }),
+    context,
+  );
   assert.equal(result.isError, true);
-  assert.match(result.content, /asks to rename a file/);
-  assert.equal(await readFile(path.join(root, 'main.fake'), 'utf8'), 'TARGET = 1;\nRENAMEFILE\n');
+  assert.match(result.content, /already exists/);
+  assert.equal(await readFile(path.join(root, 'main.fake'), 'utf8'), 'TARGET = 1;\nRENAMEONTO\n');
+  assert.equal(await readFile(path.join(root, 'second.fake'), 'utf8'), 'KEEP\n');
   assert.deepEqual(approvals, [], 'nothing may be approved for an edit that will not be applied');
-  await assert.rejects(() => stat(path.join(root, 'moved.fake')));
+});
+
+test('a WorkspaceEdit that removes a directory is refused whole, not half-applied', async (t) => {
+  const { root, tools } = await workspace(t);
+  await writeFile(path.join(root, 'main.fake'), 'TARGET = 1;\nDELETEDIR\n');
+  await mkdir(path.join(root, 'dir'));
+  await writeFile(path.join(root, 'dir', 'kept.fake'), 'KEEP\n');
+  await tools.execute(call('lsp_start', { language: 'fake' }), ctx());
+  const { context, approvals } = recording();
+  const result = await tools.execute(
+    call('lsp_rename', { path: 'main.fake', line: 1, character: 1, new_name: 'RENAMED' }),
+    context,
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content, /directory dir/);
+  assert.equal(await readFile(path.join(root, 'main.fake'), 'utf8'), 'TARGET = 1;\nDELETEDIR\n');
+  assert.equal(await readFile(path.join(root, 'dir', 'kept.fake'), 'utf8'), 'KEEP\n');
+  assert.deepEqual(approvals, []);
 });
 
 test('a WorkspaceEdit that reaches out of the workspace through a link is refused, not previewed', async (t) => {

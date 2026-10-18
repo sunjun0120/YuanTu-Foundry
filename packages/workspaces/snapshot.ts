@@ -2,7 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, type Stats } from 'node:fs';
 import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { WorkspaceFailure, type WorkspaceSnapshot } from '../protocol/workspaces.ts';
+import {
+  WORKSPACE_SCALE_LIMITS,
+  WorkspaceFailure,
+  type WorkspaceSnapshot,
+} from '../protocol/workspaces.ts';
+import { isCredentialFileName } from '../platform/credential-paths.ts';
 import { gitPath, isUnsafeGitPath, samePath } from '../platform/workspace-paths.ts';
 import { sameStatKey, statKey, type StatKey } from '../platform/stat-cache.ts';
 import {
@@ -11,6 +16,7 @@ import {
   runWorkspaceGit,
   withRepositoryLock,
   workspaceGit,
+  workspaceGitList,
   openBlobBatch,
   writeBlobs,
   WORKSPACE_GIT_IDENTITY,
@@ -51,8 +57,8 @@ const SNAPSHOT_FORMAT = 3;
  */
 const BLOB_NAME_CHARS = 32;
 /** One file larger than this is not a source file this feature was built for. Refused by name, not truncated. */
-const MAX_FILE_BYTES = 64 * 1024 * 1024;
-const MAX_FILES = 200_000;
+const MAX_FILE_BYTES = WORKSPACE_SCALE_LIMITS.fileBytes;
+const MAX_FILES = WORKSPACE_SCALE_LIMITS.files;
 /**
  * How many bytes of working tree one snapshot may carry.
  *
@@ -62,7 +68,7 @@ const MAX_FILES = 200_000;
  * the number that turns that into a refusal that names the tree, its size and the budget. It is generous on
  * purpose: a large monorepo is still a working tree this feature should handle.
  */
-const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+const MAX_TOTAL_BYTES = WORKSPACE_SCALE_LIMITS.totalBytes;
 
 /**
  * Files whose *tracked* presence blocks a freeze, and whose untracked presence is simply not copied.
@@ -128,8 +134,10 @@ export { isRuntimePath };
 function looksLikeCredential(relativePath: string): boolean {
   const segments = relativePath.split('/');
   const name = segments[segments.length - 1] ?? '';
-  if (PROTECTED_FILES.has(name)) return true;
   const lower = name.toLowerCase();
+  // The shared rule covers the `.env.*` and `credentials.*` families the file tools refuse; this list adds the
+  // names only a whole-tree copy needs to worry about. Both compare without case, as Windows and macOS do.
+  if (isCredentialFileName(name) || PROTECTED_FILES.has(lower)) return true;
   return PROTECTED_SUFFIXES.some((suffix) => lower.endsWith(suffix));
 }
 
@@ -394,7 +402,7 @@ async function walkWorkingTree(
   const budget = limits.maxTotalBytes ?? MAX_TOTAL_BYTES;
   const cwd = directory;
   const options = signal ? { signal } : {};
-  const listed = await workspaceGit(
+  const listed = await workspaceGitList(
     ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
     {
       cwd,
@@ -402,25 +410,48 @@ async function walkWorkingTree(
       maxBytes: 256 * 1024 * 1024,
     },
   );
-  const paths = [
-    ...new Set(
-      listed
-        .split('\0')
-        .map((entry) => gitPath(entry))
-        .filter(Boolean),
-    ),
-  ].sort();
+  const paths = [...new Set(listed.map((entry) => gitPath(entry)).filter(Boolean))].sort();
   if (paths.length > MAX_FILES)
     throw new WorkspaceFailure(
       'WORKSPACE_UNSUPPORTED_FILE_TYPE',
       `The working tree holds ${paths.length} files, more than the ${MAX_FILES} this version freezes`,
     );
   const tracked = new Set(
-    (await workspaceGit(['ls-files', '--cached', '-z'], { cwd, ...options }))
-      .split('\0')
+    (await workspaceGitList(['ls-files', '--cached', '-z'], { cwd, ...options }))
       .map((entry) => gitPath(entry))
       .filter(Boolean),
   );
+  /**
+   * Every directory above a file, checked once per walk.
+   *
+   * `lstat` on the file alone does not see a link further up: a tracked directory replaced by a symbolic link or
+   * a Windows junction leaves the file itself looking plain while the read follows the link out of the tree.
+   */
+  const ancestors = new Map<string, Promise<boolean>>();
+  const plainAncestor = (relative: string): Promise<boolean> => {
+    let known = ancestors.get(relative);
+    if (!known) {
+      known = lstat(path.join(cwd, ...relative.split('/')))
+        .catch(() => null)
+        .then((info) => {
+          if (info?.isSymbolicLink())
+            throw new WorkspaceFailure(
+              'WORKSPACE_UNSUPPORTED_FILE_TYPE',
+              `Symbolic links are not supported by workspace isolation yet: ${relative}`,
+              { path: relative },
+            );
+          return Boolean(info?.isDirectory());
+        });
+      ancestors.set(relative, known);
+    }
+    return known;
+  };
+  const plainAncestors = async (relative: string): Promise<boolean> => {
+    const segments = relative.split('/').slice(0, -1);
+    for (let depth = 1; depth <= segments.length; depth++)
+      if (!(await plainAncestor(segments.slice(0, depth).join('/')))) return false;
+    return true;
+  };
   const refused: string[] = [];
   let totalBytes = 0;
   for (const relative of paths) {
@@ -437,6 +468,8 @@ async function walkWorkingTree(
       continue;
     }
     if (isUnsafeGitPath(relative)) continue;
+    // A missing ancestor means the path was deleted after the listing, which the second pass judges like a file.
+    if (!(await plainAncestors(relative))) continue;
     const absolute = path.join(cwd, relative);
     /**
      * `lstat`, never `stat`: the question is what the path itself *is*, and following a link first is exactly how a
@@ -790,6 +823,40 @@ async function publishManifest(
   await rename(staging, target);
 }
 
+/**
+ * Whether every entry of a manifest read from disk is one this version could have written.
+ *
+ * The manifest decides where a worktree fill writes, so a path is trusted only when it is relative, stays inside
+ * the tree, avoids runtime directories and credential names, and appears once; embedded bytes are accepted only
+ * from the formats that embedded them.
+ */
+function validManifestEntries(manifest: SnapshotManifest): boolean {
+  const seen = new Set<string>();
+  for (const entry of manifest.files as unknown[]) {
+    if (!entry || typeof entry !== 'object') return false;
+    const { path: relative, mode, size, sha256, blob } = entry as Record<string, unknown>;
+    if (
+      typeof relative !== 'string' ||
+      relative !== gitPath(relative) ||
+      isUnsafeGitPath(relative) ||
+      relative.split('/').some((segment) => segment === '.') ||
+      isRuntimePath(relative) ||
+      looksLikeCredential(relative) ||
+      seen.has(relative) ||
+      (mode !== '100644' && mode !== '100755') ||
+      typeof size !== 'number' ||
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      typeof sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(sha256) ||
+      (blob !== undefined && (manifest.format === SNAPSHOT_FORMAT || typeof blob !== 'string'))
+    )
+      return false;
+    seen.add(relative);
+  }
+  return true;
+}
+
 export async function readManifest(
   repositoryRoot: string,
   snapshotId: string,
@@ -804,9 +871,16 @@ export async function readManifest(
       ![1, 2, SNAPSHOT_FORMAT].includes(parsed?.format ?? 0) ||
       !Array.isArray(parsed.files) ||
       typeof parsed.baseCommit !== 'string' ||
-      typeof parsed.baseTree !== 'string'
+      typeof parsed.baseTree !== 'string' ||
+      !validManifestEntries(parsed)
     )
       return null;
+    /**
+     * A format-3 snapshot is named by its manifest's digest, so a manifest edited on disk no longer answers to the
+     * id it is stored under and is treated as absent. Older formats used other naming schemes and rely on the entry
+     * checks alone.
+     */
+    if (parsed.format === SNAPSHOT_FORMAT && manifestDigest(parsed) !== snapshotId) return null;
     return parsed;
   } catch {
     return null;

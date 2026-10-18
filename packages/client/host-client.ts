@@ -4,6 +4,7 @@ import type { AgentEvent, RunResult, ImageAttachment } from '../protocol/index.t
 import { AGENT_EVENT_TYPES } from '../protocol/index.ts';
 import { MAX_INPUT_BYTES } from '../protocol/images.ts';
 import type { HostInfo, HostMethod, HostMethods } from '../protocol/rpc.ts';
+import type { CompletionRepairPolicy, CompletionSpec } from '../protocol/completion.ts';
 import { redactSecrets } from '../platform/redact.ts';
 import { stdioTransport, type HostTransport } from './host-transport.ts';
 import { HostRequests, type HostPendingRequest } from './host-requests.ts';
@@ -519,6 +520,11 @@ export class AgentHostClient {
       phase?: 'plan';
       /** Execute an already-approved plan. */
       planId?: string;
+      /** What "done" means for this run; omitted by an ordinary chat turn. */
+      completion?: CompletionSpec;
+      /** Continue the session's recorded contract instead of stating a new one. */
+      resumeCompletionId?: string;
+      completionRepairPolicy?: CompletionRepairPolicy;
     } = {},
   ): Promise<RunResult> {
     options.signal?.throwIfAborted();
@@ -529,6 +535,11 @@ export class AgentHostClient {
       ...(options.taskId ? { taskId: options.taskId } : {}),
       ...(options.phase ? { phase: options.phase } : {}),
       ...(options.planId ? { planId: options.planId } : {}),
+      ...(options.completion ? { completion: options.completion } : {}),
+      ...(options.resumeCompletionId ? { resumeCompletionId: options.resumeCompletionId } : {}),
+      ...(options.completionRepairPolicy
+        ? { completionRepairPolicy: options.completionRepairPolicy }
+        : {}),
     });
     const abort = () => {
       void this.request('run.cancel', { sessionId }).catch(() => this.stop().catch(() => {}));

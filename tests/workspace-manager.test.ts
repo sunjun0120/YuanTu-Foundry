@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -514,4 +515,36 @@ test('the manifest the allocation was built from is on disk and matches the fill
     .filter((name) => !name.startsWith('.yuantu/'))
     .sort();
   assert.deepEqual(listed, manifest.files.map((entry) => entry.path).sort());
+});
+
+test('a manifest that names a path outside the worktree allocates nothing and writes nothing', async (t) => {
+  const harness = await fixture(t);
+  const identity = (await repositoryIdentity(harness.root))!;
+  const manifestFile = path.join(
+    snapshotMetadataRoot(identity.repositoryRoot, harness.snapshotId),
+    'manifest.json',
+  );
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  const bytes = Buffer.from('SYNTHETIC_MANIFEST_ESCAPE_PROOF\n');
+  // Format 2 is not digest-named, so only the entry checks stand between this path and the write. A worktree
+  // lives at `<root>/.yuantu/worktrees/<id>`, so three levels up is the user's own repository root.
+  manifest.format = 2;
+  manifest.files.push({
+    path: '../../../escaped-proof.txt',
+    mode: '100644',
+    size: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    blob: bytes.toString('base64'),
+  });
+  await writeFile(manifestFile, JSON.stringify(manifest));
+  await assert.rejects(
+    harness.manager.allocate({
+      parentSessionId: harness.parentSessionId,
+      taskId: 'task-2',
+      snapshot: harness.store.workspaceSnapshot(harness.snapshotId)!,
+      signal: new AbortController().signal,
+    }),
+    WorkspaceFailure,
+  );
+  await assert.rejects(stat(path.join(harness.root, 'escaped-proof.txt')), { code: 'ENOENT' });
 });

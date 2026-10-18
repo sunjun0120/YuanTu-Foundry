@@ -7,8 +7,9 @@
  *   NODIAGNOSTICS never publish for this document, to exercise the wait timeout
  *   CRASH         exit immediately, to exercise crash detection
  *   MULTIFILE     make rename also edit the sibling second.fake
- *   RENAMEFILE    make rename answer with a file *rename* resource operation as well as a text edit,
- *                 which is the shape the tools refuse rather than half-apply
+ *   RENAMEFILE    make rename answer with a file *rename* resource operation as well as a text edit
+ *   RENAMEONTO    make rename move the file onto the existing second.fake, which must be refused whole
+ *   DELETEDIR     make rename also delete the sibling directory dir, which must be refused whole
  *
  * Pass `--crash-on-start` to make it fail before the handshake, the way a
  * rustup proxy does when its component is missing.
@@ -397,10 +398,24 @@ function handle(message: Incoming): void {
         ],
       };
       /**
-       * A `WorkspaceEdit` may also ask for file-level operations. Only text edits can be applied by the
-       * tools, so this shape exists to prove the whole edit is refused: the text half must not be applied
-       * while the move is dropped, which would rename references but leave the file where it was.
+       * A `WorkspaceEdit` may also ask for file-level operations. The text edit is listed after the move and still
+       * names the old URI, the way some servers send it, so applying it means applying it to the moved file.
        */
+      if (text.includes('RENAMEONTO') || text.includes('DELETEDIR')) {
+        send({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            documentChanges: [
+              { textDocument: { uri, version: null }, edits: changes[uri] },
+              text.includes('RENAMEONTO')
+                ? { kind: 'rename', oldUri: uri, newUri: sibling(uri, 'second.fake') }
+                : { kind: 'delete', uri: sibling(uri, 'dir'), options: { recursive: true } },
+            ],
+          },
+        });
+        return;
+      }
       if (text.includes('RENAMEFILE')) {
         send({
           jsonrpc: '2.0',

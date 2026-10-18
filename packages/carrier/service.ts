@@ -991,7 +991,12 @@ export class CarrierService {
         }
         case 'send':
           if (!this.snapshot.configured) throw new CarrierError('modelNotConfigured');
-          await this.controller.send(command.prompt, command.images);
+          await this.controller.send(
+            command.prompt,
+            command.images,
+            undefined,
+            command.verification,
+          );
           break;
         case 'enqueue':
           await this.controller.enqueue(command.prompt, command.mode, command.images);
@@ -1040,7 +1045,7 @@ export class CarrierService {
           await this.controller.rejectPlan(command.planId, command.reason);
           break;
         case 'planExecute':
-          await this.controller.executePlan(command.planId);
+          await this.controller.executePlan(command.planId, command.verification);
           await this.controller.refreshPlan();
           break;
         case 'planRefresh':

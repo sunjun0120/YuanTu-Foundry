@@ -167,6 +167,8 @@ if (plan) {
   await mkdir(directory, { recursive: true });
   const runId = `${Date.now()}-${process.pid}-${randomUUID()}`;
   process.env.FOUNDRY_TEST_MACHINE_LOCK_ROOT ??= path.join(tmpdir(), 'yuantu-test-resource-locks');
+  // Delegated children's worktrees live in the user's data directory by default; a suite must never allocate there.
+  process.env.YUANTU_WORKTREE_DIR ??= path.join(tmpdir(), 'yuantu-test-worktrees', runId);
   const preparationWallMs = Number((performance.now() - wallStart).toFixed(1));
   process.on('SIGINT', cancel);
   process.on('SIGTERM', cancel);

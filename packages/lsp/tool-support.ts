@@ -1,4 +1,5 @@
 /** Argument schemas, response normalisers and prepare steps shared by the language-server tools. */
+import { lstat } from 'node:fs/promises';
 import path from 'node:path';
 import type { FileChange, FileSnapshot, PreparedTool, ToolContext } from '../protocol/index.ts';
 import {
@@ -212,56 +213,95 @@ function normalizeEdits(edits: unknown[]): { range: LspRange; newText: string }[
     return [{ range: value.range, newText: value.newText }];
   });
 }
-function collectEdits(
-  result: unknown,
-): { uri: string; edits: { range: LspRange; newText: string }[] }[] {
+/** One step of a `WorkspaceEdit`, in the order the server listed it. */
+type WorkspaceEditOperation =
+  | { kind: 'text'; uri: string; edits: { range: LspRange; newText: string }[] }
+  | { kind: 'create'; uri: string; overwrite: boolean; ignoreIfExists: boolean }
+  | {
+      kind: 'rename';
+      oldUri: string;
+      newUri: string;
+      overwrite: boolean;
+      ignoreIfExists: boolean;
+    }
+  | { kind: 'delete'; uri: string; ignoreIfNotExists: boolean };
+
+/**
+ * A `WorkspaceEdit` as an ordered list of operations.
+ *
+ * The union has two shapes. `documentChanges` is ordered and may mix text edits with *resource operations* —
+ * `create`, `rename`, `delete` of whole files — and the order matters: a text edit listed after a rename is an
+ * edit to the file at its new name. `changes` is an unordered map of text edits only, and is read only when
+ * `documentChanges` produced nothing, as the protocol prescribes.
+ */
+function collectOperations(result: unknown): WorkspaceEditOperation[] {
   if (!result || typeof result !== 'object') return [];
   const value = result as { changes?: Record<string, unknown>; documentChanges?: unknown[] };
-  const collected: { uri: string; edits: { range: LspRange; newText: string }[] }[] = [];
+  const operations: WorkspaceEditOperation[] = [];
+  const flag = (options: unknown, name: string): boolean =>
+    !!options && typeof options === 'object' && (options as Record<string, unknown>)[name] === true;
   if (Array.isArray(value.documentChanges))
     for (const item of value.documentChanges) {
-      const entry = item as { textDocument?: { uri?: string }; edits?: unknown };
-      if (typeof entry?.textDocument?.uri === 'string' && Array.isArray(entry.edits)) {
+      if (!item || typeof item !== 'object') continue;
+      const entry = item as Record<string, unknown> & {
+        textDocument?: { uri?: unknown };
+        options?: unknown;
+      };
+      if (entry.kind === 'create' && typeof entry.uri === 'string')
+        operations.push({
+          kind: 'create',
+          uri: entry.uri,
+          overwrite: flag(entry.options, 'overwrite'),
+          ignoreIfExists: flag(entry.options, 'ignoreIfExists'),
+        });
+      else if (
+        entry.kind === 'rename' &&
+        typeof entry.oldUri === 'string' &&
+        typeof entry.newUri === 'string'
+      )
+        operations.push({
+          kind: 'rename',
+          oldUri: entry.oldUri,
+          newUri: entry.newUri,
+          overwrite: flag(entry.options, 'overwrite'),
+          ignoreIfExists: flag(entry.options, 'ignoreIfExists'),
+        });
+      else if (entry.kind === 'delete' && typeof entry.uri === 'string')
+        operations.push({
+          kind: 'delete',
+          uri: entry.uri,
+          ignoreIfNotExists: flag(entry.options, 'ignoreIfNotExists'),
+        });
+      else if (typeof entry.textDocument?.uri === 'string' && Array.isArray(entry.edits)) {
         const edits = normalizeEdits(entry.edits);
-        if (edits.length) collected.push({ uri: entry.textDocument.uri, edits });
+        if (edits.length) operations.push({ kind: 'text', uri: entry.textDocument.uri, edits });
       }
     }
-  if (!collected.length && value.changes && typeof value.changes === 'object')
+  if (!operations.length && value.changes && typeof value.changes === 'object')
     for (const [uri, edits] of Object.entries(value.changes))
       if (Array.isArray(edits)) {
         const normalized = normalizeEdits(edits);
-        if (normalized.length) collected.push({ uri, edits: normalized });
+        if (normalized.length) operations.push({ kind: 'text', uri, edits: normalized });
       }
-  return collected;
+  return operations;
+}
+
+/** One file's state while a `WorkspaceEdit` is replayed in memory: what is on disk, and what the edit leaves. */
+interface PlannedFile {
+  key: string;
+  original: Buffer | null;
+  current: Buffer | null;
 }
 
 /**
- * The file-level operations a `WorkspaceEdit` may ask for, which this tool does not perform.
+ * Turn a server `WorkspaceEdit` into one journaled, approval-previewed mutation.
  *
- * A `WorkspaceEdit` is a union: `TextDocumentEdit`s, which `collectEdits` above reads, and *resource
- * operations* — `create`, `rename`, `delete` of whole files — which carry a `kind` instead of a
- * `textDocument`. Only the first kind is applied here, and that makes the second kind dangerous rather than
- * merely unsupported: applying a rename's text edits while dropping the move itself leaves the workspace in a
- * state nobody asked for, and the caller is told the rename succeeded. So an edit that asks for one is
- * refused whole.
- */
-function resourceOperations(result: unknown): string[] {
-  if (!result || typeof result !== 'object') return [];
-  const changes = (result as { documentChanges?: unknown[] }).documentChanges;
-  if (!Array.isArray(changes)) return [];
-  const asked = new Set<string>();
-  for (const item of changes) {
-    const kind = (item as { kind?: unknown } | null)?.kind;
-    if (kind === 'create' || kind === 'rename' || kind === 'delete') asked.add(kind);
-  }
-  return [...asked];
-}
-
-/**
- * Turn a server `WorkspaceEdit` into one atomic, journaled, approval-previewed
- * mutation. Every target must resolve inside the workspace and the new contents
- * are computed in memory before anything is written, so a server cannot reach
- * outside the workspace or leave a half-applied edit.
+ * Every operation — text edits and file creates, renames and deletes alike — is replayed against an in-memory copy
+ * of the files it names before anything is written, so the result is a single set of before/after snapshots: what a
+ * person approves is the whole edit, the post-approval byte recheck covers every file it touches, and a server
+ * cannot reach outside the workspace or leave a rename with its references applied but the file left in place.
+ * Directories are not created, moved or removed: the mutation layer is file-granular, so an operation that names a
+ * directory is refused whole rather than turned into the partial state this function exists to prevent.
  */
 async function prepareWorkspaceEdit(
   workspace: Workspace,
@@ -269,21 +309,20 @@ async function prepareWorkspaceEdit(
   result: unknown,
   options: { missing: string; outside: string; approval: (files: string[]) => string[] },
 ): Promise<PreparedTool> {
-  const refused = resourceOperations(result);
-  if (refused.length)
-    throw new Error(
-      `The language server's edit also asks to ${refused.join(', ')} a file, and only text edits can be applied here, so nothing was changed. Make the file change with the file tools and ask again.`,
-    );
-  const edits = collectEdits(result);
-  if (!edits.length) throw new Error(options.missing);
-  const previews: FileChange[] = [];
-  const snapshots: FileSnapshot[] = [];
-  for (const entry of edits) {
-    const target = uriToPath(entry.uri);
-    if (!target) throw new Error(`Unsupported edit target: ${entry.uri}`);
+  const operations = collectOperations(result);
+  if (!operations.length) throw new Error(options.missing);
+  const files = new Map<string, PlannedFile>();
+  /** A rename moves the document, so a later text edit that still names the old URI means the moved file. */
+  const renamed = new Map<string, string>();
+  const plan = async (uri: string): Promise<PlannedFile> => {
+    const target = uriToPath(uri);
+    if (!target) throw new Error(`Unsupported edit target: ${uri}`);
     const relative = path.relative(workspace.root, target);
     if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative))
       throw new Error(options.outside);
+    const key = relative.split(path.sep).join('/');
+    const known = files.get(key);
+    if (known) return known;
     /**
      * Resolved through the workspace, not merely compared to it.
      *
@@ -294,18 +333,75 @@ async function prepareWorkspaceEdit(
      * re-checks the canonical path, so the answer is about the file that will actually be read. A link swapped in
      * after this point is still caught by the post-approval byte recheck inside `prepareMutation`.
      */
+    let resolved: string;
     try {
-      await workspace.resolve(target);
+      resolved = await workspace.resolve(target, true);
     } catch (error) {
       throw new Error(`${options.outside}: ${(error as Error).message}`);
     }
-    const before = await readMutationBytes(target);
-    const source = before.toString('utf8');
-    const after = Buffer.from(applyTextEdits(source, entry.edits));
-    if (after.equals(before)) continue;
-    const key = relative.split(path.sep).join('/');
-    previews.push(filePreview(key, source, after.toString('utf8'), 'edit'));
-    snapshots.push({ path: key, before, after });
+    let exists = true;
+    try {
+      if ((await lstat(resolved)).isDirectory())
+        throw new Error(
+          `The language server's edit names the directory ${key}, and only files can be created, renamed or deleted here, so nothing was changed. Make the directory change with the file tools and ask again.`,
+        );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      exists = false;
+    }
+    const original = exists ? await readMutationBytes(resolved) : null;
+    const file: PlannedFile = { key, original, current: original };
+    files.set(key, file);
+    return file;
+  };
+  for (const operation of operations) {
+    if (operation.kind === 'text') {
+      const file = await plan(renamed.get(operation.uri) ?? operation.uri);
+      if (file.current === null)
+        throw new Error(`The language server's edit changes ${file.key}, which does not exist`);
+      file.current = Buffer.from(applyTextEdits(file.current.toString('utf8'), operation.edits));
+    } else if (operation.kind === 'create') {
+      const file = await plan(operation.uri);
+      if (file.current === null || operation.overwrite) file.current = Buffer.alloc(0);
+      else if (!operation.ignoreIfExists)
+        throw new Error(`The language server's edit creates ${file.key}, which already exists`);
+    } else if (operation.kind === 'rename') {
+      const from = await plan(operation.oldUri);
+      const to = await plan(operation.newUri);
+      if (from === to) continue;
+      if (from.current === null)
+        throw new Error(`The language server's edit renames ${from.key}, which does not exist`);
+      if (to.current !== null && !operation.overwrite) {
+        if (operation.ignoreIfExists) continue;
+        throw new Error(`The language server's edit renames onto ${to.key}, which already exists`);
+      }
+      to.current = from.current;
+      from.current = null;
+      renamed.set(operation.oldUri, operation.newUri);
+    } else {
+      const file = await plan(operation.uri);
+      if (file.current === null) {
+        if (operation.ignoreIfNotExists) continue;
+        throw new Error(`The language server's edit deletes ${file.key}, which does not exist`);
+      }
+      file.current = null;
+    }
+  }
+  const previews: FileChange[] = [];
+  const snapshots: FileSnapshot[] = [];
+  for (const file of files.values()) {
+    const { original: before, current: after } = file;
+    if (before === null && after === null) continue;
+    if (before !== null && after !== null && after.equals(before)) continue;
+    previews.push(
+      filePreview(
+        file.key,
+        before?.toString('utf8') ?? '',
+        after?.toString('utf8') ?? '',
+        before === null ? 'create' : after === null ? 'delete' : 'edit',
+      ),
+    );
+    snapshots.push({ path: file.key, before, after });
   }
   if (!snapshots.length) throw new Error(options.missing);
   const change = groupedPreview('batch', previews);
@@ -320,7 +416,7 @@ async function prepareWorkspaceEdit(
     async execute(ctx: ToolContext) {
       const applied = await mutation.execute(ctx);
       // The server's copy of these documents is now stale.
-      for (const snapshot of snapshots)
+      for (const snapshot of snapshots.filter((file) => file.after !== null))
         await client
           .refreshDocument(path.join(workspace.root, snapshot.path), ctx.signal)
           .catch(() => undefined);

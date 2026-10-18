@@ -511,3 +511,126 @@ test('stored bytes that no longer match their digest are refused, not handed to 
     return true;
   });
 });
+
+test('credential names are matched by family and without case, tracked or not', async (t) => {
+  const harness = await repository(t);
+  const root = harness.root;
+  for (const name of [
+    '.ENV',
+    '.env.staging',
+    'credentials.dev.json',
+    'Secrets.JSON',
+    'ordinary.txt',
+  ])
+    await writeFile(path.join(root, name), 'SYNTHETIC\n');
+  // Untracked: left behind, and the ordinary file next to them still travels.
+  const copied = (await collectWorkingTree(root)).map((entry) => entry.path);
+  for (const name of ['.ENV', '.env.staging', 'credentials.dev.json', 'Secrets.JSON'])
+    assert.equal(copied.includes(name), false, name);
+  assert.ok(copied.includes('ordinary.txt'));
+  // A placeholder file is not a credential.
+  await writeFile(path.join(root, '.env.example'), 'KEY=\n');
+  assert.ok((await collectWorkingTree(root)).some((entry) => entry.path === '.env.example'));
+
+  // Tracked: refused by name, as an exactly named `.env` is.
+  git(root, ['add', '-f', '.env.staging']);
+  await assert.rejects(collectWorkingTree(root), (error: unknown) => {
+    assert.ok(error instanceof WorkspaceFailure);
+    assert.equal(error.code, 'WORKSPACE_PROTECTED_CREDENTIAL');
+    assert.match(error.message, /\.env\.staging/);
+    return true;
+  });
+});
+
+test('a tracked directory replaced by a link is refused, not read through', async (t) => {
+  const harness = await repository(t);
+  const root = harness.root;
+  const outside = `${root}-outside`;
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await mkdir(outside);
+  await writeFile(path.join(outside, 'app.ts'), 'OUTSIDE_FIXTURE\n');
+  // `src/app.ts` is tracked; its directory now leads out of the tree, while the file itself still looks plain.
+  await rm(path.join(root, 'src'), { recursive: true });
+  await symlink(outside, path.join(root, 'src'), 'junction');
+  await assert.rejects(collectWorkingTree(root), (error: unknown) => {
+    assert.ok(error instanceof WorkspaceFailure);
+    assert.equal(error.code, 'WORKSPACE_UNSUPPORTED_FILE_TYPE');
+    assert.match(error.message, /src/);
+    return true;
+  });
+  await assert.rejects(freezeSnapshot({ projectRoot: root }), WorkspaceFailure);
+});
+
+test('a file name with leading whitespace is listed as it is, even when it sorts first', async (t) => {
+  const harness = await repository(t);
+  const root = harness.root;
+  await writeFile(path.join(root, ' leading.txt'), 'kept\n');
+  git(root, ['add', '-A']);
+  const entries = await collectWorkingTree(root);
+  const kept = entries.find((entry) => entry.path === ' leading.txt');
+  assert.ok(kept, 'the first listed path keeps its leading space');
+  assert.equal(Buffer.from(kept.blob, 'base64').toString('utf8'), 'kept\n');
+  const snapshot = await freezeSnapshot({ projectRoot: root });
+  const identity = await repositoryIdentity(root);
+  const manifest = await readManifest(identity!.repositoryRoot, snapshot.id);
+  assert.ok(manifest!.files.some((entry) => entry.path === ' leading.txt'));
+});
+
+test('a manifest edited on disk is not trusted', async (t) => {
+  const harness = await repository(t);
+  const snapshot = await freezeSnapshot({ projectRoot: harness.root });
+  const identity = (await repositoryIdentity(harness.root))!;
+  const manifestFile = path.join(
+    snapshotMetadataRoot(identity.repositoryRoot, snapshot.id),
+    'manifest.json',
+  );
+  const original = JSON.parse(await readFile(manifestFile, 'utf8'));
+  const bytes = Buffer.from('SYNTHETIC_MANIFEST_ESCAPE_PROOF\n');
+  const forged = (overrides: Record<string, unknown>) => ({
+    path: 'forged.txt',
+    mode: '100644',
+    size: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    ...overrides,
+  });
+  const write = (manifest: unknown) => writeFile(manifestFile, JSON.stringify(manifest));
+
+  // Format 3 is named by its digest: any change to the entries no longer answers to the id.
+  await write({ ...original, files: [...original.files, forged({})] });
+  assert.equal(await readManifest(identity.repositoryRoot, snapshot.id), null);
+
+  // Older formats are not digest-named, so their entries are checked one by one.
+  const legacy = { ...original, format: 2 };
+  await write(legacy);
+  assert.ok(
+    await readManifest(identity.repositoryRoot, snapshot.id),
+    'the unedited entries are fine',
+  );
+  const blob = bytes.toString('base64');
+  for (const entry of [
+    forged({ path: '../../../escaped-proof.txt', blob }),
+    forged({ path: 'nested/../../escaped-proof.txt', blob }),
+    forged({ path: '/escaped-proof.txt', blob }),
+    forged({ path: 'C:/escaped-proof.txt', blob }),
+    forged({ path: 'nested\\..\\..\\escaped-proof.txt', blob }),
+    forged({ path: './forged.txt', blob }),
+    forged({ path: '.git/hooks/post-checkout', blob }),
+    forged({ path: '.yuantu/worktrees/x', blob }),
+    forged({ path: '.env', blob }),
+    forged({ path: 'tracked.txt', blob }),
+    forged({ mode: '120000', blob }),
+    forged({ size: -1, blob }),
+    forged({ sha256: 'not-a-digest', blob }),
+    forged({ blob: 42 }),
+  ]) {
+    await write({ ...legacy, files: [...legacy.files, entry] });
+    assert.equal(
+      await readManifest(identity.repositoryRoot, snapshot.id),
+      null,
+      JSON.stringify(entry.path),
+    );
+  }
+  // Embedded bytes belong to the formats that embedded them.
+  await write({ ...original, files: original.files.map((entry: object) => ({ ...entry, blob })) });
+  assert.equal(await readManifest(identity.repositoryRoot, snapshot.id), null);
+});

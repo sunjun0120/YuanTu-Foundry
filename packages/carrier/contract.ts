@@ -31,6 +31,8 @@ import type {
 } from '../protocol/index.ts';
 import type { ImageAttachment } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
+import type { PlanVerification, RunVerification } from '../protocol/completion.ts';
+export type { PlanVerification, RunVerification } from '../protocol/completion.ts';
 import type { Language } from '../protocol/language.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import { parseSandboxMode } from '../tools/sandbox-mode.ts';
@@ -109,7 +111,7 @@ export type CarrierCommand =
     }
   | { type: 'planApprove'; planId: string; hash: string }
   | { type: 'planReject'; planId: string; reason?: string }
-  | { type: 'planExecute'; planId: string }
+  | { type: 'planExecute'; planId: string; verification?: PlanVerification }
   | { type: 'planRefresh' }
   | { type: 'load' | 'undo' | 'deleteSession'; id: string }
   | { type: 'rename'; id: string; title: string }
@@ -118,7 +120,7 @@ export type CarrierCommand =
   | { type: 'loadMoreSessions' }
   | { type: 'copyText'; text: string }
   | { type: 'openLink'; url: string }
-  | { type: 'send'; prompt: string; images?: ImageAttachment[] }
+  | { type: 'send'; prompt: string; images?: ImageAttachment[]; verification?: RunVerification }
   | { type: 'enqueue'; prompt: string; images?: ImageAttachment[]; mode: 'steer' | 'follow-up' }
   | { type: 'approve'; id: string; allow: boolean }
   | { type: 'questionAnswer'; id: string; answers?: QuestionAnswer[]; cancelled?: boolean }
@@ -195,6 +197,83 @@ export interface CarrierSnapshot {
   /** Optional for older callers; the shell translates this instead of matching rendered strings. */
   errorDetail?: import('./errors.ts').CarrierIssue | null;
 }
+const VERIFICATION_LIMITS = {
+  acceptance: 32,
+  inputs: 256,
+  constraints: 32,
+  pathChars: 4096,
+} as const;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function stringList(value: unknown, max: number, chars: number): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every((item) => typeof item === 'string' && item.length <= chars)
+  );
+}
+function repairPolicyEnvelope(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(
+    ([key, item]) =>
+      ['maxRepairRounds', 'maxRepeatedFailures', 'repairTimeoutMs'].includes(key) &&
+      Number.isSafeInteger(item) &&
+      (item as number) >= 0,
+  );
+}
+function acceptanceEnvelope(value: unknown): value is Acceptance[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= VERIFICATION_LIMITS.acceptance &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.description === 'string' &&
+        typeof item.met === 'boolean' &&
+        (item.check === undefined || isRecord(item.check)),
+    )
+  );
+}
+function runVerificationEnvelope(value: unknown): value is RunVerification {
+  if (!isRecord(value) || !repairPolicyEnvelope(value.repairPolicy)) return false;
+  const keys = Object.keys(value).filter((key) => key !== 'repairPolicy');
+  if (keys.length !== 1) return false;
+  if (keys[0] === 'resumeCompletionId')
+    return (
+      typeof value.resumeCompletionId === 'string' &&
+      !!value.resumeCompletionId.trim() &&
+      value.resumeCompletionId.length <= 256
+    );
+  if (keys[0] !== 'completion' || !isRecord(value.completion)) return false;
+  const spec = value.completion;
+  return (
+    typeof spec.objective === 'string' &&
+    !!spec.objective.trim() &&
+    acceptanceEnvelope(spec.acceptance) &&
+    (spec.inputs === undefined ||
+      stringList(spec.inputs, VERIFICATION_LIMITS.inputs, VERIFICATION_LIMITS.pathChars)) &&
+    (spec.constraints === undefined ||
+      stringList(spec.constraints, VERIFICATION_LIMITS.constraints, 2000)) &&
+    (spec.steps === undefined || Array.isArray(spec.steps))
+  );
+}
+function planVerificationEnvelope(value: unknown): value is PlanVerification {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      ['acceptance', 'inputs', 'constraints', 'repairPolicy'].includes(key),
+    ) &&
+    acceptanceEnvelope(value.acceptance) &&
+    (value.inputs === undefined ||
+      stringList(value.inputs, VERIFICATION_LIMITS.inputs, VERIFICATION_LIMITS.pathChars)) &&
+    (value.constraints === undefined ||
+      stringList(value.constraints, VERIFICATION_LIMITS.constraints, 2000)) &&
+    repairPolicyEnvelope(value.repairPolicy)
+  );
+}
 export function parseCarrierCommand(input: unknown): CarrierCommand {
   const invalid = () => {
     throw new Error('Invalid carrier command');
@@ -211,7 +290,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     planRefresh: ['type'],
     planApprove: ['type', 'planId', 'hash'],
     planReject: ['type', 'planId'],
-    planExecute: ['type', 'planId'],
+    planExecute: ['type', 'planId', 'verification'],
     refreshBackground: ['type'],
     clearBackground: ['type'],
     backgroundPolicy: ['type', 'policy', 'reset'],
@@ -249,7 +328,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     searchSessions: ['type', 'query'],
     loadMoreSessions: ['type'],
     undo: ['type', 'id'],
-    send: ['type', 'prompt', 'images'],
+    send: ['type', 'prompt', 'images', 'verification'],
     enqueue: ['type', 'prompt', 'images', 'mode'],
     approve: ['type', 'id', 'allow'],
     questionAnswer: ['type', 'id', 'answers', 'cancelled'],
@@ -437,6 +516,18 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
   )
     return invalid();
   if (value.type === 'enqueue' && value.mode !== 'steer' && value.mode !== 'follow-up')
+    return invalid();
+  if (
+    value.type === 'send' &&
+    value.verification !== undefined &&
+    !runVerificationEnvelope(value.verification)
+  )
+    return invalid();
+  if (
+    value.type === 'planExecute' &&
+    value.verification !== undefined &&
+    !planVerificationEnvelope(value.verification)
+  )
     return invalid();
   if (value.type === 'send' || value.type === 'enqueue') {
     try {

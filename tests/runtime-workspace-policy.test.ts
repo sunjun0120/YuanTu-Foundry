@@ -17,6 +17,17 @@ test('host read-only policy cannot create workspace metadata', () => {
   );
 });
 
+test('worktree metadata follows the file policy, not the sandbox backend', () => {
+  assert.equal(
+    metadataWritesAllowed({ YUANTU_SANDBOX: 'native', YUANTU_SANDBOX_FILES: 'read-only' }),
+    false,
+  );
+  assert.equal(
+    metadataWritesAllowed({ YUANTU_SANDBOX: 'native', YUANTU_SANDBOX_FILES: 'workspace-write' }),
+    true,
+  );
+});
+
 for (const scenario of [
   {
     name: 'an explicitly selected host session overrides a native process default',
@@ -25,9 +36,16 @@ for (const scenario of [
     allowed: true,
   },
   {
-    name: 'revoking host access after agent construction also revokes workspace creation',
+    name: 'a native session with workspace-write allocates an isolated worktree',
     environment: 'host',
     selected: 'native',
+    allowed: true,
+  },
+  {
+    name: 'revoking write access after agent construction also revokes workspace creation',
+    environment: 'host',
+    selected: 'native',
+    files: 'read-only',
     allowed: false,
   },
   {
@@ -158,7 +176,7 @@ for (const scenario of [
     } else {
       assert.equal(child.status, 'failed', JSON.stringify(child));
       assert.match(child.error ?? '', /WORKSPACE_POLICY_UNSUPPORTED/);
-      assert.match(child.error ?? '', /host execution with workspace-write/);
+      assert.match(child.error ?? '', /workspace-write file access/);
       assert.equal(children, 0, 'a refused child must not reach the model');
       assert.equal(
         store.workspaceSnapshots().length,

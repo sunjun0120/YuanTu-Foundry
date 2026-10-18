@@ -15,7 +15,7 @@ import {
 } from './file-mutation.ts';
 import { loadInstructions } from './instructions.ts';
 import { FileObservations, type MutationGates } from './fs-observation.ts';
-import { isCredentialFileName } from './credential-paths.ts';
+import { isCredentialFileName } from '../platform/credential-paths.ts';
 import {
   LEGACY_MAX_ENTRIES,
   LEGACY_MAX_FILES,

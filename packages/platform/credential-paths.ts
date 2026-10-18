@@ -1,4 +1,4 @@
-/** Shared filename protection for file tools, repository outlines and container preflight.
+/** Shared filename protection for file tools, repository outlines, container preflight and workspace snapshots.
  * Names are a conservative heuristic: ordinary source files may still contain secrets.
  * Container preflight permits the existing .env.example placeholder exception; file tools
  * retain their stricter rule that excludes every .env name.

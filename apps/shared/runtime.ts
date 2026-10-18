@@ -209,14 +209,20 @@ export function sessionDatabasePath(options: Options): string {
 /**
  * Whether the effective policy permits the Git metadata operations a managed worktree needs.
  *
- * The plan's rule is that worktree management is *controlled infrastructure work*: it needs a policy that can say
- * it is safe to write repository metadata. Only the host policy currently can, and the answer is deliberately
- * about the policy rather than about the platform — a native sandbox that cannot state whether it may manage Git's
- * own files must fail with `WORKSPACE_POLICY_UNSUPPORTED` instead of running outside the policy it was given.
+ * Worktree management is *controlled infrastructure work*, not a command the model runs: the Host itself invokes
+ * Git with fixed argument arrays under a masked configuration (`../../packages/workspaces/git.ts`), and what it
+ * writes is bounded — the worktree's registration in the repository's metadata, the snapshot's private ref, and the
+ * worktree directory under the managed home, which sits outside the repository and off every protected path
+ * (`../../packages/platform/worktree-home.ts`). The child that then runs in the worktree is confined by its own
+ * policy, native sandbox included; nothing here widens what a model-issued process may touch.
+ *
+ * So the question is whether the policy lets this session change the project at all. `workspace-write` does,
+ * whatever backend enforces it; `read-only` says nothing may change, and still refuses with
+ * `WORKSPACE_POLICY_UNSUPPORTED` rather than allocating behind it. The model-facing Git write tools keep their own,
+ * stricter rule (`../../packages/tools/git.ts`): those run what a model asked for, and need explicit host mode.
  */
 export function metadataWritesAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
-  const config = resolveSandboxConfig(env);
-  return config.mode === 'host' && config.files !== 'read-only';
+  return resolveSandboxConfig(env).files !== 'read-only';
 }
 /**
  * The execution-directory mode this process delegates under.

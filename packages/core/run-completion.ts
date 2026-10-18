@@ -24,7 +24,11 @@ import {
   taskCompletionStepId,
 } from './completion-contract.ts';
 import { decideCompletion, failureFingerprint, type CompletionDecision } from './completion.ts';
-import { snapshotCompletionInputs, type CompletionInputSnapshot } from './completion-inputs.ts';
+import {
+  assertCompletionInputReadable,
+  snapshotCompletionInputs,
+  type CompletionInputSnapshot,
+} from './completion-inputs.ts';
 import type { RunEmit } from './run-emit.ts';
 import {
   verifyCompletionAcceptance,
@@ -449,6 +453,9 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
             const added: string[] = [];
             for (const value of raw) {
               const normalized = normalizeCompletionPath(value, 'scope path');
+              // A declared path joins the monitored range, so a credential path is refused here rather than
+              // turning every later round into an `input-snapshot-failed` review.
+              assertCompletionInputReadable(normalized);
               if (normalized === '.' || state.affectedPaths.includes(normalized)) continue;
               added.push(normalized);
             }
@@ -546,9 +553,14 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         // must not turn it into a different error from a different layer.
       }
     }
-    const monitored: string[] = [...new Set([...inputPaths, ...checkPaths])].sort((left, right) =>
-      left < right ? -1 : left > right ? 1 : 0,
-    );
+    /**
+     * A path the run declared through `completion_scope` is part of what this contract claims to have changed,
+     * so the evidence must notice it moving after the checks exactly as it notices a declared input moving.
+     * Recorded scope is already normalized and refused for protected segments when it was declared.
+     */
+    const monitored: string[] = [
+      ...new Set([...inputPaths, ...checkPaths, ...state.affectedPaths]),
+    ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
     const reviewEarly = (reason: string): CompletionDecision => ({
       action: 'review',
       summary: {
