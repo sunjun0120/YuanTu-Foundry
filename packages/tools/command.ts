@@ -7,6 +7,7 @@ import { MAX_TOOL_OUTPUT } from './registry.ts';
 import { Workspace } from './files.ts';
 import { localExecutionEnvironment, executionPolicy } from './execution-environment.ts';
 import { resolveSandboxConfig } from './sandbox.ts';
+import { createOutputDecoder } from './output-decoder.ts';
 
 /**
  * How much command output is held in memory before collection stops. Well above the tool-result limit, so
@@ -128,12 +129,15 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
         // decides what to do with the overflow: the full text goes to the session's spill file and the
         // result points at it. Stopping at the result limit here would drop the tail of a build log — the
         // part that says why it failed — before anything could preserve it.
-        const collect = (target: 'stdout' | 'stderr', chunk: Buffer) => {
+        // One decoder per stream: a character split across two chunks is joined, and a console program writing
+        // in the Windows OEM code page is read in it (see `createOutputDecoder`).
+        const decoders = { stdout: createOutputDecoder(), stderr: createOutputDecoder() };
+        const collect = (target: 'stdout' | 'stderr', text: string) => {
+          if (!text) return;
           if (output.length >= COMMAND_OUTPUT_LIMIT) {
             truncated = true;
             return;
           }
-          const text = chunk.toString('utf8');
           // What the merged text keeps is what each stream copy keeps, so the two stay a partition of `output`
           // rather than a second, longer copy of the same bytes: a card's stdout plus its stderr is exactly the
           // text the model was given, and the payload cannot outgrow the result it belongs to by construction.
@@ -146,8 +150,8 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
           else stderr += appended;
           if (appended.length < text.length) truncated = true;
         };
-        child.stdout.on('data', (chunk: Buffer) => collect('stdout', chunk));
-        child.stderr.on('data', (chunk: Buffer) => collect('stderr', chunk));
+        child.stdout.on('data', (chunk: Buffer) => collect('stdout', decoders.stdout.write(chunk)));
+        child.stderr.on('data', (chunk: Buffer) => collect('stderr', decoders.stderr.write(chunk)));
         const stop = () => {
           if (child.pid && !killing)
             killing = stopSandbox(child, plan).catch((error) => {
@@ -192,6 +196,8 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
           if (settled) return;
           settled = true;
           cleanup();
+          collect('stdout', decoders.stdout.end());
+          collect('stderr', decoders.stderr.end());
           void (async () => {
             if (killing) await killing;
             else await stopSandbox(child, plan);

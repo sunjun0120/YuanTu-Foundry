@@ -7,9 +7,9 @@ import {
   latestScheduledAt,
   type DueTask,
   type TaskEvent,
-} from '../../packages/core/task-trigger.ts';
+} from '../../packages/protocol/task-trigger.ts';
 import { recordTaskDelivery, type TaskDelivery } from '../../packages/core/task-deliveries.ts';
-import { redactSecrets } from '../../packages/core/errors.ts';
+import { redactSecrets } from '../../packages/platform/redact.ts';
 
 export interface SchedulerRun {
   task: Task;

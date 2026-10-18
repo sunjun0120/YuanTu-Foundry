@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
 

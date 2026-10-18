@@ -18,7 +18,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { PermissionPolicy } from '../packages/core/permissions.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, ToolSpec } from '../packages/protocol/index.ts';
 
 const names = (specs: readonly ToolSpec[]): string[] => specs.map((spec) => spec.name).sort();

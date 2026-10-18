@@ -1,6 +1,8 @@
-import type { Acceptance, AcceptanceCheck, TaskStep } from '../protocol/index.ts';
-import type { Language } from '../protocol/language.ts';
-import { MAX_CHECKS } from './acceptance.ts';
+import type { Acceptance, AcceptanceCheck, TaskStep } from './index.ts';
+import type { Language } from './language.ts';
+import { COMPLETION_LIMITS } from './completion.ts';
+
+const MAX_CHECKS = COMPLETION_LIMITS.acceptanceChecks;
 export interface TaskDraft {
   title: string;
   description: string;

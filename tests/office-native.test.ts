@@ -11,7 +11,7 @@ import {
   runOfficeAutomation,
 } from '../packages/office/automation.ts';
 import { readPptxSlides } from '../packages/office/read.ts';
-import { verifyFileDelivery } from '../packages/core/delivery.ts';
+import { verifyFileDelivery } from '../packages/tools/file-delivery.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
 
@@ -156,5 +156,45 @@ test(
       { signal: new AbortController().signal, approve: async () => false },
     );
     assert.match(inspected.content, /Verified slide/);
+  },
+);
+
+test(
+  'Word edits replace text longer than 255 characters and treat ^ literally',
+  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 240000 },
+  async (t) => {
+    // Word's Find and Replace refuse text over 255 characters and read ^ as a special-character code.
+    try {
+      const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-long-'));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const source = path.join(root, 'source.docx');
+      const output = path.join(root, 'edited.docx');
+      const long = 'Long clause '.repeat(30).trim(); // 359 characters
+      await runOfficeAutomation({
+        operation: 'create',
+        format: 'docx',
+        outputPath: source,
+        paragraphs: ['Keep this', long, 'Cost 3^2 units', long],
+      });
+      await runOfficeAutomation({
+        operation: 'edit',
+        format: 'docx',
+        sourcePath: source,
+        outputPath: output,
+        replacements: [
+          { from: long, to: 'Short clause' },
+          { from: '3^2', to: '9^1 '.repeat(80).trim() },
+        ],
+      });
+      const mammoth = (await import('mammoth')).default;
+      const text = (await mammoth.extractRawText({ buffer: await readFile(output) })).value;
+      assert.match(text, /Keep this/);
+      assert.doesNotMatch(text, /Long clause/);
+      assert.equal(text.match(/Short clause/g)?.length, 2);
+      assert.match(text, /Cost (9\^1 ){79}9\^1 units/);
+    } catch (error) {
+      if (!(error instanceof OfficeUnavailableError)) throw error;
+      t.skip(error.message.slice(0, 260));
+    }
   },
 );

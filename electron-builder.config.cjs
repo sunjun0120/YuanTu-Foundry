@@ -14,11 +14,8 @@ module.exports = {
     'dist/program-runner/**/*',
     'package.json',
     'LICENSE',
-    // Public entry points are paused, including stale output from earlier builds.
+    // The CLI ships through the npm `bin`, not inside the desktop bundle.
     '!dist/apps/cli/**/*',
-    '!dist/apps/web/**/*',
-    '!dist/apps/agent-acp/**/*',
-    '!dist/packages/sdk/**/*',
     '!dist/**/*.map',
     '!dist/**/*.d.ts',
   ],

@@ -115,8 +115,7 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
   },
   'permission.update': async (ctx, params) => {
     const next = new PermissionPolicy(params.policy);
-    const sessionId =
-      params.sessionId === undefined ? undefined : required(params, 'sessionId');
+    const sessionId = params.sessionId === undefined ? undefined : required(params, 'sessionId');
     if (sessionId !== undefined) ownedSession(ctx.store, ctx.workspace, sessionId);
     // A session's selection is its own: switching session B must not re-decide what session A is waiting on.
     if (sessionId !== undefined) {

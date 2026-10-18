@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { createHostState } from '../apps/agent-host/state.ts';
-import type { HostServices } from '../apps/agent-host/services.ts';
+import { spillOwnerExists, type HostServices } from '../apps/agent-host/services.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import { HookRegistry } from '../packages/tools/hooks.ts';
 import { SPILL_DIRECTORY, removeSpills, sweepSpills } from '../packages/tools/spill.ts';
@@ -198,4 +198,17 @@ test('the sweep of a workspace with no spill directory is a no-op', async () => 
     }),
     { orphans: 0, trimmed: 0 },
   );
+});
+
+test('the startup sweep only treats a definite "no such session" as an orphan', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-owner-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const session = store.create(root);
+  const exists = spillOwnerExists(store);
+  assert.equal(exists(session.id), true);
+  assert.equal(exists('no-such-session'), false);
+  // The sweep is not awaited by startup, so it can outlive its store: a closed store must not read as "gone".
+  store.close();
+  assert.equal(exists('no-such-session'), true);
 });

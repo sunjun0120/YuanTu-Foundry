@@ -8,7 +8,7 @@ import { projectRoot } from './process-fixture.ts';
 import { translate, setMainLocale } from '../apps/desktop/i18n.ts';
 import { CarrierError, carrierIssue, type CarrierErrorCode } from '../packages/carrier/errors.ts';
 import { carrierErrorReply, carrierErrorText } from '../apps/desktop/carrier-errors.ts';
-import { redactSecrets } from '../packages/core/errors.ts';
+import { redactSecrets } from '../packages/platform/redact.ts';
 
 test('a carrier validation failure preserves a locale-independent code across snapshot serialization', async (t) => {
   const env = { YUANTU_API_KEY: '', YUANTU_MODEL: '', YUANTU_BASE_URL: '' };

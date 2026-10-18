@@ -32,7 +32,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdirSync, realpathSync, statSync, openSync, closeSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { DesktopReply } from './contract.ts';
-import { redactSecrets } from '../../packages/core/errors.ts';
+import { redactSecrets } from '../../packages/platform/redact.ts';
 import { ModelSettingsStore, testModelConnection } from './model-settings.ts';
 import { parseSettingsCommand, type SettingsReply } from './settings-contract.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';

@@ -22,7 +22,7 @@ import {
   type WorkspaceSnapshot,
   type WorkspaceState,
 } from '../protocol/workspaces.ts';
-import { samePath } from '../core/workspace-paths.ts';
+import { samePath } from '../platform/workspace-paths.ts';
 
 /**
  * The durable half of workspace isolation.

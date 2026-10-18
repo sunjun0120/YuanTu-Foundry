@@ -3,9 +3,9 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { Agent } from '../packages/core/agent.ts';
-import { redactSecrets } from '../packages/core/errors.ts';
+import { redactSecrets } from '../packages/platform/redact.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type {
   ModelRequest,
   ModelResponse,

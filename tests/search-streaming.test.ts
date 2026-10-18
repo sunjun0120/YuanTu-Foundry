@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm, readFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { Workspace } from '../packages/tools/files.ts';
 import { cachedLineIndex, clearLineIndexCache, readRange } from '../packages/search/lines.ts';
 import { scanText, searchOptions } from '../packages/search/text.ts';

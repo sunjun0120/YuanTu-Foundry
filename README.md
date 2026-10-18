@@ -22,7 +22,7 @@ kind: 'project-readme'
 - [上下文与预算](#context)
 - [多 Agent、任务、目标与计划](#collaboration)
 - [记忆、知识库与工作区资源](#knowledge)
-- [四种入口](#entry-points)
+- [三种入口](#entry-points)
 - [配置](#configuration)
 - [已知边界](#boundaries)
 - [开发](#development)
@@ -33,7 +33,7 @@ kind: 'project-readme'
 
 ## 概述
 
-`packages/core` 是一次运行的唯一所有者：它把会话历史、上下文预算与工具注册表组合成「请求模型 → 执行工具 → 事件落盘」的循环，并在其上提供子代理委派、持久任务、目标续跑与计划模式。工具面由 `packages/tools` 提供，空工作区下发一套基础目录，其余工具（会话查询、技能、任务、MCP、扩展）按宿主与工作区的实际情况追加。会话是 SQLite 里的事件日志（`packages/storage`），界面看到的一切都从日志投影出来，不另存一份状态。宿主进程把内核包成一组 JSON-RPC 方法（`packages/protocol/rpc.ts`），载体（Electron 桌面与 Web）通过 `packages/carrier` 的**一套命令词表**驱动它，CLI 则在进程内直接装配同一套内核。
+`packages/core` 是一次运行的唯一所有者：它把会话历史、上下文预算与工具注册表组合成「请求模型 → 执行工具 → 事件落盘」的循环，并在其上提供子代理委派、持久任务、目标续跑与计划模式。工具面由 `packages/tools` 提供，空工作区下发一套基础目录，其余工具（会话查询、技能、任务、MCP、扩展）按宿主与工作区的实际情况追加。会话是 SQLite 里的事件日志（`packages/storage`），界面看到的一切都从日志投影出来，不另存一份状态。宿主进程把内核包成一组 JSON-RPC 方法（`packages/protocol/rpc.ts`），载体（Electron 桌面）通过 `packages/carrier` 的**一套命令词表**驱动它，CLI 则在进程内直接装配同一套内核。
 
 这套运行时的形状由几个可数的量决定，它们由代码算出而不是写在这里：[生成事实表](#facts)给出工具数、只读工具数、schema 版本、事件类型数与测试规模。
 
@@ -43,7 +43,7 @@ kind: 'project-readme'
 
 ## 快速开始
 
-当前交付目标是 Windows/macOS 本地 Electron 客户端。MCP 服务管理、Web、对外 CLI 和 SDK/ACP 暂时停用，源码与相关测试保留。范围开关见 [product-scope.ts](packages/protocol/product-scope.ts)，暂停的 npm 入口保存在 [package.json](package.json) 的 `pausedEntrypoints` 中；恢复时需同步调整范围开关、构建入口、界面入口与相关跳过测试。桌面内部的 Agent Host、客户端协议与现有 MCP 工具调用继续保留。
+当前交付目标是 Windows/macOS 本地 Electron 客户端与命令行（`npm run dev -- …`，打包后为 `yuantu-agent`）。桌面里的 MCP 服务管理与备份页面暂时停用，范围开关见 [product-scope.ts](packages/protocol/product-scope.ts)；桌面内部的 Agent Host、客户端协议与现有 MCP 工具调用继续保留。Web 桥、SDK 与 ACP 入口已移出主干，最后的源码保留在本地分支 `archive/web-sdk-acp`。
 
 需要 Node.js 24 或更新版本。Windows 使用 PowerShell：
 
@@ -63,37 +63,43 @@ npm.cmd run desktop -- --workspace E:\your-project
 
 ### 分层与真实依赖
 
-包之间**不是**严格的单向分层（`protocol` 与 `core`、`tools` 与 `storage` 之间存在相互引用），因此下表给出的是实际观测到的依赖，而不是一张理想图。
+包按单向分层组织：每个包只引用**更低层**的包，类型引用也算在内。层次的唯一声明处是 [scripts/check-layers.mjs](scripts/check-layers.mjs) 的 `LAYERS`，`npm run layers:check` 拒绝任何逆向引用；文件级的值引用环由 `npm run cycles:check` 另行把关。从低到高：
 
-| 位置                 | 职责                                                         | 内部依赖                                                        |
-| -------------------- | ------------------------------------------------------------ | --------------------------------------------------------------- |
-| `packages/protocol`  | 类型真源：消息/事件/RPC/设置表/失败码/限额                   | core, resources                                                 |
-| `packages/core`      | 内核：agent 循环、上下文预算、子代理、任务、目标、计划、投影 | knowledge, protocol, resources, storage, tools                  |
-| `packages/tools`     | 工具目录与执行管线、沙箱、后台命令、终端、文件日志           | core, knowledge, lsp, mcp, office, protocol, resources, storage |
-| `packages/providers` | 三种模型协议的适配器、SSE、缓存、端点发现、容量目录          | protocol                                                        |
-| `packages/storage`   | SQLite 会话日志、事件、投影检查点、租约、检索                | core, protocol, tools                                           |
-| `packages/client`    | 宿主客户端：传输缝隙、JSONL RPC、会话状态机                  | core, protocol, storage                                         |
-| `packages/carrier`   | 载体契约与服务：一套命令词表 + 快照 + 四条增量通道           | client, core, protocol, providers                               |
-| `packages/knowledge` | markdown 记忆与文档索引（FTS5）                              | protocol, resources, tools                                      |
-| `packages/resources` | 项目指令、Skills、声明式扩展、外部钩子桥                     | protocol, tools                                                 |
-| `packages/lsp`       | 语言服务器管理（启动、诊断、定义、重命名、代码操作）         | protocol, tools                                                 |
-| `packages/mcp`       | MCP 客户端（stdio/http/sse）与 OAuth 2.1                     | protocol, resources, tools                                      |
-| `packages/office`    | DOCX / XLSX / PPTX 读写与预览                                | core, protocol, resources, tools                                |
+| 层  | 包                     | 职责                                                                                     | 内部依赖                                                             |
+| --- | ---------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 0   | `packages/protocol`    | 类型真源：消息/事件/RPC/设置表/失败码/限额，以及任务定义与触发器的校验                   | —                                                                    |
+| 0   | `packages/platform`    | 进程身份、用户状态目录、凭据脱敏、工作区路径、原子写入                                   | —                                                                    |
+| 1   | `packages/providers`   | 三种模型协议的适配器、SSE、缓存、端点发现、容量目录                                      | platform, protocol                                                   |
+| 1   | `packages/search`      | 工作区文件清单、文本扫描与检索服务                                                       | protocol                                                             |
+| 1   | `packages/storage`     | SQLite 会话日志、事件、投影检查点、租约、检索                                            | platform, protocol                                                   |
+| 2   | `packages/maintenance` | 数据库维护（备份、校验、恢复、压缩）的调度面                                             | storage                                                              |
+| 2   | `packages/workspaces`  | 子代理工作区：快照、隔离副本、结果导出与导入                                             | platform, protocol, storage                                          |
+| 3   | `packages/tools`       | 工具执行管线、注册表、沙箱、后台命令、终端、文件工具与文件日志                           | platform, protocol, search, storage, workspaces                      |
+| 4   | `packages/lsp`         | 语言服务器管理（启动、诊断、定义、重命名、代码操作）                                     | protocol, tools                                                      |
+| 4   | `packages/office`      | DOCX / XLSX / PPTX 读写与预览                                                            | protocol, tools                                                      |
+| 4   | `packages/resources`   | Skills、声明式扩展、外部钩子桥                                                           | platform, protocol, tools                                            |
+| 5   | `packages/knowledge`   | markdown 记忆与文档索引（FTS5）                                                          | platform, protocol, resources                                        |
+| 5   | `packages/mcp`         | MCP 客户端（stdio/http/sse）与 OAuth 2.1                                                 | platform, protocol, resources, tools                                 |
+| 6   | `packages/catalog`     | `createTools()`：把基础工具与 LSP、MCP、Office、知识、扩展、技能装配成一次运行的工具目录 | knowledge, lsp, mcp, office, protocol, resources, search, tools      |
+| 7   | `packages/core`        | 内核：agent 循环、上下文预算、子代理、任务、目标、计划、投影                             | knowledge, platform, protocol, resources, storage, tools, workspaces |
+| 8   | `packages/client`      | 宿主客户端：传输缝隙、JSONL RPC、会话状态机                                              | core, platform, protocol, storage                                    |
+| 9   | `packages/carrier`     | 载体契约与服务：一套命令词表 + 快照 + 四条增量通道                                       | client, core, platform, protocol, providers, tools                   |
 
-| 入口              | 职责                                                                 | 内部依赖                                                                  |
-| ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `apps/shared`     | CLI 与 Host 共用的装配层：沙箱默认值、容量解析、store、`createAgent` | core, protocol, providers, storage, tools                                 |
-| `apps/cli`        | 一次性命令行：命令词表与计数见[生成事实](#facts)                     | shared, core, mcp, protocol, providers, resources, storage, tools         |
-| `apps/agent-host` | 长驻 Host：JSONL(stdin 或 TCP) RPC 服务端 + 任务调度器               | shared, core, protocol, providers, resources, storage, tools              |
-| `apps/desktop`    | Electron 主进程 + preload + 渲染层；自持一个 Host 子进程             | carrier, client, core, mcp, office, protocol, providers, resources, tools |
-| `apps/web`        | 本机 Web 桥：静态页 + 单条 WebSocket + 一个 Host 子进程              | desktop（复用渲染层）, carrier                                            |
+`packages/tools` 只提供工具管线和基础工具；把各领域工具拼成目录的装配点在它之上的 `packages/catalog`，所以 LSP、MCP、Office 等领域包可以依赖工具管线，而不会和装配点互相引用。
 
-`packages/carrier` 是这套架构的接缝：`CarrierService` 是「面向任何界面层的客户端状态机」，它回答「界面该看到什么」，所有答案都来自 Host 应答；包里不允许出现 Electron、DOM 或 `apps/` 引用（由 `tests/carrier.test.ts` 从源码文本上钉住）。`apps/web` 复用 `apps/desktop/renderer.ts`，只替换掉 `window.yuantu` 背后的桥——渲染层因此不知道底下是 Electron IPC 还是 WebSocket。
+| 入口              | 职责                                                                 | 内部依赖                                                                                                  |
+| ----------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `apps/shared`     | CLI 与 Host 共用的装配层：沙箱默认值、容量解析、store、`createAgent` | catalog, core, platform, protocol, providers, storage, tools, workspaces                                  |
+| `apps/cli`        | 一次性命令行：命令词表与计数见[生成事实](#facts)                     | shared, core, mcp, protocol, providers, resources, storage, tools                                         |
+| `apps/agent-host` | 长驻 Host：JSONL(stdin 或 TCP) RPC 服务端 + 任务调度器               | shared, client, core, platform, protocol, providers, resources, storage, tools, workspaces                |
+| `apps/desktop`    | Electron 主进程 + preload + 渲染层；自持一个 Host 子进程             | carrier, client, core, maintenance, mcp, office, platform, protocol, providers, resources, storage, tools |
+
+`packages/carrier` 是这套架构的接缝：`CarrierService` 是「面向任何界面层的客户端状态机」，它回答「界面该看到什么」，所有答案都来自 Host 应答；包里不允许出现 Electron、DOM 或 `apps/` 引用（由 `tests/carrier.test.ts` 从源码文本上钉住），因此另一种界面层可以复用它而不必改动内核。
 
 ### 一次运行的数据流
 
 ```text
-载体（桌面 / Web / 自建）
+载体（桌面 / 自建）
   │ CarrierCommand（一套受校验的词表）
   ▼
 CarrierService ── AgentHostClient ── JSONL ──► apps/agent-host（长驻进程）
@@ -419,7 +425,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 
 无需手动填写窗口即可运行。解析顺序为「操作者声明 → `YUANTU_MODEL_CAPACITIES` 的同端点模型 → 内置容量目录 → 自动读取当前端点 `/models` → 应用默认预算」。自动发现最多等待 3 秒，响应不超过 1 MiB，不跟随重定向；成功结果按协议、端点与凭据身份缓存 5 分钟，失败结果缓存 30 秒，最多保留 32 条缓存。所有连接统一采用 1,000,000 token 本地上下文默认预算和 256,000 token 单次输出默认预算；这些是应用预算，不是对网关真实容量的声明。已知窗口小于默认窗口且未手动指定输出时，默认输出不超过该窗口的四分之一；模型目录或内置目录提供的更小输出上限也会约束默认输出。目录仅提供输出上限时，保留该上限并使用默认窗口。接口明确报告上下文超限时，沿用每轮最多一次的压缩恢复；无法压缩或再次超限会明确停止。
 
-桌面模型设置留空显示“自动（可手动指定）”，不会把自动结果写成用户配置。`--max-context-tokens`、`YUANTU_MAX_CONTEXT_TOKENS`、模型行与同端点容量声明继续优先；手动输出上限也优先于自动发现。已手动声明窗口或已有内置容量的连接不额外请求模型目录。CLI、Host、桌面和 Web 使用同一装配流程。
+桌面模型设置留空显示“自动（可手动指定）”，不会把自动结果写成用户配置。`--max-context-tokens`、`YUANTU_MAX_CONTEXT_TOKENS`、模型行与同端点容量声明继续优先；手动输出上限也优先于自动发现。已手动声明窗口或已有内置容量的连接不额外请求模型目录。CLI、Host 与桌面使用同一装配流程。
 
 ### 每一轮只做一次前瞻
 
@@ -523,11 +529,9 @@ JS 钩子必须由人显式指定模块路径（`--hooks <module>` 或 `YUANTU_H
 
 <a id="entry-points"></a>
 
-## 四种入口
+## 三种入口
 
 ### CLI
-
-此入口当前暂时停用；以下为保留源码的实现说明，相关 npm 命令不属于当前客户端交付范围。
 
 `apps/cli/main.ts` 是单文件入口。需要模型凭据的命令只有五个（`run`、`resume`、`plan`、`plan-execute`、`task-retry`），其余命令与维护命令都不需要；命令词表、计数与维护命令见[生成事实](#facts)，真源是 `apps/shared/cli-commands.ts`——帮助文本的 `Usage:` 段由那份清单渲染，`docs:check` 会核对上面这句里点名的命令，所以两者不可能各说一套。交互模式下**进度全部走 stderr**，stdout 只留答复本身，因此它可以安全地接管道；`--json` 模式把事件、结果与计划都变成 JSONL。它明确拒绝 `--listen`：要对外服务请用 Agent Host。
 
@@ -576,14 +580,6 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 输入区支持 `/` 唤起指令与技能面板，其中只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行，其余（切换模型、权限设置、新建会话、停止、刷新技能）走面板点击。设置页分通用、模型两组（MCP 服务管理随范围开关暂停，页面与 IPC 一并关闭）。**权限与隔离是 composer 上的一枚 chip，三档**：仅可查看（沙箱内、只读）、工作区内修改（沙箱内、写入前询问，**新会话的默认**）、完全权限（宿主执行、不再询问，需要一次显式确认）。每档一次写入沙箱与批准两件事——不存在只改一半的路径——当前组合不是任何一档时 chip 显示「自定义」并说明它来自启动环境，而「自定义」只能被读出、不能被选中。档位**属于会话**：换了档只影响当前会话，新建会话回到默认，切回旧会话恢复它自己的档。菜单就是三行（盾牌图标 + 名称 + 当前项的对勾），**只在后端不可用时**多一行说明原因。界面文案由 zh/en 双语字典驱动，主进程的设置校验、失败对话框与回执用同一本字典（`apps/desktop/i18n.ts`，见下文的 `i18n:check`），`index.html` 里的静态中文在切换语言时经反向索引翻译并跟随新增节点；主题（跟随系统／浅色／深色）与三档字号写在根元素属性上。
 
 模型密钥用系统 `safeStorage` 加密（系统加密不可用时拒绝保存），配置文件（模型、界面、权限、沙箱）都在 Electron 的应用数据目录；每个接口分组最多 100 个模型。MCP OAuth 凭据在 `mcp-oauth/`，默认使用系统密钥库保存密钥并以 AES-256-GCM 加密，桌面与 Agent Host 共用同一份凭据；CLI 默认存于用户目录 `.yuantu/mcp-oauth/`。Linux 要求可用的 Secret Service。旧文件读取时原子迁移，密钥库不可用时拒绝读取或保存，不回退明文；删除本地凭据仍可执行。
-
-### Web
-
-此入口当前暂时停用；以下为保留源码的实现说明，相关 npm 命令不属于当前客户端交付范围。
-
-`npm run web` 先构建静态页，再启动一个**只绑回环**的桥：默认端口 `0`（由系统分配）与随机 token，访问地址形如 `http://127.0.0.1:<port>/?token=<token>`，WebSocket 走 `/ws?token=`，非回环来源一律 403。桥自身是 `spawnedCarrier`，页面与桌面共用同一套渲染层与同一个 `CarrierService`。第二标签页会被拒绝且不会踢掉已连接的页面。网页版刻意不提供壳专属能力（附件、MCP 设置、权限与沙箱设置、模型设置），这些请求会返回明确的拒绝文案。
-
-页面重连后，旧连接尚未完成的请求回复不会发给新页面。浏览器桥的连接握手默认等待 10 秒，普通命令及文件回复默认等待 120 秒；等待整轮运行、审批、规划、验证或压缩的命令遵循 Host 的完成与取消流程，默认不设总时长上限。嵌入方显式配置 `requestTimeoutMs` 时可限制所有请求。超时或连接丢失会提示执行结果可能未知，不自动重放命令；再次操作前应检查当前状态。
 
 ---
 
@@ -716,10 +712,10 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v31 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 257 个 | `tests/*.test.ts` |
+| 行为测试文件 | 249 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
-| CLI 维护命令 | 4 个 | `CLI_MAINTENANCE_COMMANDS` |
+| CLI 维护命令 | 5 个 | `CLI_MAINTENANCE_COMMANDS` |
 | Host JSON-RPC 方法 | 58 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
@@ -762,7 +758,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 ## 开发
 
 ```powershell
-npm.cmd run check        # format:check → docs:check → references:check → cycles:check → i18n:check → typecheck → test:isolation:check → test → build → smoke:client
+npm.cmd run check        # format:check → docs:check → references:check → cycles:check → layers:check → i18n:check → typecheck → test:isolation:check → test → build → smoke:client
 npm.cmd run check:changed   # 开发时按 Git 改动及传递依赖选择验证；不确定时回退全量
 npm.cmd run check:changed -- --plan   # 只预览改动、选测数量与回退原因
 npm.cmd test             # 全量行为测试：仅输出汇总、跳过原因和失败详情，完整日志落盘

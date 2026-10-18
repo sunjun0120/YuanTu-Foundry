@@ -19,7 +19,7 @@ import {
 } from '../packages/core/subagent-providers.ts';
 import type { SubAgentProvider } from '../packages/core/subagent-providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({

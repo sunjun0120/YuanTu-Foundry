@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { forecastRequest } from '../packages/core/forecast.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import { PermissionPolicy } from '../packages/core/permissions.ts';

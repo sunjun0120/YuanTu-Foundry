@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { normalizeTaskTrigger, nextRunAt } from '../packages/core/task-trigger.ts';
+import { normalizeTaskTrigger, nextRunAt } from '../packages/protocol/task-trigger.ts';
 import { TaskScheduler } from '../apps/agent-host/scheduler.ts';
 import { recordTaskDelivery, pendingTaskDeliveries } from '../packages/core/task-deliveries.ts';
 import { parseCarrierCommand } from '../packages/carrier/contract.ts';

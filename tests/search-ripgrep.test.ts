@@ -34,7 +34,7 @@ import {
   type ManagedSearchProcess,
 } from '../packages/search/ripgrep.ts';
 import { scanText, searchOptions } from '../packages/search/text.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import {
   type Coverage,
   type FileEntry,

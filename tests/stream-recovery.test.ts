@@ -26,7 +26,7 @@ test('Host restart restores streamed text saved before its process dies', async 
   initial.close();
   const storeUrl = pathToFileURL(path.resolve('packages/storage/sqlite.ts')).href;
   const agentUrl = pathToFileURL(path.resolve('packages/core/agent.ts')).href;
-  const toolsUrl = pathToFileURL(path.resolve('packages/tools/index.ts')).href;
+  const toolsUrl = pathToFileURL(path.resolve('packages/catalog/index.ts')).href;
   const childCode = `
     import { SessionStore } from ${JSON.stringify(storeUrl)};
     import { Agent } from ${JSON.stringify(agentUrl)};

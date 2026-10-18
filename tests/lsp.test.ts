@@ -10,7 +10,7 @@ import type {
   FileSnapshot,
   ToolContext,
 } from '../packages/protocol/index.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import {
   MessageDecoder,
   applyTextEdits,

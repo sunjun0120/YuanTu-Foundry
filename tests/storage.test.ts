@@ -7,7 +7,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { SCHEMA_VERSION, SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { projectRoot } from './process-fixture.ts';
 
 test('durable tasks support session-scoped CRUD, filtering, and validation', async (t) => {

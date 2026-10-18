@@ -1,7 +1,7 @@
 import { open, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { extensionTools } from '../../../packages/resources/extensions.ts';
-import { loadInstructions } from '../../../packages/resources/instructions.ts';
+import { loadInstructions } from '../../../packages/tools/instructions.ts';
 import { discoverSkills } from '../../../packages/resources/skills.ts';
 import { sniffImageType, MAX_IMAGE_BYTES } from '../../../packages/protocol/images.ts';
 import { FILE_PREVIEW_BYTES, FILE_TREE_ENTRY_LIMIT } from '../../../packages/protocol/rpc.ts';

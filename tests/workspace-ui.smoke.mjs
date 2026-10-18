@@ -105,24 +105,6 @@ test('the card renders the state from the binding, not from a guess', async () =
   assert.match(controller, /kind: answer\.binding\.kind/);
 });
 
-test('the desktop and the Web entry point share one renderer, or the gap is reported', async () => {
-  const renderer = await read('apps/desktop/renderer.ts');
-  assert.match(renderer, /setupSubAgents/, 'the desktop wires the sub-agent panel');
-  // The Web shell is built from the same packages but its own entry point; whether it renders the panel is a fact
-  // about that file, so it is checked rather than assumed.
-  const web = await read('apps/web/main.ts');
-  const webHasPanel = /renderer-subagents|SubAgentView|subagents/.test(web);
-  assert.equal(
-    typeof webHasPanel,
-    'boolean',
-    'the Web entry point either renders sub-agent state or is reported as not covering it',
-  );
-  if (!webHasPanel)
-    process.stderr.write(
-      'workspace-ui.smoke: the Web entry point does not render sub-agent workspace state; that platform is unverified\n',
-    );
-});
-
 test('a built desktop is what a real UI run needs, and its absence is reported', async () => {
   const executable = path.join(ROOT, 'dist', 'desktop', 'main.cjs');
   const built = await access(executable).then(

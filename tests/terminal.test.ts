@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
 import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
 import {

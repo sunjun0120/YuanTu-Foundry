@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { processAlive, processStartedAt } from '../packages/platform/process-identity.ts';
+import {
+  primeProcessStartTimes,
+  processAlive,
+  processStartedAt,
+} from '../packages/platform/process-identity.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -463,4 +467,35 @@ test('a live run of this process that was not forsaken is still refused', async 
   assert.throws(() => store.beginRun(sessionId), /already running/);
   store.forsakeRun(runId);
   assert.notEqual(store.beginRun(sessionId), runId);
+});
+
+test('recovery looks owners up in one batch and still tells a reused pid from its owner', async (t) => {
+  const strangers = [0, 1].map(() =>
+    spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }),
+  );
+  t.after(() => strangers.forEach((child) => child.kill()));
+  await Promise.all(strangers.map((child) => once(child, 'spawn')));
+  const pids = strangers.map((child) => child.pid!);
+  // One lookup for both; the per-pid answers that follow come from it and agree with a direct lookup.
+  primeProcessStartTimes(pids);
+  const started = pids.map((pid) => processStartedAt(pid));
+  if (started.includes(null)) return t.skip('this system does not report process start times');
+
+  const { root, store, sessionId, db } = await fixture(t);
+  const other = store.create(root);
+  const live = store.beginRun(sessionId);
+  const reused = store.beginRun(other.id);
+  const handle = db();
+  const owner = handle.prepare('UPDATE runs SET owner_pid=?, owner_started_at=? WHERE id=?');
+  owner.run(pids[0]!, started[0]!, live);
+  owner.run(pids[1]!, started[1]! - 3_600_000, reused);
+  handle.close();
+
+  store.reconcileInterruptedRuns();
+  assert.equal(store.get(sessionId).activeRun, live, 'a live owner keeps its run');
+  assert.equal(
+    store.get(other.id).activeRun,
+    null,
+    'a pid held by a later process is not the owner',
+  );
 });

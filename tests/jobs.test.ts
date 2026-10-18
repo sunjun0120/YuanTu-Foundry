@@ -11,7 +11,7 @@ import { getEventListeners } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { subAgentJobProducer } from '../packages/core/subagent-jobs.ts';

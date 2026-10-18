@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextCronRun, latestCronRun, parseCron } from '../packages/core/cron.ts';
-import { normalizeTaskTrigger, nextRunAt } from '../packages/core/task-trigger.ts';
+import { nextCronRun, latestCronRun, parseCron } from '../packages/protocol/cron.ts';
+import { normalizeTaskTrigger, nextRunAt } from '../packages/protocol/task-trigger.ts';
 
 test('five-field cron validates numeric lists ranges and within-field steps', () => {
   const rule = parseCron('*/15 9-17/2 1,15 * 0,7');

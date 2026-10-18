@@ -7,7 +7,7 @@ import {
   type CompletionStep,
   type CompletionSummary,
 } from '../protocol/index.ts';
-import { redactSecrets } from './errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { createHash } from 'node:crypto';
 
 /**

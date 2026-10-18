@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { parseCarrierCommand } from '../packages/carrier/contract.ts';
 import type {

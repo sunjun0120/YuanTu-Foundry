@@ -14,7 +14,7 @@ import type {
 import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import type { SandboxMode } from '../../packages/tools/sandbox.ts';
 import type { FileEffect, NetworkEffect } from '../../packages/protocol/execution.ts';
-import type { TaskEvent } from '../../packages/core/task-trigger.ts';
+import type { TaskEvent } from '../../packages/protocol/task-trigger.ts';
 import type { HostLaunch } from './cli.ts';
 import type { HostCarrier } from './carrier.ts';
 import type { TaskScheduler } from './scheduler.ts';

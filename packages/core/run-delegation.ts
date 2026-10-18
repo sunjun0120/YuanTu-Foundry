@@ -3,7 +3,7 @@ import type { ToolRegistry } from '../tools/registry.ts';
 import type { AgentEventType, SubAgentSummaryReport, Usage } from '../protocol/index.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { AgentOptions, AgentRunInput } from './agent-options.ts';
-import { redactSecrets } from './errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { createChildTurns } from './run-child-turns.ts';
 import { createCoordinator } from './run-coordinator.ts';
 import type { RunEmit } from './run-emit.ts';

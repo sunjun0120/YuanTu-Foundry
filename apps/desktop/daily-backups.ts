@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { redactSecrets } from '../../packages/core/errors.ts';
+import { redactSecrets } from '../../packages/platform/redact.ts';
 import type { BackupView } from './backup-contract.ts';
 import type { BackupAction, BackupResult } from './database-backup-worker.ts';
 

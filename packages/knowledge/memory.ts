@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
-import { atomicWriteFile } from '../tools/write-all.ts';
+import { atomicWriteFile } from '../platform/write-all.ts';
 
 /**
  * Durable memory is a markdown file the user can read and edit, not a database row.

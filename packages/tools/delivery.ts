@@ -1,5 +1,5 @@
 import type { Tool } from '../protocol/index.ts';
-import { deliveryFormats, verifyFileDelivery } from '../core/delivery.ts';
+import { deliveryFormats, verifyFileDelivery } from './file-delivery.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.

@@ -43,6 +43,18 @@ export interface HostServices {
  * `store.close()` is deliberately *not* here: closing is teardown, and teardown belongs to the process's exit path
  * (`lifecycle.ts`), which has to unwind in an order this function knows nothing about.
  */
+/** Whether a spill directory's session exists; anything but a definite "not found" answers yes. */
+export function spillOwnerExists(store: Pick<SessionStore, 'get'>): (sessionId: string) => boolean {
+  return (sessionId) => {
+    try {
+      store.get(sessionId);
+      return true;
+    } catch (error) {
+      return !(error instanceof Error && error.message.startsWith('Session not found:'));
+    }
+  };
+}
+
 export async function openHostServices(options: Options, workspace: string): Promise<HostServices> {
   const store = openStore(options);
   store.reconcileInterruptedRuns(workspace);
@@ -66,23 +78,22 @@ export async function openHostServices(options: Options, workspace: string): Pro
    * Both run here rather than per run because they are facts about the *process*: exactly one Host owns these
    * directories, and a pass that ran inside every run would classify the same rows repeatedly and race itself.
    */
-  // Spills of sessions that no longer exist, and a workspace-wide budget; housekeeping, never a startup failure.
-  await sweepSpills({
-    workspace,
-    sessionExists: (sessionId) => {
-      try {
-        store.get(sessionId);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-  }).catch(() => undefined);
   const workspaces = new WorkspaceManager({ store });
   const workspaceResults = new WorkspaceResultsService({ store });
   const reconciliation = new AbortController();
   await workspaces.reconcile(reconciliation.signal);
   await workspaceResults.reconcile(reconciliation.signal);
+  /**
+   * Spills of sessions that no longer exist, and a workspace-wide budget.
+   *
+   * Housekeeping, so it is not awaited: it stats every spilled file, and a workspace with many sessions made the Host
+   * miss its startup deadline while it did. Only a definite "no such session" counts as an orphan — a store that is
+   * closing or failing answers "exists", so a sweep that outlives its Host deletes nothing it cannot account for.
+   */
+  void sweepSpills({
+    workspace,
+    sessionExists: spillOwnerExists(store),
+  }).catch(() => undefined);
   const background = new BackgroundCommands(workspace);
   /**
    * The host's terminals, one manager for the process.

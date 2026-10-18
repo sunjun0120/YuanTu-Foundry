@@ -5,7 +5,7 @@ import { structuredPatch, formatPatch } from 'diff';
 import type { FileChange, PreparedTool, ToolContext } from '../protocol/index.ts';
 import type { Workspace } from './files.ts';
 import type { MutationGates } from './fs-observation.ts';
-import { writeAll, atomicWriteFile } from './write-all.ts';
+import { writeAll, atomicWriteFile } from '../platform/write-all.ts';
 
 const noFollow = constants.O_NOFOLLOW ?? 0;
 

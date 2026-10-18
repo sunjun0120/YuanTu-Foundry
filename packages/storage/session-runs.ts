@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { redactSecrets } from '../core/errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { changeGoal, type Goal } from '../protocol/goals.ts';
 import type { Message, RunResult } from '../protocol/index.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
@@ -11,7 +11,13 @@ import { WorkspaceFailure } from '../protocol/workspaces.ts';
 import { type PendingSessionInput, type SessionEventType } from './events.ts';
 import type { Session } from './session-schema.ts';
 import { ownStartedAt } from '../platform/process-identity.ts';
-import { ageSuffix, deadOwner, leaseEvidence, RUN_INTERRUPTED_REASON } from './session-schema.ts';
+import {
+  ageSuffix,
+  deadOwner,
+  leaseEvidence,
+  primeRunOwners,
+  RUN_INTERRUPTED_REASON,
+} from './session-schema.ts';
 
 /** Run lifecycle, interruption recovery and leases. All writes borrow the store transaction and event writer. */
 export interface SessionRunsPort {
@@ -174,6 +180,7 @@ export class SessionRuns {
    * sessions its own UI cannot delete, rename or continue. `tests/cli.test.ts` pins that for the CLI.
    */
   reconcileInterruptedRuns(workspace?: string): number {
+    primeRunOwners(this.port.db);
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { lastRuntimeSnapshot } from '../packages/core/runtime-context.ts';
 import {
   CHECK_FAILURE_REASONS,

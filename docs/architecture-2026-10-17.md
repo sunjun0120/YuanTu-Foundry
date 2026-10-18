@@ -39,36 +39,36 @@ YuanTu Agent 是一个**自研的桌面编程 Agent 内核 + Electron 客户端*
 
 ## 3. 仓库结构与规模
 
-| 目录                   | 内容                                                       | 规模（TS/JS 行数，不含 `node_modules`）                        |
-| ---------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- |
-| `packages/core`        | 内核：循环、预算、压缩、子代理、任务、目标、计划、投影辅助 | 65 文件 / 18,081 行                                            |
-| `packages/tools`       | 工具目录、执行管线、注册表、沙箱、后台命令、终端、文件日志 | 56 文件 / 14,315 行（另有 Rust `windows-sandbox` 约 1,600 行） |
-| `packages/storage`     | SQLite、事件日志、迁移、投影、检索、任务/工作区表          | 22 文件 / 9,673 行                                             |
-| `packages/protocol`    | 类型真源：消息/事件/RPC/设置/失败码/限额/图片              | 34 文件 / 6,027 行                                             |
-| `packages/search`      | 符号索引、ripgrep 后端、清单/游标                          | 10 文件 / 3,301 行                                             |
-| `packages/workspaces`  | Git worktree 隔离子代理、快照、结果导入                    | 5 文件 / 3,197 行                                              |
-| `packages/client`      | Host 客户端：JSONL 传输、会话状态机                        | 7 文件 / 2,622 行                                              |
-| `packages/lsp`         | 语言服务器管理                                             | 5 文件 / 2,452 行                                              |
-| `packages/providers`   | 三种协议适配器、SSE、缓存、容量发现                        | 14 文件 / 2,426 行                                             |
-| `packages/carrier`     | 载体契约与服务（命令词表、快照、增量通道）                 | 4 文件 / 1,942 行                                              |
-| `packages/mcp`         | MCP 客户端与 OAuth 2.1                                     | 4 文件 / 1,944 行                                              |
-| `packages/office`      | DOCX/XLSX/PPTX 读写与预览                                  | 6 文件 / 1,180 行                                              |
-| `packages/resources`   | 项目指令、Skills、扩展、外部钩子桥                         | 6 文件 / 999 行                                                |
-| `packages/knowledge`   | markdown 记忆 + 文档索引（FTS5）                           | 4 文件 / 732 行                                                |
-| `packages/maintenance` | 桌面升级/回滚事务                                          | 1 文件 / 362 行                                                |
-| `packages/sdk`         | ACP 适配与 SDK 导出（暂停）                                | 2 文件 / 296 行                                                |
-| `packages/platform`    | 用户状态目录、测试生命周期钩子                             | 2 文件 / 21 行                                                 |
-| `apps/desktop`         | 主进程、preload、渲染层、i18n、设置、面板                  | 70 文件 / 20,172 行                                            |
-| `apps/agent-host`      | Host：RPC 分发、会话/运行/任务/工作区处理器、调度器        | 24 文件 / 4,094 行                                             |
-| `apps/shared`          | 装配层：`createAgent()`、参数、CLI 命令表、钩子            | 4 文件 / 850 行                                                |
-| `apps/cli`             | 单文件 CLI（暂停）                                         | 1 文件 / 1,277 行                                              |
-| `apps/web`             | 本机 Web 桥（暂停；`dist/` 为构建产物，未跟踪）            | 9 文件 / 23,032 行（含构建产物）                               |
-| `apps/agent-acp`       | ACP 入口（暂停）                                           | 1 文件 / 102 行                                                |
-| `tests`                | 行为测试 + 冒烟 + 快照 + 夹具                              | 249 个 `.test.ts` / 88,331 行；16 个 `.smoke.mjs`              |
-| `scripts`              | 构建、门禁、测试调度、覆盖率、打包                         | 67 文件 / 约 0.3 MB                                            |
-| `benchmarks`           | 性能基准、检索基准、编码评测                               | 36 文件                                                        |
-| `sdk/python`           | Host JSONL 的 Python 客户端（240 行，标准库）              | 4 文件                                                         |
-| `build`                | 图标、ripgrep 资产锁、Windows 运行时锁、受保护安装脚本     | 12 个已跟踪文件                                                |
+| 目录                   | 内容                                                                  | 规模（TS/JS 行数，不含 `node_modules`）                        |
+| ---------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `packages/core`        | 内核：循环、预算、压缩、子代理、任务、目标、计划、投影辅助            | 65 文件 / 18,081 行                                            |
+| `packages/tools`       | 工具目录、执行管线、注册表、沙箱、后台命令、终端、文件日志            | 56 文件 / 14,315 行（另有 Rust `windows-sandbox` 约 1,600 行） |
+| `packages/storage`     | SQLite、事件日志、迁移、投影、检索、任务/工作区表                     | 22 文件 / 9,673 行                                             |
+| `packages/protocol`    | 类型真源：消息/事件/RPC/设置/失败码/限额/图片                         | 34 文件 / 6,027 行                                             |
+| `packages/search`      | 符号索引、ripgrep 后端、清单/游标                                     | 10 文件 / 3,301 行                                             |
+| `packages/workspaces`  | Git worktree 隔离子代理、快照、结果导入                               | 5 文件 / 3,197 行                                              |
+| `packages/client`      | Host 客户端：JSONL 传输、会话状态机                                   | 7 文件 / 2,622 行                                              |
+| `packages/lsp`         | 语言服务器管理                                                        | 5 文件 / 2,452 行                                              |
+| `packages/providers`   | 三种协议适配器、SSE、缓存、容量发现                                   | 14 文件 / 2,426 行                                             |
+| `packages/carrier`     | 载体契约与服务（命令词表、快照、增量通道）                            | 4 文件 / 1,942 行                                              |
+| `packages/mcp`         | MCP 客户端与 OAuth 2.1                                                | 4 文件 / 1,944 行                                              |
+| `packages/office`      | DOCX/XLSX/PPTX 读写与预览                                             | 6 文件 / 1,180 行                                              |
+| `packages/resources`   | 项目指令、Skills、扩展、外部钩子桥                                    | 6 文件 / 999 行                                                |
+| `packages/knowledge`   | markdown 记忆 + 文档索引（FTS5）                                      | 4 文件 / 732 行                                                |
+| `packages/maintenance` | 桌面升级/回滚事务                                                     | 1 文件 / 362 行                                                |
+| packages/sdk           | ACP 适配与 SDK 导出（已移出主干，见分支 archive/web-sdk-acp）         | 2 文件 / 296 行                                                |
+| `packages/platform`    | 用户状态目录、测试生命周期钩子                                        | 2 文件 / 21 行                                                 |
+| `apps/desktop`         | 主进程、preload、渲染层、i18n、设置、面板                             | 70 文件 / 20,172 行                                            |
+| `apps/agent-host`      | Host：RPC 分发、会话/运行/任务/工作区处理器、调度器                   | 24 文件 / 4,094 行                                             |
+| `apps/shared`          | 装配层：`createAgent()`、参数、CLI 命令表、钩子                       | 4 文件 / 850 行                                                |
+| `apps/cli`             | 单文件 CLI（暂停）                                                    | 1 文件 / 1,277 行                                              |
+| apps/web               | 本机 Web 桥（已移出主干，见分支 archive/web-sdk-acp）                 | 9 文件 / 23,032 行（含构建产物）                               |
+| apps/agent-acp         | ACP 入口（已移出主干，见分支 archive/web-sdk-acp）                    | 1 文件 / 102 行                                                |
+| `tests`                | 行为测试 + 冒烟 + 快照 + 夹具                                         | 249 个 `.test.ts` / 88,331 行；16 个 `.smoke.mjs`              |
+| `scripts`              | 构建、门禁、测试调度、覆盖率、打包                                    | 67 文件 / 约 0.3 MB                                            |
+| `benchmarks`           | 性能基准、检索基准、编码评测                                          | 36 文件                                                        |
+| sdk/python             | Host JSONL 的 Python 客户端（已移出主干，见分支 archive/web-sdk-acp） | 4 文件                                                         |
+| `build`                | 图标、ripgrep 资产锁、Windows 运行时锁、受保护安装脚本                | 12 个已跟踪文件                                                |
 
 源码（`apps`+`packages`，排除 `windows-sandbox`）共 **349 个 TS 文件 / 91,381 行**；测试 **249 个文件 / 88,331 行**——测试与源码行数比约 **0.97:1**。这解释了为什么本项目的质量论证主要落在测试与门禁上。
 
@@ -108,7 +108,7 @@ CarrierService ── AgentHostClient ── JSONL(stdin/stdout 或回环 TCP) �
                                                             └──── 界面看到的一切 ← 日志投影
 ```
 
-CLI 是另一条路：进程内直接 `createAgent()`，不经 `CarrierService`，并明确拒绝 `--listen`。桌面与 Web 共用同一份渲染层（`apps/web` 复用 `apps/desktop/renderer.ts`），差别只在 `window.yuantu` 背后是 Electron IPC 还是 WebSocket——这是 `packages/carrier` 作为「接缝」的价值。
+CLI 是另一条路：进程内直接 `createAgent()`，不经 `CarrierService`，并明确拒绝 `--listen`。桌面与 Web 共用同一份渲染层（当时的 Web 桥复用 `apps/desktop/renderer.ts`；Web 桥已移出主干），差别只在 `window.yuantu` 背后是 Electron IPC 还是 WebSocket——这是 `packages/carrier` 作为「接缝」的价值。
 
 ### 4.3 唯一装配点
 
@@ -158,7 +158,7 @@ CLI 是另一条路：进程内直接 `createAgent()`，不经 `CarrierService`�
 
 ### 5.3 工具系统与执行管线
 
-工具面由 `createTools()`（`packages/tools/index.ts`，210 行）注册；在空工作区下发 **67 个工具 / 36.6 KB schema**，只读运行 **34 个 / 18.2 KB**，`YUANTU_TOOL_MODE=ptc` 时折叠为 **1 个 `run_code` / 10.6 KB**（生成事实，`npm run docs:check` 核验）。
+工具面由 `createTools()`（`packages/catalog/index.ts`，210 行）注册；在空工作区下发 **67 个工具 / 36.6 KB schema**，只读运行 **34 个 / 18.2 KB**，`YUANTU_TOOL_MODE=ptc` 时折叠为 **1 个 `run_code` / 10.6 KB**（生成事实，`npm run docs:check` 核验）。
 
 执行管线是 9 个有名字的阶段，且**在每次执行时**由 `packages/tools/pipeline.ts` 的 `ToolPipelineInvariant` 校验顺序与先决条件：
 
@@ -235,7 +235,7 @@ Windows 增强后端（AppContainer）有完整原型（Rust helper + ACL 脚本
 | 搜索       | `packages/search` + `tools/repo-map.ts` | 符号索引独立数据库（`.yuantu/search/`）；可选固定版本 ripgrep（按锁校验 SHA-256），不可用则回退内置流式扫描，不回退 host                               |
 | 浏览器     | `packages/tools/browser.ts`             | 可选 Playwright/Chromium，未安装时明确报错并给安装命令                                                                                                 |
 | 工作流     | `packages/core/workflow.ts`             | 独立 Node 进程运行编排脚本，工具 RPC 经 catalog 校验与原有审批                                                                                         |
-| Python SDK | `sdk/python`                            | 标准库实现的 Host JSONL 客户端（240 行），便于非 Node 嵌入方                                                                                           |
+| Python SDK | sdk/python（已移出主干）                | 标准库实现的 Host JSONL 客户端（240 行），便于非 Node 嵌入方                                                                                           |
 
 ### 5.10 载体层与桌面壳
 
@@ -381,7 +381,7 @@ clean-paused-builds → tsc -p tsconfig.build.json → copy-sandbox-assets
 | -------- | -------------------------------------------------------------------------------------------------------- |
 | 内核装配 | `apps/shared/runtime.ts`                                                                                 |
 | 内核循环 | `packages/core/agent.ts`、`packages/core/run-request.ts`、`packages/core/run-tools.ts`                   |
-| 工具目录 | `packages/tools/index.ts`                                                                                |
+| 工具目录 | `packages/catalog/index.ts`                                                                              |
 | 执行管线 | `packages/tools/pipeline.ts`、`packages/tools/registry.ts`、`packages/tools/dispatch.ts`                 |
 | 沙箱     | `packages/tools/sandbox.ts`、`sandbox-windows.ts`、`sandbox-seatbelt.ts`、`sandbox-appcontainer.ts`      |
 | 存储     | `packages/storage/sqlite.ts`、`packages/storage/events.ts`、`packages/storage/session-current-schema.ts` |

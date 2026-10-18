@@ -21,7 +21,11 @@ import { performance } from 'node:perf_hooks';
  */
 export const START_TOLERANCE_MS = 10_000;
 const LOOKUP_TIMEOUT_MS = 5_000;
-const CACHE_MS = 60_000;
+/**
+ * How long a looked-up start time is trusted. Long enough to cover one recovery pass, short enough that a pid the
+ * owner released and the system handed to a new process is not judged by the old owner's start for long.
+ */
+const CACHE_MS = 5_000;
 
 /** When this process started, in epoch milliseconds. */
 export function ownStartedAt(): number {
@@ -49,6 +53,80 @@ export function processStartedAt(pid: number): number | null {
   }
   cache.set(pid, { startedAt, at: Date.now() });
   return startedAt;
+}
+
+/**
+ * Look up many pids at once and cache the answers, so that a pass deciding about each of them afterwards — inside a
+ * database write transaction, typically — reads the cache instead of starting one subprocess per pid.
+ *
+ * On Windows and macOS this is a single subprocess for the whole set. Pids that are not running, this process's own
+ * and ones already cached are skipped; a pid the system would not describe is cached as unknown (`null`), which
+ * `processAlive` reads as alive, exactly as a single lookup would.
+ */
+export function primeProcessStartTimes(pids: Iterable<number>): void {
+  const wanted = new Set<number>();
+  for (const pid of pids) {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    const cached = cache.get(pid);
+    if (cached && Date.now() - cached.at < CACHE_MS) continue;
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') continue;
+    }
+    wanted.add(pid);
+  }
+  if (!wanted.size) return;
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    for (const pid of wanted) processStartedAt(pid);
+    return;
+  }
+  let found = new Map<number, number>();
+  try {
+    found = batchLookup([...wanted]);
+  } catch {
+    // Leave the set uncached: each pid is then looked up on its own, as before.
+    return;
+  }
+  const at = Date.now();
+  for (const pid of wanted) cache.set(pid, { startedAt: found.get(pid) ?? null, at });
+}
+
+function batchLookup(pids: number[]): Map<number, number> {
+  const found = new Map<number, number>();
+  if (process.platform === 'darwin') {
+    const text = execFileSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], {
+      encoding: 'utf8',
+      timeout: LOOKUP_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of text.split('\n')) {
+      const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+      const parsed = match ? Date.parse(match[2]!) : NaN;
+      if (match && Number.isFinite(parsed)) found.set(Number(match[1]), parsed);
+    }
+    return found;
+  }
+  const text = execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { try { '{0} {1}' -f $_.Id, [DateTimeOffset]::new($_.StartTime).ToUnixTimeMilliseconds() } catch {} }`,
+    ],
+    {
+      encoding: 'utf8',
+      timeout: LOOKUP_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    },
+  );
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^(\d+) (\d+)$/.exec(line.trim());
+    if (match) found.set(Number(match[1]), Number(match[2]));
+  }
+  return found;
 }
 
 function lookup(pid: number): number | null {

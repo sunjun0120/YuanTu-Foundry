@@ -106,6 +106,8 @@ function ipv6Reason(address: string): string | null {
     if (h6 === 0 && h7 === 1) return null;
     return ipv4Reason(`${h6 >> 8}.${h6 & 0xff}.${h7 >> 8}.${h7 & 0xff}`);
   }
+  // Teredo (2001:0::/32) carries an obfuscated IPv4 server and client address, so it can tunnel to either.
+  if (h0 === 0x2001 && h1 === 0) return 'a Teredo address';
   if ((h0 & 0xfe00) === 0xfc00) return 'a unique-local address';
   if ((h0 & 0xffc0) === 0xfe80) return 'a link-local address';
   if ((h0 & 0xff00) === 0xff00) return 'a multicast address';
@@ -136,8 +138,30 @@ export function assertUrlLiteralAllowed(url: URL): void {
 }
 
 /**
+ * True for an address of an instance metadata service, however it is spelled — including the IPv4-mapped and
+ * IPv4-compatible IPv6 forms of 169.254.169.254.
+ */
+export function metadataAddress(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) return address === '169.254.169.254';
+  if (family !== 6) return false;
+  const hextets = ipv6Hextets(address);
+  if (!hextets) return false;
+  if (
+    hextets.slice(0, 5).every((value) => value === 0) &&
+    (hextets[5] === 0xffff || hextets[5] === 0)
+  )
+    return hextets[6] === 0xa9fe && hextets[7] === 0xa9fe;
+  return hextets.join(':') === [0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254].join(':');
+}
+
+/**
  * Rejects a model-supplied http/https URL whose host is a metadata service, or that resolves to
  * an address the runtime refuses to contact.
+ *
+ * The metadata check runs on the *resolved* addresses too, and with `YUANTU_ALLOW_PRIVATE_NETWORK=1` as well: the
+ * opt-in lifts the private ranges, and a name such as `169.254.169.254.nip.io` must not turn it into a way to reach
+ * the metadata service that the literal-name list above exists to refuse.
  */
 export async function assertPublicUrl(
   url: URL,
@@ -146,24 +170,33 @@ export async function assertPublicUrl(
   assertUrlLiteralAllowed(url);
   const hostname = normalizedHostname(url);
   if (!hostname) throw new Error('Invalid URL host');
-  if (privateNetworkAllowed(env)) return;
-  if (isIP(hostname)) {
-    const reason = addressReason(hostname);
-    if (reason) throw new Error(`Refusing to connect to ${hostname}: it is ${reason}`);
-    return;
-  }
+  const allowPrivate = privateNetworkAllowed(env);
   let addresses: { address: string }[];
-  try {
-    addresses = await lookup(hostname, { all: true });
-  } catch (error) {
-    throw new Error(
-      `Could not resolve ${hostname}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  if (isIP(hostname)) addresses = [{ address: hostname }];
+  else {
+    try {
+      addresses = await lookup(hostname, { all: true });
+    } catch (error) {
+      // With the opt-in, an unresolvable name is the connection's problem to report, as it always was.
+      if (allowPrivate) return;
+      throw new Error(
+        `Could not resolve ${hostname}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!addresses.length && !allowPrivate) throw new Error(`Could not resolve ${hostname}`);
   }
-  if (!addresses.length) throw new Error(`Could not resolve ${hostname}`);
   for (const entry of addresses) {
+    if (metadataAddress(entry.address))
+      throw new Error(
+        `Refusing to fetch ${hostname}: it resolves to a link-local metadata endpoint`,
+      );
+    if (allowPrivate) continue;
     const reason = addressReason(entry.address);
     if (reason)
-      throw new Error(`Refusing to fetch ${hostname}: it resolves to ${reason} (${entry.address})`);
+      throw new Error(
+        hostname === entry.address
+          ? `Refusing to connect to ${hostname}: it is ${reason}`
+          : `Refusing to fetch ${hostname}: it resolves to ${reason} (${entry.address})`,
+      );
   }
 }

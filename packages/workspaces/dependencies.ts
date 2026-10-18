@@ -1,11 +1,7 @@
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
-
-export interface DependencyWarning {
-  code: 'WORKSPACE_DEPENDENCIES_MISSING';
-  message: string;
-  paths: string[];
-}
+import type { DependencyWarning } from '../protocol/workspaces.ts';
+export type { DependencyWarning } from '../protocol/workspaces.ts';
 
 /** Report an absent local Node install; never install packages or reuse a writable parent tree. */
 export async function nodeDependencyWarning(

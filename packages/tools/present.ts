@@ -1,4 +1,4 @@
-import { verifyFileDelivery } from '../core/delivery.ts';
+import { verifyFileDelivery } from './file-delivery.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 

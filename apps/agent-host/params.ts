@@ -3,7 +3,7 @@ import { pendingTaskDeliveries } from '../../packages/core/task-deliveries.ts';
 import type { BackgroundJobSnapshot } from '../../packages/protocol/rpc.ts';
 import type { Task } from '../../packages/protocol/index.ts';
 import type { SessionStore } from '../../packages/storage/sqlite.ts';
-import type { TaskEvent } from '../../packages/core/task-trigger.ts';
+import type { TaskEvent } from '../../packages/protocol/task-trigger.ts';
 import { resolveWorkspace, safeError } from '../shared/runtime.ts';
 import type { TaskScheduler } from './scheduler.ts';
 

@@ -2,7 +2,7 @@ import { open, unlink, realpath } from 'node:fs/promises';
 import type { FileSnapshot } from '../protocol/index.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { Workspace } from './files.ts';
-import { writeAll, atomicWriteFile } from './write-all.ts';
+import { writeAll, atomicWriteFile } from '../platform/write-all.ts';
 
 async function current(workspace: Workspace, snapshot: FileSnapshot): Promise<Buffer | null> {
   let file: string;

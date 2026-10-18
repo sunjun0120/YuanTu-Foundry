@@ -1,4 +1,4 @@
-import type { Task, TaskEventName, TaskTrigger, TaskTriggerSource } from '../protocol/index.ts';
+import type { Task, TaskEventName, TaskTrigger, TaskTriggerSource } from './index.ts';
 import {
   nextCalendarRun,
   latestCalendarRun,

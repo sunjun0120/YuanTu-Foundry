@@ -19,7 +19,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { HookRegistry, ToolRegistry } from '../packages/tools/registry.ts';
 import { foldMessages } from '../packages/storage/events.ts';
 import type { SessionEvent } from '../packages/storage/events.ts';

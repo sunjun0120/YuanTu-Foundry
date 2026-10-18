@@ -6,7 +6,7 @@ import ts from 'typescript';
 import { HookRegistry } from '../packages/tools/hooks.ts';
 import { HookRegistry as LegacyHooks, ToolRegistry } from '../packages/tools/registry.ts';
 import { DeferredApprovalError } from '../packages/protocol/failure.ts';
-import { DeferredApprovalError as LegacyDeferred } from '../packages/core/approval-deferred.ts';
+import { DeferredApprovalError as LegacyDeferred } from '../packages/protocol/failure.ts';
 import { PIPELINE_STAGES } from '../packages/protocol/tool-pipeline.ts';
 import { PIPELINE_STAGES as LegacyStages } from '../packages/tools/pipeline.ts';
 import type { PermissionPolicyView } from '../packages/protocol/permissions.ts';

@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Agent } from '../packages/core/agent.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SCHEMA_VERSION, SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { projectRoot, runCli } from './process-fixture.ts';

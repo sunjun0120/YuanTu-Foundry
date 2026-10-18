@@ -1,10 +1,8 @@
 import path from 'node:path';
 import { resourceEntries, resourceText } from './files.ts';
-export interface SkillInfo {
-  name: string;
-  description: string;
-  path: string;
-}
+import type { SkillInfo } from '../protocol/skills.ts';
+
+export type { SkillInfo } from '../protocol/skills.ts';
 export function discoverSkills(workspace: string): SkillInfo[] {
   const skills = new Map<string, SkillInfo>();
   for (const base of ['.agents/skills', '.yuantu/skills'])

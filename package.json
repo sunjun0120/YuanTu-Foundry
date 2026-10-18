@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "exports": {},
+  "bin": {
+    "yuantu-agent": "dist/apps/cli/main.js"
+  },
   "description": "Independent YuanTu desktop coding agent",
   "engines": {
     "node": ">=24.0.0"
@@ -27,6 +30,7 @@
     "package:macos:x64": "node scripts/prepare-macos-package.mjs --arch=x64 && node scripts/copy-search-assets.mjs --platform=darwin --arch=x64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --x64",
     "package:macos:x64:dir": "node scripts/prepare-macos-package.mjs --arch=x64 && node scripts/copy-search-assets.mjs --platform=darwin --arch=x64 && npm run build && electron-builder --config electron-builder.config.cjs --mac --x64 --dir",
     "host": "node apps/agent-host/main.ts",
+    "dev": "node apps/cli/main.ts",
     "build": "node scripts/clean-paused-builds.mjs && tsc -p tsconfig.build.json && node scripts/copy-sandbox-assets.mjs && node scripts/build-program-runner.mjs && node scripts/build-desktop.mjs",
     "build:program-runner": "node scripts/build-program-runner.mjs",
     "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
@@ -54,9 +58,10 @@
     "docs:check": "node scripts/docs-facts.mjs --check",
     "references:check": "node scripts/check-references.mjs",
     "cycles:check": "node scripts/check-import-cycles.mjs",
+    "layers:check": "node scripts/check-layers.mjs",
     "i18n:check": "node scripts/check-i18n.mjs",
     "smoke:client": "node scripts/run-tests.mjs tests/compiled-client.smoke.mjs",
-    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run cycles:check && npm run i18n:check && npm run typecheck && npm run test:isolation:check && npm test && npm run build && npm run smoke:client",
+    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run cycles:check && npm run layers:check && npm run i18n:check && npm run typecheck && npm run test:isolation:check && npm test && npm run build && npm run smoke:client",
     "check:changed": "node scripts/check-changed.mjs",
     "check:related": "node scripts/check-related.mjs",
     "check:full": "npm run check",
@@ -66,7 +71,6 @@
     "test:isolation:check": "node scripts/check-test-isolation.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.7.0",
     "@lydell/node-pty": "^1.2.0-beta.15",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@napi-rs/keyring": "2.1.1",
@@ -78,7 +82,7 @@
     "marked": "^18.0.13",
     "pdfjs-dist": "^6.3.289",
     "typescript": "^5.9.3",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "xlsx": "file:vendor/xlsx-0.20.3.tgz",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -88,25 +92,5 @@
     "esbuild": "^0.28.2",
     "playwright": "^1.63.0",
     "prettier": "^3.9.6"
-  },
-  "pausedEntrypoints": {
-    "reason": "Desktop-only product scope; implementation and paused tests are retained for restoration.",
-    "exports": {
-      "./sdk": {
-        "types": "./dist/packages/sdk/index.d.ts",
-        "import": "./dist/packages/sdk/index.js"
-      }
-    },
-    "bin": {
-      "yuantu-agent": "dist/apps/cli/main.js"
-    },
-    "scripts": {
-      "dev": "node apps/cli/main.ts",
-      "web": "node scripts/build-web.mjs && node apps/web/main.ts",
-      "smoke:web": "node scripts/run-tests.mjs tests/web.smoke.mjs",
-      "build": "tsc -p tsconfig.build.json && node scripts/copy-sandbox-assets.mjs && node scripts/build-program-runner.mjs && node scripts/build-desktop.mjs && node scripts/build-web.mjs",
-      "smoke:client": "node scripts/run-tests.mjs --concurrency=2 tests/compiled-client.smoke.mjs tests/compiled-sdk.smoke.mjs",
-      "check": "npm run format:check && npm run docs:check && npm run references:check && npm run i18n:check && npm run typecheck && npm test && npm run build && npm run smoke:client && npm run smoke:web"
-    }
   }
 }

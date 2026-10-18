@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { parseArgs } from '../apps/shared/args.ts';
 import { loadHookRegistry } from '../apps/shared/hooks.ts';

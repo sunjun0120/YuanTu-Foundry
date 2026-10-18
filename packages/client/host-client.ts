@@ -4,7 +4,7 @@ import type { AgentEvent, RunResult, ImageAttachment } from '../protocol/index.t
 import { AGENT_EVENT_TYPES } from '../protocol/index.ts';
 import { MAX_INPUT_BYTES } from '../protocol/images.ts';
 import type { HostInfo, HostMethod, HostMethods } from '../protocol/rpc.ts';
-import { redactSecrets } from '../core/errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { stdioTransport, type HostTransport } from './host-transport.ts';
 import { HostRequests, type HostPendingRequest } from './host-requests.ts';
 import {

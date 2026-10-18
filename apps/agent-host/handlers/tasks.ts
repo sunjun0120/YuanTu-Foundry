@@ -1,4 +1,4 @@
-import { DeferredApprovalError } from '../../../packages/core/approval-deferred.ts';
+import { DeferredApprovalError } from '../../../packages/protocol/failure.ts';
 import {
   verifyTaskAcceptance,
   type TaskBaselines,

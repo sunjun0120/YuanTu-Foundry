@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { TaskScheduler, type SchedulerRun } from '../apps/agent-host/scheduler.ts';
 import { recordTaskDelivery, pendingTaskDeliveries } from '../packages/core/task-deliveries.ts';
-import { latestScheduledAt, normalizeTaskTrigger } from '../packages/core/task-trigger.ts';
+import { latestScheduledAt, normalizeTaskTrigger } from '../packages/protocol/task-trigger.ts';
 
 for (const failure of ['start', 'timer', 'wake', 'rearm'] as const) {
   test(`background scheduler survives a database read failure during ${failure}`, () => {

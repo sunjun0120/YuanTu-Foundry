@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { UserInput } from '../protocol/index.ts';
+import type { InputMode, QueuedInput } from '../protocol/inputs.ts';
 
-export type InputMode = 'steer' | 'follow-up';
+export type { InputMode, QueuedInput } from '../protocol/inputs.ts';
 /**
  * The queue is full, and that is not the same thing as "there is no turn to fold into".
  *
@@ -18,13 +19,6 @@ export class RunQueueFull extends Error {
 }
 /** How many inputs one queue holds before it refuses more. */
 export const MAX_QUEUED_INPUTS = 16;
-export interface QueuedInput {
-  id: string;
-  mode: InputMode;
-  prompt: string;
-  imageCount: number;
-  createdAt: string;
-}
 /**
  * A queued input as the queue holds it, which is more than the live event needs.
  *

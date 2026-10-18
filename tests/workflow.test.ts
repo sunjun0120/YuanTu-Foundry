@@ -6,10 +6,10 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { workflowTool, WORKFLOW, WORKFLOW_CEILINGS } from '../packages/core/workflow.ts';
 import type { SubAgentAnswer } from '../packages/core/subagents.ts';
-import { DeferredApprovalError } from '../packages/core/approval-deferred.ts';
+import { DeferredApprovalError } from '../packages/protocol/failure.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type {
   ModelRequest,
   ModelResponse,

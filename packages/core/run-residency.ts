@@ -2,7 +2,7 @@ import type { AgentEventType, Provider, Tool, ToolContext, Usage } from '../prot
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { addUsage } from '../protocol/statistics.ts';
-import { redactSecrets } from './errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import type { SubAgentResidency } from './residency.ts';
 import type { ChildTurns } from './run-subagents.ts';
 import { assignedChildren, type AssignedChild } from './subagent-jobs.ts';

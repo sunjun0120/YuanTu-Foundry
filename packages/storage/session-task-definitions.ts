@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
-import { normalizeTaskDraft } from '../core/task-spec.ts';
-import { normalizeTaskTrigger, oneShot } from '../core/task-trigger.ts';
+import { normalizeTaskDraft } from '../protocol/task-spec.ts';
+import { normalizeTaskTrigger, oneShot } from '../protocol/task-trigger.ts';
 import type { Task, TaskStatus } from '../protocol/index.ts';
 import type { Session, TaskCreate, TaskUpdate } from './session-schema.ts';
 import {

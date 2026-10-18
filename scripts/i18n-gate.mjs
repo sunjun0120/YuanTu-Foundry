@@ -34,7 +34,7 @@
  * `CONTENT` is the same distinction inside a scanned file: the labels the readers put *into* extracted text — the
  * PDF page label and the sheet label — are what the model reads, so they follow the file rather than the interface.
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /** Where the interface's own copy lives: every module here is scanned unless an exception matches it. */
@@ -93,6 +93,9 @@ const CONTENT = [/\u7b2c[^\u9875]{0,16}\u9875/, /\u5de5\u4f5c\u8868\uff1a/];
  * rather than about this gate, so the reason says so instead of pretending the question is settled.
  */
 const CORE_DIR = 'packages/core';
+// Kernel modules that moved below the kernel: the task-draft defaults went to `packages/protocol` with the validator
+// that stores them, and the scan follows them there rather than letting the move take them out of review.
+const CORE_MOVED = ['packages/protocol/task-spec.ts'];
 export const CORE_ALLOWED = [
   {
     file: 'packages/core/agent.ts',
@@ -129,22 +132,22 @@ export const CORE_ALLOWED = [
     why: 'a pattern rather than a message: it strips a \u6807\u9898:/title: prefix from what the model returned, so it matches text instead of producing it. The scan is by line, not by literal, which is why a regular expression has to be recorded here like a string — and why measuring with a string-only extractor missed this one and the gate did not',
   },
   {
-    file: 'packages/core/task-spec.ts',
+    file: 'packages/protocol/task-spec.ts',
     match: /\u68c0\u67e5\u76f8\u5173\u6587\u4ef6\uff0c\u786e\u8ba4\u5b9e\u73b0\u8303\u56f4/,
     why: 'content rather than copy: a default step of a draft the user then edits and owns, like a session title, which must not be rewritten under them at render time (see desktop-app-3)',
   },
   {
-    file: 'packages/core/task-spec.ts',
+    file: 'packages/protocol/task-spec.ts',
     match: /\u6309\u7167\u9700\u6c42\u5b8c\u6210\u4fee\u6539/,
     why: 'content: the second default step of the same draft',
   },
   {
-    file: 'packages/core/task-spec.ts',
+    file: 'packages/protocol/task-spec.ts',
     match: /\u9a8c\u8bc1\u7ed3\u679c\u5e76\u62a5\u544a\u8bc1\u636e/,
     why: 'content: the third default step of the same draft',
   },
   {
-    file: 'packages/core/task-spec.ts',
+    file: 'packages/protocol/task-spec.ts',
     match: /\u4eba\u5de5\u68c0\u67e5\u7ed3\u679c\u7b26\u5408\u4efb\u52a1\u9700\u6c42/,
     why: 'content: the default acceptance line of the same draft',
   },
@@ -291,6 +294,15 @@ export async function scanI18n(root) {
    * `tests/i18n-gate.test.ts` is what proves these entries still match something real.
    */
   const coreFiles = await modulesUnder(root, CORE_DIR);
+  if (coreFiles.length)
+    for (const file of CORE_MOVED)
+      if (
+        await access(path.join(root, file)).then(
+          () => true,
+          () => false,
+        )
+      )
+        coreFiles.push(file);
   if (coreFiles.length) {
     const allowed = new Set();
     for (const file of coreFiles) {
@@ -333,7 +345,7 @@ export async function scanI18n(root) {
       if (allowed.has(entry)) continue;
       problems.push(
         `scripts/i18n-gate.mjs: the CORE_ALLOWED entry for ${entry.file} matching ${String(entry.match)} ` +
-          'matches nothing under packages/core, so the reason recorded for it now covers nothing',
+          'matches nothing under the scanned kernel modules, so the reason recorded for it now covers nothing',
       );
     }
   }

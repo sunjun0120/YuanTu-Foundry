@@ -31,10 +31,38 @@ try {
         $document = $app.Documents.Open([string]$inputData.sourcePath, $false, $readOnly, $false)
         if ($inputData.operation -eq 'edit') {
           foreach ($replacement in @($inputData.replacements)) {
-            $find = $document.Content.Find
-            $found = $find.Execute([string]$replacement.from, $false, $false, $false,
-              $false, $false, $true, 1, $false, [string]$replacement.to, 2)
-            if (-not $found) { throw "Word text not found: $($replacement.from)" }
+            $from = [string]$replacement.from
+            $to = [string]$replacement.to
+            # Find reads ^ as a special-character code even without wildcards; ^^ is a literal caret.
+            if ($from.Length -le 255 -and $to.Length -le 255) {
+              $find = $document.Content.Find
+              $found = $find.Execute($from.Replace('^', '^^'), $false, $false, $false,
+                $false, $false, $true, 1, $false, $to.Replace('^', '^^'), 2)
+              if (-not $found) { throw "Word text not found: $from" }
+              continue
+            }
+            # Find and Replace refuse text over 255 characters, so a longer replacement locates each match by its
+            # first 255 characters, confirms the whole text, and replaces it through the range.
+            $prefix = $from.Substring(0, [Math]::Min(255, $from.Length)).Replace('^', '^^')
+            $count = 0
+            $search = $document.Content
+            while ($true) {
+              $found = $search.Find.Execute($prefix, $false, $false, $false, $false, $false, $true, 0)
+              if (-not $found) { break }
+              $start = $search.Start
+              $candidate = $document.Range($start, $start + $from.Length)
+              if ($candidate.Text -eq $from) {
+                $candidate.Text = $to
+                $count++
+                $next = $start + $to.Length
+              } else {
+                $next = $start + 1
+              }
+              $end = $document.Content.End
+              if ($next -ge $end) { break }
+              $search = $document.Range($next, $end)
+            }
+            if ($count -eq 0) { throw "Word text not found: $from" }
           }
           $document.SaveAs2([string]$inputData.outputPath, 16)
         } elseif ($inputData.operation -eq 'preview') {

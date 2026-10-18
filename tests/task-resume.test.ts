@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { Provider, TaskTrigger } from '../packages/protocol/index.ts';
 import { TaskScheduler } from '../apps/agent-host/scheduler.ts';
-import { dueTasks } from '../packages/core/task-trigger.ts';
+import { dueTasks } from '../packages/protocol/task-trigger.ts';
 
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-resume-'));

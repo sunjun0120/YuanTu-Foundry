@@ -467,17 +467,24 @@ test('migration failure is recoverable from its pre-migration snapshot', (t) => 
   const db = new DatabaseSync(file);
   db.exec(`PRAGMA user_version=${SCHEMA_VERSION - 1}`);
   db.close();
+  // The steps are free functions now, so the failure is injected through the list the class runs them from.
   const prototype = SessionMigrations.prototype as unknown as {
-    migrateMachineTitledSessions: (version: number) => void;
+    migrations: () => { from: number; upTo: number; run(version: number): void }[];
   };
-  const migrate = prototype.migrateMachineTitledSessions;
-  prototype.migrateMachineTitledSessions = () => {
-    throw new Error('simulated migration failure');
-  };
+  const migrations = prototype.migrations;
+  prototype.migrations = () => [
+    {
+      from: SCHEMA_VERSION - 1,
+      upTo: SCHEMA_VERSION,
+      run: () => {
+        throw new Error('simulated migration failure');
+      },
+    },
+  ];
   try {
     assert.throws(() => new SessionStore(file), /simulated migration failure/);
   } finally {
-    prototype.migrateMachineTitledSessions = migrate;
+    prototype.migrations = migrations;
   }
   const snapshot = readdirSync(`${file}.backups`).find((name) => name.endsWith('.sqlite'))!;
   restoreDatabase(file, path.join(`${file}.backups`, snapshot), SESSION_DATABASE_POLICY);

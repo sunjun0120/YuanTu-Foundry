@@ -2,7 +2,7 @@ import { Ajv } from 'ajv';
 import type { SubAgentRole, SubAgentSummaryReport } from '../protocol/index.ts';
 import type { WorkspaceMode } from '../protocol/workspaces.ts';
 import { resolveWorkspaceKind } from '../workspaces/manager.ts';
-import { redactSecrets } from './errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import type { SubAgentTask } from './subagent-providers.ts';
 import type { AdmittedTask, SubAgentResult } from './subagents.ts';
 

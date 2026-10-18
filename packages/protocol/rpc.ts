@@ -1,11 +1,8 @@
 import type { Message, RunResult, SessionInfo, UserInput } from './index.ts';
-import type { PermissionPolicySource } from '../core/permissions.ts';
-import type { InputMode, QueuedInput } from '../core/run-queue.ts';
-import type { SkillInfo } from '../resources/skills.ts';
-// Type-only, and the seam is the owner of this vocabulary: `sandbox-provider.ts` imports nothing from here, so
-// this is a name being borrowed rather than a dependency being taken.
-import type { SandboxMode } from '../tools/sandbox-provider.ts';
-import type { FileEffect, NetworkEffect } from './execution.ts';
+import type { PermissionPolicySource } from './permissions.ts';
+import type { InputMode, QueuedInput } from './inputs.ts';
+import type { SkillInfo } from './skills.ts';
+import type { ExecutionMode as SandboxMode, FileEffect, NetworkEffect } from './execution.ts';
 /** Optional policy context selects a live owned session's permissions without assigning the orphan to it. */
 type WorkspaceMaintenanceParams =
   | { sessionId: string; bindingId?: never; policySessionId?: never }
@@ -118,15 +115,15 @@ export interface HostMethods {
   };
   'background.state': {
     params: { sessionId: string };
-    result: import('../core/background-deliveries.ts').BackgroundState;
+    result: import('./background.ts').BackgroundState;
   };
   'background.policy': {
     params: {
       sessionId: string;
-      policy: import('../core/background-deliveries.ts').BackgroundPolicyInput;
+      policy: import('./background.ts').BackgroundPolicyInput;
       reset?: boolean;
     };
-    result: import('../core/background-deliveries.ts').BackgroundState;
+    result: import('./background.ts').BackgroundState;
   };
   'background.poll': {
     params: { sessionId: string; id: string; cursor?: number; waitMs?: number };
@@ -142,7 +139,7 @@ export interface HostMethods {
   };
   'changes.list': {
     params: { sessionId: string };
-    result: import('../storage/sqlite.ts').StoredFileChange[];
+    result: import('./file-changes.ts').StoredFileChange[];
   };
   'changes.undo': { params: { sessionId: string; id: string }; result: { undone: true } };
   /**
@@ -159,14 +156,14 @@ export interface HostMethods {
       binding: import('./workspaces.ts').WorkspaceBinding;
       snapshot: import('./workspaces.ts').WorkspaceSnapshot | null;
       problems: string[];
-      dependencyWarnings?: import('../workspaces/dependencies.ts').DependencyWarning[];
+      dependencyWarnings?: import('./workspaces.ts').DependencyWarning[];
     };
   };
   /** What this session's children produced, with the per-file detail an import preview needs. */
   'workspace.results': {
     params: { sessionId: string };
     result: (import('./workspaces.ts').WorkspaceResult & {
-      files: import('../workspaces/results.ts').WorkspaceResultFile[];
+      files: import('./workspaces.ts').WorkspaceResultFile[];
       evidence: { tool: string; at: string }[];
     })[];
   };

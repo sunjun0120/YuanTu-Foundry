@@ -19,7 +19,7 @@ import type {
 } from '../packages/core/subagent-providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, ModelRequest, Provider } from '../packages/protocol/index.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { SubAgentCoordinator, resolveSubAgentOptions } from '../packages/core/subagents.ts';

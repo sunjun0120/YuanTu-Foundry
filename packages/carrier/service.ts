@@ -6,11 +6,11 @@ import {
   type StatisticsDelta,
   type SubAgentDelta,
 } from '../client/session-controller.ts';
-import { redactSecrets } from '../core/errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { readConfig } from '../providers/config.ts';
 import type { SessionInfo } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
-import { initialTaskDraft, normalizeTaskDraft } from '../core/task-spec.ts';
+import { initialTaskDraft, normalizeTaskDraft } from '../protocol/task-spec.ts';
 import type { PermissionPolicySource } from '../core/permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';

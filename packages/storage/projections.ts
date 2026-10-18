@@ -16,7 +16,7 @@ import {
   normalizeStatistics,
 } from '../protocol/statistics.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
-import type { Disposer } from '../tools/dispatch.ts';
+import type { Disposer } from '../protocol/disposer.ts';
 import { foldMessages } from './events.ts';
 import type { SessionEvent } from './events.ts';
 

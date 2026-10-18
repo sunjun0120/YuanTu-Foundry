@@ -7,7 +7,7 @@ import type {
   TaskTrigger,
 } from '../../packages/protocol/index.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
-import { normalizeTaskTrigger, initialRunAt } from '../../packages/core/task-trigger.ts';
+import { normalizeTaskTrigger, initialRunAt } from '../../packages/protocol/task-trigger.ts';
 import { locale } from './i18n.ts';
 const tr = (zh: string, en: string) => (locale() === 'zh-CN' ? zh : en);
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') {

@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { fileTools, Workspace } from '../packages/tools/files.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import {

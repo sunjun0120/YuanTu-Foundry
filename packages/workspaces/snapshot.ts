@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceFailure, type WorkspaceSnapshot } from '../protocol/workspaces.ts';
-import { gitPath, isUnsafeGitPath, samePath } from '../core/workspace-paths.ts';
+import { gitPath, isUnsafeGitPath, samePath } from '../platform/workspace-paths.ts';
 import {
   repositoryIdentity,
   repositoryReadiness,

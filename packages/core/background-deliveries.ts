@@ -3,6 +3,18 @@ import type { SessionStore } from '../storage/sqlite.ts';
 import { PermissionPolicy, type PermissionPolicySource } from './permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
+import type {
+  BackgroundPolicy,
+  BackgroundDelivery,
+  BackgroundState,
+  BackgroundPolicyInput,
+} from '../protocol/background.ts';
+export type {
+  BackgroundPolicy,
+  BackgroundDelivery,
+  BackgroundState,
+  BackgroundPolicyInput,
+} from '../protocol/background.ts';
 
 export interface BackgroundAuthority {
   sandboxMode: SandboxMode;
@@ -45,34 +57,6 @@ export function backgroundAuthority(
     return;
   }
 }
-
-export interface BackgroundPolicy {
-  mode: 'notify' | 'auto';
-  paused: boolean;
-  maxWakeups: number;
-  maxRunMs: number;
-  epoch: string;
-  used: number;
-}
-export interface BackgroundDelivery {
-  id: string;
-  kind: 'command' | 'subagent';
-  producerId: string;
-  childSessionId?: string;
-  status: string;
-  cleanupUnknown?: boolean;
-  state: 'pending' | 'admitted' | 'processed';
-  reason?: string;
-  at: string;
-}
-export interface BackgroundState {
-  policy: BackgroundPolicy;
-  deliveries: BackgroundDelivery[];
-}
-export type BackgroundPolicyInput = Pick<
-  BackgroundPolicy,
-  'mode' | 'paused' | 'maxWakeups' | 'maxRunMs'
->;
 
 export function normalizeBackgroundPolicy(input: unknown): BackgroundPolicyInput {
   if (!input || typeof input !== 'object' || Array.isArray(input))

@@ -861,3 +861,24 @@ test('a chunk boundary never splits a character outside the BMP', async (t) => {
     db.close();
   }
 });
+
+test('a document is cut into as many chunks as it needs and no trailing duplicate', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-chunks-'));
+  const store = new KnowledgeStore(path.join(root, 'knowledge.sqlite'));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  // Windows are 1600 units wide and start every 1400: exactly one window used to be followed by a second that
+  // only repeated its last 200 units.
+  for (const [length, expected] of [
+    [1600, 1],
+    [1601, 2],
+    [3000, 2],
+    [3001, 3],
+  ] as const) {
+    const name = `doc-${length}.md`;
+    await writeFile(path.join(root, name), 'x'.repeat(length));
+    assert.equal(store.pinDocument(root, name).chunks, expected, `${length} characters`);
+  }
+});

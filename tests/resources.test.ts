@@ -4,8 +4,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes } from 'node:f
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { discoverSkills, expandSkill } from '../packages/resources/skills.ts';
-import { createTools } from '../packages/tools/index.ts';
-import { loadInstructions } from '../packages/resources/instructions.ts';
+import { createTools } from '../packages/catalog/index.ts';
+import { loadInstructions } from '../packages/tools/instructions.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import {

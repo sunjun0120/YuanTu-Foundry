@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { runBatchCase, summarizePairs } from './performance-cases.ts';
 import { createProvider, readConfig } from '../packages/providers/index.ts';
-import { redactSecrets } from '../packages/core/errors.ts';
+import { redactSecrets } from '../packages/platform/redact.ts';
 
 const args = process.argv.slice(2);
 const live = args.includes('--live');

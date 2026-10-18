@@ -4,9 +4,6 @@ const PRODUCT_SCOPE_LABELS: Record<keyof typeof PRODUCT_SCOPE, string> = {
   mcpManagement: 'MCP management',
   backups: 'backup management',
   cli: 'CLI',
-  web: 'web',
-  acp: 'ACP',
-  sdk: 'SDK',
 };
 
 export function pausedSkip(surface: keyof typeof PRODUCT_SCOPE): false | string {

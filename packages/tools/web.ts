@@ -156,7 +156,40 @@ async function readBody(
   } finally {
     reader.releaseLock();
   }
-  return { body: Buffer.concat(chunks).toString('utf8'), truncated };
+  return {
+    body: decodeBody(Buffer.concat(chunks), response.headers.get('content-type'), truncated),
+    truncated,
+  };
+}
+
+/** The charset a document declares: a byte-order mark first, then the header, then an HTML `<meta>` in its head. */
+export function declaredCharset(bytes: Buffer, contentType: string | null): string | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'utf-8';
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+  const header = /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(contentType ?? '')?.[1];
+  if (header) return header;
+  const head = bytes.subarray(0, 4096).toString('latin1');
+  return /<meta[^>]+charset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1];
+}
+
+/**
+ * The body as text, in the encoding it declares.
+ *
+ * Decoding everything as UTF-8 turned every GBK, Big5 or Shift_JIS page into replacement characters — a large
+ * share of Chinese government, bank and older corporate sites. An unknown or undecodable label falls back to UTF-8.
+ * A body cut at the byte limit may end inside a character; that one partial character is dropped rather than shown
+ * as U+FFFD.
+ */
+export function decodeBody(bytes: Buffer, contentType: string | null, truncated = false): string {
+  let decoder: TextDecoder;
+  try {
+    decoder = new TextDecoder(declaredCharset(bytes, contentType) ?? 'utf-8');
+  } catch {
+    decoder = new TextDecoder('utf-8');
+  }
+  // `stream: true` holds back an unfinished trailing character instead of emitting U+FFFD for it.
+  return decoder.decode(bytes, { stream: truncated });
 }
 async function requestText(
   url: string | URL,

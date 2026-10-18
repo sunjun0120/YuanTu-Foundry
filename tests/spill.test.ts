@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry, MAX_TOOL_OUTPUT, bounded } from '../packages/tools/registry.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { SPILL_DIRECTORY, spillOutput, spillResult } from '../packages/tools/spill.ts';
 import { Agent } from '../packages/core/agent.ts';
 import type { Message, ModelResponse, ToolContext } from '../packages/protocol/index.ts';

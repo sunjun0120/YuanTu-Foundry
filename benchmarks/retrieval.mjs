@@ -232,7 +232,7 @@ async function measureViaService(root, entry, backendName) {
  * a tree that predates `packages/search` entirely.
  */
 async function measureViaTool(root, entry) {
-  const { createTools } = await import('../packages/tools/index.ts');
+  const { createTools } = await import('../packages/catalog/index.ts');
   const tools = createTools(root);
   try {
     const context = { signal: new AbortController().signal, approve: async () => true };

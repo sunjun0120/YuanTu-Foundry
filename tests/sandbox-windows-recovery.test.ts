@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { atomicWriteFile } from '../packages/tools/write-all.ts';
+import { atomicWriteFile } from '../packages/platform/write-all.ts';
 import { workspaceSandboxSid } from '../packages/tools/sandbox-windows.ts';
 import { toolEnvironment } from '../packages/tools/environment.ts';
 

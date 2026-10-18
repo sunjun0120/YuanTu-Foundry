@@ -1,3 +1,4 @@
+import type { Disposer } from '../protocol/disposer.ts';
 /**
  * Dispatch modes for extension seams.
  *
@@ -25,7 +26,7 @@
  * `invoke` is supplied by the caller and owns cancellation and the per-seam timeout budget, so this
  * module stays free of policy about how long an extension may take.
  */
-export type Disposer = () => void;
+export type { Disposer } from '../protocol/disposer.ts';
 /**
  * An ordered listener list whose every registration returns its own removal.
  *

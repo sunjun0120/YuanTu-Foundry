@@ -34,8 +34,8 @@ import type { HostMethods } from '../protocol/rpc.ts';
 import type { Language } from '../protocol/language.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import { parseSandboxMode } from '../tools/sandbox-mode.ts';
-import { normalizeTaskDraft } from '../core/task-spec.ts';
-import { normalizeTaskTrigger } from '../core/task-trigger.ts';
+import { normalizeTaskDraft } from '../protocol/task-spec.ts';
+import { normalizeTaskTrigger } from '../protocol/task-trigger.ts';
 import { validateUserInput } from '../protocol/images.ts';
 
 /**

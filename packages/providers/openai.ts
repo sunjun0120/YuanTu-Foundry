@@ -340,6 +340,10 @@ export class OpenAIProvider implements Provider {
         }
         toolCalls.push({ id: call.id, name: call.name, arguments: args });
       }
+    // Several OpenAI-compatible servers (Ollama, some vLLM and gateway builds) finish a turn that called tools with
+    // `stop`. The calls are complete and parsed, so the turn is a tool turn; the reverse — `tool_calls` with no
+    // call — is still refused, because there is nothing to run.
+    if (reason === 'stop' && toolCalls.length) reason = 'tool_calls';
     if ((reason === 'tool_calls') !== Boolean(toolCalls.length) && reason !== 'length')
       throw new Error('Model finish reason conflicts with tool calls');
     return {

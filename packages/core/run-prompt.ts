@@ -2,7 +2,7 @@ import type { AgentOptions } from './agent.ts';
 import type { Plan, TaskAttempt } from '../protocol/index.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { AGENT_SYSTEM_PROMPT } from './agent-notices.ts';
-import { redactSecrets } from './errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { definePromptSection, type PromptSection } from './prompt-sections.ts';
 import {
   settlementNoticeText,

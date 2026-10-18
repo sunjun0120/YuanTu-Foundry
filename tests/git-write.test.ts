@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Approval, ToolContext } from '../packages/protocol/index.ts';
 import { gitCommandLine } from '../packages/tools/git.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { spillOutput } from '../packages/tools/spill.ts';
 
 const execFileAsync = promisify(execFile);

@@ -220,7 +220,7 @@ taskkill.exe /PID $p.Id /T /F; $LASTEXITCODE   # 128
 - `packages/knowledge/store.ts:100`（`YUANTU_KNOWLEDGE_DB`）
 - `packages/knowledge/memory.ts:40`（`YUANTU_MEMORY_DIR`）
 - `packages/office/preview.ts:24`（`YUANTU_LIBREOFFICE_PATH`）
-- `packages/tools/index.ts:103`（`YUANTU_LSP_AFTER_EDIT`）、`:112`（`YUANTU_SEARCH_RG`）
+- `packages/catalog/index.ts:153`（`YUANTU_LSP_AFTER_EDIT`）、`:162`（`YUANTU_SEARCH_RG`）
 
 这些名字都在 `packages/protocol/settings.ts` 的 `ENVIRONMENT` 表里登记，但读取时没有走统一的 `parseSetting()`（类型/范围校验）。
 

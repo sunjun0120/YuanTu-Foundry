@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { SESSION_EVENT_TYPES } from '../packages/storage/events.ts';

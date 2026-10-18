@@ -23,7 +23,7 @@ import {
   toolArgumentPreview,
 } from './subagents.ts';
 import { RunQueueFull } from './run-queue.ts';
-import { redactSecrets } from './errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 import { nodeDependencyWarning } from '../workspaces/dependencies.ts';
 
 export interface ChildTurnOptions {

@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { todosProjection } from '../packages/storage/projections.ts';
 import { SESSION_EVENT_TYPES } from '../packages/storage/events.ts';
 import { describeTodoChange } from '../packages/protocol/todos.ts';

@@ -1,5 +1,5 @@
 import type { Provider, Task, Usage } from '../protocol/index.ts';
-import { normalizeTaskDraft, type TaskDraft } from './task-spec.ts';
+import { normalizeTaskDraft, type TaskDraft } from '../protocol/task-spec.ts';
 export async function proposeTask(
   provider: Provider,
   task: Task,

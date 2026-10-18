@@ -23,7 +23,7 @@ import {
 import { isMachineContext, isRuntimeContext } from '../packages/protocol/context.ts';
 import { resetRepoMapCache } from '../packages/tools/repo-map.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { capacityResolver, modelInfoFor } from '../apps/shared/runtime.ts';
 import { parseArgs } from '../apps/shared/args.ts';
 import type { Message, ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';

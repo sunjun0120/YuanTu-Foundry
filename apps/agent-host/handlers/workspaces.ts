@@ -4,7 +4,7 @@ import { WorkspaceResultsService } from '../../../packages/workspaces/results.ts
 import type { Handler } from '../dispatch.ts';
 import type { HostContext } from '../state.ts';
 import { WorkspaceFailure, type WorkspaceBinding } from '../../../packages/protocol/workspaces.ts';
-import { samePath } from '../../../packages/core/workspace-paths.ts';
+import { samePath } from '../../../packages/platform/workspace-paths.ts';
 import { nodeDependencyWarning } from '../../../packages/workspaces/dependencies.ts';
 import { ToolRegistry } from '../../../packages/tools/registry.ts';
 import { workspaceResultTools } from '../../../packages/tools/workspaces.ts';

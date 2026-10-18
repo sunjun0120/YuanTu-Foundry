@@ -5,7 +5,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { AnthropicProvider } from '../packages/providers/anthropic.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';

@@ -11,7 +11,7 @@ import type {
 } from '../protocol/index.ts';
 import type { Workspace } from './files.ts';
 import type { MutationGates } from './fs-observation.ts';
-import { writeAll, atomicWriteFile } from './write-all.ts';
+import { writeAll, atomicWriteFile } from '../platform/write-all.ts';
 
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_GROUP_BYTES = 10_000_000;

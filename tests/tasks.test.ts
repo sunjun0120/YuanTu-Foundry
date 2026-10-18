@@ -4,7 +4,7 @@ import {
   normalizeTaskDraft,
   initialTaskDraft,
   validateAcceptance,
-} from '../packages/core/task-spec.ts';
+} from '../packages/protocol/task-spec.ts';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,9 +24,9 @@ import {
   normalizeTaskTrigger,
   triggerSource,
   latestScheduledAt,
-} from '../packages/core/task-trigger.ts';
+} from '../packages/protocol/task-trigger.ts';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
-import { nextCalendarRun, latestCalendarRun } from '../packages/core/calendar.ts';
+import { nextCalendarRun, latestCalendarRun } from '../packages/protocol/calendar.ts';
 
 /** Han characters, for the cases that assert which language a generated string is in. */
 const HAN = /\p{Script=Han}/u;

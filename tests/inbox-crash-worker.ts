@@ -1,6 +1,6 @@
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse } from '../packages/protocol/index.ts';
 /**
  * A process that dies holding a queued follow-up.

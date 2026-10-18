@@ -1,5 +1,5 @@
 import { carrierIssue, type CarrierIssue } from '../../packages/carrier/errors.ts';
-import { redactSecrets } from '../../packages/core/errors.ts';
+import { redactSecrets } from '../../packages/platform/redact.ts';
 import { mainText, translate } from './i18n.ts';
 import type { UiLanguage } from './ui-settings.ts';
 import type { DesktopReply } from './contract.ts';

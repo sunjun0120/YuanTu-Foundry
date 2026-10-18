@@ -20,7 +20,7 @@ import {
 } from '../packages/core/subagent-providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type {
   AgentEvent,
   ModelRequest,

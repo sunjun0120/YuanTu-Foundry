@@ -20,7 +20,7 @@ import { contextMessageSize } from '../packages/protocol/images.ts';
 import { validateImages } from '../packages/protocol/images.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { fileTools } from '../packages/tools/files.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type {
   ModelRequest,
   ModelResponse,

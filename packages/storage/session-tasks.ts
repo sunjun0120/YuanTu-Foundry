@@ -24,6 +24,7 @@ import {
   assertTaskTransition,
   completedStepIndexesFor,
   deadOwner,
+  primeRunOwners,
   nextTaskTimestamp,
   resumeSteps,
   sameApprovalDescription,
@@ -36,7 +37,7 @@ import {
   validateSteps,
   validateTaskText,
 } from './session-schema.ts';
-import { misfirePolicy, nextRunAt as nextRunAtValue, oneShot } from '../core/task-trigger.ts';
+import { misfirePolicy, nextRunAt as nextRunAtValue, oneShot } from '../protocol/task-trigger.ts';
 import type { SessionEventType } from './events.ts';
 
 /**
@@ -778,6 +779,7 @@ export class TaskJournal {
     return row?.baselines ? (JSON.parse(String(row.baselines)) as Record<string, unknown>) : {};
   }
   recoverInterruptedTasks(workspace?: string): number {
+    primeRunOwners(this.port.db);
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(
@@ -844,6 +846,7 @@ export class TaskJournal {
    * split because only this one knows both the child and the parent that has to hear about it.
    */
   reconcileChildRuns(workspace?: string): number {
+    primeRunOwners(this.port.db);
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(

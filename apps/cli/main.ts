@@ -57,7 +57,7 @@ import {
   resolveRunLimits,
   settingShape,
 } from '../../packages/protocol/settings.ts';
-import { loadInstructions } from '../../packages/resources/instructions.ts';
+import { loadInstructions } from '../../packages/tools/instructions.ts';
 import { discoverSkills } from '../../packages/resources/skills.ts';
 import { extensionTools } from '../../packages/resources/extensions.ts';
 import { loadHookRegistry } from '../shared/hooks.ts';

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { installHookBridge } from '../packages/resources/hook-bridge.ts';
 import type { HookDeclaration } from '../packages/resources/hook-config.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import {
   checkSandboxAvailability,
   cleanupSandbox,

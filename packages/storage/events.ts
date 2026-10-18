@@ -1,5 +1,5 @@
 import type { Message } from '../protocol/index.ts';
-import type { InputMode } from '../core/run-queue.ts';
+import type { InputMode } from '../protocol/inputs.ts';
 
 /**
  * The durable session log.

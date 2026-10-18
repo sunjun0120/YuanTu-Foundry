@@ -12,7 +12,7 @@ import {
   workspaceBindingFrom,
   workspacePath,
 } from '../packages/protocol/workspaces.ts';
-import { isWithin, samePath } from '../packages/core/workspace-paths.ts';
+import { isWithin, samePath } from '../packages/platform/workspace-paths.ts';
 
 /**
  * The durable half of workspace isolation.

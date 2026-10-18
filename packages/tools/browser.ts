@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { FileChange, Tool, ToolResult } from '../protocol/index.ts';
 import { Workspace } from './files.ts';
 import { bounded } from './registry.ts';
-import { atomicWriteFile } from './write-all.ts';
+import { atomicWriteFile } from '../platform/write-all.ts';
 import { validateFetchUrl } from './web.ts';
 import { assertPublicUrl, normalizedHostname } from './network-guard.ts';
 

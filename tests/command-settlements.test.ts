@@ -18,7 +18,7 @@ import { commandJournal, commandRecords } from '../packages/core/command-jobs.ts
 import { commandNotices, commandNoticeText } from '../packages/core/settlements.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { BackgroundCommands } from '../packages/tools/background.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type {
   ModelRequest,
   ModelResponse,

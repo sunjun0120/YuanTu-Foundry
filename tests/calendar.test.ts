@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { nextCalendarRun, normalizeTimeZone, wallClockInstant } from '../packages/core/calendar.ts';
+import {
+  nextCalendarRun,
+  normalizeTimeZone,
+  wallClockInstant,
+} from '../packages/protocol/calendar.ts';
 
 test('explicit calendar zones ignore host TZ and weekly calendars advance on local weekdays', () => {
   const after = new Date('2026-10-05T01:00:00Z');
@@ -52,7 +56,7 @@ test('half-hour transitions and a removed calendar day keep the same missing/fol
 });
 
 test('explicit daily zones give identical answers in differently configured Host processes', () => {
-  const module = pathToFileURL(path.resolve('packages/core/task-trigger.ts')).href;
+  const module = pathToFileURL(path.resolve('packages/protocol/task-trigger.ts')).href;
   const source = `import {nextRunAt} from ${JSON.stringify(module)};console.log(JSON.stringify({explicit:nextRunAt({kind:'daily',enabled:true,atMinutes:540,timeZone:'Asia/Shanghai'},new Date('2026-10-05T01:00:00Z')),legacy:nextRunAt({kind:'daily',enabled:true,atMinutes:540},new Date('2026-10-05T01:00:00Z'))}));`;
   const run = (zone: string) =>
     JSON.parse(

@@ -1847,3 +1847,39 @@ test('OpenAI accepts an id repeated as empty or unchanged, and still refuses a s
   }
   await assert.rejects(run(['call_q', 'call_other']), /Duplicate tool ID fragment/);
 });
+test('OpenAI-compatible servers that finish a tool turn with stop and end without a blank line still work', async (t) => {
+  // Ollama and some vLLM/gateway builds report `stop` for a turn that called tools, and some gateways close the
+  // stream after `data: [DONE]\n` with no separator. Each used to fail the answer at its very end.
+  const url = await httpFixture(t, (_body, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const value of [
+      {
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'read_file', arguments: '{"path":"a.txt"}' },
+                },
+              ],
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      },
+      { choices: [], usage: { prompt_tokens: 3, completion_tokens: 2 } },
+    ])
+      res.write(`data: ${JSON.stringify(value)}\n\n`);
+    res.end('data: [DONE]\n');
+  });
+  const provider = createProvider({ protocol: 'openai', apiKey: 'k', model: 'm', baseUrl: url });
+  const result = await provider.complete(request4());
+  assert.equal(result.finishReason, 'tool_calls');
+  assert.deepEqual(result.toolCalls, [
+    { id: 'call_1', name: 'read_file', arguments: { path: 'a.txt' } },
+  ]);
+});

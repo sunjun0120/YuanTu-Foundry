@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
-import { Workspace } from '../tools/files.ts';
+import { Workspace } from './files.ts';
 import { VerificationAssertionError, VerificationDefinitionError } from './verification-errors.ts';
 
 export const deliveryFormats = [

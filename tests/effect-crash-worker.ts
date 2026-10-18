@@ -1,5 +1,5 @@
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 const [db, root] = process.argv.slice(2);
 if (!db || !root) throw new Error('Expected db and workspace');
 const store = new SessionStore(db);

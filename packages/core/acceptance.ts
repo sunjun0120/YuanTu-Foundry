@@ -1,4 +1,4 @@
-import { verifyFileDelivery, type FileDeliverySpec } from './delivery.ts';
+import { verifyFileDelivery, type FileDeliverySpec } from '../tools/file-delivery.ts';
 import {
   prepareSandbox,
   stopSandbox,
@@ -10,10 +10,14 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { COMPLETION_LIMITS } from '../protocol/completion.ts';
 import type { CheckFailureReason } from '../protocol/index.ts';
 import type { Approver } from '../protocol/index.ts';
-import { DeferredApprovalError } from './approval-deferred.ts';
-import { VerificationAssertionError, VerificationDefinitionError } from './verification-errors.ts';
+import { DeferredApprovalError } from '../protocol/failure.ts';
+import {
+  VerificationAssertionError,
+  VerificationDefinitionError,
+} from '../tools/verification-errors.ts';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_OUTPUT_BYTES = 24_000;
@@ -27,7 +31,7 @@ const MAX_TIMEOUT_MS = 300_000;
  * task be persisted that every single run then failed with "Acceptance checks exceed limit of 64" — a failure
  * that blames the work when the definition is what is wrong.
  */
-export const MAX_CHECKS = 64;
+export const MAX_CHECKS = COMPLETION_LIMITS.acceptanceChecks;
 const DEFAULT_FILE_BYTES = 1_000_000;
 const MAX_FILE_BYTES = 4_000_000;
 const MAX_SNAPSHOT_ENTRIES = 2_000;

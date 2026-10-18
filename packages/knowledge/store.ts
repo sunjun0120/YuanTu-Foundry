@@ -307,6 +307,8 @@ export class KnowledgeStore {
           .prepare('INSERT INTO knowledge_fts(rowid,title,content) VALUES(?,?,?)')
           .run(lastInsertRowid, ftsIndexText(file), ftsIndexText(chunk));
         chunks++;
+        // A chunk that reached the end leaves nothing new: the next window would only repeat its overlap.
+        if (offset + DOCUMENT_CHUNK_CHARS >= content.length) break;
       }
       return { path: file, updatedAt: now, chunks };
     });

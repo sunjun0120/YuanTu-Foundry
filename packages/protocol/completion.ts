@@ -127,7 +127,7 @@ export const COMPLETION_LIMITS = {
   /** Paths one `completion_scope` call may add, and the total a contract may accumulate. */
   affectedPathsPerCall: 64,
   affectedPaths: 256,
-  /** The verifier's own ceiling for executable checks; kept in step with `MAX_CHECKS` in the core verifier. */
+  /** The verifier's own ceiling for executable checks; the single source for `MAX_CHECKS` in the core verifier and the task validator. */
   acceptanceChecks: 64,
 } as const;
 

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { lstat, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceFailure, gitObjectId } from '../protocol/workspaces.ts';
-import { canonicalKey, gitPath, isUnsafeGitPath, samePath } from '../core/workspace-paths.ts';
+import { canonicalKey, gitPath, isUnsafeGitPath, samePath } from '../platform/workspace-paths.ts';
 
 /**
  * The Git plumbing the workspace service is built on.

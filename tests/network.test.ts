@@ -7,10 +7,20 @@ import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Tool, ToolContext } from '../packages/protocol/index.ts';
-import { createTools } from '../packages/tools/index.ts';
-import { htmlToText, parseDuckDuckGo, readWebConfig, webTools } from '../packages/tools/web.ts';
+import { createTools } from '../packages/catalog/index.ts';
+import {
+  decodeBody,
+  htmlToText,
+  parseDuckDuckGo,
+  readWebConfig,
+  webTools,
+} from '../packages/tools/web.ts';
 import type { WebConfig } from '../packages/tools/web.ts';
-import { addressReason, assertPublicUrl } from '../packages/tools/network-guard.ts';
+import {
+  addressReason,
+  assertPublicUrl,
+  metadataAddress,
+} from '../packages/tools/network-guard.ts';
 import { browserTools } from '../packages/tools/browser.ts';
 
 // ---- merged from web.test.ts ----
@@ -520,4 +530,56 @@ test('browser tools render scripted pages, interact and screenshot into the jour
   assert.equal((await stat(path.join(root, 'shot.png'))).size, shotPayload.bytes);
 
   await pick2(tools, 'browser_close').execute({}, context2());
+});
+
+test('web_fetch decodes a page in the charset it declares', async (t) => {
+  // 中文页面 in GBK: what many Chinese government and bank sites still serve.
+  const gbk = Buffer.from('d6d0cec4d2b3c3e6', 'hex');
+  const base = await serve(t, (req, res) => {
+    if (req.url === '/header') {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=GBK' });
+      res.end(gbk);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(
+      Buffer.concat([
+        Buffer.from('<html><head><meta charset="gb2312"><title>t</title></head><body><p>'),
+        gbk,
+        Buffer.from('</p></body></html>'),
+      ]),
+    );
+  });
+  const tool = pick(webTools('/workspace'), 'web_fetch');
+  for (const route of ['/header', '/meta']) {
+    const payload = JSON.parse((await tool.execute({ url: `${base}${route}` }, context())).content);
+    assert.match(String(payload.text), /中文页面/, route);
+  }
+});
+
+test('decodeBody prefers a byte-order mark, falls back to UTF-8 and drops a character cut by truncation', () => {
+  assert.equal(decodeBody(Buffer.from('﻿你好', 'utf8'), 'text/html; charset=gbk'), '你好');
+  assert.equal(decodeBody(Buffer.from('你好', 'utf8'), 'text/plain; charset=bogus-label'), '你好');
+  const cut = Buffer.from('你好', 'utf8').subarray(0, 4);
+  assert.equal(decodeBody(cut, 'text/plain', true), '你');
+});
+
+test('metadata addresses stay refused under the private-network opt-in in every spelling', async () => {
+  for (const address of [
+    '169.254.169.254',
+    '::ffff:169.254.169.254',
+    '::a9fe:a9fe',
+    'fd00:ec2::254',
+  ])
+    assert.equal(metadataAddress(address), true, address);
+  for (const address of ['169.254.169.253', '10.0.0.1', '::1', 'fd00:ec2::253'])
+    assert.equal(metadataAddress(address), false, address);
+  const optIn = { YUANTU_ALLOW_PRIVATE_NETWORK: '1' };
+  for (const input of ['http://[::ffff:169.254.169.254]/', 'http://[::ffff:a9fe:a9fe]/'])
+    await assert.rejects(assertPublicUrl(new URL(input), optIn), /metadata/, input);
+  // The opt-in still lifts the private ranges themselves.
+  await assertPublicUrl(new URL('http://10.0.0.5/'), optIn);
+  // Teredo tunnels to an embedded IPv4 address, so it is refused like the other transition ranges.
+  assert.ok(addressReason('2001:0:4136:e378:8000:63bf:3fff:fdd2'));
+  assert.equal(addressReason('2001:db9::1'), null);
 });

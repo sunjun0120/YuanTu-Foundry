@@ -1,4 +1,4 @@
-import { redactSecrets } from '../core/errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
 
 /**
  * Validate identity metadata only. A libuv version does not prove AppContainer

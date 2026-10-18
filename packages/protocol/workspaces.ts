@@ -429,3 +429,20 @@ export function newWorkspaceBindingState(): {
 } {
   return { state: 'preparing', sessionId: null };
 }
+
+export interface DependencyWarning {
+  code: 'WORKSPACE_DEPENDENCIES_MISSING';
+  message: string;
+  paths: string[];
+}
+
+/** One file this version will move, as the result record describes it. */
+export interface WorkspaceResultFile {
+  path: string;
+  kind: 'create' | 'edit' | 'delete';
+  /** Size of the bytes involved, for the caller's own reporting. */
+  beforeBytes: number;
+  afterBytes: number;
+  beforeBlob: string | null;
+  afterBlob: string | null;
+}

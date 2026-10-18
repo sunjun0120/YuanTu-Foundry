@@ -220,15 +220,14 @@ test('a kernel decision that matches nothing is reported, so the list cannot go 
   for (const problem of problems)
     assert.match(
       problem,
-      /^scripts\/i18n-gate\.mjs: the CORE_ALLOWED entry for packages\/core\/.* matches nothing/,
+      /^scripts\/i18n-gate\.mjs: the CORE_ALLOWED entry for packages\/(?:core|protocol)\/.* matches nothing/,
     );
   // Named by module rather than counted, so this case does not need the list itself imported and cannot pass by
   // agreeing with a number the test and the gate both read from the same wrong place.
-  for (const file of ['agent.ts', 'session-title.ts', 'task-spec.ts'])
+  // The task-draft defaults live in protocol now, beside the validator that stores them.
+  for (const file of ['core/agent.ts', 'core/session-title.ts', 'protocol/task-spec.ts'])
     assert.ok(
-      problems.some((problem) =>
-        problem.includes(`the CORE_ALLOWED entry for packages/core/${file} `),
-      ),
+      problems.some((problem) => problem.includes(`the CORE_ALLOWED entry for packages/${file} `)),
       `no decision reported for ${file}`,
     );
 });

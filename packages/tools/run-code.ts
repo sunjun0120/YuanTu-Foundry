@@ -27,7 +27,7 @@
  */
 import { startCodeProcess } from './code-process.ts';
 import { parseSetting } from '../protocol/settings.ts';
-import { DeferredApprovalError } from '../core/approval-deferred.ts';
+import { DeferredApprovalError } from '../protocol/failure.ts';
 import { BASE_DESCRIPTION, RUN_CODE } from './run-code-sdk.ts';
 import type { ToolMode } from './run-code-sdk.ts';
 import type { Tool, ToolCall, ToolResult } from '../protocol/index.ts';

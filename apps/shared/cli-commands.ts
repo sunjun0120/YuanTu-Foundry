@@ -98,6 +98,11 @@ export const CLI_MAINTENANCE_COMMANDS: readonly CliCommand[] = [
     usage: 'db-recover --db <file> [--json]              (interrupted restore rollback)',
     runs: false,
   },
+  {
+    name: 'db-compact',
+    usage: 'db-compact --db <file> [--json]              (VACUUM; close Host/CLI first)',
+    runs: false,
+  },
 ];
 /** How many commands a run needs a model for. */
 export const countCliRunCommands = (): number =>

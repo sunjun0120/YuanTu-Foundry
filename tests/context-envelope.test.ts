@@ -21,7 +21,7 @@ import { Agent, type AgentOptions } from '../packages/core/agent.ts';
 import { envelopeEvent } from '../packages/core/envelope.ts';
 import { ENVELOPE_SYSTEM_CHARS, foldContextEnvelopes } from '../packages/protocol/context.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';
 
 const reply = (text = 'Done'): ModelResponse => ({

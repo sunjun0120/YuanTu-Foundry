@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 

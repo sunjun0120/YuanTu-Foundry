@@ -15,7 +15,7 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { InvariantRegistry, InvariantViolationError } from '../packages/core/invariants.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { AGENT_EVENT_TYPES } from '../packages/protocol/index.ts';
 import { emittedEventTypesInvariant } from '../packages/protocol/invariants.ts';
 import { logTablesAgreeInvariant } from '../packages/storage/invariants.ts';

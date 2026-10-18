@@ -14,7 +14,7 @@ import {
   COMPLETION_REPAIR_CEILINGS,
   COMPLETION_REPAIR_DEFAULTS,
 } from '../protocol/index.ts';
-import { normalizeAcceptanceCheck } from './task-spec.ts';
+import { normalizeAcceptanceCheck } from '../protocol/task-spec.ts';
 
 /**
  * Building, validating and fingerprinting a completion contract.

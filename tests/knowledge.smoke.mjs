@@ -8,7 +8,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { KnowledgeStore } from '../packages/knowledge/store.ts';
 import { memoryPaths, readMemoryFile } from '../packages/knowledge/memory.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 
 test(
   'desktop has no knowledge settings page while Agent memory persists',

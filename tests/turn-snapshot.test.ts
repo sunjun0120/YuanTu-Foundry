@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent, type AgentOptions } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { AgentEvent, Message } from '../packages/protocol/index.ts';
 import {

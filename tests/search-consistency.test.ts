@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { repoMapTools } from '../packages/tools/repo-map.ts';
 import { Workspace, workspaceAccess } from '../packages/tools/files.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import {
   WorkspaceSearchService,
   acquireSearchService,

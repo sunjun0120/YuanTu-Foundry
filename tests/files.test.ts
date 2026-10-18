@@ -13,10 +13,10 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { reconcilePendingFileChanges, undoFileChange } from '../packages/tools/file-undo.ts';
-import { writeAll, atomicWriteFile } from '../packages/tools/write-all.ts';
+import { writeAll, atomicWriteFile } from '../packages/platform/write-all.ts';
 import { Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
 import { fileHandlers } from '../apps/agent-host/handlers/files.ts';

@@ -170,12 +170,15 @@ test(
     const seeded = new SessionStore(db);
     const runId = seeded.beginRun(session.id);
     const runAttempt = seeded.startTaskAttempt(session.id, task.id, { kind: 'run', runId });
+    // A finished attempt writes its acceptance and steps back onto the task, so the seed carries the task's own:
+    // an empty list here would erase the criterion the verification below is meant to pass.
+    const current = seeded.getTask(session.id, task.id);
     seeded.finishTaskAttempt(session.id, task.id, runAttempt.id, {
       status: 'completed',
       resolvedEffectIds: [],
       verification: { passed: true, checks: [], durationMs: 0 },
-      acceptance: [],
-      steps: [],
+      acceptance: current.acceptance,
+      steps: current.steps,
     });
     seeded.close();
     const passed = await runCli(['task-verify', session.id, task.id, '--db', db, '--json']);

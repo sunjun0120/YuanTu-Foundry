@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
-import { dueTasks } from '../packages/core/task-trigger.ts';
+import { dueTasks } from '../packages/protocol/task-trigger.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 

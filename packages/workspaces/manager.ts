@@ -7,7 +7,7 @@ import {
   type WorkspaceBinding,
   type WorkspaceSnapshot,
 } from '../protocol/workspaces.ts';
-import { canonicalKey, isWithin, realPathOrNull, samePath } from '../core/workspace-paths.ts';
+import { canonicalKey, isWithin, realPathOrNull, samePath } from '../platform/workspace-paths.ts';
 import {
   isManagedWorktreePath,
   linkedWorktreeName,

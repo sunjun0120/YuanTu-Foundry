@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProvider } from '../../packages/providers/index.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
-import { redactSecrets } from '../../packages/core/errors.ts';
+import { redactSecrets } from '../../packages/platform/redact.ts';
 import { mainText } from './i18n.ts';
 import {
   MODEL_LIMIT_KEYS,

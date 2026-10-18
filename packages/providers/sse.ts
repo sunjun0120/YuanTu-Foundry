@@ -1,4 +1,27 @@
 import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
+const DONE = Symbol('stream.done');
+/** One frame's event, {@link DONE} for an allowed `[DONE]`, or undefined for a frame without data. */
+function parseFrame(
+  frame: string,
+  allowDone: boolean,
+): Record<string, unknown> | typeof DONE | undefined {
+  const data = frame
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).replace(/^ /, ''))
+    .join('\n');
+  if (!data) return undefined;
+  if (allowDone && data === '[DONE]') return DONE;
+  let event: unknown;
+  try {
+    event = JSON.parse(data);
+  } catch {
+    throw new Error('Invalid JSON in model stream');
+  }
+  if (!event || typeof event !== 'object' || Array.isArray(event))
+    throw new Error('Invalid stream event');
+  return event as Record<string, unknown>;
+}
 export async function* readSse(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
@@ -73,29 +96,36 @@ export async function* readSse(
         buffer = buffer.slice(boundary.index + boundary[0].length);
         bufferedBytes = Buffer.byteLength(buffer, 'utf8');
         searchFrom = 0;
-        const data = frame
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).replace(/^ /, ''))
-          .join('\n');
-        if (!data) continue;
-        if (allowDone && data === '[DONE]') {
+        const event = parseFrame(frame, allowDone);
+        if (event === undefined) continue;
+        if (event === DONE) {
           yield { type: 'stream.done' };
           return;
         }
-        let event: unknown;
-        try {
-          event = JSON.parse(data);
-        } catch {
-          throw new Error('Invalid JSON in model stream');
-        }
-        if (!event || typeof event !== 'object' || Array.isArray(event))
-          throw new Error('Invalid stream event');
-        yield event as Record<string, unknown>;
+        yield event;
       }
       if (bufferedBytes > maxFrameBytes) throw new Error('Model stream frame exceeds 16MB limit');
     }
-    if (buffer.trim()) throw new Error('Incomplete model stream frame');
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      /**
+       * The body ended without the blank line that closes its last frame.
+       *
+       * Some OpenAI-compatible gateways end with `data: [DONE]\n` and close: every line of that frame is complete,
+       * only the separator is missing, and refusing it failed every answer from them at the very end. A frame whose
+       * lines are all complete is therefore read; one cut inside a line (no newline at the end, or a payload that
+       * does not parse) is still the half frame it always was.
+       */
+      if (!/\r?\n$/.test(buffer)) throw new Error('Incomplete model stream frame');
+      let event: Record<string, unknown> | typeof DONE | undefined;
+      try {
+        event = parseFrame(buffer.replace(/(?:\r?\n)+$/, ''), allowDone);
+      } catch {
+        throw new Error('Incomplete model stream frame');
+      }
+      if (event === DONE) yield { type: 'stream.done' };
+      else if (event !== undefined) yield event;
+    }
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();

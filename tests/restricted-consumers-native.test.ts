@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
 import { LspClient } from '../packages/lsp/client.ts';

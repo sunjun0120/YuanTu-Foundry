@@ -12,7 +12,7 @@ import {
   registeredWorktrees,
   repositoryIdentity,
 } from '../packages/workspaces/git.ts';
-import { samePath } from '../packages/core/workspace-paths.ts';
+import { samePath } from '../packages/platform/workspace-paths.ts';
 
 /**
  * Allocating real worktrees.

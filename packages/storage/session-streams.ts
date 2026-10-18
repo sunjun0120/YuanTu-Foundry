@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message } from '../protocol/index.ts';
 import type { SessionEventType } from './events.ts';
-import { deadOwner } from './session-schema.ts';
+import { deadOwner, primeRunOwners } from './session-schema.ts';
 /**
  * The stream-checkpoint group: durable recovery points for a run that is still being written.
  *
@@ -103,6 +103,7 @@ export class StreamCheckpoints {
   }
   /** Reconcile only streams whose owning process is gone; active Hosts keep writing their own rows. */
   recoverInterruptedStreams(workspace?: string): number {
+    primeRunOwners(this.port.db);
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(

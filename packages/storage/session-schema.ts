@@ -12,20 +12,20 @@ import type {
   TaskTrigger,
   TaskTriggerSource,
 } from '../protocol/index.ts';
-import type { FileChange } from '../protocol/index.ts';
-import { processAlive } from '../platform/process-identity.ts';
+import { primeProcessStartTimes, processAlive } from '../platform/process-identity.ts';
 import { ftsIndexText, ftsMatchQuery } from '../protocol/fts-text.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
 import {
   normalizeTaskDraft,
   validateAcceptance as normalizeAcceptance,
-} from '../core/task-spec.ts';
-import { initialRunAt } from '../core/task-trigger.ts';
+} from '../protocol/task-spec.ts';
+import { initialRunAt } from '../protocol/task-trigger.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { DatabasePolicy } from './database-maintenance.ts';
 import type { SessionEvent } from './events.ts';
 import type { SessionProjection } from './projections.ts';
-import { redactSecrets } from '../core/errors.ts';
+import { redactSecrets } from '../platform/redact.ts';
+export type { StoredFileChange } from '../protocol/file-changes.ts';
 
 /**
  * The storage layer's own vocabulary: what a session record is, whose database file this is, and what
@@ -44,18 +44,6 @@ export interface Session {
   activeRun: string | null;
   /** The session that delegated to this one, when this session belongs to a sub-agent run. */
   parentSessionId?: string | null;
-}
-export interface StoredFileChange {
-  id: string;
-  sessionId: string;
-  runId?: string;
-  /** True when a terminal event exists, even if an old migration lost its transcript position. */
-  runFinished?: boolean;
-  /** Absolute transcript position after which this finished run's changes are displayed. */
-  endMessageIndex?: number;
-  change: FileChange;
-  status: 'pending' | 'applied' | 'abandoned' | 'conflict' | 'undoing' | 'undone';
-  createdAt: string;
 }
 /** How many sessions one search may return, and how many matching messages it shows per session. */
 export const MAX_SEARCH_SESSIONS = 10;
@@ -332,6 +320,29 @@ export function deadOwner(ownerPid: unknown, ownerStartedAt?: unknown): boolean 
   const startedAt =
     ownerStartedAt === null || ownerStartedAt === undefined ? null : Number(ownerStartedAt);
   return !processAlive(Number(ownerPid), Number.isFinite(startedAt) ? startedAt : null);
+}
+
+/**
+ * Look up every recorded run owner in one go, before a recovery pass opens its write transaction.
+ *
+ * `deadOwner` may need the owner's start time, which on Windows is a PowerShell subprocess. Asked row by row inside
+ * `BEGIN IMMEDIATE`, that held the database's only write lock for a subprocess per owner — every other connection
+ * (the desktop's, a sub-agent's) waited behind it. Priming answers them all with one lookup outside the lock, and the
+ * pass then reads the cache.
+ */
+export function primeRunOwners(db: DatabaseSync): void {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT owner_pid AS pid FROM runs
+         WHERE owner_pid IS NOT NULL AND owner_started_at IS NOT NULL
+           AND (status='running' OR id IN (SELECT run_id FROM run_stream_checkpoints))`,
+      )
+      .all();
+    primeProcessStartTimes(rows.map((row) => Number(row.pid)));
+  } catch {
+    // An optimisation: without it each owner is looked up on its own, as before.
+  }
 }
 
 /**

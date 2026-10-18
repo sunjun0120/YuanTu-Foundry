@@ -1,5 +1,6 @@
 import { stopSandboxProcess, markSandboxStarted, type SandboxPlan } from './sandbox.ts';
 import { BufferedOutput } from './background-output.ts';
+import { createOutputDecoder } from './output-decoder.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 let plan: SandboxPlan;
 let child: ChildProcessWithoutNullStreams | undefined;
@@ -86,11 +87,13 @@ process.on('message', (raw: unknown) => {
     detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-  const collect = (text: string) => output.write(text);
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', collect);
-  child.stderr.on('data', collect);
+  // Decoded per stream, so a Windows console program's OEM code page output is read in it (see `createOutputDecoder`).
+  const decoders = [createOutputDecoder(), createOutputDecoder()] as const;
+  const collect = (text: string) => {
+    if (text) output.write(text);
+  };
+  child.stdout.on('data', (chunk: Buffer) => collect(decoders[0].write(chunk)));
+  child.stderr.on('data', (chunk: Buffer) => collect(decoders[1].write(chunk)));
   child.stdin.on('error', () => {});
   child.on('spawn', () => {
     send({ type: 'ready', pid: child!.pid });
@@ -100,6 +103,8 @@ process.on('message', (raw: unknown) => {
     void finish(null, null, true);
   });
   child.on('close', (code, signal) => {
+    collect(decoders[0].end());
+    collect(decoders[1].end());
     void finish(code, signal);
   });
   deadline = setTimeout(stop, msg.timeout);

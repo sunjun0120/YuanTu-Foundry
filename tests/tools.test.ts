@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { toolEnvironment, workerExecArgv } from '../packages/tools/environment.ts';
 import { projectRoot } from './process-fixture.ts';
 

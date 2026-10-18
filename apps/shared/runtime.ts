@@ -10,7 +10,7 @@ import path from 'node:path';
 import { realpathSync, statSync } from 'node:fs';
 import { SessionStore } from '../../packages/storage/sqlite.ts';
 import { Agent } from '../../packages/core/agent.ts';
-import { createTools } from '../../packages/tools/index.ts';
+import { createTools } from '../../packages/catalog/index.ts';
 import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
 import type { WorkspaceMode } from '../../packages/protocol/workspaces.ts';
@@ -34,7 +34,7 @@ import type { InvariantRegistry } from '../../packages/core/invariants.ts';
 import type { PermissionPolicyView } from '../../packages/protocol/permissions.ts';
 import type { AgentEvent, Approver, Provider, Questioner } from '../../packages/protocol/index.ts';
 import type { Options } from './args.ts';
-import { redactSecrets } from '../../packages/core/errors.ts';
+import { redactSecrets } from '../../packages/platform/redact.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 /**
  * The route a run's measurements belong to, from the configuration this process reads.

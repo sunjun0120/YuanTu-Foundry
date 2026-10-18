@@ -11,7 +11,7 @@ import {
   isScriptAuthorizationFailure,
   runOfficeAutomation,
 } from '../packages/office/automation.ts';
-import { verifyFileDelivery, deliveryFormats } from '../packages/core/delivery.ts';
+import { verifyFileDelivery, deliveryFormats } from '../packages/tools/file-delivery.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
 import { MAX_CREATED_SHEETS, runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';

@@ -2,7 +2,7 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import { runCodeTool } from '../packages/tools/run-code.ts';
 import type { ToolContext, ToolCatalog } from '../packages/protocol/index.ts';

@@ -11,7 +11,7 @@ import { Agent } from '../packages/core/agent.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { createTools } from '../packages/tools/index.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import { httpFixture } from './http-fixture.ts';
 
 test('OpenAI stream can exceed 4 MB of discarded reasoning and still deliver a short answer', async (t) => {
@@ -403,6 +403,28 @@ test('a half frame at the end of the body is an error, not a truncation', async 
   );
   // A trailing blank line is not a half frame.
   assert.deepEqual(await readAll(streamOf(['data: {"a":1}\n\n'])), [{ a: 1 }]);
+  // A line cut before its newline is still a half frame, even when what arrived happens to parse.
+  await assert.rejects(
+    readAll(streamOf(['data: {"a":1}\n\n', 'data: {"b":2}'])),
+    /Incomplete model stream frame/,
+  );
+});
+
+test('a last frame whose lines are complete is read even without its closing blank line', async () => {
+  // Some OpenAI-compatible gateways end with `data: [DONE]\n` and close the connection.
+  assert.deepEqual(
+    await readAll(streamOf(['data: {"a":1}\n\n', 'data: [DONE]\n']), { allowDone: true }),
+    [{ a: 1 }, { type: 'stream.done' }],
+  );
+  assert.deepEqual(await readAll(streamOf(['data: {"a":1}\r\n\r\n', 'data: {"b":2}\r\n'])), [
+    { a: 1 },
+    { b: 2 },
+  ]);
+  // A complete line whose payload is cut is not read as an event.
+  await assert.rejects(
+    readAll(streamOf(['data: {"a":1}\n\n', 'data: {"b":\n'])),
+    /Incomplete model stream frame/,
+  );
 });
 
 test('a named failure keeps its name, and a cancel is reported as the cancel', async () => {

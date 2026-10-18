@@ -41,9 +41,10 @@ for (const arg of args) {
  */
 const ALLOWLIST = [
   'packages/tools/files.ts',
+  'packages/tools/file-search.ts',
   'packages/tools/search-worker.ts',
   'packages/tools/repo-map.ts',
-  'packages/tools/index.ts',
+  'packages/catalog/index.ts',
   'packages/knowledge/store.ts',
   'packages/core/agent-notices.ts',
   'packages/protocol/settings.ts',
