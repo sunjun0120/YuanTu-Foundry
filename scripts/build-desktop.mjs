@@ -35,8 +35,16 @@ await copyFile('packages/office/automation.ps1', 'dist/desktop/automation.ps1');
 await mkdir('dist/packages/office', { recursive: true });
 await copyFile('packages/office/automation.ps1', 'dist/packages/office/automation.ps1');
 await copyFile('apps/desktop/index.html', 'dist/desktop/index.html');
-await copyFile('apps/desktop/styles.css', 'dist/desktop/styles.css');
-await copyFile('apps/desktop/layout.css', 'dist/desktop/layout.css');
+// The stylesheets `index.html` links, in its order.
+for (const sheet of [
+  'styles.css',
+  'styles-subagents.css',
+  'styles-panels.css',
+  'layout.css',
+  'layout-surfaces.css',
+  'layout-workspace.css',
+])
+  await copyFile(`apps/desktop/${sheet}`, `dist/desktop/${sheet}`);
 // Runs under ordinary bundled Node, including from a copied maintenance directory.
 await build({
   entryPoints: ['apps/desktop/upgrade-worker.ts'],

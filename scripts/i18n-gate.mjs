@@ -22,7 +22,8 @@
  *
  * - **The renderer's own modules and the dictionary.** `renderer*.ts` and `session-management.ts` (which imports
  *   `document` and is reached only from `renderer.ts`) carry Chinese *source* text on purpose — that is the
- *   mechanism the DOM walker translates — and `i18n.ts` is where the words are supposed to be.
+ *   mechanism the DOM walker translates — and `i18n.ts` with its `i18n-*.ts` parts is where the words are
+ *   supposed to be.
  *   `attachment-contract.ts` composes the prompts sent to the model: instructions are not copy, and putting them in
  *   the interface's dictionary would be a different bug.
  * - **Guest workers.** `packages/tools/*worker*.ts` runs model-authored code and shell commands in a process of its
@@ -56,8 +57,8 @@ export const EXCLUSIONS = [
     why: 'the renderer is translated at render time: its Chinese source text is the mechanism, and the DOM walker checks what a person ends up seeing',
   },
   {
-    pattern: /^apps\/desktop\/i18n\.ts$/,
-    why: 'the dictionary itself: this is where the words are supposed to be',
+    pattern: /^apps\/desktop\/i18n(-[a-z-]+)?\.ts$/,
+    why: 'the dictionary itself and its parts: this is where the words are supposed to be',
   },
   {
     pattern: /^apps\/desktop\/session-management\.ts$/,

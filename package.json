@@ -42,7 +42,7 @@
     "check:windows-appcontainer": "node scripts/check-windows-appcontainer.mjs",
     "sign:windows-sandbox": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/sign-windows-sandbox.ps1",
     "desktop": "npm run build && node scripts/start-desktop.mjs",
-    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/backups.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs tests/workspace-ui.smoke.mjs",
+    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-capabilities.smoke.mjs tests/desktop-launcher.smoke.mjs tests/desktop-sessions.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/backups.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs tests/workspace-ui.smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check . --log-level warn",
     "typecheck": "tsc --noEmit",

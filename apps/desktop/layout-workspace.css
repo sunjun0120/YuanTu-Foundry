@@ -1,0 +1,391 @@
+/* Loaded right after layout-surfaces.css: the right-hand workspace column and its narrow and full-screen modes. */
+
+/* ---------------------------------------------------------------------------
+ * The right-hand workspace column.
+ *
+ * It is the third grid column, and only while it is open: the two-column body is what
+ * the window has always had, and a column reserved for a panel nobody opened would
+ * shrink the conversation for a surface that is not on screen.
+ * ------------------------------------------------------------------------- */
+body[data-workspace-view='open'] {
+  grid-template-columns: 272px minmax(0, 1fr) var(--workspace-width, min(560px, 42vw));
+}
+#workspace-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+#workspace-panel .workspace-panel-header {
+  display: flex;
+  height: auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  flex-shrink: 0;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+#workspace-panel .workspace-panel-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+#workspace-panel .workspace-panel-actions {
+  margin-left: auto;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+#workspace-panel .workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+#workspace-panel .workspace-file-tab {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 176px;
+  border-radius: 8px;
+}
+#workspace-panel .workspace-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+#workspace-panel .workspace-tab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#workspace-panel .workspace-tab svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+#workspace-panel .workspace-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  margin-right: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+#workspace-panel .workspace-file-tab.active,
+#workspace-panel .workspace-tab[aria-selected='true'] {
+  background: var(--raised);
+  color: var(--ink);
+}
+#workspace-panel .workspace-tab-close:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+#workspace-panel .workspace-panel-actions button {
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+}
+#workspace-panel .workspace-panel-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+#workspace-panel .workspace-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+#workspace-panel .workspace-resize:hover,
+#workspace-panel .workspace-resize:focus-visible,
+.workspace-resizing #workspace-panel .workspace-resize {
+  background: var(--accent);
+}
+body.workspace-resizing,
+body.workspace-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.workspace-tooltip {
+  position: fixed;
+  z-index: 200;
+  max-width: calc(100vw - 16px);
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  font-size: 12px;
+  pointer-events: none;
+}
+#workspace-panel .workspace-panel-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+#workspace-panel .workspace-panel-actions button:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+#workspace-panel .workspace-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 20px;
+  font-size: var(--ui-font-size);
+}
+#workspace-panel .workspace-location {
+  flex-shrink: 0;
+  padding: 10px 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+#workspace-panel .workspace-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* One indentation step per level, on the nested list rather than on the row, so the whole row still
+   catches the pointer across the panel's width. */
+#workspace-panel .workspace-list .workspace-list {
+  padding-left: 13px;
+}
+#workspace-panel .workspace-entry-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+#workspace-panel .workspace-entry-button:hover {
+  background: var(--hover);
+}
+#workspace-panel .workspace-entry-button[aria-current='true'] {
+  background: var(--raised);
+  color: var(--accent);
+}
+#workspace-panel .workspace-entry-glyph {
+  display: flex;
+  align-items: center;
+  flex: 0 0 20px;
+  color: var(--muted);
+  font-size: 10px;
+}
+#workspace-panel .workspace-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#workspace-panel .workspace-note {
+  margin: 0;
+  padding: 4px 6px;
+  list-style: none;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+#workspace-panel .workspace-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+#workspace-panel .workspace-preview-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 22px 24px 32px;
+  background: var(--surface);
+  color: var(--ink);
+  scrollbar-gutter: stable;
+}
+#workspace-panel .workspace-preview-text {
+  margin: 0;
+  padding: 0;
+  max-height: none;
+  overflow: visible;
+  background: transparent;
+  color: var(--ink);
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
+  font-size: calc(var(--ui-font-size) - 1px);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#workspace-panel .workspace-preview-markdown {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--ui-font-size);
+  line-height: 1.8;
+  color: var(--ink);
+}
+#workspace-panel .markdown p,
+#workspace-panel .markdown strong,
+#workspace-panel .markdown h1,
+#workspace-panel .markdown h2,
+#workspace-panel .markdown h3,
+#workspace-panel .markdown h4,
+#workspace-panel .markdown h5,
+#workspace-panel .markdown h6 {
+  color: var(--ink);
+}
+#workspace-panel .markdown h1 {
+  font-size: 26px;
+}
+#workspace-panel .markdown h2 {
+  font-size: 21px;
+}
+#workspace-panel .markdown h3 {
+  font-size: 17px;
+}
+#workspace-panel .markdown a {
+  color: var(--accent);
+}
+#workspace-panel .markdown blockquote {
+  color: var(--muted);
+  border-color: var(--line);
+}
+#workspace-panel .markdown hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+#workspace-panel .markdown :not(pre) > code,
+#workspace-panel .markdown th,
+#workspace-panel .code-block,
+#workspace-panel .code-header {
+  background: var(--raised);
+  border-color: var(--line);
+  color: var(--ink);
+}
+#workspace-panel .markdown th,
+#workspace-panel .markdown td {
+  border-color: var(--line);
+}
+#workspace-panel .code-block pre {
+  max-height: none;
+  background: transparent;
+  color: var(--ink);
+}
+#workspace-panel .code-block code,
+#workspace-panel .code-block code span {
+  color: var(--ink);
+}
+#workspace-panel .code-block .hljs-keyword,
+#workspace-panel .code-block .hljs-title {
+  color: var(--accent);
+}
+#workspace-panel .code-block .hljs-comment {
+  color: var(--muted);
+}
+#workspace-panel .code-header button {
+  color: var(--ink);
+  border-color: var(--line);
+}
+#workspace-panel .workspace-preview-markdown.plain-fallback {
+  white-space: pre-wrap !important;
+}
+#workspace-panel .workspace-preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: var(--raised);
+}
+/* At this width the conversation needs every pixel it can get, so the panel floats over it instead of
+   taking a column: a third column here would leave the transcript narrower than the panel. */
+@media (max-width: 1000px) {
+  body[data-workspace-view='open'] {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  #workspace-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    width: var(--workspace-width, min(560px, 92vw));
+    box-shadow: -14px 0 36px rgb(0 0 0 / 20%);
+  }
+}
+/* Reading takes the whole app viewport. The mounted chat keeps receiving updates underneath. */
+body[data-workspace-view='fullscreen'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+body[data-workspace-view='fullscreen'] #chat-page,
+body[data-workspace-view='fullscreen'] #chat-sidebar {
+  display: none;
+}
+body[data-workspace-view='fullscreen'] #workspace-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  box-shadow: none;
+}
+body[data-workspace-view='fullscreen'] .workspace-preview-body {
+  padding: 28px clamp(20px, 4vw, 64px) 48px;
+}
+/* The settings page owns the whole window and hides the chat surface, so the panel goes with it — leaving
+   it in the grid would put a file tree beside a settings form that the reader is trying to use. */
+body[data-page='settings'] #workspace-panel {
+  display: none;
+}
+body[data-page='settings'][data-workspace-view='open'] {
+  grid-template-columns: minmax(0, 1fr);
+}

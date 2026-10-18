@@ -1,0 +1,448 @@
+/**
+ * One part of the desktop dictionary; `./i18n.ts` joins the parts in this order and owns the lookup.
+ *
+ * Every entry is a `[zh-CN, en-US]` pair, so the two languages of one string are always edited together.
+ */
+/** The conversation: the composer, commands, plans, sub-agents and their transcript. */
+export const conversationMessages: Record<string, [string, string]> = {
+  'ui.loadOlderHistory': [
+    '加载更早的消息（还有 {count} 条）',
+    'Load earlier messages ({count} remaining)',
+  ],
+  'settings.description': [
+    '管理模型连接，为每次对话选择合适的模型。',
+    'Manage model connections and choose a model for each conversation.',
+  ],
+  'settings.noModel': ['尚无模型', 'No models'],
+  'settings.connectionConfigured': ['已保存密钥；留空则沿用', 'Saved key; leave blank to keep'],
+  'settings.currentConfig': ['当前配置：{source}', 'Current configuration: {source}'],
+  'settings.savedLocally': ['本机保存', 'Saved locally'],
+  'settings.fromEnvironment': ['环境变量', 'Environment'],
+  'settings.notConfigured': ['未配置', 'Not configured'],
+  'settings.selectHint': ['正在切换模型…', 'Switching model...'],
+  'settings.endpointName': ['名称', 'Name'],
+  'settings.endpointNamePlaceholder': ['例如：常用接口', 'e.g. Primary endpoint'],
+  'settings.endpointGroup': ['已保存的接口', 'Saved endpoints'],
+  'settings.newEndpoint': ['新增接口', 'New endpoint'],
+  'settings.addModel': ['添加模型', 'Add model'],
+  'settings.displayName': ['显示名称', 'Display name'],
+  'settings.expandModel': ['展开模型参数', 'Expand model settings'],
+  'settings.collapseModel': ['收起模型参数', 'Collapse model settings'],
+  'settings.removeModel': ['删除模型', 'Remove model'],
+  'settings.cancel': ['取消', 'Cancel'],
+  'settings.modelList': ['模型列表', 'Models'],
+  'settings.newEndpointOption': ['新接口（未保存）', 'New endpoint (unsaved)'],
+  'settings.atLeastOne': ['至少保留一个模型。', 'Keep at least one model.'],
+  'settings.duplicateModel': [
+    '同一接口下的模型 ID 不可重复。',
+    'Model IDs must be unique for an endpoint.',
+  ],
+  'settings.saveGroup': ['保存', 'Save'],
+  'settings.savedConnections': ['已保存的连接', 'Saved connections'],
+  'settings.newConnection': ['新增连接', 'New connection'],
+  'settings.applyDefault': ['应用并设为默认', 'Apply and set default'],
+  'settings.connectionName': ['连接名称', 'Connection name'],
+  'settings.namePlaceholder': ['例如：日常编码', 'Example: Daily coding'],
+  'settings.protocol': ['接口协议', 'API protocol'],
+  'settings.protocolNote': [
+    '支持官方接口与兼容网关',
+    'Supports official APIs and compatible gateways',
+  ],
+  'settings.url': ['接口地址', 'API endpoint'],
+  'settings.urlNote': ['填写根地址或以 /v1 结尾的地址。', 'Enter a root URL or one ending in /v1.'],
+  'settings.modelId': ['模型 ID', 'Model ID'],
+  'settings.modelNote': ['填写接口支持的模型 ID', 'Enter a model ID supported by the endpoint'],
+  'settings.apiKey': ['API 密钥', 'API key'],
+  'settings.apiKeyNote': [
+    '密钥使用系统加密存储。更换接口地址时需重新输入密钥。',
+    'The key is stored with system encryption. Enter it again when changing the endpoint.',
+  ],
+  'settings.testNote': [
+    '测试连接会发送一条简短请求，消耗少量 Token。',
+    'Connection tests send a short request and use a small number of tokens.',
+  ],
+  'settings.test': ['测试连接', 'Test connection'],
+  'settings.discover': ['从端点读取规格', 'Read limits from endpoint'],
+  'settings.discovering': ['正在读取端点目录…', 'Reading the endpoint catalogue...'],
+  'settings.discoverFilled': [
+    '已填入 {models} 的窗口与单次输出上限。',
+    'Filled the window and output cap for {models}.',
+  ],
+  'settings.discoverNoWindow': [
+    '端点没有声明 {models} 的窗口；留空将自动采用应用预算，也可按提供方规格填写。',
+    'The endpoint declared no window for {models}; leave blank for the automatic app budget or enter the provider limit.',
+  ],
+  'settings.discoverMissing': [
+    '端点目录里没有 {models}（可用：{list}）。',
+    'The catalogue has no {models} (available: {list}).',
+  ],
+  'settings.discoverEmpty': ['端点没有返回任何模型。', 'The endpoint returned no models.'],
+  'settings.discoverError': [
+    '无法读取端点目录，请检查接口地址、协议与密钥。',
+    'Could not read the endpoint catalogue; check the URL, protocol and key.',
+  ],
+  'settings.saveApply': ['保存并应用', 'Save and apply'],
+  'settings.connectionError': [
+    '无法读取模型配置，请重新启动桌面。',
+    'Unable to read model settings. Restart the desktop.',
+  ],
+  'ui.promptPlaceholder': [
+    '发消息或描述任务，让想法逐步落地…',
+    'Send a message or describe a task...',
+  ],
+  'ui.newSession': ['新建会话', 'New session'],
+  'ui.workspace': ['工作区', 'Workspace'],
+  'ui.changeFolder': ['更换目录', 'Change folder'],
+  'ui.recentSessions': ['最近会话', 'Recent sessions'],
+  'ui.clearSessionSearch': ['清除并关闭搜索', 'Clear and close search'],
+  'ui.searchSessions': ['搜索会话', 'Search sessions'],
+  'ui.searchSessionsOrMessages': ['搜索会话或消息', 'Search sessions or messages'],
+  'ui.closeSearch': ['关闭搜索', 'Close search'],
+  'ui.noMatchingSessions': ['无匹配会话', 'No matching sessions'],
+  'ui.searchNameOnly': [
+    '内容搜索不可用，仅显示名称匹配。',
+    'Content search is unavailable; matching session names only.',
+  ],
+  'ui.sessionList': ['会话列表', 'Session list'],
+  'ui.projectCapabilities': ['项目能力', 'Project capabilities'],
+  'ui.refreshCapabilities': ['刷新项目能力', 'Refresh capabilities'],
+  'ui.settings': ['设置', 'Settings'],
+  'ui.projectSession': ['项目会话', 'Project session'],
+  'ui.chat': ['对话', 'Chat'],
+  'ui.conversation': ['对话内容', 'Conversation'],
+  'ui.taskDescription': ['任务描述', 'Task description'],
+  'ui.addImage': ['添加图片', 'Add images'],
+  'ui.queueMode': ['追加方式', 'Queue mode'],
+  'ui.runAfterCompletion': ['完成后执行', 'Run after completion'],
+  'ui.steerTask': ['调整当前任务', 'Steer current task'],
+  // Missing until now, so the queue row printed the raw key `ui.followUp` in both languages: the composer's
+  // enqueue control offers "steer" and "follow-up", and only the first had a translation.
+  'ui.followUp': ['后续任务', 'Follow-up task'],
+  'ui.toolCardLines': ['第 {start}–{end} 行 / 共 {total} 行', 'lines {start}–{end} of {total}'],
+  'ui.toolCardEmptyFile': ['空文件', 'empty file'],
+  /**
+   * A read whose window starts past the end of the file.
+   *
+   * Its own string rather than `ui.toolCardEmptyFile`: the file is not empty — the requested range is, and the
+   * total is still the fact that says so. Reusing the empty-file text here would take a request that found
+   * nothing and turn it into a claim about the file.
+   */
+  'ui.toolCardEmptyRange': [
+    '此范围没有内容（共 {total} 行）',
+    'no content in this range ({total} lines)',
+  ],
+  'ui.toolCardTruncated': ['已截断', 'truncated'],
+  'ui.toolCardLiteral': ['字面匹配', 'literal'],
+  'ui.toolCardRegex': ['正则匹配', 'regex'],
+  'ui.toolCardMatches': ['{count} 处匹配', '{count} matches'],
+  'ui.toolCardMatchRows': [
+    '仅画前 {shown} 处，共 {count} 处',
+    'drawing the first {shown} of {count}',
+  ],
+  'ui.toolCardLimited': ['结果被截断，不是全部匹配', 'truncated: these are not all the matches'],
+  'ui.toolCardNoMatches': ['没有匹配', 'no matches'],
+  /**
+   * Three statements about a search that are not the same statement.
+   *
+   * `coverageUnknown` is what a result written before coverage existed says: the scan happened, and whether it
+   * reached the end of the workspace is simply not recorded. `incomplete` is a scan that stopped early and knows
+   * why. Neither may be rendered as the other, and neither may be rendered as "no matches" — which is why the
+   * card shows one of these instead of staying silent.
+   */
+  'ui.toolCardCoverageUnknown': ['扫描范围未记录', 'scan coverage not recorded'],
+  'ui.toolCardIncomplete': ['扫描不完整：{reasons}', 'incomplete scan: {reasons}'],
+  'ui.toolCardOutputTruncated': [
+    '返回结果已按输出预算截断',
+    'the returned matches were cut to the output budget',
+  ],
+  'ui.toolCardExit': ['退出码 {code}', 'exit {code}'],
+  'ui.toolCardSignal': ['被 {signal} 终止', 'killed by {signal}'],
+  'ui.toolCardUnknownExit': ['退出码未知', 'exit code unknown'],
+  'ui.toolCardTimeout': ['超时', 'timed out'],
+  'ui.toolCardStderr': ['标准错误', 'stderr'],
+  'ui.toolCardNoOutput': ['没有输出', 'no output'],
+  'ui.toolCardRaw': ['工具结果原文', 'Raw tool result'],
+  'ui.model': ['模型', 'Model'],
+  'ui.switchModel': ['切换模型', 'Switch model'],
+  'ui.loading': ['正在加载…', 'Loading...'],
+  'ui.stop': ['停止', 'Stop'],
+  'ui.send': ['发送', 'Send'],
+  'ui.queue': ['追加', 'Queue'],
+  'ui.clearQueue': ['清空待执行消息', 'Clear queued messages'],
+  'ui.sessionName': ['会话名称', 'Session name'],
+  'ui.cancel': ['取消', 'Cancel'],
+  'ui.confirm': ['确认', 'Confirm'],
+  'ui.backToChat': ['返回对话', 'Back to chat'],
+  'ui.general': ['通用设置', 'General'],
+  'ui.models': ['模型设置', 'Models'],
+  'ui.commands': ['指令', 'Commands'],
+  'ui.commandAndSkills': ['指令和技能', 'Commands and skills'],
+  'ui.skills': ['技能', 'Skills'],
+  'ui.permissions': ['权限设置', 'Permissions'],
+  'ui.refreshSkills': ['刷新技能', 'Refresh skills'],
+  'ui.compactContext': ['压缩上下文', 'Compact context'],
+  'ui.exportSession': ['导出会话', 'Export session'],
+  'ui.createGoal': ['创建目标', 'Create goal'],
+  'ui.createPlan': ['制定计划', 'Create plan'],
+  'command.modelDescription': [
+    '打开模型设置并切换当前连接',
+    'Open model settings and switch the current connection',
+  ],
+  'command.permissionsDescription': ['打开权限模式设置', 'Open permission mode settings'],
+  'command.newSessionDescription': ['创建并切换到新的会话', 'Create and switch to a new session'],
+  'command.stopDescription': ['停止当前正在执行的任务', 'Stop the current running task'],
+  'command.refreshSkillsDescription': [
+    '重新读取项目技能和指令',
+    'Reload project skills and instructions',
+  ],
+  'command.compactDescription': [
+    '用当前模型整理会话上下文，下一轮生效',
+    'Summarize this conversation with the current model for the next turn',
+  ],
+  'command.exportDescription': [
+    '导出当前会话为 Markdown 文件',
+    'Export this conversation as a Markdown file',
+  ],
+  'command.goalDescription': ['创建一个可持续跟踪的目标', 'Create a goal you can track over time'],
+  'command.planDescription': [
+    '只读探索后给出计划，人工批准才执行',
+    'Read-only exploration, then a plan that needs human approval to run',
+  ],
+  'ui.copy': ['复制代码', 'Copy code'],
+  'ui.copied': ['已复制', 'Copied'],
+  'ui.copyFailed': ['复制失败', 'Copy failed'],
+  'ui.openLinkFailed': ['打开链接失败', 'Failed to open link'],
+  'ui.image': ['图片', 'Image'],
+  'ui.imageNotLoaded': ['未加载', 'not loaded'],
+  'ui.removeImage': ['移除 {name}', 'Remove {name}'],
+  'ui.sendTimeUnavailable': ['这条消息未记录发送时间', 'Send time unavailable for this message'],
+  'ui.copyMessage': ['复制问题', 'Copy message'],
+  'ui.operationFailed': ['操作未完成', 'Operation failed'],
+  'ui.toolResult': ['工具结果', 'Tool result'],
+  'ui.runningTool': ['正在执行 {name}', 'Running {name}'],
+  'ui.sessionChanges': [
+    '会话改动 · {count} 次文件操作',
+    'Session changes · {count} file operations',
+  ],
+  'ui.editedFiles': ['已编辑 {count} 个文件', 'Edited {count} files'],
+  'ui.previewChanges': ['在侧边栏预览', 'Preview in sidebar'],
+  'ui.allChangedFiles': ['全部 {count} 个文件', 'All {count} files'],
+  'ui.collapseChangedFiles': ['收起文件列表', 'Collapse file list'],
+  'ui.legacyChange': [
+    '这条记录没有恢复快照，仅可查看差异。',
+    'This record has no recovery snapshot; only the diff is available.',
+  ],
+  'ui.projectResources': [
+    '项目规则 {instructions} · 技能 {skills} · 扩展 {extensions}',
+    'Project rules {instructions} · Skills {skills} · Extensions {extensions}',
+  ],
+  'ui.queueItem': ['{mode}：{prompt}', '{mode}: {prompt}'],
+  'ui.approvalRequired': ['需要你的确认', 'Approval required'],
+  'ui.externalService': ['访问外部服务', 'Access external service'],
+  'ui.runCommand': ['执行命令', 'Run command'],
+  'ui.modifyFiles': ['修改文件', 'Modify files'],
+  'ui.fullDetails': ['完整操作参数', 'Full operation details'],
+  'ui.allowOnce': ['允许一次', 'Allow once'],
+  'ui.deny': ['拒绝', 'Deny'],
+  'ui.undoChange': ['撤销此修改', 'Undo this change'],
+  'plan.title': ['计划', 'Plan'],
+  'plan.status.planning': ['正在制定计划', 'Planning in progress'],
+  'plan.status.proposed': ['等待批准', 'Awaiting approval'],
+  'plan.status.approved': ['已批准', 'Approved'],
+  'plan.status.rejected': ['已拒绝', 'Rejected'],
+  'plan.status.abandoned': ['已废弃', 'Abandoned'],
+  'plan.approve': ['批准计划', 'Approve plan'],
+  'plan.reject': ['拒绝', 'Reject'],
+  'plan.execute': ['按计划执行', 'Execute plan'],
+  'plan.approvedHint': ['已批准，可开始执行。', 'Approved; ready to execute.'],
+  'plan.gateHint': [
+    '批准前不会执行任何写入；执行时代理会再次校验计划内容未变。',
+    'Nothing is written before approval, and the change check runs again when execution starts.',
+  ],
+  'plan.rejectedHint': ['计划已被拒绝，可重新制定。', 'The plan was rejected; you can plan again.'],
+  'plan.discard': ['放弃这份计划', 'Discard this plan'],
+  /**
+   * The one action a *planning* row needs, now that such a row keeps the session in plan mode.
+   *
+   * A session whose plan is still being written continues planning (that is what the row means), so without a way
+   * to throw the plan away a person who changed their mind would be left in read-only with nothing to click.
+   */
+  'plan.discardHint': [
+    '这次会话仍在计划模式：继续提问会继续制定计划。若不想再计划，先放弃这份计划。',
+    'This session is still planning: your next message continues the plan. Discard the plan to leave plan mode.',
+  ],
+  'plan.abandonedHint': [
+    '制定这份计划的运行已中断，这份计划不会再完成；可以重新发起一次计划。',
+    'The run that was preparing this plan was interrupted, so it will not finish. You can plan again.',
+  ],
+  'subagent.title': ['子代理', 'Sub-agents'],
+  'subagent.cardTitle': ['子代理 {index}/{total} · {role}', 'Sub-agent {index}/{total} · {role}'],
+  'subagent.role.explore': ['只读调查', 'read-only research'],
+  'subagent.role.general': ['可写入', 'write-capable'],
+  'subagent.status.running': ['执行中', 'Running'],
+  'subagent.status.completed': ['已完成', 'Completed'],
+  'subagent.status.failed': ['失败', 'Failed'],
+  'subagent.status.cancelled': ['已取消', 'Cancelled'],
+  'subagent.status.limited': ['受限', 'Limited'],
+  'subagent.status.needs_review': ['待复核', 'Needs review'],
+  'subagent.status.interrupted': ['中断，待复核', 'Interrupted; review required'],
+  'subagent.status.skipped': ['未启动', 'Not started'],
+  'subagent.runningTool': ['正在执行 {tool}', 'Running {tool}'],
+  'subagent.runningToolWithArgs': ['正在执行 {tool} · {args}', 'Running {tool} · {args}'],
+  'subagent.meta': ['{rounds} 轮 · {tools} 次工具调用', '{rounds} rounds · {tools} tool calls'],
+  'subagent.tokens': ['{value} tok', '{value} tok'],
+  /**
+   * A child's work time. Seconds are two-digit from a minute up — `21分07秒` reads as a duration where
+   * `21分7秒` reads as two numbers — and the tiers stop at days, because this measures how long a child
+   * *worked*: a child that has been working for a month is a broken run, not a reading.
+   */
+  'subagent.duration.seconds': ['{seconds}秒', '{seconds}s'],
+  'subagent.duration.minutes': ['{minutes}分{seconds}秒', '{minutes}m {seconds}s'],
+  'subagent.duration.hours': [
+    '{hours}小时{minutes}分{seconds}秒',
+    '{hours}h {minutes}m {seconds}s',
+  ],
+  'subagent.duration.days': ['{days}天', '{days}d'],
+  'subagent.duration.daysHours': ['{days}天{hours}小时', '{days}d {hours}h'],
+  'subagent.duration.exact': ['总活跃耗时：{duration}', 'Total active time: {duration}'],
+  'subagent.catalog.one': ['{count} 个子代理', '{count} subagent'],
+  'subagent.catalog.other': ['{count} 个子代理', '{count} subagents'],
+  'subagent.catalog.running.one': ['{count} 个子代理，正在运行', '{count} subagent running'],
+  'subagent.catalog.running.other': ['{count} 个子代理，正在运行', '{count} subagents running'],
+  'subagent.viewTranscript': ['查看记录', 'View transcript'],
+  'subagent.transcriptNote': [
+    '只读：这是该子代理自己会话里的完整记录。',
+    "Read-only: this is the full transcript of the sub-agent's own session.",
+  ],
+  'subagent.transcriptTruncated': [
+    '过程记录较长，此处展示最近记录。最终结果单独展示。',
+    'Recent process records are shown here. The final result is displayed separately.',
+  ],
+  'subagent.workspace.dependenciesMissing': [
+    '隔离副本尚未安装项目依赖；需要依赖的检查须先审批安装。',
+    'Project dependencies are not installed in this isolated copy; approve a local install before checks that need them.',
+  ],
+  'subagent.process': ['执行过程', 'Execution history'],
+  'subagent.workspace.action.archive': ['归档工作区', 'Archive workspace'],
+  'subagent.workspace.action.remove': ['清理已归档目录', 'Remove archived directory'],
+  'subagent.workspace.action.restore': ['恢复工作区', 'Restore workspace'],
+  'subagent.workspace.removeConfirm': [
+    '清理这个已归档的子代理目录？源码将保存到可恢复快照；未能保存的文件会阻止清理。',
+    'Remove this archived sub-agent directory? Source files will be saved in a recoverable snapshot; files that cannot be preserved prevent removal.',
+  ],
+  'subagent.processCount': ['执行过程 · {count} 条记录', 'Execution history · {count} records'],
+  'subagent.processRecentCount': [
+    '执行过程 · 最近 {count} 条记录',
+    'Execution history · latest {count} records',
+  ],
+  'subagent.finalResult': ['最终结果', 'Final result'],
+  'subagent.liveProgress': ['当前进展', 'Current progress'],
+  'subagent.finalPending': [
+    '子代理仍在运行，完成后显示最终结果。',
+    'The sub-agent is running. Its final result will appear when it finishes.',
+  ],
+  'subagent.finalEmpty': [
+    '该子代理没有生成最终结果。',
+    'This sub-agent did not produce a final result.',
+  ],
+  'subagent.transcriptEmpty': ['该子代理还没有任何记录。', 'The sub-agent recorded no messages.'],
+  'subagent.transcriptLoading': ['正在载入记录…', 'Loading the record…'],
+  'subagent.back': ['返回会话：{title}', 'Back to the conversation: {title}'],
+  'subagent.findings': ['结论与依据', 'Findings and evidence'],
+  'subagent.evidence': ['依据', 'Evidence'],
+  'subagent.unverified': ['未核实', 'Unverified'],
+  'subagent.blockers': ['阻塞', 'Blockers'],
+  'subagent.message.user': ['任务', 'Task'],
+  // Not '子代理': the zh→en index used by the DOM walker is last-wins for duplicate source strings,
+  // so reusing the panel title's text would silently rename the panel itself.
+  'subagent.message.assistant': ['子代理回复', 'Sub-agent reply'],
+  'subagent.message.tool': ['工具', 'Tool'],
+  'subagent.attribution': ['子代理：{objective}', 'Sub-agent: {objective}'],
+  /**
+   * Where a sub-agent worked, and what happened to its work.
+   *
+   * The two "where" labels are not translations of each other and must not be collapsed: one promises that the
+   * child's changes are somewhere else and have to be imported, the other says there is no separation at all. A
+   * person reading "isolated" over a shared child would look in the wrong pane for its work.
+   */
+  'subagent.workspace.isolated': ['独立工作区：{path}', 'Isolated workspace: {path}'],
+  'subagent.workspace.shared': [
+    '共享工作区：与本次会话同一目录，改动直接出现在变更列表里，不做隔离',
+    'Shared workspace: the same directory as this session, so its changes appear directly in the change list — not isolated',
+  ],
+  'subagent.workspace.problem': ['工作区不可用：{reason}', 'Workspace unusable: {reason}'],
+  'subagent.workspace.result.ready': [
+    '成果待合入（{count} 个路径）',
+    'Result awaiting import ({count} path(s))',
+  ],
+  'subagent.workspace.result.unsupported': [
+    '成果无法自动合入（{count} 个路径），请在子代理目录中人工处理',
+    'Result cannot be imported automatically ({count} path(s)); review the sub-agent’s directory instead',
+  ],
+  'subagent.workspace.result.applying': ['正在合入', 'Import in progress'],
+  'subagent.workspace.result.applied': ['已合入', 'Imported'],
+  'subagent.workspace.result.conflict': [
+    '合入冲突：目标文件已被修改，未写入任何文件',
+    'Import conflict: the target files changed, so nothing was written',
+  ],
+  'subagent.workspace.result.superseded': [
+    '已被该子代理后续回合取代',
+    'Superseded by a later turn of this sub-agent',
+  ],
+  'ui.resumeUndo': ['继续完成恢复', 'Resume the interrupted undo'],
+  'ui.undoInterrupted': [
+    '上次撤销被中断（应用被关闭或进程意外结束），文件可能只恢复了一部分；可继续完成恢复。',
+    'The previous undo was interrupted, so some files may not be restored yet. Resume it to finish.',
+  ],
+  'ui.undoNewFile': ['确认删除此新建文件', 'Confirm deleting this new file'],
+  'ui.undoContent': ['确认恢复修改前内容', 'Confirm restoring previous content'],
+  'ui.undone': ['已撤销', 'Undone'],
+  'ui.restoreContent': ['可恢复修改前的文件内容', 'The previous file content can be restored'],
+  'ui.uncertainResult': [
+    '操作结果不确定，请检查文件后再处理。',
+    'The operation result is uncertain. Check the file before continuing.',
+  ],
+  'ui.noSnapshot': [
+    '这条记录没有本会话的恢复快照，仅可查看差异。',
+    'This record has no recovery snapshot for this session; only the diff is available.',
+  ],
+  'ui.modelReasoning': ['正在推理…', 'Reasoning...'],
+  'ui.modelToolCall': ['正在生成工具调用…', 'Generating tool call...'],
+  'ui.thinking': ['思考中…', 'Thinking...'],
+  /**
+   * The folded reasoning block. It is a label, not a summary: the runtime never writes prose about a thought,
+   * because any sentence it invented would be its own text sitting next to the model's.
+   */
+  'ui.reasoning': ['思考过程', 'Reasoning'],
+  'ui.reasoningTail': [
+    '共 {count} 个字符，只显示末尾 {shown} 个字符。',
+    '{count} characters in all; showing the last {shown}.',
+  ],
+  'ui.liveTail': [
+    '已生成 {count} 个字符，暂时显示末尾；完成后显示全文。',
+    'Generated {count} characters. Showing the latest part until the full reply is ready.',
+  ],
+  'ui.interruptedReply': ['回复中断，已保留部分内容', 'Reply interrupted; partial content saved'],
+  'ui.runPaused': ['提问已暂停', 'Paused'],
+  /**
+   * Shown after the app restarted a Host that died on its own. It has to say two things and no more: that the
+   * window is usable again, and that the run which was in flight did not continue — the second is the part a
+   * silent recovery would hide, and a user still waiting for a reply deserves to know why it never arrives.
+   */
+  'ui.hostRecovered': [
+    'Agent Host（进程 {pid}）意外退出，已自动重启并从会话日志重建（第 {attempts} 次尝试）。中断的那一轮不会继续：它的未完成调用已记为"结果未知"。',
+    'The Agent Host (pid {pid}) exited. It was restarted and the session was rebuilt from its log (attempt {attempts}). The interrupted run did not continue; its unfinished calls are recorded as "outcome unknown".',
+  ],
+  'ui.stopping': ['正在停止…', 'Stopping...'],
+  'ui.sessionShort': ['会话 {id}', 'Session {id}'],
+  'ui.loadMoreSessions': ['加载更早的会话', 'Show older sessions'],
+  'ui.commandNeedsDescription': ['/{name} 需要描述内容。', '/{name} requires a description.'],
+  'ui.maxImages': ['每条消息最多附加 4 张图片', 'Each message can include at most 4 images'],
+  'ui.maxImageTotal': ['图片合计不能超过 10MB', 'Images must total no more than 10 MB'],
+  'ui.maxImage': ['单张图片不能超过 5MB', 'Each image must be no larger than 5 MB'],
+  'ui.imageReadFailed': ['图片读取失败', 'Failed to read image'],
+  'ui.connectionInterrupted': [
+    '桌面连接中断，请重新启动后检查会话记录。',
+    'Desktop connection interrupted. Restart it and check the session history.',
+  ],
+};

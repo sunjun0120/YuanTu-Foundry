@@ -1,0 +1,873 @@
+/* Loaded right after styles.css: sub-agent cards, the header catalog and a child's record page. */
+
+/* Sub-agent cards reuse the task-panel shape: both are "one live entity per card" panels, and a
+   second visual language for the same idea would only make the two harder to read. */
+.subagents-panel {
+  margin: 0 28px 18px;
+  border: 1px solid var(--line, #dfe5e1);
+  border-radius: 10px;
+  background: var(--raised, #fff);
+  padding: 14px;
+}
+.subagents-panel-header,
+.subagent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.subagents-panel h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.subagent-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.subagent-card {
+  border: 1px solid var(--line, #dfe5e1);
+  border-radius: 8px;
+  padding: 12px;
+}
+.subagent-card h3 {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.subagent-status {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: var(--surface, #f5f5f6);
+  white-space: nowrap;
+}
+.subagent-card[data-status='running'] .subagent-status {
+  color: var(--accent, #4f7560);
+}
+.subagent-card[data-status='failed'] .subagent-status,
+.subagent-card[data-status='cancelled'] .subagent-status,
+.subagent-card[data-status='limited'] .subagent-status,
+.subagent-card[data-status='needs_review'] .subagent-status {
+  color: #9b5d17;
+}
+.subagent-objective {
+  margin: 8px 0;
+  color: var(--muted, #777982);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.subagent-text {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.subagent-text:empty {
+  display: none;
+}
+.subagent-tool,
+.subagent-meta {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted, #777982);
+}
+.subagent-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9b5d17;
+  overflow-wrap: anywhere;
+}
+/* Who produced an effect: shown on the change list and on an approval prompt, because "a sub-agent
+   did it" is the difference between reviewing your own step and someone else's. */
+.subagent-badge {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--muted, #777982);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+ * The sub-agent catalog in the header: one line per child, DSH's shape.
+ *
+ * The trigger lives beside the session title because the children are the title's
+ * own continuation — "what is this session doing" includes the work it delegated
+ * — and the popover hangs off the heading so it opens under the thing it counts.
+ * ------------------------------------------------------------------------- */
+/* The generic `header > div` rule clips its overflow so a long session title ellipsizes; the popover hangs
+   below this box, so the clipping has to stop here. The title element still ellipsizes on its own. */
+#chat-page > header > .chat-heading {
+  position: relative;
+  overflow: visible;
+  gap: 8px;
+}
+.subagent-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+#open-subagents {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--muted, #777982);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+#open-subagents:hover,
+#open-subagents[aria-expanded='true'] {
+  background: var(--hover, #eef0f2);
+  color: var(--ink, #1b1c1e);
+}
+#open-subagents:focus-visible {
+  outline: 2px solid var(--accent, #4f7560);
+  outline-offset: 2px;
+}
+/* The running marker: a child is working, which is the one thing the count alone cannot say. */
+.subagent-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, #4f7560);
+  animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes subagent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.subagents-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 30;
+  width: min(336px, calc(100vw - 32px));
+  max-height: min(60vh, 420px);
+  overflow: auto;
+  border: 1px solid var(--line, #dfe5e1);
+  border-radius: 12px;
+  padding: 6px;
+  background: var(--raised, #fff);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 20%);
+  color: var(--ink, #1b1c1e);
+}
+@media (max-width: 1200px) {
+  .subagents-popover {
+    right: 0;
+    left: auto;
+  }
+}
+.subagent-catalog {
+  display: grid;
+  gap: 2px;
+}
+.subagent-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.subagent-row:hover,
+.subagent-row:focus-visible {
+  background: var(--hover, #eef0f2);
+}
+.subagent-row:focus-visible {
+  outline: 2px solid var(--accent, #4f7560);
+  outline-offset: -2px;
+}
+/* The dot's column is fixed whether or not it is drawn, so the titles of a running row and a finished
+   one line up instead of stepping in and out by the marker's width. */
+.subagent-row-dot {
+  width: 7px;
+  height: 7px;
+  justify-self: center;
+  border-radius: 50%;
+  background: var(--muted, #777982);
+}
+.subagent-row-dot[data-state='ongoing'] {
+  background: var(--accent, #4f7560);
+  animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+.subagent-row-dot[data-state='done'] {
+  background: #3f9a63;
+}
+.subagent-row-content {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.subagent-row-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.subagent-row-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted, #777982);
+  font-size: 11px;
+}
+.subagent-row-metrics {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.subagent-row-tokens {
+  color: var(--ink, #1b1c1e);
+}
+.subagent-row-duration {
+  color: var(--muted, #777982);
+}
+/* The card's own two numbers, painted by the same functions as the catalog's so the two surfaces
+   cannot print different readings of one child. */
+.subagent-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.subagent-meta-tokens,
+.subagent-meta-duration {
+  font-variant-numeric: tabular-nums;
+}
+.subagent-report {
+  margin: 8px 0;
+}
+.subagent-report-summary {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.subagent-report-heading {
+  font-size: 11px;
+  color: var(--muted, #777982);
+  margin-bottom: 4px;
+}
+.subagent-findings {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.subagent-findings li {
+  margin-bottom: 6px;
+}
+.subagent-evidence {
+  display: block;
+  color: var(--muted, #777982);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.subagent-unverified,
+.subagent-blockers {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #9b5d17;
+  overflow-wrap: anywhere;
+}
+.subagent-view {
+  margin-top: 8px;
+}
+/* A child's record, as a page.
+   It used to open folded into the card list, which put a whole transcript inside the box that lists it. While
+   it is on screen the parent's own surfaces step aside — the page names the child in the header, so anything
+   else would be the conversation the reader just left. */
+.subagent-page {
+  margin: 0 auto;
+  max-width: 1000px;
+  width: 100%;
+  padding: 20px 28px 60px;
+}
+.subagent-page .subagent-transcript-note {
+  margin: 0 0 14px;
+  font-size: 12px;
+}
+/* The page scrolls as a whole, so the record itself is not a second scroll box. */
+.subagent-page .subagent-transcript-messages {
+  display: block;
+  max-height: none;
+  overflow: visible;
+}
+.subagent-page .subagent-live {
+  margin-top: 20px;
+}
+.subagent-process {
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+.subagent-process > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+.subagent-process > summary::-webkit-details-marker {
+  display: none;
+}
+.subagent-process > summary::before {
+  content: '›';
+  display: inline-block;
+  font-size: 20px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+.subagent-process[open] > summary::before {
+  transform: rotate(90deg);
+}
+.subagent-process > summary:hover {
+  color: var(--ink);
+}
+.subagent-process > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.subagent-process[open] > summary {
+  margin-bottom: 18px;
+}
+.subagent-result > h2 {
+  margin: 0 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.subagent-result .message {
+  margin-top: 0;
+}
+.subagent-result-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+.subagent-workspace-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+body[data-subagent-page='open'] #conversation > :not(#subagent-transcript),
+body[data-subagent-page='open'] .composer-area {
+  display: none;
+}
+/* The record has no tail to follow: the conversation and its jump control are out of the reader's reach. */
+body[data-subagent-page='open'] #chat-page #jump-to-latest {
+  display: none;
+}
+.subagent-transcript-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.subagent-transcript-header strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.subagent-transcript-note {
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--muted, #777982);
+}
+.subagent-transcript-messages {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.subagent-transcript-message {
+  border: 1px solid var(--line, #dfe5e1);
+  border-radius: 6px;
+  padding: 8px;
+}
+.subagent-transcript-role {
+  font-size: 11px;
+  color: var(--muted, #777982);
+  margin-bottom: 4px;
+}
+.subagent-transcript-text {
+  margin: 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tasks-panel-header,
+.task-card-header,
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tasks-panel-header {
+  justify-content: space-between;
+}
+.tasks-panel h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.task-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.task-card {
+  border: 1px solid var(--line, #dfe5e1);
+  border-radius: 8px;
+  padding: 12px;
+}
+.task-card-header {
+  justify-content: space-between;
+}
+.task-card h3 {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.task-status {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: var(--surface, #f5f5f6);
+}
+.task-status.completed {
+  color: #28704a;
+}
+.task-status.needs_review,
+.task-status.blocked {
+  color: #9b5d17;
+}
+.task-status.in_progress {
+  color: var(--accent, #4f7560);
+}
+.task-description {
+  margin: 8px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted, #69756e);
+  font-size: 12px;
+}
+.task-steps {
+  margin: 8px 0;
+  padding-left: 22px;
+  font-size: 12px;
+}
+.task-schedule-summary {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted, #69756e);
+}
+.task-schedule-error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #9b5d17;
+  overflow-wrap: anywhere;
+}
+.task-approval {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--line, #dfe5e1);
+  border-radius: 8px;
+  background: var(--surface, #f5f5f6);
+  font-size: 12px;
+}
+.task-approval p {
+  margin: 6px 0;
+}
+.task-approval pre {
+  max-height: 160px;
+  margin: 6px 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.task-schedule-fields {
+  display: grid;
+  gap: 8px;
+}
+.task-step-journal summary,
+.task-history summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted, #69756e);
+}
+.task-step-journal p,
+.task-history p {
+  margin: 4px 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.task-step {
+  margin: 4px 0;
+}
+.task-step.completed {
+  color: #28704a;
+}
+.task-step.blocked {
+  color: #a53d3d;
+}
+.task-empty {
+  color: var(--muted, #69756e);
+  font-size: 12px;
+}
+.task-acceptance {
+  margin: 8px 0;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.task-acceptance small {
+  color: var(--muted, #69756e);
+}
+.task-history {
+  margin: 8px 0;
+  font-size: 11px;
+  color: var(--muted, #69756e);
+}
+.task-history div {
+  padding: 3px 0;
+}
+.task-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.message-model {
+  display: block;
+  font-size: 11px;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+.undo-change,
+.confirm-undo {
+  margin: 8px;
+}
+
+.sidebar-footer .settings-entry {
+  margin: 0;
+  padding: 12px 0;
+  border: 0;
+  gap: 10px;
+  align-items: center;
+  font-size: 14px;
+  color: #3d5f49;
+}
+body[data-page='settings'],
+body[data-page='background'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.settings-page {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+}
+.settings-sidebar {
+  background: #f0f2f2;
+  border-right: 1px solid #e0e5e4;
+  padding: 28px 20px;
+}
+#settings-back {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  background: transparent;
+  color: #60746a;
+  padding: 10px 8px;
+  font-size: 13px;
+  text-align: left;
+  border-radius: 6px;
+}
+#settings-back:hover {
+  color: #244c35;
+  background: #e5ece6;
+  border-radius: 6px;
+}
+.settings-sidebar h1 {
+  margin: 38px 12px 24px;
+  font-size: 26px;
+  font-weight: 600;
+  color: #294637;
+}
+.settings-sidebar nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+  background: #e0e9e1;
+  color: #335b40;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.settings-sidebar nav button > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-nav-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.settings-content {
+  overflow: auto;
+  padding: 48px clamp(24px, 6vw, 84px);
+}
+.workspace-maintenance-body {
+  max-width: 780px;
+  margin: 0 auto;
+}
+#settings-page #workspace-maintenance-label {
+  flex: 1;
+  width: auto;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: nowrap;
+}
+.workspace-maintenance-list {
+  list-style: none;
+  padding: 0;
+  margin: 24px 0;
+}
+.workspace-maintenance-item {
+  padding: 20px 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+}
+.workspace-maintenance-item > strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.workspace-maintenance-item > small {
+  display: block;
+  margin: 8px 0 16px;
+  opacity: 0.7;
+}
+.workspace-maintenance-item > div {
+  display: flex;
+  gap: 8px;
+}
+.settings-page-header {
+  max-width: 780px;
+  margin: 0 auto 30px;
+}
+.settings-page-header .eyebrow {
+  margin: 0 0 12px;
+}
+.settings-page-header h2 {
+  margin: 0;
+  font-size: 29px;
+  font-weight: 600;
+  color: #294637;
+}
+.settings-page-header p {
+  color: #7b8880;
+  font-size: 13px;
+  margin: 14px 0 0;
+}
+#settings-form {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 28px 32px;
+  border: 1px solid #dfe6e0;
+  background: #fff;
+  border-radius: 12px;
+}
+#settings-form > .settings-field:first-child {
+  margin-top: 0;
+}
+.chat-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 55%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.chat-model label {
+  color: #8c998f;
+  font-size: 11px;
+}
+select.model-chip {
+  padding: 8px 32px 8px 12px;
+  max-width: 100%;
+  color: #42634d;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+select.model-chip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+#model-switch-status {
+  width: 100%;
+  color: #985346;
+  font-size: 11px;
+  text-align: right;
+}
+@media (max-width: 960px) {
+  .settings-page {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  .settings-content {
+    padding: 28px 22px;
+  }
+  #settings-form {
+    padding: 22px;
+  }
+  .chat-model label {
+    display: none;
+  }
+}
+
+#session-search {
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border: 1px solid #dfdfd6;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+}
+.session-empty {
+  color: #77796d;
+  font-size: 12px;
+}
+.session-row {
+  position: relative;
+  margin-bottom: 5px;
+}
+.session-row .session-item {
+  margin-bottom: 0;
+  padding-right: 42px;
+}
+.session-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-more {
+  position: absolute;
+  right: 6px;
+  top: 10px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5d6967;
+  font-size: 23px;
+  line-height: 1;
+}
+.session-more:hover,
+.session-more:focus-visible,
+.session-more[aria-expanded='true'] {
+  background: #d5dfd9;
+}
+.session-menu {
+  position: fixed;
+  z-index: 100;
+  width: 132px;
+  padding: 5px;
+  border: 1px solid #d9dfda;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 22px #263d2926;
+}
+.session-menu button {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #34473d;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+}
+.session-menu button:hover,
+.session-menu button:focus-visible {
+  background: #eef2ee;
+}
+.session-menu .danger-text {
+  color: #a74536;
+}
+#session-dialog {
+  width: min(440px, 90vw);
+  padding: 28px;
+  border: 1px solid #d9dccf;
+  border-radius: 14px;
+  background: #fbfbf7;
+  color: #292e22;
+  box-shadow: 0 20px 70px #20251b30;
+}
+#session-dialog::backdrop {
+  background: #252d2055;
+}
+#session-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+#session-dialog p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+#session-title-label {
+  display: block;
+  margin: 16px 0 6px;
+  font-size: 12px;
+}
+#session-title-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #cdd2c3;
+  border-radius: 7px;
+  font: inherit;
+}
+.session-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+.session-dialog-actions button {
+  padding: 8px 14px;
+  border: 1px solid #cdd2c3;
+  border-radius: 7px;
+  font: inherit;
+}
+#session-dialog-error {
+  color: #a74536;
+}

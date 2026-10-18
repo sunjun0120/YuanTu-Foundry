@@ -34,7 +34,15 @@ async function read(relative) {
   return await readFile(path.join(ROOT, relative), 'utf8');
 }
 
-/** One entry of `apps/desktop/i18n.ts`'s zh/en table, as its two strings. */
+/** The desktop dictionary's source: `apps/desktop/i18n.ts` and the `i18n-*.ts` parts it joins. */
+async function dictionary() {
+  const files = (await readdir(path.join(ROOT, 'apps/desktop')))
+    .filter((name) => /^i18n(-[a-z-]+)?\.ts$/.test(name))
+    .sort();
+  return (await Promise.all(files.map((name) => read(`apps/desktop/${name}`)))).join('\n');
+}
+
+/** One entry of the desktop dictionary's zh/en table, as its two strings. */
 function labels(source, key) {
   const match = new RegExp(`'${key.replaceAll('.', '\\.')}':\\s*\\[([\\s\\S]*?)\\]`).exec(source);
   assert.ok(match, `i18n has no entry for ${key}`);
@@ -46,7 +54,7 @@ function labels(source, key) {
 }
 
 test('the interface distinguishes an isolated workspace from a shared one in both languages', async () => {
-  const i18n = await read('apps/desktop/i18n.ts');
+  const i18n = await dictionary();
   const isolated = labels(i18n, 'subagent.workspace.isolated');
   const shared = labels(i18n, 'subagent.workspace.shared');
   for (const [language, index] of [
@@ -69,7 +77,7 @@ test('the interface distinguishes an isolated workspace from a shared one in bot
 });
 
 test('every result status the Host can report has its own sentence', async () => {
-  const i18n = await read('apps/desktop/i18n.ts');
+  const i18n = await dictionary();
   const protocol = await read('packages/protocol/workspaces.ts');
   const statuses = /WORKSPACE_RESULT_STATUSES = \[([\s\S]*?)\] as const/.exec(protocol);
   assert.ok(statuses, 'the result statuses are declared as a closed set');
@@ -97,12 +105,13 @@ test('the card renders the state from the binding, not from a guess', async () =
   assert.match(renderer, /dataset\.state = view\.workspace\.state/);
   assert.match(renderer, /subagent\.workspace\.problem/);
   assert.match(renderer, /subagent\.workspace\.result\./);
-  const controller = await read('packages/client/session-controller.ts');
+  // The controller's session reads live in `session-history.ts`.
+  const reads = await read('packages/client/session-history.ts');
   // The view is filled from the Host's own answers, and a Host that cannot answer leaves the field *absent* rather
   // than filling it with `shared`: "we do not know" and "this is not isolated" are different statements.
-  assert.match(controller, /request\('workspaces\.get'/);
-  assert.match(controller, /request\('workspace\.results'/);
-  assert.match(controller, /kind: answer\.binding\.kind/);
+  assert.match(reads, /request\('workspaces\.get'/);
+  assert.match(reads, /request\('workspace\.results'/);
+  assert.match(reads, /kind: answer\.binding\.kind/);
 });
 
 test('a built desktop is what a real UI run needs, and its absence is reported', async () => {

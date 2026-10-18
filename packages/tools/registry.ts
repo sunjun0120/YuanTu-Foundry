@@ -9,21 +9,19 @@ import {
 import { resolveSandboxConfig } from './sandbox-provider.ts';
 import type { ValidateFunction } from 'ajv';
 import { DeferredApprovalError } from '../protocol/failure.ts';
-import { validateImages } from '../protocol/images.ts';
 import { JobRegistry } from '../protocol/jobs.ts';
 import type { PermissionPolicyView } from '../protocol/permissions.ts';
-import { spillNotice } from './spill.ts';
-import type {
-  Tool,
-  ToolCall,
-  ToolContext,
-  ToolResult,
-  ToolScope,
-  ToolSpec,
-} from '../protocol/index.ts';
+import type { Tool, ToolCall, ToolContext, ToolResult, ToolSpec } from '../protocol/index.ts';
 import type { Disposer } from './dispatch.ts';
 import { ToolPipelineInvariant } from './pipeline.ts';
-import { ToolTimeoutError, resolveToolDeadline, type ToolDeadlinePolicy } from './timeouts.ts';
+import { ToolTimeoutError, type ToolDeadlinePolicy } from './timeouts.ts';
+import { approveWithinBudget, createDispatch, runWithDeadline } from './call-runtime.ts';
+import {
+  errorResult,
+  finalResult,
+  invalidArgumentsMessage,
+  normalizeImages,
+} from './call-result.ts';
 import { FOLDED_DESCRIPTION, RUN_CODE, toolSdk, type ToolMode } from './run-code-sdk.ts';
 import { LOAD_TOOLS, deferredCatalog } from './deferred-tools.ts';
 import { presentedSchema } from './presented-schema.ts';
@@ -35,16 +33,8 @@ import type {
 } from './pipeline.ts';
 
 import { HookRegistry } from './hooks.ts';
-import type { ExtensionHooks, ToolDispatch, ToolGuard } from '../protocol/tool-hooks.ts';
-import {
-  MAX_TOOL_OUTPUT,
-  OBSERVER_FAILURE_NOTICE,
-  RUN_SCOPED_TOOLS,
-  TRUNCATION_MARKER,
-  bounded,
-  noop,
-  safeSpill,
-} from './tool-output.ts';
+import type { ExtensionHooks, ToolGuard } from '../protocol/tool-hooks.ts';
+import { RUN_SCOPED_TOOLS, noop } from './tool-output.ts';
 export {
   MAX_TOOL_OUTPUT,
   RUN_SCOPED_TOOLS,
@@ -512,61 +502,13 @@ export class ToolRegistry {
     });
     const invariant = this.pipelineInvariant;
     let completed = false;
-    const errorResult = (error: unknown): ToolResult => ({
-      isError: true,
-      content: error instanceof Error ? error.message : String(error),
-    });
-    const normalizeImages = (result: ToolResult): ToolResult => {
-      if (result.images === undefined) return result;
-      try {
-        return { ...result, images: validateImages(result.images) };
-      } catch (error) {
-        return errorResult(
-          `Invalid tool result images: ${
-            error instanceof Error ? bounded(error.message, 256) : 'image validation failed'
-          }`,
-        );
-      }
-    };
     const materialize = (
       result: ToolResult,
       extra: { notice?: boolean; additionalContext?: string[] } = {},
     ): ToolExecutionResult => {
       invariant.enter(execution, 'result');
       completed = true;
-      // Post-execute policies may replace attachments, so validate the final persistence boundary too.
-      result = normalizeImages(result);
-      /**
-       * Output that does not fit is written somewhere the model can still read it, and the truncation notice
-       * says where. Without a host-provided spill this is the plain truncation it always was.
-       *
-       * A result that already ends in `TRUNCATION_MARKER` is one a tool cut before handing it over, and it must
-       * not be spilled: the copy would be the same text under a notice promising "the full N bytes / N lines",
-       * so the prompt would assert a completeness the file does not have — exactly in the cases that matter
-       * most, where the missing tail is the failing build or the stack. `bounded` is what cuts, and the marker
-       * is what it leaves, so the marker is the test for "was this truncated" rather than a length comparison
-       * against a budget the marker sits outside of.
-       */
-      const truncated = result.content.endsWith(TRUNCATION_MARKER);
-      /**
-       * A tool that already cut its own output still gets its captured text spilled — that text is the only copy —
-       * but the notice says what the copy is instead of promising a tail the tool never had. Without this the
-       * prompt asserted a completeness the file does not have, in exactly the case that matters most: a command
-       * whose output is long enough to be bounded is a command whose tail was the failing build or the stack.
-       */
-      const overflow =
-        !truncated && result.content.length > MAX_TOOL_OUTPUT && context.spill
-          ? safeSpill(context.spill, call.name, result.content)
-          : null;
-      return {
-        ...result,
-        content:
-          (overflow
-            ? result.content.slice(0, MAX_TOOL_OUTPUT) +
-              spillNotice(overflow, MAX_TOOL_OUTPUT, result.truncated === true)
-            : bounded(result.content)) + (extra.notice ? OBSERVER_FAILURE_NOTICE : ''),
-        ...(extra.additionalContext?.length ? { additionalContext: extra.additionalContext } : {}),
-      };
+      return finalResult(result, call.name, context.spill, extra);
     };
     try {
       invariant.enter(execution, 'validate');
@@ -590,16 +532,17 @@ export class ToolRegistry {
           ),
         );
       if (!entry.validate(call.arguments)) {
-        const properties = entry.tool.inputSchema.properties;
         const additional = entry.validate.errors?.some(
           (error) => error.keyword === 'additionalProperties' && error.instancePath === '',
         );
-        const hint =
-          additional && properties && typeof properties === 'object'
-            ? ` Allowed top-level arguments: ${Object.keys(properties).slice(0, 20).join(', ') || '(none)'}.`
-            : '';
         return materialize(
-          errorResult(`Invalid arguments: ${this.ajv.errorsText(entry.validate.errors)}.${hint}`),
+          errorResult(
+            invalidArgumentsMessage(
+              this.ajv.errorsText(entry.validate.errors),
+              entry.tool.inputSchema.properties,
+              additional === true,
+            ),
+          ),
         );
       }
 
@@ -637,7 +580,12 @@ export class ToolRegistry {
       let approvedPolicy = context.permissionPolicyForCall?.();
       if (entry.tool.permission) {
         invariant.enter(execution, 'approval');
-        const decision = await this.approveWithinBudget(approval!, context.approve, context.signal);
+        const decision = await approveWithinBudget(
+          approval!,
+          context.approve,
+          context.signal,
+          this.deadlines?.approvalMs,
+        );
         context.signal.throwIfAborted();
         if (!decision.allowed)
           return materialize(
@@ -662,10 +610,11 @@ export class ToolRegistry {
           if (decision === 'deny')
             throw new Error('Permission denied by the current policy. No effect was executed.');
           if (decision !== 'allow') {
-            const answer = await this.approveWithinBudget(
+            const answer = await approveWithinBudget(
               approval,
               context.approve,
               dispatchSignal,
+              this.deadlines?.approvalMs,
             );
             if (!answer.allowed)
               throw new Error(
@@ -726,7 +675,7 @@ export class ToolRegistry {
          * call's cancellation without rewriting the record of what was requested, and it is why the deadline below
          * reads the signal *the wrapper chain handed it* rather than the one this method created.
          */
-        const dispatched = this.createDispatch(execution, dispatchScope, callAbort);
+        const dispatched = createDispatch(execution, dispatchScope, callAbort);
         let bodyAttempts = 0;
         let ownedDeadlineExpired = false;
         result = await withExecutionPolicy(dispatchPolicy, () =>
@@ -745,7 +694,7 @@ export class ToolRegistry {
                   retryAbort,
                 );
               }
-              return this.runWithDeadline(
+              return runWithDeadline(
                 call.name,
                 current.abort,
                 async () => {
@@ -816,6 +765,7 @@ export class ToolRegistry {
                     observe('finished');
                   }
                 },
+                this.deadlines,
                 entry.tool.cancellationGraceMs,
               ).catch((error) => {
                 if (
@@ -874,143 +824,6 @@ export class ToolRegistry {
     } finally {
       context.signal.removeEventListener('abort', abortWithRun);
       invariant.leave(execution, completed);
-    }
-  }
-  /**
-   * Runs one tool body with this call's deadline, turning "it ran out of budget" into a failure the model reads.
-   *
-   * It sits at the *terminal* of the around-dispatch chain rather than in an `aroundTool` wrapper, and the
-   * placement is the point: a wrapper receives `next()` and the run's signal, but the signal a tool body sees is
-   * fixed before that seam runs, so a policy installed there could only bound its own waiting — it would report
-   * a timeout while the tool kept running, which is the same "result for an effect that did not happen" the rest
-   * of this pipeline refuses. Here the call has a signal of its own, so the deadline can *abort the call*: a
-   * cooperative tool kills its child or closes its socket, and a tool that ignores its signal is bounded anyway,
-   * because the wait is a race either way.
-   *
-   * Wrappers lose nothing by this: the timeout arrives as the call's result, so a retry or metrics policy wraps
-   * it like any other failure — and because the timer is per invocation, a wrapper that retries gives the attempt
-   * a fresh budget rather than the leftovers of the first one.
-   */
-  /**
-   * The dispatch one call's wrapper chain threads.
-   *
-   * The scope is where a wrapper's replacement actually lands, so this is the only place a `ToolScope` is minted:
-   * `withSignal` and `withScope` copy the same frozen `execution` forward, which is what keeps "what a wrapper
-   * replaced" and "what the audit record says" from being able to drift apart.
-   */
-  private createDispatch(
-    execution: ToolExecution,
-    scope: ToolContext,
-    abort: AbortController,
-  ): ToolDispatch {
-    const bound = scope as ToolScope;
-    const make = (next: ToolScope, controller: AbortController): ToolDispatch => ({
-      execution,
-      scope: next,
-      signal: next.signal,
-      abort: controller,
-      withSignal: (signal, replacement) => make({ ...next, signal }, replacement),
-      withScope: (replacement) => make(replacement, controller),
-    });
-    return make(bound, abort);
-  }
-  /**
-   * Wait for an approval, but not forever.
-   *
-   * The per-call deadline below wraps `execute`, and an approval happens before it: an approver that never answers
-   * therefore had no bound at all, and the step stayed open until somebody pressed Stop — the case the factory Host
-   * papers over with its own 120 s timer, and one a library embedder has nothing for. An unanswered request is a
-   * denial, not a timeout: nothing ran, and the model is told which of the two happened. `0` keeps the wait-forever
-   * behaviour for a deployment that owns a timer already.
-   */
-  private async approveWithinBudget(
-    approval: Parameters<ToolContext['approve']>[0],
-    approve: ToolContext['approve'],
-    signal: AbortSignal,
-  ): Promise<{ allowed: boolean; timedOut: boolean; budgetMs?: number }> {
-    const budgetMs = this.deadlines?.approvalMs;
-    if (budgetMs === undefined || budgetMs <= 0)
-      return { allowed: await approve(approval, signal), timedOut: false };
-    // Handlers are attached before the race, so a late answer — or a late failure — after the budget expired is
-    // observed and discarded instead of surfacing as an unhandled rejection.
-    const answer = approve(approval, signal).then(
-      (allowed) => ({ allowed }),
-      (error: unknown) => ({ error }),
-    );
-    let timer: NodeJS.Timeout | undefined;
-    const expired = new Promise<'expired'>((resolve) => {
-      timer = setTimeout(() => resolve('expired'), budgetMs);
-      // A pending approval must not be a reason for the process to stay alive.
-      timer.unref();
-    });
-    try {
-      const outcome = await Promise.race([answer, expired]);
-      if (outcome === 'expired') return { allowed: false, timedOut: true, budgetMs };
-      if ('error' in outcome) throw outcome.error;
-      return { allowed: outcome.allowed, timedOut: false };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  private async runWithDeadline(
-    name: string,
-    abort: AbortController,
-    body: () => Promise<ToolResult>,
-    cancellationGraceMs?: number,
-  ): Promise<ToolResult> {
-    const timeoutMs = resolveToolDeadline(name, this.deadlines);
-    const call = body();
-    if (timeoutMs === undefined) return await call;
-    let timer: NodeJS.Timeout | undefined;
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const error = new ToolTimeoutError(name, timeoutMs);
-        // Abort before rejecting: a tool that is listening is given the same error it is about to be reported
-        // with, so "what the tool was told" and "what the model is told" cannot end up saying different things.
-        // The controller is the one the wrapper chain handed down, so a wrapper that replaced the signal gets its
-        // replacement aborted — a bound it can actually tighten rather than one it can only report.
-        abort.abort(error);
-        reject(error);
-      }, timeoutMs);
-      // A pending deadline must not be a reason for the process to stay alive, or every test that leaves a hung
-      // tool behind would wait out the whole budget before it could exit.
-      timer.unref();
-    });
-    // The abandoned attempt may still settle — it was *asked* to stop, not guaranteed to have stopped — and by
-    // then nothing is reading it. An unhandled rejection here would take the process down for a call the run
-    // already reported as failed.
-    void call.catch(() => {});
-    try {
-      return await Promise.race([call, deadline]);
-    } catch (error) {
-      if (abort.signal.aborted && cancellationGraceMs !== undefined) {
-        let cleanupTimer: NodeJS.Timeout | undefined;
-        try {
-          await Promise.race([
-            call.then(
-              () => {},
-              (cause) => {
-                if (cause instanceof Error && cause.name === 'ToolCleanupError') throw cause;
-              },
-            ),
-            new Promise<never>((_, reject) => {
-              cleanupTimer = setTimeout(() => {
-                const unknown = new Error(
-                  'Tool cleanup could not be confirmed; effects may be unknown',
-                );
-                unknown.name = 'ToolCleanupError';
-                reject(unknown);
-              }, cancellationGraceMs);
-              cleanupTimer.unref();
-            }),
-          ]);
-        } finally {
-          clearTimeout(cleanupTimer);
-        }
-      }
-      throw error;
-    } finally {
-      clearTimeout(timer);
     }
   }
 }

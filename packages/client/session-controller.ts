@@ -6,11 +6,7 @@ import type {
   QuestionAnswer,
   QuestionRequest,
   RunResult,
-  SubAgentRole,
-  SubAgentSummaryReport,
-  TodoItem,
   ToolCall,
-  Usage,
   ImageAttachment,
 } from '../protocol/index.ts';
 import type { AgentHostClient } from './host-client.ts';
@@ -20,33 +16,30 @@ import { validateUserInput } from '../protocol/images.ts';
 import { isTodoItem } from '../protocol/index.ts';
 import { emptyStatistics, addStatistics, type SessionStatistics } from '../protocol/statistics.ts';
 import { todoDiff } from '../protocol/todos.ts';
-import type { TodoChange } from '../protocol/todos.ts';
 import { isPresentedFile, presentFiles } from '../protocol/deliverables.ts';
-import type { PresentedFile } from '../protocol/deliverables.ts';
-import type { Goal } from '../protocol/goals.ts';
 import { isGoal } from '../protocol/goals.ts';
-import type { CompletionRecord } from '../protocol/completion.ts';
+import {
+  readCompletion,
+  readDeliverables,
+  readGoal,
+  readPlan,
+  readSubAgents,
+  readTodos,
+  readWorkspaceViews,
+} from './session-history.ts';
+import {
+  foldCompletion,
+  foldForecast,
+  foldSubAgentFinished,
+  foldSubAgentProgress,
+  foldSubAgentTool,
+  startedSubAgent,
+  subAgentWorkspace,
+  toolResultMessage,
+} from './session-event-fold.ts';
 
-/**
- * The definition a window shows before it has read one.
- *
- * A `completion.updated` record written by a mid-run round carries the evidence but not the contract, so a window
- * that attached while a run was already repairing folds its first record without an objective. This stands in so
- * the shape is stable and the reader can tell "not read yet" from "no contract" — the latter being `null` on the
- * state itself. It is never written back to the session.
- */
-const EMPTY_COMPLETION_DEFINITION: CompletionRecord['definition'] = {
-  version: 1,
-  objective: '',
-  constraints: [],
-  steps: [],
-  acceptance: [],
-  inputs: [],
-};
 /** The newest page a run-end sync reads; a run that added more than this falls back to the full window read. */
 const INCREMENTAL_TAIL = 100;
-import type { ToolResultOutput } from '../protocol/tool-result.ts';
-import type { ContextBreakdown } from '../core/budget.ts';
 import type {
   MessageDelta,
   SessionSnapshot,
@@ -455,23 +448,23 @@ export class SessionController {
     if (this.staleRead(generation)) return;
     // The plan lives outside the message history, so it is fetched separately: a plan proposed in an
     // earlier run is still the plan awaiting a decision after a reload.
-    const plan = await this.currentPlan(sessionId);
+    const plan = await readPlan(this.client, sessionId);
     if (this.staleRead(generation)) return;
     // Sub-agent cards are rebuilt from the stored run result: their events are progress, not history,
     // and nothing about a child survives in the parent's transcript but its report.
-    const subagents = await this.historySubAgents(sessionId);
+    const subagents = await readSubAgents(this.client, sessionId);
     if (this.staleRead(generation)) return;
     // The checklist is session state, not run state: it is written during a run but it is still the plan the
     // model is following after that run ends, so a reload has to bring it back.
-    const checklist = await this.historyTodos(sessionId);
+    const checklist = await readTodos(this.client, sessionId);
     if (this.staleRead(generation)) return;
     // The deliverables and the goal are session state in the same sense the checklist is: written during a run,
     // still true after it ends, and restored on reload from the log rather than from the run's result.
-    const deliverables = await this.historyDeliverables(sessionId);
+    const deliverables = await readDeliverables(this.client, sessionId);
     if (this.staleRead(generation)) return;
-    const goal = await this.historyGoal(sessionId);
+    const goal = await readGoal(this.client, sessionId);
     if (this.staleRead(generation)) return;
-    const completion = await this.historyCompletion(sessionId);
+    const completion = await readCompletion(this.client, sessionId);
     if (this.staleRead(generation)) return;
     /**
      * The live run is read *last*, after every other query has been answered.
@@ -621,177 +614,12 @@ export class SessionController {
     this.publish();
     return true;
   }
-  /** Reads the latest plan, tolerating a Host that predates the plan capability. */
-  private async currentPlan(sessionId: string): Promise<Plan | null> {
-    try {
-      return await this.client.request('plan.get', { sessionId });
-    } catch {
-      return null;
-    }
-  }
-  /**
-   * The files a run marked as its deliverables, for a session load.
-   *
-   * Tolerant of a Host that predates the capability, like the plan and the checklist: the panel stays empty
-   * rather than the whole session failing to load.
-   */
-  private async historyDeliverables(sessionId: string): Promise<PresentedFile[]> {
-    try {
-      return await this.client.request('deliverables.get', { sessionId });
-    } catch {
-      return [];
-    }
-  }
-  /** The session's goal, for a session load; `null` when there is none or the Host predates the capability. */
-  private async historyGoal(sessionId: string): Promise<Goal | null> {
-    try {
-      return await this.client.request('goal.get', { sessionId });
-    } catch {
-      return null;
-    }
-  }
-  /**
-   * The completion contract this session is working against, for a session load.
-   *
-   * The record outlives the run that created it, so a window reopened after a repair — or after a crash — has to
-   * read it back from the log rather than from a result it never saw. `null` is the honest answer for a session
-   * with no contract, and a Host that predates the capability answers the same way.
-   */
-  private async historyCompletion(sessionId: string): Promise<CompletionRecord | null> {
-    try {
-      return await this.client.request('completion.current', { sessionId });
-    } catch {
-      return null;
-    }
-  }
-  /**
-   * Sub-agents of the most recent run, as stored with its result. A Host that predates the capability
-   * simply answers with an error, and the panel stays empty instead of failing the session load.
-   */
-  private async historySubAgents(sessionId: string): Promise<SubAgentView[]> {
-    try {
-      const summaries = await this.client.request('subagents.list', {
-        sessionId,
-        includePreviousRuns: true,
-      });
-      /**
-       * Where each child worked, reconstructed from what the Host still knows.
-       *
-       * This is the *reopen* path: a session loaded after the fact has no `subagent.workspace` frames to replay, so
-       * the workspace state has to be read rather than remembered. A failure is tolerated on purpose — a Host that
-       * predates the capability answers "Unknown method" — and the cards are then built without the field instead of
-       * the session load failing.
-       */
-      const workspaces = await this.workspaceViews(
-        sessionId,
-        summaries.map((entry) => entry.sessionId),
-      );
-      return summaries.map((summary, index) => ({
-        id: summary.id,
-        index,
-        total: summaries.length,
-        role: summary.role,
-        objective: summary.objective,
-        childSessionId: summary.sessionId,
-        status: summary.status,
-        rounds: summary.rounds,
-        toolCalls: summary.toolCalls,
-        ...(summary.status !== 'interrupted' && summary.usage ? { usage: summary.usage } : {}),
-        // The card's clock, restored with the card: a child that ran for six minutes says six minutes on a
-        // reload, and one whose turn was cut off by a restart stops there instead of counting the downtime.
-        durationMs: summary.durationMs ?? 0,
-        runningSince: summary.runningSince ?? null,
-        text: '',
-        // The report is why a card is worth restoring: the status alone says a child ran, and the
-        // findings say what it found.
-        ...(summary.report ? { report: summary.report } : {}),
-        ...(summary.error ? { error: summary.error } : {}),
-        ...(workspaces.get(summary.sessionId)
-          ? { workspace: workspaces.get(summary.sessionId)! }
-          : {}),
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * The workspace each child ran in, keyed by child session id.
-   *
-   * Two requests per child, and both are allowed to fail independently: the *binding* is where it worked and the
-   * *result* is what it produced, and a child that produced nothing still has a place it worked. A failure returns no
-   * entry at all rather than a `shared` one, which is the difference between "we do not know" and "this is not
-   * isolated" — and only one of those is safe to show a person as reassurance.
-   */
-  private async workspaceViews(
-    parentSessionId: string,
-    childSessionIds: readonly string[],
-  ): Promise<Map<string, NonNullable<SubAgentView['workspace']>>> {
-    const found = new Map<string, NonNullable<SubAgentView['workspace']>>();
-    const results = new Map<
-      string,
-      { id: string; digest: string; status: string; paths: string[] }
-    >();
-    try {
-      for (const result of await this.client.request('workspace.results', {
-        sessionId: parentSessionId,
-      })) {
-        // The newest result per child wins, which is the one still outstanding: an earlier import has already been
-        // accepted, and a card that offered it again would be offering work the parent already has.
-        // The Host orders durable results oldest first; take the latest even after it conflicts or is imported.
-        results.set(result.childSessionId, {
-          id: result.id,
-          digest: result.digest,
-          status: result.status,
-          paths: [...result.paths],
-        });
-      }
-    } catch {
-      // A Host without the method, or a session with no results at all.
-    }
-    for (const childSessionId of childSessionIds) {
-      if (!childSessionId) continue;
-      try {
-        const answer = await this.client.request('workspaces.get', { sessionId: childSessionId });
-        found.set(childSessionId, {
-          kind: answer.binding.kind,
-          executionRoot: answer.binding.executionRoot,
-          state: answer.binding.state,
-          ...(answer.problems.length ? { problem: answer.problems.join('; ') } : {}),
-          ...(answer.dependencyWarnings?.length
-            ? {
-                dependencyWarning: answer.dependencyWarnings
-                  .map((warning) => warning.message)
-                  .join('; '),
-              }
-            : {}),
-          ...(results.get(childSessionId) ? { result: results.get(childSessionId)! } : {}),
-        });
-      } catch {
-        // Some Hosts cannot answer; saying nothing is the honest response.
-      }
-    }
-    return found;
-  }
-  /**
-   * The checklist as last written, for a session load, plus what the last write changed about it. A Host that
-   * predates the capability answers with an error, and the panel stays empty instead of failing the load.
-   */
-  private async historyTodos(
-    sessionId: string,
-  ): Promise<{ todos: TodoItem[]; change: TodoChange | null }> {
-    try {
-      return await this.client.request('todos.get', { sessionId });
-    } catch {
-      return { todos: [], change: null };
-    }
-  }
   /** Re-reads the plan after an approval decision so the panel reflects the new status. */
   async refreshPlan(): Promise<void> {
     this.assertActive();
     const sessionId = this.state.sessionId;
     if (!sessionId) return;
-    this.state.plan = await this.currentPlan(sessionId);
+    this.state.plan = await readPlan(this.client, sessionId);
     this.publish();
   }
   async approvePlan(planId: string, hash: string): Promise<void> {
@@ -903,7 +731,8 @@ export class SessionController {
       if (!this.disposed && this.client.status === 'ready') {
         const transcript = await this.history(sessionId, true);
         const workspaces = owns()
-          ? await this.workspaceViews(
+          ? await readWorkspaceViews(
+              this.client,
               sessionId,
               this.state.subagents.map((child) => child.childSessionId ?? ''),
             )
@@ -1031,7 +860,8 @@ export class SessionController {
     try {
       const transcript = await this.history(sessionId, true);
       if (this.disposed || !owns()) return;
-      const workspaces = await this.workspaceViews(
+      const workspaces = await readWorkspaceViews(
+        this.client,
         sessionId,
         this.state.subagents.map((child) => child.childSessionId ?? ''),
       );
@@ -1112,27 +942,7 @@ export class SessionController {
         this.state.compacting = false;
         break;
       case 'context.forecast':
-        /**
-         * The round's own prediction, kept so a window can show what the request costs before it is sent and
-         * after it is: "the request is too big" is not actionable on its own, and "the tool schemas cost more
-         * than the conversation" is. Only the fields the panel renders are copied — the event also carries
-         * numbers the run used to size the request, and a second full copy of them in the snapshot would be a
-         * second answer to "what did this round cost".
-         */
-        this.state.budget = {
-          round: Number(event.data.round ?? 0),
-          breakdown: structuredClone(event.data.breakdown as ContextBreakdown),
-          inputTokens: Number(event.data.inputTokens ?? 0),
-          rawInputTokens: Number(event.data.rawInputTokens ?? 0),
-          windowRoom: Number(event.data.windowRoom ?? 0),
-          shortened: Number(event.data.shortened ?? 0),
-          freedChars: Number(event.data.freedChars ?? 0),
-          compacted: event.data.compacted === true,
-          ...(event.data.problem === undefined ? {} : { problem: String(event.data.problem) }),
-          ...(event.data.policyProblem === undefined
-            ? {}
-            : { policyProblem: String(event.data.policyProblem) }),
-        };
+        this.state.budget = foldForecast(event.data);
         break;
       case 'input.queued':
       case 'queue.changed':
@@ -1190,38 +1000,7 @@ export class SessionController {
         this.state.questions = this.state.questions.filter(
           (item) => item.request.callId !== event.data.callId,
         );
-        this.state.messages.push({
-          role: 'tool',
-          toolCallId: String(event.data.callId),
-          content: String(event.data.content),
-          isError: event.data.isError === true,
-          ...(event.data.change
-            ? {
-                change: structuredClone(
-                  event.data.change as import('../protocol/index.ts').FileChange,
-                ),
-              }
-            : {}),
-          /**
-           * The structured payload and its renderer name, when the tool declared an output contract.
-           *
-           * Carried on the message rather than looked up from the tool catalogue, because no method ships that
-           * catalogue to a carrier and a message has to be readable on its own: a window folding a session out
-           * of the log sees results from runs whose tools an extension may since have unregistered, and a card
-           * that needed the declaration to draw a two-minute-old result would draw nothing after a reload. The
-           * event already carries it — the run emits the whole result — so this is the projection's job and
-           * nothing upstream needs to know about it.
-           *
-           * The name is not re-checked against the closed set here. A client that dropped a name it did not
-           * recognise would turn a defect in a tool into a missing feature in the interface, and afterwards the
-           * two are indistinguishable; the set is enforced where names are written (the `ToolRenderer` type,
-           * plus the test that reads every declaration back), and a carrier that meets an unknown name falls
-           * back to the text it already has — which is also what it does when `output` is absent.
-           */
-          ...(event.data.output
-            ? { output: structuredClone(event.data.output as ToolResultOutput) }
-            : {}),
-        });
+        this.state.messages.push(toolResultMessage(event.data));
         this.state.messageRevision++;
         break;
       case 'approval.required':
@@ -1265,84 +1044,8 @@ export class SessionController {
         if (isGoal(event.data.goal)) this.state.goal = structuredClone(event.data.goal);
         break;
       case 'completion.updated': {
-        /**
-         * The contract's state, folded rather than merged.
-         *
-         * Every record the runtime writes carries a whole `summary`, so the newest one is the current state and no
-         * client has to replay a sequence. The *definition* is the exception and is deliberately kept: only the
-         * record written when a contract is created carries it, and a later round record without one must not erase
-         * the objective and criteria the user is reading. `steps` replaces only when present, for the same reason.
-         */
-        const summary = event.data.summary;
-        if (!summary || typeof summary !== 'object' || Array.isArray(summary)) break;
-        const definition = event.data.definition;
-        const steps = event.data.steps;
-        const affectedPaths = event.data.affectedPaths;
-        const previous = this.state.completion;
-        const contractId = String(event.data.contractId ?? previous?.contractId ?? '');
-        if (!contractId) break;
-        this.state.completion = {
-          version: 1,
-          contractId,
-          sessionId: this.state.sessionId ?? '',
-          originRunId: String(event.data.runId ?? previous?.originRunId ?? event.runId ?? ''),
-          latestRunId: String(event.data.runId ?? event.runId ?? previous?.latestRunId ?? ''),
-          source:
-            event.data.source === 'task' ||
-            event.data.source === 'request' ||
-            event.data.source === 'approved-plan'
-              ? event.data.source
-              : (previous?.source ?? 'request'),
-          definition:
-            definition && typeof definition === 'object' && !Array.isArray(definition)
-              ? structuredClone(definition as CompletionRecord['definition'])
-              : (previous?.definition ?? EMPTY_COMPLETION_DEFINITION),
-          definitionHash: String(
-            (summary as { definitionHash?: unknown }).definitionHash ??
-              previous?.definitionHash ??
-              '',
-          ),
-          summary: structuredClone(summary as CompletionRecord['summary']),
-          steps: Array.isArray(steps)
-            ? structuredClone(steps as CompletionRecord['steps'])
-            : (previous?.steps ?? []),
-          affectedPaths: Array.isArray(affectedPaths)
-            ? affectedPaths.map(String)
-            : (previous?.affectedPaths ?? []),
-          policy:
-            event.data.policy && typeof event.data.policy === 'object'
-              ? structuredClone(event.data.policy as CompletionRecord['policy'])
-              : (previous?.policy ?? {
-                  maxRepairRounds: 0,
-                  maxRepeatedFailures: 0,
-                  repairTimeoutMs: 0,
-                }),
-          ...(typeof event.data.repairStartedAt === 'number'
-            ? { repairStartedAt: event.data.repairStartedAt }
-            : previous?.repairStartedAt === undefined
-              ? {}
-              : { repairStartedAt: previous.repairStartedAt }),
-          ...(typeof event.data.failureFingerprint === 'string'
-            ? { failureFingerprint: event.data.failureFingerprint }
-            : previous?.failureFingerprint === undefined
-              ? {}
-              : { failureFingerprint: previous.failureFingerprint }),
-          ...(typeof event.data.taskId === 'string'
-            ? { taskId: event.data.taskId }
-            : previous?.taskId === undefined
-              ? {}
-              : { taskId: previous.taskId }),
-          ...(typeof event.data.planId === 'string'
-            ? { planId: event.data.planId }
-            : previous?.planId === undefined
-              ? {}
-              : { planId: previous.planId }),
-          ...(typeof event.data.goalObjective === 'string'
-            ? { goalObjective: event.data.goalObjective }
-            : previous?.goalObjective === undefined
-              ? {}
-              : { goalObjective: previous.goalObjective }),
-        };
+        const completion = foldCompletion(this.state.completion, event, this.state.sessionId);
+        if (completion) this.state.completion = completion;
         break;
       }
       case 'plan.approved':
@@ -1351,23 +1054,7 @@ export class SessionController {
         if (this.state.plan) this.state.plan = { ...this.state.plan, status: 'approved' };
         break;
       case 'subagent.started': {
-        this.state.subagents.push({
-          id: String(event.data.id),
-          index: Number(event.data.index),
-          total: Number(event.data.total),
-          role: event.data.role as SubAgentRole,
-          objective: String(event.data.objective),
-          childSessionId: String(event.data.childSessionId),
-          status: 'running',
-          rounds: 0,
-          toolCalls: 0,
-          // The clock starts with the child's first frame rather than here: this event says a session exists,
-          // and the turn it will run has not begun. A row that ticked from this moment would count the
-          // provider setup as work.
-          durationMs: 0,
-          runningSince: null,
-          text: '',
-        });
+        this.state.subagents.push(startedSubAgent(event.data));
         break;
       }
       case 'subagent.delta': {
@@ -1383,15 +1070,7 @@ export class SessionController {
       case 'subagent.tool': {
         const view = this.subagents().find((entry) => entry.id === event.data.id);
         if (!view) break;
-        if (event.data.phase === 'started') {
-          view.tool = String(event.data.name);
-          if (typeof event.data.args === 'string' && event.data.args)
-            view.toolArgs = event.data.args;
-        } else {
-          view.tool = undefined;
-          view.toolArgs = undefined;
-          view.toolCalls++;
-        }
+        foldSubAgentTool(view, event.data);
         break;
       }
       case 'subagent.progress': {
@@ -1400,12 +1079,7 @@ export class SessionController {
         // Same contract as the streamed text: keep the snapshot accurate and deliver the numbers on the
         // delta channel, because a working child reports them once a second and a full snapshot per second
         // would copy the whole session — every message and every attached image — for two rows of a table.
-        view.durationMs = Number(event.data.durationMs ?? view.durationMs ?? 0);
-        view.runningSince =
-          event.data.runningSince === null || event.data.runningSince === undefined
-            ? null
-            : Number(event.data.runningSince);
-        if (event.data.usage) view.usage = event.data.usage as Usage;
+        foldSubAgentProgress(view, event.data);
         this.emitSubAgentDelta({
           id: view.id,
           durationMs: view.durationMs,
@@ -1431,37 +1105,13 @@ export class SessionController {
             entry.childSessionId === String(event.data.childSessionId),
         );
         if (!view) break;
-        view.workspace = {
-          kind: event.data.kind as 'shared' | 'worktree',
-          executionRoot: String(event.data.executionRoot),
-          state: String(event.data.state),
-          ...(typeof event.data.dependencyWarning === 'string'
-            ? { dependencyWarning: event.data.dependencyWarning }
-            : {}),
-          ...(event.data.result
-            ? {
-                result: event.data.result as NonNullable<SubAgentView['workspace']>['result'],
-              }
-            : {}),
-        };
+        view.workspace = subAgentWorkspace(event.data);
         break;
       }
       case 'subagent.finished': {
         const view = this.subagents().find((entry) => entry.id === event.data.id);
         if (!view) break;
-        view.status = event.data.status as SubAgentView['status'];
-        view.rounds = Number(event.data.rounds ?? view.rounds);
-        view.toolCalls = Number(event.data.toolCalls ?? view.toolCalls);
-        if (event.data.usage) view.usage = event.data.usage as Usage;
-        // The turn's clock has stopped: the settled total the host read out of the child's log is what the
-        // card keeps, and it must not be re-derived from a `runningSince` that outlived its own turn.
-        view.durationMs = Number(event.data.durationMs ?? view.durationMs ?? 0);
-        view.runningSince = null;
-        view.tool = undefined;
-        view.toolArgs = undefined;
-        if (event.data.report) view.report = event.data.report as SubAgentSummaryReport;
-        if (typeof event.data.text === 'string' && event.data.text) view.text = event.data.text;
-        if (typeof event.data.error === 'string' && event.data.error) view.error = event.data.error;
+        foldSubAgentFinished(view, event.data);
         break;
       }
       case 'run.finished': {

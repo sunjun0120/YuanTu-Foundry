@@ -11,14 +11,28 @@ import { credentialsPath } from '../providers/credentials.ts';
 import { statSync } from 'node:fs';
 import type { SessionInfo } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
-import { initialTaskDraft, normalizeTaskDraft } from '../protocol/task-spec.ts';
 import type { PermissionPolicySource } from '../core/permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
-import { parseCarrierCommand, type CarrierCommand, type CarrierSnapshot } from './contract.ts';
+import { parseCarrierCommand, type CarrierSnapshot } from './contract.ts';
 import { CarrierError, carrierIssue } from './errors.ts';
 import { BackgroundPanel } from './background-panel.ts';
 import { SubAgentTranscriptViewer } from './subagent-transcript.ts';
+import { runTaskCommand, type TaskCommandContext } from './task-commands.ts';
+import {
+  EXECUTION_COMMANDS,
+  EXECUTION_POLICY_CAPABILITY,
+  MANAGING_COMMANDS,
+  describeSelection,
+} from './command-policy.ts';
+import {
+  FULL_REFRESH,
+  mergeAuditWindow,
+  refreshScopeFor,
+  type RefreshScope,
+} from './refresh-scope.ts';
+export { AUDIT_WINDOW, mergeAuditWindow, refreshScopeFor } from './refresh-scope.ts';
+export type { RefreshScope } from './refresh-scope.ts';
 /**
  * How many times the carrier restarts a Host that died on its own, and the pause between tries.
  *
@@ -30,46 +44,6 @@ import { SubAgentTranscriptViewer } from './subagent-transcript.ts';
  */
 const HOST_RECOVERY_ATTEMPTS = 3;
 const HOST_RECOVERY_DELAY_MS = 250;
-/**
- * The capability a Host advertises when `sandbox.set` acknowledges the file and network policy it was given.
- *
- * A reply's `mode` used to be the whole promise: the carrier cached `files`/`network` from the *request* when
- * the answer did not carry them, which turns "an older Host ignored this" into "the restriction is in force".
- * A Host that can say so advertises this, and only then is a strict selection (one that names files or network)
- * worth sending — let alone worth believing.
- */
-const EXECUTION_POLICY_CAPABILITY = 'execution-policy-files-network-v1';
-/**
- * Commands that put the Host to work under a sandbox policy.
- *
- * Refused while the visible session's policy is unconfirmed: work handed over then would run under whatever
- * the Host happens to have, which is exactly the state a person cannot reason about. Re-selecting the sandbox
- * is deliberately not in this set, because that is how the state is left.
- */
-const EXECUTION_COMMANDS = new Set<string>([
-  'send',
-  'enqueue',
-  'taskStart',
-  'taskRetry',
-  'taskVerify',
-  'taskPropose',
-  'goal',
-  'plan',
-  'planExecute',
-  'approve',
-  'taskApproval',
-  'questionAnswer',
-  'undo',
-  'compact',
-]);
-/** One selection, as the error text names it: what a person chose versus what came back. */
-function describeSelection(selection: { mode: string; files?: string; network?: string }): string {
-  return [
-    `mode=${selection.mode}`,
-    ...(selection.files === undefined ? [] : [`files=${selection.files}`]),
-    ...(selection.network === undefined ? [] : [`network=${selection.network}`]),
-  ].join(' ');
-}
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -81,135 +55,8 @@ function deepFreeze<T>(value: T): T {
 const SESSION_PAGE = 100;
 /** The largest page the Host answers in one `session.list` call (`MAX_SESSION_PAGE` in the store). */
 const SESSION_REQUEST_MAX = 500;
-/** How many audit entries one request asks for, and how many the carrier keeps. */
+/** How many audit entries one request asks for; the carrier keeps `AUDIT_WINDOW` of them. */
 const AUDIT_PAGE = 500;
-export const AUDIT_WINDOW = 5_000;
-
-/**
- * Which panels one command's refresh reads.
- *
- * Every command used to refresh everything — the session list, the file changes, the audit record, the task history
- * and the background panel — which is six to eight requests for a command that usually moved one panel or none. The
- * panels that change *during* a run are already event-driven (`approval.decided`, `question.answered`,
- * `run.finished`, `task.step` schedule their own refreshes), so a mid-run decision does not need the full read to be
- * correct; the transcript and the queue arrive on the controller's own channels.
- */
-export interface RefreshScope {
-  sessions: boolean;
-  changes: boolean;
-  audit: boolean;
-  tasks: boolean;
-  background: boolean;
-}
-const FULL_REFRESH: RefreshScope = {
-  sessions: true,
-  changes: true,
-  audit: true,
-  tasks: true,
-  background: true,
-};
-/** A decision or a queue edit during a run: only the audit record can move for this carrier to read. */
-const DECISION_REFRESH: RefreshScope = {
-  sessions: false,
-  changes: false,
-  audit: true,
-  tasks: false,
-  background: false,
-};
-
-/** A rename moves the sidebar row and writes one audit line; no other panel reads the title. */
-const RENAME_REFRESH: RefreshScope = {
-  sessions: true,
-  changes: false,
-  audit: true,
-  tasks: false,
-  background: false,
-};
-/** A task edit that starts nothing: the task panel and the audit line it wrote. */
-const TASK_EDIT_REFRESH: RefreshScope = {
-  sessions: false,
-  changes: false,
-  audit: true,
-  tasks: true,
-  background: false,
-};
-/** A task action that may run checks or touch files: the task panel, the files it changed and its audit line. */
-const TASK_ACTION_REFRESH: RefreshScope = {
-  sessions: false,
-  changes: true,
-  audit: true,
-  tasks: true,
-  background: false,
-};
-/** A sub-agent workspace archived, removed or restored: what the parent sees as changed, and the audit line. */
-const WORKSPACE_REFRESH: RefreshScope = {
-  sessions: false,
-  changes: true,
-  audit: true,
-  tasks: false,
-  background: false,
-};
-/** Commands that only read, or only move what the controller or the transcript already publishes. */
-const NO_REFRESH: RefreshScope = {
-  sessions: false,
-  changes: false,
-  audit: false,
-  tasks: false,
-  background: false,
-};
-
-/** The refresh a command's own effect requires. Unknown commands get the full read rather than a guess. */
-export function refreshScopeFor(type: CarrierCommand['type']): RefreshScope {
-  switch (type) {
-    case 'approve':
-    case 'questionAnswer':
-    case 'enqueue':
-    case 'clearQueue':
-    case 'cancel':
-    case 'sandbox':
-    case 'compact':
-    case 'planApprove':
-    case 'planReject':
-      return DECISION_REFRESH;
-    case 'rename':
-      return RENAME_REFRESH;
-    case 'taskSave':
-    case 'taskConfirm':
-    case 'taskHistory':
-      return TASK_EDIT_REFRESH;
-    case 'taskApproval':
-    case 'taskTrigger':
-    case 'taskPropose':
-      return TASK_ACTION_REFRESH;
-    case 'subagentWorkspace':
-      return WORKSPACE_REFRESH;
-    case 'loadOlder':
-    case 'refreshResources':
-    case 'export':
-    case 'subagentTranscript':
-    case 'closeSubagentTranscript':
-    case 'planRefresh':
-      return NO_REFRESH;
-    default:
-      return FULL_REFRESH;
-  }
-}
-
-/**
- * The audit window after one page: appended, capped to the newest entries.
- *
- * The cap matters to the cursor as much as to the panel: what is kept is the newest entries, and the seq carried
- * forward is the last kept one's, so the next read continues from the newest line however much older record the
- * window dropped.
- */
-export function mergeAuditWindow(
-  previous: CarrierSnapshot['audit'],
-  page: CarrierSnapshot['audit'],
-  limit = AUDIT_WINDOW,
-): CarrierSnapshot['audit'] {
-  const merged = [...previous, ...page];
-  return merged.length > limit ? merged.slice(merged.length - limit) : merged;
-}
 
 /**
  * The client state machine every carrier shares: sessions, run state, transcript projection, pending
@@ -976,6 +823,25 @@ export class CarrierService {
     const detail = carrierIssue(error, (value) => this.safeError(new Error(value)));
     return detail ? new CarrierError(detail.code, detail.values) : this.safeError(error);
   }
+  /** What a task command may see and change of this service; see `runTaskCommand`. */
+  private taskContext(): TaskCommandContext {
+    return {
+      client: this.client,
+      controller: this.controller,
+      tasks: this.tasks,
+      configured: this.snapshot.configured,
+      setTasks: (tasks) => {
+        this.tasks = tasks;
+      },
+      setRestoring: (restoring) => {
+        this.restoring = restoring;
+      },
+      reportError: (error) => {
+        this.error = error;
+      },
+      safeError: (error) => this.safeError(error),
+    };
+  }
   async dispatch(input: unknown): Promise<CarrierSnapshot> {
     const command = parseCarrierCommand(input);
     if (command.type === 'snapshot') return this.snapshot;
@@ -1039,26 +905,7 @@ export class CarrierService {
       return this.snapshot;
     }
     if (this.restoring || this.managing) throw new CarrierError('sessionOperationBusy');
-    const manages = [
-      'rename',
-      'deleteSession',
-      'taskRefresh',
-      'taskVerify',
-      'taskRetry',
-      'taskHistory',
-      'taskSave',
-      'taskApproval',
-      'taskStart',
-      'taskConfirm',
-      'taskPropose',
-      'goal',
-      'plan',
-      'planApprove',
-      'planReject',
-      'planExecute',
-      'planRefresh',
-      'subagentWorkspace',
-    ].includes(command.type);
+    const manages = MANAGING_COMMANDS.has(command.type);
     if (manages) {
       if (this.busy) throw new CarrierError('runBusy');
       this.managing = true;
@@ -1152,93 +999,18 @@ export class CarrierService {
         case 'clearQueue':
           await this.controller.clearQueue();
           break;
-        case 'taskSave': {
-          const sessionId = this.controller.sessionId;
-          if (!sessionId) throw new CarrierError('sessionRequired');
-          await this.client.request('task.update', {
-            sessionId,
-            taskId: command.taskId,
-            ...normalizeTaskDraft(command),
-            expectedUpdatedAt: command.expectedUpdatedAt,
-          });
-          break;
-        }
-        case 'taskConfirm': {
-          const sessionId = this.controller.sessionId;
-          if (!sessionId) throw new CarrierError('sessionRequired');
-          await this.client.request('task.confirm', {
-            sessionId,
-            taskId: command.taskId,
-            indices: command.indices,
-            expectedUpdatedAt: command.expectedUpdatedAt,
-          });
-          break;
-        }
-        case 'taskPropose': {
-          const sessionId = this.controller.sessionId;
-          if (!sessionId) throw new CarrierError('sessionRequired');
-          try {
-            await this.client.request('task.propose', { sessionId, taskId: command.taskId });
-          } finally {
-            await this.controller.load(sessionId);
-          }
-          break;
-        }
-        case 'taskStart': {
-          const task = this.tasks.find((item) => item.id === command.taskId);
-          if (!task) throw new CarrierError('taskNotFound');
-          normalizeTaskDraft(task);
-          await this.controller.send(task.description || task.title, undefined, task.id);
-          break;
-        }
-        case 'taskApproval': {
-          const sessionId = this.controller.sessionId;
-          if (!sessionId) throw new CarrierError('sessionRequired');
-          await this.client.request('task.approval.respond', {
-            sessionId,
-            taskId: command.taskId,
-            approvalId: command.approvalId,
-            allow: command.allow,
-          });
-          break;
-        }
-        case 'taskTrigger': {
-          const sessionId = this.controller.sessionId;
-          if (!sessionId) throw new CarrierError('sessionRequired');
-          await this.client.request('task.trigger', {
-            sessionId,
-            taskId: command.taskId,
-            trigger: command.trigger,
-          });
-          break;
-        }
-        // The full read at the end of `dispatch` is the refresh; reading here as well did every request twice.
+        case 'taskSave':
+        case 'taskConfirm':
+        case 'taskPropose':
+        case 'taskStart':
+        case 'taskApproval':
+        case 'taskTrigger':
         case 'taskRefresh':
-          break;
-        case 'taskVerify': {
-          this.restoring = true;
-          try {
-            await this.client.request('task.verify', {
-              sessionId: this.controller.sessionId!,
-              taskId: command.taskId,
-            });
-          } finally {
-            this.restoring = false;
-          }
-          break;
-        }
-        case 'taskRetry': {
-          if (!this.controller.sessionId) throw new CarrierError('sessionRequired');
-          const task = this.tasks.find((item) => item.id === command.taskId);
-          if (!task) throw new CarrierError('taskNotFound');
-          await this.controller.send(
-            command.prompt?.trim() || task.description,
-            undefined,
-            task.id,
-          );
-          break;
-        }
+        case 'taskVerify':
+        case 'taskRetry':
         case 'taskHistory':
+        case 'goal':
+          await runTaskCommand(this.taskContext(), command);
           break;
 
         // The palette and settings surface invoke this to pick up instruction/extension edits
@@ -1255,28 +1027,6 @@ export class CarrierService {
             sessionId: this.controller.sessionId,
           });
           break;
-        case 'goal': {
-          const sessionId = this.controller.sessionId;
-          if (!sessionId) throw new CarrierError('sessionRequired');
-          const draft = initialTaskDraft(command.type, command.prompt, command.language);
-          const task = await this.client.request('task.create', {
-            sessionId,
-            ...draft,
-          });
-          this.tasks = [task, ...this.tasks.filter((item) => item.id !== task.id)];
-          if (this.snapshot.configured) {
-            try {
-              await this.client.request('task.propose', { sessionId, taskId: task.id });
-            } catch (error) {
-              this.error = new CarrierError('draftPlanningFailed', {
-                message: this.safeError(error),
-              });
-            } finally {
-              await this.controller.load(sessionId);
-            }
-          }
-          break;
-        }
         case 'plan':
           // `/plan` is the plan-mode state machine now: a read-only run proposes a plan, and a human
           // approves it before anything executes. The old behaviour drafted a task instead.

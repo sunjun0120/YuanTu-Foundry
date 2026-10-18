@@ -95,7 +95,14 @@ test(
     const page = await desktopPage(t);
     await page.setViewportSize({ width: 1100, height: 550 });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
-    for (const file of ['styles.css', 'layout.css'])
+    for (const file of [
+      'styles.css',
+      'styles-subagents.css',
+      'styles-panels.css',
+      'layout.css',
+      'layout-surfaces.css',
+      'layout-workspace.css',
+    ])
       await page.addStyleTag({
         content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
       });
