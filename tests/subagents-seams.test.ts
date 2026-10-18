@@ -23,6 +23,13 @@ import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, ModelRequest, Provider } from '../packages/protocol/index.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { SubAgentCoordinator, resolveSubAgentOptions } from '../packages/core/subagents.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
+
+/** Child transcripts also carry the runtime's skill announcement; a task or follow-up is not it. */
+const transcriptContents = (messages: readonly { content: string }[]): string[] =>
+  messages
+    .filter((message) => !isRuntimeContext(message.content))
+    .map((message) => message.content);
 
 // ---- merged from subagent-providers.test.ts ----
 
@@ -947,9 +954,7 @@ test('a message reaches a child that is still working, as a correction to its tu
     .find((content) => content.includes('Delivered as a correction'));
   assert.ok(sendResult, 'the message was delivered into the turn that was already running');
   assert.match(sendResult, /answered/);
-  const childContents = store
-    .messages(lastChildSessionId)
-    .map((message) => String(message.content));
+  const childContents = transcriptContents(store.messages(lastChildSessionId));
   assert.match(childContents[0]!, /Objective: Sweep the repository/);
   assert.deepEqual(
     childContents.slice(1),
@@ -1030,7 +1035,7 @@ test('a child delegated in an earlier process is resumed from the log, not re-de
   );
   assert.equal(childTurns, 2, 'the cold child ran exactly one more turn');
   assert.match(childPrompts[1]!, /What did the config contain\?/);
-  const contents = store.messages(childSessionId).map((message) => String(message.content));
+  const contents = transcriptContents(store.messages(childSessionId));
   assert.match(contents[0]!, /Objective: Sweep the configuration/);
   assert.ok(
     contents.includes('What did the config contain?'),

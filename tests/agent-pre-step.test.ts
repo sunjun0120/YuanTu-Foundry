@@ -166,7 +166,10 @@ test('injected context is persisted, announced and visible to the next request',
     requests[0]?.messages.some((message) => message.content.includes('PRE-STEP-NOTE')),
     'the note is part of the very first request it was injected for',
   );
-  const announced = events.filter((event) => event.type === 'context.injected');
+  // The runtime's skill announcement is also `context.injected`; this test is about the hook's note.
+  const announced = events.filter(
+    (event) => event.type === 'context.injected' && event.data.source === 'pre-step',
+  );
   assert.equal(announced.length, 1);
   assert.equal(announced[0]!.data.source, 'pre-step');
   assert.equal(announced[0]!.data.notes, 1);

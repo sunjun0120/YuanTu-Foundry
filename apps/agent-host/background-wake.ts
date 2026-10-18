@@ -73,12 +73,29 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
         !ctx.automaticReady
       )
         return;
-      for (const session of ctx.store.list('', ctx.workspace)) {
+      // Nobody awaits this microtask, so a store failure here (a write lock held past `busy_timeout`, a full
+      // disk, a session deleted by another process mid-scan) would otherwise reach the process as an uncaught
+      // error. It is reported and this pass is dropped; the next settled producer asks for a wake again.
+      let sessions: ReturnType<typeof ctx.store.list>;
+      try {
+        sessions = ctx.store.list('', ctx.workspace);
+      } catch (error) {
+        process.stderr.write(`[background] ${safeError(error)}\n`);
+        return;
+      }
+      for (const session of sessions) {
         if (session.parentSessionId) continue;
-        reconcileBackground(ctx.store, session.id);
-        const authority = backgroundAuthority(ctx.store, session.id);
-        if (!authority) continue;
-        const accepted = admitBackground(ctx.store, session.id);
+        let authority: ReturnType<typeof backgroundAuthority>;
+        let accepted: ReturnType<typeof admitBackground>;
+        try {
+          reconcileBackground(ctx.store, session.id);
+          authority = backgroundAuthority(ctx.store, session.id);
+          if (!authority) continue;
+          accepted = admitBackground(ctx.store, session.id);
+        } catch (error) {
+          process.stderr.write(`[background] ${session.id}: ${safeError(error)}\n`);
+          continue;
+        }
         if (!accepted) continue;
         ctx.waking.add(session.id);
         const wakeTask = ctx

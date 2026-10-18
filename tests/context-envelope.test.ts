@@ -19,7 +19,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent, type AgentOptions } from '../packages/core/agent.ts';
 import { envelopeEvent } from '../packages/core/envelope.ts';
-import { ENVELOPE_SYSTEM_CHARS, foldContextEnvelopes } from '../packages/protocol/context.ts';
+import {
+  ENVELOPE_SYSTEM_CHARS,
+  foldContextEnvelopes,
+  isRuntimeContext,
+} from '../packages/protocol/context.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';
@@ -105,11 +109,25 @@ test('a round records the prompt and the catalogue it was actually sent with', a
   const loaded = store.events(sessionId).find((event) => event.type === 'resources.loaded');
   assert.ok(loaded, 'resources.loaded is in the log, not only on the live channel');
   assert.deepEqual(loaded.data.instructions, ['AGENTS.md']);
-  assert.deepEqual(loaded.data.skills, []);
+  /**
+   * An empty workspace still has the skills that ship with the build. The envelope records the catalogue the
+   * model was actually given, so the built-in skill is part of it — pinning `[]` here asserted that no skill
+   * exists, which was never the product intent and would hide a built-in that failed to load.
+   */
+  const skills = loaded.data.skills as { name: string; path: string }[];
+  assert.ok(
+    skills.some(
+      (skill) => skill.name === 'office-documents' && skill.path === 'builtin:office-documents',
+    ),
+    `the built-in skill is in the recorded catalogue: ${JSON.stringify(skills)}`,
+  );
 
-  // And none of it became transcript: the model-visible history is what it always was.
+  // The announcement is machine context, not a human turn: the conversation still has one typed user message.
   assert.deepEqual(
-    store.messages(sessionId).map((message) => message.role),
+    store
+      .messages(sessionId)
+      .filter((message) => !isRuntimeContext(message.content))
+      .map((message) => message.role),
     ['user', 'assistant'],
   );
 });

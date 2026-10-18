@@ -43,6 +43,10 @@ jobs:
       # the internal client smoke remains active. `docs:check` and `references:check` inside it are what
       # make the numbers and the paths in the documentation fail here rather than in a reader's browser.
       - run: npm run check
+      # The advisory gate is a CI step rather than part of `check`, because it reads npm's registry: a local
+      # `npm run check` must stay usable offline. Every accepted advisory is listed in scripts/check-audit.mjs
+      # with its reason, and an entry that stops being reported fails as stale.
+      - run: npm run audit:check
 
   # The benchmark gate. Every rule is deterministic (schema bytes, publish counts, records per message) or a
   # ratio measured inside the run itself (batched against per-message commits, cached against cold folds), so

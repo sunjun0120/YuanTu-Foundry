@@ -30,7 +30,7 @@ test.before(async () => {
 });
 
 test(
-  'Word and PowerPoint creation, template edit and PDF previews retain content',
+  'Word and PowerPoint files created and edited in JS convert to PDF through local Office',
   { skip: process.platform !== 'win32' && 'needs Windows', timeout: 240000 },
   async (t) => {
     try {
@@ -98,7 +98,7 @@ test(
       assert.match(slideText, /marker 948/);
       await verifyFileDelivery(root, { path: 'slides.pdf', format: 'pdf' });
     } catch (error) {
-      // Each operation starts a new COM/script host; availability can change after create.
+      // Only the PDF conversions reach Office; creating and editing are JS and must not be what skips.
       if (!(error instanceof OfficeUnavailableError)) throw error;
       t.skip(error.message.slice(0, 260));
     }
@@ -125,76 +125,37 @@ function officeEnvironmentReason(text: string): string | undefined {
 }
 
 test(
-  'Office tools create and verify a PowerPoint file through local Office',
+  'office_preview converts a JS-created PowerPoint file to PDF through local Office',
   { skip: process.platform !== 'win32' && 'needs Windows', timeout: 120000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-ppt-tools-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const registry = new ToolRegistry();
     officeTools(root).forEach((tool) => registry.register(tool));
-    const result = await registry.execute(
-      {
-        id: 'ppt',
-        name: 'office_create',
-        arguments: {
-          format: 'pptx',
-          path: 'presentation.pptx',
-          slides: [{ title: 'Delivery', body: ['Verified slide'] }],
-        },
-      },
-      { signal: new AbortController().signal, approve: async () => true },
-    );
-    const environment = result.isError ? officeEnvironmentReason(result.content) : undefined;
+    const run = (id: string, name: string, args: Record<string, unknown>) =>
+      registry.execute(
+        { id, name, arguments: args },
+        { signal: new AbortController().signal, approve: async () => true },
+      );
+    // Creation needs no Office, so it must succeed here whatever the machine has installed.
+    const created = await run('ppt', 'office_create', {
+      format: 'pptx',
+      path: 'presentation.pptx',
+      slides: [{ title: 'Delivery', body: ['Verified slide'] }],
+    });
+    assert.equal(created.isError, false, created.content);
+    const preview = await run('preview', 'office_preview', {
+      source_path: 'presentation.pptx',
+      output_path: 'presentation.pdf',
+      backend: 'office',
+    });
+    const environment = preview.isError ? officeEnvironmentReason(preview.content) : undefined;
     if (environment) {
-      t.skip(`${environment}; creating PPTX needs local Office`);
+      t.skip(`${environment}; an Office PDF of PPTX needs local Office`);
       return;
     }
-    assert.equal(result.isError, false, result.content);
-    assert.match(result.content, /"format":"pptx"/);
-    const inspected = await registry.execute(
-      { id: 'inspect', name: 'office_inspect', arguments: { path: 'presentation.pptx' } },
-      { signal: new AbortController().signal, approve: async () => false },
-    );
-    assert.match(inspected.content, /Verified slide/);
-  },
-);
-
-test(
-  'Word edits replace text longer than 255 characters and treat ^ literally',
-  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 240000 },
-  async (t) => {
-    // Word's Find and Replace refuse text over 255 characters and read ^ as a special-character code.
-    try {
-      const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-long-'));
-      t.after(() => rm(root, { recursive: true, force: true }));
-      const source = path.join(root, 'source.docx');
-      const output = path.join(root, 'edited.docx');
-      const long = 'Long clause '.repeat(30).trim(); // 359 characters
-      await runOfficeAutomation({
-        operation: 'create',
-        format: 'docx',
-        outputPath: source,
-        paragraphs: ['Keep this', long, 'Cost 3^2 units', long],
-      });
-      await runOfficeAutomation({
-        operation: 'edit',
-        format: 'docx',
-        sourcePath: source,
-        outputPath: output,
-        replacements: [
-          { from: long, to: 'Short clause' },
-          { from: '3^2', to: '9^1 '.repeat(80).trim() },
-        ],
-      });
-      const mammoth = (await import('mammoth')).default;
-      const text = (await mammoth.extractRawText({ buffer: await readFile(output) })).value;
-      assert.match(text, /Keep this/);
-      assert.doesNotMatch(text, /Long clause/);
-      assert.equal(text.match(/Short clause/g)?.length, 2);
-      assert.match(text, /Cost (9\^1 ){79}9\^1 units/);
-    } catch (error) {
-      if (!(error instanceof OfficeUnavailableError)) throw error;
-      t.skip(error.message.slice(0, 260));
-    }
+    assert.equal(preview.isError, false, preview.content);
+    assert.equal(JSON.parse(preview.content).previewType, 'office-pdf');
+    await verifyFileDelivery(root, { path: 'presentation.pdf', format: 'pdf' });
   },
 );

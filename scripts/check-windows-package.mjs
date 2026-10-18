@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, validatePackagedWindowsRuntime } from './windows-runtime-product.mjs';
@@ -60,6 +60,11 @@ export async function validateWindowsPackage(
       );
   }
   await readFile(path.join(resources, 'app/dist/apps/agent-host/main.js'));
+  // The entry the desktop actually launches: one bundled file. The compiled entry stays (tests and a tsc-only
+  // checkout use it), but a package without the bundle would pay the module-resolution cost on every launch.
+  const bundledHost = path.join(resources, 'app/dist/packages/tools/host.bundle.js');
+  if ((await stat(bundledHost)).size < 1024 * 1024)
+    throw new Error('Packaged Host bundle is missing or truncated');
   const metadata = JSON.parse(await readFile(path.join(resources, 'app/package.json'), 'utf8'));
   if (metadata.main !== 'dist/desktop/main.cjs')
     throw new Error('Packaged desktop entry point changed');

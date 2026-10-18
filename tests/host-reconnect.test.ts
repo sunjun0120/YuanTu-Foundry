@@ -22,6 +22,7 @@ import { AgentHostClient, HostDisconnectedError } from '../packages/client/host-
 import { SCHEMA_VERSION, SessionStore } from '../packages/storage/sqlite.ts';
 import { auditEntries, foldMessages } from '../packages/storage/events.ts';
 import type { Message } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
@@ -87,6 +88,50 @@ test('a run left by a dead Host is settled, recorded and made usable at startup'
   // Converging twice is a no-op: the record must not be written again by the next startup.
   assert.equal(store.reconcileInterruptedRuns(root), 0);
   store.delete(session.id);
+});
+
+test('a failed recovery write rolls that session back instead of committing a partial state', async (t) => {
+  const { root, file, store, session } = await store_(t);
+  const runId = store.beginRun(session.id);
+  store.append(session.id, {
+    role: 'assistant',
+    content: 'writing',
+    toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { path: 'a.txt', content: 'x' } }],
+  });
+  orphan(file, runId);
+  const raw = new DatabaseSync(file);
+  raw.exec(`CREATE TRIGGER test_fail_interrupted BEFORE INSERT ON session_events
+    WHEN NEW.type = 'run.interrupted'
+    BEGIN SELECT RAISE(ABORT, 'injected recovery failure'); END;`);
+  raw.close();
+
+  const reported: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void reported.push(args.join(' '));
+  let recovered: number;
+  try {
+    recovered = store.reconcileInterruptedRuns(root);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(recovered, 0, 'the failed session is not counted as converged');
+  assert.match(reported.join('\n'), /injected recovery failure/);
+  // The failure happened at the last write of settleAbandonedRun. Every earlier write — the unknown-tool
+  // answer, the run row, the active pointer, the lease — belongs to the same object and must be rolled back.
+  assert.equal(store.get(session.id).activeRun, runId, 'the active run pointer is unchanged');
+  assert.deepEqual(
+    store.messages(session.id).filter((message) => message.role === 'tool'),
+    [],
+    'the unresolved call was not answered by a rolled-back recovery',
+  );
+  assert.deepEqual(
+    store.events(session.id).map((event) => event.type),
+    ['run.started', 'message.assistant'],
+    'no interruption record survived a failed convergence',
+  );
+  const check = new DatabaseSync(file, { readOnly: true });
+  assert.equal(check.prepare('SELECT status FROM runs WHERE id=?').get(runId)?.status, 'running');
+  check.close();
 });
 
 test('one unreadable session does not stop the rest from being converged, or the Host from starting', async (t) => {
@@ -281,9 +326,13 @@ test('a client whose Host is killed mid-approval can restart and rebuild the ses
   assert.equal(client.status, 'ready');
   const page = await client.request('session.get', { sessionId: session.id });
   assert.equal(page.session.activeRun, null);
-  const roles = page.messages.map((message: Message) => message.role);
+  const roles = page.messages
+    .filter((message: Message) => !isRuntimeContext(message.content))
+    .map((message: Message) => message.role);
   assert.deepEqual(roles, ['user', 'assistant', 'tool']);
-  const unresolved = page.messages[2] as Message & { role: 'tool' };
+  const unresolved = page.messages.filter(
+    (message: Message) => !isRuntimeContext(message.content),
+  )[2] as Message & { role: 'tool' };
   assert.equal(unresolved.isError, true);
   assert.match(String(unresolved.content), /outcome is unknown/i);
   // Asked, never decided  and now with the reason it was never decided.

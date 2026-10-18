@@ -1,8 +1,8 @@
 import type { ImageAttachment, ImageReference, UserInput } from './index.ts';
-import { validatePng } from './image-png.ts';
-import { validateJpeg } from './image-jpeg.ts';
-import { validateGif } from './image-gif.ts';
-import { validateWebp } from './image-webp.ts';
+import { validatePng } from '../formats/image-png.ts';
+import { validateJpeg } from '../formats/image-jpeg.ts';
+import { validateGif } from '../formats/image-gif.ts';
+import { validateWebp } from '../formats/image-webp.ts';
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_INPUT_BYTES = 16 * 1024 * 1024;
 /**
@@ -96,12 +96,39 @@ export function validateUserInput(input: UserInput): UserInput {
   const images = validateImages(input.images);
   return { prompt: input.prompt, ...(images.length ? { images } : {}) };
 }
+const sizedReplacer = (key: string, value: unknown): unknown =>
+  key === 'change'
+    ? undefined
+    : key === 'images' && Array.isArray(value)
+      ? value.map((i) => ({ mimeType: i.mimeType, name: i.name, data: '[image]'.repeat(512) }))
+      : value;
+/**
+ * Each message's serialised length, keyed by the message object.
+ *
+ * The context budget asks this of the whole conversation on every request and again for every candidate cut while
+ * compacting, and a long session is megabytes of JSON each time. Messages are immutable by the same convention
+ * `packages/core/budget.ts` already relies on for its byte sizes (the store's fold is handed out as-is, and every
+ * transformation builds a new message), so identity is a sound key and a `WeakMap` lets the entries go with them.
+ */
+const messageChars = new WeakMap<object, number>();
+function elementChars(value: unknown): number {
+  if (typeof value !== 'object' || value === null) return JSON.stringify(value ?? null).length;
+  const cached = messageChars.get(value);
+  if (cached !== undefined) return cached;
+  // `undefined` would be `null` inside an array, and a message is never one, but the sum must still match.
+  const chars = (JSON.stringify(value, sizedReplacer) ?? 'null').length;
+  messageChars.set(value, chars);
+  return chars;
+}
+/**
+ * The length of `JSON.stringify(messages)` under the sizing rules above, without building the string.
+ *
+ * An array is summed from its elements: `[`, the elements joined by `,`, and `]` — the same characters the whole
+ * serialisation would produce, since the replacer never sees an array index as `change` or `images`.
+ */
 export function contextMessageSize(messages: unknown): number {
-  return JSON.stringify(messages, (key, value) =>
-    key === 'change'
-      ? undefined
-      : key === 'images' && Array.isArray(value)
-        ? value.map((i) => ({ mimeType: i.mimeType, name: i.name, data: '[image]'.repeat(512) }))
-        : value,
-  ).length;
+  if (!Array.isArray(messages)) return JSON.stringify(messages, sizedReplacer).length;
+  let chars = 2 + Math.max(0, messages.length - 1);
+  for (const message of messages) chars += elementChars(message);
+  return chars;
 }

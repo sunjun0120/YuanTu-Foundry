@@ -1003,6 +1003,41 @@ test('a server that changes its tool list is re-read over the connection already
   );
 });
 
+test('a change announced during the catalogue load is read on the next request', async (t) => {
+  /**
+   * The notification arrives while the first `tools/list` response is being read, and the fixture only serves
+   * the added tool on the next list. Recording the generation after the load would mark the old catalogue
+   * current and swallow the change; the load must record the generation it started from.
+   */
+  const root = await setup(t, {
+    local: {
+      transport: 'stdio',
+      command: process.execPath,
+      args: [fixture, 'pid.txt', '--notify-during-list'],
+    },
+  });
+  const tools = createTools(root);
+  (t as test.TestContext & { mcpCleanups: (() => Promise<void>)[] }).mcpCleanups.push(() =>
+    tools.close(),
+  );
+  const first = await tools.execute(
+    { id: 'first', name: 'mcp_local_list_tools', arguments: {} },
+    ctx(),
+  );
+  assert.equal(first.isError, false, first.content);
+  assert.doesNotMatch(first.content, /"name":"added"/, 'the first response is the old catalogue');
+  const second = await tools.execute(
+    { id: 'second', name: 'mcp_local_list_tools', arguments: {} },
+    ctx(),
+  );
+  assert.equal(second.isError, false, second.content);
+  assert.match(
+    second.content,
+    /"name":"added"/,
+    'the change announced during the load triggered a re-read',
+  );
+});
+
 test('MCP resource and prompt proxies refuse servers that do not advertise them', async (t) => {
   const root = await setup(t, {
     local: { transport: 'stdio', command: process.execPath, args: [fixture, '--tools-only'] },

@@ -20,6 +20,7 @@ import {
 } from '../packages/core/subagent-providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type {
   AgentEvent,
@@ -27,6 +28,10 @@ import type {
   ModelResponse,
   Provider,
 } from '../packages/protocol/index.ts';
+
+/** Messages a person or a task produced, without the runtime's skill announcement. */
+const typedMessages = <T extends { content: string }>(messages: readonly T[]): T[] =>
+  messages.filter((message) => !isRuntimeContext(message.content));
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
@@ -211,9 +216,13 @@ test('delegated tasks run in parallel, in isolated sessions, and are reported in
     store.list('').map((listed) => listed.id),
     [session.id],
   );
-  assert.equal(store.messages(children[0]!.id).length, 2, 'each child kept its own transcript');
   assert.equal(
-    store.messages(session.id).length,
+    typedMessages(store.messages(children[0]!.id)).length,
+    2,
+    'each child kept its own transcript',
+  );
+  assert.equal(
+    typedMessages(store.messages(session.id)).length,
     4,
     'the parent kept only its own turn: prompt, tool call, tool result, answer',
   );
@@ -1074,7 +1083,10 @@ test('a sub-agent answers through a structured report, and the tool never leaks 
   const finished = events.find((event) => event.type === 'subagent.finished')!;
   assert.deepEqual((finished.data.report as { summary: string }).summary, summary?.report?.summary);
   // The child's own transcript records the tool call, which is where a reader goes for the raw text.
-  assert.match(store.messages(summary!.sessionId)[0]!.content as string, /Delegated task/);
+  assert.match(
+    String(typedMessages(store.messages(summary!.sessionId))[0]!.content),
+    /Delegated task/,
+  );
 });
 
 test('an explore child cannot reach tools that manage its parent resources', async (t) => {

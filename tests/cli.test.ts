@@ -1,12 +1,13 @@
 // Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ENVIRONMENT } from '../packages/protocol/settings.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { CLI_COMMANDS, CLI_MAINTENANCE_COMMANDS } from '../apps/shared/cli-commands.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot, runCli } from './process-fixture.ts';
@@ -94,7 +95,14 @@ test(
     );
     assert.equal(resumed.code, 0, resumed.stderr);
     const store = new SessionStore(db);
-    assert.equal(store.messages(final.result.sessionId).filter((m) => m.role === 'user').length, 2);
+    // Two turns a person typed. A runtime snapshot (the built-in skills catalogue) is a user-role message by
+    // design, so the conversation's own turns are counted without it.
+    assert.equal(
+      store
+        .messages(final.result.sessionId)
+        .filter((m) => m.role === 'user' && !isRuntimeContext(m.content)).length,
+      2,
+    );
     store.close();
   },
 );
@@ -990,7 +998,14 @@ test(
       );
     // The first word is what the parser compares: a `mcp list` entry dispatches on `mcp`, and an entry whose
     // first word is missing from the help would be a command nobody could discover.
-    const source = await readFile(path.join(projectRoot, 'apps/cli/main.ts'), 'utf8');
+    const cliDirectory = path.join(projectRoot, 'apps/cli');
+    const source = (
+      await Promise.all(
+        (await readdir(cliDirectory))
+          .filter((file) => file.endsWith('.ts'))
+          .map((file) => readFile(path.join(cliDirectory, file), 'utf8')),
+      )
+    ).join('\n');
     const dispatched = new Set(
       [...source.matchAll(/command === '([a-z][a-z0-9-]*)'/g)].map((match) => match[1]!),
     );

@@ -123,7 +123,7 @@ test(
     }
     assert.equal(journal?.phase, 'completed', JSON.stringify(journal));
     assert.equal(journal.confirmedVersion, journal.manifest.version);
-    newPid = Number(await readFile(`${journalFile}.pid`, 'utf8'));
+    newPid = JSON.parse(await readFile(`${journalFile}.pid`, 'utf8')).pid;
     await closeWindow(newPid);
     newPid = undefined;
     app = undefined;

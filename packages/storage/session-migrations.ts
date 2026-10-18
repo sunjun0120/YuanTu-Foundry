@@ -172,6 +172,9 @@ export class SessionMigrations {
         at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS session_events_session ON session_events(session_id,seq);
+      -- Added without a version step: an index changes no reader's interpretation, so an older build opening this
+      -- file is unaffected, and IF NOT EXISTS builds it once on the first open by this build.
+      CREATE INDEX IF NOT EXISTS session_events_type ON session_events(session_id,type,seq);
       -- Who is writing each session right now (see SessionLease). Ephemeral presence: taken by beginRun,
       -- renewed by the run loop, released when the run finishes, and reclaimed only through the dead-owner
       -- path. Never expired by age, so it is not a second source of truth about a run's status.

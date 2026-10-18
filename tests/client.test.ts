@@ -12,10 +12,24 @@ import { largePng } from './image-fixture.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import type { SessionSnapshot, StatisticsDelta } from '../packages/client/session-controller.ts';
 import type { AgentEvent, Message, RunResult } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createProvider } from '../packages/providers/index.ts';
 import type { HostTransport } from '../packages/client/host-transport.ts';
+
+/**
+ * The user-role messages a person actually typed.
+ *
+ * A runtime snapshot — the built-in skills catalogue, a goal notice — is persisted as a user-role message so the
+ * model reads it where it is needed. It is conversation the runtime wrote, not a turn somebody took, so a test that
+ * counts a conversation's turns excludes it.
+ */
+function typedUserMessages(messages: readonly Message[]): Message[] {
+  return messages.filter(
+    (message) => message.role === 'user' && !isRuntimeContext(message.content),
+  );
+}
 
 test('rejected send removes an optimistic message absent from durable history', async (t) => {
   const client = {
@@ -38,6 +52,41 @@ test('rejected send removes an optimistic message absent from durable history', 
   await assert.rejects(controller.send('second request'), /already has an active run/);
   assert.deepEqual(controller.snapshot.messages, []);
   assert.equal(controller.snapshot.status, 'failed');
+});
+
+test('change subscribers are told without a copy, and scalar reads match the snapshot', async (t) => {
+  const client = {
+    status: 'ready',
+    subscribe: () => () => {},
+    subscribeStatus: () => () => {},
+    async request(method: string) {
+      if (method === 'session.get') return { messages: [] };
+      if (method === 'plan.get') return null;
+      if (method === 'subagents.list') return [];
+      throw new Error(`Unexpected method: ${method}`);
+    },
+  };
+  const controller = new SessionController(client as unknown as AgentHostClient);
+  t.after(() => controller.dispose());
+  const calls: unknown[][] = [];
+  const unsubscribe = controller.subscribeChanges((...args: unknown[]) => calls.push(args));
+  assert.equal(calls.length, 0, 'subscribing is not itself a change');
+  await controller.load('session-1');
+  assert.ok(calls.length > 0, 'a load is announced');
+  // The carrier builds its own view from `snapshot`; a copy handed to it here would be cloned and thrown away.
+  assert.ok(calls.every((args) => args.length === 0));
+  const snapshot = controller.snapshot;
+  assert.equal(controller.sessionId, snapshot.sessionId);
+  assert.equal(controller.running, snapshot.running);
+  assert.equal(controller.loading, snapshot.loading);
+  assert.equal(
+    controller.findSubAgent(() => true),
+    undefined,
+  );
+  unsubscribe();
+  const seen = calls.length;
+  await controller.load('session-1');
+  assert.equal(calls.length, seen, 'an unsubscribed listener is not called');
 });
 
 // ---- merged from client.test.ts ----
@@ -570,7 +619,7 @@ test('controller projects separate assistant turns, handles approval and reconci
     state.messages.filter((m) => m.role === 'assistant').map((m) => m.content),
     ['First turn', 'Final turn'],
   );
-  assert.equal(state.messages.filter((m) => m.role === 'user').length, 1);
+  assert.equal(typedUserMessages(state.messages).length, 1);
   // Streamed text is delivered on the delta channel, in order and complete. Snapshots no longer
   // republish per token, so asserting on snapshot text would only pass by accident of event ordering.
   assert.equal(streamed.join(''), 'First turnFinal turn');
@@ -620,7 +669,14 @@ test('controller sends images and steers a pending Host approval without stale w
   };
   const url = await httpFixture(t, (body, res) => {
     if (step++ === 0) {
-      assert.equal(body.messages[0].content[1].type, 'image');
+      // Positional would break the first time the runtime writes a user-role snapshot (the built-in skills
+      // catalogue is one): find the turn that carries the picture, wherever it sits.
+      const withImage = (body.messages as { content: { type: string }[] }[]).find((message) =>
+        Array.isArray(message.content)
+          ? message.content.some((block) => block.type === 'image')
+          : false,
+      );
+      assert.ok(withImage, 'the request carries the image the person attached');
       sendFrames(
         res,
         frames('Approval', [
@@ -643,10 +699,14 @@ test('controller sends images and steers a pending Host approval without stale w
   await controller.enqueue('just explain', 'steer');
   assert.equal((await running).text, 'Explained');
   assert.equal(controller.snapshot.queue.length, 0);
-  assert.equal(controller.snapshot.messages.filter((m) => m.role === 'user').length, 2);
+  assert.equal(typedUserMessages(controller.snapshot.messages).length, 2);
   await assert.rejects(readFile(path.join(root, 'blocked.txt')), { code: 'ENOENT' });
   const resources = await client.request('resources.list', {});
-  assert.deepEqual(resources.skills, []);
+  // The workspace declares no skills of its own; what is listed is what this build ships with.
+  assert.deepEqual(
+    resources.skills.map((skill) => skill.path),
+    ['builtin:office-documents'],
+  );
 });
 test('controller rejects a second send and session switch during an active run', async (t) => {
   let ready!: () => void;
@@ -682,7 +742,7 @@ test('a completion snapshot accepts the next send immediately', async (t) => {
   await controller.send('first');
   assert.ok(next);
   assert.equal((await next).status, 'completed');
-  assert.equal(controller.snapshot.messages.filter((m) => m.role === 'user').length, 2);
+  assert.equal(typedUserMessages(controller.snapshot.messages).length, 2);
 });
 
 test('provider error data cannot expose a credential in terminal state or persisted run error', async (t) => {

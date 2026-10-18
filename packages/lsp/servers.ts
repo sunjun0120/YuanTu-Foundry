@@ -158,6 +158,18 @@ export async function resolveServers(
               continue;
             }
             const base = servers.get(language);
+            /**
+             * An explicit command replaces the built-in *command*, including the package binding that told the
+             * resolver to prefer a local npm entry over it. Inheriting `package` past an explicit command ran
+             * the package's entry instead of the wrapper the user named — the override said one thing and the
+             * process did another. A caller that wants both states the package explicitly.
+             */
+            const inheritedPackage =
+              override.package !== undefined
+                ? override.package
+                : override.command !== undefined
+                  ? undefined
+                  : base?.package;
             servers.set(
               language,
               validate({
@@ -176,9 +188,7 @@ export async function resolveServers(
                 ...((override.notes ?? base?.notes)
                   ? { notes: String(override.notes ?? base?.notes) }
                   : {}),
-                ...((override.package ?? base?.package)
-                  ? { package: String(override.package ?? base?.package) }
-                  : {}),
+                ...(inheritedPackage ? { package: String(inheritedPackage) } : {}),
               }),
             );
           } catch (error) {

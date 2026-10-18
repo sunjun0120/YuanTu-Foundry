@@ -67,6 +67,10 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         at TEXT NOT NULL
       );
       CREATE INDEX session_events_session ON session_events(session_id,seq);
+      -- The log is read by fact type on hot paths (the compaction surface every request, task admission inside a
+      -- write transaction, step and completion folds every run); without this, each such read walks every event
+      -- of the session.
+      CREATE INDEX session_events_type ON session_events(session_id,type,seq);
       -- Who is writing each session right now (see SessionLease). Ephemeral presence: taken by beginRun,
       -- renewed by the run loop, released when the run finishes, and reclaimed only through the dead-owner
       -- path. Never expired by age, so it is not a second source of truth about a run's status.

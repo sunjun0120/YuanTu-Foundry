@@ -63,27 +63,28 @@ npm.cmd run desktop -- --workspace E:\your-project
 
 ### 分层与真实依赖
 
-包按单向分层组织：每个包只引用**更低层**的包，类型引用也算在内。层次的唯一声明处是 [scripts/check-layers.mjs](scripts/check-layers.mjs) 的 `LAYERS`，`npm run layers:check` 拒绝任何逆向引用；文件级的值引用环由 `npm run cycles:check` 另行把关。从低到高：
+包按单向分层组织：每个包只引用**更低层**的包，类型引用也算在内。层次的唯一声明处是 [scripts/check-layers.mjs](scripts/check-layers.mjs) 的 `LAYERS`（包）与 `APP_LAYERS`（入口），`npm run layers:check` 拒绝任何逆向引用：入口位于所有包之上，可以引用任意包，但入口之间只能引用更低层的入口（`apps/shared` 在下，`apps/agent-host`、`apps/cli`、`apps/desktop` 同层、互不引用），包永远不引用入口；文件级的值引用环由 `npm run cycles:check` 另行把关。从低到高：
 
 | 层  | 包                     | 职责                                                                                     | 内部依赖                                                             |
 | --- | ---------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 0   | `packages/protocol`    | 类型真源：消息/事件/RPC/设置表/失败码/限额，以及任务定义与触发器的校验                   | —                                                                    |
-| 0   | `packages/platform`    | 进程身份、用户状态目录、凭据脱敏、工作区路径、原子写入                                   | —                                                                    |
-| 1   | `packages/providers`   | 三种模型协议的适配器、SSE、缓存、端点发现、容量目录                                      | platform, protocol                                                   |
-| 1   | `packages/search`      | 工作区文件清单、文本扫描与检索服务                                                       | protocol                                                             |
-| 1   | `packages/storage`     | SQLite 会话日志、事件、投影检查点、租约、检索                                            | platform, protocol                                                   |
-| 2   | `packages/maintenance` | 数据库维护（备份、校验、恢复、压缩）的调度面                                             | storage                                                              |
-| 2   | `packages/workspaces`  | 子代理工作区：快照、隔离副本、结果导出与导入                                             | platform, protocol, storage                                          |
-| 3   | `packages/tools`       | 工具执行管线、注册表、沙箱、后台命令、终端、文件工具与文件日志                           | platform, protocol, search, storage, workspaces                      |
-| 4   | `packages/lsp`         | 语言服务器管理（启动、诊断、定义、重命名、代码操作）                                     | protocol, tools                                                      |
-| 4   | `packages/office`      | DOCX / XLSX / PPTX 读写与预览                                                            | protocol, tools                                                      |
-| 4   | `packages/resources`   | Skills、声明式扩展、外部钩子桥                                                           | platform, protocol, tools                                            |
-| 5   | `packages/knowledge`   | markdown 记忆与文档索引（FTS5）                                                          | platform, protocol, resources                                        |
-| 5   | `packages/mcp`         | MCP 客户端（stdio/http/sse）与 OAuth 2.1                                                 | platform, protocol, resources, tools                                 |
-| 6   | `packages/catalog`     | `createTools()`：把基础工具与 LSP、MCP、Office、知识、扩展、技能装配成一次运行的工具目录 | knowledge, lsp, mcp, office, protocol, resources, search, tools      |
-| 7   | `packages/core`        | 内核：agent 循环、上下文预算、子代理、任务、目标、计划、投影                             | knowledge, platform, protocol, resources, storage, tools, workspaces |
-| 8   | `packages/client`      | 宿主客户端：传输缝隙、JSONL RPC、会话状态机                                              | core, platform, protocol, storage                                    |
-| 9   | `packages/carrier`     | 载体契约与服务：一套命令词表 + 快照 + 四条增量通道                                       | client, core, platform, protocol, providers, tools                   |
+| 0   | `packages/formats`     | 无依赖的纯解析器：cron 与日历规则、PNG/JPEG/GIF/WebP 结构校验、FTS 文本归一化            | —                                                                    |
+| 1   | `packages/protocol`    | 类型真源：消息/事件/RPC/设置表/失败码/限额，以及任务定义与触发器的校验                   | formats                                                              |
+| 1   | `packages/platform`    | 进程身份、用户状态目录、凭据脱敏、工作区路径、原子写入                                   | —                                                                    |
+| 2   | `packages/providers`   | 三种模型协议的适配器、SSE、缓存、端点发现、容量目录                                      | platform, protocol                                                   |
+| 2   | `packages/search`      | 工作区文件清单、文本扫描与检索服务                                                       | protocol                                                             |
+| 2   | `packages/storage`     | SQLite 会话日志、事件、投影检查点、租约、检索                                            | formats, platform, protocol                                          |
+| 3   | `packages/maintenance` | 数据库维护（备份、校验、恢复、压缩）的调度面                                             | platform, storage                                                    |
+| 3   | `packages/workspaces`  | 子代理工作区：快照、隔离副本、结果导出与导入                                             | platform, protocol, storage                                          |
+| 4   | `packages/tools`       | 工具执行管线、注册表、沙箱、后台命令、终端、文件工具与文件日志                           | platform, protocol, search, storage, workspaces                      |
+| 5   | `packages/lsp`         | 语言服务器管理（启动、诊断、定义、重命名、代码操作）                                     | protocol, tools                                                      |
+| 5   | `packages/office`      | DOCX / XLSX / PPTX 读写与预览                                                            | protocol, tools                                                      |
+| 5   | `packages/resources`   | Skills、声明式扩展、外部钩子桥                                                           | platform, protocol, tools                                            |
+| 6   | `packages/knowledge`   | markdown 记忆与文档索引（FTS5）                                                          | formats, platform, protocol, resources                               |
+| 6   | `packages/mcp`         | MCP 客户端（stdio/http/sse）与 OAuth 2.1                                                 | platform, protocol, resources, tools                                 |
+| 7   | `packages/catalog`     | `createTools()`：把基础工具与 LSP、MCP、Office、知识、扩展、技能装配成一次运行的工具目录 | knowledge, lsp, mcp, office, protocol, resources, search, tools      |
+| 8   | `packages/core`        | 内核：agent 循环、上下文预算、子代理、任务、目标、计划、投影                             | knowledge, platform, protocol, resources, storage, tools, workspaces |
+| 9   | `packages/client`      | 宿主客户端：传输缝隙、JSONL RPC、会话状态机                                              | core, platform, protocol, storage                                    |
+| 10  | `packages/carrier`     | 载体契约与服务：一套命令词表 + 快照 + 四条增量通道                                       | client, core, platform, protocol, providers, tools                   |
 
 `packages/tools` 只提供工具管线和基础工具；把各领域工具拼成目录的装配点在它之上的 `packages/catalog`，所以 LSP、MCP、Office 等领域包可以依赖工具管线，而不会和装配点互相引用。
 
@@ -245,16 +246,16 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 
 ### Office 与交付
 
-| 工具                   | 行为                                                           | 审批 |
-| ---------------------- | -------------------------------------------------------------- | ---- |
-| `office_inspect`       | 读取 DOCX/XLSX/PPTX 的结构与文本                               | —    |
-| `office_create`        | 新建文档、表格或演示文稿（Word/PPT 需要本机 Microsoft Office） | 写入 |
-| `office_edit`          | 基于模板替换文本、编辑单元格，保留未受影响的格式               | 写入 |
-| `office_preview`       | 默认 PDF（DOCX/PPTX）或 HTML（XLSX）；可选 LibreOffice PDF     | 写入 |
-| `verify_file_delivery` | 校验类型、大小、SHA-256 与结构标记                             | —    |
-| `present`              | 把工作区文件声明为本次任务的交付物，供用户打开                 | —    |
+| 工具                   | 行为                                                            | 审批 |
+| ---------------------- | --------------------------------------------------------------- | ---- |
+| `office_inspect`       | 读取 DOCX/XLSX/PPTX 的结构与文本                                | —    |
+| `office_create`        | 新建文档、表格或演示文稿（纯 JS，无需 Microsoft Office）        | 写入 |
+| `office_edit`          | 基于模板替换文本（可跨格式片段）、编辑单元格，保留其余格式      | 写入 |
+| `office_preview`       | 按输出扩展名：`.html` 内置预览，`.pdf` 用 Office 或 LibreOffice | 写入 |
+| `verify_file_delivery` | 校验类型、大小、SHA-256 与结构标记                              | —    |
+| `present`              | 把工作区文件声明为本次任务的交付物，供用户打开                  | —    |
 
-`office_*` 处理 DOCX/XLSX/PPTX，拒绝旧版 DOC/XLS/PPT。DOCX/PPTX 的默认 PDF 预览需要本机 Microsoft Office；XLSX 默认生成纯 JS 的 HTML 数据预览。显式选择 LibreOffice PDF 后端时需要另外安装 LibreOffice。`verify_file_delivery` 可检查旧格式的结构签名，这不代表 Office 工具支持创建、编辑或预览旧格式。
+`office_*` 处理 DOCX/XLSX/PPTX，拒绝旧版 DOC/XLS/PPT。三种格式的创建都是纯 JS（Word 用 `docx`，PPT 用 `pptxgenjs`）：Word 支持标题、段落、各级标题、有序/无序列表、表格与分页，PPT 每页支持要点、表格与演讲者备注。模板编辑同样是纯 JS：DOCX/PPTX 逐段落匹配文本，命中跨越多个格式片段时也能替换，替换文字沿用匹配起点的格式；没有命中的替换项会使整次编辑失败。`office_preview` 按输出扩展名选择：`.html` 是不依赖任何软件的内置预览（Word 正文与表格、幻灯片文字、Excel 单元格值，页面禁止脚本与外部请求）；`.pdf` 对 Word/PPT 先用本机 Microsoft Office，Office 不可用时回退 LibreOffice，两者都没有时报错并提示改用 `.html`。`backend` 可强制 `html`、`office`、`libreoffice`，旧值 `native` 保持原义。`verify_file_delivery` 可检查旧格式的结构签名，这不代表 Office 工具支持创建、编辑或预览旧格式。
 
 ### 记忆与知识
 
@@ -285,7 +286,7 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 | 目标续跑 | 该运行自己拥有这份工作（根运行）         | `create_goal`、`get_goal`、`update_goal`                                                                                    |
 | 计划模式 | 计划阶段                                 | `submit_plan`、`exit_plan_mode`                                                                                             |
 | 工作流   | 宿主启用                                 | `workflow`（在独立 Node 进程中运行编排脚本，支持 host 与 Windows/macOS 原生后端）                                           |
-| 技能     | 工作区发现至少一个技能                   | `load_skill`                                                                                                                |
+| 技能     | 始终（内置 `office-documents` 技能）     | `load_skill`                                                                                                                |
 | 持久任务 | 有任务尝试活动                           | `task_step`                                                                                                                 |
 | MCP      | 工作区配置了服务                         | `mcp_<服务名>_list_tools`、`_call_tool`、`_list_resources`、`_read_resource`、`_list_prompts`、`_get_prompt`                |
 | 扩展     | `.yuantu/extensions/*.json` 或嵌入方注册 | `ext_<名称>`                                                                                                                |
@@ -515,7 +516,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 
 项目指令每次运行重新加载，同一目录按 `AGENTS.override.md` → `AGENTS.md` → `CLAUDE.md` 取**第一个存在的**，按根到目标目录合并、越近优先级越高。渲染预算单文件 32KB、合计 64KB，**从最靠近目标的文件往外分配**：放不下的文件被截断或整个略去，并在提示词里点名说明——文件本身不动，`read_file` 可以读全文。超限因此不再让整个工作区无法运行。
 
-Skills 放在 `.agents/skills/<name>/SKILL.md` 或 `.yuantu/skills/<name>/SKILL.md`（同名时 `.yuantu` 优先），每个最多 32KB、最多 64 个。用户输入 `/skill:<name> 任务` 加载全文，模型也可用 `load_skill`。技能指引**不能改变运行时权限**，这句话会随技能内容一起注入。
+Skills 放在 `.agents/skills/<name>/SKILL.md` 或 `.yuantu/skills/<name>/SKILL.md`（同名时 `.yuantu` 优先），每个最多 32KB、最多 64 个。用户输入 `/skill:<name> 任务` 加载全文，模型也可用 `load_skill`。技能指引**不能改变运行时权限**，这句话会随技能内容一起注入。应用内置 `office-documents` 技能（Word 报告与 PPT 的写作与自查方法），它不占 64 个的工作区名额；工作区里同名的技能会替换它。
 
 ### 声明式扩展
 
@@ -545,19 +546,19 @@ CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*
 
 TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCarrier({ transport, authToken })` 显式传入相同密钥。首条请求必须是带 `params.authToken` 的 `host.info`；Host 验证并移除密钥后才接入普通 RPC，失败连接不会取得会话控制权。握手帧上限 4 KiB、等待上限 5 秒、最多 8 条待认证连接；认证后单请求帧上限 16 MiB，包含没有换行符的未完成帧。此 TCP 入口不提供直接远程监听或 TLS，远程使用需由外部受保护通道转发到回环地址。
 
-| 域         | 方法                                                                                                                                                                                       |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`permission.update`、`invariants.list`                                                                                                        |
-| 会话       | `session.create`、`session.list`、`session.rename`、`session.delete`、`session.get`、`session.audit`、`session.events`                                                                     |
-| 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                            |
-| 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                     |
-| 计划       | `plan.get`、`plan.approve`、`plan.reject`                                                                                                                                                  |
-| 任务       | `task.create`、`task.get`、`task.list`、`task.update`、`task.attempts`、`task.steps`、`task.approval.respond`、`task.trigger`、`task.propose`、`task.confirm`、`task.verify`、`task.retry` |
-| 后台命令   | `background.list`、`background.state`、`background.policy`、`background.poll`、`background.stop`、`background.clear`                                                                       |
-| 资源与文件 | `resources.list`、`files.list`、`files.read`                                                                                                                                               |
-| 变更       | `changes.list`、`changes.undo`                                                                                                                                                             |
-| 工作区     | `workspaces.get`、`workspaces.orphaned`、`workspace.results`、`workspace.apply`、`workspace.archive`、`workspace.restore`、`workspace.remove`                                              |
-| 会话附属   | `todos.get`、`deliverables.get`、`completion.current`、`subagents.list`、`goal.get`                                                                                                        |
+| 域         | 方法                                                                                                                                                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`permission.update`、`invariants.list`                                                                                                                        |
+| 会话       | `session.create`、`session.list`、`session.rename`、`session.delete`、`session.recover`、`session.get`、`session.audit`、`session.events`                                                                  |
+| 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                                            |
+| 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                                     |
+| 计划       | `plan.get`、`plan.approve`、`plan.reject`                                                                                                                                                                  |
+| 任务       | `task.create`、`task.get`、`task.list`、`task.update`、`task.attempts`、`task.steps`、`task.history`、`task.approval.respond`、`task.trigger`、`task.propose`、`task.confirm`、`task.verify`、`task.retry` |
+| 后台命令   | `background.list`、`background.state`、`background.policy`、`background.poll`、`background.stop`、`background.clear`                                                                                       |
+| 资源与文件 | `resources.list`、`files.list`、`files.read`                                                                                                                                                               |
+| 变更       | `changes.list`、`changes.undo`                                                                                                                                                                             |
+| 工作区     | `workspaces.get`、`workspaces.orphaned`、`workspace.results`、`workspace.apply`、`workspace.archive`、`workspace.restore`、`workspace.remove`                                                              |
+| 会话附属   | `todos.get`、`deliverables.get`、`completion.current`、`subagents.list`、`goal.get`                                                                                                                        |
 
 **同时只接受一个连接**（审批、运行、提问映射与工作区锁都是 per-Host），第二个连接会收到明确的拒绝报文后被关闭。载体断开即走同一个关闭流程——Host 属于拉起它的载体。
 
@@ -704,19 +705,19 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 67 个 / 33.9 KB | `createTools().specs()` |
-| 工具（只读运行） | 34 个 / 16.6 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 30 个 / 16.6 KB | `specs({ loaded: new Set() })`（默认 `YUANTU_TOOL_MODE=deferred`） |
-| 工具（折叠为 `run_code`） | 1 个 / 10.2 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
+| 工具（空工作区，全部） | 68 个 / 36.1 KB | `createTools().specs()` |
+| 工具（只读运行） | 35 个 / 17.1 KB | `specs({ readOnly: true })` |
+| 工具（默认按需加载，首个请求） | 31 个 / 17.1 KB | `specs({ loaded: new Set() })`（默认 `YUANTU_TOOL_MODE=deferred`） |
+| 工具（折叠为 `run_code`） | 1 个 / 10.4 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v31 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 8 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 249 个 | `tests/*.test.ts` |
+| 行为测试文件 | 252 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
-| CLI 维护命令 | 5 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 58 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| CLI 维护命令 | 6 个 | `CLI_MAINTENANCE_COMMANDS` |
+| Host JSON-RPC 方法 | 60 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->
@@ -733,7 +734,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **host 沙箱不是安全边界**：授权后的命令可以访问主机其他位置与网络；命令工具不适合不受信任的工作负载。权限策略作用于需要审批的操作，同样不能代替操作系统沙箱。
 - **不提供 `push`、`amend`、`rebase`、`reset --hard`**：它们需要凭据、改写历史或丢弃工作成果，不能由模型顺带推断。
 - **文件工具不是并发安全边界**：它们拒绝工作区外路径与符号链接，但不对抗有意绕过它的进程。
-- **浏览器工具依赖可选的 `playwright`**；DOCX/PPTX 的创建、编辑与默认 PDF 预览依赖 Windows 和本机 Microsoft Office，XLSX 的读写及默认 HTML 数据预览使用纯 JS。`office_preview` 可显式选择 `backend: 'libreoffice'`，为三种格式生成 PDF；需要另行安装 LibreOffice，真实引擎、字体、版式和公式计算仍需独立验收。
+- **浏览器工具依赖可选的 `playwright`**；Office 文件的创建、编辑、读取与 `.html` 预览都是纯 JS；只有 `.pdf` 预览需要本机 Microsoft Office（Windows）或另行安装的 LibreOffice，真实引擎、字体、版式和公式计算仍需独立验收。
 - **语言服务器支持 host 与 Windows/macOS 原生执行后端**；后端不可用或不能满足文件、网络要求时拒绝启动。服务器保留创建策略，切换后需要停止并重新启动才能继续请求。服务器不会自动重启，也没有空闲回收，必须显式 `lsp_start`。没有格式化工具，而语言服务器返回的 `WorkspaceEdit` 里除了文本编辑还可能带**建文件/改名/删文件类资源操作**——这些一律拒绝整份编辑，而不是只应用文本那一半（否则引用被改名而文件没动，调用方还会以为重命名成功了）。
 - **MCP 没有命令允许名单，也没有域名白名单**：约束是「HTTPS 或回环」加上来源白名单，stdio 传输额外要求 host 沙箱。运行时的授权请求不会自动弹浏览器，必须显式完成一次授权；远端返回的 schema、提示词与内容一律当作不可信数据。工具目录在连接建立时读取一次，此后只在服务器自己发出 `notifications/tools/list_changed` 时按需重读——用已经开着的连接重读，不重握手，也不因为收到通知就立刻发起请求。
 - **`verify_file_delivery` 校验的是结构而不是语义**：它核对大小、SHA-256 与魔数，不判断页数、能否被 Office 打开、版式或内容是否正确。

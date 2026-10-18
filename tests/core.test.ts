@@ -7,6 +7,7 @@ import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type {
+  Message,
   ModelRequest,
   ModelResponse,
   Provider,
@@ -17,6 +18,20 @@ import { RunQueue } from '../packages/core/run-queue.ts';
 import { emptyStatistics, addStatistics, addUsage } from '../packages/protocol/statistics.ts';
 import { redactSecrets } from '../packages/platform/redact.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
+
+/**
+ * The user-role messages a person actually typed.
+ *
+ * The runtime announces built-in skills as a user-role message, so a conversation's message count includes
+ * machine context. Tests that count turns or look for the first human turn must exclude it, not pin the
+ * announcement's presence or absence.
+ */
+const typedUserMessages = (messages: readonly Message[]): Extract<Message, { role: 'user' }>[] =>
+  messages.filter(
+    (message): message is Extract<Message, { role: 'user' }> =>
+      message.role === 'user' && !isRuntimeContext(message.content),
+  );
 
 // ---- merged from core.test.ts ----
 
@@ -297,8 +312,9 @@ test('agent executes tools, returns results to provider and persists history acr
   assert.equal(ends[0]!.data.messageId, starts[0]!.data.messageId);
   assert.equal((ends[0]!.data.message as { toolCalls: unknown[] }).toolCalls.length, 1);
   const reopened = new SessionStore(path.join(root, 'sessions.sqlite'));
-  assert.equal(reopened.messages(session.id).length, 6);
-  assert.equal(reopened.messages(session.id).at(-1)?.role, 'assistant');
+  const reopenedMessages = reopened.messages(session.id);
+  assert.equal(typedUserMessages(reopenedMessages).length, 1);
+  assert.equal(reopenedMessages.at(-1)?.role, 'assistant');
   reopened.close();
   assert.equal(store.get(session.id).activeRun, null);
 });
@@ -367,7 +383,7 @@ test('concurrent run is rejected without corrupting the first run', async (t) =>
   await assert.rejects(agent.run({ sessionId: session.id, prompt: 'two' }), /already running/i);
   finish(reply());
   await first;
-  assert.equal(store.messages(session.id).filter((m) => m.role === 'user').length, 1);
+  assert.equal(typedUserMessages(store.messages(session.id)).length, 1);
 });
 
 test('cancelled approval resolves every pending call without side effects', async (t) => {
@@ -715,7 +731,7 @@ test('each user turn persists the selected model identity without changing provi
     (await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'hello' })).status,
     'completed',
   );
-  const first = ctx.store.messages(ctx.session.id)[0];
+  const first = typedUserMessages(ctx.store.messages(ctx.session.id))[0];
   assert.ok(first?.role === 'user');
   assert.deepEqual(first.modelInfo, identity);
   const second = new Agent({
@@ -730,7 +746,7 @@ test('each user turn persists the selected model identity without changing provi
     modelInfo: { ...identity, model: 'model-b' },
   });
   await second.run({ sessionId: ctx.session.id, prompt: 'continue' });
-  const users = ctx.store.messages(ctx.session.id).filter((m) => m.role === 'user');
+  const users = typedUserMessages(ctx.store.messages(ctx.session.id));
   assert.deepEqual(
     users.map((m) => m.modelInfo?.model),
     ['model-a', 'model-b'],
@@ -972,7 +988,7 @@ test('steer interrupts pending approval and skips remaining stale calls before r
   assert.equal(result.text, 'Explained only');
   await assert.rejects(readFile(path.join(root, 'one.txt')), { code: 'ENOENT' });
   await assert.rejects(readFile(path.join(root, 'two.txt')), { code: 'ENOENT' });
-  assert.equal(store.messages(session.id).filter((m) => m.role === 'user').length, 2);
+  assert.equal(typedUserMessages(store.messages(session.id)).length, 2);
 });
 test('steering wins an approval race even when the approver returns allow', async (t) => {
   let calls = 0;
@@ -1069,10 +1085,7 @@ test('follow-ups execute in FIFO order after the current turn and are durable on
   release(reply2('answer first'));
   assert.equal((await running).text, 'answer third');
   assert.deepEqual(
-    store
-      .messages(session.id)
-      .filter((m) => m.role === 'user')
-      .map((m) => m.content),
+    typedUserMessages(store.messages(session.id)).map((message) => message.content),
     ['first', 'second', 'third'],
   );
   assert.equal(agent.getQueue(session.id).length, 0);
@@ -1096,7 +1109,7 @@ test('cancel clears unconsumed inputs and does not replay them into history', as
   aborter.abort();
   assert.equal((await running).status, 'cancelled');
   assert.equal(agent.getQueue(session.id).length, 0);
-  assert.equal(store.messages(session.id).filter((m) => m.role === 'user').length, 1);
+  assert.equal(typedUserMessages(store.messages(session.id)).length, 1);
 });
 
 test('queued image metadata does not duplicate base64 data into queue events', async (t) => {

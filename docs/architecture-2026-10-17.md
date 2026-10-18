@@ -1,9 +1,9 @@
 # YuanTu Agent 架构与能力分析
 
-- 记录日期：2026-10-17
+- 记录日期：2026-10-17；2026-10-18 按当时的代码修订（分层门禁覆盖 `apps/`、新增 `packages/formats`、桌面主进程拆分、暂停面统一、CLI 恢复）
 - 分析对象：`E:\agent-desktop\YuanTu-Foundry`（`HEAD` = `3c2e26b`，工作树干净）
 - 方法：全仓库文件级扫描（349 个 `.ts` 源文件、249 个行为测试文件）、对入口与关键模块的定向阅读、跨包导入关系自动提取、门禁脚本实测（详见《测试耗时统计》与《问题清单》两份文档）
-- 说明：本文只描述**今天这棵树**的事实。数字凡能由代码算出者，均给出出处；与 README 生成事实块冲突时，以生成事实块为准。
+- 说明：本文只描述**修订当日这棵树**的事实；§3 的规模数字为 2026-10-18 重算值（不含另一会话进行中的 Office 改动）。数字凡能由代码算出者，均给出出处；与 README 生成事实块冲突时，以生成事实块为准。
 
 ---
 
@@ -16,7 +16,7 @@ YuanTu Agent 是一个**自研的桌面编程 Agent 内核 + Electron 客户端*
 - 会话存储（`packages/storage`）是 SQLite 事件日志 + 投影，`seq` 为全局游标，UI 的一切状态从日志重放/检查点得到，不另存一份状态。
 - 工具面（`packages/tools` + 若干集成包）共 67 个工具，统一走 9 阶段执行管线与单调守卫（只能拒绝，不能授权）。
 - 宿主（`apps/agent-host`）把内核包成 58 个 JSON-RPC 方法；载体层（`packages/carrier` + `packages/client`）是一套受校验的命令词表与客户端状态机；Electron 桌面（`apps/desktop`）是无框架、无状态库的渲染层。
-- 当前产品形态**只交付桌面**（Windows/macOS）。CLI、Web、ACP、对外 SDK 与 MCP 服务管理被 `packages/protocol/product-scope.ts` 的开关暂停，源码与测试保留。
+- 当前产品形态以桌面（Windows/macOS）为主，CLI 已恢复（`PRODUCT_SCOPE.cli = true`）。桌面 MCP 服务管理与备份被 `packages/protocol/product-scope.ts` 的开关暂停，源码与测试保留；Web、ACP 与对外 SDK 已移出主干（分支 `archive/web-sdk-acp`）。
 
 它最突出的工程特征不是功能数量，而是**「可验证性优先」**：README 的数字由脚本算出并门禁；工具管线在每次执行时校验阶段顺序；测试调度器为每个文件建私有机密目录/端口/临时状态并检查进程清理；文档引用路径有独立门禁。代价是仓库复杂度高、测试规模几乎与源码 1:1。
 
@@ -30,47 +30,48 @@ YuanTu Agent 是一个**自研的桌面编程 Agent 内核 + Electron 客户端*
 | 运行时    | Node.js ≥ 24（`engines`），ESM；TypeScript 由 Node 类型擦除直接运行，`npm run build` 只是分发形态 |
 | 桌面壳    | Electron 43 + electron-builder 26，Windows NSIS / macOS dmg+zip                                   |
 | 对外交付  | Windows/macOS 本地 Electron 客户端；模型端点由用户配置                                            |
-| 暂停入口  | CLI、Web、ACP、SDK/ACP 公开入口、桌面 MCP 服务管理（`PRODUCT_SCOPE`）                             |
+| 暂停入口  | 桌面 MCP 服务管理、桌面备份（`PRODUCT_SCOPE`）；Web/ACP/SDK 已移出主干                            |
 | 许可      | MIT（`LICENSE`）                                                                                  |
 
-`PRODUCT_SCOPE` 是一个 7 行的常量表，被 CLI/Web/ACP 入口的 `requireProductEntry()` 与桌面的 MCP IPC/渲染层读取。它把「产品范围」变成一个可读的代码事实，而不是散落在文档里的约定；`package.json` 的 `pausedEntrypoints` 保存被摘掉的 npm 入口，恢复时两处必须同步（README 明确写了这条规则）。
+`PRODUCT_SCOPE` 是一个三项的常量表（`mcpManagement`、`backups`、`cli`），被 CLI 入口的 `requireProductEntry()` 与桌面主进程、preload、渲染层读取。暂停面统一按同一种方式关闭：preload 不暴露对应成员、主进程不注册对应 IPC 通道（`tests/product-scope.test.ts` 对 `backups` 与 `mcp` 逐项钉住）。它把「产品范围」变成一个可读的代码事实，而不是散落在文档里的约定；`package.json` 的 `pausedEntrypoints` 保存被摘掉的 npm 入口，恢复时两处必须同步（README 明确写了这条规则）。
 
 ---
 
 ## 3. 仓库结构与规模
 
-| 目录                   | 内容                                                                  | 规模（TS/JS 行数，不含 `node_modules`）                        |
-| ---------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `packages/core`        | 内核：循环、预算、压缩、子代理、任务、目标、计划、投影辅助            | 65 文件 / 18,081 行                                            |
-| `packages/tools`       | 工具目录、执行管线、注册表、沙箱、后台命令、终端、文件日志            | 56 文件 / 14,315 行（另有 Rust `windows-sandbox` 约 1,600 行） |
-| `packages/storage`     | SQLite、事件日志、迁移、投影、检索、任务/工作区表                     | 22 文件 / 9,673 行                                             |
-| `packages/protocol`    | 类型真源：消息/事件/RPC/设置/失败码/限额/图片                         | 34 文件 / 6,027 行                                             |
-| `packages/search`      | 符号索引、ripgrep 后端、清单/游标                                     | 10 文件 / 3,301 行                                             |
-| `packages/workspaces`  | Git worktree 隔离子代理、快照、结果导入                               | 5 文件 / 3,197 行                                              |
-| `packages/client`      | Host 客户端：JSONL 传输、会话状态机                                   | 7 文件 / 2,622 行                                              |
-| `packages/lsp`         | 语言服务器管理                                                        | 5 文件 / 2,452 行                                              |
-| `packages/providers`   | 三种协议适配器、SSE、缓存、容量发现                                   | 14 文件 / 2,426 行                                             |
-| `packages/carrier`     | 载体契约与服务（命令词表、快照、增量通道）                            | 4 文件 / 1,942 行                                              |
-| `packages/mcp`         | MCP 客户端与 OAuth 2.1                                                | 4 文件 / 1,944 行                                              |
-| `packages/office`      | DOCX/XLSX/PPTX 读写与预览                                             | 6 文件 / 1,180 行                                              |
-| `packages/resources`   | 项目指令、Skills、扩展、外部钩子桥                                    | 6 文件 / 999 行                                                |
-| `packages/knowledge`   | markdown 记忆 + 文档索引（FTS5）                                      | 4 文件 / 732 行                                                |
-| `packages/maintenance` | 桌面升级/回滚事务                                                     | 1 文件 / 362 行                                                |
-| packages/sdk           | ACP 适配与 SDK 导出（已移出主干，见分支 archive/web-sdk-acp）         | 2 文件 / 296 行                                                |
-| `packages/platform`    | 用户状态目录、测试生命周期钩子                                        | 2 文件 / 21 行                                                 |
-| `apps/desktop`         | 主进程、preload、渲染层、i18n、设置、面板                             | 70 文件 / 20,172 行                                            |
-| `apps/agent-host`      | Host：RPC 分发、会话/运行/任务/工作区处理器、调度器                   | 24 文件 / 4,094 行                                             |
-| `apps/shared`          | 装配层：`createAgent()`、参数、CLI 命令表、钩子                       | 4 文件 / 850 行                                                |
-| `apps/cli`             | 单文件 CLI（暂停）                                                    | 1 文件 / 1,277 行                                              |
-| apps/web               | 本机 Web 桥（已移出主干，见分支 archive/web-sdk-acp）                 | 9 文件 / 23,032 行（含构建产物）                               |
-| apps/agent-acp         | ACP 入口（已移出主干，见分支 archive/web-sdk-acp）                    | 1 文件 / 102 行                                                |
-| `tests`                | 行为测试 + 冒烟 + 快照 + 夹具                                         | 249 个 `.test.ts` / 88,331 行；16 个 `.smoke.mjs`              |
-| `scripts`              | 构建、门禁、测试调度、覆盖率、打包                                    | 67 文件 / 约 0.3 MB                                            |
-| `benchmarks`           | 性能基准、检索基准、编码评测                                          | 36 文件                                                        |
-| sdk/python             | Host JSONL 的 Python 客户端（已移出主干，见分支 archive/web-sdk-acp） | 4 文件                                                         |
-| `build`                | 图标、ripgrep 资产锁、Windows 运行时锁、受保护安装脚本                | 12 个已跟踪文件                                                |
+| 目录                   | 内容                                                                  | 规模（TS/JS 行数，不含 `node_modules`）            |
+| ---------------------- | --------------------------------------------------------------------- | -------------------------------------------------- |
+| `packages/core`        | 内核：循环、预算、压缩、子代理、任务、目标、计划、投影辅助            | 65 文件 / 17,929 行                                |
+| `packages/tools`       | 工具目录、执行管线、注册表、沙箱、后台命令、终端、文件日志            | 62 文件 / 15,764 行（另有 Rust `windows-sandbox`） |
+| `packages/storage`     | SQLite、事件日志、迁移、投影、检索、任务/工作区表                     | 23 文件 / 10,239 行                                |
+| `packages/protocol`    | 类型真源：消息/事件/RPC/设置/失败码/限额；输入与任务触发器的边界校验  | 40 文件 / 6,355 行                                 |
+| `packages/formats`     | 无依赖的纯解析器：cron/日历、图片结构校验、FTS 文本归一化             | 7 文件 / 809 行                                    |
+| `packages/search`      | 符号索引、ripgrep 后端、清单/游标                                     | 10 文件 / 3,510 行                                 |
+| `packages/workspaces`  | Git worktree 隔离子代理、快照、结果导入                               | 6 文件 / 3,387 行                                  |
+| `packages/client`      | Host 客户端：JSONL 传输、会话状态机                                   | 8 文件 / 2,675 行                                  |
+| `packages/lsp`         | 语言服务器管理                                                        | 6 文件 / 2,551 行                                  |
+| `packages/providers`   | 三种协议适配器、SSE、缓存、容量发现                                   | 15 文件 / 2,596 行                                 |
+| `packages/carrier`     | 载体契约与服务（命令词表、快照、增量通道）                            | 4 文件 / 2,007 行                                  |
+| `packages/mcp`         | MCP 客户端与 OAuth 2.1                                                | 4 文件 / 1,989 行                                  |
+| `packages/office`      | DOCX/XLSX/PPTX 读写与预览                                             | 6 文件 / 1,275 行                                  |
+| `packages/resources`   | 项目指令、Skills、扩展、外部钩子桥                                    | 6 文件 / 1,052 行                                  |
+| `packages/knowledge`   | markdown 记忆 + 文档索引（FTS5）                                      | 4 文件 / 804 行                                    |
+| `packages/maintenance` | 桌面升级/回滚事务                                                     | 1 文件 / 382 行                                    |
+| packages/sdk           | ACP 适配与 SDK 导出（已移出主干，见分支 archive/web-sdk-acp）         | 2 文件 / 296 行                                    |
+| `packages/platform`    | 进程身份、用户状态目录、凭据脱敏、工作区路径、原子写入                | 6 文件 / 367 行                                    |
+| `apps/desktop`         | 主进程（按职责拆分）、preload、渲染层、i18n、设置、面板               | 75 文件 / 15,056 行                                |
+| `apps/agent-host`      | Host：RPC 分发、会话/运行/任务/工作区处理器、调度器                   | 24 文件 / 4,436 行                                 |
+| `apps/shared`          | 装配层：`createAgent()`、参数、CLI 命令表、钩子                       | 4 文件 / 887 行                                    |
+| `apps/cli`             | 单文件 CLI（`PRODUCT_SCOPE.cli = true`，已恢复）                      | 1 文件 / 1,294 行                                  |
+| apps/web               | 本机 Web 桥（已移出主干，见分支 archive/web-sdk-acp）                 | 9 文件 / 23,032 行（含构建产物）                   |
+| apps/agent-acp         | ACP 入口（已移出主干，见分支 archive/web-sdk-acp）                    | 1 文件 / 102 行                                    |
+| `tests`                | 行为测试 + 冒烟 + 快照 + 夹具                                         | 249 个 `.test.ts` / 88,331 行；16 个 `.smoke.mjs`  |
+| `scripts`              | 构建、门禁、测试调度、覆盖率、打包                                    | 67 文件 / 约 0.3 MB                                |
+| `benchmarks`           | 性能基准、检索基准、编码评测                                          | 36 文件                                            |
+| sdk/python             | Host JSONL 的 Python 客户端（已移出主干，见分支 archive/web-sdk-acp） | 4 文件                                             |
+| `build`                | 图标、ripgrep 资产锁、Windows 运行时锁、受保护安装脚本                | 12 个已跟踪文件                                    |
 
-源码（`apps`+`packages`，排除 `windows-sandbox`）共 **349 个 TS 文件 / 91,381 行**；测试 **249 个文件 / 88,331 行**——测试与源码行数比约 **0.97:1**。这解释了为什么本项目的质量论证主要落在测试与门禁上。
+源码（`apps`+`packages`，排除 `windows-sandbox`）共 **378 个 TS 文件 / 95,628 行**；测试 **249 个文件 / 88,331 行**——测试与源码行数比约 **0.97:1**。这解释了为什么本项目的质量论证主要落在测试与门禁上。
 
 > 注：`packages/tools/windows-sandbox/appcontainer/target/` 下约 660 MB 的 Rust 构建缓存不在版本控制内（嵌套 `.gitignore`），但会占据工作树；`dist/`、`.scratch/`、`.yuantu/` 同样被忽略。
 
@@ -80,15 +81,15 @@ YuanTu Agent 是一个**自研的桌面编程 Agent 内核 + Electron 客户端*
 
 ### 4.1 分层与真实依赖
 
-README 明确声明「包之间不是严格单向分层」，这与实测一致。用 TypeScript AST 按 `scripts/check-import-cycles.mjs` 的同一套规则统计（排除 `import type`）：
+包与入口按严格单向分层组织，由 `npm run layers:check`（`scripts/check-layers.mjs`）门禁，**类型导入也计入**：
 
-- 349 个文件、386 条同仓库值导入、85 组包间值导入边。
-- **8 组包对互相导入**（值导入，不含纯类型）：
-  `core ↔ tools`、`core ↔ workspaces`、`core ↔ storage`、`tools ↔ resources`、`tools ↔ mcp`、`tools ↔ office`、`tools ↔ knowledge`、`tools ↔ lsp`。
-- 入度最高的三个包：`protocol`（150 条）、`core`（63 条）、`tools`（59 条）。
-- 文件级值导入环为 **0**（`npm run cycles:check` 的判定口径），即包级耦合没有退化成模块初始化环。
+- 包分 11 层，从低到高：`formats` → `protocol`、`platform` → `providers`、`search`、`storage` → `maintenance`、`workspaces` → `tools` → `lsp`、`office`、`resources` → `knowledge`、`mcp` → `catalog` → `core` → `client` → `carrier`。同层的包互不引用。
+- 入口在所有包之上，分两层：`apps/shared` 在下，`apps/agent-host`、`apps/cli`、`apps/desktop` 同层、互不引用；入口可以引用任意包，包永远不引用入口。
+- 昨日记录的 8 组包级双向导入（`core↔tools` 等）已全部拆除：共享类型下沉到 `protocol`，工具目录的装配点上移到 `catalog`。
+- `packages/formats` 是最底层：cron 与日历规则、PNG/JPEG/GIF/WebP 结构校验、FTS 文本归一化这些无依赖的纯算法从 `protocol` 移出，`protocol` 只保留类型、常量与边界校验（`images.ts`、`task-trigger.ts` 调用 `formats` 完成校验）。
+- 文件级值导入环为 **0**（`npm run cycles:check`）。
 
-因此更准确的描述是「**以 `protocol` 为类型/契约中心的星形 + 以 `core`↔`tools` 为轴的双向依赖**」，而不是分层栈。这样做的收益是内核可以直接调用工具注册表、工具又需要内核的事件/权限类型；代价是任何要抽出独立包（如把 tools 搬出进程）的动作都需要先拆这 8 组环。
+因此当前结构是「**以 `formats`/`protocol` 为底的单向分层栈**」；任何逆向引用（包括借一个类型）都会被门禁拒绝，移动包的层次必须显式修改 `LAYERS`/`APP_LAYERS`。
 
 ### 4.2 一次运行的数据流
 
@@ -114,7 +115,7 @@ CLI 是另一条路：进程内直接 `createAgent()`，不经 `CarrierService`�
 
 `apps/shared/runtime.ts` 的 `createAgent()` 是内核唯一的装配点，顺序是：读 provider 配置 → 建 provider → 解析上下文容量（声明 → 目录 → `/models` 发现 → 应用默认）→ 构造 `Agent` 并注入工具注册表、子代理 provider 解析器、可委派模型、审批/提问回调、权限策略 getter、驻留与 `childTools`、全部预算参数 → 注册工具 → 装载外部钩子。
 
-桌面、Host、CLI 与 Web 都走这一个函数，因此「同一份配置在四个入口给出同一个答案」是构造上的，而不是靠测试对齐的。
+Host 与 CLI 直接走这一个函数；桌面不在进程内装配内核，而是启动一个 Host 子进程，因此三个入口「同一份配置给出同一个答案」是构造上的，而不是靠测试对齐的。
 
 ---
 
@@ -122,7 +123,7 @@ CLI 是另一条路：进程内直接 `createAgent()`，不经 `CarrierService`�
 
 ### 5.1 内核循环
 
-`packages/core/agent.ts`（1,507 行）保留 `Agent` 类与运行入口，但循环的每个阶段已经拆成独立模块，按职责命名：
+`packages/core/agent.ts`（1,408 行）保留 `Agent` 类与运行入口，但循环的每个阶段已经拆成独立模块，按职责命名：
 
 | 模块                                                    | 职责                                      |
 | ------------------------------------------------------- | ----------------------------------------- |
@@ -239,9 +240,9 @@ Windows 增强后端（AppContainer）有完整原型（Rust helper + ACL 脚本
 
 ### 5.10 载体层与桌面壳
 
-- `packages/carrier/service.ts`（1,311 行）是「面向任何界面层的客户端状态机」：回答「界面该看到什么」，所有答案来自 Host；包内禁止出现 Electron/DOM/`apps/` 引用（由 `tests/carrier.test.ts` 从源码文本钉住）。
-- `packages/client/session-controller.ts`（1,560 行）持有快照、增量通道与命令去重；`host-transport.ts` 是 JSONL 传输缝隙。
-- `apps/desktop/main.ts`（1,195 行）负责窗口、单实例锁、设置存储、IPC 与 Host 子进程生命周期；`preload.ts` 只有 49 行，用 `contextBridge` 暴露 10 个 invoke 通道 + 5 个订阅通道（快照、消息增量、子代理增量、统计增量、权限预设）。
+- `packages/carrier/service.ts`（1,362 行）是「面向任何界面层的客户端状态机」：回答「界面该看到什么」，所有答案来自 Host；包内禁止出现 Electron/DOM/`apps/` 引用（由 `tests/carrier.test.ts` 从源码文本钉住）。
+- `packages/client/session-controller.ts`（1,366 行）持有快照、增量通道与命令去重；`host-transport.ts` 是 JSONL 传输缝隙。
+- `apps/desktop/main.ts`（约 680 行）只保留进程的可变状态、窗口、单实例锁、设置存储、Host 子进程生命周期与核心 IPC；自成一体的部分拆到同目录的 `main-upgrade.ts`（手动升级）、`main-backups.ts`（暂停的备份面）、`main-mcp.ts`（暂停的 MCP 管理面）、`main-attachment.ts`（附件读取 worker）、`main-hook-trust.ts`（工作区钩子信任对话框）与 `session-choices.ts`（每会话沙箱/审批档位），它们通过 `main-context.ts` 的 `MainContext`（对 main 中绑定的实时 getter/setter）访问共享状态。`preload.ts` 用 `contextBridge` 暴露 invoke 通道（暂停面的 `backups`/`mcp` 不暴露）+ 5 个订阅通道（快照、消息增量、子代理增量、统计增量、权限预设）。
 - 窗口 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`；拒绝所有窗口打开、导航、权限请求；外链只走系统浏览器且只接受无凭据 http/https；每个 IPC handler 先 `assertSender` 校验 sender 是主框架且 URL 是受信任页面。
 - 渲染层无框架、无状态库：一份 `CarrierSnapshot` + 增量，按区块 key 做差量，locale 进 key；对话区只画对话（机器写给模型的 `<runtime-context>` 快照不渲染为消息）。
 - i18n：`apps/desktop/i18n.ts`（1,264 行）是中英唯一字典，主进程与渲染层共用；`i18n:check` 用静态规则扫描主进程模块，真窗口冒烟用 DOM 遍历验证渲染层。
@@ -349,8 +350,8 @@ clean-paused-builds → tsc -p tsconfig.build.json → copy-sandbox-assets
 
 - 运行时依赖只有 14 个（`@agentclientprotocol/sdk`、`@lydell/node-pty`、`@modelcontextprotocol/sdk`、`@napi-rs/keyring`、`ajv`、`diff`、`highlight.js`、`jszip`、`mammoth`、`marked`、`pdfjs-dist`、`typescript`、`xlsx`、`zod`）。`typescript` 进运行时依赖是因为 `packages/tools/repo-map.ts` 与测试选择器需要解析源码。
 - `xlsx` 来自 `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`（lockfile 记录了完整性摘要），不是 npm registry；这是供应链上唯一非 registry 依赖。
-- 包级存在 8 组双向值导入（见 4.1），文件级值导入环为 0；`npm run cycles:check` 把「文件级环」定为 0 并解释为什么不按包对判定（两个方向的边可能连的是不同文件，且多数是类型导入）。
-- 端口/路径/协议契约集中在 `packages/protocol`，但 `process.env.YUANTU_*` 仍有 5 处直接读取（`packages/knowledge/store.ts`、`memory.ts`、`office/preview.ts`、`tools/index.ts` 两处），值都在 `ENVIRONMENT` 表里登记，只是没走 `parseSetting()`。这类旁路不会造成取值不一致，但会让「添加一个设置」的路径不唯一。
+- 包与入口是单向分层（见 4.1），由 `layers:check` 门禁；文件级值导入环为 0（`cycles:check`）。
+- 端口/路径/协议契约集中在 `packages/protocol`；包内对 `process.env.YUANTU_*` 的直接读取已改为走 `ENVIRONMENT` 表，剩下的只在 CLI 参数回退与程序入口处。
 
 ---
 
@@ -366,10 +367,10 @@ clean-paused-builds → tsc -p tsconfig.build.json → copy-sandbox-assets
 
 ### 风险与代价
 
-1. **复杂度集中在少数巨型文件**：`subagents.ts` 1,804 行、`session-controller.ts` 1,560 行、`agent.ts` 1,507 行、`carrier/service.ts` 1,311 行。它们各自有清晰职责，但单文件承载了过多分支，改动时的回归面大。
+1. **复杂度集中在少数巨型文件**：`agent.ts` 1,408 行、`session-controller.ts` 1,366 行、`carrier/service.ts` 1,362 行、`apps/cli/main.ts` 1,294 行、`storage/sqlite.ts` 1,188 行。`subagents.ts`、`context.ts`、`lsp/tools.ts` 与桌面 `main.ts` 已拆分，剩余集中点改动时回归面仍大。
 2. **测试成本高**：源码与测试近 1:1，全量套件在本机需要数分钟（见耗时文档），且单个偶发失败会让默认运行提前停止（`continueOnFailure=false`）。
-3. **产品收窄留下的「半开」表面**：MCP 管理、CLI、Web、备份 UI 停了，但代码、IPC、测试仍在；`DailyBackups.tick()` 只有测试调用（见问题清单）。恢复成本低，但当下是维护负担。
-4. **包级耦合**：8 组双向导入意味着这些包无法单独版本化/搬进程；若未来要做真正的外置工具进程，需要先拆环。
+3. **产品收窄留下的「半开」表面**：MCP 管理与备份暂停，代码与测试保留以便恢复；两者现在都按同一方式关闭（preload 不暴露、主进程不注册 IPC），`DailyBackups.tick()` 仍只有测试调用。
+4. **包级耦合**：已由单向分层门禁收敛（见 4.1）；剩余代价是 `client`/`carrier` 两层客户端状态机合计约 2,700 行，界面侧状态链仍偏厚。
 5. **平台验证不对称**：Windows 是主战场（沙箱、安装、桌面冒烟），macOS 有 CI job 但签名/公证仍需人工，Linux 只跑 host 契约。
 6. **文档记录被清空**：`HEAD` 删除了全部 `docs/` 下的架构评估与缺陷记录（见问题清单），历史决策只能从 git 历史回收。
 

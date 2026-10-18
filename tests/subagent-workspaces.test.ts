@@ -10,6 +10,14 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
+
+/** The task text this run was given, without the runtime's own skill announcement. */
+const taskPrompt = (messages: readonly { role: string; content: string }[]): string =>
+  messages
+    .filter((message) => message.role === 'user' && !isRuntimeContext(message.content))
+    .map((message) => message.content)
+    .join('\n');
 
 /**
  * Delegation with isolated directories.
@@ -83,10 +91,7 @@ test('an isolated child is told that dependency-dependent checks need a local in
   const provider: Provider = {
     async complete(request) {
       if (isChild(request)) {
-        childPrompt = request.messages
-          .filter((message) => message.role === 'user')
-          .map((message) => message.content)
-          .join('\n');
+        childPrompt = taskPrompt(request.messages);
         return reply('Source inspection complete');
       }
       return request.messages.some((message) => message.role === 'tool')
@@ -229,7 +234,7 @@ test('two general children edit the same file without seeing each other', async 
           { objective: 'Write beta', role: 'general', context: 'Write "beta" into same.txt' },
         ]);
       }
-      const prompt = String(request.messages[0]?.content ?? '');
+      const prompt = taskPrompt(request.messages);
       const which = prompt.includes('alpha') ? 'alpha' : 'beta';
       const own = (rounds[which] = (rounds[which] ?? 0) + 1);
       if (own === 1) {
@@ -437,7 +442,7 @@ test('tasks queued behind the concurrency cap share the snapshot the first one u
           { objective: 'Read it three', role: 'general' },
         ]);
       }
-      const prompt = String(request.messages[0]?.content ?? '');
+      const prompt = taskPrompt(request.messages);
       const mine = ['one', 'two', 'three'].find((word) => prompt.includes(` ${word}`)) ?? 'one';
       const turn = (turns.get(mine) ?? 0) + 1;
       turns.set(mine, turn);

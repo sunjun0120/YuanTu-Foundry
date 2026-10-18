@@ -963,9 +963,8 @@ test(
       'Models',
     );
     assert.equal(await page.locator('#mcp-settings,#mcp-panel').count(), 0);
-    const pausedMcp = await page.evaluate(() => window.yuantu.mcp({ type: 'get' }));
-    assert.equal(pausedMcp.ok, false);
-    assert.match(pausedMcp.error, /temporarily disabled/);
+    // Paused like backups: the bridge has no `mcp` member and the channel is not registered.
+    assert.equal(await page.evaluate(() => Object.hasOwn(window.yuantu, 'mcp')), false);
     assert.equal(await page.locator('#permission-settings').count(), 0);
     await page.locator('#settings-back').click();
     await page.waitForFunction(() => !document.querySelector('#permission-mode').disabled);
@@ -2200,14 +2199,15 @@ test(
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     assert.equal(await page.locator('#skill-select').count(), 0);
     await page.locator('#prompt').fill('/');
-    await page.getByRole('option').filter({ hasText: 'review' }).waitFor();
+    // By name, not by text: the built-in office skill's description mentions office_preview, which contains "review".
+    await page.getByRole('option', { name: /^review\b/ }).waitFor();
     await page.locator('#image-input').setInputFiles({
       name: 'pixel.png',
       mimeType: 'image/png',
       buffer: Buffer.from(png, 'base64'),
     });
     await page.locator('#prompt').fill('/');
-    await page.getByRole('option').filter({ hasText: 'review' }).click();
+    await page.getByRole('option', { name: /^review\b/ }).click();
     await page.locator('#prompt').fill('/skill:review 看图并修改');
     await page.locator('#send').click();
     /**

@@ -8,8 +8,17 @@ import { Workspace } from '../tools/files.ts';
 import { verifyFileDelivery } from '../tools/file-delivery.ts';
 import { loadInstructions } from '../tools/instructions.ts';
 import { runOfficeAutomation, type OfficeFormat, type OfficeOperation } from './automation.ts';
+import {
+  PREVIEW_BACKENDS,
+  previewExtensions,
+  renderPreview,
+  type PreviewBackend,
+  type PreviewType,
+} from './render.ts';
 import { readPptxSlides } from './read.ts';
 import { MAX_CREATED_SHEETS } from './spreadsheet.ts';
+import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS } from './document.ts';
+import { MAX_SLIDE_TABLE_ROWS } from './presentation.ts';
 import { libreOfficePreview, type OfficePreview } from './preview.ts';
 import { assertExpansionWithinBudget } from './zip-entry.ts';
 
@@ -149,17 +158,13 @@ async function prepareWrite(
     throw new Error('Excel edit requires cells');
   if (operation === 'edit' && format !== 'xlsx' && !args.replacements)
     throw new Error('Word or PowerPoint edit requires replacements');
-  const backend = operation === 'preview' ? (args.backend ?? 'native') : 'native';
-  if (backend !== 'native' && backend !== 'libreoffice')
+  const backend = (args.backend ?? 'auto') as PreviewBackend;
+  if (operation === 'preview' && !PREVIEW_BACKENDS.includes(backend))
     throw new Error('Unknown Office preview backend');
-  const expected =
-    operation === 'preview'
-      ? format === 'xlsx' && backend === 'native'
-        ? '.html'
-        : '.pdf'
-      : '.' + format;
-  if (path.extname(output).toLowerCase() !== expected)
-    throw new Error(`Output must have ${expected} extension`);
+  const allowed = operation === 'preview' ? previewExtensions(format, backend) : ['.' + format];
+  const expected = path.extname(output).toLowerCase();
+  if (!allowed.includes(expected))
+    throw new Error(`Output must have ${allowed.join(' or ')} extension`);
   const instructions = guidance(path.dirname(output));
   if (instructions)
     throw new Error(
@@ -190,7 +195,7 @@ async function prepareWrite(
       const temp = await mkdtemp(path.join(path.dirname(output), '.yuantu-office-'));
       const staged = path.join(temp, 'staged' + expected);
       try {
-        let op: OfficeOperation;
+        let op: OfficeOperation | undefined;
         if (operation === 'create')
           op = {
             operation,
@@ -198,6 +203,7 @@ async function prepareWrite(
             outputPath: staged,
             title: args.title as string | undefined,
             paragraphs: args.paragraphs as string[] | undefined,
+            blocks: args.blocks as Extract<OfficeOperation, { operation: 'create' }>['blocks'],
             sheets: args.sheets as Extract<OfficeOperation, { operation: 'create' }>['sheets'],
             slides: args.slides as Extract<OfficeOperation, { operation: 'create' }>['slides'],
           };
@@ -213,13 +219,14 @@ async function prepareWrite(
             >['replacements'],
             cells: args.cells as Extract<OfficeOperation, { operation: 'edit' }>['cells'],
           };
-        else op = { operation, format, sourcePath: original!.file, outputPath: staged };
-        if (operation === 'preview' && backend === 'libreoffice')
-          await renderer.render(
-            { format, sourcePath: original!.file, outputPath: staged },
+        let previewType: PreviewType | undefined;
+        if (operation === 'preview')
+          previewType = await renderPreview(
+            { format, sourcePath: original!.file, outputPath: staged, backend },
+            renderer,
             ctx.signal,
           );
-        else await runOfficeAutomation(op, ctx.signal);
+        else await runOfficeAutomation(op!, ctx.signal);
         ctx.signal.throwIfAborted();
         const stagedBytes = await readFile(staged);
         if (!stagedBytes.length || stagedBytes.length > maximum)
@@ -242,20 +249,17 @@ async function prepareWrite(
           content: JSON.stringify({
             ...evidence,
             operation,
-            previewType:
-              operation === 'preview'
-                ? backend === 'libreoffice'
-                  ? 'libreoffice-pdf'
-                  : format === 'xlsx'
-                    ? 'data-html'
-                    : 'office-pdf'
-                : undefined,
+            previewType,
             previewWarnings:
-              operation === 'preview' && backend === 'libreoffice'
+              previewType === 'libreoffice-pdf'
                 ? [
                     'Fonts and pagination may differ; inspect the PDF visually. Spreadsheet formula recalculation is not verified by a preview.',
                   ]
-                : undefined,
+                : previewType === 'document-html'
+                  ? [
+                      'Built-in HTML preview: content and structure only; layout and fonts are approximate.',
+                    ]
+                  : undefined,
           }),
           change,
         };
@@ -275,6 +279,46 @@ const replacements = {
     properties: { from: { type: 'string', minLength: 1 }, to: { type: 'string' } },
     required: ['from', 'to'],
     additionalProperties: false,
+  },
+};
+const textTable = (maxRows: number) => ({
+  type: 'array',
+  minItems: 1,
+  maxItems: maxRows,
+  items: {
+    type: 'array',
+    minItems: 1,
+    maxItems: MAX_TABLE_COLUMNS,
+    items: { type: 'string', maxLength: 2000 },
+  },
+});
+const text = (maxLength: number) => ({ type: 'string', maxLength });
+const block = (type: string, properties: Record<string, unknown>, required: string[]) => ({
+  type: 'object',
+  properties: { type: { const: type }, ...properties },
+  required: ['type', ...required],
+  additionalProperties: false,
+});
+const blocks = {
+  type: 'array',
+  maxItems: MAX_DOCUMENT_BLOCKS,
+  description:
+    'Word body after title and paragraphs, in order. A table header row is bold unless header is false.',
+  items: {
+    anyOf: [
+      block('heading', { text: text(500), level: { type: 'integer', enum: [1, 2, 3] } }, ['text']),
+      block('paragraph', { text: text(10000) }, ['text']),
+      block(
+        'list',
+        {
+          items: { type: 'array', minItems: 1, maxItems: 100, items: text(2000) },
+          ordered: { type: 'boolean' },
+        },
+        ['items'],
+      ),
+      block('table', { rows: textTable(MAX_TABLE_ROWS), header: { type: 'boolean' } }, ['rows']),
+      block('page_break', {}, []),
+    ],
   },
 };
 const cells = {
@@ -338,12 +382,13 @@ export function officeTools(root: string, renderer: OfficePreview = libreOfficeP
     },
     writable(
       'office_create',
-      'Create a Word, Excel or PowerPoint file in the workspace. Word and PowerPoint require local Microsoft Office.',
+      'Create a Word, Excel or PowerPoint file in the workspace; works without Microsoft Office. Word: title, paragraphs, then blocks (headings, paragraphs, lists, tables, page breaks). PowerPoint: one entry per slide with bullets in body, an optional table (first row bold) and speaker notes; a slide with only a title is a section slide.',
       {
         format: { type: 'string', enum: formats },
         path: pathSchema,
         title: { type: 'string', maxLength: 500 },
         paragraphs: { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 10000 } },
+        blocks,
         sheets: {
           type: 'array',
           minItems: 1,
@@ -382,8 +427,10 @@ export function officeTools(root: string, renderer: OfficePreview = libreOfficeP
             properties: {
               title: { type: 'string', maxLength: 500 },
               body: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 5000 } },
+              table: textTable(MAX_SLIDE_TABLE_ROWS),
+              notes: { type: 'string', maxLength: 10000 },
             },
-            required: ['title', 'body'],
+            required: ['title'],
             additionalProperties: false,
           },
         },
@@ -393,18 +440,18 @@ export function officeTools(root: string, renderer: OfficePreview = libreOfficeP
     ),
     writable(
       'office_edit',
-      'Create a revised Office file from a template, preserving unaffected document structure and formatting. DOCX/PPTX replace text and need local Microsoft Office; XLSX updates existing cells without it.',
+      'Create a revised Office file from a template, preserving unaffected document structure and formatting; works without Microsoft Office. DOCX/PPTX replace every occurrence of each text (also across formatting runs; the replacement takes the formatting where the match starts); XLSX updates existing cells.',
       { source_path: pathSchema, output_path: pathSchema, replacements, cells },
       ['source_path', 'output_path'],
       'edit',
     ),
     writable(
       'office_preview',
-      'Create a preview without changing the source. Default: DOCX/PPTX PDF using local Office, XLSX data HTML. Select backend libreoffice for PDF of all three formats when LibreOffice is installed; visual fidelity and formula calculation need separate verification.',
+      'Create a preview without changing the source. The output extension picks the kind: .html is a built-in preview that needs nothing installed (Word text and tables, slide text, Excel cell values); .pdf uses local Microsoft Office for Word/PowerPoint and falls back to LibreOffice. backend forces one engine (html, office, libreoffice). Visual fidelity and formula calculation need separate verification.',
       {
         source_path: pathSchema,
         output_path: pathSchema,
-        backend: { type: 'string', enum: ['native', 'libreoffice'] },
+        backend: { type: 'string', enum: [...PREVIEW_BACKENDS] },
       },
       ['source_path', 'output_path'],
       'preview',

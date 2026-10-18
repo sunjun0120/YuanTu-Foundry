@@ -17,6 +17,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelResponse } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 
 /** What a second connection sees: the independent view of what has actually been written. */
 const rowsOnDisk = (file: string, sessionId: string): number => {
@@ -159,7 +160,9 @@ test('the message naming a tool call is durable before the tool runs', async (t)
           db
             .prepare('SELECT body FROM messages WHERE session_id=? ORDER BY seq')
             .all(session.id)
-            .map((row) => String((JSON.parse(String(row.body)) as Message).role)),
+            .map((row) => JSON.parse(String(row.body)) as Message)
+            .filter((message) => !isRuntimeContext(message.content))
+            .map((message) => String(message.role)),
         );
       } finally {
         db.close();

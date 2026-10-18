@@ -538,7 +538,12 @@ const aclHelper =
     ? path.resolve(__dirname, '../packages/tools/windows-sandbox/acl.ps1')
     : fileURLToPath(new URL('./windows-sandbox/acl.ps1', import.meta.url));
 // Capture trusted application code once. Guest workspace edits must never become host cleanup code.
-const aclSource = gzipSync(readFileSync(aclHelper)).toString('base64');
+// Read on first use rather than at import: every Host imports this module, most never prepare a Windows sandbox,
+// and a read at import time ties module loading to a file path a bundler moves. The helper ships with the
+// application rather than in any workspace, and it is still captured once and reused for the process's lifetime.
+let aclSourceMemo: string | undefined;
+const aclSource = (): string =>
+  (aclSourceMemo ??= gzipSync(readFileSync(aclHelper)).toString('base64'));
 const ACL_VARIABLE = 'YUANTU_SANDBOX_ACL_SOURCE';
 const aclBootstrap = [
   "$ErrorActionPreference = 'Stop'",
@@ -618,7 +623,7 @@ async function journalOperation(
   const result = await run(powershellPath(), launcherArgs(aclBootstrap), {
     env: {
       ...toolEnvironment(),
-      [ACL_VARIABLE]: aclSource,
+      [ACL_VARIABLE]: aclSource(),
       [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid, ...preparation })),
     },
   });

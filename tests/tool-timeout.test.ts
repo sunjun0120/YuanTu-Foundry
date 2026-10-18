@@ -378,3 +378,50 @@ test('the policy is resolved per tool, and the environment overrides the default
     TOOL_DEADLINE_DEFAULTS.defaultMs,
   );
 });
+
+test('an approval nobody answers is bounded, and the call never runs', async () => {
+  const tools = new ToolRegistry();
+  let executed = 0;
+  tools.register({
+    ...tool('needs_approval', async () => {
+      executed++;
+      return { content: 'ran', isError: false };
+    }),
+    permission: 'write',
+  });
+  tools.deadlines = { approvalMs: 40 };
+  const started = Date.now();
+  const result = await tools.execute(call('needs_approval'), {
+    signal: new AbortController().signal,
+    // A window that was closed, or a host nobody is watching: the promise never settles.
+    approve: () => new Promise<boolean>(() => {}),
+  });
+  assert.equal(result.isError, true);
+  assert.match(result.content, /nobody answered the approval request/);
+  assert.match(result.content, /40ms/);
+  assert.equal(executed, 0, 'a call that was never approved never ran');
+  assert.ok(Date.now() - started < 2_000, 'the wait is the budget, not the run');
+});
+
+test('an approval that fails after its budget expired is discarded, not left unhandled', async () => {
+  const tools = new ToolRegistry();
+  let executed = 0;
+  tools.register({
+    ...tool('late_approval', async () => {
+      executed++;
+      return { content: 'ran', isError: false };
+    }),
+    permission: 'write',
+  });
+  tools.deadlines = { approvalMs: 20 };
+  const result = await tools.execute(call('late_approval'), {
+    signal: new AbortController().signal,
+    // The budget expires first; the rejection lands with nobody waiting for it. If the registry did not attach a
+    // handler when it started the race, this is an unhandled rejection and the test process fails.
+    approve: () =>
+      new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error('too late')), 80)),
+  });
+  assert.equal(result.isError, true);
+  assert.equal(executed, 0);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+});

@@ -5,6 +5,7 @@ import { addUsage } from '../protocol/statistics.ts';
 import { redactSecrets } from '../platform/redact.ts';
 import type { SubAgentResidency } from './residency.ts';
 import type { ChildTurns } from './run-subagents.ts';
+import type { WorkspaceManager } from '../workspaces/manager.ts';
 import { assignedChildren, type AssignedChild } from './subagent-jobs.ts';
 
 /**
@@ -30,6 +31,14 @@ export interface ResidentToolOptions {
   childTurns: ChildTurns;
   /** Resolves the provider a child was delegated to, or `undefined` when this host cannot serve it. */
   resolveProviderFor?: ((model: string) => Provider | undefined) | undefined;
+  /**
+   * Resolves and validates the directory a cold-resumed child was bound to.
+   *
+   * A residency is process memory; the binding is durable. A child resumed after a restart must execute in the
+   * directory its delegation named, not in the parent's, and a binding that is gone or no longer describes that
+   * directory must refuse the turn rather than silently fall back.
+   */
+  workspaceManager?: Pick<WorkspaceManager, 'resolve' | 'validate'> | undefined;
   /** The run's own frames: a finished follow-up turn is announced through this. */
   emit: (type: AgentEventType, data: Record<string, unknown>) => void;
   /** Folded in place, so a follow-up's spending reaches the run's totals. */
@@ -124,7 +133,7 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
    * its children is the slots they occupy, not an allowance. The tokens a child has used are read from its
    * own statistics, which are durable already.
    */
-  const resume = (childSessionId: string) => {
+  const resume = async (childSessionId: string, signal: AbortSignal) => {
     const logged = loggedChildren().findLast((entry) => entry.childSessionId === childSessionId);
     if (!logged) return undefined;
     const childProvider = logged.model ? options.resolveProviderFor?.(logged.model) : undefined;
@@ -133,6 +142,23 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
         `This host cannot run a sub-agent on model "${logged.model}", which this child was delegated to; it was not resumed`,
       );
     const childSession = store.get(childSessionId);
+    /**
+     * The binding is what makes the resumed child the same *workspace* as the one that was delegated.
+     *
+     * Without it, `createChildTurns` receives no `binding`, and the host's `childTools` factory falls back to
+     * the parent's directory — a resumed isolated child would read and write the delegator's tree, journal its
+     * changes against the parent, and never export its worktree result. The manager also validates the row, so
+     * a directory that is gone or belongs to another repository refuses the resume instead of falling back.
+     */
+    const binding = options.workspaceManager
+      ? options.workspaceManager.resolve(childSessionId)
+      : undefined;
+    if (binding && binding.kind !== 'shared' && binding.state !== 'ready')
+      throw new Error(
+        `The isolated workspace for ${childSessionId} is ${binding.state}, not ready; it was not resumed`,
+      );
+    if (binding && options.workspaceManager)
+      await options.workspaceManager.validate(binding, signal);
     /** The delegation's own descriptor, with the model only when it named one: an older record has none. */
     const task = {
       id: logged.id,
@@ -147,6 +173,7 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
       tag: { id: logged.id, role: logged.role, objective: logged.objective },
       ...(logged.persona ? { persona: logged.persona } : {}),
       ...(childProvider ? { childProvider } : {}),
+      ...(binding ? { binding } : {}),
     });
     return residency.open({
       id: logged.id,
@@ -156,10 +183,12 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
       depth,
       turn: child.turn,
       ...(child.close ? { close: child.close } : {}),
+      ...(child.setEmit ? { setEmit: child.setEmit } : {}),
     });
   };
-  const own = (childSessionId: string) => {
-    const activation = residency.get(childSessionId) ?? resume(childSessionId);
+  const own = async (childSessionId: string, signal: AbortSignal) => {
+    let activation = residency.get(childSessionId);
+    if (!activation) activation = await resume(childSessionId, signal);
     if (!activation || activation.parentSessionId !== parentSessionId)
       throw new Error(
         `No sub-agent of this session was delegated to ${childSessionId}; call job_list to see the ones it was`,
@@ -187,7 +216,7 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
     execute: async (args: Record<string, unknown>, context: ToolContext) => {
       const signal = context.signal;
       try {
-        const activation = own(String(args.childSessionId));
+        const activation = await own(String(args.childSessionId), signal);
         const message = String(args.message);
         const wait = args.wait !== false;
         /**
@@ -268,11 +297,18 @@ export function createResidentMessageTool(options: ResidentToolOptions): Tool {
         // soon as the message is in the queue, and the call is then over: its signal must not be able to stop
         // work that was deliberately handed off. The run's own end still stops it, through the delegation's
         // signal rather than through this call.
-        const turn =
-          delivery.done ??
-          (delivery.delivered
-            ? undefined
-            : activation.run(message, false, wait ? signal : undefined));
+        let turn = delivery.done;
+        if (!delivery.delivered) {
+          /**
+           * A new turn belongs to the run that is asking for it, not to the run that created the activation.
+           *
+           * A resident child survives its parent run; the turn closure it kept still points at the old run's
+           * emitter. Rebinding before the turn starts is what makes the new run receive its deltas, tool
+           * frames and progress, instead of having them filtered as another run's events.
+           */
+          activation.setEmit(options.emit);
+          turn = activation.run(message, false, wait ? signal : undefined);
+        }
         // Settlement belongs to the turn, even when its caller stops waiting before it finishes.
         const settledTurn = turn?.then((outcome) => {
           settle(outcome);

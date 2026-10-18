@@ -34,6 +34,20 @@ export interface SessionRunsPort {
   saveProjectionCheckpoints(id?: string): number;
 }
 
+/** What an operator-initiated recovery changed; see `recoverSession`. */
+export interface SessionRecovery {
+  sessionId: string;
+  /** Whether anything was actually done — a second call on a clean session changes nothing. */
+  recovered: boolean;
+  /** The run whose interruption was recorded, when one was still marked running. */
+  settledRunId: string | null;
+  /** The owner the lease named before it was dropped, as evidence for the operator rather than a liveness claim. */
+  previousOwnerPid: number | null;
+  previousOwnerStartedAt: number | null;
+  /** Whether a lease was holding the session when the recovery was asked for. */
+  leaseDropped: boolean;
+}
+
 /** Runs this process ended without managing to persist their end; see `forsakeRun`. */
 const FORSAKEN_RUNS = new Set<string>();
 
@@ -181,43 +195,49 @@ export class SessionRuns {
    */
   reconcileInterruptedRuns(workspace?: string): number {
     primeRunOwners(this.port.db);
-    return this.port.transaction(() => {
-      const rows = this.port.db
-        .prepare(
-          `SELECT s.id AS sessionId, s.active_run AS runId, r.owner_pid AS ownerPid,
-                  r.owner_started_at AS ownerStartedAt
-           FROM sessions s JOIN runs r ON r.id=s.active_run
-           WHERE (s.parent_session_id IS NULL OR s.fork_message_count IS NOT NULL)
-             AND r.status='running' AND (? IS NULL OR s.workspace=?)`,
-        )
-        .all(workspace ?? null, workspace ?? null)
-        .filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
-      /** How many were actually converged: a session that threw above is not one of them. */
-      let converged = 0;
-      for (const row of rows) {
-        /**
-         * One session at a time, and one failure at a time.
-         *
-         * `settleAbandonedRun` is not read-only housekeeping: it answers the run's unresolved tool calls and
-         * parses the session's event log, so a session this build cannot fold — a blob that is gone, an event
-         * type it refuses by design — throws from inside here. Letting that escape did two things at once: it
-         * rolled back the convergence already performed for the *other* sessions, and it propagated to the
-         * caller, which is Host startup. One unreadable conversation therefore left every session in the
-         * workspace unusable and stopped the Host from opening at all. The session that cannot be converged is
-         * named and skipped, and the rest still become deletable, renameable and continuable.
-         */
-        try {
-          this.settleAbandonedRun(String(row.sessionId), String(row.runId), RUN_INTERRUPTED_REASON);
-          converged += 1;
-        } catch (error) {
-          console.error(
-            `[session log] could not converge interrupted run ${String(row.runId)} in session ` +
-              `${String(row.sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+    const rows = this.port.db
+      .prepare(
+        `SELECT s.id AS sessionId, s.active_run AS runId, r.owner_pid AS ownerPid,
+                r.owner_started_at AS ownerStartedAt
+         FROM sessions s JOIN runs r ON r.id=s.active_run
+         WHERE (s.parent_session_id IS NULL OR s.fork_message_count IS NOT NULL)
+           AND r.status='running' AND (? IS NULL OR s.workspace=?)`,
+      )
+      .all(workspace ?? null, workspace ?? null)
+      .filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
+    /** How many were actually converged: a session that threw is not one of them. */
+    let converged = 0;
+    for (const row of rows) {
+      /**
+       * One session at a time, and one failure at a time.
+       *
+       * `settleAbandonedRun` is not read-only housekeeping: it answers the run's unresolved tool calls and
+       * parses the session's event log, so a session this build cannot fold — a blob that is gone, an event
+       * type it refuses by design — throws from inside here. Letting that escape did two things at once: it
+       * rolled back the convergence already performed for the *other* sessions, and it propagated to the
+       * caller, which is Host startup. One unreadable conversation therefore left every session in the
+       * workspace unusable and stopped the Host from opening at all. The session that cannot be converged is
+       * named and skipped, and the rest still become deletable, renameable and continuable.
+       *
+       * Each session gets its **own** transaction, not one shared by the batch. `settleAbandonedRun` writes
+       * several facts (answers to unresolved calls, the run row, the active pointer, the lease, the
+       * interruption record); if a later write fails after earlier ones succeeded, a shared transaction would
+       * commit the partial state when the catch below moved on. A failed object rolls back completely, and the
+       * other sessions still converge.
+       */
+      try {
+        this.port.transaction(() =>
+          this.settleAbandonedRun(String(row.sessionId), String(row.runId), RUN_INTERRUPTED_REASON),
+        );
+        converged += 1;
+      } catch (error) {
+        console.error(
+          `[session log] could not converge interrupted run ${String(row.runId)} in session ` +
+            `${String(row.sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-      return converged;
-    });
+    }
+    return converged;
   }
 
   /**
@@ -336,6 +356,71 @@ export class SessionRuns {
     return Number(result.changes) > 0;
   }
 
+  /**
+   * Converge a session on an operator's word, whatever the lease's owner identity says.
+   *
+   * Liveness is decided by pid *and* start time, and a pid that cannot be checked (an old row with no start time, a
+   * machine where the start-time probe failed) is read as alive. That is the safe direction for a crash, and it has
+   * no upper bound: a reused pid or an unprovable identity locks the session against every run, rename, delete and
+   * compaction, with no way out but editing the database. This is the way out.
+   *
+   * It is deliberately not automatic and not on a timer. Ending a run that really is working would let two writers
+   * into one session, so nothing does this on the runtime's own initiative: the caller is a person who has decided
+   * the owner is not coming back (the Host refuses for a session this process is running; see `session.recover`).
+   * The interruption record names the reason it was given, and the previous owner is returned so the caller can
+   * report who was displaced.
+   */
+  recoverSession(sessionId: string, reason: string): SessionRecovery {
+    return this.port.transaction(() => {
+      const session = this.port.get(sessionId);
+      const lease = this.leaseOf(sessionId);
+      // Reported as "a lease was holding it", which is the operator's question; whether this method or
+      // `settleAbandonedRun` performed the delete is an implementation detail.
+      const leaseDropped = Boolean(lease);
+      const runId = session.activeRun ?? lease?.runId ?? null;
+      let previousOwnerPid: number | null = null;
+      let previousOwnerStartedAt: number | null = null;
+      let settledRunId: string | null = null;
+      if (runId) {
+        const row = this.port.db
+          .prepare('SELECT status,owner_pid,owner_started_at FROM runs WHERE id=? AND session_id=?')
+          .get(runId, sessionId);
+        if (row) {
+          previousOwnerPid = row.owner_pid === null ? null : Number(row.owner_pid);
+          previousOwnerStartedAt =
+            row.owner_started_at === null ? null : Number(row.owner_started_at);
+          // Only a run still marked running has unresolved calls and a lease worth settling; a finished one is
+          // already consistent, and calling the interruption path for it would record an interruption that never
+          // happened.
+          if (String(row.status) === 'running') {
+            this.settleAbandonedRun(sessionId, runId, reason);
+            settledRunId = runId;
+          }
+        }
+      }
+      /**
+       * The lease outlives the run in exactly one broken case: a compaction lock whose run is gone, or a release
+       * that never ran. It is presence, not history, so an explicit recovery drops all of it.
+       */
+      this.port.db.prepare('DELETE FROM session_leases WHERE session_id=?').run(sessionId);
+      const cleared =
+        this.port.db
+          .prepare('UPDATE sessions SET active_run=NULL WHERE id=? AND active_run IS NOT NULL')
+          .run(sessionId).changes > 0;
+      // The same broken state can also be written in the run row alone (active_run already cleared, status not).
+      this.port.db
+        .prepare("UPDATE runs SET status='interrupted' WHERE session_id=? AND status='running'")
+        .run(sessionId);
+      return {
+        sessionId,
+        recovered: Boolean(settledRunId) || leaseDropped || cleared,
+        settledRunId,
+        previousOwnerPid,
+        previousOwnerStartedAt,
+        leaseDropped,
+      };
+    });
+  }
   /**
    * Takes the compaction lock for a session, before the summary request is sent.
    *

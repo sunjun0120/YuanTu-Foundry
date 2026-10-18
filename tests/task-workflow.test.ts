@@ -115,6 +115,14 @@ test('task proposal only drafts, normalizes claimed completion, and makes no too
     await f.client.request('task.attempts', { sessionId: f.sessionId, taskId: task.id }),
     [],
   );
+  // The batched read answers the same as the per-task ones, for every task of the session at once.
+  assert.ok(f.client.supports('task-history-v1'));
+  assert.deepEqual(await f.client.request('task.history', { sessionId: f.sessionId }), {
+    [task.id]: {
+      attempts: [],
+      steps: await f.client.request('task.steps', { sessionId: f.sessionId, taskId: task.id }),
+    },
+  });
   assert.deepEqual(
     (await f.client.request('session.get', { sessionId: f.sessionId })).messages,
     [],

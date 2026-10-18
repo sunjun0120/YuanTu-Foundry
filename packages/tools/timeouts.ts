@@ -40,6 +40,16 @@ export const TOOL_TIMEOUT_MARKER = 'TOOL_TIMEOUT';
 export interface ToolDeadlinePolicy {
   defaultMs?: number;
   overrides?: Readonly<Record<string, number>>;
+  /**
+   * How long to wait for an approval before treating it as unanswered.
+   *
+   * Not part of `defaultMs` because an approval is not a tool body: the deadline wraps `execute`, and the
+   * approval happens before it, so an approver that never answers held the step open with no bound at all — a
+   * window that was closed, a host nobody is watching. An unanswered approval is a denial, not a timeout marker:
+   * the call did not run, and the model is told so. `0` waits forever (what a deployment that has its own timer,
+   * like the factory Host's 120 s, may choose).
+   */
+  approvalMs?: number;
 }
 
 /**
@@ -81,6 +91,7 @@ export interface ToolDeadlinePolicy {
  */
 export const TOOL_DEADLINE_DEFAULTS: Required<ToolDeadlinePolicy> = {
   defaultMs: 600_000,
+  approvalMs: 600_000,
   overrides: {
     ask_user_question: 0,
     run_command: 330_000,
@@ -135,6 +146,7 @@ export function toolDeadlinePolicy(env: NodeJS.ProcessEnv = process.env): ToolDe
   const configured = parseSetting(env, 'YUANTU_TOOL_TIMEOUT_MS');
   return {
     defaultMs: typeof configured === 'number' ? configured : TOOL_DEADLINE_DEFAULTS.defaultMs,
+    approvalMs: TOOL_DEADLINE_DEFAULTS.approvalMs,
     overrides: TOOL_DEADLINE_DEFAULTS.overrides,
   };
 }

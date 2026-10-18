@@ -24,11 +24,12 @@ import {
   type RepositoryIdentity,
 } from './git.ts';
 import {
-  entryBytes,
-  collectWorkingTree,
+  snapshotFileBytes,
+  collectFileDigests,
   freezeSnapshot,
   readManifest,
   snapshotRef,
+  type SnapshotFileDigest,
   type SnapshotManifest,
   type SnapshotManifestEntry,
 } from './snapshot.ts';
@@ -301,7 +302,7 @@ export class WorkspaceManager {
         },
       );
     });
-    await this.fillWorktree(identity, target, manifest, signal);
+    await this.fillWorktree(identity, target, manifest, snapshot.id, signal);
   }
 
   /** The snapshot's stored manifest, which is also its content: a snapshot without one is not usable. */
@@ -323,6 +324,7 @@ export class WorkspaceManager {
     identity: RepositoryIdentity,
     target: string,
     manifest: SnapshotManifest,
+    snapshotId: string,
     signal: AbortSignal,
   ): Promise<void> {
     signal.throwIfAborted();
@@ -337,7 +339,12 @@ export class WorkspaceManager {
           'WORKSPACE_UNSUPPORTED_FILE_TYPE',
           `A worktree path is not a plain file: ${entry.path}`,
         );
-      await writeFileExact(absolute, entryBytes(entry));
+      // One file at a time: the bytes come from the digest-addressed store beside the manifest, not from a manifest
+      // that would have loaded the whole snapshot to answer this loop.
+      await writeFileExact(
+        absolute,
+        await snapshotFileBytes(identity.repositoryRoot, snapshotId, entry),
+      );
     }
   }
 
@@ -730,9 +737,9 @@ export class WorkspaceManager {
       await withRepositoryLock(binding.repositoryRoot, async () => {
         await this.validate(binding, signal);
         await assertPreserved();
-        const current = await collectWorkingTree(binding.executionRoot, signal);
-        const fingerprint = (entries: SnapshotManifestEntry[]) =>
-          JSON.stringify(entries.map(({ path, mode, sha256 }) => ({ path, mode, sha256 })));
+        const current = await collectFileDigests(binding.executionRoot, signal);
+        const fingerprint = (files: readonly SnapshotFileDigest[]) =>
+          JSON.stringify(files.map(({ path, mode, sha256 }) => ({ path, mode, sha256 })));
         if (fingerprint(current) !== fingerprint(manifest.files))
           throw new WorkspaceFailure(
             'WORKSPACE_SOURCE_CHANGED',

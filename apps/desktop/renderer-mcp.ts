@@ -6,6 +6,10 @@ export function setupMcpSettings(
   onBusy: (busy: boolean) => void,
   workspace: () => string | undefined,
 ): { updateBusy(): void } {
+  // The bridge exposes `mcp` only while the surface is in scope; the caller sets this up under the same flag.
+  const bridge = window.yuantu.mcp;
+  if (!bridge) throw new Error('MCP service management is not exposed by this desktop build');
+  const mcp: NonNullable<typeof bridge> = bridge;
   const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
   const page = byId('settings-page');
   const nav = document.createElement('button');
@@ -236,7 +240,7 @@ export function setupMcpSettings(
   }
   async function refresh() {
     try {
-      const reply = await window.yuantu.mcp({ type: 'get' });
+      const reply = await mcp({ type: 'get' });
       if (reply.ok && reply.view) {
         if (workspace() && reply.view.workspace !== workspace()) return;
         render(reply.view, editing);
@@ -353,11 +357,10 @@ export function setupMcpSettings(
     status(type === 'test' ? '正在连接并发现工具…' : '正在保存配置…');
     try {
       let reply: McpReply;
-      if (type === 'test')
-        reply = await window.yuantu.mcp({ type, server, revision: view!.revision });
+      if (type === 'test') reply = await mcp({ type, server, revision: view!.revision });
       else if (!view) throw new Error('请先重新加载配置。');
       else
-        reply = await window.yuantu.mcp(
+        reply = await mcp(
           type === 'save'
             ? { type, server, revision: view.revision }
             : { type, id: editing!, revision: view.revision },
@@ -394,7 +397,7 @@ export function setupMcpSettings(
     updateBusy();
     status(t('mcp.oauthPending'));
     try {
-      const reply = await window.yuantu.mcp({
+      const reply = await mcp({
         type: 'authorize',
         server: config,
         revision: view.revision,
@@ -420,7 +423,7 @@ export function setupMcpSettings(
   }
   async function cancelAuthorize() {
     try {
-      const reply = await window.yuantu.mcp({ type: 'cancel-authorize' });
+      const reply = await mcp({ type: 'cancel-authorize' });
       if (!reply.ok) status(reply.error, true);
     } catch (error) {
       status(error instanceof Error ? error.message : t('mcp.oauthFailed'), true);
@@ -434,7 +437,7 @@ export function setupMcpSettings(
     updateBusy();
     status(t('mcp.revoking'));
     try {
-      const reply = await window.yuantu.mcp({
+      const reply = await mcp({
         type: 'revoke',
         id: saved.id,
         revision: view.revision,

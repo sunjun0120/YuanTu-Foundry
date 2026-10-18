@@ -6,7 +6,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message, RunResult, SubAgentSummary, Usage } from '../protocol/index.ts';
 import { redactSecrets } from '../platform/redact.ts';
-import { ftsIndexText } from '../protocol/fts-text.ts';
+import { ftsIndexText } from '../formats/fts-text.ts';
 import { messageEventType } from './events.ts';
 
 /** The connection a migration borrows: the database and the transaction wrapper around it. */

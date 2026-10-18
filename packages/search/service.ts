@@ -251,7 +251,10 @@ export class WorkspaceSearchService {
           files: inventory.files,
           options,
           inventory: () => inventory.coverage,
-          fallback: (files) => scanText(this.access, fromFiles(files), options),
+          // The fallback scans only the files the backend could not answer for. The coverage it is handed is
+          // the enumeration's, not the backend's: a scan of a partial file list must not come back complete.
+          fallback: (files, coverage) =>
+            scanText(this.access, fromFiles(files), options, () => coverage),
         },
         context,
       );

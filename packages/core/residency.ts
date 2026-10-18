@@ -1,4 +1,5 @@
 import type { RunStatus, SubAgentSummaryReport, Usage } from '../protocol/index.ts';
+import type { RunEmit } from './run-emit.ts';
 
 /**
  * Residency for delegated children.
@@ -96,6 +97,15 @@ export interface ResidentChildInput {
   ) => Promise<ResidentTurnResult>;
   /** Releases whatever the child owns (its tool registry). Called once per successful release. */
   close?: () => Promise<void>;
+  /**
+   * Rebinds the run this child's next turn publishes through.
+   *
+   * A resident child outlives the parent run that created it, but the closure that built its turn captured
+   * that run's emitter. A follow-up under a new parent run must publish its deltas, tools and progress under
+   * the *current* run id — otherwise the client filters them as another run's frames, and the answer arrives
+   * without the work that produced it.
+   */
+  setEmit?: (emit: RunEmit) => void;
 }
 export class ChildActivation {
   readonly id: string;
@@ -105,6 +115,7 @@ export class ChildActivation {
   readonly depth: number;
   private readonly turn: ResidentChildInput['turn'];
   private readonly close: (() => Promise<void>) | undefined;
+  private readonly rebindEmit: ResidentChildInput['setEmit'];
   private controller = new AbortController();
   private running = false;
   private disposed = false;
@@ -125,6 +136,11 @@ export class ChildActivation {
     this.depth = input.depth;
     this.turn = input.turn;
     this.close = input.close;
+    this.rebindEmit = input.setEmit;
+  }
+  /** Points the next turn at the run that is asking for it. */
+  setEmit(emit: RunEmit): void {
+    this.rebindEmit?.(emit);
   }
   get status(): ResidentChild['status'] {
     return this.disposed ? 'disposed' : this.running ? 'running' : 'idle';

@@ -9,6 +9,7 @@ import type {
   ModelResponse,
   Provider,
 } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -289,7 +290,9 @@ test('prompt hook rewrites the prompt that runs and is persisted', async (t) => 
   const result = await agent.run({ sessionId: session.id, prompt: 'ship it' });
   assert.equal(result.status, 'completed');
   assert.match(seen, /ship it \(reviewed\)/);
-  const user = store.messages(session.id).find((message) => message.role === 'user');
+  const user = store
+    .messages(session.id)
+    .find((message) => message.role === 'user' && !isRuntimeContext(message.content));
   assert.equal((user as { content: string }).content, 'ship it (reviewed)');
 });
 
@@ -619,7 +622,9 @@ test('a hooks module loaded by the host drives session, prompt and stop hooks', 
   const history = (await client.request('session.get', { sessionId: session.id })) as {
     messages: { role: string; content: string }[];
   };
-  const user = history.messages.find((message) => message.role === 'user');
+  const user = history.messages.find(
+    (message) => message.role === 'user' && !isRuntimeContext(message.content),
+  );
   assert.equal(
     user?.content,
     'hook me [hooked]',

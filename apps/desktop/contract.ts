@@ -40,6 +40,10 @@ export type DesktopReply =
       error: string;
       errorDetail?: import('../../packages/carrier/errors.ts').CarrierIssue;
     };
+/** `DesktopReply` as it crosses IPC: the snapshot travels as a patch the preload merges (`snapshot-patch.ts`). */
+export type DesktopWireReply =
+  | { ok: true; patch: import('./snapshot-patch.ts').SnapshotPatch }
+  | Extract<DesktopReply, { ok: false }>;
 export interface DesktopBridge {
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
   backups?(command: BackupCommand): Promise<BackupReply>;
@@ -52,7 +56,7 @@ export interface DesktopBridge {
    * attachment — for one directory listing.
    */
   files(command: FilesCommand): Promise<FilesReply>;
-  mcp(command: McpCommand): Promise<McpReply>;
+  mcp?(command: McpCommand): Promise<McpReply>;
   /**
    * The two security knobs as one choice, which is now the only way either of them moves.
    *
@@ -82,7 +86,13 @@ export interface DesktopBridge {
    * and forwards everything else to the carrier service.
    */
   invoke(command: CarrierCommand): Promise<DesktopReply>;
-  subscribe(listener: (state: CarrierSnapshot) => void): () => void;
+  /**
+   * Whole snapshots, plus which sections the main process actually changed since the last one — so the window can
+   * leave the rest of the page alone (`renderer.ts`).
+   */
+  subscribe(
+    listener: (state: CarrierSnapshot, changed: readonly (keyof CarrierSnapshot)[]) => void,
+  ): () => void;
   /**
    * Streamed assistant text. Separate from `subscribe` on purpose: delivering each token as a whole
    * CarrierSnapshot copied the entire session — attachments included — across IPC per token.

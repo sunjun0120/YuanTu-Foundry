@@ -10,7 +10,7 @@ const executeFile = promisify(execFile);
  * The sandbox facts a deployment owns, and a cache of whether a backend can actually run.
  *
  * What is *not* here is the more interesting half: there is no `save`, no file, and no "apply" — the mode a
- * session runs in belongs to the session (`apps/desktop/main.ts` keeps one per session id and tells the Host
+ * session runs in belongs to the session (`apps/desktop/session-choices.ts` keeps one per session id and tells the Host
  * over the carrier's `sandbox` command). This class answers the two questions the interface still has to ask a
  * deployment: which mode does a new session start from, and does the backend behind a mode work on this
  * machine.

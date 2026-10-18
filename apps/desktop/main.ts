@@ -1,4 +1,3 @@
-import { MAX_DOCUMENT_BYTES, type AttachmentReply } from './attachment-contract.ts';
 import { SandboxEnvironment } from './sandbox-environment.ts';
 import {
   WindowsSandboxSetup,
@@ -7,10 +6,6 @@ import {
   type SandboxSetupReply,
   type SandboxSetupView,
 } from './sandbox-setup.ts';
-import { Worker } from 'node:worker_threads';
-import { McpSettingsStore } from './mcp-settings.ts';
-import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
-import { parseMcpCommand, type McpReply } from './mcp-contract.ts';
 import { parseFilesCommand, type FilesReply } from './files-contract.ts';
 import { maintainWorkspace } from './workspace-maintenance.ts';
 import {
@@ -18,20 +13,14 @@ import {
   type WorkspaceMaintenanceReply,
 } from './workspace-maintenance-contract.ts';
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, clipboard, Menu } from 'electron';
-import { writeFile, copyFile, readFile } from 'node:fs/promises';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
-import type {
-  DesktopRelease,
-  StagedUpgrade,
-  UpgradeManifest,
-} from '../../packages/maintenance/desktop-upgrade.ts';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { desktopPaths } from './install-paths.ts';
 import { pathToFileURL } from 'node:url';
-import { mkdirSync, realpathSync, statSync, openSync, closeSync } from 'node:fs';
+import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
-import type { DesktopReply } from './contract.ts';
+import type { DesktopWireReply } from './contract.ts';
+import { SnapshotSender } from './snapshot-patch.ts';
+import { withinQuitDeadline } from './quit-deadline.ts';
 import { redactSecrets } from '../../packages/platform/redact.ts';
 import { ModelSettingsStore, testModelConnection } from './model-settings.ts';
 import { parseSettingsCommand, type SettingsReply } from './settings-contract.ts';
@@ -41,31 +30,33 @@ import { parseUiSettingsCommand, type UiSettingsReply } from './ui-settings.ts';
 import { mainText, setMainLocale } from './i18n.ts';
 import { carrierErrorReply } from './carrier-errors.ts';
 import { UiSettingsStore } from './ui-settings-store.ts';
-import { permissionPolicyForMode, type PermissionMode } from './permission-settings.ts';
 import { PermissionSettingsStore } from './permission-settings-store.ts';
 import {
-  DEFAULT_PRESET,
   parsePermissionPresetCommand,
   permissionPreset,
-  presetIdFor,
   type PermissionPresetReply,
-  type PermissionPresetView,
 } from './permission-presets.ts';
-import type { SandboxMode } from './sandbox-settings.ts';
-import { DailyBackups } from './daily-backups.ts';
-import { parseBackupCommand, type BackupReply } from './backup-contract.ts';
-import type { BackupAction, BackupResult } from './database-backup-worker.ts';
-import {
-  HookTrustReview,
-  type HookTrustAnswer,
-  type HookTrustQuestion,
-} from './hook-trust-review.ts';
-import { describeHookDeclarations } from '../../packages/resources/hook-trust.ts';
+import { runtimePaths, safeError, type MainContext } from './main-context.ts';
+import { SessionChoices, type SessionChoice } from './session-choices.ts';
+import { DesktopBackups } from './main-backups.ts';
+import { mcpOAuthDirectory, registerMcpIpc } from './main-mcp.ts';
+import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
+import { workspaceHookReviewer } from './main-hook-trust.ts';
+import { registerAttachmentIpc } from './main-attachment.ts';
 
+/**
+ * The Electron main process: the window, the settings stores, the IPC channels and the Host child's lifecycle.
+ *
+ * The bindings below are the process's whole mutable state. Self-contained surfaces live in their own modules
+ * (`main-upgrade.ts`, `main-backups.ts`, `main-mcp.ts`, `main-attachment.ts`, `main-hook-trust.ts`,
+ * `session-choices.ts`) and see this state through `ctx` — live getters, never copies.
+ */
 let window: BrowserWindow | null = null;
 let service: CarrierService | null = null;
 let openingService: CarrierService | null = null;
 let unsubscribe: (() => void) | undefined;
+/** What the window's mirror already holds; publishes and replies send only what differs from it. */
+const snapshotSender = new SnapshotSender();
 let unsubscribeDelta: (() => void) | undefined;
 let unsubscribeSubAgentDelta: (() => void) | undefined;
 let unsubscribeStatisticsDelta: (() => void) | undefined;
@@ -77,233 +68,80 @@ let settingsStore: ModelSettingsStore;
 let uiSettingsStore: UiSettingsStore;
 let permissionSettingsStore: PermissionSettingsStore;
 let sandboxEnvironment: SandboxEnvironment;
-/**
- * The paused daily-backup scheduler.
- *
- * `PRODUCT_SCOPE.backups` is false, so `whenReady` never assigns this and the class is never constructed; the
- * only readers are the IPC handler that the same flag registers and `restoreBackup` behind it. Kept as a
- * module binding so turning the scope back on is one guarded assignment, not a refactor.
- */
-let dailyBackups: DailyBackups | undefined;
-let backupRestoring: Promise<BackupReply> | undefined;
 let sandboxInitializing: Promise<SandboxSetupView> | undefined;
-const backupWorkers = new Set<Promise<BackupResult>>();
-/** One session's pair: where its commands run, and how much it may do without asking. */
-interface SessionChoice {
-  sandbox: SandboxMode;
-  permission: PermissionMode;
-}
-const settingsAbort = new AbortController();
-let mcpAuthorize: AbortController | undefined;
+// Replaced, not reused, after an upgrade that aborted it and then failed before quitting: an aborted controller
+// stays aborted, and every later connection test or model discovery would fail at once until a restart.
+let settingsAbort = new AbortController();
 const pagePath = path.join(__dirname, 'index.html');
 const trustedUrl = pathToFileURL(pagePath).href;
 
-async function desktopRelease(): Promise<DesktopRelease> {
-  const pkg = JSON.parse(await readFile(path.join(__dirname, 'package-version.json'), 'utf8')) as {
-    version: string;
-  };
-  const release = JSON.parse(await readFile(path.join(__dirname, 'release.json'), 'utf8')) as {
-    maxSchemaVersion: number;
-  };
-  return {
-    version: app.isPackaged ? app.getVersion() : pkg.version,
-    channel: 'manual',
-    maxSchemaVersion: release.maxSchemaVersion,
-  };
-}
-async function confirmUpgradeStartup(): Promise<void> {
-  const file = app.commandLine.getSwitchValue('upgrade-journal');
-  if (!file) return;
-  const relative = path.relative(path.join(app.getPath('userData'), 'upgrades'), file);
+function assertSender(event: Electron.IpcMainInvokeEvent): void {
   if (
-    relative.startsWith('..') ||
-    path.isAbsolute(relative) ||
-    path.basename(file) !== 'upgrade.json'
+    !window ||
+    event.sender !== window.webContents ||
+    event.senderFrame !== window.webContents.mainFrame ||
+    event.senderFrame.url !== trustedUrl
   )
-    throw new Error('Invalid upgrade journal path');
-  const journal = JSON.parse(await readFile(file, 'utf8')) as {
-    phase: string;
-    manifest: { version: string };
-  };
-  const release = await desktopRelease();
-  if (journal.phase !== 'starting' || journal.manifest.version !== release.version)
-    throw new Error('Upgrade version did not match the installed application');
-  await writeFile(`${file}.ready`, JSON.stringify({ version: release.version, pid: process.pid }), {
-    flag: 'wx',
-    mode: 0o600,
-  });
+    throw new Error('Untrusted desktop sender');
 }
-async function manualUpgrade(): Promise<void> {
-  if (!window || !app.isPackaged || process.platform !== 'win32') return;
-  let stopped = false;
-  try {
-    if (!service?.snapshot.ready || service.busy || switching || quitting)
-      throw new Error(mainText('upgrade.busy'));
-    const current = await desktopRelease();
-    const selected = await dialog.showOpenDialog(window, {
-      title: mainText('upgrade.choose', { version: current.version }),
-      properties: ['openFile'],
-      filters: [{ name: mainText('upgrade.installer'), extensions: ['exe'] }],
-    });
-    if (selected.canceled || !selected.filePaths[0]) return;
-    const runtime = desktopPaths({
-      packaged: true,
-      resourcesPath: process.resourcesPath,
-      mainDirectory: __dirname,
-      userData: app.getPath('userData'),
-      cwd: process.cwd(),
-      env: process.env,
-      args: process.argv,
-    });
-    const execute = async (node: string, helper: string, args: string[]) => {
-      const result = await promisify(execFile)(node, [helper, ...args], {
-        windowsHide: true,
-        timeout: 300000,
-        maxBuffer: 1024 * 1024,
-      });
-      return JSON.parse(result.stdout.trim().split('\n').at(-1)!);
-    };
-    const helper = path.join(__dirname, 'upgrade-worker.cjs');
-    const manifest = (await execute(runtime.nodePath, helper, [
-      'check',
-      selected.filePaths[0],
-      JSON.stringify(current),
-    ])) as UpgradeManifest;
-    const confirm = await dialog.showMessageBox(window, {
-      type: 'question',
-      title: mainText('upgrade.title'),
-      message: mainText('upgrade.confirm', { current: current.version, next: manifest.version }),
-      detail: mainText('upgrade.detail'),
-      buttons: [mainText('upgrade.cancel'), mainText('upgrade.install')],
-      defaultId: 0,
-      cancelId: 0,
-    });
-    if (confirm.response !== 1) return;
-    if (!service || service.busy || switching || quitting)
-      throw new Error(mainText('upgrade.busy'));
-    switching = true;
-    const staged = (await execute(runtime.nodePath, helper, [
-      'stage',
-      selected.filePaths[0],
-      app.getPath('userData'),
-      JSON.stringify(current),
-      JSON.stringify(manifest),
-    ])) as StagedUpgrade;
-    const node = path.join(staged.directory, 'maintenance-node.exe'),
-      copiedHelper = path.join(staged.directory, 'upgrade-worker.cjs');
-    await copyFile(runtime.nodePath, node);
-    await copyFile(helper, copiedHelper);
-    const stagedFile = path.join(staged.directory, 'selection.json');
-    await writeFile(stagedFile, JSON.stringify(staged), { flag: 'wx', mode: 0o600 });
-    const workspace = service.snapshot.workspace;
-    quitting = true;
-    settingsAbort.abort();
-    await Promise.all([...profileWrites]);
-    await dailyBackups?.drain();
-    await Promise.allSettled([...backupWorkers]);
-    await service.stop();
-    stopped = true;
-    await execute(node, copiedHelper, [
-      'prepare',
-      stagedFile,
-      path.dirname(app.getPath('exe')),
-      path.join(workspace, '.yuantu/sessions.sqlite'),
-      JSON.stringify(current),
-      workspace,
-    ]);
-    const log = openSync(path.join(staged.directory, 'upgrade.log'), 'a', 0o600);
-    try {
-      const worker = spawn(node, [copiedHelper, 'install', staged.journal, String(process.pid)], {
-        cwd: staged.directory,
-        detached: true,
-        windowsHide: true,
-        stdio: ['ignore', log, log],
-      });
-      await new Promise<void>((resolve, reject) => {
-        worker.once('spawn', () => resolve());
-        worker.once('error', reject);
-      });
-      worker.unref();
-    } finally {
-      closeSync(log);
-    }
-    quitAllowed = true;
-    app.quit();
-  } catch (error) {
-    dialog.showErrorBox(
-      mainText('upgrade.failed'),
-      `${safeError(error)}\n${mainText('upgrade.recovery')}`,
-    );
-    if (stopped) {
-      quitAllowed = true;
-      app.quit();
-    } else {
-      quitting = false;
-      switching = false;
-    }
-  }
-}
-
-/**
- * MCP credentials live in the desktop profile, never in the workspace, and the agent host child
- * must read exactly the same directory.
- */
-function mcpOAuthDirectory(): string {
-  return path.join(app.getPath('userData'), 'mcp-oauth');
-}
-
-function testMcpInWorker(
-  root: string,
-  server: import('./mcp-contract.ts').McpServer,
-  signal: AbortSignal,
-  revision: string,
-): Promise<{ count: number }> {
-  signal.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, 'mcp-test-worker.cjs'), {
-      execArgv: process.execArgv.filter((argument) => !argument.startsWith('--input-type')),
-      workerData: { root, server, revision },
-      env: {
-        ...process.env,
-        ...sandboxEnvironment.environment(),
-        YUANTU_MCP_OAUTH_DIR: mcpOAuthDirectory(),
-      },
-    });
-    let settled = false;
-    const finish = (error?: unknown, result?: { count: number }) => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener('abort', abort);
-      void worker.terminate();
-      if (error) reject(error);
-      else resolve(result!);
-    };
-    const abort = () => finish(signal.reason ?? new Error('MCP connection test cancelled'));
-    signal.addEventListener('abort', abort, { once: true });
-    worker.once(
-      'message',
-      (message: { ok: boolean; result?: { count: number }; error?: string }) =>
-        message.ok
-          ? finish(undefined, message.result)
-          : finish(new Error(message.error ?? 'MCP connection test failed')),
-    );
-    worker.once('error', finish);
-    worker.once('exit', (code) => {
-      if (!settled && code !== 0) finish(new Error('MCP connection test worker failed'));
-    });
-  });
-}
+const ctx: MainContext = {
+  get window() {
+    return window;
+  },
+  get service() {
+    return service;
+  },
+  get openingService() {
+    return openingService;
+  },
+  set openingService(next) {
+    openingService = next;
+  },
+  get switching() {
+    return switching;
+  },
+  set switching(next) {
+    switching = next;
+  },
+  get quitting() {
+    return quitting;
+  },
+  set quitting(next) {
+    quitting = next;
+  },
+  get quitAllowed() {
+    return quitAllowed;
+  },
+  set quitAllowed(next) {
+    quitAllowed = next;
+  },
+  get following() {
+    return choices.following;
+  },
+  get settingsAbort() {
+    return settingsAbort;
+  },
+  renewSettingsAbort() {
+    if (settingsAbort.signal.aborted) settingsAbort = new AbortController();
+  },
+  get sandboxEnvironment() {
+    return sandboxEnvironment;
+  },
+  profileWrites,
+  createService,
+  attach,
+  assertSender,
+};
+const choices = new SessionChoices({
+  service: () => service,
+  window: () => window,
+  sandbox: () => sandboxEnvironment,
+});
+const backups = new DesktopBackups(ctx);
+const reviewWorkspaceHooks = workspaceHookReviewer(() => window);
 
 function createService(workspace: string, config?: ProviderConfig): CarrierService {
-  const runtime = desktopPaths({
-    packaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    mainDirectory: __dirname,
-    userData: app.getPath('userData'),
-    cwd: process.cwd(),
-    env: process.env,
-    args: process.argv,
-  });
+  const runtime = runtimePaths();
   return new CarrierService({
     nodePath: runtime.nodePath,
     hostPath: runtime.hostPath,
@@ -316,128 +154,20 @@ function createService(workspace: string, config?: ProviderConfig): CarrierServi
     },
   });
 }
-function sessionDatabase(): string {
-  if (!service) throw new Error('The desktop is not connected to a workspace');
-  return path.join(service.snapshot.workspace, '.yuantu', 'sessions.sqlite');
-}
-function executeBackup(file: string, action: BackupAction, id?: string): Promise<BackupResult> {
-  if (quitting && !backupRestoring) return Promise.reject(new Error(mainText('desktop.quitting')));
-  const runtime = desktopPaths({
-    packaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    mainDirectory: __dirname,
-    userData: app.getPath('userData'),
-    cwd: process.cwd(),
-    env: process.env,
-    args: process.argv,
-  });
-  const work = promisify(execFile)(
-    runtime.nodePath,
-    [
-      path.join(__dirname, 'database-backup-worker.cjs'),
-      '--database-backup',
-      file,
-      action,
-      ...(id ? [id] : []),
-    ],
-    { windowsHide: true, timeout: 300000, maxBuffer: 1024 * 1024 },
-  ).then(({ stdout }) => JSON.parse(stdout.trim()) as BackupResult);
-  backupWorkers.add(work);
-  void work.finally(() => backupWorkers.delete(work)).catch(() => {});
-  return work;
-}
-/**
- * The paused scheduler, or an error that names the reason it is missing.
- *
- * `whenReady` only constructs it under `PRODUCT_SCOPE.backups`, and every caller below is inside the IPC handler
- * that the same flag registers (`tests/product-scope.test.ts` pins both). A throw here therefore means the scope
- * guard was bypassed — worth an error rather than a silent no-op.
- */
-function pausedBackups(): DailyBackups {
-  if (!dailyBackups) throw new Error('Backup management is outside the current product scope');
-  return dailyBackups;
-}
-async function restoreBackup(file: string, id: string): Promise<BackupReply> {
-  if (!service?.snapshot.ready || service.busy || switching || quitting || !window)
-    throw new Error(mainText('upgrade.busy'));
-  switching = true;
-  const workspace = service.snapshot.workspace;
-  let stopped = false;
-  let reopening = false;
-  let recoveryDirectory: string | undefined;
-  try {
-    await dailyBackups?.drain();
-    await Promise.allSettled([...backupWorkers]);
-    const verified = await executeBackup(file, 'verify', id);
-    const selected = verified.backups.find((item) => item.id === id)!;
-    const confirm = await dialog.showMessageBox(window, {
-      type: 'warning',
-      title: mainText('backup.title'),
-      message: mainText('backup.confirm', { date: selected.createdAt }),
-      detail: mainText('backup.restoreDetail'),
-      buttons: [mainText('upgrade.cancel'), mainText('backup.restore')],
-      defaultId: 0,
-      cancelId: 0,
-    });
-    if (confirm.response !== 1)
-      return { ok: true, view: await pausedBackups().view(file), cancelled: true };
-    if (quitting || service.busy) throw new Error(mainText('upgrade.busy'));
-    await service.stop();
-    stopped = true;
-    const restored = await executeBackup(file, 'restore', id);
-    recoveryDirectory = restored.recoveryDirectory;
-    if (!quitting) {
-      const next = createService(workspace);
-      openingService = next;
-      reopening = true;
-      attach(next);
-      await next.start();
-      await following;
-      stopped = false;
-    }
-    return {
-      ok: true,
-      view: await pausedBackups().view(file),
-      recoveryDirectory: restored.recoveryDirectory,
-    };
-  } catch (error) {
-    if (stopped && !reopening && !quitting) {
-      const next = createService(workspace);
-      openingService = next;
-      attach(next);
-      try {
-        await next.start();
-        await following;
-      } catch {
-        /* The visible Host error preserves the recovery instructions. */
-      }
-    }
-    if (recoveryDirectory)
-      throw new Error(mainText('backup.reconnectFailed', { path: recoveryDirectory }), {
-        cause: error,
-      });
-    throw error;
-  } finally {
-    openingService = null;
-    switching = false;
-  }
-}
 function attach(next: CarrierService): CarrierService {
   unsubscribe?.();
   unsubscribeDelta?.();
   unsubscribeSubAgentDelta?.();
   unsubscribeStatisticsDelta?.();
   // A replacement Host starts with launch defaults, even when it loads the same session.
-  live = undefined;
-  applied = new Map();
-  showing = undefined;
-  moving = undefined;
-  following = undefined;
+  choices.reset();
   service = next;
   unsubscribe = next.subscribe((state) => {
-    if (state.ready && state.session.sessionId) followSession(state.session.sessionId);
-    if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
-      window.webContents.send('yuantu:state', state);
+    if (state.ready && state.session.sessionId) choices.follow(state.session.sessionId);
+    if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+      const patch = snapshotSender.diff(state);
+      if (Object.keys(patch.sections).length) window.webContents.send('yuantu:state', patch);
+    }
   });
   // Streamed text travels on its own channel so a token never serialises the whole snapshot.
   unsubscribeDelta = next.subscribeDelta((delta) => {
@@ -455,162 +185,6 @@ function attach(next: CarrierService): CarrierService {
       window.webContents.send('yuantu:statistics-delta', delta);
   });
   return next;
-}
-function safeError(error: unknown): string {
-  return carrierErrorReply(error).error;
-}
-/**
- * The workspace-hook trust prompt: every command and the file that declared it, then "trust" or "not now".
- *
- * A native dialog rather than a renderer panel because it has to be answered *before* the Host starts — the
- * first run of a new Host is when an untrusted `SessionStart` would otherwise execute — and the renderer is
- * not connected to anything yet at that point.
- */
-async function askHookTrust(question: HookTrustQuestion): Promise<HookTrustAnswer> {
-  const detail = `${mainText('hookTrust.detail', { workspace: question.workspace })}\n\n${describeHookDeclarations(question.declarations)}`;
-  const options = (buttons: string[], message: string): Electron.MessageBoxOptions => ({
-    type: 'warning',
-    title: mainText('hookTrust.title'),
-    message,
-    detail,
-    buttons,
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-  });
-  const show = (box: Electron.MessageBoxOptions) =>
-    window && !window.isDestroyed()
-      ? dialog.showMessageBox(window, box)
-      : dialog.showMessageBox(box);
-  if (question.reason === 'unavailable') {
-    await show(
-      options(
-        [mainText('hookTrust.skip')],
-        mainText('hookTrust.unavailable', { detail: question.detail ?? '' }),
-      ),
-    );
-    return 'skip';
-  }
-  const message = mainText('hookTrust.message', { count: question.declarations.length });
-  const result = await show(
-    options(
-      [mainText('hookTrust.skip'), mainText('hookTrust.trust')],
-      question.reason === 'changed' ? `${mainText('hookTrust.changed')}\n${message}` : message,
-    ),
-  );
-  return result.response === 1 ? 'trust' : 'skip';
-}
-const hookTrust = new HookTrustReview(askHookTrust);
-/** Asked before every Host start; a failure to ask leaves the hooks off, which the Host enforces anyway. */
-async function reviewWorkspaceHooks(workspace: string): Promise<void> {
-  try {
-    await hookTrust.review(workspace);
-  } catch (error) {
-    console.error(`[desktop] workspace hook review failed: ${safeError(error)}`);
-  }
-}
-/**
- * The pair a session is in, and the pair the live carrier is actually enforcing.
- *
- * Two facts rather than one, because they can differ for as long as it takes to move — and because the carrier
- * is *one process serving every session* (`packages/tools/sandbox-provider.ts` reads the mode per command), so
- * "which pair is session X in" is knowledge only the desktop has. `sessions` remembers a choice for as long as
- * the window is open; a session nobody has chosen for starts at `defaultChoice()`, which is the whole of "a new
- * session resets": there is nothing to clear, because the choice was never kept anywhere else.
- */
-const sessions = new Map<string, SessionChoice>();
-let live: SessionChoice | undefined;
-/**
- * What the Host was last told for each session. The Host keeps both halves per session, so whether a switch can
- * skip a half depends on what *that* session already has, not on what the previous session was in.
- */
-let applied = new Map<string, SessionChoice>();
-const defaultChoice = (): SessionChoice => ({
-  sandbox: sandboxEnvironment.defaultMode,
-  permission: permissionPreset(DEFAULT_PRESET).permission,
-});
-const choiceFor = (sessionId: string | undefined): SessionChoice =>
-  (sessionId ? sessions.get(sessionId) : undefined) ?? defaultChoice();
-/**
- * Moves the live carrier onto one pair: the sandbox over the carrier's own command (the Host enforces it from
- * the next command on), the approval floor through the service handle.
- *
- * The cached pair is committed only after both settings succeed. Invalidate it on a failure so a retry
- * reapplies both halves instead of assuming a partly completed update left enforcement unchanged.
- */
-async function applyChoice(choice: SessionChoice, sessionId: string | undefined): Promise<void> {
-  const target = service;
-  if (!target) throw new Error('The desktop is not connected to a carrier yet.');
-  const prior = sessionId ? applied.get(sessionId) : undefined;
-  try {
-    if (!prior || prior.sandbox !== choice.sandbox)
-      await target.dispatch({ type: 'sandbox', mode: choice.sandbox });
-    if (!prior || prior.permission !== choice.permission)
-      await target.updatePermissionPolicy(permissionPolicyForMode(choice.permission));
-  } catch (error) {
-    live = undefined;
-    if (sessionId) applied.delete(sessionId);
-    throw error;
-  }
-  live = { ...choice };
-  if (sessionId) applied.set(sessionId, { ...choice });
-  /**
-   * The availability of the backend is asked for *after* the switch and never awaited: the answer costs a
-   * native enforcement probe, and what a person is waiting for is the switch — a chip that froze for a
-   * second and a half before redrawing would be the interface paying for a footnote. The window is told when the
-   * answer lands, which is what the push channel is for.
-   */
-  if (!sandboxEnvironment.known(choice.sandbox)) {
-    void sandboxEnvironment
-      .probe(choice.sandbox)
-      .then(() => pushPresets())
-      .catch((error: unknown) =>
-        console.error('desktop: could not probe the sandbox backend', error),
-      );
-  }
-}
-/**
- * Follows the session the window is showing, and answers the one question this feature has: when the session
- * changes, what should the sandbox be? A session with a remembered choice gets it back; a session nobody has
- * chosen for — including every newly created one — gets the default.
- */
-let showing: string | undefined;
-/** A move in flight for a session; a second state update carrying the same id must not start a second one. */
-let moving: string | undefined;
-let following: Promise<void> | undefined;
-function followSession(sessionId: string): void {
-  if ((sessionId === showing && live !== undefined) || sessionId === moving) return;
-  moving = sessionId;
-  following = applyChoice(choiceFor(sessionId), sessionId)
-    .then(() => {
-      showing = sessionId;
-      pushPresets();
-    })
-    .finally(() => {
-      if (moving === sessionId) moving = undefined;
-    });
-  void following.catch((error: unknown) => {
-    // Leave `showing` unchanged after a failure so a later ready snapshot can retry the session's choice.
-    console.error('desktop: could not apply the session sandbox', error);
-  });
-}
-/** Tell the window which pair its session is in, once it is actually in it. */
-function pushPresets(): void {
-  if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
-    window.webContents.send('yuantu:presets-view', presetView());
-}
-/** Both knobs as the chip renders them, and which preset (if any) that pair currently is. */
-function presetView(): PermissionPresetView {
-  const choice = live ?? choiceFor(showing ?? service?.snapshot.session.sessionId ?? undefined);
-  return {
-    current: presetIdFor(choice.sandbox, choice.permission),
-    sandbox: {
-      mode: choice.sandbox,
-      image: sandboxEnvironment.image,
-      availability: sandboxEnvironment.cached(choice.sandbox),
-    },
-    permission: choice.permission,
-  };
 }
 
 app.setName('YuanTu Agent');
@@ -637,11 +211,23 @@ app.on('before-quit', (event) => {
   settingsAbort.abort();
   void (async () => {
     try {
-      const setupSettled = await waitForSandboxInitialization(sandboxInitializing);
-      await backupRestoring?.catch(() => {});
-      await dailyBackups?.drain();
-      await Promise.allSettled([...backupWorkers]);
-      const results = await Promise.allSettled([service?.stop(), openingService?.stop()]);
+      /**
+       * Every step is bounded.
+       *
+       * The window's close has already been turned into this quit, so a step that never settles leaves a process
+       * with no window that cannot be closed again. Each wait reports which step missed its deadline; the quit then
+       * continues instead of hanging. The bound is above the Host client's own ten-second kill, so an ordinary slow
+       * shutdown still finishes on its own terms.
+       */
+      const setupSettled = await withinQuitDeadline(
+        waitForSandboxInitialization(sandboxInitializing),
+        'sandbox setup confirmation',
+      );
+      await withinQuitDeadline(backups.quiesce(), 'backup quiesce');
+      const results = await Promise.allSettled([
+        withinQuitDeadline(service?.stop(), 'Host shutdown'),
+        withinQuitDeadline(openingService?.stop(), 'Host shutdown'),
+      ]);
       const failure = results.find((result) => result.status === 'rejected');
       if (!setupSettled) throw new Error(mainText('sandboxSetup.exitUnconfirmed'));
       if (failure?.status === 'rejected') throw failure.reason;
@@ -671,17 +257,7 @@ void app
       },
     );
     await settingsStore.load();
-    /**
-     * Paused: the desktop ships no backup page, IPC channel or scheduler while `PRODUCT_SCOPE.backups` is false
-     * (`tests/product-scope.test.ts` pins the preload bridge, the registration and this construction). Turning the
-     * scope back on builds the class here and needs nothing else in this file.
-     */
-    if (PRODUCT_SCOPE.backups)
-      dailyBackups = new DailyBackups(
-        path.join(app.getPath('userData'), 'backup-settings.json'),
-        executeBackup,
-      );
-    // Manual maintenance only: legacy daily opt-in files no longer enable scheduling.
+    backups.start();
     uiSettingsStore = new UiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
     await uiSettingsStore.load();
     /**
@@ -700,7 +276,7 @@ void app
               {
                 label: mainText('upgrade.check'),
                 click: () => {
-                  void manualUpgrade();
+                  void manualUpgrade(ctx, () => backups.quiesce());
                 },
               },
               {
@@ -731,15 +307,7 @@ void app
       path.join(app.getPath('userData'), 'permission-policy.json'),
     );
     await permissionSettingsStore.load();
-    const runtime = desktopPaths({
-      packaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      mainDirectory: __dirname,
-      userData: app.getPath('userData'),
-      cwd: process.cwd(),
-      env: process.env,
-      args: process.argv,
-    });
+    const runtime = runtimePaths();
     sandboxEnvironment = new SandboxEnvironment(process.env, {
       nodePath: runtime.nodePath,
       workerPath: path.join(__dirname, 'sandbox-probe-worker.cjs'),
@@ -784,91 +352,15 @@ void app
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event) => event.preventDefault());
+    // A (re)loading page starts with an empty mirror, so the next patch has to carry every section.
+    window.webContents.on('did-start-loading', () => snapshotSender.reset());
     window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
       callback(false),
     );
     window.webContents.session.setPermissionCheckHandler(() => false);
     const initial = attach(createService(workspace));
-    const assertSender = (event: Electron.IpcMainInvokeEvent) => {
-      if (
-        !window ||
-        event.sender !== window.webContents ||
-        event.senderFrame !== window.webContents.mainFrame ||
-        event.senderFrame.url !== trustedUrl
-      )
-        throw new Error('Untrusted desktop sender');
-    };
-    if (PRODUCT_SCOPE.backups)
-      ipcMain.handle('yuantu:backups', async (event, input: unknown): Promise<BackupReply> => {
-        try {
-          assertSender(event);
-          const command = parseBackupCommand(input);
-          if (quitting || switching || !service?.snapshot.ready)
-            throw new Error(mainText('upgrade.busy'));
-          const file = sessionDatabase();
-          if (command.type === 'get') return { ok: true, view: await pausedBackups().view(file) };
-          if (command.type === 'create')
-            return { ok: true, view: await pausedBackups().create(file) };
-          const work = restoreBackup(file, command.id);
-          backupRestoring = work;
-          try {
-            return await work;
-          } finally {
-            if (backupRestoring === work) backupRestoring = undefined;
-          }
-        } catch (error) {
-          return { ok: false, error: safeError(error) };
-        }
-      });
-    let readingAttachment = false;
-    ipcMain.handle('yuantu:attachment', async (event, input): Promise<AttachmentReply> => {
-      try {
-        assertSender(event);
-        if (readingAttachment) throw new Error(mainText('attach.busy'));
-        if (
-          !input ||
-          typeof input.name !== 'string' ||
-          !(input.data instanceof Uint8Array) ||
-          input.data.byteLength > MAX_DOCUMENT_BYTES
-        )
-          throw new Error(mainText('attach.invalid'));
-        readingAttachment = true;
-        try {
-          return await new Promise<AttachmentReply>((resolve) => {
-            const worker = new Worker(path.join(__dirname, 'attachment-worker.cjs'), {
-              // The language travels with the work: a worker thread has its own copy of every module, so the one
-              // message it can produce would otherwise be in the default language.
-              workerData: { ...input, language: uiSettingsStore.view.language },
-              resourceLimits: { maxOldGenerationSizeMb: 256 },
-            });
-            let settled = false;
-            const finish = (reply: AttachmentReply) => {
-              if (settled) return;
-              settled = true;
-              clearTimeout(timer);
-              void worker.terminate();
-              resolve(reply);
-            };
-            const timer = setTimeout(
-              () => finish({ ok: false, error: mainText('attach.timeout') }),
-              20000,
-            );
-            worker.once('message', finish);
-            worker.once('error', () => finish({ ok: false, error: mainText('attach.readFailed') }));
-            worker.once('exit', () =>
-              finish({ ok: false, error: mainText('attach.workerExited') }),
-            );
-          });
-        } finally {
-          readingAttachment = false;
-        }
-      } catch (error) {
-        return {
-          ok: false,
-          error: error instanceof Error ? error.message : mainText('attach.failed'),
-        };
-      }
-    });
+    backups.register();
+    registerAttachmentIpc(ctx, () => uiSettingsStore.view.language);
     ipcMain.handle(
       'yuantu:workspace-maintenance',
       async (event, input: unknown): Promise<WorkspaceMaintenanceReply> => {
@@ -887,7 +379,7 @@ void app
               service: current,
               command,
               workspace,
-              policyReady: following,
+              policyReady: choices.following,
               isCurrent: () =>
                 !quitting &&
                 current === service &&
@@ -926,87 +418,7 @@ void app
         return { ok: false, error: safeError(error) };
       }
     });
-    ipcMain.handle('yuantu:mcp', async (event, input: unknown): Promise<McpReply> => {
-      try {
-        assertSender(event);
-        const command = parseMcpCommand(input);
-        // The hidden management surface must also refuse direct IPC calls.
-        if (!PRODUCT_SCOPE.mcpManagement)
-          return { ok: false, error: 'MCP service management is temporarily disabled.' };
-        if (command.type === 'cancel-authorize') {
-          mcpAuthorize?.abort(new Error('MCP authorization cancelled'));
-          return { ok: true, message: mainText('mcpMain.cancelAuthorize') };
-        }
-        if (!service || quitting) throw new Error(mainText('desktop.quitting'));
-        const store = new McpSettingsStore(service.snapshot.workspace, mcpOAuthDirectory());
-        if (command.type === 'get') return { ok: true, view: store.view() };
-        if (command.type === 'authorize' && mcpAuthorize)
-          throw new Error(mainText('mcpMain.authorizeInProgress'));
-        if (switching || service.busy) throw new Error(mainText('mcpMain.busy'));
-        switching = true;
-        try {
-          if (command.type === 'test') {
-            const result = await testMcpInWorker(
-              service.snapshot.workspace,
-              command.server,
-              AbortSignal.any([settingsAbort.signal, AbortSignal.timeout(15000)]),
-              command.revision,
-            );
-            return {
-              ok: true,
-              message: mainText('mcpMain.testSucceeded', { count: result.count }),
-            };
-          }
-          if (command.type === 'authorize') {
-            const controller = new AbortController();
-            mcpAuthorize = controller;
-            try {
-              await store.authorize(
-                command.server,
-                command.revision,
-                async (url) => {
-                  if (url.protocol !== 'http:' && url.protocol !== 'https:')
-                    throw new Error(mainText('mcpMain.authorizeUrlInvalid'));
-                  await shell.openExternal(url.href);
-                },
-                AbortSignal.any([
-                  settingsAbort.signal,
-                  controller.signal,
-                  AbortSignal.timeout(300_000),
-                ]),
-              );
-            } finally {
-              if (mcpAuthorize === controller) mcpAuthorize = undefined;
-            }
-            return {
-              ok: true,
-              view: store.view(),
-              message: mainText('mcpMain.authorizeSucceeded'),
-            };
-          }
-          const view =
-            command.type === 'save'
-              ? store.save(command.server, command.revision)
-              : command.type === 'delete'
-                ? store.delete(command.id, command.revision)
-                : await store.revoke(command.id, command.revision);
-          return {
-            ok: true,
-            view,
-            message:
-              command.type === 'save'
-                ? mainText('mcpMain.saved')
-                : command.type === 'delete'
-                  ? mainText('mcpMain.deleted')
-                  : mainText('mcpMain.revoked'),
-          };
-        } finally {
-          switching = false;
-        }
-      } catch (error) {
-        return { ok: false, error: safeError(error) };
-      }
-    });
+    registerMcpIpc(ctx);
     /** Hold the shell operation guard across both halves of a preset update. */
     const assertPresetChangeAllowed = (): void => {
       if (!service || quitting || switching)
@@ -1018,22 +430,22 @@ void app
         try {
           assertSender(event);
           const command = parsePermissionPresetCommand(input);
-          if (command.type === 'get') return { ok: true, view: presetView() };
+          if (command.type === 'get') return { ok: true, view: choices.view() };
           const preset = permissionPreset(command.preset);
           assertPresetChangeAllowed();
           switching = true;
           try {
-            await following;
+            await choices.following;
             const choice: SessionChoice = {
               sandbox: preset.sandbox,
               permission: preset.permission,
             };
             const sessionId = service?.snapshot.session.sessionId ?? undefined;
-            await applyChoice(choice, sessionId);
-            if (sessionId) sessions.set(sessionId, choice);
+            await choices.apply(choice, sessionId);
+            if (sessionId) choices.remember(sessionId, choice);
             return {
               ok: true,
-              view: presetView(),
+              view: choices.view(),
               message: `Preset applied: ${preset.sandbox} + ${preset.permission}.`,
             };
           } finally {
@@ -1171,7 +583,7 @@ void app
             }
             if (quitting) throw new Error(mainText('desktop.quitting'));
             attach(next);
-            await following;
+            await choices.following;
             return {
               ok: true,
               settings: settingsStore.view,
@@ -1196,20 +608,22 @@ void app
         };
       }
     });
-    ipcMain.handle('yuantu:command', async (event, input: unknown): Promise<DesktopReply> => {
+    ipcMain.handle('yuantu:command', async (event, input: unknown): Promise<DesktopWireReply> => {
       try {
         assertSender(event);
         const command = parseCarrierCommand(input);
+        // The window asks for a snapshot when it starts; whatever it held before, it gets every section.
+        if (command.type === 'snapshot') snapshotSender.reset();
         if (command.type === 'sandbox')
           throw new Error('Change the sandbox through a confirmed permission preset.');
         if (!service || quitting) throw new Error('Desktop is shutting down');
         if (command.type === 'copyText') {
           clipboard.writeText(command.text);
-          return { ok: true, state: service.snapshot };
+          return { ok: true, patch: snapshotSender.diff(service.snapshot) };
         }
         if (command.type === 'openLink') {
           await shell.openExternal(command.url);
-          return { ok: true, state: service.snapshot };
+          return { ok: true, patch: snapshotSender.diff(service.snapshot) };
         }
         if (command.type === 'export') {
           const result = await dialog.showSaveDialog(window!, {
@@ -1225,7 +639,7 @@ void app
           });
           if (!result.canceled && result.filePath)
             await writeFile(result.filePath, command.content, 'utf8');
-          return { ok: true, state: service.snapshot };
+          return { ok: true, patch: snapshotSender.diff(service.snapshot) };
         }
         if (switching && command.type !== 'snapshot') throw new Error('Workspace is changing');
         if (command.type === 'chooseWorkspace') {
@@ -1258,15 +672,15 @@ void app
                 }
               }
             }
-            return { ok: true, state: service.snapshot };
+            return { ok: true, patch: snapshotSender.diff(service.snapshot) };
           } finally {
             switching = false;
           }
         }
-        if (command.type !== 'snapshot') await following;
+        if (command.type !== 'snapshot') await choices.following;
         const state = await service.dispatch(command);
-        if (command.type !== 'snapshot') await following;
-        return { ok: true, state };
+        if (command.type !== 'snapshot') await choices.following;
+        return { ok: true, patch: snapshotSender.diff(state) };
       } catch (error) {
         return carrierErrorReply(error);
       }

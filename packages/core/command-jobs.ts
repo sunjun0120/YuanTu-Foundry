@@ -1,4 +1,5 @@
 import type { CommandJournal, CommandRecord } from '../protocol/jobs.ts';
+import { logProjection } from './log-projection.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 /**
  * The session's durable record of the background commands it started.
@@ -39,6 +40,69 @@ export function commandJournal(store: SessionStore, sessionId: string): CommandJ
     records: () => [...commandRecords(store, sessionId).values()],
   };
 }
+/** What the command fold keeps: the records, and the ids a client hid or the model read. */
+interface CommandState {
+  records: Map<string, CommandRecord>;
+  /** Ids a client hid with `background.hidden`. */
+  hidden: Set<string>;
+  /** Ids the model has read with `command.collected`. */
+  collected: Set<string>;
+}
+
+function ids(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+/** Every reader used to fold the whole log per call; this fold is kept and continued (see `logProjection`). */
+const commands = logProjection<CommandState>(
+  () => ({ records: new Map(), hidden: new Set(), collected: new Set() }),
+  (state, event) => {
+    const { records } = state;
+    switch (event.type) {
+      case 'command.started': {
+        const id = String(event.data.id ?? '');
+        if (!id || records.has(id)) break;
+        records.set(id, {
+          id,
+          sessionId: event.sessionId,
+          command: String(event.data.command ?? ''),
+          cwd: String(event.data.cwd ?? ''),
+          createdAt: String(event.data.createdAt ?? event.at),
+          output: '',
+          outputChars: 0,
+        });
+        break;
+      }
+      case 'command.settled': {
+        const id = String(event.data.id ?? '');
+        const record = id ? records.get(id) : undefined;
+        if (!record) break;
+        const output = String(event.data.output ?? '');
+        // Replaced rather than mutated: a reader may still hold the record it was handed before this settle.
+        records.set(id, {
+          ...record,
+          status: String(event.data.status ?? 'completed'),
+          finishedAt: String(event.data.finishedAt ?? event.at),
+          exitCode:
+            typeof event.data.exitCode === 'number' || event.data.exitCode === null
+              ? (event.data.exitCode as number | null)
+              : null,
+          output,
+          outputChars:
+            typeof event.data.outputChars === 'number' ? event.data.outputChars : output.length,
+        });
+        break;
+      }
+      case 'background.hidden':
+        for (const id of ids(event.data.ids)) state.hidden.add(id);
+        break;
+      case 'command.collected':
+        for (const id of ids(event.data.ids)) state.collected.add(id);
+        break;
+    }
+  },
+);
+
 /**
  * Every command this session recorded, folded from its log, oldest first.
  *
@@ -46,41 +110,18 @@ export function commandJournal(store: SessionStore, sessionId: string): CommandJ
  * was never read, and `job_output` asks for one id when the process that ran it no longer exists. A `settled`
  * for a command this log never saw start is ignored rather than invented — the same rule the sub-agent fold
  * follows, and for the same reason: an id nobody can look up is not a record of work.
+ *
+ * The map is the caller's own copy; the fold behind it is kept and continued (see `logProjection`).
  */
 export function commandRecords(store: SessionStore, sessionId: string): Map<string, CommandRecord> {
-  const records = new Map<string, CommandRecord>();
-  for (const event of store.events(sessionId)) {
-    if (event.type === 'command.started') {
-      const id = String(event.data.id ?? '');
-      if (!id || records.has(id)) continue;
-      records.set(id, {
-        id,
-        sessionId,
-        command: String(event.data.command ?? ''),
-        cwd: String(event.data.cwd ?? ''),
-        createdAt: String(event.data.createdAt ?? event.at),
-        output: '',
-        outputChars: 0,
-      });
-      continue;
-    }
-    if (event.type === 'command.settled') {
-      const id = String(event.data.id ?? '');
-      const record = id ? records.get(id) : undefined;
-      if (!record) continue;
-      record.status = String(event.data.status ?? 'completed');
-      record.finishedAt = String(event.data.finishedAt ?? event.at);
-      record.exitCode =
-        typeof event.data.exitCode === 'number' || event.data.exitCode === null
-          ? (event.data.exitCode as number | null)
-          : null;
-      record.output = String(event.data.output ?? '');
-      record.outputChars =
-        typeof event.data.outputChars === 'number' ? event.data.outputChars : record.output.length;
-    }
-  }
-  return records;
+  return new Map(commands.read(store, sessionId).records);
 }
+
+/** The ids a client hid from the background panel with `background.hidden`. */
+export function hiddenCommandIds(store: SessionStore, sessionId: string): ReadonlySet<string> {
+  return new Set(commands.read(store, sessionId).hidden);
+}
+
 /**
  * The commands this session settled and nobody has read, oldest first.
  *
@@ -93,13 +134,10 @@ export function unsettledCommands(
   sessionId: string,
   limit = 8,
 ): CommandRecord[] {
-  const read = new Set<string>();
-  for (const event of store.events(sessionId))
-    if (event.type === 'command.collected')
-      for (const id of Array.isArray(event.data.ids) ? event.data.ids : []) read.add(String(id));
+  const { records, collected } = commands.read(store, sessionId);
   const pending: CommandRecord[] = [];
-  for (const record of commandRecords(store, sessionId).values()) {
-    if (!record.status || read.has(record.id)) continue;
+  for (const record of records.values()) {
+    if (!record.status || collected.has(record.id)) continue;
     pending.push(record);
     if (pending.length >= limit) break;
   }

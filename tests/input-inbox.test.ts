@@ -21,6 +21,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry, HookRegistry } from '../packages/tools/registry.ts';
 import { SESSION_EVENT_TYPES, foldPendingInputs } from '../packages/storage/events.ts';
 import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const reply = (text = 'Done'): ModelResponse => ({
@@ -96,7 +97,7 @@ test('a consumed input is recorded as accepted before it is recorded as delivere
   assert.deepEqual(
     store
       .messages(session.id)
-      .filter((message) => message.role === 'user')
+      .filter((message) => message.role === 'user' && !isRuntimeContext(message.content))
       .map((message) => message.content),
     ['first', 'queued follow-up'],
   );

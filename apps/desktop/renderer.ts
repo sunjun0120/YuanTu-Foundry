@@ -575,13 +575,36 @@ element('load-older-history').addEventListener('click', () => {
     loadingOlderHistory = false;
   });
 });
-window.yuantu.subscribe((next) => {
+/**
+ * Sections whose change is drawn by one view and by nothing else on the page.
+ *
+ * A publish names the sections it changed (`snapshot-patch.ts`). Most publishes outside a run are one of these —
+ * a background command's output, a task's progress — and redrawing the whole page for them read the
+ * conversation's layout and re-keyed every panel for a change one popover shows. A publish that touches any
+ * other section takes the full `render()`, exactly as before. `audit` and `backgroundState` are carried for
+ * other consumers and drawn by no view here.
+ */
+const SECTION_VIEWS: Partial<Record<keyof CarrierSnapshot, () => void>> = {
+  background: () => backgroundView.render(),
+  backgroundState: () => {},
+  audit: () => {},
+  tasks: renderTasks,
+  taskAttempts: renderTasks,
+  taskSteps: renderTasks,
+};
+window.yuantu.subscribe((next, changed) => {
+  const first = !state;
   state = next;
   // A recovery notice supersedes the error that caused it: both describe the same crash, and "the app came
   // back and rebuilt the session" is the more useful of the two to leave on screen. Without this the window
   // recovered silently and kept an error banner from the request that died with the Host.
   if (state.recovery) localError = null;
-  render();
+  // A bridge that names no sections (a test double, an older preload) means "anything may have changed".
+  if (first || !changed?.length || !changed.every((key) => SECTION_VIEWS[key])) {
+    render();
+    return;
+  }
+  for (const view of new Set(changed.map((key) => SECTION_VIEWS[key]!))) view();
 });
 window.yuantu.subscribeDelta((delta) => {
   liveView.delta(delta);

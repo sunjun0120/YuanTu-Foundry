@@ -8,6 +8,7 @@ import type {
   Approval,
   FileChange,
   FileSnapshot,
+  Tool,
   ToolContext,
 } from '../packages/protocol/index.ts';
 import { createTools } from '../packages/catalog/index.ts';
@@ -20,10 +21,15 @@ import {
   toDisplayRange,
   toProtocolPosition,
 } from '../packages/lsp/protocol.ts';
-import { findExecutable, languageForFile, resolveServers } from '../packages/lsp/servers.ts';
+import {
+  findExecutable,
+  languageForFile,
+  resolveServerCommand,
+  resolveServers,
+} from '../packages/lsp/servers.ts';
 import { LspClient } from '../packages/lsp/client.ts';
 import { LspManager } from '../packages/lsp/manager.ts';
-import { lspTools } from '../packages/lsp/tools.ts';
+import { attachDiagnostics, lspTools } from '../packages/lsp/tools.ts';
 import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
 
 // ---- merged from lsp.test.ts ----
@@ -210,6 +216,41 @@ test('the server catalog merges .yuantu/lsp.json and can disable built-ins', asy
   assert.equal(languageForFile(path.join(root, 'a.ts'), servers)?.language, 'typescript');
   assert.equal(languageForFile(path.join(root, 'a.d.ts'), servers)?.language, 'typescript');
   assert.equal(languageForFile(path.join(root, 'a.txt'), servers), undefined);
+});
+
+test('an explicit command clears an inherited package binding', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lsp-override-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, '.yuantu'), { recursive: true });
+  // A local package that would otherwise win: the built-in catalog names it and the resolver prefers its
+  // real entry over the command on Windows.
+  const pkg = path.join(root, 'node_modules', 'typescript-language-server');
+  await mkdir(pkg, { recursive: true });
+  await writeFile(
+    path.join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'typescript-language-server',
+      bin: { 'typescript-language-server': 'entry.js' },
+    }),
+  );
+  await writeFile(path.join(pkg, 'entry.js'), '');
+  await writeFile(
+    path.join(root, '.yuantu', 'lsp.json'),
+    JSON.stringify({
+      servers: { typescript: { command: process.execPath, args: ['--explicit-wrapper'] } },
+    }),
+  );
+  const { servers } = await resolveServers(root);
+  const typescript = servers.find((server) => server.language === 'typescript')!;
+  assert.equal(typescript.command, process.execPath);
+  assert.equal(
+    typescript.package,
+    undefined,
+    'an explicit command must not keep the package that would override it',
+  );
+  const resolved = await resolveServerCommand(root, typescript);
+  assert.equal(resolved?.command, process.execPath);
+  assert.deepEqual(resolved?.args, ['--explicit-wrapper']);
 });
 
 test('configured uppercase extension resolves its server', async (t) => {
@@ -1422,3 +1463,36 @@ for (const scenario of SCENARIOS)
       `the real ${scenario.language} server should report a type error in ${scenario.target}`,
     );
   });
+
+test('an edit is not reported clean before the language server settles', async () => {
+  const tool: Tool = {
+    name: 'edit_file',
+    description: 'fixture edit',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    execute: async () => ({
+      isError: false,
+      content: 'edited a.ts',
+      change: { kind: 'update', path: 'a.ts', changes: [{ path: 'a.ts' }] } as never,
+    }),
+  };
+  const context = (): ToolContext => ({
+    signal: new AbortController().signal,
+    approve: async () => true,
+  });
+  for (const settled of [false, true]) {
+    const manager = {
+      runningForFile: async () => ({
+        diagnostics: async () => ({ diagnostics: [], settled }),
+      }),
+    };
+    const result = await attachDiagnostics(tool, manager as never, process.cwd()).execute(
+      {},
+      context(),
+    );
+    if (settled) assert.match(result.content, /a\.ts: no errors or warnings/);
+    else {
+      assert.doesNotMatch(result.content, /a\.ts: no errors or warnings/);
+      assert.match(result.content, /has not finished analysing/);
+    }
+  }
+});

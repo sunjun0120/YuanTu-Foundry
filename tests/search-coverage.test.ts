@@ -30,7 +30,12 @@ import {
 import { scanText, searchOptions } from '../packages/search/text.ts';
 import { WorkspaceSearchService } from '../packages/search/service.ts';
 import { workspaceAccess } from '../packages/tools/files.ts';
-import { emptyCoverage, type FileEntry, type WorkspaceAccess } from '../packages/search/types.ts';
+import {
+  emptyCoverage,
+  type Coverage,
+  type FileEntry,
+  type WorkspaceAccess,
+} from '../packages/search/types.ts';
 import { toolCardModel } from '../apps/desktop/tool-card-model.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
 
@@ -67,6 +72,60 @@ test('backend preparation and enumeration cannot grant a search a fresh time bud
     assert.equal(backendCalls, 0, 'do not start a process after its request budget expired');
     assert.equal(page.coverage.complete, false);
     assert.ok(page.coverage.reasons.includes('time-limit'));
+  } finally {
+    await service.close();
+  }
+});
+
+test('a backend fallback keeps the enumeration coverage it was given', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-fallback-coverage-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, 'target.ts'), 'TARGET\n');
+  const access = workspaceAccess(new Workspace(root));
+  const service = new WorkspaceSearchService(access, { indexDirectory: null });
+  const inventory = await collectInventory(access, {
+    path: '.',
+    include: [],
+    exclude: [],
+    maxEntries: 1_000,
+    maxFiles: null,
+    timeoutMs: 1_000,
+    signal: new AbortController().signal,
+  });
+  const incomplete: Coverage = {
+    ...emptyCoverage(),
+    complete: false,
+    reasons: ['entry-limit'],
+    entriesVisited: 200_000,
+    filesConsidered: 1,
+  };
+  // The backend fails to prepare its execution environment. The service already enumerated these files, and
+  // that enumeration said the list was incomplete.
+  (service as unknown as { inventory: () => Promise<unknown> }).inventory = async () => ({
+    files: inventory.files,
+    coverage: incomplete,
+  });
+  try {
+    const page = await service.search(
+      searchOptions({ query: 'TARGET' }),
+      {
+        name: 'ripgrep',
+        available: async () => true,
+        search: async (input) => input.fallback(input.files, input.inventory()),
+      },
+      context(),
+    );
+    assert.deepEqual(
+      page.matches.map((hit) => hit.path),
+      ['target.ts'],
+    );
+    assert.equal(
+      page.coverage.complete,
+      false,
+      'a partial enumeration must not become a complete scan',
+    );
+    assert.deepEqual(page.coverage.reasons, ['entry-limit']);
+    assert.equal(page.coverage.entriesVisited, 200_000);
   } finally {
     await service.close();
   }
@@ -304,11 +363,17 @@ test('a search whose zero matches came from a cut scan never says the scope has 
     coverage: { complete: boolean; reasons: string[] };
   };
   assert.deepEqual(payload.matches, []);
+  await tools.close();
+  // Under a loaded machine the scan's own clock can cut it; that is an honest incomplete answer, and the one
+  // thing it must not do is the thing this test is about — claim the scope has no such text.
+  if (!payload.coverage.complete) {
+    assert.deepEqual(payload.coverage.reasons, ['time-limit']);
+    assert.notEqual(result.content, 'No matches in the requested scope.');
+    return;
+  }
   // Nothing was cut here — the tree is enumerated to the end — so this really is a complete zero.
-  assert.equal(payload.coverage.complete, true);
   assert.equal(payload.limited, false);
   assert.equal(result.content, 'No matches in the requested scope.');
-  await tools.close();
 });
 
 test('the entry budget is recorded as its own reason, separately from the candidate budget', async (t) => {

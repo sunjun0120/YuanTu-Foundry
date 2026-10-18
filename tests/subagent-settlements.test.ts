@@ -17,6 +17,7 @@ import { SubAgentResidency } from '../packages/core/residency.ts';
 import { settlementNotices, settlementNoticeText } from '../packages/core/settlements.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 
 const SUBAGENT_MARK = 'You are a sub-agent delegated by a parent agent';
@@ -122,7 +123,9 @@ test('a child that finished after its run is announced to the parent and can be 
   assert.doesNotMatch(notice, /Sweep complete/);
   // A notice is context, not a turn: the transcript must not grow a message the user never sent.
   assert.equal(
-    requests[0]!.messages.filter((message) => message.role === 'user').length,
+    requests[0]!.messages.filter(
+      (message) => message.role === 'user' && !isRuntimeContext(message.content),
+    ).length,
     2,
     JSON.stringify(requests[0]!.messages.map((message) => message.role)),
   );

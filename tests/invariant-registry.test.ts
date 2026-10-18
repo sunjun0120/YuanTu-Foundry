@@ -221,6 +221,18 @@ test('the storage invariant compares the log fold, the transcript read and the r
     ),
     /transcript read is not the fold of the log/,
   );
+  // A digest can say *where* two histories parted; "not the fold" alone leaves a reader to bisect by hand.
+  assert.match(
+    await detect(
+      divergent({
+        messages: () => [
+          store.messages(session.id)[0]!,
+          { ...store.messages(session.id)[1]!, content: 'changed' },
+        ],
+      }),
+    ),
+    /transcript read is not the fold of the log \(first difference at message 1\)/,
+  );
   assert.match(
     await detect(
       divergent({ events: () => [...store.events(session.id), store.events(session.id)[0]!] }),

@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
-import { ftsIndexText, ftsMatchQuery } from '../protocol/fts-text.ts';
+import { ftsIndexText, ftsMatchQuery } from '../formats/fts-text.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
 import { resourceText } from '../resources/files.ts';
@@ -120,10 +120,31 @@ export function defaultKnowledgePath(): string {
     ? configured
     : path.join(userStateDirectory(), 'knowledge.sqlite');
 }
+/** What one pinned document's last refresh attempt learned about its freshness. */
+export interface KnowledgeDocumentFreshness {
+  path: string;
+  /** When this document's indexed content was last written. */
+  lastIndexedAt: string;
+  stale: boolean;
+  /** Why the refresh failed, when it did. The old content is still searchable. */
+  error?: string;
+  /** When the most recent failed refresh happened. */
+  failedAt?: string;
+}
+
+/** Whether every pinned document was re-read successfully for a search, and which were not. */
+export interface KnowledgeFreshness {
+  stale: boolean;
+  checkedAt: string;
+  documents: KnowledgeDocumentFreshness[];
+}
+
 export class KnowledgeStore {
   private db: DatabaseSync;
   /** Size and mtime of each document as it was when last indexed, keyed by scope and path. */
   private verified = new Map<string, { size: number; mtimeMs: number }>();
+  /** Documents whose last refresh failed, keyed by scope and path; cleared by the next successful read. */
+  private refreshFailures = new Map<string, { path: string; error: string; at: string }>();
   private refreshChecks = { verified: 0, reread: 0 };
   constructor(file = defaultKnowledgePath()) {
     mkdirSync(path.dirname(file), { recursive: true });
@@ -339,13 +360,16 @@ export class KnowledgeStore {
    */
   private refreshDocuments(root: string): void {
     const scope = canonical(root);
+    const present = new Set<string>();
     for (const document of this.listDocuments(root)) {
       const key = `${scope}\u0000${document.path}`;
+      present.add(key);
       const known = this.verified.get(key);
       if (known) {
         const current = statSource(root, document.path);
         if (current && current.size === known.size && current.mtimeMs === known.mtimeMs) {
           this.refreshChecks.verified++;
+          this.refreshFailures.delete(key);
           continue;
         }
       }
@@ -355,11 +379,53 @@ export class KnowledgeStore {
         const current = statSource(root, document.path);
         if (current) this.verified.set(key, current);
         else this.verified.delete(key);
-      } catch {
+        this.refreshFailures.delete(key);
+      } catch (error) {
         this.verified.delete(key);
-        if (this.documentMissing(root, document.path)) this.unpinDocument(root, document.path);
+        if (this.documentMissing(root, document.path)) {
+          this.unpinDocument(root, document.path);
+          this.refreshFailures.delete(key);
+        } else {
+          /**
+           * Keep serving the old chunks, but do not pretend they are current. The next search reports this
+           * failure as result-level freshness, so a stale document cannot be mistaken for an unchanged one —
+           * including when the query matches nothing and the old content is invisible.
+           */
+          this.refreshFailures.set(key, {
+            path: document.path,
+            error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+            at: new Date().toISOString(),
+          });
+        }
       }
     }
+    // A failure recorded for a document that is no longer pinned is about a source this search does not use.
+    for (const key of this.refreshFailures.keys())
+      if (key.startsWith(`${scope}\u0000`) && !present.has(key)) this.refreshFailures.delete(key);
+  }
+
+  /**
+   * Freshness of the pinned documents, after the refresh that `search` performs.
+   *
+   * This is result-level, not item-level: a stale document must be reported even when it did not match the
+   * query, because "no results" is exactly the answer a caller could otherwise mistake for "nothing changed".
+   */
+  freshness(root: string): KnowledgeFreshness {
+    const scope = canonical(root);
+    const documents = this.listDocuments(root).map((document) => {
+      const failure = this.refreshFailures.get(`${scope}\u0000${document.path}`);
+      return {
+        path: document.path,
+        lastIndexedAt: document.updatedAt,
+        stale: Boolean(failure),
+        ...(failure ? { error: failure.error, failedAt: failure.at } : {}),
+      } satisfies KnowledgeDocumentFreshness;
+    });
+    return {
+      stale: documents.some((document) => document.stale),
+      checkedAt: new Date().toISOString(),
+      documents,
+    };
   }
   /**
    * What the last refreshes did, so "an unchanged document is not read twice" is a measured

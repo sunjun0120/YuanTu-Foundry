@@ -1,55 +1,44 @@
-import {
-  DeferredApprovalError,
-  RunFailure,
-  failureCodeOf,
-  statusForFailure,
-  type FailureCode,
-} from '../protocol/failure.ts';
-import { validateUserInput } from '../protocol/images.ts';
+import type { FailureCode, RunFailure } from '../protocol/failure.ts';
 import type {
-  AgentEvent,
   Approver,
   FileChange,
-  Message,
-  ModelResponse,
   Questioner,
-  ReasoningEffort,
   RunResult,
   RunStatus,
-  ToolSpec,
   Usage,
   UserInput,
 } from '../protocol/index.ts';
-import { describeViolations } from '../protocol/invariants.ts';
+import { validateUserInput } from '../protocol/images.ts';
 import { resolveRunLimits } from '../protocol/settings.ts';
 import { emptyStatistics } from '../protocol/statistics.ts';
-import type { StepEndReason } from '../protocol/steps.ts';
 import { loadInstructions } from '../tools/instructions.ts';
-import { discoverSkills, expandSkill } from '../resources/skills.ts';
-import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
+import { discoverSkills } from '../resources/skills.ts';
 import { goalTools } from '../tools/goal.ts';
 import type { AgentOptions, AgentRunInput } from './agent-options.ts';
 import { admitVisibleBackground } from './background-deliveries.ts';
-import { cacheKeyFor } from './cache-key.ts';
 import { TokenCalibration, calibrationRoute } from './calibration.ts';
-import type { PreparedContext } from './context.ts';
-import { prepareContext } from './context.ts';
-import { envelopeEvent } from './envelope.ts';
-import { redactSecrets } from '../platform/redact.ts';
+import { prepareContext, type PreparedContext } from './context.ts';
 import { createPlanningTools, type PlanningTools } from './plan-tools.ts';
 import { assemblePrompt, type PromptTrace } from './prompt-sections.ts';
+import { abandonRun, submitPrompt } from './run-admission.ts';
+import { RunAim } from './run-aim.ts';
 import { createRunCompletion } from './run-completion.ts';
 import { buildContextInput } from './run-context.ts';
 import { createRunDelegation, registerRunReport } from './run-delegation.ts';
 import { createRunEmit, type RunEmission } from './run-emit.ts';
-import { finalizeRun } from './run-finalization.ts';
+import { RunEnvelopes } from './run-envelope.ts';
+import { checkRunEnd, finalizeRun } from './run-finalization.ts';
+import { RunInbox } from './run-inbox.ts';
+import { injectContext, userMessage } from './run-input.ts';
 import { createRunInteraction } from './run-interaction.ts';
-import { createRunPromptSections } from './run-prompt.ts';
+import { StepBlockedError, settleThrownRun, stepEndReason } from './run-outcome.ts';
+import { approvedPlanNotice, createRunPromptSections, planPhaseNotice } from './run-prompt.ts';
 import { createRunAnnouncements } from './run-snapshots.ts';
+import { RunSteps } from './run-steps.ts';
 import { RunSurface } from './run-surface.ts';
 import { settleAnswerRound } from './run-verdict.ts';
 import { createProviderMeasurement } from './run-provider.ts';
-import { RunQueue, queuedInput, type InputMode, type QueuedInput } from './run-queue.ts';
+import { RunQueue, type InputMode, type QueuedInput } from './run-queue.ts';
 import { requestRunRound } from './run-request.ts';
 import { ResidentTurnSettlements } from './run-residency.ts';
 import { loadRunTask, registerTaskStepTool, startRunTask } from './run-task.ts';
@@ -64,45 +53,6 @@ import {
 } from './subagents.ts';
 import { captureTaskBaselines, type TaskBaselines } from './task-acceptance.ts';
 export type { AgentOptions } from './agent-options.ts';
-/**
- * A round a pre-step hook refused.
- *
- * Its own class because the refusal is not a failure of anything: a policy said no to this round, and a reader
- * asking why the step ended should see that instead of the anonymous `failed` an unclassified error produces.
- * The message and the run's status are deliberately unchanged — the task did not happen, so the run still
- * fails — which is why this names the *step's* end and not the run's outcome.
- */
-class StepBlockedError extends Error {
-  constructor(blocked: string) {
-    super(`Run refused by extension pre-step hook: ${blocked}`);
-    this.name = 'StepBlockedError';
-  }
-}
-/**
- * Whether a failure ended a run because it ran out of room or because something broke.
- *
- * The distinction is what tells a user to start a smaller task instead of looking for a bug, so it is
- * answered from one place: the code the failure carries. Every failure this runtime raises itself now carries
- * one (`LimitError`, `ContextLimitError`, the provider adapters), `failureCodeOf` names the two that do not —
- * a `TimeoutError` abort and an endpoint that only describes an overflow in prose — and anything else is a
- * defect without a name, which is exactly what `failed` means.
- */
-function failureStatus(value: unknown): 'limited' | 'failed' | undefined {
-  return statusForFailure(failureCodeOf(value));
-}
-/**
- * Why the step that was open when the run threw ended.
- *
- * Read from the same places the run's own status is built from a few lines further down, so the two never
- * disagree: a step that ended because a limit was reached is not a failure, and one that ended because a person
- * was asked to look at something is neither. The abort comes first because that is what the signal says,
- * whatever error arrived carrying it.
- */
-function stepEndReason(cause: unknown, aborted: boolean): StepEndReason {
-  if (aborted) return 'cancelled';
-  if (cause instanceof StepBlockedError || cause instanceof DeferredApprovalError) return 'blocked';
-  return failureStatus(cause) === 'limited' ? 'limited' : 'failed';
-}
 
 /**
  * Serial number for the ids of messages handed to sub-agents.
@@ -123,14 +73,8 @@ const COMPACTION_RETRY_ROUNDS = 3;
 
 export class Agent {
   private options: AgentOptions;
-  private runs = new Map<
-    string,
-    {
-      runId: string;
-      queue: RunQueue;
-      emit: (type: AgentEvent['type'], data: Record<string, unknown>) => void;
-    }
-  >();
+  /** The live queue of each running session, and the log behind it once nothing runs (see `run-inbox.ts`). */
+  private inbox: RunInbox;
   private subagents?: ResolvedSubAgentOptions;
   /**
    * What the most recent assembly of a system prompt was made of.
@@ -142,6 +86,7 @@ export class Agent {
   private lastPrompt: readonly PromptTrace[] = [];
   constructor(options: AgentOptions) {
     this.options = options;
+    this.inbox = new RunInbox(options.store);
     // Resolved once, at construction, so an invalid limit fails before a run opens a row.
     this.subagents = resolveSubAgentOptions(options.subagents);
     /**
@@ -154,72 +99,23 @@ export class Agent {
         subAgentJobProducer({ store: options.store, residency: options.subagentResidency }),
       );
   }
-  /**
-   * Queue an input for a running session.
-   *
-   * `id` is passed through by the one caller that already named the message — a parent correcting a child — so
-   * that the child's receipt and the parent's record are about one id (see `RunQueue.add`).
-   *
-   * The acceptance is durable *before* the input can be folded into a turn, on the same argument the sub-agent
-   * inbox follows: the queue is memory, the fact that somebody queued this is not. `input.queued` is written
-   * first, so a process that dies holding it leaves "queued and never delivered" readable rather than leaving
-   * a conversation that merely ended (see `packages/storage/events.ts`).
-   */
+  /** Queue an input for a running session (see `RunInbox.enqueue`). */
   enqueue(sessionId: string, input: UserInput, mode: InputMode, id?: string): QueuedInput {
     if (this.options.supportsVision === false && input.images?.length)
       throw new Error('当前连接未启用图片输入，请选择支持视觉的模型。');
-    const active = this.runs.get(sessionId);
-    if (!active) throw new Error('Session is not running');
-    const pending = active.queue.add(validateUserInput(input), mode, id);
-    this.options.store.recordEvent(sessionId, 'input.queued', {
-      item: {
-        id: pending.id,
-        mode: pending.mode,
-        prompt: pending.prompt,
-        createdAt: pending.createdAt,
-        imageCount: pending.images?.length ?? 0,
-      },
-    });
-    const item = queuedInput(pending);
-    active.emit('input.queued', { item, queue: active.queue.items });
-    return item;
+    return this.inbox.enqueue(sessionId, input, mode, id);
   }
   getQueue(sessionId: string): QueuedInput[] {
-    return this.runs.get(sessionId)?.queue.items ?? [];
+    return this.inbox.queue(sessionId);
   }
-  /**
-   * The session's inbox as a client reads it, live or after the fact.
-   *
-   * While a run holds the queue, the queue is the answer: it is what the person can still act on (steer it,
-   * clear it). Once nothing holds it, the *log* is the answer, and what it says is what nobody ever delivered —
-   * a follow-up the process died holding, or the tail of a run that ended with input still waiting. That second
-   * case is the one nothing used to be able to show, and it is the whole reason this seam exists.
-   */
+  /** The session's inbox as a client reads it, live or after the fact (see `RunInbox.inboxOf`). */
   inboxOf(sessionId: string): { running: boolean; items: QueuedInput[] } {
-    const active = this.runs.get(sessionId);
-    if (active) return { running: true, items: active.queue.items };
-    return { running: false, items: this.options.store.pendingInputs(sessionId) };
+    return this.inbox.inboxOf(sessionId);
   }
-  /**
-   * Drop the session's inbox and record that it will never be delivered.
-   *
-   * Deliberately allowed while no run holds the session: the entries this settles are mostly *leftovers* from
-   * a run that ended or died, and a clear that only worked during a run would leave them to reappear after every
-   * reload. The log is what is settled rather than the array, so the live queue and the leftovers are one list
-   * to this call — which is what a person pressing "clear" means.
-   */
+  /** Drop the session's inbox and record that it will never be delivered (see `RunInbox.clear`). */
   clearQueue(sessionId: string): void {
-    const active = this.runs.get(sessionId);
-    active?.queue.clear();
-    this.options.store.discardPendingInputs(sessionId, 'user');
-    active?.emit('queue.changed', { queue: [] });
+    this.inbox.clear(sessionId);
   }
-  /**
-   * Record that inputs will never be delivered, and why.
-   *
-   * One record for the batch rather than one per input, because the reason is the same fact about all of them
-   * and the reader asks it once: `ids` names exactly the inputs it covers, so the fold settles all of them.
-   */
   /**
    * What the system prompt of this agent's last assembled round was made of.
    *
@@ -229,10 +125,6 @@ export class Agent {
    */
   promptSections(): readonly PromptTrace[] {
     return this.lastPrompt;
-  }
-  private discard(ids: readonly string[], sessionId: string, reason: string): void {
-    if (!ids.length) return;
-    this.options.store.recordEvent(sessionId, 'input.discarded', { ids: [...ids], reason });
   }
   async run(input: AgentRunInput): Promise<RunResult> {
     const admittedAt = input.admittedAt ?? Date.now();
@@ -282,22 +174,14 @@ export class Agent {
     // reach the prompt, the tool schema and the calls that follow, not just the next run.
     const policy = this.options.permissionPolicy?.();
     const executionPolicy = this.options.executionPolicy?.();
-    // Prompt hooks run before the run row is opened, so a refused prompt leaves no run or attempt
-    // behind. A hook that itself fails stops the run: these hooks exist to police or shape the
-    // request, and silently continuing would drop that enforcement.
-    const submitted = await underExecutionPolicy(executionPolicy, () =>
-      tools.extensions.promptSubmit(
-        { sessionId: input.sessionId, prompt: input.prompt, readOnly },
-        signal,
-      ),
-    );
-    if (submitted.failures.length)
-      throw new Error(
-        `Prompt hook failed, so the run was not started: ${submitted.failures.join('; ')}`,
-      );
-    if (submitted.block) throw new Error(`Prompt rejected by extension: ${submitted.block}`);
-    if (!submitted.prompt.trim()) throw new Error('Prompt hook produced an empty prompt');
-    input.prompt = submitted.prompt;
+    input.prompt = await submitPrompt({
+      tools,
+      executionPolicy,
+      sessionId: input.sessionId,
+      prompt: input.prompt,
+      readOnly,
+      signal,
+    });
     const { task, previousAttempt } = loadRunTask(store, input);
     /**
      * The project a session belongs to, and the directory it works in — two facts, deliberately separate.
@@ -406,51 +290,23 @@ export class Agent {
       const usage: Usage = { inputTokens: 0, outputTokens: 0 };
       const statistics = emptyStatistics();
       const committedSummaryUsage = emptyStatistics();
-      /**
-       * When the open step began, and when its first visible text arrived.
-       *
-       * Two facts about the *step* rather than about the request, because that is what the numbers beside them
-       * mean: a round that re-sent a refused request is still one step, so its wall time and its first-token
-       * latency are measured from where the step opened and its first token survives the retry. `null` outside a
-       * step — before the first one opens, and again once its timing has been closed — so no figure can be
-       * accrued twice or against a step that assembled no answer.
-       */
-      let stepStartedAt: number | null = null;
-      let stepFirstTokenAt: number | null = null;
       let text = '',
         status: RunStatus = 'failed',
         error: string | undefined,
         /** Why the run ended, when the reason has a name. Absent is a real answer: some failures are prose only. */
         code: FailureCode | undefined,
-        /**
-         * The failure itself, when the thing that threw was one this runtime named.
-         *
-         * Kept as the object rather than as two more locals because what it carries is optional in both fields:
-         * `code` above is read from it either way, and a failure that named neither a status nor a request id is
-         * the common case rather than an error.
-         */
+        /** The failure itself, when the thing that threw was one this runtime named (see `run-outcome.ts`). */
         endpointFailure: RunFailure | undefined,
         result!: RunResult;
       /** Every event type this run emitted, which is what the protocol invariant checks at the end. */
       const emittedTypes = new Set<string>();
-      /**
-       * The output tokens each child had reported as of its last `subagent.progress` frame.
-       *
-       * It exists so that frame can be told apart from the one the watchdog is aimed at: a child that keeps
-       * publishing a *running clock* without producing anything is exactly the child worth stopping, while a
-       * child whose output token count grew has produced something. Kept here rather than in the coordinator
-       * because the frames are folded here (see `reportProgress`), and it is per parent run — a resident child's
-       * next turn starts from the count its last turn left, which is what makes the first frame of that turn
-       * count as no growth rather than as growth.
-       */
-      const childOutputTokens = new Map<string, number>();
       /**
        * One emitter for the run: identity, timing, activity and the child-stall signal, in one place.
        *
        * The counters it shares with this loop are grouped here so the module that owns the emission rule can
        * read and write *this run's* numbers without owning them: `toolCalls` is opened and closed by the emitter's
        * tool frames while the loop settles whatever was still open when the run ended, `statistics` is folded by
-       * both, and the child token map is the stall watchdog's memory.
+       * both, and the child token map is the stall watchdog's memory (see `RunEmission.childOutputTokens`).
        */
       const emission: RunEmission = {
         statistics,
@@ -458,7 +314,7 @@ export class Agent {
         toolCalls: new Map<string, number>(),
         toolSpanStarted: undefined,
         toolActivityStartedAt: undefined,
-        childOutputTokens,
+        childOutputTokens: new Map<string, number>(),
         coordinator: undefined,
       };
       const emit = createRunEmit({
@@ -521,36 +377,8 @@ export class Agent {
             emit,
           })('summary')
         : measureProvider('summary');
-      /**
-       * Close the open step's spans, at the moment its answer was assembled.
-       *
-       * This is the `assistant/message` side of the boundary: `step.started` opened the step, this closes what
-       * the step spent, and `endStep` closes the boundary itself. Only a reported output count makes a step a
-       * decode sample, which is why a round that answered with no tokens contributes a throughput of nothing
-       * rather than a share of its wall time.
-       */
-      const commitStepTiming = (response: ModelResponse): void => {
-        if (stepStartedAt === null) return;
-        const now = performance.now();
-        statistics.modelMs += Math.max(0, now - stepStartedAt);
-        if (stepFirstTokenAt !== null && response.usage.outputTokens > 0) {
-          statistics.decodeMs += Math.max(0, now - stepFirstTokenAt);
-          const reasoningTokens = response.outputDiagnostics?.reasoningTokens;
-          const known =
-            reasoningTokens !== undefined &&
-            Number.isInteger(reasoningTokens) &&
-            reasoningTokens >= 0 &&
-            reasoningTokens <= response.usage.outputTokens &&
-            response.toolCalls.length === 0 &&
-            !response.outputDiagnostics?.toolArgumentChars;
-          statistics.decodeKnown = statistics.decodeKnown !== false && known;
-          if (known) statistics.decodeTokens += response.usage.outputTokens - reasoningTokens;
-        }
-        stepStartedAt = null;
-        stepFirstTokenAt = null;
-      };
       const queue = new RunQueue();
-      this.runs.set(input.sessionId, { runId, queue, emit });
+      this.inbox.open(input.sessionId, { runId, queue, emit });
       /**
        * The approval and question adapters, which own the *record* of each request and each answer rather than
        * the decision itself (see `run-interaction.ts`). `readOnly` is passed as a getter because the run can
@@ -589,15 +417,13 @@ export class Agent {
          * turn may change the goal's standing, exactly as a request they typed would.
          */
         humanTurn = true;
-        const expanded = expandSkill(workspace, item.prompt);
-        const message: Message = {
-          role: 'user',
+        const message = userMessage({
+          workspace,
+          prompt: item.prompt,
           createdAt: item.createdAt,
-          ...(this.options.modelInfo ? { modelInfo: this.options.modelInfo } : {}),
-          content: expanded.prompt,
-          ...(expanded.skill ? { displayContent: item.prompt } : {}),
-          ...(item.images?.length ? { images: item.images } : {}),
-        };
+          images: item.images,
+          modelInfo: this.options.modelInfo,
+        });
         // The message and the record that it came from the inbox are one write: a crash between them would
         // either lose a message the model was shown or leave an inbox entry for one already in the transcript.
         store.consumeQueuedInput(input.sessionId, item.id, message);
@@ -649,49 +475,12 @@ export class Agent {
           nextMessageId: () => ++messageCounter,
         });
       }
-      /**
-       * The step the log currently has open, and the one way it ever closes.
-       *
-       * Declared out here rather than inside the `try` below because the `catch` is where the interesting close
-       * happens: every exit from the round loop goes through `endStep`, so the log holds exactly one
-       * `step.finished` per `step.started` — including the exits that throw, which is the whole point. A step left
-       * open is how a reader tells a run that was cut off from one that ended, so a stray open step is a false
-       * report of a crash, and the number is tracked in a variable of its own because the classification of a
-       * throw needs the step it happened in after the loop's own variable is out of scope.
-       */
-      let openStep: number | null = null;
-      const endStep = (step: number, reason: StepEndReason): void => {
-        openStep = null;
-        // Whatever a step opened and never committed — a cancellation, a failure mid-stream — leaves no span
-        // behind. The boundary is still counted, because it happened, and the run that closed it is a turn.
-        stepStartedAt = null;
-        stepFirstTokenAt = null;
-        statistics.steps += 1;
-        statistics.turns = 1;
-        store.recordEvent(input.sessionId, 'step.finished', { runId, step, reason });
-        // A step boundary is a stopping point, so a long run checkpoints here too rather than only at its end:
-        // a crash hours into it then reopens from a recent fold instead of the whole log.
-        store.checkpointIfDue(input.sessionId);
-        // The panel's counts and wall times change exactly here, so the boundary is what a listener is told
-        // about; a client that only saw the live channel would otherwise learn the step count a round late.
-        emit('statistics.updated', { statistics: { ...statistics }, activity: null });
-      };
+      // The step the log has open, its timing, and the one way it closes (see `run-steps.ts`).
+      const steps = new RunSteps({ store, sessionId: input.sessionId, runId, statistics, emit });
       try {
         signal.throwIfAborted();
         const instructions = loadInstructions(workspace);
         const skills = discoverSkills(workspace);
-        /**
-         * What this run says about the plan phase, as a value rather than a literal inside the prompt.
-         *
-         * It changes once, when the user approves a plan mid-run with `exit_plan_mode`. A prompt that still said
-         * "you have read-only tools" after the approval would be the run telling the model something untrue
-         * about its own capabilities, and the model would then refuse work it is in fact able to do.
-         */
-        const initialPlanNotice = input.planPhase
-          ? this.options.question
-            ? '\n\nPlanning mode: you have read-only tools and every permission-requiring operation is refused, so investigate the codebase and then end the planning phase with one tool call: exit_plan_mode to ask the user to approve the plan now, or submit_plan to record it for a decision later. Prefer exit_plan_mode when the user is present. Give a concrete, ordered plan either way. Do not attempt modifications.'
-            : '\n\nPlanning mode: you have read-only tools and every permission-requiring operation is refused, so investigate the codebase and then call submit_plan exactly once with a concrete, ordered plan. Do not attempt modifications.'
-          : '';
         // The goal notice and the runtime snapshots the conversation carries (see `./run-snapshots.ts`).
         const announcements = createRunAnnouncements({
           store,
@@ -737,7 +526,7 @@ export class Agent {
           ...(this.options.executionPolicy
             ? { currentExecutionPolicy: this.options.executionPolicy }
             : {}),
-          planNotice: initialPlanNotice,
+          planNotice: planPhaseNotice(input.planPhase === true, Boolean(this.options.question)),
           composeSystem,
         });
         /**
@@ -774,15 +563,16 @@ export class Agent {
           humanTurn: () => humanTurn,
           catalogSpecs: () => surface.catalog,
         });
-        const expanded = expandSkill(workspace, input.prompt);
-        store.append(input.sessionId, {
-          role: 'user',
-          createdAt: new Date().toISOString(),
-          ...(this.options.modelInfo ? { modelInfo: this.options.modelInfo } : {}),
-          content: expanded.prompt,
-          ...(expanded.skill ? { displayContent: input.prompt } : {}),
-          ...(input.images?.length ? { images: input.images } : {}),
-        });
+        store.append(
+          input.sessionId,
+          userMessage({
+            workspace,
+            prompt: input.prompt,
+            createdAt: new Date().toISOString(),
+            images: input.images,
+            modelInfo: this.options.modelInfo,
+          }),
+        );
         emit('run.started', {});
         /**
          * The instruction files and skills this run loaded, durable as well as live.
@@ -796,31 +586,19 @@ export class Agent {
           skills,
         });
         emit('resources.loaded', { instructions: instructions.files, skills });
-        /**
-         * The model this run was configured to use, and the pair the next request is currently aiming at.
-         *
-         * `configuredModel` is `null` for an embedder that declared no `modelInfo`: the kernel then does not know
-         * the provider's model name, so it can only report — and re-aim at — a name a policy actually supplies.
-         * The previous pair starts as the configured one, so the transition *into* an override is a change.
-         */
-        const configuredModel = this.options.modelInfo?.model ?? null;
-        let previousModel: string | null = configuredModel;
-        let previousEffort: ReasoningEffort | undefined;
-        /**
-         * The identities the session's newest envelope already carries, so this run records rather than re-copies.
-         *
-         * Seeded from the log rather than from an empty hand: a reopened session whose prompt and catalogue have not
-         * changed since the last run would otherwise write a second copy of each — and the catalogue is the large
-         * half, so that is the copy worth avoiding. Within the run these are updated as rounds go, so a prompt that
-         * changes mid-run still arrives with its own text.
-         */
-        const recordedEnvelope = store.newestPayload(input.sessionId, 'context.envelope');
-        let lastEnvelopeSystemHash =
-          typeof recordedEnvelope?.systemHash === 'string'
-            ? recordedEnvelope.systemHash
-            : undefined;
-        let lastEnvelopeToolsHash =
-          typeof recordedEnvelope?.toolsHash === 'string' ? recordedEnvelope.toolsHash : undefined;
+        // The model each round aims at, and the transitions between them (see `run-aim.ts`).
+        const aim = new RunAim({
+          store,
+          sessionId: input.sessionId,
+          runId,
+          emit,
+          modelInfo: this.options.modelInfo,
+          capacityFor: this.options.capacityFor,
+          maxContextTokens,
+          maxOutputTokens,
+        });
+        // What each round asked the model to read (see `run-envelope.ts`).
+        const envelopes = new RunEnvelopes(store, input.sessionId, runId);
         /**
          * The round loop, which counts rounds without bounding them.
          *
@@ -868,26 +646,12 @@ export class Agent {
             progressGuard.reset();
             concludeQueries = false;
             readOnly = false;
-            surface.setPlanNotice(
-              '\n\nApproved plan (approved by the user during this run; carry it out in this session and report deviations):\n' +
-                JSON.stringify({
-                  title: approved.title,
-                  summary: approved.summary,
-                  steps: approved.steps.map((step) => step.description),
-                }) +
-                '\nRead-only mode is over for this run: your write and command tools are available again, and each of them still asks for its own approval.',
-            );
+            surface.setPlanNotice(approvedPlanNotice(approved));
             // The delegation guard was built with this run's original promise; a run that may now write may also
             // delegate work that writes, so the coordinator is told rather than left refusing a general child.
             coordinator?.promoteToWritable();
           }
-          // Opened before the round does anything at all, so a step that dies while its request is still being
-          // built is a step the log names. A run cancelled before its first step opens none, which is the honest
-          // answer: no work had begun.
-          store.recordEvent(input.sessionId, 'step.started', { runId, step: round });
-          openStep = round;
-          stepStartedAt = performance.now();
-          stepFirstTokenAt = null;
+          steps.begin(round);
           /**
            * The lease is renewed at every step boundary: this run is still the session's writer, and the number
            * is what lets a refusal elsewhere say when the owner last did anything. Nothing is decided by how old
@@ -910,107 +674,22 @@ export class Agent {
               // What the round would use if no hook re-aims it. A policy that means "keep the run's model" reads it
               // here rather than hardcoding a name, which is what makes "only downgrade the cheap rounds"
               // expressible without the policy owning the default.
-              //
-              // The aim is *per round*: it starts from the run's own values every time, never from what the round
-              // before it chose. A policy that wants a model for several rounds says so each round — which is the
-              // only version of this that stays readable, because the alternative is a state nobody declared.
-              model: configuredModel ?? '',
+              model: aim.configuredModel ?? '',
             },
             signal,
           );
           if (preStep.blocked) throw new StepBlockedError(preStep.blocked);
-          /**
-           * The model and effort this round's request will actually use.
-           *
-           * A re-aimed round changes how the run spends money, so the change is recorded — and *only* the change,
-           * because the transition is the interesting fact: a run on its configured model writes nothing, a run
-           * that switches writes one row where it switches, and a policy that switches back writes one more. The
-           * row carries the model itself, so a reader does not have to know the run's configuration to read it.
-           */
-          const aimed = preStep.model.trim() || null;
-          /**
-           * The override to send, which is *not* the same thing as the model the round uses.
-           *
-           * When nothing re-aims the round the request carries no model at all, and the adapter uses the model
-           * its own configuration names. That is not a detail: what the kernel holds is `modelInfo.model`, a
-           * label prepared for display, so sending it as the model would be a guess at somebody else's
-           * configuration. Only a policy that names a model puts one on the wire.
-           */
-          const requestedModel = aimed === configuredModel ? null : aimed;
-          // `none` is how a hook takes a level back, so by the time the request is built it means exactly what
-          // "no effort was named" means: no reasoning parameter at all.
-          const requestedEffort =
-            preStep.reasoningEffort === 'none' ? undefined : preStep.reasoningEffort;
-          const effectiveModel = requestedModel ?? configuredModel;
-          if (
-            effectiveModel !== null &&
-            (effectiveModel !== previousModel || requestedEffort !== previousEffort)
-          ) {
-            const shape = {
-              runId,
-              round,
-              model: effectiveModel,
-              ...(requestedEffort === undefined ? {} : { reasoningEffort: requestedEffort }),
-            };
-            store.recordEvent(input.sessionId, 'llm.request', shape);
-            emit('llm.request', shape);
-          }
-          previousModel = effectiveModel;
-          previousEffort = requestedEffort;
+          const roundAim = aim.aim(round, preStep);
+          const { cacheKeyOf } = roundAim;
           // The state the round is about to be asked about, before the round's own injections: a policy note is a
           // message to the model, while a snapshot is the world it is being asked about.
           announcements.snapshots(round);
-          if (preStep.inject.length) {
-            const content = preStep.inject.join('\n\n');
-            store.append(input.sessionId, { role: 'user', content });
-            emit('context.injected', {
+          if (preStep.inject.length)
+            injectContext(store, input.sessionId, emit, preStep.inject.join('\n\n'), {
               source: 'pre-step',
               round,
               notes: preStep.inject.length,
-              content,
             });
-          }
-          /**
-           * How this round's context is built, kept as a value so a provider-confirmed overflow can rebuild it
-           * once with a forced compression without repeating — or drifting from — the way it was built.
-           */
-          /**
-           * The cache key of a request, as a function of that request.
-           *
-           * The route is resolved here rather than once before the loop, because the model it names can change from
-           * round to round: an entry belongs to the model that served it, and two models sharing a key would read
-           * each other's cache. The prompt is an argument rather than a captured value because the prompt is not a
-           * constant of the run — approving a plan mid-run adds the tools that write and rebuilds it — and a key
-           * taken from the prompt the round began with names a prefix nobody was sent.
-           *
-           * Handed to `prepareContext` as well, so the summary request it makes carries the key of the prefix that
-           * request actually replays, rather than of the compressed round it is compressing for.
-           */
-          const cacheKeyOf = (systemText: string, toolSpecs: readonly ToolSpec[]): string =>
-            cacheKeyFor(
-              this.options.modelInfo === undefined
-                ? undefined
-                : {
-                    ...this.options.modelInfo,
-                    model: effectiveModel ?? this.options.modelInfo.model,
-                  },
-              systemText,
-              toolSpecs,
-            );
-          /** The model this round aims at, when one is named at all: `null` means the embedder declared none. */
-          const aimedModel = effectiveModel ?? configuredModel;
-          /**
-           * The capacity of the route this round will actually use.
-           *
-           * Resolved per round, after the pre-step waterfall has had its say about the model, because a re-aimed
-           * round is measured against the window of the model that will serve it. The run's own window remains
-           * the answer when the host has no opinion about this model — a resolver that shrugs is not a licence to
-           * invent a window.
-           */
-          const resolved =
-            effectiveModel === null ? undefined : this.options.capacityFor?.(effectiveModel);
-          const roundContextTokens = resolved?.contextWindow ?? maxContextTokens;
-          const roundOutputTokens = resolved?.maxOutputTokens ?? maxOutputTokens;
           /**
            * A `load_tools` call (or a direct call to a held-back tool) in the previous round widens this round's
            * catalog, and a goal created (or finished) in it adds (or drops) `update_goal`. The transcript part only
@@ -1026,8 +705,8 @@ export class Agent {
             provider: summaryProvider,
             limit: limits.maxContextChars,
             signal,
-            maxOutputTokens: roundOutputTokens,
-            maxContextTokens: roundContextTokens,
+            maxOutputTokens: roundAim.outputTokens,
+            maxContextTokens: roundAim.contextTokens,
             autoCompactTokens: this.options.autoCompactTokens,
             summaryTimeoutMs: limits.summaryTimeoutMs,
             onSummaryRetry: (details) => emit('context.summary.retry', details),
@@ -1043,7 +722,7 @@ export class Agent {
             // embedder declared none, which the record then does not claim to know. The provider is recorded beside
             // it for the same reason: a summary is a model answer, and the model name alone does not say which
             // adapter it came back over.
-            model: aimedModel,
+            model: roundAim.model,
             ...(this.options.modelInfo?.protocol === undefined
               ? {}
               : { protocol: this.options.modelInfo.protocol }),
@@ -1064,48 +743,21 @@ export class Agent {
             emit,
           });
           if (round < compactionRetryRound) contextInput.deferThresholdCompaction = true;
-          let context = await prepareContext(contextInput);
+          const context = await prepareContext(contextInput);
           if (context.compactionProblem !== undefined)
             compactionRetryRound = round + 1 + COMPACTION_RETRY_ROUNDS;
           signal.throwIfAborted();
-          /**
-           * What this round asked the model to read, recorded as the round is decided on it.
-           *
-           * The envelope is `context.system` rather than the compose step's own text, and that is not a detail:
-           * `prepareContext` is free to change what it is given — it is the call that decides whether to compress, and
-           * that decision can rewrite the prompt — so the prompt the request carries is only knowable after it. A
-           * record taken earlier would name a prompt nobody was ever sent.
-           *
-           * Once per round, plus once more when a provider-confirmed overflow re-prepares the context and re-sends
-           * under a different summary — that round really did send two envelopes, and the log says so rather than
-           * keeping only the first. Retries are deliberately not recorded again: they re-send the same request, so
-           * a second record would be a second answer to a question that has one.
-           */
-          const recordEnvelope = (prepared: PreparedContext): void => {
-            const written = envelopeEvent({
-              runId,
+          // Recorded as the round is decided on it, from the prompt `prepareContext` returned (see `run-envelope.ts`).
+          const recordEnvelope = (prepared: PreparedContext): void =>
+            envelopes.record({
               round,
               system: prepared.system,
               tools: requestSpecs,
-              model: effectiveModel ?? configuredModel,
-              maxOutputTokens: roundOutputTokens,
-              ...(roundContextTokens === undefined ? {} : { maxContextTokens: roundContextTokens }),
-              // The key belongs to the request, so the record keeps the one this request carries: it is part of what
-              // the request was, not a transport detail. Taken from the prompt being recorded rather than from the
-              // one the round began with — `prepareContext` may rewrite the prompt it is handed, and only the prompt
-              // it returned is the one the request will carry.
+              model: roundAim.model,
+              maxOutputTokens: roundAim.outputTokens,
+              maxContextTokens: roundAim.contextTokens,
               cacheKey: cacheKeyOf(prepared.system, requestSpecs),
-              ...(lastEnvelopeSystemHash === undefined
-                ? {}
-                : { previousSystemHash: lastEnvelopeSystemHash }),
-              ...(lastEnvelopeToolsHash === undefined
-                ? {}
-                : { previousToolsHash: lastEnvelopeToolsHash }),
             });
-            lastEnvelopeSystemHash = written.systemHash;
-            lastEnvelopeToolsHash = written.toolsHash;
-            store.recordEvent(input.sessionId, 'context.envelope', { ...written.envelope });
-          };
           recordEnvelope(context);
           /**
            * The resolved limit, not the raw option: `resolveRunLimits` is what decides whether an operator asked
@@ -1123,25 +775,19 @@ export class Agent {
             signal,
             context,
             contextInput,
-            roundContextTokens,
+            roundContextTokens: roundAim.contextTokens,
             measuredProvider,
             specs: requestSpecs,
-            requestedModel,
-            requestedEffort,
+            requestedModel: roundAim.requestedModel,
+            requestedEffort: roundAim.requestedEffort,
             cacheKeyOf,
             recordEnvelope,
             beforeRequest: (system) => admitVisibleBackground(store, input.sessionId, system),
-            onVisibleText: (delta) => {
-              if (stepFirstTokenAt === null && delta.length && stepStartedAt !== null) {
-                stepFirstTokenAt = performance.now();
-                statistics.firstTokenMs += Math.max(0, stepFirstTokenAt - stepStartedAt);
-                statistics.firstTokenCount += 1;
-              }
-            },
+            onVisibleText: (delta) => steps.visibleText(delta),
             onAnswerText: (answer) => {
               text = answer;
             },
-            commitStepTiming,
+            commitStepTiming: (answered) => steps.commitTiming(answered),
             statistics,
             usage,
             calibration,
@@ -1153,7 +799,7 @@ export class Agent {
           signal.throwIfAborted();
           if (response.toolCalls.length === 0) {
             if (queue.hasSteer || consume('follow-up')) {
-              endStep(round, 'queued-input');
+              steps.end(round, 'queued-input');
               continue;
             }
             status = 'completed';
@@ -1169,12 +815,12 @@ export class Agent {
             if (verdict.next === 'repair') {
               progressGuard.reset();
               concludeQueries = false;
-              endStep(round, 'queued-input');
+              steps.end(round, 'queued-input');
               continue;
             }
             status = verdict.status;
             if (verdict.error !== undefined) error = verdict.error;
-            endStep(round, 'final');
+            steps.end(round, 'final');
             break;
           }
           if (concludeQueries) {
@@ -1185,7 +831,7 @@ export class Agent {
             status = 'needs_review';
             error =
               'Repeated tool calls produced no new information; further tools were not executed.';
-            endStep(round, 'final');
+            steps.end(round, 'final');
             break;
           }
           // The tool calls are about to run. The message that names them is written first, so a crash while a
@@ -1199,34 +845,30 @@ export class Agent {
           const { injected, changedGoals, observations } = await batch.run(response.toolCalls);
           for (const goal of changedGoals) announcements.goal(goal);
           // Context a post-execute policy asked to inject becomes a persisted user message *after* the
-          // batch's tool results, never a field riding along inside a tool block: injected context is
-          // model-visible, and everything model-visible has to be in the transcript (and therefore in
-          // the summary, the compaction boundary and the session reader).
-          for (const entry of injected) {
-            const content = entry.notes.join('\n\n');
-            store.append(input.sessionId, { role: 'user', content });
-            emit('context.injected', {
+          // batch's tool results, never a field riding along inside a tool block (see `run-input.ts`).
+          for (const entry of injected)
+            injectContext(store, input.sessionId, emit, entry.notes.join('\n\n'), {
               source: 'post-execute',
               callId: entry.callId,
               notes: entry.notes.length,
-              content,
             });
-          }
           const progress =
             injected.length || changedGoals.length
               ? (progressGuard.reset(), 'continue')
               : progressGuard.observeRound(observations);
           if (progress !== 'continue') {
-            const content = toolProgressNotice(progress);
-            store.append(input.sessionId, { role: 'user', content });
-            emit('context.injected', { source: 'tool-progress', round, action: progress, content });
+            injectContext(store, input.sessionId, emit, toolProgressNotice(progress), {
+              source: 'tool-progress',
+              round,
+              action: progress,
+            });
             concludeQueries = progress === 'conclude';
           }
           // Submitting the plan ends the planning run: the next step is a human decision, and letting
           // the loop continue would only burn rounds on a phase that cannot change anything.
           if (planning?.submitted) {
             status = 'completed';
-            endStep(round, 'final');
+            steps.end(round, 'final');
             break;
           }
           // A submitted report ends the child run too: the parent is waiting for the answer, and further
@@ -1234,77 +876,24 @@ export class Agent {
           // same way — the caller asked for one object, and the child submitted it.
           if (reportHolder.report || reportHolder.data !== undefined) {
             status = 'completed';
-            endStep(round, 'final');
+            steps.end(round, 'final');
             break;
           }
           // The last of the ordinary ways out: the step asked for tools, they ran, and the run continues.
-          endStep(round, 'tool-calls');
+          steps.end(round, 'tool-calls');
         }
       } catch (cause) {
         // Closed before anything else in here can fail, so no path out of a run leaves its last step open.
-        if (openStep !== null) endStep(openStep, stepEndReason(cause, signal.aborted));
-        try {
-          const partial = store.persistStreamCheckpoint(input.sessionId, runId);
-          if (partial) text = partial;
-        } catch {
-          status = 'failed';
-          error = 'Failed to persist partial model output';
-        }
-        status =
-          error === 'Failed to persist partial model output'
-            ? 'failed'
-            : signal.aborted
-              ? 'cancelled'
-              : cause instanceof DeferredApprovalError
-                ? 'needs_review'
-                : (failureStatus(cause) ?? 'failed');
-        error =
-          error === 'Failed to persist partial model output'
-            ? error
-            : cause instanceof Error && cause.name === 'ToolCleanupError'
-              ? cause.message
-              : signal.aborted
-                ? 'Run cancelled'
-                : cause instanceof Error
-                  ? cause.message
-                  : String(cause);
-        /**
-         * What kind of failure it was, in the form a client can branch on.
-         *
-         * A `tool-cleanup` failure is named here because that error class carries no code: the run failed
-         * *after* its work, and a reader should be able to see that without matching on a message. A cancelled
-         * run has no code at all — its status already says `cancelled`, and inventing a code for it would make
-         * a deliberate stop look like a failure with a name.
-         */
-        code =
-          error === 'Failed to persist partial model output'
-            ? undefined
-            : cause instanceof Error && cause.name === 'ToolCleanupError'
-              ? 'tool-cleanup'
-              : signal.aborted
-                ? undefined
-                : failureCodeOf(cause);
-        /**
-         * What the endpoint said about the request, when it was the endpoint that failed.
-         *
-         * Not codes: nothing branches on them and the run's own status already says `failed`. They are the two
-         * facts a person needs to take the failure back to whoever runs the endpoint — the status, and the id
-         * the endpoint filed the call under — and they are read from the same thrown value the code is, so a
-         * failure that never carried them reports none rather than an empty one.
-         */
-        endpointFailure = cause instanceof RunFailure ? cause : undefined;
-        try {
-          store.resolvePending(
-            input.sessionId,
-            cause instanceof DeferredApprovalError
-              ? 'Approval deferred; the requested operation was not executed. Review it before retrying.'
-              : `Run ${status}. A tool may already have had effects; inspect state before retrying.`,
-          );
-        } catch {
-          status = 'failed';
-          error = 'Failed to resolve pending tool calls; execution outcome is unknown';
-        }
-        error = redactSecrets(error);
+        if (steps.open !== null) steps.end(steps.open, stepEndReason(cause, signal.aborted));
+        const outcome = settleThrownRun({
+          store,
+          sessionId: input.sessionId,
+          runId,
+          cause,
+          aborted: signal.aborted,
+        });
+        if (outcome.text !== undefined) text = outcome.text;
+        ({ status, error, code, endpointFailure } = outcome);
       } finally {
         result = await finalizeRun({
           agent: this.options,
@@ -1333,76 +922,21 @@ export class Agent {
           queue,
           emit,
           releaseRun: (ids, reason) => {
-            this.discard(ids, input.sessionId, reason);
-            if (this.runs.get(input.sessionId)?.runId === runId) this.runs.delete(input.sessionId);
+            this.inbox.discard(ids, input.sessionId, reason);
+            this.inbox.release(input.sessionId, runId);
           },
-          checkRunEnd: (result, types) => this.checkRunEnd(result, input.sessionId, runId, types),
+          checkRunEnd: (result, types) =>
+            checkRunEnd(this.options, result, input.sessionId, runId, types),
         });
       }
       return result;
     } catch (cause) {
-      this.abandonAdmission(input.sessionId, runId, cause);
+      // Close what is still this run's: the live queue entry if it is ours, and the run row (see `abandonRun`).
+      this.inbox.release(input.sessionId, runId);
+      abandonRun(store, input.sessionId, runId, cause);
       throw cause;
     } finally {
       for (const dispose of runScoped.splice(0).reverse()) dispose();
     }
-  }
-  /**
-   * Close a run that threw before its own finalization could.
-   *
-   * Only what is still this run's is touched: the live queue entry if it is ours, and the run row only while the
-   * session still names it as active — `startRunTask` and `finalizeRun` may already have closed it, and a second
-   * `run.finished` would be a second answer to a question that has one.
-   */
-  private abandonAdmission(sessionId: string, runId: string, cause: unknown): void {
-    if (this.runs.get(sessionId)?.runId === runId) this.runs.delete(sessionId);
-    try {
-      if (this.options.store.get(sessionId).activeRun !== runId) return;
-      this.options.store.finishRun({
-        runId,
-        sessionId,
-        status: 'failed',
-        text: '',
-        usage: { inputTokens: 0, outputTokens: 0 },
-        error: redactSecrets(cause instanceof Error ? cause.message : String(cause)),
-      });
-    } catch {
-      // The original failure is the one worth reporting. The run is over even though its row could not say so,
-      // and this process is the one that can vouch for that (see `SessionStore.forsakeRun`).
-      this.options.store.forsakeRun(runId);
-    }
-  }
-  /**
-   * Runs the `run-end` invariants and turns a violation into a failed run.
-   *
-   * A violation is logged as well as recorded: the registry is process-wide and a host may outlive many
-   * runs, so the log is where an operator sees that a promise broke even if nobody looks at this run's
-   * result.
-   */
-  private async checkRunEnd(
-    result: RunResult,
-    sessionId: string,
-    runId: string,
-    emittedTypes: string[],
-  ): Promise<void> {
-    const invariants = this.options.invariants;
-    if (!invariants) return;
-    const violations = await invariants.run('run-end', { sessionId, runId, emittedTypes });
-    if (!violations.length) return;
-    const detail = describeViolations(violations);
-    try {
-      this.options.onEvent?.({
-        type: 'invariant.violated',
-        sessionId,
-        runId,
-        // Read from the log like any other frame's cursor: a diagnostic is still ordered against the record.
-        seq: this.options.store.lastSeq(sessionId),
-        data: { violations },
-      });
-    } catch {
-      /* diagnostics must not change the outcome of a run that already ended */
-    }
-    result.status = 'failed';
-    result.error = `Runtime invariant violated: ${detail}`;
   }
 }

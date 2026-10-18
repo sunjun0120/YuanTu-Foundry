@@ -91,6 +91,8 @@ export class SessionController {
     error: null,
   };
   private listeners = new Set<(state: SessionSnapshot) => void>();
+  private changeListeners = new Set<() => void>();
+  private stateRevision = 0;
   private deltaListeners = new Set<(delta: MessageDelta) => void>();
   private subagentDeltaListeners = new Set<(delta: SubAgentDelta) => void>();
   private statisticsDeltaListeners = new Set<(delta: StatisticsDelta) => void>();
@@ -120,11 +122,49 @@ export class SessionController {
   get snapshot(): SessionSnapshot {
     return structuredClone(this.state);
   }
+  /*
+   * Scalar reads that do not clone. `snapshot` deep-copies every message (base64 images included), so a caller
+   * that only needs to know which session is open, or whether it is busy, must not pay for the whole state —
+   * the carrier asks these on every Host event, streamed tokens included.
+   */
+  /**
+   * Moves whenever the state may have changed: on every publish, every delta, and every Host event this
+   * controller looks at. Equal revisions mean an earlier `snapshot` is still the current one, so a consumer that
+   * keeps one (the carrier) need not clone the whole state again to say the same thing.
+   */
+  get revision(): number {
+    return this.stateRevision;
+  }
+  get sessionId(): string | null {
+    return this.state.sessionId;
+  }
+  get running(): boolean {
+    return this.state.running;
+  }
+  get loading(): boolean {
+    return this.state.loading;
+  }
+  /** A copy of the one live sub-agent card that matches, without cloning the rest of the state. */
+  findSubAgent(match: (entry: Readonly<SubAgentView>) => boolean): SubAgentView | undefined {
+    const found = this.state.subagents.find(match);
+    return found ? structuredClone(found) : undefined;
+  }
   subscribe(listener: (state: SessionSnapshot) => void): () => void {
     this.assertActive();
     this.listeners.add(listener);
     listener(this.snapshot);
     return () => this.listeners.delete(listener);
+  }
+  /**
+   * Told that the state changed, without being handed a copy of it.
+   *
+   * For a consumer that builds its own view from `snapshot` (the carrier): `subscribe` clones the whole state per
+   * listener per change, and such a consumer would throw that copy away and clone again.
+   */
+  subscribeChanges(listener: () => void): () => void {
+    this.assertActive();
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
   }
   /**
    * Streamed assistant text, delivered as small slices instead of as a republished snapshot.
@@ -140,6 +180,7 @@ export class SessionController {
     return () => this.deltaListeners.delete(listener);
   }
   private emitDelta(delta: MessageDelta): void {
+    this.stateRevision++;
     for (const listener of this.deltaListeners) {
       try {
         listener(delta);
@@ -159,6 +200,7 @@ export class SessionController {
     return () => this.subagentDeltaListeners.delete(listener);
   }
   private emitSubAgentDelta(delta: SubAgentDelta): void {
+    this.stateRevision++;
     for (const listener of this.subagentDeltaListeners) {
       try {
         listener(delta);
@@ -177,6 +219,7 @@ export class SessionController {
     return () => this.statisticsDeltaListeners.delete(listener);
   }
   private emitStatisticsDelta(delta: StatisticsDelta): void {
+    this.stateRevision++;
     for (const listener of this.statisticsDeltaListeners) {
       try {
         listener(delta);
@@ -189,10 +232,18 @@ export class SessionController {
     return this.state.subagents;
   }
   private publish(): void {
+    this.stateRevision++;
     if (this.disposed) return;
     for (const listener of this.listeners) {
       try {
         listener(this.snapshot);
+      } catch {
+        /* UI errors must not stall run cleanup. */
+      }
+    }
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
       } catch {
         /* UI errors must not stall run cleanup. */
       }
@@ -392,6 +443,7 @@ export class SessionController {
       transcript = reread;
     }
     this.runId = liveRun;
+    this.stateRevision++;
     this.state = {
       queue: structuredClone(snapshot.items),
       compacting: false,
@@ -886,11 +938,13 @@ export class SessionController {
     this.unsubscribe();
     this.unsubscribeStatus();
     this.listeners.clear();
+    this.changeListeners.clear();
     this.deltaListeners.clear();
     this.subagentDeltaListeners.clear();
     this.statisticsDeltaListeners.clear();
   }
   private clearLive(): void {
+    this.stateRevision++;
     this.state.statisticsActivity = null;
     this.state.queue = [];
     this.state.compacting = false;
@@ -936,6 +990,7 @@ export class SessionController {
   }
   private onEvent(event: AgentEvent): void {
     if (this.disposed || event.sessionId !== this.state.sessionId) return;
+    this.stateRevision++;
     if (event.type === 'run.started') {
       this.olderLoad = null;
       if (!this.state.running) {

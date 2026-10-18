@@ -5,7 +5,7 @@ import { availableParallelism, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverTests, partitionTests } from './test-execution-policy.ts';
-import { runSchedule } from './test-scheduler.mjs';
+import { DEFAULT_FILE_TIMEOUT_MS, runSchedule } from './test-scheduler.mjs';
 import { mergeReports, sumCounts, writeMergedReport } from './test-report-merge.mjs';
 import { sourceFingerprint } from './test-source-fingerprint.mjs';
 import {
@@ -125,6 +125,21 @@ const durations =
   order === 'duration' && schedule !== 'serial' && !explicit && !filtered
     ? await readTestDurations(historyFile)
     : {};
+/**
+ * How long one file may run before the scheduler ends its process tree.
+ *
+ * A hang has no natural end: the worker keeps its stdio open, the scheduler waits on `close`, and the run never
+ * produces an exit code. The bound is per file because the hangs seen here came after the last case was reported.
+ * A measured file gets ten times its own cost (never below two minutes, since that cost was measured under the
+ * same eight-way load); an unmeasured file gets the fixed default. `FOUNDRY_TEST_FILE_TIMEOUT_MS` pins it for a
+ * harness test or a one-off investigation.
+ */
+const fixedFileTimeoutMs = Number(process.env.FOUNDRY_TEST_FILE_TIMEOUT_MS ?? '');
+const fileTimeout = (file) => {
+  if (Number.isSafeInteger(fixedFileTimeoutMs) && fixedFileTimeoutMs > 0) return fixedFileTimeoutMs;
+  const measured = durations[file];
+  return measured ? Math.ceil(Math.max(measured * 10, 120_000)) : DEFAULT_FILE_TIMEOUT_MS;
+};
 const parallelFiles =
   order === 'duration' && !explicit && !filtered
     ? orderTestsByDuration(partition.parallel, durations)
@@ -169,6 +184,7 @@ if (plan) {
       signal: controller.signal,
       verbose,
       continueOnFailure,
+      fileTimeout,
     });
     const sourceAfter = timings ? await sourceFingerprint(root) : undefined;
     const sourceChanged = source?.digest !== sourceAfter?.digest;
@@ -206,6 +222,14 @@ if (plan) {
       durationHistory: historyFile,
       measuredFiles: discovered.filter((file) => Object.hasOwn(durations, file)).length,
       parallelConcurrency: concurrency,
+      fileTimeout: {
+        overrideMs:
+          Number.isSafeInteger(fixedFileTimeoutMs) && fixedFileTimeoutMs > 0
+            ? fixedFileTimeoutMs
+            : null,
+        defaultMs: DEFAULT_FILE_TIMEOUT_MS,
+        rule: "ten times the file's measured cost, minimum 120s; the default when unmeasured",
+      },
       filtered,
       explicit,
       discovered: discovered.length,

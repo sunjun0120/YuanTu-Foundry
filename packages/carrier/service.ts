@@ -1,5 +1,4 @@
 import { AgentHostClient, type HostClientOptions } from '../client/host-client.ts';
-import { readDisplayHistory } from '../client/display-history.ts';
 import {
   SessionController,
   type MessageDelta,
@@ -8,14 +7,18 @@ import {
 } from '../client/session-controller.ts';
 import { redactSecrets } from '../platform/redact.ts';
 import { readConfig } from '../providers/config.ts';
+import { credentialsPath } from '../providers/credentials.ts';
+import { statSync } from 'node:fs';
 import type { SessionInfo } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
 import { initialTaskDraft, normalizeTaskDraft } from '../protocol/task-spec.ts';
 import type { PermissionPolicySource } from '../core/permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
-import { parseCarrierCommand, type CarrierSnapshot, type SubAgentTranscript } from './contract.ts';
+import { parseCarrierCommand, type CarrierCommand, type CarrierSnapshot } from './contract.ts';
 import { CarrierError, carrierIssue } from './errors.ts';
+import { BackgroundPanel } from './background-panel.ts';
+import { SubAgentTranscriptViewer } from './subagent-transcript.ts';
 /**
  * How many times the carrier restarts a Host that died on its own, and the pause between tries.
  *
@@ -67,12 +70,120 @@ function describeSelection(selection: { mode: string; files?: string; network?: 
     ...(selection.network === undefined ? [] : [`network=${selection.network}`]),
   ].join(' ');
 }
-/** Keep the newest process records and the final reply within a bounded child history window. */
-const SUBAGENT_TRANSCRIPT_MESSAGES = 200;
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
 /** How many more sessions the sidebar shows each time it is asked for more. */
 const SESSION_PAGE = 100;
 /** The largest page the Host answers in one `session.list` call (`MAX_SESSION_PAGE` in the store). */
 const SESSION_REQUEST_MAX = 500;
+/** How many audit entries one request asks for, and how many the carrier keeps. */
+const AUDIT_PAGE = 500;
+export const AUDIT_WINDOW = 5_000;
+
+/**
+ * Which panels one command's refresh reads.
+ *
+ * Every command used to refresh everything — the session list, the file changes, the audit record, the task history
+ * and the background panel — which is six to eight requests for a command that usually moved one panel or none. The
+ * panels that change *during* a run are already event-driven (`approval.decided`, `question.answered`,
+ * `run.finished`, `task.step` schedule their own refreshes), so a mid-run decision does not need the full read to be
+ * correct; the transcript and the queue arrive on the controller's own channels.
+ */
+export interface RefreshScope {
+  sessions: boolean;
+  changes: boolean;
+  audit: boolean;
+  tasks: boolean;
+  background: boolean;
+}
+const FULL_REFRESH: RefreshScope = {
+  sessions: true,
+  changes: true,
+  audit: true,
+  tasks: true,
+  background: true,
+};
+/** A decision or a queue edit during a run: only the audit record can move for this carrier to read. */
+const DECISION_REFRESH: RefreshScope = {
+  sessions: false,
+  changes: false,
+  audit: true,
+  tasks: false,
+  background: false,
+};
+
+/** A rename moves the sidebar row and writes one audit line; no other panel reads the title. */
+const RENAME_REFRESH: RefreshScope = {
+  sessions: true,
+  changes: false,
+  audit: true,
+  tasks: false,
+  background: false,
+};
+/** A task edit that starts nothing: the task panel and the audit line it wrote. */
+const TASK_EDIT_REFRESH: RefreshScope = {
+  sessions: false,
+  changes: false,
+  audit: true,
+  tasks: true,
+  background: false,
+};
+/** Commands that only read, or only move what the controller or the transcript already publishes. */
+const NO_REFRESH: RefreshScope = {
+  sessions: false,
+  changes: false,
+  audit: false,
+  tasks: false,
+  background: false,
+};
+
+/** The refresh a command's own effect requires. Unknown commands get the full read rather than a guess. */
+export function refreshScopeFor(type: CarrierCommand['type']): RefreshScope {
+  switch (type) {
+    case 'approve':
+    case 'questionAnswer':
+    case 'enqueue':
+    case 'clearQueue':
+    case 'cancel':
+      return DECISION_REFRESH;
+    case 'rename':
+      return RENAME_REFRESH;
+    case 'taskSave':
+    case 'taskConfirm':
+    case 'taskHistory':
+      return TASK_EDIT_REFRESH;
+    case 'loadOlder':
+    case 'refreshResources':
+    case 'export':
+    case 'subagentTranscript':
+    case 'closeSubagentTranscript':
+    case 'planRefresh':
+      return NO_REFRESH;
+    default:
+      return FULL_REFRESH;
+  }
+}
+
+/**
+ * The audit window after one page: appended, capped to the newest entries.
+ *
+ * The cap matters to the cursor as much as to the panel: what is kept is the newest entries, and the seq carried
+ * forward is the last kept one's, so the next read continues from the newest line however much older record the
+ * window dropped.
+ */
+export function mergeAuditWindow(
+  previous: CarrierSnapshot['audit'],
+  page: CarrierSnapshot['audit'],
+  limit = AUDIT_WINDOW,
+): CarrierSnapshot['audit'] {
+  const merged = [...previous, ...page];
+  return merged.length > limit ? merged.slice(merged.length - limit) : merged;
+}
 
 /**
  * The client state machine every carrier shares: sessions, run state, transcript projection, pending
@@ -94,6 +205,8 @@ const SESSION_REQUEST_MAX = 500;
 export class CarrierService {
   private client: AgentHostClient;
   private controller: SessionController;
+  private readonly backgroundPanel: BackgroundPanel;
+  private readonly transcript: SubAgentTranscriptViewer;
   /**
    * Whether this carrier owns the Host process.
    *
@@ -127,21 +240,11 @@ export class CarrierService {
   };
   private changes: CarrierSnapshot['changes'] = [];
   private audit: CarrierSnapshot['audit'] = [];
-  private background: CarrierSnapshot['background'] = [];
-  private backgroundState: CarrierSnapshot['backgroundState'] = null;
+  /** The session and seq the held audit window ends at; see `refreshAudit`. Empty means "read from the start". */
+  private auditCursor: { sessionId: string; seq: number } = { sessionId: '', seq: 0 };
   private tasks: CarrierSnapshot['tasks'] = [];
   private taskAttempts: CarrierSnapshot['taskAttempts'] = {};
   private taskSteps: CarrierSnapshot['taskSteps'] = {};
-  private backgroundCursors = new Map<string, number>();
-  /** The sub-agent transcript the user opened, if any. Read-only, and scoped to the open session. */
-  private subagentTranscript: SubAgentTranscript | null = null;
-  private subagentTranscriptOffset = 0;
-  private subagentTranscriptTimer: ReturnType<typeof setInterval> | undefined;
-  private subagentTranscriptRefreshing = false;
-  private subagentTranscriptVersion = 0;
-  private backgroundLogs = new Map<string, string>();
-  private backgroundTimer: ReturnType<typeof setInterval> | undefined;
-  private backgroundRefreshing = false;
   private restoring = false;
   private managing = false;
   private sessionQuery = '';
@@ -186,8 +289,23 @@ export class CarrierService {
     this.workspace = 'workspace' in options ? options.workspace : '';
     this.client = new AgentHostClient({ ...options, deferAutomatic: true });
     this.controller = new SessionController(this.client);
+    this.backgroundPanel = new BackgroundPanel({
+      client: this.client,
+      controller: this.controller,
+      ready: () => this.ready && this.client.status === 'ready',
+      publish: () => this.publish(),
+    });
+    this.transcript = new SubAgentTranscriptViewer({
+      client: this.client,
+      controller: this.controller,
+      publish: () => this.publish(),
+    });
     this.unsubscribers = [
-      this.controller.subscribe(() => this.publish()),
+      this.controller.subscribeChanges(() => {
+        // A run that starts may start commands; the poll that follows it is what shows them.
+        if (this.controller.running) this.backgroundPanel.wake();
+        this.publish();
+      }),
       // Streamed text bypasses the snapshot entirely: republishing the whole CarrierSnapshot per
       // token structured-cloned the full session (base64 images included) across IPC.
       this.controller.subscribeDelta((delta) => {
@@ -200,6 +318,7 @@ export class CarrierService {
         }
       }),
       this.controller.subscribeSubAgentDelta((delta) => {
+        if (delta.text) this.transcript.quicken(delta.id);
         for (const listener of this.subagentDeltaListeners) {
           try {
             listener(delta);
@@ -224,7 +343,8 @@ export class CarrierService {
           void this.refreshSessionNames().catch(() => {});
           return;
         }
-        if (event.sessionId !== this.controller.snapshot.sessionId) return;
+        if (event.sessionId !== this.controller.sessionId) return;
+        this.backgroundPanel.wake();
         if (event.type === 'run.started') void this.refreshSessionNames().catch(() => {});
         // The process record grows during a run, and a decision is only worth reading once it has been made:
         // refreshing it on the events that carry decisions keeps the panel current without polling.
@@ -271,7 +391,7 @@ export class CarrierService {
     ];
   }
   async updatePermissionPolicy(policy: PermissionPolicySource): Promise<void> {
-    const sessionId = this.controller.snapshot.sessionId;
+    const sessionId = this.controller.sessionId;
     await this.client.request('permission.update', { policy, ...(sessionId ? { sessionId } : {}) });
     this.permissionPolicies.set(sessionId ?? '', structuredClone(policy));
   }
@@ -380,7 +500,7 @@ export class CarrierService {
     if (!this.client.supports('workspace-orphans-v1'))
       throw new CarrierError('workspaceMaintenanceUnsupported');
     if (this.busy) throw new CarrierError('runBusy');
-    const policySessionId = this.controller.snapshot.sessionId;
+    const policySessionId = this.controller.sessionId;
     if (this.unconfirmedPolicies.has(policySessionId ?? ''))
       throw new CarrierError('policyUnconfirmed');
     if (policySessionId && !this.client.supports('workspace-orphan-policy-context-v1'))
@@ -397,22 +517,50 @@ export class CarrierService {
     }
   }
   get busy(): boolean {
-    return (
-      this.restoring ||
-      this.managing ||
-      this.controller.snapshot.running ||
-      this.controller.snapshot.loading
-    );
+    return this.restoring || this.managing || this.controller.running || this.controller.loading;
   }
-  get snapshot(): CarrierSnapshot {
-    const env = { ...process.env, ...this.env };
-    let configured = false;
+  /** The last `configured` answer and what it was computed from; see `isConfigured`. */
+  private configuredMemo: { key: string; value: boolean } | null = null;
+  /**
+   * Whether a provider configuration resolves — asked on every snapshot, answered from the environment and the
+   * credentials file. Both rarely change, so the answer is kept until one of them does: the key is the
+   * environment itself plus the file's modification time, a stat rather than a read and parse.
+   */
+  private isConfigured(env: NodeJS.ProcessEnv): boolean {
+    let stamp = -1;
+    try {
+      stamp = statSync(credentialsPath(env), { throwIfNoEntry: false })?.mtimeMs ?? -1;
+    } catch {
+      /* An unreadable location reads as "no file", which is what `readConfig` will conclude too. */
+    }
+    const key = `${stamp}:${JSON.stringify(env)}`;
+    if (this.configuredMemo?.key === key) return this.configuredMemo.value;
+    let value = false;
     try {
       readConfig(env);
-      configured = true;
+      value = true;
     } catch {
       /* History remains available without a key. */
     }
+    this.configuredMemo = { key, value };
+    return value;
+  }
+  /** The frozen session view, reused while the controller reports no change since it was taken. */
+  private sessionView: { revision: number; value: CarrierSnapshot['session'] } | null = null;
+  private currentSessionView(): CarrierSnapshot['session'] {
+    const revision = this.controller.revision;
+    if (this.sessionView?.revision !== revision)
+      this.sessionView = { revision, value: deepFreeze(this.controller.snapshot) };
+    return this.sessionView.value;
+  }
+  /**
+   * What the interface should show. `session` is shared between snapshots taken while the session did not move
+   * (cloning every message, images included, for each background or task change was most of a publish's cost),
+   * so it is frozen: a consumer that needs to change it copies it first.
+   */
+  get snapshot(): CarrierSnapshot {
+    const env = { ...process.env, ...this.env };
+    const configured = this.isConfigured(env);
     return {
       sessionQuery: this.sessionQuery,
       currentSession: structuredClone(this.currentSession),
@@ -432,13 +580,13 @@ export class CarrierService {
       hostPid: (this.supervisesHost ? this.client.pid : undefined) ?? null,
       sessions: structuredClone(this.sessions),
       sessionsHasMore: this.sessionsHasMore,
-      background: this.background,
-      backgroundState: this.backgroundState,
+      background: this.backgroundPanel.jobs,
+      backgroundState: this.backgroundPanel.state,
       tasks: structuredClone(this.tasks),
       taskAttempts: structuredClone(this.taskAttempts),
       taskSteps: structuredClone(this.taskSteps),
-      session: this.controller.snapshot,
-      subagentTranscript: structuredClone(this.subagentTranscript),
+      session: this.currentSessionView(),
+      subagentTranscript: structuredClone(this.transcript.current),
       error: this.error instanceof CarrierError ? this.error.message : this.error,
       errorDetail: carrierIssue(this.error, (value) => this.safeError(new Error(value))),
     };
@@ -472,77 +620,8 @@ export class CarrierService {
       }
     }
   }
-  private backgroundRefreshVersion = 0;
-  private async refreshBackground(): Promise<void> {
-    if (this.backgroundRefreshing || !this.ready || this.client.status !== 'ready') return;
-    const sessionId = this.controller.snapshot.sessionId;
-    const version = ++this.backgroundRefreshVersion;
-    if (!sessionId) {
-      this.background = [];
-      this.backgroundState = null;
-      return;
-    }
-    this.backgroundRefreshing = true;
-    try {
-      const jobs = await this.client.request('background.list', { sessionId });
-      const backgroundState = await this.client.request('background.state', { sessionId });
-      const next: CarrierSnapshot['background'] = [];
-      for (const summary of jobs) {
-        const cursor = this.backgroundCursors.get(summary.id) ?? 0;
-        try {
-          const current = await this.client.request('background.poll', {
-            sessionId,
-            id: summary.id,
-            cursor,
-            waitMs: 0,
-          });
-          const previous = this.backgroundLogs.get(summary.id) ?? '';
-          const combined = current.truncated ? current.output : previous + current.output;
-          this.backgroundLogs.set(summary.id, combined.slice(-65536));
-          this.backgroundCursors.set(summary.id, current.nextCursor);
-          next.push({ ...current, output: this.backgroundLogs.get(summary.id)! });
-        } catch {
-          next.push({
-            ...summary,
-            output: this.backgroundLogs.get(summary.id) ?? summary.output,
-            nextCursor: this.backgroundCursors.get(summary.id) ?? summary.nextCursor,
-          });
-        }
-      }
-      if (
-        version !== this.backgroundRefreshVersion ||
-        sessionId !== this.controller.snapshot.sessionId
-      )
-        return;
-      this.background = next;
-      this.backgroundState = backgroundState;
-      const ids = new Set(next.map((job) => job.id));
-      for (const id of this.backgroundCursors.keys())
-        if (!ids.has(id)) this.backgroundCursors.delete(id);
-      this.publish();
-    } finally {
-      this.backgroundRefreshing = false;
-    }
-  }
-  private startBackgroundPolling(): void {
-    clearInterval(this.backgroundTimer);
-    // A poll that fails because the Host went away is not an unhandled rejection: the failure is already
-    // reported once, by the connection's own status channel (`subscribeStatus`), and a process that died
-    // mid-poll is exactly when this fires. Letting it escape here would take down a timer callback that no
-    // caller is waiting on — which is how the connected-carrier test caught it.
-    this.backgroundTimer = setInterval(() => void this.refreshBackground().catch(() => {}), 1000);
-    void this.refreshBackground().catch(() => {});
-  }
-  private stopBackgroundPolling(): void {
-    clearInterval(this.backgroundTimer);
-    this.backgroundTimer = undefined;
-    this.backgroundCursors.clear();
-    this.backgroundLogs.clear();
-    this.background = [];
-    this.backgroundState = null;
-  }
   private taskRefreshVersion = 0;
-  private async refreshTasks(sessionId = this.controller.snapshot.sessionId): Promise<void> {
+  private async refreshTasks(sessionId = this.controller.sessionId): Promise<void> {
     const version = ++this.taskRefreshVersion;
     if (!sessionId) {
       this.tasks = [];
@@ -551,20 +630,28 @@ export class CarrierService {
       return;
     }
     const tasks = await this.client.request('task.list', { sessionId });
+    // One request for every task's history where the Host offers it; two per task where it does not.
+    const history = this.client.supports('task-history-v1')
+      ? await this.client.request('task.history', { sessionId })
+      : null;
     const pairs = await Promise.all(
       tasks.map(
         async (task) =>
           [
             task.id,
-            {
-              attempts: await this.client.request('task.attempts', { sessionId, taskId: task.id }),
-              steps: await this.client.request('task.steps', { sessionId, taskId: task.id }),
-            },
+            history
+              ? (history[task.id] ?? { attempts: [], steps: [] })
+              : {
+                  attempts: await this.client.request('task.attempts', {
+                    sessionId,
+                    taskId: task.id,
+                  }),
+                  steps: await this.client.request('task.steps', { sessionId, taskId: task.id }),
+                },
           ] as const,
       ),
     );
-    if (version !== this.taskRefreshVersion || sessionId !== this.controller.snapshot.sessionId)
-      return;
+    if (version !== this.taskRefreshVersion || sessionId !== this.controller.sessionId) return;
     this.tasks = tasks;
     this.taskAttempts = Object.fromEntries(pairs.map(([id, value]) => [id, value.attempts]));
     // The step journal is the durable record of what survived an interruption, so the UI reads it
@@ -591,30 +678,33 @@ export class CarrierService {
         }
       });
   }
-  private async refresh(): Promise<void> {
-    const version = ++this.searchVersion;
-    const id = this.controller.snapshot.sessionId;
-    const { sessions, hasMore, current } = await this.sessionWindow(id);
-    if (version === this.searchVersion) {
-      this.sessions = sessions;
-      this.sessionsHasMore = hasMore;
-      this.currentSession = current;
+  private async refresh(scope: RefreshScope = FULL_REFRESH): Promise<void> {
+    const id = this.controller.sessionId;
+    if (scope.sessions) {
+      const version = ++this.searchVersion;
+      const { sessions, hasMore, current } = await this.sessionWindow(id);
+      if (version === this.searchVersion) {
+        this.sessions = sessions;
+        this.sessionsHasMore = hasMore;
+        this.currentSession = current;
+      }
     }
-    const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
-    // Published under the same guard as the list above: two overlapping refreshes can cross a session switch,
-    // and a stale reply landing last would show the file changes of a session the user has left.
-    if (version === this.searchVersion && id === this.controller.snapshot.sessionId)
-      this.changes = changes;
-    await this.refreshAudit(id);
-    await this.refreshTasks(id);
-    await this.refreshBackground();
+    if (scope.changes) {
+      const version = this.searchVersion;
+      const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
+      // Published under the same guard as the list above: two overlapping refreshes can cross a session switch,
+      // and a stale reply landing last would show the file changes of a session the user has left.
+      if (version === this.searchVersion && id === this.controller.sessionId)
+        this.changes = changes;
+    }
+    if (scope.audit) await this.refreshAudit(id);
+    if (scope.tasks) await this.refreshTasks(id);
+    if (scope.background) await this.backgroundPanel.refresh();
   }
   /** Refresh independently when a fallback or a background-generated title becomes available. */
   private async refreshSessionNames(): Promise<void> {
     const version = ++this.searchVersion;
-    const { sessions, hasMore, current } = await this.sessionWindow(
-      this.controller.snapshot.sessionId,
-    );
+    const { sessions, hasMore, current } = await this.sessionWindow(this.controller.sessionId);
     if (version !== this.searchVersion) return;
     this.sessions = sessions;
     this.sessionsHasMore = hasMore;
@@ -651,36 +741,40 @@ export class CarrierService {
     return { sessions, hasMore: page.length > this.sessionLimit, current };
   }
   /**
-   * Read the session's process record from the log.
+   * Read the session's process record from the log, continuing from what was already read.
    *
-   * It is read whole (as bounded pages) rather than incrementally: the record is a handful of lines per run,
-   * and a panel that has to be scrolled to the newest line is not worth a cursor on the carrier side yet. The
-   * RPC's `afterSeq` is what makes the bounded read possible in the first place.
+   * It used to be read whole on every refresh — up to ten pages of five hundred entries — although a command
+   * usually adds one line and the panel scrolls to the newest. The RPC's `afterSeq` was there for this: the same
+   * session continues from the seq of the last entry held, and only a session this carrier has not read starts at
+   * zero. The window is capped, so a long session keeps its newest entries instead of growing without bound.
    */
   private async refreshAudit(sessionId: string | null): Promise<void> {
     if (!sessionId) {
       this.audit = [];
+      this.auditCursor = { sessionId: '', seq: 0 };
       return;
     }
-    const entries: CarrierSnapshot['audit'] = [];
-    let afterSeq = 0;
+    const continuing = this.auditCursor.sessionId === sessionId;
+    let entries: CarrierSnapshot['audit'] = continuing ? [...this.audit] : [];
+    let afterSeq = continuing ? this.auditCursor.seq : 0;
     for (;;) {
       const page: HostMethods['session.audit']['result'] = await this.client.request(
         'session.audit',
         {
           sessionId,
           afterSeq,
-          limit: 500,
+          limit: AUDIT_PAGE,
         },
       );
-      entries.push(...page.entries);
-      if (page.entries.length < 500 || entries.length >= 5_000) break;
+      entries = mergeAuditWindow(entries, page.entries);
+      if (page.entries.length < AUDIT_PAGE) break;
       afterSeq = page.nextSeq;
     }
     // A load can finish after the user moved on; publishing another session's record would be worse than
     // showing a stale one, so the answer is dropped unless it is still the open session.
-    if (sessionId !== this.controller.snapshot.sessionId) return;
+    if (sessionId !== this.controller.sessionId) return;
     this.audit = entries;
+    this.auditCursor = { sessionId, seq: entries.at(-1)?.seq ?? afterSeq };
   }
   private auditRefreshing = false;
   private auditRefreshQueued = false;
@@ -691,7 +785,7 @@ export class CarrierService {
       return;
     }
     this.auditRefreshing = true;
-    void this.refreshAudit(this.controller.snapshot.sessionId)
+    void this.refreshAudit(this.controller.sessionId)
       .then(() => this.publish())
       .catch(() => {})
       .finally(() => {
@@ -701,125 +795,6 @@ export class CarrierService {
           this.scheduleAuditRefresh();
         }
       });
-  }
-  /**
-   * Opens a sub-agent's transcript for reading.
-   *
-   * The ids come from the interface, so they are checked against the delegations this session actually
-   * recorded — the viewer must not become a way to read any session in the workspace. The bounded
-   * window starts at the tail so a long process cannot hide the child's final reply at the end.
-   */
-  private async openSubAgentTranscript(subagentId: string, childSessionId: string): Promise<void> {
-    this.closeSubAgentTranscript();
-    const version = this.subagentTranscriptVersion;
-    const sessionId = this.controller.snapshot.sessionId;
-    if (!sessionId) throw new CarrierError('sessionRequired');
-    // The durable card list shows completed delegations. While the current run is still active, its child
-    // exists only in the controller's live event projection, so the viewer must accept that same trusted view.
-    const live = this.controller.snapshot.subagents.find(
-      (entry) => entry.id === subagentId && entry.childSessionId === childSessionId,
-    );
-    const summary =
-      live ??
-      (await this.client.request('subagents.list', { sessionId, includePreviousRuns: true })).find(
-        (entry) => entry.id === subagentId && entry.sessionId === childSessionId,
-      );
-    if (!summary) throw new CarrierError('subagentNotInSession');
-    const history = await readDisplayHistory(
-      this.client,
-      childSessionId,
-      SUBAGENT_TRANSCRIPT_MESSAGES,
-      0,
-      { tail: SUBAGENT_TRANSCRIPT_MESSAGES },
-    );
-    if (version !== this.subagentTranscriptVersion) return;
-    this.subagentTranscript = {
-      subagentId,
-      childSessionId,
-      objective: summary.objective,
-      status: summary.status,
-      ...(summary.report ? { report: summary.report } : {}),
-      ...(summary.error ? { error: summary.error } : {}),
-      messages: history.messages,
-      truncated: history.truncated || history.startOffset > 0,
-    };
-    this.subagentTranscriptOffset = history.nextOffset;
-    this.startSubAgentTranscriptPolling();
-  }
-  private startSubAgentTranscriptPolling(): void {
-    this.stopSubAgentTranscriptPolling();
-    this.subagentTranscriptTimer = setInterval(
-      () => void this.refreshSubAgentTranscript().catch(() => {}),
-      700,
-    );
-  }
-  private stopSubAgentTranscriptPolling(): void {
-    clearInterval(this.subagentTranscriptTimer);
-    this.subagentTranscriptTimer = undefined;
-  }
-  private closeSubAgentTranscript(): void {
-    this.subagentTranscriptVersion++;
-    this.subagentTranscript = null;
-    this.stopSubAgentTranscriptPolling();
-  }
-  private async refreshSubAgentTranscript(): Promise<void> {
-    const transcript = this.subagentTranscript;
-    if (!transcript || this.subagentTranscriptRefreshing || this.client.status !== 'ready') return;
-    this.subagentTranscriptRefreshing = true;
-    try {
-      let history = await readDisplayHistory(
-        this.client,
-        transcript.childSessionId,
-        100,
-        this.subagentTranscriptOffset,
-      );
-      // If a busy child produced more than a polling page, catch up to its newest window rather
-      // than working through old process records while its completed answer stays off screen.
-      const replaceWindow = history.truncated;
-      if (replaceWindow)
-        history = await readDisplayHistory(
-          this.client,
-          transcript.childSessionId,
-          SUBAGENT_TRANSCRIPT_MESSAGES,
-          0,
-          { tail: SUBAGENT_TRANSCRIPT_MESSAGES },
-        );
-      if (this.subagentTranscript !== transcript) return;
-      this.subagentTranscriptOffset = history.nextOffset;
-      const current = this.controller.snapshot.subagents.find(
-        (entry) =>
-          entry.id === transcript.subagentId && entry.childSessionId === transcript.childSessionId,
-      );
-      const previousResult = JSON.stringify([
-        transcript.status,
-        transcript.report,
-        transcript.error,
-      ]);
-      if (current) {
-        transcript.status = current.status;
-        transcript.report = current.report;
-        transcript.error = current.error;
-      }
-      if (!history.messages.length) {
-        if (
-          previousResult !==
-          JSON.stringify([transcript.status, transcript.report, transcript.error])
-        )
-          this.publish();
-        return;
-      }
-      const combined = replaceWindow
-        ? history.messages
-        : [...transcript.messages, ...history.messages];
-      transcript.messages = combined.slice(-SUBAGENT_TRANSCRIPT_MESSAGES);
-      transcript.truncated ||=
-        history.truncated ||
-        (replaceWindow && history.startOffset > 0) ||
-        combined.length > SUBAGENT_TRANSCRIPT_MESSAGES;
-      this.publish();
-    } finally {
-      this.subagentTranscriptRefreshing = false;
-    }
   }
   /**
    * Bring the app back after the Host process died on its own.
@@ -840,7 +815,7 @@ export class CarrierService {
   private async recoverHost(): Promise<void> {
     if (this.recovering || this.stopping || !this.client.recoverable) return;
     this.recovering = true;
-    const sessionId = this.controller.snapshot.sessionId;
+    const sessionId = this.controller.sessionId;
     // Read before restarting: `lastPid` becomes the *new* Host's id as soon as one is spawned, and the notice
     // has to name the process that died.
     const crashedPid = this.client.lastPid ?? null;
@@ -907,7 +882,7 @@ export class CarrierService {
           this.startupStage = 'ready';
           this.error = null;
           this.recovery = { attempts: attempt, pid: crashedPid };
-          this.startBackgroundPolling();
+          this.backgroundPanel.start();
           return;
         } catch (error) {
           this.error = this.captureError(error);
@@ -948,7 +923,7 @@ export class CarrierService {
       if (this.client.supports('runtime.ready')) await this.client.request('runtime.ready', {});
       this.ready = true;
       this.startupStage = 'ready';
-      this.startBackgroundPolling();
+      this.backgroundPanel.start();
     } catch (error) {
       this.startupStage = 'failed';
       this.error = this.captureError(error);
@@ -974,7 +949,7 @@ export class CarrierService {
       throw new CarrierError(this.recovering ? 'hostRecovering' : 'hostNotReady');
     if (
       EXECUTION_COMMANDS.has(command.type) &&
-      this.unconfirmedPolicies.has(this.controller.snapshot.sessionId ?? '')
+      this.unconfirmedPolicies.has(this.controller.sessionId ?? '')
     )
       throw new CarrierError('policyUnconfirmed');
     // Any action counts as seeing the notice: it is there to explain a window that came back by itself, not to
@@ -999,7 +974,7 @@ export class CarrierService {
           sessionId: command.sessionId,
           id: command.id,
         });
-        await this.refreshBackground();
+        await this.backgroundPanel.refresh();
         return this.snapshot;
       } catch (error) {
         this.error = this.captureError(error);
@@ -1009,24 +984,24 @@ export class CarrierService {
       }
     }
     if (command.type === 'backgroundPolicy') {
-      const sessionId = this.controller.snapshot.sessionId;
+      const sessionId = this.controller.sessionId;
       if (!sessionId) throw new CarrierError('sessionRequired');
       await this.client.request('background.policy', {
         sessionId,
         policy: command.policy,
         reset: command.reset,
       });
-      await this.refreshBackground();
+      await this.backgroundPanel.refresh();
       return this.snapshot;
     }
     if (command.type === 'pollBackground' || command.type === 'refreshBackground') {
-      await this.refreshBackground();
+      await this.backgroundPanel.refresh();
       return this.snapshot;
     }
     if (command.type === 'clearBackground') {
-      const sessionId = this.controller.snapshot.sessionId;
+      const sessionId = this.controller.sessionId;
       if (sessionId) await this.client.request('background.clear', { sessionId });
-      await this.refreshBackground();
+      await this.backgroundPanel.refresh();
       return this.snapshot;
     }
     if (this.restoring || this.managing) throw new CarrierError('sessionOperationBusy');
@@ -1072,8 +1047,8 @@ export class CarrierService {
           this.sessionQuery = '';
           // A transcript belongs to the session that opened it; leaving it up would show one
           // conversation's child while another is on screen.
-          this.closeSubAgentTranscript();
-          if (this.controller.snapshot.sessionId === command.id) {
+          this.transcript.close();
+          if (this.controller.sessionId === command.id) {
             const remaining = await this.client.request('session.list', { limit: 1 });
             if (remaining[0]) await this.controller.load(remaining[0].id);
             else await this.controller.create();
@@ -1081,7 +1056,11 @@ export class CarrierService {
           break;
         }
         case 'undo': {
-          const current = this.controller.snapshot;
+          const current = {
+            running: this.controller.running,
+            loading: this.controller.loading,
+            sessionId: this.controller.sessionId,
+          };
           if (current.running || current.loading || !current.sessionId)
             throw new CarrierError('operationBusy');
           this.restoring = true;
@@ -1097,11 +1076,11 @@ export class CarrierService {
           break;
         }
         case 'create':
-          this.closeSubAgentTranscript();
+          this.transcript.close();
           await this.controller.create();
           break;
         case 'load':
-          this.closeSubAgentTranscript();
+          this.transcript.close();
           await this.controller.load(command.id);
           break;
         case 'loadOlder':
@@ -1115,7 +1094,7 @@ export class CarrierService {
            * Nothing is cached from the request: `applySelection` keeps what the Host confirmed and refuses a
            * strict selection that a Host without the capability cannot acknowledge.
            */
-          const selectedSession = this.controller.snapshot.sessionId;
+          const selectedSession = this.controller.sessionId;
           await this.applySelection(
             {
               mode: command.mode,
@@ -1140,7 +1119,7 @@ export class CarrierService {
           await this.controller.clearQueue();
           break;
         case 'taskSave': {
-          const sessionId = this.controller.snapshot.sessionId;
+          const sessionId = this.controller.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.update', {
             sessionId,
@@ -1151,7 +1130,7 @@ export class CarrierService {
           break;
         }
         case 'taskConfirm': {
-          const sessionId = this.controller.snapshot.sessionId;
+          const sessionId = this.controller.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.confirm', {
             sessionId,
@@ -1162,7 +1141,7 @@ export class CarrierService {
           break;
         }
         case 'taskPropose': {
-          const sessionId = this.controller.snapshot.sessionId;
+          const sessionId = this.controller.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
           try {
             await this.client.request('task.propose', { sessionId, taskId: command.taskId });
@@ -1179,7 +1158,7 @@ export class CarrierService {
           break;
         }
         case 'taskApproval': {
-          const sessionId = this.controller.snapshot.sessionId;
+          const sessionId = this.controller.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.approval.respond', {
             sessionId,
@@ -1190,7 +1169,7 @@ export class CarrierService {
           break;
         }
         case 'taskTrigger': {
-          const sessionId = this.controller.snapshot.sessionId;
+          const sessionId = this.controller.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('task.trigger', {
             sessionId,
@@ -1199,24 +1178,23 @@ export class CarrierService {
           });
           break;
         }
+        // The full read at the end of `dispatch` is the refresh; reading here as well did every request twice.
         case 'taskRefresh':
-          await this.refresh();
           break;
         case 'taskVerify': {
           this.restoring = true;
           try {
             await this.client.request('task.verify', {
-              sessionId: this.controller.snapshot.sessionId!,
+              sessionId: this.controller.sessionId!,
               taskId: command.taskId,
             });
           } finally {
             this.restoring = false;
           }
-          await this.refreshTasks(this.controller.snapshot.sessionId);
           break;
         }
         case 'taskRetry': {
-          if (!this.controller.snapshot.sessionId) throw new CarrierError('sessionRequired');
+          if (!this.controller.sessionId) throw new CarrierError('sessionRequired');
           const task = this.tasks.find((item) => item.id === command.taskId);
           if (!task) throw new CarrierError('taskNotFound');
           await this.controller.send(
@@ -1224,11 +1202,9 @@ export class CarrierService {
             undefined,
             task.id,
           );
-          await this.refresh();
           break;
         }
         case 'taskHistory':
-          await this.refreshTasks(this.controller.snapshot.sessionId);
           break;
 
         // The palette and settings surface invoke this to pick up instruction/extension edits
@@ -1240,13 +1216,13 @@ export class CarrierService {
         case 'export':
           break;
         case 'compact':
-          if (!this.controller.snapshot.sessionId) throw new CarrierError('sessionRequired');
+          if (!this.controller.sessionId) throw new CarrierError('sessionRequired');
           await this.client.request('context.compact', {
-            sessionId: this.controller.snapshot.sessionId,
+            sessionId: this.controller.sessionId,
           });
           break;
         case 'goal': {
-          const sessionId = this.controller.snapshot.sessionId;
+          const sessionId = this.controller.sessionId;
           if (!sessionId) throw new CarrierError('sessionRequired');
           const draft = initialTaskDraft(command.type, command.prompt, command.language);
           const task = await this.client.request('task.create', {
@@ -1265,7 +1241,6 @@ export class CarrierService {
               await this.controller.load(sessionId);
             }
           }
-          await this.refresh();
           break;
         }
         case 'plan':
@@ -1297,10 +1272,10 @@ export class CarrierService {
           else await this.controller.answerQuestion(command.id, command.answers ?? []);
           break;
         case 'subagentTranscript':
-          await this.openSubAgentTranscript(command.subagentId, command.childSessionId);
+          await this.transcript.open(command.subagentId, command.childSessionId);
           break;
         case 'subagentWorkspace': {
-          const parentSessionId = this.controller.snapshot.sessionId;
+          const parentSessionId = this.controller.sessionId;
           if (!parentSessionId) throw new CarrierError('sessionRequired');
           const children = await this.client.request('subagents.list', {
             sessionId: parentSessionId,
@@ -1322,7 +1297,7 @@ export class CarrierService {
           break;
         }
         case 'closeSubagentTranscript':
-          this.closeSubAgentTranscript();
+          this.transcript.close();
           break;
         case 'cancel':
           await this.controller.cancel();
@@ -1335,7 +1310,7 @@ export class CarrierService {
         case 'chooseWorkspace':
           throw new CarrierError('shellCommand');
       }
-      await this.refresh();
+      await this.refresh(refreshScopeFor(command.type));
       return this.snapshot;
     } catch (error) {
       this.error = this.captureError(error);
@@ -1347,9 +1322,8 @@ export class CarrierService {
   }
   async stop(): Promise<void> {
     this.stopping = true;
-    this.backgroundRefreshVersion++;
-    this.stopBackgroundPolling();
-    this.closeSubAgentTranscript();
+    this.backgroundPanel.stop();
+    this.transcript.close();
     this.ready = false;
     this.startupStage = 'stopped';
     this.controller.dispose();

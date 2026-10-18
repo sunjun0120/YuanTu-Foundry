@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextCronRun, latestCronRun, parseCron } from '../packages/protocol/cron.ts';
+import { nextCronRun, latestCronRun, parseCron } from '../packages/formats/cron.ts';
 import { normalizeTaskTrigger, nextRunAt } from '../packages/protocol/task-trigger.ts';
 
 test('five-field cron validates numeric lists ranges and within-field steps', () => {

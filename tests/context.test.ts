@@ -17,6 +17,7 @@ import type {
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { TokenCalibration, calibrationRoute } from '../packages/core/calibration.ts';
 import { estimateInputTokens, estimateMessageTokens } from '../packages/core/budget.ts';
 // "Which request is the summary request" has one answer and it lives in production code: the instruction is the
@@ -27,6 +28,10 @@ import { readConfig } from '../packages/providers/index.ts';
 import { summaryProviderFor } from '../apps/shared/runtime.ts';
 
 // ---- merged from context-budget.test.ts ----
+
+/** Messages that are not the runtime's own skill announcement. */
+const typedMessages = <T extends { content: string }>(messages: readonly T[]): T[] =>
+  messages.filter((message) => !isRuntimeContext(message.content));
 
 const reply = (inputTokens = 5, outputTokens = 3): ModelResponse => ({
   text: 'Keep blue and release-73. Never edit protected.txt.',
@@ -722,11 +727,12 @@ test('overflow summaries retain project constraints and persist without deleting
   });
   assert.equal(result.status, 'completed', result.error);
   assert.ok(seen.some(isSummaryRequest), 'must summarize rather than discard old messages');
-  assert.equal(store.messages(session.id).length, 6);
+  assert.equal(typedMessages(store.messages(session.id)).length, 6);
   const reopened = new SessionStore(db);
   try {
     assert.match(reopened.contextSurface(session.id)!.summary, /blue theme/);
-    assert.equal(reopened.contextSurface(session.id)!.coveredMessages, 4);
+    // The covered prefix includes the runtime's skill announcement, which is a persisted user-role message.
+    assert.equal(reopened.contextSurface(session.id)!.coveredMessages, 5);
   } finally {
     reopened.close();
   }
@@ -825,8 +831,8 @@ test('a summary failure preserves the transcript and sends the round rather than
   // The round really was sent, carrying every message the session had: nothing was dropped to make it fit and
   // nothing was written in the summary's place.
   assert.equal(sent.length, 1);
-  assert.equal(sent[0]!.messages.length, before.length + 1);
-  assert.equal(store.messages(session.id).length, before.length + 2);
+  assert.equal(typedMessages(sent[0]!.messages).length, before.length + 1);
+  assert.equal(typedMessages(store.messages(session.id)).length, before.length + 2);
   assert.equal(store.contextSurface(session.id), null, 'no compaction was recorded');
   assert.equal(
     store.events(session.id).filter((event) => event.type === 'context.compacted').length,
@@ -944,7 +950,7 @@ test('cancelled summaries never commit a checkpoint or delete history', async (t
   });
   assert.equal(result.status, 'cancelled');
   assert.equal(store.contextSurface(session.id), null);
-  assert.equal(store.messages(session.id).length, 5);
+  assert.equal(typedMessages(store.messages(session.id)).length, 5);
 });
 
 test('multi-batch compaction merges the running summary with each new slice of the transcript', async (t) => {

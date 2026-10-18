@@ -171,6 +171,12 @@
           },
           {
             "role": "user",
+            "chars": 404,
+            "digest": "9eec3023a4b8b2ac",
+            "toolCalls": []
+          },
+          {
+            "role": "user",
             "chars": 1316,
             "digest": "b278edb70854781c",
             "toolCalls": []
@@ -261,6 +267,17 @@
     },
     "events": [
       {
+        "type": "context.injected",
+        "sessionId": "<session:1>",
+        "runId": "<run:1>",
+        "data": {
+          "source": "skills",
+          "round": 0,
+          "notes": 1,
+          "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\noffice-documents: Plan, write and check Word reports and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
+        }
+      },
+      {
         "type": "run.started",
         "sessionId": "<session:1>",
         "runId": "<run:1>",
@@ -272,7 +289,13 @@
         "runId": "<run:1>",
         "data": {
           "instructions": [],
-          "skills": []
+          "skills": [
+            {
+              "name": "office-documents",
+              "description": "Plan, write and check Word reports and PowerPoint decks with office_create, office_edit and office_preview.",
+              "path": "builtin:office-documents"
+            }
+          ]
         }
       },
       {
@@ -548,7 +571,7 @@
         "sessionId": "<session:1>",
         "runId": "<run:1>",
         "data": {
-          "coveredMessages": 4
+          "coveredMessages": 5
         }
       },
       {
@@ -904,21 +927,37 @@
         "data": {
           "message": {
             "role": "user",
+            "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\noffice-documents: Plan, write and check Word reports and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
+          }
+        }
+      },
+      {
+        "seq": 7,
+        "type": "message.user",
+        "data": {
+          "message": {
+            "role": "user",
             "createdAt": "<time>",
             "content": "Continue. next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next next "
           }
         }
       },
       {
-        "seq": 7,
+        "seq": 8,
         "type": "resources.loaded",
         "data": {
           "instructions": [],
-          "skills": []
+          "skills": [
+            {
+              "name": "office-documents",
+              "description": "Plan, write and check Word reports and PowerPoint decks with office_create, office_edit and office_preview.",
+              "path": "builtin:office-documents"
+            }
+          ]
         }
       },
       {
-        "seq": 8,
+        "seq": 9,
         "type": "step.started",
         "data": {
           "runId": "<run:1>",
@@ -926,7 +965,7 @@
         }
       },
       {
-        "seq": 9,
+        "seq": 10,
         "type": "provider.request.finished",
         "data": {
           "runId": "<run:1>",
@@ -942,7 +981,7 @@
         }
       },
       {
-        "seq": 10,
+        "seq": 11,
         "type": "provider.request.finished",
         "data": {
           "runId": "<run:1>",
@@ -958,12 +997,12 @@
         }
       },
       {
-        "seq": 11,
+        "seq": 12,
         "type": "context.compacted",
         "data": {
-          "coveredMessages": 4,
+          "coveredMessages": 5,
           "startSeq": 1,
-          "endSeq": 4,
+          "endSeq": 6,
           "summary": "Retain the blue theme; the earlier summary stands and the conversation continues.",
           "usage": {
             "inputTokens": 20,
@@ -971,13 +1010,13 @@
           },
           "cacheKnown": false,
           "runId": "<run:1>",
-          "replacedChars": 16593,
+          "replacedChars": 17032,
           "surfaceChars": 860,
           "maxTokens": 2750
         }
       },
       {
-        "seq": 12,
+        "seq": 13,
         "type": "context.envelope",
         "data": {
           "runId": "<run:1>",
@@ -1008,7 +1047,7 @@
         }
       },
       {
-        "seq": 13,
+        "seq": 14,
         "type": "provider.request.finished",
         "data": {
           "runId": "<run:1>",
@@ -1025,7 +1064,7 @@
         }
       },
       {
-        "seq": 14,
+        "seq": 15,
         "type": "message.assistant",
         "data": {
           "message": {
@@ -1036,7 +1075,7 @@
         }
       },
       {
-        "seq": 15,
+        "seq": 16,
         "type": "step.finished",
         "data": {
           "runId": "<run:1>",
@@ -1045,7 +1084,7 @@
         }
       },
       {
-        "seq": 16,
+        "seq": 17,
         "type": "run.finished",
         "data": {
           "runId": "<run:1>",
@@ -1119,6 +1158,10 @@
         "role": "assistant",
         "content": "Inspected the source.",
         "toolCalls": []
+      },
+      {
+        "role": "user",
+        "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\noffice-documents: Plan, write and check Word reports and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
       },
       {
         "role": "user",

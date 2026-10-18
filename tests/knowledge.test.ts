@@ -201,15 +201,29 @@ test('a refresh failure keeps the index entry; only a removed file unpins it', a
     'a recoverable read failure must not delete the index entry',
   );
   assert.equal(store.listDocuments(root).length, 1);
+  const stale = store.freshness(root);
+  assert.equal(
+    stale.stale,
+    true,
+    'the failed refresh is reported, not hidden behind the old content',
+  );
+  assert.equal(stale.documents[0]?.path, 'guide.md');
+  assert.match(stale.documents[0]?.error ?? '', /32KB/);
+  assert.ok(
+    stale.documents[0]?.lastIndexedAt,
+    'the stale document names when its content was indexed',
+  );
 
   // Shrinking it again makes the next refresh pick the new content up.
   await writeFile(doc, '现在使用 pnpm build 构建。');
   assert.equal(store.search(root, 'pnpm build')[0]?.source, 'guide.md');
+  assert.equal(store.freshness(root).stale, false, 'a successful re-read clears the failure');
 
   // A genuinely removed source file is the one case that drops the entry.
   await rm(doc);
   assert.deepEqual(store.search(root, 'pnpm build'), []);
   assert.deepEqual(store.listDocuments(root), []);
+  assert.deepEqual(store.freshness(root).documents, [], 'a removed document is gone, not stale');
   store.close();
 });
 
@@ -251,6 +265,13 @@ test('Agent can recall saved knowledge but persistent writes still require appro
   assert.equal(recall.isError, false);
   assert.match(recall.content, /Use staged rollout 481/);
   assert.match(recall.content, /\.yuantu\/memory\.md/, 'the result names its source file');
+  const recalled = JSON.parse(recall.content);
+  assert.ok(Array.isArray(recalled.results));
+  assert.deepEqual(recalled.freshness, {
+    stale: false,
+    checkedAt: recalled.freshness.checkedAt,
+    documents: [],
+  });
   const save = {
     id: 'write',
     name: 'save_memory',

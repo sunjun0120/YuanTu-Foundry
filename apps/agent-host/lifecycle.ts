@@ -47,11 +47,28 @@ export function createShutdown(ctx: HostContext): () => void {
  * registered — a Host that ignores the second interrupt instead of the first.
  */
 export function installSignals(shutdown: () => void): () => void {
+  /**
+   * The last line behind every callback nobody awaits (a timer, a microtask, a store observer).
+   *
+   * Node's default for an uncaught error is to terminate on the spot, which leaves every in-flight run marked
+   * running, its pty and children orphaned, and the reason nowhere but a stack trace the carrier may never read.
+   * The error is reported and the Host takes its ordinary way down instead, so runs are aborted and settled and
+   * the carrier sees an exit with a non-zero code rather than a vanished process.
+   */
+  const fault = (error: unknown) => {
+    process.stderr.write(`[host] uncaught failure, shutting down: ${safeError(error)}\n`);
+    process.exitCode = 1;
+    shutdown();
+  };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('uncaughtException', fault);
+  process.on('unhandledRejection', fault);
   return () => {
     process.off('SIGINT', shutdown);
     process.off('SIGTERM', shutdown);
+    process.off('uncaughtException', fault);
+    process.off('unhandledRejection', fault);
   };
 }
 

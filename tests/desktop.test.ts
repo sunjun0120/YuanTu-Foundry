@@ -8,6 +8,8 @@ import { parseCarrierCommand } from '../packages/carrier/contract.ts';
 import { FILE_PREVIEW_BYTES, FILE_TREE_ENTRY_LIMIT } from '../packages/protocol/rpc.ts';
 import { MAX_IMAGE_BYTES } from '../packages/protocol/images.ts';
 import { parseFilesCommand } from '../apps/desktop/files-contract.ts';
+import { SnapshotMirror, SnapshotSender } from '../apps/desktop/snapshot-patch.ts';
+import type { CarrierSnapshot } from '../packages/carrier/contract.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 import * as XLSX from 'xlsx';
@@ -552,4 +554,37 @@ test('the workspace file surface is bounded by the file tools own rules', async 
     ['f0.txt', 'f1.txt', 'f2.txt', 'f3.txt'],
   );
   assert.equal(many.entries.at(-1)?.name, `f${FILE_TREE_ENTRY_LIMIT - 1}.txt`);
+});
+
+test('the window receives only changed snapshot sections and never an older one', () => {
+  const sender = new SnapshotSender();
+  const mirror = new SnapshotMirror();
+  const session = Object.freeze({ sessionId: 's1', messages: [{ id: 'm1' }] });
+  const snapshot = (extra: Record<string, unknown>) =>
+    ({ session, background: [], tasks: [], ...extra }) as unknown as CarrierSnapshot;
+
+  const first = sender.diff(snapshot({}));
+  assert.deepEqual(Object.keys(first.sections).sort(), ['background', 'session', 'tasks']);
+  assert.deepEqual(mirror.apply(first).changed.sort(), ['background', 'session', 'tasks']);
+
+  // An equal rebuild of a small section and the same frozen session send nothing.
+  assert.deepEqual(sender.diff(snapshot({ background: [] })).sections, {});
+
+  // One section changed: only it travels, and the mirror still answers with the whole snapshot.
+  const pushed = sender.diff(snapshot({ background: [{ id: 'job-1' }] }));
+  assert.deepEqual(Object.keys(pushed.sections), ['background']);
+  const reply = sender.diff(snapshot({ background: [{ id: 'job-2' }] }));
+  const applied = mirror.apply(reply);
+  assert.deepEqual(applied.changed, ['background']);
+  assert.equal(applied.state.session, session);
+  // The older push arriving after the newer reply is ignored rather than rolling the panel back.
+  assert.deepEqual(mirror.apply(pushed).changed, []);
+  assert.deepEqual(mirror.apply({ sections: {} }).state.background, [{ id: 'job-2' }]);
+
+  // A reloaded window starts empty, so after a reset every section is sent again.
+  sender.reset();
+  assert.deepEqual(
+    Object.keys(sender.diff(snapshot({ background: [{ id: 'job-2' }] })).sections).sort(),
+    ['background', 'session', 'tasks'],
+  );
 });

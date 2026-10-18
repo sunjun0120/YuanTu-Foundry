@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { killTree } from '../tools/process.ts';
 import { parseSetting } from '../protocol/settings.ts';
-import type { OfficeFormat } from './automation.ts';
+import { OfficeUnavailableError, type OfficeFormat } from './automation.ts';
 
 export interface OfficePreview {
   render(
@@ -220,7 +220,9 @@ async function runConverter(
     child.once('error', (error: NodeJS.ErrnoException) => {
       failure =
         error.code === 'ENOENT'
-          ? new Error('LibreOffice is unavailable; install it or configure YUANTU_LIBREOFFICE_PATH')
+          ? new OfficeUnavailableError(
+              'LibreOffice is unavailable; install it or configure YUANTU_LIBREOFFICE_PATH, or choose an .html output_path for the built-in preview',
+            )
           : error;
     });
     child.once('close', (code) => {

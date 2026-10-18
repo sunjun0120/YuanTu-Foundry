@@ -637,12 +637,14 @@ export class ToolRegistry {
       let approvedPolicy = context.permissionPolicyForCall?.();
       if (entry.tool.permission) {
         invariant.enter(execution, 'approval');
-        const allowed = await context.approve(approval!, context.signal);
+        const decision = await this.approveWithinBudget(approval!, context.approve, context.signal);
         context.signal.throwIfAborted();
-        if (!allowed)
+        if (!decision.allowed)
           return materialize(
             errorResult(
-              'Permission denied by user. Do not retry the operation without new authorization.',
+              decision.timedOut
+                ? `Permission was not granted: nobody answered the approval request within ${decision.budgetMs}ms. Nothing was executed; do not retry without new authorization.`
+                : 'Permission denied by user. Do not retry the operation without new authorization.',
             ),
           );
         if (context.readOnly)
@@ -657,11 +659,21 @@ export class ToolRegistry {
         if (approval && context.permissionPolicyForCall?.() !== approvedPolicy) {
           approvedPolicy = context.permissionPolicyForCall?.();
           const decision = approvedPolicy?.decide(approval);
-          if (
-            decision === 'deny' ||
-            (decision !== 'allow' && !(await context.approve(approval, dispatchSignal)))
-          )
+          if (decision === 'deny')
             throw new Error('Permission denied by the current policy. No effect was executed.');
+          if (decision !== 'allow') {
+            const answer = await this.approveWithinBudget(
+              approval,
+              context.approve,
+              dispatchSignal,
+            );
+            if (!answer.allowed)
+              throw new Error(
+                answer.timedOut
+                  ? 'Permission was not granted before the approval timeout; no effect was executed.'
+                  : 'Permission denied by the current policy. No effect was executed.',
+              );
+          }
           dispatchSignal.throwIfAborted();
         }
         const next = snapshotExecutionPolicy(
@@ -901,6 +913,44 @@ export class ToolRegistry {
       withScope: (replacement) => make(replacement, controller),
     });
     return make(bound, abort);
+  }
+  /**
+   * Wait for an approval, but not forever.
+   *
+   * The per-call deadline below wraps `execute`, and an approval happens before it: an approver that never answers
+   * therefore had no bound at all, and the step stayed open until somebody pressed Stop — the case the factory Host
+   * papers over with its own 120 s timer, and one a library embedder has nothing for. An unanswered request is a
+   * denial, not a timeout: nothing ran, and the model is told which of the two happened. `0` keeps the wait-forever
+   * behaviour for a deployment that owns a timer already.
+   */
+  private async approveWithinBudget(
+    approval: Parameters<ToolContext['approve']>[0],
+    approve: ToolContext['approve'],
+    signal: AbortSignal,
+  ): Promise<{ allowed: boolean; timedOut: boolean; budgetMs?: number }> {
+    const budgetMs = this.deadlines?.approvalMs;
+    if (budgetMs === undefined || budgetMs <= 0)
+      return { allowed: await approve(approval, signal), timedOut: false };
+    // Handlers are attached before the race, so a late answer — or a late failure — after the budget expired is
+    // observed and discarded instead of surfacing as an unhandled rejection.
+    const answer = approve(approval, signal).then(
+      (allowed) => ({ allowed }),
+      (error: unknown) => ({ error }),
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<'expired'>((resolve) => {
+      timer = setTimeout(() => resolve('expired'), budgetMs);
+      // A pending approval must not be a reason for the process to stay alive.
+      timer.unref();
+    });
+    try {
+      const outcome = await Promise.race([answer, expired]);
+      if (outcome === 'expired') return { allowed: false, timedOut: true, budgetMs };
+      if ('error' in outcome) throw outcome.error;
+      return { allowed: outcome.allowed, timedOut: false };
+    } finally {
+      clearTimeout(timer);
+    }
   }
   private async runWithDeadline(
     name: string,

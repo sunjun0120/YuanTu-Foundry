@@ -880,6 +880,44 @@ test('Host reserves session deletion until a blocked background cleanup actually
   assert.throws(() => store.get(session.id), /Session not found/);
 });
 
+test('session.recover refuses the session this Host is running and recovers a stuck one', async (t) => {
+  const root = await workspace(t);
+  // The database lives outside the workspace: `workspace()` removes its root at the end, and a store still open
+  // there is a locked `-shm` file rather than a cleanup. These two hooks run in registration order — close, then
+  // remove — which is the order this needs.
+  const dbRoot = await mkdtemp(path.join(tmpdir(), 'yuantu-recover-db-'));
+  const store = new SessionStore(path.join(dbRoot, 'sessions.sqlite'));
+  t.after(() => store.close());
+  t.after(() => rm(dbRoot, { recursive: true, force: true }));
+  const session = store.create(root);
+  const stuck = store.beginRun(session.id);
+  const ctx = {
+    workspace: root,
+    store,
+    active: new Map(),
+    restoring: false,
+  } as unknown as HostContext;
+
+  // The state the automatic rules cannot end: the recorded owner is this Host, which is alive.
+  assert.throws(() => store.beginRun(session.id), /already running/i);
+  // A run this Host is actually executing is never recovered out from under it.
+  ctx.active.set(session.id, {} as never);
+  await assert.rejects(
+    sessionHandlers['session.recover']!(ctx, { sessionId: session.id }),
+    /running the session/i,
+  );
+  assert.equal(store.leaseOf(session.id)?.runId, stuck, 'the refusal changed nothing');
+
+  ctx.active.delete(session.id);
+  const recovered = (await sessionHandlers['session.recover']!(ctx, {
+    sessionId: session.id,
+  })) as { recovered: boolean; settledRunId: string | null };
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.settledRunId, stuck);
+  assert.equal(store.leaseOf(session.id), null);
+  assert.ok(store.beginRun(session.id), 'the session runs again');
+});
+
 test('Host deletes a session with managed commands after its background cleanup completes', async (t) => {
   const root = await workspace(t);
   await writeFile(path.join(root, 'managed.cjs'), 'setInterval(()=>{},1000);');

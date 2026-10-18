@@ -165,4 +165,23 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
       ctx.restoring = false;
     }
   },
+  /**
+   * An operator's way out of a lease that can never be confirmed dead.
+   *
+   * Refused while *this* Host is running the session: that run is demonstrably live, and settling it would let a
+   * second writer in. Every other case is the caller's decision — a pid reused by an unrelated process, an owner
+   * row written before start times were recorded, a machine where the start-time probe kept failing — and the
+   * interruption it records says so.
+   */
+  'session.recover': async (ctx, params) => {
+    const id = required(params, 'sessionId');
+    ownedSession(ctx.store, ctx.workspace, id);
+    if (ctx.active.has(id))
+      throw new Error('This Host is running the session; cancel that run before recovering it');
+    if (ctx.restoring) throw new Error('Host is busy; wait before recovering a session');
+    return ctx.store.recoverSession(
+      id,
+      'Operator forced recovery: the owning process could not be confirmed dead',
+    );
+  },
 };

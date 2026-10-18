@@ -22,6 +22,16 @@ function markHandshake(method: string): void {
 }
 /** `--tools-only` advertises no resources or prompts so capability gating can be tested. */
 const toolsOnly = flags.includes('--tools-only');
+/**
+ * Announce a tool-list change *while* the first `tools/list` request is being answered.
+ *
+ * The notification is written before the response, and the added tool is only served on the next list, so a
+ * client that records the generation at the end of the load marks the old catalogue current and never asks
+ * again. A client that captures the generation at the start sees the gap and re-reads.
+ */
+const notifyDuringList = flags.includes('--notify-during-list');
+let notifiedDuringList = false;
+let refreshAfterList = false;
 const capabilities = toolsOnly
   ? { tools: { listChanged: true } }
   : {
@@ -43,6 +53,13 @@ input.on('line', (line) => {
   if (request.id === undefined) return;
   if (request.method === 'initialize' || request.method === 'tools/list')
     markHandshake(request.method);
+  if (request.method === 'tools/list' && notifyDuringList && !notifiedDuringList) {
+    notifiedDuringList = true;
+    refreshAfterList = true;
+    process.stdout.write(
+      JSON.stringify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' }) + '\n',
+    );
+  }
   if (request.method === 'tools/call' && request.params?.name === 'refresh') {
     refreshed = true;
     process.stdout.write(
@@ -186,7 +203,13 @@ input.on('line', (line) => {
         };
     }
   })();
-  if (result)
+  if (result) {
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+    // The change is announced during this response but only served by the next list, which is the race.
+    if (refreshAfterList) {
+      refreshed = true;
+      refreshAfterList = false;
+    }
+  }
 });
 input.on('close', () => process.exit(0));

@@ -4,6 +4,9 @@ import type { SessionEventType } from './events.ts';
 import type { Session } from './session-schema.ts';
 import { hashesIn } from './session-blobs.ts';
 
+/** Candidate blob addresses checked per scan statement (each is one bound parameter). */
+const BLOB_CANDIDATE_BATCH = 200;
+
 /**
  * What a person may do to a session *after* it exists: rename it, let a model name it, and delete it.
  *
@@ -210,27 +213,40 @@ export class SessionLifecycle {
    * One pass over the rows that can hold a reference at all, however many addresses are asked about: the old
    * shape ran a `LIKE '%hash%'` over every message and every log entry *per address*, so deleting a session that
    * mentioned twenty pictures read the whole database twenty times inside the write transaction. An image
-   * reference is a JSON object with a `"hash"` key, so `instr` narrows the rows to those with that key — a check
-   * SQLite does without parsing — and only those are read as JSON. The answer still comes from the rows
-   * themselves rather than from a second copy of "who refers to what" that could drift from them.
+   * reference names its address as a string, so `instr` narrows the rows to those that contain one of the
+   * candidate addresses — a check SQLite makes in C, without parsing — and only those are read as JSON to confirm
+   * the address is a reference rather than text that happens to spell it. (Narrowing on the `"hash"` key alone
+   * still parsed every image-bearing row of every other session in JavaScript.) The answer still comes from the
+   * rows themselves rather than from a second copy of "who refers to what" that could drift from them.
    */
   private dropUnreferencedBlobs(candidates: ReadonlySet<string>): void {
     if (!candidates.size) return;
     const orphaned = new Set(candidates);
-    for (const statement of [
-      `SELECT body AS json FROM messages WHERE instr(body,'"hash"')>0`,
-      `SELECT data AS json FROM session_events WHERE instr(data,'"hash"')>0`,
-    ]) {
-      for (const row of this.port.db.prepare(statement).iterate()) {
-        const found = new Set<string>();
-        try {
-          hashesIn(JSON.parse(String(row.json)), found);
-        } catch {
-          // A row that no longer parses names nothing, exactly as `sessionHashes` reads it.
-          continue;
+    for (const [table, column] of [
+      ['messages', 'body'],
+      ['session_events', 'data'],
+    ] as const) {
+      // Bounded batches keep each statement well inside SQLite's parameter limit however many pictures there were.
+      const pending = [...orphaned];
+      for (let start = 0; start < pending.length; start += BLOB_CANDIDATE_BATCH) {
+        const batch = pending
+          .slice(start, start + BLOB_CANDIDATE_BATCH)
+          .filter((hash) => orphaned.has(hash));
+        if (!batch.length) continue;
+        const where = batch.map(() => `instr(${column},?)>0`).join(' OR ');
+        for (const row of this.port.db
+          .prepare(`SELECT ${column} AS json FROM ${table} WHERE ${where}`)
+          .iterate(...batch)) {
+          const found = new Set<string>();
+          try {
+            hashesIn(JSON.parse(String(row.json)), found);
+          } catch {
+            // A row that no longer parses names nothing, exactly as `sessionHashes` reads it.
+            continue;
+          }
+          for (const hash of found) orphaned.delete(hash);
+          if (!orphaned.size) return;
         }
-        for (const hash of found) orphaned.delete(hash);
-        if (!orphaned.size) return;
       }
     }
     const remove = this.port.db.prepare('DELETE FROM attachment_blobs WHERE hash=?');

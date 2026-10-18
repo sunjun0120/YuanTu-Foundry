@@ -122,7 +122,9 @@ export async function runRipgrep(input: RipgrepInput): Promise<SearchPage> {
     // scanner as well, so a replayed row cannot turn into two hits for one match.
     const remainder = dedupeFiles(input.files.slice(cursor));
     if (remainder.length) {
-      const page = await input.fallback(remainder, emptyCoverage());
+      // The remainder is scanned against the enumeration's coverage, not a fresh complete one: the file list
+      // itself may already have been truncated before this backend ever saw it.
+      const page = await input.fallback(remainder, input.inventory?.() ?? emptyCoverage());
       for (const match of page.matches) add(match);
       scanned += page.coverage.filesScanned;
       coverage.unreadableFiles += page.coverage.unreadableFiles;

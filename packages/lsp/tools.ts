@@ -57,7 +57,18 @@ async function annotate(
         .filter((item) => item.severity === 'error' || item.severity === 'warning')
         .slice(0, 10);
       if (!relevant.length) {
-        lines.push(`${relative}: no errors or warnings`);
+        /**
+         * "No errors or warnings" is a conclusion, and it needs the analysis to have finished.
+         *
+         * A server publishes diagnostics after it has parsed the file, so an empty list while `settled` is
+         * false means "nothing yet", not "nothing wrong". Saying the former in the latter's place gave an edit
+         * a clean bill of health the server had not issued.
+         */
+        lines.push(
+          diagnostics.settled
+            ? `${relative}: no errors or warnings`
+            : `${relative}: no diagnostics yet (the language server has not finished analysing)`,
+        );
         continue;
       }
       lines.push(`${relative}:`);

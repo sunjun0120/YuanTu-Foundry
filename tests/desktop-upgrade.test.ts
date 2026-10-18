@@ -11,6 +11,8 @@ import {
   runUpgrade,
   acknowledgeUpgrade,
   rollbackUpgrade,
+  writeLaunchRecord,
+  readLaunchRecord,
 } from '../packages/maintenance/desktop-upgrade.ts';
 import {
   SessionStore,
@@ -220,6 +222,24 @@ test('preparation refuses active databases and application/profile overlap; reco
     () => prepareUpgrade(overlap, f.installDirectory, f.database, f.current),
     /overlap/,
   );
+});
+
+test('rollback judges the launched desktop by pid and start time, so a reused pid does not block it', (t) => {
+  const f = fixture(t);
+  const staged = stageUpgrade(f.file, f.profile, f.current);
+  prepareUpgrade(staged, f.installDirectory, f.database, f.current);
+  const record = `${staged.journal}.pid`;
+  // The real launcher's record: this live process under its own start time is the desktop, and blocks rollback.
+  writeLaunchRecord(record, process.pid);
+  assert.equal(readLaunchRecord(record).pid, process.pid);
+  assert.throws(() => rollbackUpgrade(staged.journal), /Close.*desktop/);
+  // The same pid under a start time an hour earlier is a different process that inherited the number.
+  writeFileSync(record, JSON.stringify({ pid: process.pid, startedAt: Date.now() - 3_600_000 }));
+  assert.throws(() => readLaunchRecord(`${record}.missing`), /ENOENT/);
+  writeFileSync(`${record}.bad`, '{"pid":"x"}');
+  assert.throws(() => readLaunchRecord(`${record}.bad`), /Invalid application PID/);
+  rmSync(`${record}.bad`);
+  rollbackUpgrade(staged.journal);
 });
 
 test('rollback refuses an active upgraded desktop and restores encrypted profile files after format changes', (t) => {

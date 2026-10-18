@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { SessionStore } from '../storage/sqlite.ts';
+import { logProjection } from './log-projection.ts';
 import { PermissionPolicy, type PermissionPolicySource } from './permissions.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
@@ -77,26 +78,33 @@ export function normalizeBackgroundPolicy(input: unknown): BackgroundPolicyInput
   return p as unknown as BackgroundPolicyInput;
 }
 
-export function backgroundState(store: SessionStore, sessionId: string): BackgroundState {
-  let policy: BackgroundPolicy = {
-    mode: 'notify',
-    paused: false,
-    maxWakeups: 3,
-    maxRunMs: 60000,
-    epoch: 'default',
-    used: 0,
-  };
-  const deliveries = new Map<string, BackgroundDelivery>();
-  for (const e of store.events(sessionId)) {
+/** The policy and the deliveries, folded in log order and continued from the last seq (see `logProjection`). */
+const deliveryLog = logProjection<{
+  policy: BackgroundPolicy;
+  deliveries: Map<string, BackgroundDelivery>;
+}>(
+  () => ({
+    policy: {
+      mode: 'notify',
+      paused: false,
+      maxWakeups: 3,
+      maxRunMs: 60000,
+      epoch: 'default',
+      used: 0,
+    },
+    deliveries: new Map(),
+  }),
+  (state, e) => {
     if (e.type === 'background.policy')
-      policy = structuredClone(e.data.policy as unknown as BackgroundPolicy);
+      state.policy = structuredClone(e.data.policy as unknown as BackgroundPolicy);
     if (e.type === 'background.pending') {
       const delivery = e.data.delivery as unknown as BackgroundDelivery;
-      if (!deliveries.has(delivery.id)) deliveries.set(delivery.id, structuredClone(delivery));
+      if (!state.deliveries.has(delivery.id))
+        state.deliveries.set(delivery.id, structuredClone(delivery));
     }
     if (e.type === 'background.admitted' || e.type === 'background.processed') {
       for (const id of (e.data.ids as string[]) ?? []) {
-        const d = deliveries.get(id);
+        const d = state.deliveries.get(id);
         if (!d) continue;
         d.state = e.type === 'background.admitted' ? 'admitted' : 'processed';
         d.reason = String(e.data.reason ?? 'automatic');
@@ -104,20 +112,27 @@ export function backgroundState(store: SessionStore, sessionId: string): Backgro
       if (
         e.type === 'background.admitted' &&
         e.data.automatic === true &&
-        e.data.epoch === policy.epoch
+        e.data.epoch === state.policy.epoch
       )
-        policy.used++;
+        state.policy.used++;
     }
-  }
-  return { policy, deliveries: [...deliveries.values()] };
+  },
+);
+
+export function backgroundState(store: SessionStore, sessionId: string): BackgroundState {
+  const { policy, deliveries } = deliveryLog.read(store, sessionId);
+  // Copies: the fold behind them is kept and continued, and a caller may change what it was handed.
+  return { policy: structuredClone(policy), deliveries: structuredClone([...deliveries.values()]) };
 }
 
-/** Producer events, including collection, are folded in order: a later child turn is a new result. */
-export function reconcileBackground(store: SessionStore, sessionId: string): BackgroundState {
-  const outcomes = new Map<string, BackgroundDelivery>();
-  const commands = new Set<string>();
-  const children = new Map<string, string>();
-  for (const e of store.events(sessionId)) {
+/** The producers' outcomes as the log tells them, before they are compared with the recorded deliveries. */
+const outcomeLog = logProjection<{
+  outcomes: Map<string, BackgroundDelivery>;
+  commands: Set<string>;
+  children: Map<string, string>;
+}>(
+  () => ({ outcomes: new Map(), commands: new Set(), children: new Map() }),
+  ({ outcomes, commands, children }, e) => {
     const producerId = String(e.data.id ?? '');
     if (e.type === 'command.started') commands.add(producerId);
     if (e.type === 'subagent.assigned')
@@ -132,12 +147,12 @@ export function reconcileBackground(store: SessionStore, sessionId: string): Bac
         e.data.sessionId ?? e.data.childSessionId ?? children.get(producerId) ?? '',
       );
       const knownId = producerId || [...children].find(([, id]) => id === childSessionId)?.[0];
-      if (!knownId || (kind === 'subagent' && !children.has(knownId))) continue;
+      if (!knownId || (kind === 'subagent' && !children.has(knownId))) return;
       const id =
         kind === 'command'
           ? `command:${knownId}`
           : `subagent:${knownId}:${e.data.childRunId ?? e.seq}`;
-      if (outcomes.has(id)) continue;
+      if (outcomes.has(id)) return;
       outcomes.set(id, {
         id,
         kind,
@@ -160,11 +175,18 @@ export function reconcileBackground(store: SessionStore, sessionId: string): Bac
           d.reason = 'collected';
         }
     }
-  }
-  const current = new Map(backgroundState(store, sessionId).deliveries.map((d) => [d.id, d]));
+  },
+);
+
+/** Producer events, including collection, are folded in order: a later child turn is a new result. */
+export function reconcileBackground(store: SessionStore, sessionId: string): BackgroundState {
+  const { outcomes } = outcomeLog.read(store, sessionId);
+  const current = deliveryLog.read(store, sessionId).deliveries;
   for (const d of outcomes.values()) {
     const existing = current.get(d.id);
-    if (!existing) store.recordEvent(sessionId, 'background.pending', { delivery: d });
+    // A copy: the journal keeps the event's data by reference, and the fold goes on changing `d`.
+    if (!existing)
+      store.recordEvent(sessionId, 'background.pending', { delivery: structuredClone(d) });
     else if (d.state === 'processed' && existing.state !== 'processed')
       store.recordEvent(sessionId, 'background.processed', { ids: [d.id], reason: 'collected' });
   }

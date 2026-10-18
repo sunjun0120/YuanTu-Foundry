@@ -143,7 +143,15 @@ function gated<T>(file: string, action: () => T): T {
       fd = openSync(lock, 'wx', 0o600);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // Windows answers EPERM, not EEXIST, while the previous owner's lock is still being deleted: the file is
+      // gone to every reader but its name cannot be created yet. That is a lock being released, so wait for it.
+      if (code === 'EPERM' && process.platform === 'win32') {
+        if (Date.now() >= deadline) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        continue;
+      }
+      if (code !== 'EEXIST') throw error;
       // Never unlink a stale lock automatically: two reclaimers could remove a new owner's lock.
       if (Date.now() >= deadline) {
         let contents: string;

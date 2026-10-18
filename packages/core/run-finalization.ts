@@ -6,6 +6,7 @@ import type {
   Task,
   Usage,
 } from '../protocol/index.ts';
+import { describeViolations } from '../protocol/invariants.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
@@ -251,4 +252,39 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
   emit('run.finished', { result });
 
   return result;
+}
+
+/**
+ * Runs the `run-end` invariants and turns a violation into a failed run.
+ *
+ * A violation is logged as well as recorded: the registry is process-wide and a host may outlive many
+ * runs, so the log is where an operator sees that a promise broke even if nobody looks at this run's
+ * result.
+ */
+export async function checkRunEnd(
+  agent: Pick<AgentOptions, 'invariants' | 'onEvent' | 'store'>,
+  result: RunResult,
+  sessionId: string,
+  runId: string,
+  emittedTypes: string[],
+): Promise<void> {
+  const invariants = agent.invariants;
+  if (!invariants) return;
+  const violations = await invariants.run('run-end', { sessionId, runId, emittedTypes });
+  if (!violations.length) return;
+  const detail = describeViolations(violations);
+  try {
+    agent.onEvent?.({
+      type: 'invariant.violated',
+      sessionId,
+      runId,
+      // Read from the log like any other frame's cursor: a diagnostic is still ordered against the record.
+      seq: agent.store.lastSeq(sessionId),
+      data: { violations },
+    });
+  } catch {
+    /* diagnostics must not change the outcome of a run that already ended */
+  }
+  result.status = 'failed';
+  result.error = `Runtime invariant violated: ${detail}`;
 }

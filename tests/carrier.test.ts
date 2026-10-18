@@ -22,7 +22,9 @@ import path from 'node:path';
 import {
   CarrierService,
   connectedCarrier,
+  mergeAuditWindow,
   parseCarrierCommand,
+  refreshScopeFor,
   spawnedCarrier,
 } from '../packages/carrier/index.ts';
 import { socketTransport } from '../packages/client/host-transport.ts';
@@ -80,6 +82,76 @@ test('the carrier package imports neither Electron nor the shell that consumes i
     for (const [pattern, why] of banned)
       assert.doesNotMatch(text, pattern, `packages/carrier/${name} ${why}`);
   }
+});
+
+test('the audit window appends, keeps the newest entries, and carries the last seq forward', () => {
+  const entry = (seq: number) => ({
+    seq,
+    at: '2026-10-18T00:00:00.000Z',
+    type: 'run.started',
+    data: {},
+  });
+  // The first read starts empty and takes the page whole.
+  assert.deepEqual(mergeAuditWindow([], [entry(1), entry(2)]), [entry(1), entry(2)]);
+  // A later read appends what it missed to what is already held.
+  assert.deepEqual(mergeAuditWindow([entry(1), entry(2)], [entry(3)]), [
+    entry(1),
+    entry(2),
+    entry(3),
+  ]);
+  // The window keeps the newest entries, and its last seq is the cursor the next read continues from.
+  const window = mergeAuditWindow([entry(1), entry(2)], [entry(3)], 2);
+  assert.deepEqual(window, [entry(2), entry(3)]);
+  assert.equal(window.at(-1)?.seq, 3);
+  // A page that brought nothing new changes nothing.
+  assert.deepEqual(mergeAuditWindow([entry(1)], []), [entry(1)]);
+});
+
+test('each command refreshes only the panels its effect moves; unknown or session-wide commands keep the full read', () => {
+  const decision = {
+    sessions: false,
+    changes: false,
+    audit: true,
+    tasks: false,
+    background: false,
+  };
+  assert.deepEqual(refreshScopeFor('approve'), decision);
+  for (const type of ['questionAnswer', 'enqueue', 'clearQueue', 'cancel'] as const)
+    assert.deepEqual(refreshScopeFor(type), decision, type);
+  // A command that replaces the session, rewrites the changes or owns the task panels keeps the full read: the
+  // scoped set above is what a run does repeatedly, and guessing beyond it is how a panel goes stale.
+  const full = { sessions: true, changes: true, audit: true, tasks: true, background: true };
+  for (const type of [
+    'send',
+    'load',
+    'create',
+    'undo',
+    'deleteSession',
+    'taskVerify',
+    'taskRefresh',
+    'taskRetry',
+    'goal',
+    'planApprove',
+  ] as const)
+    assert.deepEqual(refreshScopeFor(type), full, type);
+  // A rename moves only the sidebar row; a task edit that starts nothing moves only the task panel.
+  assert.deepEqual(refreshScopeFor('rename'), {
+    ...decision,
+    sessions: true,
+  });
+  for (const type of ['taskSave', 'taskConfirm', 'taskHistory'] as const)
+    assert.deepEqual(refreshScopeFor(type), { ...decision, tasks: true }, type);
+  // Reads and transcript moves change no panel the refresh owns.
+  const none = { sessions: false, changes: false, audit: false, tasks: false, background: false };
+  for (const type of [
+    'loadOlder',
+    'refreshResources',
+    'export',
+    'subagentTranscript',
+    'closeSubagentTranscript',
+    'planRefresh',
+  ] as const)
+    assert.deepEqual(refreshScopeFor(type), none, type);
 });
 
 test('a spawned carrier drives a real Host in Node, with no shell in the process', async (t) => {
@@ -434,8 +506,16 @@ function dispatch(method, params) {
       return { entries: [], nextSeq: 0 };
     case 'task.list':
       return [];
-    case 'background.list':
-      return [];
+    case 'background.list': {
+      const state = read();
+      if (state.traceBackground) note({ method: 'background.list', params: params });
+      return state.jobs || [];
+    }
+    case 'background.poll': {
+      const job = (read().jobs || []).find(function (entry) { return entry.id === params.id; });
+      if (!job) throw new Error('Unknown job: ' + params.id);
+      return job;
+    }
     case 'background.state':
       return { policy: { mode: 'notify', paused: false, maxWakeups: 3, maxRunMs: 60000, epoch: 'fixture', used: 0 }, deliveries: [] };
     case 'resources.list':
@@ -529,6 +609,11 @@ async function fakeHost(root: string, options: FakeHostOptions = {}) {
     setReply: async (reply: 'echo' | 'mismatch') => {
       current.reply = reply;
       await flush();
+    },
+    /** Background commands as the Host reports them; setting any also logs each `background.list` it answers. */
+    setJobs: async (jobs: Record<string, unknown>[]) => {
+      const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+      await writeFile(statePath, JSON.stringify({ ...state, jobs, traceBackground: true }));
     },
     failReplay: async (change: { deleteOnSandbox?: string; sandboxError?: string }) => {
       const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
@@ -809,6 +894,77 @@ test(
       .filter((entry) => entry.method === 'sandbox.set');
     assert.deepEqual(replayed, [], 'a deleted session is never retried');
     assert.notEqual(carrier.snapshot.session.sessionId, 'session-a');
+  },
+);
+
+test(
+  'background polling republishes only on change and stops once nothing is live',
+  { timeout: 30_000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-background-poll-'));
+    const host = await fakeHost(root, { sessions: ['session-a'] });
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: host.script,
+      workspace: root,
+      env: host.env,
+    });
+    t.after(async () => {
+      await carrier.stop();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    await carrier.start();
+    const job = {
+      id: 'job-1',
+      sessionId: 'session-a',
+      command: 'npm run watch',
+      cwd: root,
+      createdAt: '2026-10-18T00:00:00.000Z',
+      status: 'running',
+      exitCode: null,
+      output: 'watching',
+      nextCursor: 8,
+      truncated: true,
+    };
+    await host.setJobs([job]);
+    await carrier.dispatch({ type: 'refreshBackground' });
+    assert.equal(carrier.snapshot.background[0]?.status, 'running');
+    const lists = async () =>
+      (await host.requests()).filter((entry) => entry.method === 'background.list').length;
+    const until = async (condition: () => Promise<boolean>, what: string) => {
+      const deadline = Date.now() + 10_000;
+      while (!(await condition())) {
+        if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    let publishes = 0;
+    const unsubscribe = carrier.subscribe(() => publishes++);
+    t.after(unsubscribe);
+    publishes = 0;
+
+    // A live command keeps the poll going, but reads that find nothing new do not republish the snapshot.
+    const seen = await lists();
+    await until(async () => (await lists()) >= seen + 2, 'two polls of a live command');
+    assert.equal(publishes, 0, 'an unchanged panel is not republished');
+
+    // The command settles: that read is published once, and with nothing live left the poll stops.
+    await host.setJobs([
+      { ...job, status: 'completed', exitCode: 0, finishedAt: '2026-10-18T00:00:05.000Z' },
+    ]);
+    await until(
+      async () => carrier.snapshot.background[0]?.status === 'completed',
+      'the settled command',
+    );
+    assert.equal(publishes, 1, 'the change is published exactly once');
+    const settled = await lists();
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.equal(await lists(), settled, 'an idle session is not polled');
+    assert.equal(publishes, 1);
+
+    // The panel still answers when asked.
+    await carrier.dispatch({ type: 'refreshBackground' });
+    assert.equal(await lists(), settled + 1);
   },
 );
 

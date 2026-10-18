@@ -124,6 +124,8 @@ test('deleting a session tree drops the bytes only the tree named, in one pass',
   store.append(parent.id, { role: 'user', content: 'p', images: [parentOnly] });
   store.append(child.id, { role: 'user', content: 'c', images: [childOnly, shared] });
   store.append(other.id, { role: 'user', content: 'o', images: [shared] });
+  // Text that spells an address is not a reference to it: the scan narrows on the string, the parse decides.
+  store.append(other.id, { role: 'user', content: `see ${hashOf(parentOnly)}` });
   store.flush();
 
   store.delete(parent.id);

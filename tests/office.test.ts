@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { readPptxSlides } from '../packages/office/read.ts';
 import {
+  OfficeUnavailableError,
   isOfficeUnavailable,
   isScriptAuthorizationFailure,
   runOfficeAutomation,
@@ -15,6 +16,8 @@ import { verifyFileDelivery, deliveryFormats } from '../packages/tools/file-deli
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
 import { MAX_CREATED_SHEETS, runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
+import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS } from '../packages/office/document.ts';
+import { MAX_SLIDE_TABLE_ROWS } from '../packages/office/presentation.ts';
 import { deliveryTool } from '../packages/tools/delivery.ts';
 
 // ---- merged from office.test.ts ----
@@ -91,8 +94,8 @@ test('operation text containing authorization keywords is not a script refusal',
 
 /**
  * The Excel path is pure JavaScript, so it runs on every platform without
- * Office. Only Word and PowerPoint need local Office, and a machine without it
- * skips with a reason instead of failing.
+ * Office. Only Word and PowerPoint editing and PDF previews need local Office
+ * (tests/office-native.test.ts), and a machine without it skips there with a reason.
  */
 test(
   'Excel creation, template edit and HTML preview preserve unaffected workbook parts',
@@ -418,6 +421,338 @@ test('office_create advertises exactly the workbook the engine builds', async (t
     new RegExp(`(1 to ${MAX_CREATED_SHEETS}|more than ${MAX_CREATED_SHEETS} items)`),
   );
 });
+/**
+ * Word and PowerPoint creation is pure JavaScript, so these run on every platform and never skip for a missing
+ * Office: a failure here is a failure of the generator, not of the machine.
+ */
+test('office_create builds a Word document from blocks without Microsoft Office', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-create-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tool = officeTools(root).find((item) => item.name === 'office_create')!;
+  await runOfficeOperation(tool, {
+    format: 'docx',
+    path: 'report.docx',
+    title: 'Quarterly Plan',
+    paragraphs: ['Opening paragraph'],
+    blocks: [
+      { type: 'heading', text: 'Goals', level: 2 },
+      { type: 'paragraph', text: 'First line\nSecond line' },
+      { type: 'list', items: ['Bullet one', 'Bullet two'] },
+      { type: 'list', items: ['Step one'], ordered: true },
+      { type: 'page_break' },
+      {
+        type: 'table',
+        rows: [['Metric', 'Value'], ['Revenue', '947'], ['Short row']],
+      },
+    ],
+  });
+  const bytes = await readFile(path.join(root, 'report.docx'));
+  const mammoth = (await import('mammoth')).default;
+  const text = (await mammoth.extractRawText({ buffer: bytes })).value;
+  for (const expected of [
+    'Quarterly Plan',
+    'Opening paragraph',
+    'Goals',
+    'First line',
+    'Second line',
+    'Bullet two',
+    'Step one',
+    'Revenue',
+    '947',
+    'Short row',
+  ])
+    assert.match(text, new RegExp(expected));
+  // Order is the order of the request: title, then paragraphs, then blocks.
+  assert.ok(text.indexOf('Quarterly Plan') < text.indexOf('Opening paragraph'));
+  assert.ok(text.indexOf('Opening paragraph') < text.indexOf('Goals'));
+  const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml')!.async('string');
+  assert.match(xml, /w:pStyle w:val="Title"/);
+  assert.match(xml, /w:pStyle w:val="Heading2"/);
+  assert.match(xml, /<w:br w:type="page"\/>/);
+  assert.equal(xml.match(/<w:tr\b/g)?.length, 3);
+  // The short row is padded to the table's width instead of leaving a ragged grid.
+  assert.equal(xml.match(/<w:tc>/g)?.length, 6);
+});
+
+test('office_create builds a PowerPoint deck with bullets, a table and notes without Microsoft Office', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-create-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tool = officeTools(root).find((item) => item.name === 'office_create')!;
+  await runOfficeOperation(tool, {
+    format: 'pptx',
+    path: 'deck.pptx',
+    title: 'Quarterly Review',
+    slides: [
+      { title: 'Quarterly Review' },
+      { title: 'Highlights', body: ['Revenue up', 'Costs flat'], notes: 'Mention the hiring plan' },
+      {
+        title: 'Numbers',
+        table: [
+          ['Metric', 'Value'],
+          ['Revenue', '947'],
+        ],
+      },
+    ],
+  });
+  const bytes = await readFile(path.join(root, 'deck.pptx'));
+  const slides = await readPptxSlides(bytes);
+  assert.equal(slides.length, 3);
+  assert.match(slides[0]!, /Quarterly Review/);
+  assert.match(slides[1]!, /Revenue up/);
+  assert.match(slides[1]!, /Costs flat/);
+  assert.match(slides[2]!, /Metric/);
+  assert.match(slides[2]!, /947/);
+  const zip = await JSZip.loadAsync(bytes);
+  const notes = Object.keys(zip.files).filter((name) => /^ppt\/notesSlides\/.+\.xml$/.test(name));
+  const noteText = await Promise.all(notes.map((name) => zip.file(name)!.async('string')));
+  assert.ok(noteText.some((xml) => xml.includes('Mention the hiring plan')));
+  // Widescreen 13.333" × 7.5" in EMU.
+  assert.match(
+    await zip.file('ppt/presentation.xml')!.async('string'),
+    /<p:sldSz cx="12192000" cy="6858000"/,
+  );
+});
+
+test('the old Word and PowerPoint argument shapes still create through the JS generators', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-legacy-args-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const docx = path.join(root, 'legacy.docx');
+  const pptx = path.join(root, 'legacy.pptx');
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'docx',
+    outputPath: docx,
+    title: 'Plan',
+    paragraphs: ['Keep original detail'],
+  });
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'pptx',
+    outputPath: pptx,
+    slides: [{ title: 'Plan', body: ['Keep this point'] }],
+  });
+  const mammoth = (await import('mammoth')).default;
+  assert.match(
+    (await mammoth.extractRawText({ buffer: await readFile(docx) })).value,
+    /Keep original detail/,
+  );
+  assert.match((await readPptxSlides(await readFile(pptx))).join(' '), /Keep this point/);
+});
+
+test('office_create refuses tables and block lists past their published limits', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-create-limits-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tool = officeTools(root).find((item) => item.name === 'office_create')!;
+  const wide = [Array.from({ length: MAX_TABLE_COLUMNS + 1 }, () => 'x')];
+  await assert.rejects(
+    runOfficeOperation(tool, {
+      format: 'docx',
+      path: 'wide.docx',
+      blocks: [{ type: 'table', rows: wide }],
+    }),
+  );
+  await assert.rejects(
+    runOfficeOperation(tool, {
+      format: 'pptx',
+      path: 'wide.pptx',
+      slides: [{ title: 'Wide', table: wide }],
+    }),
+  );
+  await assert.rejects(
+    runOfficeOperation(tool, {
+      format: 'docx',
+      path: 'long.docx',
+      blocks: Array.from({ length: MAX_DOCUMENT_BLOCKS + 1 }, () => ({ type: 'page_break' })),
+    }),
+  );
+  await assert.rejects(
+    runOfficeOperation(tool, {
+      format: 'docx',
+      path: 'unknown.docx',
+      blocks: [{ type: 'image', path: 'logo.png' }],
+    }),
+  );
+  await assert.rejects(readFile(path.join(root, 'wide.docx')));
+  await assert.rejects(
+    runOfficeOperation(tool, {
+      format: 'pptx',
+      path: 'tall.pptx',
+      slides: [
+        { title: 'Tall', table: Array.from({ length: MAX_SLIDE_TABLE_ROWS + 1 }, () => ['x']) },
+      ],
+    }),
+  );
+});
+
+/** Characters XML 1.0 forbids in content; one of them in a part makes Word and PowerPoint call the file corrupt. */
+const XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/;
+async function xmlParts(file: string, pattern: RegExp): Promise<string[]> {
+  const zip = await JSZip.loadAsync(await readFile(file));
+  return Promise.all(
+    Object.keys(zip.files)
+      .filter((name) => !zip.files[name]!.dir && pattern.test(name))
+      .map((name) => zip.file(name)!.async('string')),
+  );
+}
+
+test('control characters in model text are dropped instead of corrupting the package', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-control-chars-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const docx = path.join(root, 'made.docx');
+  const pptx = path.join(root, 'made.pptx');
+  const edited = path.join(root, 'edited.docx');
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'docx',
+    outputPath: docx,
+    title: 'Ti\u0001tle',
+    paragraphs: ['Hel\u000blo NAME'],
+    blocks: [
+      { type: 'list', items: ['it\u0007em'] },
+      { type: 'table', rows: [['ce\u001fll']] },
+    ],
+  });
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'pptx',
+    outputPath: pptx,
+    title: 'De\u0002ck',
+    slides: [
+      { title: 'Sl\u0002ide', body: ['po\u0007int'], table: [['ce\u0008ll']], notes: 'no\u0003te' },
+    ],
+  });
+  await runOfficeAutomation({
+    operation: 'edit',
+    format: 'docx',
+    sourcePath: docx,
+    outputPath: edited,
+    replacements: [{ from: 'NAME', to: 'Ada\u0003 Lovelace' }],
+  });
+  for (const xml of [
+    ...(await xmlParts(docx, /\.xml$/)),
+    ...(await xmlParts(pptx, /\.xml$/)),
+    ...(await xmlParts(edited, /\.xml$/)),
+  ])
+    assert.doesNotMatch(xml, XML_FORBIDDEN);
+  const mammoth = (await import('mammoth')).default;
+  const text = (await mammoth.extractRawText({ buffer: await readFile(edited) })).value;
+  for (const expected of ['Title', 'Hello Ada Lovelace', 'item', 'cell'])
+    assert.match(text, new RegExp(expected));
+  const slides = (await readPptxSlides(await readFile(pptx))).join(' ');
+  for (const expected of ['Slide', 'point', 'cell']) assert.match(slides, new RegExp(expected));
+  assert.ok((await xmlParts(pptx, /^ppt\/notesSlides\//)).some((xml) => xml.includes('note')));
+});
+
+test('each ordered list in a Word document starts again at 1', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-ordered-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const docx = path.join(root, 'lists.docx');
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'docx',
+    outputPath: docx,
+    blocks: [
+      { type: 'list', ordered: true, items: ['a1', 'a2'] },
+      { type: 'paragraph', text: 'between' },
+      { type: 'list', ordered: true, items: ['b1', 'b2'] },
+    ],
+  });
+  const [xml] = await xmlParts(docx, /^word\/document\.xml$/);
+  const numId = (item: string) =>
+    xml!.match(new RegExp(`<w:numId w:val="(\\d+)"/>(?:(?!</w:p>).)*?<w:t[^>]*>${item}<`))?.[1];
+  assert.ok(numId('a1'));
+  assert.equal(numId('a1'), numId('a2'), 'items of one list share a numbering instance');
+  assert.notEqual(numId('a1'), numId('b1'), 'a second list gets its own instance, so it restarts');
+  // The second instance must restart its counter rather than continue the first one's.
+  const [numbering] = await xmlParts(docx, /^word\/numbering\.xml$/);
+  const instance = numbering!.match(
+    new RegExp(`<w:num w:numId="${numId('b1')}"[^>]*>(?:(?!</w:num>).)*</w:num>`),
+  )?.[0];
+  assert.match(instance ?? '', /<w:startOverride w:val="1"\/>/);
+});
+
+/** Shapes of a slide as EMU rectangles: `y` and height of every placed frame. */
+function frames(xml: string): { y: number; cy: number }[] {
+  return [...xml.matchAll(/<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)].map(
+    (match) => ({ y: Number(match[1]), cy: Number(match[2]) }),
+  );
+}
+const SLIDE_HEIGHT_EMU = 6858000;
+
+test('a slide table at its row limit stays on the slide, under bullets too', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-tall-table-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pptx = path.join(root, 'tall.pptx');
+  const table = Array.from({ length: MAX_SLIDE_TABLE_ROWS }, (_, row) => [`r${row}`, 'value']);
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'pptx',
+    outputPath: pptx,
+    slides: [
+      { title: 'Table only', table },
+      { title: 'Bullets and table', body: ['One', 'Two', 'Three'], table },
+    ],
+  });
+  const slides = await xmlParts(pptx, /^ppt\/slides\/slide\d+\.xml$/);
+  assert.equal(slides.length, 2);
+  for (const xml of slides) {
+    // A row is drawn at least as tall as one line of its text plus the cell margins, whatever `h` says, so a
+    // written height of 0 must not pass for a table that fits.
+    const table = xml.slice(xml.indexOf('<a:tbl>'));
+    const size = Number(table.match(/\bsz="(\d+)"/)![1]) / 100;
+    const margins =
+      Number(table.match(/marT="(\d+)"/)![1]) + Number(table.match(/marB="(\d+)"/)![1]);
+    const lineEmu = Math.ceil(size * 1.2 * 12_700) + margins;
+    const rowHeights = [...table.matchAll(/<a:tr h="(\d+)"/g)].map((match) =>
+      Math.max(Number(match[1]), lineEmu),
+    );
+    assert.equal(rowHeights.length, MAX_SLIDE_TABLE_ROWS);
+    const tableTop = frames(xml).at(-1)!.y;
+    const bottom = tableTop + rowHeights.reduce((sum, height) => sum + height, 0);
+    assert.ok(bottom <= SLIDE_HEIGHT_EMU, `table ends at ${bottom} EMU, past the slide`);
+  }
+});
+
+test('long bullet lists get a smaller font instead of overflowing their box', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-bullets-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pptx = path.join(root, 'bullets.pptx');
+  const long =
+    'A bullet that runs on for quite a while to need more than one line of the slide width. '.repeat(
+      2,
+    );
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'pptx',
+    outputPath: pptx,
+    slides: [
+      { title: 'Short', body: ['One', 'Two'] },
+      { title: 'Long', body: Array.from({ length: 14 }, () => long) },
+      {
+        title: 'Long with table',
+        body: Array.from({ length: 6 }, () => long),
+        table: [['a'], ['b']],
+      },
+    ],
+  });
+  const slides = await xmlParts(pptx, /^ppt\/slides\/slide\d+\.xml$/);
+  const sizes = (xml: string) =>
+    [...xml.matchAll(/<a:rPr[^>]*\bsz="(\d+)"[^>]*>(?:(?!<\/a:r>).)*?<a:t>(One|A bullet)/g)].map(
+      (match) => Number(match[1]),
+    );
+  const byTitle = (title: string) => slides.find((xml) => xml.includes(`<a:t>${title}</a:t>`))!;
+  assert.deepEqual(
+    [...new Set(sizes(byTitle('Short')))],
+    [2000],
+    'short lists keep the 20 pt default',
+  );
+  for (const title of ['Long', 'Long with table']) {
+    const found = sizes(byTitle(title));
+    assert.ok(found.length > 0);
+    assert.ok(Math.max(...found) < 2000, `${title}: ${found[0]} is not smaller than 20 pt`);
+  }
+});
+
 /** One `office_create` call through the tool's own execute, with the approval it needs already granted. */
 async function runOfficeOperation(
   tool: ReturnType<typeof officeTools>[number],
@@ -638,4 +973,241 @@ test('a small DOCX of the same shape still inspects to its text', async (t) => {
   // The bound must price the package without changing what a readable one returns.
   assert.equal(result.isError, false);
   assert.match(result.content, /Hello from the bounded inspect path/);
+});
+
+// ---- Word and PowerPoint template edits without Office ----
+const SPLIT_RUNS =
+  '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+  '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Hello </w:t></w:r><w:r><w:t>wor</w:t></w:r>' +
+  '<w:proofErr w:type="spellStart"/><w:r><w:t xml:space="preserve">ld again</w:t></w:r></w:p>' +
+  '<w:p><w:r><w:t>wor</w:t></w:r></w:p><w:p/><w:p><w:r><w:t>ld</w:t></w:r></w:p>' +
+  '</w:body></w:document>';
+
+test('a Word edit replaces text split across runs and keeps the first run formatting', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-edit-runs-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'source.docx');
+  const output = path.join(root, 'edited.docx');
+  await writeFile(
+    source,
+    await docxWithDocumentXml(SPLIT_RUNS).generateAsync({ type: 'nodebuffer' }),
+  );
+  await runOfficeAutomation({
+    operation: 'edit',
+    format: 'docx',
+    sourcePath: source,
+    outputPath: output,
+    replacements: [{ from: 'world', to: 'planet & <co>' }],
+  });
+  const after = await JSZip.loadAsync(await readFile(output));
+  const xml = await after.file('word/document.xml')!.async('string');
+  // The match started in the plain "wor" run, so the replacement lands there; the bold run is untouched.
+  assert.match(xml, /<w:rPr><w:b\/><\/w:rPr><w:t>Hello <\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve">planet &amp; &lt;co&gt;<\/w:t>/);
+  assert.match(xml, /<w:t xml:space="preserve"> again<\/w:t>/);
+  // Paragraph boundaries are respected: "wor" + "ld" in separate paragraphs is not a match.
+  assert.match(xml, /<w:p><w:r><w:t>wor<\/w:t><\/w:r><\/w:p><w:p\/><w:p><w:r><w:t>ld<\/w:t>/);
+  const mammoth = (await import('mammoth')).default;
+  const text = (await mammoth.extractRawText({ buffer: await readFile(output) })).value;
+  assert.match(text, /Hello planet & <co> again/);
+  // Parts the edit did not need are carried over unchanged.
+  const before = await JSZip.loadAsync(await readFile(source));
+  assert.equal(
+    await before.file('[Content_Types].xml')!.async('string'),
+    await after.file('[Content_Types].xml')!.async('string'),
+  );
+});
+
+test('a Word edit that matches nothing fails and writes nothing', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-edit-missing-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'source.docx');
+  await writeFile(
+    source,
+    await docxWithDocumentXml(WORD_BODY('present')).generateAsync({ type: 'nodebuffer' }),
+  );
+  await assert.rejects(
+    runOfficeAutomation({
+      operation: 'edit',
+      format: 'docx',
+      sourcePath: source,
+      outputPath: path.join(root, 'edited.docx'),
+      replacements: [
+        { from: 'present', to: 'kept' },
+        { from: 'absent', to: 'x' },
+      ],
+    }),
+    /Word text not found: absent/,
+  );
+  await assert.rejects(readFile(path.join(root, 'edited.docx')));
+});
+
+test('Word edits replace long text and treat ^ literally', async (t) => {
+  // Word's COM Find refused text over 255 characters and read ^ as a code; the JS path has neither limit.
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-long-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'source.docx');
+  const output = path.join(root, 'edited.docx');
+  const long = 'Long clause '.repeat(30).trim(); // 359 characters
+  await runOfficeAutomation({
+    operation: 'create',
+    format: 'docx',
+    outputPath: source,
+    paragraphs: ['Keep this', long, 'Cost 3^2 units', long],
+  });
+  await runOfficeAutomation({
+    operation: 'edit',
+    format: 'docx',
+    sourcePath: source,
+    outputPath: output,
+    replacements: [
+      { from: long, to: 'Short clause' },
+      { from: '3^2', to: '9^1 '.repeat(80).trim() },
+    ],
+  });
+  const mammoth = (await import('mammoth')).default;
+  const text = (await mammoth.extractRawText({ buffer: await readFile(output) })).value;
+  assert.match(text, /Keep this/);
+  assert.doesNotMatch(text, /Long clause/);
+  assert.equal(text.match(/Short clause/g)?.length, 2);
+  assert.match(text, /Cost (9\^1 ){79}9\^1 units/);
+});
+
+test('office_edit revises slide text and table cells of a PowerPoint deck without Office', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-edit-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tools = officeTools(root);
+  const tool = (name: string) => tools.find((item) => item.name === name)!;
+  await runOfficeOperation(tool('office_create'), {
+    format: 'pptx',
+    path: 'deck.pptx',
+    slides: [
+      { title: 'Draft review', body: ['Draft point'] },
+      { title: 'Numbers', table: [['Metric', 'Draft value']] },
+    ],
+  });
+  await runOfficeOperation(tool('office_edit'), {
+    source_path: 'deck.pptx',
+    output_path: 'final.pptx',
+    replacements: [{ from: 'Draft', to: 'Final' }],
+  });
+  const slides = await readPptxSlides(await readFile(path.join(root, 'final.pptx')));
+  assert.match(slides[0]!, /Final review/);
+  assert.match(slides[0]!, /Final point/);
+  assert.match(slides[1]!, /Final value/);
+  assert.doesNotMatch(slides.join(' '), /Draft/);
+  // The template is never modified.
+  assert.match(
+    (await readPptxSlides(await readFile(path.join(root, 'deck.pptx')))).join(' '),
+    /Draft/,
+  );
+});
+
+// ---- Built-in previews and engine fallback ----
+test('an .html preview of Word and PowerPoint needs nothing installed and runs no script', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-html-preview-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let rendered = false;
+  const tools = officeTools(root, {
+    async render() {
+      rendered = true;
+    },
+  });
+  const tool = (name: string) => tools.find((item) => item.name === name)!;
+  await runOfficeOperation(tool('office_create'), {
+    format: 'docx',
+    path: 'report.docx',
+    title: 'Report <script>alert(1)</script>',
+    blocks: [
+      {
+        type: 'table',
+        rows: [
+          ['Metric', 'Value'],
+          ['Revenue', '947'],
+        ],
+      },
+    ],
+  });
+  await runOfficeOperation(tool('office_create'), {
+    format: 'pptx',
+    path: 'deck.pptx',
+    slides: [{ title: 'Highlights', body: ['Revenue up'] }],
+  });
+  await runOfficeOperation(tool('office_preview'), {
+    source_path: 'report.docx',
+    output_path: 'report.html',
+  });
+  await runOfficeOperation(tool('office_preview'), {
+    source_path: 'deck.pptx',
+    output_path: 'deck.html',
+  });
+  const report = await readFile(path.join(root, 'report.html'), 'utf8');
+  assert.match(report, /default-src 'none'/);
+  assert.match(report, /<table>/);
+  assert.match(report, /Revenue/);
+  assert.doesNotMatch(report, /<script>/);
+  const deck = await readFile(path.join(root, 'deck.html'), 'utf8');
+  assert.match(deck, /Slide 1/);
+  assert.match(deck, /Revenue up/);
+  assert.equal(rendered, false);
+});
+
+test('a .pdf preview falls back to LibreOffice only when Office is unavailable', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-pdf-fallback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let rendered = 0;
+  const tools = officeTools(root, {
+    async render(input) {
+      rendered++;
+      await writeFile(input.outputPath, '%PDF-1.4\nfixture\n%%EOF');
+    },
+  });
+  const tool = (name: string) => tools.find((item) => item.name === name)!;
+  await runOfficeOperation(tool('office_create'), {
+    format: 'docx',
+    path: 'report.docx',
+    paragraphs: ['Body'],
+  });
+  const registry = new ToolRegistry();
+  registry.register(tool('office_preview'));
+  const result = await registry.execute(
+    {
+      id: 'pdf',
+      name: 'office_preview',
+      arguments: { source_path: 'report.docx', output_path: 'report.pdf' },
+    },
+    { signal: new AbortController().signal, approve: async () => true },
+  );
+  assert.equal(result.isError, false, result.content);
+  const type = JSON.parse(result.content).previewType;
+  // Which engine answers depends on the machine; that the fallback ran exactly when Office could not does not.
+  assert.equal(type, rendered ? 'libreoffice-pdf' : 'office-pdf');
+  if (process.platform !== 'win32') assert.equal(type, 'libreoffice-pdf');
+});
+
+test('a .pdf preview with no engine available says how to get a preview', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Office may be installed here; the no-engine path is pinned on other platforms');
+    return;
+  }
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-no-engine-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const tools = officeTools(root, {
+    async render() {
+      throw new OfficeUnavailableError('LibreOffice is unavailable');
+    },
+  });
+  const tool = (name: string) => tools.find((item) => item.name === name)!;
+  await runOfficeOperation(tool('office_create'), {
+    format: 'docx',
+    path: 'report.docx',
+    paragraphs: ['Body'],
+  });
+  await assert.rejects(
+    runOfficeOperation(tool('office_preview'), {
+      source_path: 'report.docx',
+      output_path: 'report.pdf',
+    }),
+    /No PDF engine is available.*\.html output_path/s,
+  );
 });

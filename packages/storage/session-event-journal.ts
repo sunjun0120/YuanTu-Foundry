@@ -31,9 +31,20 @@ import {
  * second agent-host process, or the CLI appending while the desktop has the session open.
  */
 interface LogCacheEntry {
-  events: SessionEvent[];
+  /**
+   * The log, owned by the cache and appended to in place. Never handed out: readers get `eventsOf`'s frozen copy.
+   *
+   * Appends used to build a new frozen array per event, which made every append cost the whole history (a third
+   * of a millisecond at twenty thousand events, paid again for every event of a run). Now an append is a push,
+   * and the copy is taken once per *read* that follows a change rather than once per write.
+   */
+  log: SessionEvent[];
+  /** The frozen copy last handed out, or null when the log moved since. */
+  eventsView: SessionEvent[] | null;
   /** The folded transcript, or null while nobody has asked for it: reading the log is not reading it. */
-  messages: Message[] | null;
+  folded: Message[] | null;
+  /** The frozen copy of `folded` last handed out; only a message event clears it, not every event. */
+  messagesView: Message[] | null;
   /**
    * Whether every event in this log is one this build can interpret: `null` until a *derived* answer asks.
    *
@@ -45,6 +56,23 @@ interface LogCacheEntry {
   dataVersion: number;
   /** `approximateBytes` of the events, kept so the cache can be bounded by size without re-walking them. */
   bytes: number;
+}
+
+/** The log as readers see it: a frozen copy, reused until the next append. */
+function eventsOf(entry: LogCacheEntry): SessionEvent[] {
+  return (entry.eventsView ??= frozen(entry.log.slice()));
+}
+
+/** Append to a cached log in place, folding into its transcript when one was already asked for. */
+function appendToEntry(entry: LogCacheEntry, events: readonly SessionEvent[]): void {
+  if (!events.length) return;
+  for (const event of events) entry.log.push(event);
+  entry.eventsView = null;
+  entry.bytes += approximateBytes(events);
+  if (!entry.folded) return;
+  const before = entry.folded.length;
+  appendFoldedMessages(entry.folded, events);
+  if (entry.folded.length !== before) entry.messagesView = null;
 }
 
 /** One message waiting to be written, with the parts of it that are cheaper to compute before the write. */
@@ -181,20 +209,20 @@ export class SessionEventJournal {
   events(id: string, afterSeq = 0, limit?: number): SessionEvent[] {
     // A reader must not be shown less than is recorded, so buffered appends are written before a read.
     this.flush(id);
-    if (afterSeq === 0 && limit === undefined) return this.logOf(id).events;
+    if (afterSeq === 0 && limit === undefined) return eventsOf(this.logOf(id));
     const cached = this.transactionDepth === 0 ? this.cachedLog(id) : undefined;
     if (cached) {
       // A delta read asks for a tail, and the cached log is ordered by seq, so the position is found by
       // bisection rather than by filtering the whole log: a reader that polls for new events should not pay for
       // the history it has already seen on every poll.
       let low = 0;
-      let high = cached.events.length;
+      let high = cached.log.length;
       while (low < high) {
         const middle = Math.floor((low + high) / 2);
-        if (cached.events[middle]!.seq <= afterSeq) low = middle + 1;
+        if (cached.log[middle]!.seq <= afterSeq) low = middle + 1;
         else high = middle;
       }
-      return frozen(cached.events.slice(low, limit === undefined ? undefined : low + limit));
+      return frozen(cached.log.slice(low, limit === undefined ? undefined : low + limit));
     }
     // A delta read asks for a tail, not for the log, so it stays a bounded query instead of reading the
     // whole history to answer a question about its end.
@@ -338,8 +366,10 @@ export class SessionEventJournal {
     const dataVersion = this.dataVersion();
     const events = this.readEvents(id, 0);
     const entry: LogCacheEntry = {
-      events: frozen(events),
-      messages: null,
+      log: events,
+      eventsView: null,
+      folded: null,
+      messagesView: null,
       readable: null,
       dataVersion,
       bytes: approximateBytes(events),
@@ -359,8 +389,8 @@ export class SessionEventJournal {
    */
   private transcriptOf(id: string): Message[] {
     const entry = this.logOf(id);
-    entry.messages ??= frozen(foldMessages(entry.events));
-    return entry.messages;
+    entry.folded ??= foldMessages(entry.log);
+    return (entry.messagesView ??= frozen(entry.folded.slice()));
   }
 
   /**
@@ -375,10 +405,10 @@ export class SessionEventJournal {
   checkedLog(id: string): readonly SessionEvent[] {
     const entry = this.logOf(id);
     if (entry.readable === null) {
-      assertKnownEvents(entry.events);
+      assertKnownEvents(entry.log);
       entry.readable = true;
     }
-    return entry.events;
+    return eventsOf(entry);
   }
 
   private cachedLog(id: string): LogCacheEntry | undefined {
@@ -412,21 +442,15 @@ export class SessionEventJournal {
         this.logCache.delete(id);
         return undefined;
       }
-      const tail = this.readEvents(id, entry.events.at(-1)?.seq ?? 0);
-      const next: LogCacheEntry = tail.length
-        ? {
-            events: frozen([...entry.events, ...tail]),
-            messages: entry.messages
-              ? frozen(appendFoldedMessages([...entry.messages], tail))
-              : null,
-            // Events another build wrote are not vouched for: the next derived read checks the log again.
-            readable: null,
-            dataVersion,
-            bytes: entry.bytes + approximateBytes(tail),
-          }
-        : { ...entry, dataVersion };
-      this.rememberLog(id, next);
-      return next;
+      const tail = this.readEvents(id, entry.log.at(-1)?.seq ?? 0);
+      // A fold that refuses the tail throws out of here before the entry is trusted again: the catch below drops
+      // it, so a half-extended entry is never read.
+      appendToEntry(entry, tail);
+      // Events another build wrote are not vouched for: the next derived read checks the log again.
+      if (tail.length) entry.readable = null;
+      entry.dataVersion = dataVersion;
+      this.rememberLog(id, entry);
+      return entry;
     } catch {
       this.logCache.delete(id);
       return undefined;
@@ -478,7 +502,7 @@ export class SessionEventJournal {
    */
   lastSeq(id: string): number {
     const cached = this.transactionDepth === 0 ? this.cachedLog(id) : undefined;
-    if (cached) return cached.events.at(-1)?.seq ?? 0;
+    if (cached) return cached.log.at(-1)?.seq ?? 0;
     const seq = Number(
       this.port.db.prepare('SELECT MAX(seq) AS seq FROM session_events WHERE session_id=?').get(id)
         ?.seq ?? 0,
@@ -568,15 +592,11 @@ export class SessionEventJournal {
       return;
     }
     const stored = appended.map((event) => ({ ...event, data: structuredClone(event.data) }));
-    this.rememberLog(id, {
-      events: frozen([...entry.events, ...stored]),
-      messages: entry.messages ? frozen(appendFoldedMessages([...entry.messages], stored)) : null,
-      // Appended events come from `recordEvent`, whose type is this build's own, so a log already checked stays
-      // checked; one that has not been checked stays unchecked and pays for the check when a derived read asks.
-      readable: entry.readable,
-      dataVersion: entry.dataVersion,
-      bytes: entry.bytes + approximateBytes(stored),
-    });
+    // Appended events come from `recordEvent`, whose type is this build's own, so a log already checked stays
+    // checked; one that has not been checked stays unchecked and pays for the check when a derived read asks.
+    // A fold that throws leaves the entry half-extended, which is why every caller drops the cache on a throw.
+    appendToEntry(entry, stored);
+    this.rememberLog(id, entry);
   }
 
   /** Fold a committed transaction's events into the cache; a failed one leaves nothing behind. */

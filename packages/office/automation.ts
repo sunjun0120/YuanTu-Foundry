@@ -1,3 +1,6 @@
+import { createDocx, type DocumentBlock } from './document.ts';
+import { createPptx, type SlideSpec } from './presentation.ts';
+import { replaceOfficeText } from './replace.ts';
 import { runSpreadsheetOperation } from './spreadsheet.ts';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -12,8 +15,9 @@ export type OfficeOperation =
       outputPath: string;
       title?: string;
       paragraphs?: string[];
+      blocks?: DocumentBlock[];
       sheets?: { name: string; rows: (string | number | boolean | null)[][] }[];
-      slides?: { title: string; body: string[] }[];
+      slides?: SlideSpec[];
     }
   | {
       operation: 'edit';
@@ -37,7 +41,8 @@ export type OfficeOperation =
  * The environment refuses in three different ways — Office is not installed, PowerShell cannot be started, or
  * Windows will not load the automation script — and each message names its own cause, because the remedies have
  * nothing to do with each other: install Office, fix the PATH, or settle the script-authorization policy with
- * whoever owns the machine. Word and PowerPoint need this path; `office_inspect` and the Excel tools do not.
+ * whoever owns the machine. Only Office PDF previews of Word and PowerPoint need this path; creating, editing,
+ * inspecting and HTML previews do not.
  */
 export class OfficeUnavailableError extends Error {
   constructor(message: string) {
@@ -87,6 +92,15 @@ export async function runOfficeAutomation(
     await runSpreadsheetOperation(operation as OfficeOperation & { format: 'xlsx' });
     return;
   }
+  // Creating and editing Word and PowerPoint is pure JavaScript; only PDF conversion still needs local Office.
+  if (operation.operation === 'create') {
+    await (operation.format === 'docx' ? createDocx(operation) : createPptx(operation));
+    return;
+  }
+  if (operation.operation === 'edit') {
+    await replaceOfficeText({ ...operation, format: operation.format });
+    return;
+  }
   await runOfficePowerShell(operation, signal);
 }
 async function runOfficePowerShell(
@@ -95,8 +109,8 @@ async function runOfficePowerShell(
 ): Promise<void> {
   if (process.platform !== 'win32')
     throw new OfficeUnavailableError(
-      'Word and PowerPoint automation needs Microsoft Office on Windows. ' +
-        'office_inspect reads DOCX, XLSX and PPTX anywhere, and the Excel tools work without Office.',
+      'Converting Word and PowerPoint files to PDF through Microsoft Office needs Office on Windows. ' +
+        'Creating, editing, inspecting and HTML previews work without Office.',
     );
   const script = path.join(
     typeof __dirname === 'string' ? __dirname : path.dirname(fileURLToPath(import.meta.url)),
@@ -144,8 +158,8 @@ async function runOfficePowerShell(
       if (error.code === 'ENOENT')
         fail(
           new OfficeUnavailableError(
-            'Windows PowerShell could not be started, so Word and PowerPoint automation is unavailable. ' +
-              'office_inspect still reads DOCX, XLSX and PPTX, and the Excel tools work without Office. Original error: ' +
+            'Windows PowerShell could not be started, so PDF conversion through Microsoft Office is unavailable. ' +
+              'Creating, editing, inspecting and HTML previews still work without Office. Original error: ' +
               error.message,
           ),
         );
@@ -169,7 +183,7 @@ async function runOfficePowerShell(
           new OfficeUnavailableError(
             `Windows refused to load the Office automation script, so ${operation.format} ${operation.operation} cannot run here. ` +
               'This is a script-authorization limit of this machine — an execution policy that will not run the file, a copy marked as untrusted, or a blocked script host — not a missing installation and not a failure of the requested operation. ' +
-              'office_inspect still reads DOCX, XLSX and PPTX, and the Excel tools work without Office, because neither path loads this script. Original error: ' +
+              'Creating, editing, inspecting and HTML previews still work, because none of those paths loads this script. Original error: ' +
               detail,
           ),
         );
@@ -179,8 +193,8 @@ async function runOfficePowerShell(
         reject(
           new OfficeUnavailableError(
             `Microsoft Office is not installed on this machine, so ${operation.format} ${operation.operation} cannot run. ` +
-              'office_inspect still reads DOCX, XLSX and PPTX, and office_create/office_edit/office_preview still handle XLSX, because those paths do not use Office. ' +
-              'Install Microsoft Office to create or convert Word and PowerPoint files. Original error: ' +
+              'Creating, editing, inspecting and HTML previews still work, because those paths do not use Office. ' +
+              'Install Microsoft Office or LibreOffice to convert Word and PowerPoint files to PDF. Original error: ' +
               detail,
           ),
         );

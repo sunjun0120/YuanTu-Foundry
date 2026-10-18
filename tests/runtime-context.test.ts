@@ -266,9 +266,14 @@ test('a workspace that changed between runs appends the outline instead of rewri
     1,
     'one prompt for two runs',
   );
-  // The snapshot is announced before the run's own prompt, so the person's request stays the last thing said.
-  assert.match(requests[0]!.messages[0]!.content, /^<runtime-context source="workspace-outline">/);
-  assert.match(requests[0]!.messages[1]!.content, /看一下这个项目/);
+  // Snapshots are announced before the run's own prompt, so the person's request stays the last thing said.
+  const opening = requests[0]!.messages;
+  assert.ok(
+    opening
+      .slice(0, -1)
+      .some((message) => /^<runtime-context source="workspace-outline">/.test(message.content)),
+  );
+  assert.match(opening.at(-1)!.content, /看一下这个项目/);
   const seen = snapshotsIn(requests[1]!.messages, 'workspace-outline');
   assert.equal(seen.length, 2, 'the conversation holds both snapshots, oldest first');
   assert.match(seen[1]!, /added\.ts/);
@@ -592,14 +597,13 @@ test('a skill written during a run is announced instead of changing the prompt',
     `the skill file was written: ${written?.role === 'tool' ? written.content : 'no tool result'}`,
   );
   assert.equal(new Set(requests.map((request) => request.system)).size, 1, 'one prompt throughout');
-  assert.equal(
-    snapshotsIn(requests[0]!.messages, 'skills').length,
-    0,
-    'the workspace offered no skills when the run started',
-  );
+  // Only the built-in skills were on offer when the run started; the workspace had none of its own.
+  const before = snapshotsIn(requests[0]!.messages, 'skills');
+  assert.equal(before.length, 1);
+  assert.doesNotMatch(before[0]!, /release:/);
   const after = snapshotsIn(requests[1]!.messages, 'skills');
-  assert.equal(after.length, 1);
-  assert.match(after[0]!, /Available skills \(use load_skill to read relevant guidance\):/);
-  assert.match(after[0]!, /release: How releases are cut/);
+  assert.equal(after.length, 2, 'the changed set is announced once more, after the first');
+  assert.match(after[1]!, /Available skills \(use load_skill to read relevant guidance\):/);
+  assert.match(after[1]!, /release: How releases are cut/);
   assert.ok(!requests[1]!.system.includes('How releases are cut'), 'and not through the prompt');
 });

@@ -23,6 +23,7 @@ import {
 import type { SessionEvent } from '../packages/storage/events.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 import type { Message, ModelResponse } from '../packages/protocol/index.ts';
 
 const reply = (text = 'Done'): ModelResponse => ({
@@ -93,6 +94,8 @@ test('a real run records its transcript as events, and all three views agree', a
     [
       'run.started',
       'message.user',
+      // The runtime's machine-written skills announcement is a user-role message in the log too.
+      'message.user',
       'resources.loaded',
       'step.started',
       'context.envelope',
@@ -117,13 +120,16 @@ test('a real run records its transcript as events, and all three views agree', a
   const folded = foldMessages(events);
   assert.deepEqual(folded, store.messages(session.id));
   assert.deepEqual(rawRows(file, session.id), store.messages(session.id));
+  const conversation = store
+    .messages(session.id)
+    .filter((message) => !isRuntimeContext(message.content));
   assert.deepEqual(
-    store.messages(session.id).map((message) => message.role),
+    conversation.map((message) => message.role),
     ['user', 'assistant', 'tool', 'assistant'],
   );
   // `run.*` and `step.*` events describe the run, not the transcript: they must not leak into the model's
   // history.
-  assert.equal(folded.length, 4);
+  assert.equal(folded.filter((message) => !isRuntimeContext(message.content)).length, 4);
   assert.ok(!isSessionEventType('run.started' satisfies string) === false);
 });
 

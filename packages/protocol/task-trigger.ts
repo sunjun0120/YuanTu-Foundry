@@ -4,8 +4,8 @@ import {
   latestCalendarRun,
   normalizeInstant,
   normalizeTimeZone,
-} from './calendar.ts';
-import { nextCronRun, latestCronRun } from './cron.ts';
+} from '../formats/calendar.ts';
+import { nextCronRun, latestCronRun } from '../formats/cron.ts';
 
 /** Interval triggers are capped at one week so a typo cannot park a task for years. */
 export const MIN_INTERVAL_MINUTES = 1;

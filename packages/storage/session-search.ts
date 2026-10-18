@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { ftsDisplayText, ftsSnippetTokens } from '../protocol/fts-text.ts';
+import { ftsDisplayText, ftsSnippetTokens } from '../formats/fts-text.ts';
 import {
   MAX_SEARCH_MATCHES,
   MAX_SEARCH_SESSIONS,

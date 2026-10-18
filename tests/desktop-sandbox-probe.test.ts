@@ -7,6 +7,7 @@ import { SandboxEnvironment } from '../apps/desktop/sandbox-environment.ts';
 import { runInNewContext } from 'node:vm';
 import { stripTypeScriptTypes } from 'node:module';
 import * as sandboxSetup from '../apps/desktop/sandbox-setup.ts';
+import { withinQuitDeadline } from '../apps/desktop/quit-deadline.ts';
 
 test('desktop quit bounds sandbox initialization and still closes both carriers', async () => {
   const source = await readFile(new URL('../apps/desktop/main.ts', import.meta.url), 'utf8');
@@ -40,9 +41,9 @@ test('desktop quit bounds sandbox initialization and still closes both carriers'
           waitForSandboxInitialization?: (setup: Promise<unknown>, ms: number) => Promise<boolean>;
         }
       ).waitForSandboxInitialization?.(setup, 20),
-    backupRestoring: undefined,
-    dailyBackups: undefined,
-    backupWorkers: new Set(),
+    // The handler bounds each step with this; the real one is used so the bound is exercised, not stubbed away.
+    withinQuitDeadline,
+    backups: { quiesce: async () => {} },
     service: {
       stop: async () => {
         closed++;

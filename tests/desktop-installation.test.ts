@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { desktopPaths } from '../apps/desktop/install-paths.ts';
 
@@ -40,4 +42,25 @@ test('development launch preserves explicit Node and workspace; packaged launch 
     workspace,
   );
   assert.throws(() => desktopPaths({ ...options, packaged: false, env: {} }), /Node/i);
+});
+
+test('the single-file Host bundle is preferred when built, and the compiled entry is the fallback', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-install-paths-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const options = {
+    packaged: false,
+    resourcesPath: path.join(root, 'resources'),
+    mainDirectory: path.join(root, 'app/dist/desktop'),
+    userData: path.join(root, 'profile'),
+    cwd: root,
+    env: { YUANTU_NODE_PATH: process.execPath },
+    args: [],
+  };
+  const compiled = path.join(root, 'app/dist/apps/agent-host/main.js');
+  const bundled = path.join(root, 'app/dist/packages/tools/host.bundle.js');
+  // A checkout that only ran `tsc` has no bundle; the compiled entry is what starts.
+  assert.equal(desktopPaths(options).hostPath, compiled);
+  await mkdir(path.dirname(bundled), { recursive: true });
+  await writeFile(bundled, '// one file\n');
+  assert.equal(desktopPaths(options).hostPath, bundled);
 });

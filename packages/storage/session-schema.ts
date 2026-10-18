@@ -13,7 +13,7 @@ import type {
   TaskTriggerSource,
 } from '../protocol/index.ts';
 import { primeProcessStartTimes, processAlive } from '../platform/process-identity.ts';
-import { ftsIndexText, ftsMatchQuery } from '../protocol/fts-text.ts';
+import { ftsIndexText, ftsMatchQuery } from '../formats/fts-text.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
 import {
   normalizeTaskDraft,

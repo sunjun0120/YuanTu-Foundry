@@ -26,7 +26,7 @@ import {
   latestScheduledAt,
 } from '../packages/protocol/task-trigger.ts';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
-import { nextCalendarRun, latestCalendarRun } from '../packages/protocol/calendar.ts';
+import { nextCalendarRun, latestCalendarRun } from '../packages/formats/calendar.ts';
 
 /** Han characters, for the cases that assert which language a generated string is in. */
 const HAN = /\p{Script=Han}/u;

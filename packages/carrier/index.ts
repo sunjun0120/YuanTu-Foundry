@@ -19,6 +19,8 @@ import type { ConnectedHostOptions, SpawnedHostOptions } from '../client/host-cl
 import { CarrierService } from './service.ts';
 
 export { CarrierService } from './service.ts';
+export { mergeAuditWindow, refreshScopeFor } from './service.ts';
+export type { RefreshScope } from './service.ts';
 export { CarrierError, carrierIssue } from './errors.ts';
 export type { CarrierIssue, CarrierErrorCode } from './errors.ts';
 export { parseCarrierCommand } from './contract.ts';

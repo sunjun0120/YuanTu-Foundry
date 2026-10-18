@@ -55,6 +55,14 @@ export function setupPermissionSettings(
   const enable = byId<HTMLButtonElement>('full-access-enable');
   let view: PermissionPresetView | undefined;
   let pending = true;
+  /**
+   * The last read of the session's pair failed, so the chip does not know what is enforced.
+   *
+   * Without this the chip fell through to `custom`, which is a claim — "the operator set a pair no rung matches" —
+   * about a pair nobody read. A security control that cannot read its state says so, keeps its rungs shut, and
+   * offers to read again; it does not guess.
+   */
+  let unreadable = false;
   /** The preset the open dialog is asking about; `undefined` when no dialog is open. */
   let confirming: PermissionPresetId | undefined;
   /** The `custom` reading inside the menu, drawn by `translate()` and shown by `render()`. */
@@ -147,10 +155,20 @@ export function setupPermissionSettings(
   };
   function render(): void {
     const id = current();
-    const locked = pending || !isReady();
-    trigger.replaceChildren(icon(id), document.createTextNode(label(id)));
-    trigger.dataset.preset = id;
-    trigger.title = id === CUSTOM_PRESET ? '' : boundary(id);
+    const locked = pending || !isReady() || unreadable;
+    trigger.replaceChildren(
+      icon(id),
+      document.createTextNode(unreadable ? text('权限未读取', 'Permissions unknown') : label(id)),
+    );
+    trigger.dataset.preset = unreadable ? 'unknown' : id;
+    trigger.title = unreadable
+      ? text(
+          '未能读取当前会话的权限设置，点击重试。',
+          "This session's permissions could not be read. Click to try again.",
+        )
+      : id === CUSTOM_PRESET
+        ? ''
+        : boundary(id);
     select.value = id;
     /**
      * Nothing is disabled but a control that cannot move yet. The launch environment used to *pin* the mode, so
@@ -167,7 +185,8 @@ export function setupPermissionSettings(
     if (customReading) customReading.hidden = id !== CUSTOM_PRESET;
     drawEnvironment();
     select.disabled = locked;
-    trigger.disabled = locked;
+    // Still clickable when unreadable: the click is the retry (see the trigger's listener).
+    trigger.disabled = pending || !isReady();
   }
   function translate(): void {
     const aria = text('权限与隔离', 'Permissions and isolation');
@@ -274,6 +293,7 @@ export function setupPermissionSettings(
   }
   async function apply(preset: PermissionPresetId, acknowledgeHost: boolean): Promise<void> {
     if (pending) return;
+    let failed = false;
     pending = true;
     onBusy(true);
     render();
@@ -286,6 +306,7 @@ export function setupPermissionSettings(
       if (!reply.ok) throw new Error(reply.error);
       view = reply.view;
     } catch (error) {
+      failed = true;
       fail(error);
     } finally {
       pending = false;
@@ -293,6 +314,10 @@ export function setupPermissionSettings(
       render();
       trigger.focus();
     }
+    // A switch is two writes (the sandbox, then the approval policy), and one that failed between them leaves a
+    // pair that is neither the old rung nor the new one. Drawing the old rung would be the chip lying, so the
+    // pair actually in force is read back.
+    if (failed) void read();
   }
   function choose(next: PermissionPresetId): void {
     if (pending || next === current()) {
@@ -310,6 +335,10 @@ export function setupPermissionSettings(
     void apply(next, false);
   }
   trigger.addEventListener('click', () => {
+    if (unreadable) {
+      void read();
+      return;
+    }
     menu.hidden = !menu.hidden;
     trigger.setAttribute('aria-expanded', String(!menu.hidden));
     if (!menu.hidden) menu.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
@@ -326,16 +355,23 @@ export function setupPermissionSettings(
   menu.addEventListener('keydown', (event) => {
     const buttons = [...menu.querySelectorAll<HTMLButtonElement>('button')];
     const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeMenu();
-      trigger.focus();
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       buttons[
         (index + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length
       ]?.focus();
     } else if (event.key === 'Tab') closeMenu();
+  });
+  /**
+   * Escape closes an open menu wherever focus is. It used to be heard only inside the menu, so a re-render that
+   * replaced the focused item — or an item still disabled when the menu opened — sent the key to the body and left
+   * the menu open over the composer, catching the clicks meant for the attachments beneath it.
+   */
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || menu.hidden) return;
+    event.preventDefault();
+    closeMenu();
+    trigger.focus();
   });
   document.addEventListener('pointerdown', (event) => {
     if (!trigger.parentElement!.contains(event.target as Node)) closeMenu();
@@ -374,9 +410,13 @@ export function setupPermissionSettings(
     render();
     try {
       const reply = await window.yuantu.presets({ type: 'get' });
-      if (reply.ok) view = reply.view;
-      else fail(reply.error);
+      if (!reply.ok) throw new Error(reply.error);
+      view = reply.view;
+      unreadable = false;
     } catch (error) {
+      // The previous view may be another session's: it is dropped rather than shown as this one's.
+      view = undefined;
+      unreadable = true;
       fail(error);
     } finally {
       pending = false;
@@ -397,6 +437,7 @@ export function setupPermissionSettings(
    */
   window.yuantu.subscribePresets((next) => {
     view = next;
+    unreadable = false;
     translate();
   });
   onLocaleChange(translate);

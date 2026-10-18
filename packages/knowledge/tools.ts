@@ -42,7 +42,7 @@ export function knowledgeTools(root: string): { tools: Tool[]; close: () => Prom
       {
         name: 'recall_knowledge',
         description:
-          'Search durable memories and indexed project documents. Use when earlier user preferences, decisions, or project documentation may matter. Results include sources. If no result is found, do not invent one.',
+          'Search durable memories and indexed project documents. Use when earlier user preferences, decisions, or project documentation may matter. Results include sources and a freshness block: a pinned document listed as stale could not be re-read, so its indexed content may be older than the file. If no result is found, do not invent one, and say when a source is stale rather than treating it as current.',
         inputSchema: {
           type: 'object',
           properties: { query: { type: 'string', minLength: 1, maxLength: 200 } },
@@ -51,15 +51,14 @@ export function knowledgeTools(root: string): { tools: Tool[]; close: () => Prom
         },
         execute: async (args) => {
           const query = String(args.query);
-          const indexed = get()
-            .search(root, query)
-            .map((item) => ({
-              kind: item.kind,
-              scope: item.scope,
-              title: item.title,
-              content: item.content,
-              source: item.source,
-            }));
+          const store = get();
+          const indexed = store.search(root, query).map((item) => ({
+            kind: item.kind,
+            scope: item.scope,
+            title: item.title,
+            content: item.content,
+            source: item.source,
+          }));
           const memories = searchMemories(root, query).map((entry) => ({
             kind: 'memory' as const,
             scope: entry.scope,
@@ -67,7 +66,10 @@ export function knowledgeTools(root: string): { tools: Tool[]; close: () => Prom
             content: entry.text,
             source: entry.scope === 'global' ? '~/.yuantu/memory.md' : '.yuantu/memory.md',
           }));
-          return result([...memories, ...indexed]);
+          return result({
+            results: [...memories, ...indexed],
+            freshness: store.freshness(root),
+          });
         },
       },
       {

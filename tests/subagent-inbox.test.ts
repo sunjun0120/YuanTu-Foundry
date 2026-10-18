@@ -14,6 +14,7 @@ import type { PendingSubagentMessage } from '../packages/storage/projections.ts'
 import type { SessionEvent } from '../packages/storage/events.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { isRuntimeContext } from '../packages/protocol/context.ts';
 
 /**
  * *入队即回执* and the durable inbox.
@@ -1106,8 +1107,8 @@ test('cold resident continuation keeps the model and role its delegation assigne
    */
   const models = store
     .messages(childSessionId)
-    .filter((message) => message.role === 'user')
-    .map((message) => message.modelInfo?.model);
+    .filter((message) => message.role === 'user' && !isRuntimeContext(message.content))
+    .map((message) => (message.role === 'user' ? message.modelInfo?.model : undefined));
   t.diagnostic(`models the child's turns ran under: ${JSON.stringify(models)}`);
   assert.deepEqual(
     models,

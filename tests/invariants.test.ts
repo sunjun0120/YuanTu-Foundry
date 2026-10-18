@@ -578,8 +578,12 @@ test('I7: injected context is persisted, positioned and seen by the model', asyn
   );
 
   const announced = events.filter((event) => event.type === 'context.injected');
+  // Runtime snapshots (the built-in skills catalogue, memory) are announced through the same event, so the seam
+  // assertion names its own sources rather than assuming it is the only writer of this type.
   assert.deepEqual(
-    announced.map((event) => event.data.source),
+    announced
+      .map((event) => event.data.source)
+      .filter((source) => source === 'pre-step' || source === 'post-execute'),
     ['pre-step', 'post-execute'],
     'both seams announce their injection, in the order they happened',
   );

@@ -1,5 +1,6 @@
 import type { Provider, SubAgentRole, SubAgentTag } from '../protocol/index.ts';
 import type { WorkspaceBinding } from '../protocol/workspaces.ts';
+import { isRuntimeContext } from '../protocol/context.ts';
 import type { SessionStore, Session } from '../storage/sqlite.ts';
 import { isDurableBinding } from '../storage/session-workspaces.ts';
 import type { WorkspaceManager } from '../workspaces/manager.ts';
@@ -60,6 +61,8 @@ export type ChildTurns = (input: {
     handle?: ResidentTurnHandle,
   ) => Promise<ResidentTurnResult>;
   close?: () => Promise<void>;
+  /** Rebinds the emitter the next turn publishes through; see `ResidentChildInput.setEmit`. */
+  setEmit?: (emit: import('./run-emit.ts').RunEmit) => void;
 };
 
 export interface InProcessProviderOptions {
@@ -135,11 +138,21 @@ export function createSubAgentProviders(
          * what fits and starts the copy at a user turn, so a trimmed transcript cannot begin with a tool
          * result whose call was dropped.
          */
+        /**
+         * A fork inherits the parent's *conversation*, not the runtime's own announcements. The skills
+         * catalogue is machine-written context for the parent's workspace; copying it into a child would
+         * spend the child's fork budget on text it does not need and count a machine note as a human turn.
+         */
         const seed = childOptions.contextFork
-          ? forkSeed(store.messages(parentSessionId), {
-              chars: options.forkTranscriptChars ?? RUN_DEFAULTS.forkTranscriptChars,
-              messages: options.forkTranscriptMessages ?? RUN_DEFAULTS.forkTranscriptMessages,
-            })
+          ? forkSeed(
+              store
+                .messages(parentSessionId)
+                .filter((message) => !isRuntimeContext(message.content)),
+              {
+                chars: options.forkTranscriptChars ?? RUN_DEFAULTS.forkTranscriptChars,
+                messages: options.forkTranscriptMessages ?? RUN_DEFAULTS.forkTranscriptMessages,
+              },
+            )
           : undefined;
         const childSession = store.create(workspace, parentSessionId);
         /**
@@ -241,6 +254,7 @@ export function createSubAgentProviders(
             depth,
             turn: child.turn,
             ...(child.close ? { close: child.close } : {}),
+            ...(child.setEmit ? { setEmit: child.setEmit } : {}),
           } satisfies ResidentChildInput);
           return settle(await activation.run(prompt, true));
         }

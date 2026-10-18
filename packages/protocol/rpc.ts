@@ -295,6 +295,27 @@ export interface HostMethods {
   };
   'session.rename': { params: { sessionId: string; title: string }; result: SessionInfo };
   'session.delete': { params: { sessionId: string }; result: { deleted: true } };
+  /**
+   * Converge a session whose lease owner cannot be confirmed dead (capability `session-recover-v1`).
+   *
+   * Every automatic path is deliberately conservative: a pid that cannot be checked is read as alive, because
+   * the alternative is letting a second writer into a session that really is running. The cost is a session that
+   * no longer runs, renames, deletes or compacts, with no way out but editing the database. This method is the
+   * way out, and it is only ever called for a person: the Host refuses it for a session it is running itself,
+   * and the interruption it records carries the reason the caller gave.
+   */
+  'session.recover': {
+    params: { sessionId: string };
+    result: {
+      sessionId: string;
+      /** False when there was nothing to recover, so a retry is visibly a no-op. */
+      recovered: boolean;
+      settledRunId: string | null;
+      previousOwnerPid: number | null;
+      previousOwnerStartedAt: number | null;
+      leaseDropped: boolean;
+    };
+  };
   'session.get': {
     params: {
       sessionId: string;
@@ -488,6 +509,20 @@ export interface HostMethods {
   'task.steps': {
     params: { sessionId: string; taskId: string };
     result: import('./index.ts').TaskStepCheckpoint[];
+  };
+  /**
+   * `task.attempts` and `task.steps` for every task of a session, in one round trip (capability
+   * `task-history-v1`). A task panel that asked per task paid two requests for each one on every refresh.
+   */
+  'task.history': {
+    params: { sessionId: string };
+    result: Record<
+      string,
+      {
+        attempts: import('./index.ts').TaskAttempt[];
+        steps: import('./index.ts').TaskStepCheckpoint[];
+      }
+    >;
   };
   'task.approval.respond': {
     params: { sessionId: string; taskId: string; approvalId: string; allow: boolean };

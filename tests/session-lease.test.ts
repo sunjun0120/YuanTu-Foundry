@@ -178,6 +178,63 @@ test('a dead owner is taken over, and the abandoned run’s lease goes with it',
   );
 });
 
+test('an operator can recover a lease whose owner looks alive, and the record says why', async (t) => {
+  const { store, sessionId } = await fixture(t);
+  const stuck = store.beginRun(sessionId);
+  // The state the conservative rule cannot end: this process is the recorded owner and it is alive, so every
+  // automatic path refuses. Only an explicit recovery may settle it.
+  store.renewLease(sessionId, stuck);
+  assert.throws(() => store.beginRun(sessionId), /already running/i);
+
+  const recovered = store.recoverSession(sessionId, 'operator: owner pid looks alive but is gone');
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.settledRunId, stuck);
+  assert.equal(recovered.previousOwnerPid, process.pid);
+  assert.equal(recovered.leaseDropped, true);
+  assert.equal(store.leaseOf(sessionId), null, 'the lease is gone, not merely forgotten');
+
+  const interrupted = store
+    .events(sessionId)
+    .filter((event) => event.type === 'run.interrupted')
+    .at(-1);
+  assert.equal(interrupted?.data.runId, stuck);
+  assert.match(String(interrupted?.data.reason), /operator:/, 'the reason is the operator’s');
+
+  // The point of the recovery: the session runs again without editing the database by hand.
+  const next = store.beginRun(sessionId);
+  assert.notEqual(next, stuck);
+  assert.equal(store.leaseOf(sessionId)?.runId, next);
+});
+
+test('recovery of a clean session changes nothing, so a retry is visibly a no-op', async (t) => {
+  const { store, sessionId } = await fixture(t);
+  const clean = store.recoverSession(sessionId, 'operator');
+  assert.equal(clean.recovered, false);
+  assert.equal(clean.settledRunId, null);
+  assert.equal(clean.leaseDropped, false);
+});
+
+test('recovery drops a lease whose run row is gone without inventing an interruption', async (t) => {
+  const { store, sessionId, db } = await fixture(t);
+  const orphan = store.beginRun(sessionId);
+  // Presence without a runner: the lease survived, the run did not. Recording an interruption here would put a
+  // crash in the log that never happened; the record is for runs, and this is not one.
+  const handle = db();
+  handle.prepare('DELETE FROM runs WHERE id=?').run(orphan);
+  handle.prepare('UPDATE sessions SET active_run=NULL WHERE id=?').run(sessionId);
+  handle.close();
+
+  const dropped = store.recoverSession(sessionId, 'operator');
+  assert.equal(dropped.recovered, true);
+  assert.equal(dropped.settledRunId, null);
+  assert.equal(dropped.leaseDropped, true);
+  assert.equal(store.leaseOf(sessionId), null);
+  assert.equal(
+    store.events(sessionId).filter((event) => event.type === 'run.interrupted').length,
+    0,
+  );
+});
+
 /**
  * A pid the system handed to another process is not the owner.
  *

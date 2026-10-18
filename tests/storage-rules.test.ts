@@ -18,7 +18,7 @@ import {
   storedMessage,
 } from '../packages/storage/session-blobs.ts';
 import type { Message, TaskStep, TaskStepStatus } from '../packages/protocol/index.ts';
-import { ftsDisplayText, ftsIndexText } from '../packages/protocol/fts-text.ts';
+import { ftsDisplayText, ftsIndexText } from '../packages/formats/fts-text.ts';
 
 /**
  * The storage layer's pure rules, tested without a database.

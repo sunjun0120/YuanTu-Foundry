@@ -311,6 +311,7 @@ export function createRunDelegation(options: RunDelegationOptions): SubAgentCoor
         residency,
         childTurns,
         resolveProviderFor: agent.subagentProviderFor,
+        workspaceManager: agent.workspaceManager,
         emit: subAgentEmit,
         statistics,
         usage,

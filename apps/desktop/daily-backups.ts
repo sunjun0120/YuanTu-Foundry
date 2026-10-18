@@ -11,7 +11,7 @@ type Execute = (file: string, operation: BackupAction, id?: string) => Promise<B
  * The daily-backup scheduler, retained but paused.
  *
  * `PRODUCT_SCOPE.backups` is false: the desktop ships no backup page, no `yuantu:backups` IPC channel and no
- * scheduler, and `main.ts` only constructs this class under that same flag (`tests/product-scope.test.ts` pins
+ * scheduler, and `main-backups.ts` only constructs this class under that same flag (`tests/product-scope.test.ts` pins
  * the bridge, the registration and the construction). `tick()`, `load()` and `configure()` consequently have no
  * production caller today; they are kept together with `tests/daily-backups.test.ts` so that restoring the scope
  * starts from working, tested code instead of from an untested one. `view()`, `create()` and `drain()` are the

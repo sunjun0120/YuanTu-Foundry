@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore, WorkspaceFailure } from '../packages/storage/sqlite.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
-import { readManifest } from '../packages/workspaces/snapshot.ts';
+import { readManifest, snapshotFileBytes } from '../packages/workspaces/snapshot.ts';
 import {
   isManagedWorktreePath,
   registeredWorktrees,
@@ -430,7 +430,13 @@ test('the manifest the allocation was built from is on disk and matches the fill
       path.join(binding.executionRoot, ...entry.path.split('/')),
       'utf8',
     );
-    assert.equal(actual, Buffer.from(entry.blob, 'base64').toString('utf8'), entry.path);
+    assert.equal(
+      actual,
+      (await snapshotFileBytes(identity!.repositoryRoot, harness.snapshotId, entry)).toString(
+        'utf8',
+      ),
+      entry.path,
+    );
   }
   // Every path Git lists in the worktree is one the baseline names, so a result computed there cannot include a
   // file the snapshot never froze.

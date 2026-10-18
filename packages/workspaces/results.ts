@@ -19,7 +19,7 @@ import {
   withRepositoryLock,
   writeTree,
 } from './git.ts';
-import { collectWorkingTree, type SnapshotManifestEntry } from './snapshot.ts';
+import { collectWorkingTree } from './snapshot.ts';
 import type { WorkspaceResultFile } from '../protocol/workspaces.ts';
 import {
   changeForResult,
@@ -203,7 +203,7 @@ export class WorkspaceResultsService implements WorkspaceResults, WorkspaceApply
     const entries = await collectWorkingTree(binding.executionRoot, signal);
     const currentTree = await writeTree(
       identity.repositoryRoot,
-      entries.map((entry: SnapshotManifestEntry) => ({
+      entries.map((entry) => ({
         path: entry.path,
         mode: entry.mode,
         bytes: Buffer.from(entry.blob, 'base64'),

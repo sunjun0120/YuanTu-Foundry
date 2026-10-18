@@ -103,6 +103,11 @@ export const CLI_MAINTENANCE_COMMANDS: readonly CliCommand[] = [
     usage: 'db-compact --db <file> [--json]              (VACUUM; close Host/CLI first)',
     runs: false,
   },
+  {
+    name: 'session-recover',
+    usage: 'session-recover <session-id> --db <file>     (clear a lease no process can prove dead)',
+    runs: false,
+  },
 ];
 /** How many commands a run needs a model for. */
 export const countCliRunCommands = (): number =>

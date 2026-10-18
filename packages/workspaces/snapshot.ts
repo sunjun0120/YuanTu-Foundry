@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, type Stats } from 'node:fs';
+import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WorkspaceFailure, type WorkspaceSnapshot } from '../protocol/workspaces.ts';
 import { gitPath, isUnsafeGitPath, samePath } from '../platform/workspace-paths.ts';
@@ -35,10 +36,29 @@ import {
  *    working tree. The baseline's own objects hang off a private ref so a later `gc` cannot collect them.
  */
 
-const SNAPSHOT_FORMAT = 2;
+const SNAPSHOT_FORMAT = 3;
+/**
+ * How much of a blob's digest names its file beside a format-3 manifest.
+ *
+ * The full digest is in the manifest and is re-checked when the bytes are read, so the file name only has to be
+ * unique in practice. Truncating it keeps a snapshot's metadata path below Windows' classic 260-character limit,
+ * which a full 64-character digest plus a deep temp workspace can exceed (`git hash-object` then fails on a path
+ * the process can otherwise create).
+ */
+const BLOB_NAME_CHARS = 32;
 /** One file larger than this is not a source file this feature was built for. Refused by name, not truncated. */
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_FILES = 200_000;
+/**
+ * How many bytes of working tree one snapshot may carry.
+ *
+ * The manifest holds each file's bytes base64-encoded, so a freeze costs roughly twice the tree in memory before it
+ * is published. That is fine for source trees and not fine for a directory someone pointed at by mistake — and the
+ * failure used to arrive as an out-of-memory death partway through, with a half-built snapshot behind it. This is
+ * the number that turns that into a refusal that names the tree, its size and the budget. It is generous on
+ * purpose: a large monorepo is still a working tree this feature should handle.
+ */
+const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 
 /**
  * Files whose *tracked* presence blocks a freeze, and whose untracked presence is simply not copied.
@@ -109,12 +129,28 @@ function looksLikeCredential(relativePath: string): boolean {
   return PROTECTED_SUFFIXES.some((suffix) => lower.endsWith(suffix));
 }
 
-export interface SnapshotManifestEntry {
+/** What a walk learned about one file, without the bytes: enough to compare two walks and to build a manifest. */
+export interface SnapshotFileDigest {
   path: string;
   mode: '100644' | '100755';
   size: number;
   sha256: string;
-  /** The bytes, base64: a snapshot's manifest is its own copy of the input, so a lost directory is recoverable. */
+}
+
+export interface SnapshotManifestEntry extends SnapshotFileDigest {
+  /**
+   * The bytes, base64 — **format 2** manifests only.
+   *
+   * Format 3 stores each file's bytes content-addressed beside the manifest (`<metadata>/files/<sha256 prefix>`). A
+   * manifest that embedded the tree made `readManifest` load the whole tree just to fill a worktree, and made the
+   * published file about 2.3 times the size of the tree it describes. Entries written by this version carry no
+   * `blob`; the field is still read so manifests written before the migration keep working.
+   */
+  blob?: string;
+}
+
+/** A tree as the bytes-returning walk produces it: every entry carries its content. */
+export interface CollectedTreeEntry extends SnapshotManifestEntry {
   blob: string;
 }
 
@@ -147,6 +183,11 @@ export function snapshotMetadataRoot(repositoryRoot: string, snapshotId: string)
 /** The ref that keeps a baseline's objects alive: an unreferenced object is garbage to a later `gc`. */
 export function snapshotRef(snapshotId: string): string {
   return `refs/yuantu/snapshots/${snapshotId}`;
+}
+
+/** The content-addressed name a format-3 manifest's bytes are stored under. */
+function blobName(sha256: string): string {
+  return sha256.slice(0, BLOB_NAME_CHARS);
 }
 
 /**
@@ -198,29 +239,73 @@ export async function freezeSnapshot(input: FreezeSnapshotInput): Promise<Worksp
       'A sparse checkout is not supported by workspace isolation yet: part of the working tree is absent by design',
     );
 
-  const entries = await collectWorkingTree(sourceRoot, signal);
-  const manifest = await buildManifest(identity, entries, { projectRoot, sourceRoot });
+  /**
+   * The bytes are staged, not held.
+   *
+   * A freeze used to collect the whole tree base64-encoded into the manifest, which put ~2.3 copies of the tree in
+   * memory and made the published manifest a second copy on disk. The staging directory is content-addressed and
+   * renamed beside the manifest once the id is known, so the freeze's peak is one file and a published snapshot is
+   * a small manifest plus the bytes it names.
+   */
+  const staging = path.join(
+    identity.repositoryRoot,
+    '.yuantu',
+    'workspace-snapshots',
+    `.staging-${process.pid}-${randomUUID()}`,
+  );
+  /**
+   * Two walks, and they must agree — but the first one only hashes.
+   *
+   * A single walk proves only that each file was a plausible size when it was read: a file rewritten to the same
+   * length between two reads is invisible, and two files edited at different moments can be collected as a
+   * combination that never existed. That combination is a baseline a child would analyse as if it were one version
+   * of the project, so the bytes are always read twice and an equal-length rewrite or a changed path set is refused.
+   * It is deliberately not called atomic: a change after the second read can still race the publish, but the
+   * deterministic mixed-version window is closed.
+   *
+   * Hashing first is what makes a repeat freeze cheap. Delegating again from an unchanged tree used to stage every
+   * file's bytes and only then find the snapshot already published and throw the copy away; now the identity is
+   * known before anything is written, and a published one costs the second read and nothing else.
+   */
+  const first = await collectFileDigests(sourceRoot, signal);
+  const manifest = await buildManifest(identity, first, { projectRoot, sourceRoot });
   const snapshotId = manifestDigest(manifest);
   // The identity of a snapshot *is* its manifest, so a later freeze of unchanged content may find the metadata
   // already published. That is idempotence, not a collision: the bytes are the same bytes.
   const published = await readManifest(identity.repositoryRoot, snapshotId);
-  if (published) return snapshotOf(published, snapshotId);
+  if (published) {
+    await verifySnapshotStable(identity, first, signal);
+    return snapshotOf(published, snapshotId);
+  }
+  try {
+    assertSameTree(first, await collectStagedTree(sourceRoot, staging, signal));
+    const metadata = snapshotMetadataRoot(identity.repositoryRoot, snapshotId);
+    await mkdir(metadata, { recursive: true });
+    const files = path.join(metadata, 'files');
+    /**
+     * A concurrent freeze of the same content may have published these bytes already. They are addressed by their
+     * digest, so whichever copy lands first is the same content; the loser's staging directory is simply dropped.
+     */
+    if (!existsSync(files)) await rename(staging, files);
 
-  const tree = await buildTree(identity, manifest, snapshotId, signal);
-  /**
-   * The commit is *not* part of the snapshot's identity, which is why it is made outside the lock and may be
-   * discarded: two freezes of one unchanged directory produce the same id and two different `commit-tree`
-   * timestamps, and only one of those commits can be the baseline the store records for that id.
-   */
-  const baseCommit = await commitBaseline(identity, tree, snapshotId, signal);
-  await checkIndexUntouched(identity, readiness.indexHash);
-  const stored: SnapshotManifest = {
-    ...manifest,
-    baseCommit,
-    baseTree: tree,
-    createdAt: new Date().toISOString(),
-  };
-  return publishSnapshot(identity, snapshotId, stored, signal);
+    const tree = await buildTree(identity, manifest, snapshotId, signal);
+    /**
+     * The commit is *not* part of the snapshot's identity, which is why it is made outside the lock and may be
+     * discarded: two freezes of one unchanged directory produce the same id and two different `commit-tree`
+     * timestamps, and only one of those commits can be the baseline the store records for that id.
+     */
+    const baseCommit = await commitBaseline(identity, tree, snapshotId, signal);
+    await checkIndexUntouched(identity, readiness.indexHash);
+    const stored: SnapshotManifest = {
+      ...manifest,
+      baseCommit,
+      baseTree: tree,
+      createdAt: new Date().toISOString(),
+    };
+    return publishSnapshot(identity, snapshotId, stored, signal);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -282,10 +367,27 @@ function snapshotOf(manifest: SnapshotManifest, snapshotId: string): WorkspaceSn
  * `node_modules` are reproducible from the project, and copying them would make every allocation cost a full
  * install.
  */
-export async function collectWorkingTree(
+
+function modeOf(info: { mode: number }): '100644' | '100755' {
+  // Only the two modes Git distinguishes for regular files are reproduced; anything else was refused by the walk.
+  return (info.mode & 0o111) === 0 ? '100644' : '100755';
+}
+
+/**
+ * One walk over the working tree, with the caller deciding what to keep.
+ *
+ * The refusals and the stability checks live here once. `collectWorkingTree` keeps every file's bytes because the
+ * result export compares trees byte for byte; `collectFileDigests` keeps only what identifies those bytes; and
+ * `collectStagedTree` writes the bytes to a staging directory so the freeze never holds the tree in memory. Two
+ * copies of this walk would be two sets of refusals to keep in step.
+ */
+async function walkWorkingTree(
   directory: string,
-  signal?: AbortSignal,
-): Promise<SnapshotManifestEntry[]> {
+  signal: AbortSignal | undefined,
+  limits: { maxTotalBytes?: number },
+  onFile: (file: { relative: string; info: Stats; bytes: Buffer }) => void | Promise<void>,
+): Promise<void> {
+  const budget = limits.maxTotalBytes ?? MAX_TOTAL_BYTES;
   const cwd = directory;
   const options = signal ? { signal } : {};
   const listed = await workspaceGit(
@@ -315,8 +417,8 @@ export async function collectWorkingTree(
       .map((entry) => gitPath(entry))
       .filter(Boolean),
   );
-  const entries: SnapshotManifestEntry[] = [];
   const refused: string[] = [];
+  let totalBytes = 0;
   for (const relative of paths) {
     if (isRuntimePath(relative)) continue;
     if (looksLikeCredential(relative)) {
@@ -358,6 +460,15 @@ export async function collectWorkingTree(
         `File is larger than the ${MAX_FILE_BYTES} byte limit: ${relative}`,
         { path: relative },
       );
+    // Checked before the read, so the file that crosses the line is not loaded first: the point of a budget is to
+    // stop before the allocation that would have failed anyway, and to say which tree it was.
+    if (totalBytes + info.size > budget)
+      throw new WorkspaceFailure(
+        'WORKSPACE_TOO_LARGE',
+        `The working tree is larger than the ${budget} byte budget this version freezes (${totalBytes + info.size}+ bytes at ${relative}); delegate with a smaller project or raise the budget`,
+        { bytes: totalBytes + info.size, budget, path: relative },
+      );
+    totalBytes += info.size;
     const bytes = await readFile(absolute);
     if (bytes.length !== info.size)
       throw new WorkspaceFailure(
@@ -365,14 +476,7 @@ export async function collectWorkingTree(
         `${relative} changed while it was being read; nothing was frozen`,
         { path: relative },
       );
-    entries.push({
-      path: relative,
-      // Only the two modes Git distinguishes for regular files are reproduced; anything else was refused above.
-      mode: (info.mode & 0o111) === 0 ? '100644' : '100755',
-      size: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex'),
-      blob: bytes.toString('base64'),
-    });
+    await onFile({ relative, info, bytes });
   }
   if (refused.length)
     throw new WorkspaceFailure(
@@ -382,7 +486,72 @@ export async function collectWorkingTree(
         .join(', ')}`,
       { paths: refused.slice(0, 20) },
     );
+}
+
+export async function collectWorkingTree(
+  directory: string,
+  signal?: AbortSignal,
+  limits: { maxTotalBytes?: number } = {},
+): Promise<CollectedTreeEntry[]> {
+  const entries: CollectedTreeEntry[] = [];
+  await walkWorkingTree(directory, signal, limits, ({ relative, info, bytes }) => {
+    entries.push({
+      path: relative,
+      mode: modeOf(info),
+      size: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      blob: bytes.toString('base64'),
+    });
+  });
   return entries;
+}
+
+/**
+ * The freeze's own walk: each file's bytes go to `staging/<sha256 prefix>`, and the entry keeps only what
+ * identifies them.
+ *
+ * This is what makes a freeze's memory independent of the tree's size. The staging directory is content-addressed,
+ * so two files with the same content share one copy, and it is renamed beside the manifest once the snapshot id is
+ * known; the caller removes it on every path that does not publish.
+ */
+export async function collectStagedTree(
+  directory: string,
+  staging: string,
+  signal?: AbortSignal,
+  limits: { maxTotalBytes?: number } = {},
+): Promise<SnapshotManifestEntry[]> {
+  const entries: SnapshotManifestEntry[] = [];
+  await mkdir(staging, { recursive: true });
+  await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    await writeFile(path.join(staging, blobName(sha256)), bytes);
+    entries.push({ path: relative, mode: modeOf(info), size: bytes.length, sha256 });
+  });
+  return entries;
+}
+
+/**
+ * The same walk, keeping only what identifies the bytes.
+ *
+ * `collectWorkingTree` returns every file's content base64-encoded, which publishing a snapshot needs and a
+ * *comparison* does not: a caller that only asks "is this still the same tree" used to hold a second full copy of
+ * it. This walk hashes each file and lets the buffer go, so its peak is one file whatever the tree's size.
+ */
+export async function collectFileDigests(
+  directory: string,
+  signal?: AbortSignal,
+  limits: { maxTotalBytes?: number } = {},
+): Promise<SnapshotFileDigest[]> {
+  const digests: SnapshotFileDigest[] = [];
+  await walkWorkingTree(directory, signal, limits, ({ relative, info, bytes }) => {
+    digests.push({
+      path: relative,
+      mode: modeOf(info),
+      size: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    });
+  });
+  return digests;
 }
 
 async function buildManifest(
@@ -407,6 +576,9 @@ async function buildManifest(
  * A `git commit` the user runs while a delegation is queued changes HEAD without changing the working bytes this
  * baseline is made of; folding HEAD in would then hand two children of one call two different baselines, which is
  * exactly what the shared-input promise forbids. The file list is what the baseline *is*.
+ *
+ * The content is committed to by `sha256`, not by embedding the bytes: an identity that hashed the encoded tree
+ * was itself a reason to hold the tree in memory.
  */
 function manifestDigest(
   manifest: Omit<SnapshotManifest, 'baseCommit' | 'baseTree' | 'createdAt'>,
@@ -419,9 +591,7 @@ function manifestDigest(
     `${path.resolve(manifest.projectRoot)}\u0000${path.resolve(manifest.sourceRoot)}\u0000`,
   );
   for (const entry of manifest.files)
-    hash.update(
-      `${entry.path}\u0000${entry.mode}\u0000${entry.size}\u0000${entry.sha256}\u0000${entry.blob}\u0000`,
-    );
+    hash.update(`${entry.path}\u0000${entry.mode}\u0000${entry.size}\u0000${entry.sha256}\u0000`);
   return hash.digest('hex').slice(0, 32);
 }
 
@@ -449,22 +619,23 @@ async function buildTree(
    * Two Git processes for the whole manifest, not two per file.
    *
    * Each entry used to spawn its own `hash-object` and `update-index`; on Windows a Git spawn costs tens of
-   * milliseconds, so a baseline of 800 files took over a minute before the child could start. The bytes are
-   * staged as numbered files under this snapshot's own metadata directory (names this code chose, so
-   * `--stdin-paths` never sees a path with a newline), hashed by one `hash-object --stdin-paths` that answers
-   * one id per line in order, and entered by one `update-index -z --index-info`, whose NUL-terminated records
-   * carry any path Git can store. `--no-filters` keeps the bytes exactly as recorded, as before.
+   * milliseconds, so a baseline of 800 files took over a minute before the child could start. The bytes are the
+   * content-addressed files the freeze staged beside this manifest (names this code chose, so `--stdin-paths` never
+   * sees a path with a newline), hashed by one `hash-object --stdin-paths` that answers one id per line in order,
+   * and entered by one `update-index -z --index-info`, whose NUL-terminated records carry any path Git can store.
+   * `--no-filters` keeps the bytes exactly as recorded.
    */
   if (manifest.files.length) {
-    const staging = path.join(metadata, 'blobs');
-    await mkdir(staging, { recursive: true });
+    const filesDirectory = path.join(metadata, 'files');
+    const staged = manifest.files.map((entry) => {
+      // A format 2 manifest embeds its bytes; only a manifest this version wrote has the files beside it.
+      if (entry.blob === undefined) return path.join(filesDirectory, blobName(entry.sha256));
+      throw new WorkspaceFailure(
+        'WORKSPACE_INTEGRITY',
+        `A snapshot manifest without stored files cannot be rebuilt: ${entry.path}`,
+      );
+    });
     try {
-      const staged: string[] = [];
-      for (const [index, entry] of manifest.files.entries()) {
-        const file = path.join(staging, String(index));
-        await writeFile(file, Buffer.from(entry.blob, 'base64'));
-        staged.push(file);
-      }
       const blobs = (
         await runWorkspaceGit(['hash-object', '-w', '--no-filters', '--stdin-paths'], {
           ...options,
@@ -487,8 +658,10 @@ async function buildTree(
         ...options,
         input: Buffer.from(records.join(''), 'utf8'),
       });
-    } finally {
-      await rm(staging, { recursive: true, force: true });
+    } catch (error) {
+      // The files beside the manifest are the snapshot's bytes and stay; a failure here is a failed build, not a
+      // reason to delete what a concurrent writer may already be using.
+      throw error;
     }
   }
   const tree = (await runWorkspaceGit(['write-tree'], options)).stdout.toString('utf8').trim();
@@ -551,7 +724,38 @@ async function publishManifest(
   await mkdir(directory, { recursive: true });
   const target = path.join(directory, 'manifest.json');
   const staging = `${target}.${process.pid}.tmp`;
-  await writeFile(staging, `${JSON.stringify(manifest, null, 2)}\n`);
+  /**
+   * Produced in pieces rather than as one string.
+   *
+   * `JSON.stringify(manifest)` built a second copy of the manifest just to hand it to `writeFile`. The bytes are the
+   * same JSON either way; writing the header and then the entries keeps peak memory at one chunk. Chunks are bounded
+   * rather than one write per entry, so a tree of a hundred thousand small files is not a hundred thousand syscalls.
+   */
+  const header = JSON.stringify({
+    format: manifest.format,
+    projectRoot: manifest.projectRoot,
+    sourceRoot: manifest.sourceRoot,
+    sourceHead: manifest.sourceHead,
+    baseCommit: manifest.baseCommit,
+    baseTree: manifest.baseTree,
+    createdAt: manifest.createdAt,
+  });
+  const handle = await open(staging, 'w');
+  try {
+    await handle.write(`${header.slice(0, -1)},"files":[`);
+    let chunk = '';
+    for (const [index, entry] of manifest.files.entries()) {
+      chunk += `${index ? ',' : ''}${JSON.stringify(entry)}`;
+      if (chunk.length >= 64 * 1024) {
+        await handle.write(chunk);
+        chunk = '';
+      }
+    }
+    if (chunk) await handle.write(chunk);
+    await handle.write(']}\n');
+  } finally {
+    await handle.close();
+  }
   await rename(staging, target);
 }
 
@@ -565,7 +769,8 @@ export async function readManifest(
   try {
     const parsed = JSON.parse(bytes.toString('utf8')) as SnapshotManifest;
     if (
-      (parsed?.format !== 1 && parsed?.format !== SNAPSHOT_FORMAT) ||
+      // Formats 1 and 2 embedded the bytes; format 3 names them by digest. All three stay readable.
+      ![1, 2, SNAPSHOT_FORMAT].includes(parsed?.format ?? 0) ||
       !Array.isArray(parsed.files) ||
       typeof parsed.baseCommit !== 'string' ||
       typeof parsed.baseTree !== 'string'
@@ -586,10 +791,17 @@ export async function readManifest(
  */
 export async function verifySnapshotStable(
   identity: RepositoryIdentity,
-  expected: readonly SnapshotManifestEntry[],
+  expected: readonly SnapshotFileDigest[],
   signal?: AbortSignal,
 ): Promise<void> {
-  const actual = await collectWorkingTree(identity.worktreeRoot, signal);
+  assertSameTree(expected, await collectFileDigests(identity.worktreeRoot, signal));
+}
+
+/** Two walks of one tree, refused as `WORKSPACE_SOURCE_CHANGED` unless every path, mode and digest agrees. */
+function assertSameTree(
+  expected: readonly SnapshotFileDigest[],
+  actual: readonly SnapshotFileDigest[],
+): void {
   if (actual.length !== expected.length)
     throw new WorkspaceFailure(
       'WORKSPACE_SOURCE_CHANGED',
@@ -607,7 +819,39 @@ export async function verifySnapshotStable(
   }
 }
 
-/** One entry's bytes, read back out of the manifest, for the worktree fill. */
-export function entryBytes(entry: SnapshotManifestEntry): Buffer {
-  return Buffer.from(entry.blob, 'base64');
+/**
+ * One entry's bytes: embedded in the manifest when it is a format 2 one, read from the content-addressed files
+ * beside it otherwise.
+ *
+ * The digest is checked on the way out. A stored file is what a worktree will be filled with, so a file that no
+ * longer hashes to the entry's `sha256` is a snapshot that would silently hand a child different content — the
+ * `WORKSPACE_INTEGRITY` case, not a reason to carry on.
+ */
+export async function snapshotFileBytes(
+  repositoryRoot: string,
+  snapshotId: string,
+  entry: SnapshotManifestEntry,
+): Promise<Buffer> {
+  if (entry.blob !== undefined) return Buffer.from(entry.blob, 'base64');
+  const files = path.join(snapshotMetadataRoot(repositoryRoot, snapshotId), 'files');
+  /**
+   * The short name is what this build writes. The full digest is still read so snapshots published by the
+   * preceding format-3 build remain usable; both are verified against `entry.sha256` below.
+   */
+  const bytes = await readFile(path.join(files, blobName(entry.sha256)))
+    .catch(() => readFile(path.join(files, entry.sha256)))
+    .catch(() => null);
+  if (!bytes)
+    throw new WorkspaceFailure(
+      'WORKSPACE_MISSING',
+      `The stored bytes for ${entry.path} are missing from snapshot ${snapshotId}`,
+      { path: entry.path },
+    );
+  if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256)
+    throw new WorkspaceFailure(
+      'WORKSPACE_INTEGRITY',
+      `The stored bytes for ${entry.path} do not match the digest recorded for it`,
+      { path: entry.path },
+    );
+  return bytes;
 }

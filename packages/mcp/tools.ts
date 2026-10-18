@@ -443,7 +443,14 @@ class Connection {
      */
     if (this.discovered && this.loadedGeneration === this.generation) return;
     if (this.discovering) return this.discovering;
-    const discovering = this.loadCatalog(client, signal);
+    /**
+     * The generation this load starts from is captured *before* the first request, not read after the
+     * last one. A `tools/list_changed` that arrives while the pages are coming back increments `generation`;
+     * recording the new value at the end would mark the old catalogue as current and swallow the change. The
+     * captured value lets the comparison in `discover` see the gap and read again on the next request.
+     */
+    const generation = this.generation;
+    const discovering = this.loadCatalog(client, signal, generation);
     this.discovering = discovering;
     try {
       await discovering;
@@ -451,7 +458,11 @@ class Connection {
       if (this.discovering === discovering) this.discovering = undefined;
     }
   }
-  private async loadCatalog(client: Client, signal: AbortSignal): Promise<void> {
+  private async loadCatalog(
+    client: Client,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
     const validators = new Map<string, ValidateFunction>();
     const catalog: unknown[] = [];
     await this.page('tool', MAX_TOOLS, async (cursor) => {
@@ -488,11 +499,11 @@ class Connection {
     };
     this.discovered = true;
     /**
-     * The generation this catalog *is*. Read after the last request of the load, so a change announced while the
-     * pages were coming back leaves this behind `generation` and triggers one more read rather than being
-     * swallowed by it.
+     * The generation this catalog *is*: the one captured when the load started. A change announced while the
+     * pages were coming back has already advanced `generation`, so this stays behind it and the next request
+     * re-reads. Assigning the *current* generation here would be the swallow this guard exists to prevent.
      */
-    this.loadedGeneration = this.generation;
+    this.loadedGeneration = generation;
   }
   private capability(client: Client, name: 'resources' | 'prompts'): void {
     if (!client.getServerCapabilities()?.[name])

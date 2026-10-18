@@ -1,5 +1,6 @@
 /**
- * Package layering, gated: a package under `packages/` may import only packages of a strictly lower layer.
+ * Package layering, gated: a package under `packages/` may import only packages of a strictly lower layer, and an
+ * entry under `apps/` may import any package and only apps of a strictly lower layer. No package imports an app.
  *
  * `cycles:check` keeps the *file* graph acyclic over value imports. That says nothing about direction: `protocol`
  * could still borrow a type from `core`, and `storage` a helper from `core`, without any file cycle appearing —
@@ -15,6 +16,7 @@ import ts from 'typescript';
 
 /** Lowest first. Packages on one row must not import each other. */
 const LAYERS = [
+  ['formats'],
   ['protocol', 'platform'],
   ['providers', 'search', 'storage'],
   ['maintenance', 'workspaces'],
@@ -26,10 +28,20 @@ const LAYERS = [
   ['client'],
   ['carrier'],
 ];
+/**
+ * Entries, above every package. `shared` is the one assembly point the Host and the CLI build the kernel with; the
+ * desktop starts a Host as a child process and talks to it through `packages/carrier`, so it imports no other app.
+ */
+const APP_LAYERS = [['shared'], ['agent-host', 'cli', 'desktop']];
 
 const root = process.cwd();
 const packagesRoot = path.join(root, 'packages');
-const rank = new Map(LAYERS.flatMap((row, index) => row.map((name) => [name, index])));
+const appsRoot = path.join(root, 'apps');
+/** Units are named `name` for a package and `apps/name` for an app, so the two namespaces cannot collide. */
+const rank = new Map([
+  ...LAYERS.flatMap((row, index) => row.map((name) => [name, index])),
+  ...APP_LAYERS.flatMap((row, index) => row.map((name) => [`apps/${name}`, LAYERS.length + index])),
+]);
 
 async function sources(dir) {
   const found = [];
@@ -71,25 +83,41 @@ function specifiers(file, text) {
   return found;
 }
 
-const packageOf = (file) => path.relative(packagesRoot, file).split(path.sep)[0];
+/** The unit a path belongs to (`core`, `apps/desktop`), or undefined outside `packages/` and `apps/`. */
+function unitOf(file) {
+  for (const [base, prefix] of [
+    [packagesRoot, ''],
+    [appsRoot, 'apps/'],
+  ]) {
+    const relative = path.relative(base, file);
+    if (!relative.startsWith('..') && !path.isAbsolute(relative))
+      return prefix + relative.split(path.sep)[0];
+  }
+  return undefined;
+}
 const problems = [];
-const directories = (await readdir(packagesRoot, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => entry.name);
-for (const name of directories)
-  if (!rank.has(name)) problems.push(`packages/${name} has no layer in scripts/check-layers.mjs`);
+for (const [base, prefix] of [
+  [packagesRoot, ''],
+  [appsRoot, 'apps/'],
+]) {
+  const directories = (await readdir(base, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => prefix + entry.name);
+  for (const name of directories)
+    if (!rank.has(name))
+      problems.push(`${prefix ? '' : 'packages/'}${name} has no layer in scripts/check-layers.mjs`);
+}
 
 let edges = 0;
-for (const file of await sources(packagesRoot)) {
-  const from = packageOf(file);
+for (const file of [...(await sources(packagesRoot)), ...(await sources(appsRoot))]) {
+  const from = unitOf(file);
   if (!rank.has(from)) continue;
   for (const specifier of specifiers(file, await readFile(file, 'utf8'))) {
     if (!specifier.startsWith('.')) continue;
-    const target = path.resolve(path.dirname(file), specifier);
-    const relative = path.relative(packagesRoot, target);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-    const to = packageOf(target);
-    if (to === from) continue;
+    const to = unitOf(path.resolve(path.dirname(file), specifier));
+    if (to === undefined || to === from) continue;
+    // An app may use any package: packages sit below every app, so only app-to-app edges need the order.
+    if (from.startsWith('apps/') && !to.startsWith('apps/')) continue;
     edges++;
     if (!rank.has(to) || rank.get(to) >= rank.get(from))
       problems.push(
@@ -104,5 +132,5 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(
-  `layers:check passed (${rank.size} packages in ${LAYERS.length} layers, ${edges} cross-package imports)`,
+  `layers:check passed (${LAYERS.flat().length} packages in ${LAYERS.length} layers, ${APP_LAYERS.flat().length} apps in ${APP_LAYERS.length} layers, ${edges} ordered imports)`,
 );

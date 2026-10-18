@@ -644,7 +644,8 @@ export function fileTools(
                 files: inventory.files,
                 options,
                 inventory: () => inventory.coverage,
-                fallback: (files) => scanText(access, fromFiles(files), options),
+                fallback: (files, coverage) =>
+                  scanText(access, fromFiles(files), options, () => coverage),
               },
               ctx,
             );

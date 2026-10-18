@@ -31,6 +31,35 @@ async function terminateOwned(pid, child) {
   }
 }
 
+/**
+ * How long a single test file may run before its process tree is ended.
+ *
+ * Without this, one test that never settles hangs the whole run: the worker keeps its stdio open forever, the
+ * scheduler waits on `close`, and neither CI nor a developer ever gets a failing exit code — only a run that
+ * never finishes. The bound is per file, not per case, because the hang observed in practice was after the last
+ * case had been reported (a leaked handle or a teardown waiting on a child that will not exit), which no
+ * `--test-timeout` reaches.
+ */
+export const DEFAULT_FILE_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** The watchdog's own grace period between ending the tree and giving up on its `close` event. */
+const WATCHDOG_CLOSE_GRACE_MS = 15_000;
+
+/** The last case the reporter wrote for a file, or undefined when it wrote none. */
+async function lastReportedCase(timings) {
+  try {
+    const lines = (await readFile(timings, 'utf8')).trimEnd().split('\n');
+    for (let index = lines.length - 1; index >= 0; index--) {
+      const row = JSON.parse(lines[index]);
+      if (row.kind === 'case' && typeof row.name === 'string') return row;
+      if (row.kind === 'file-summary') return undefined;
+    }
+  } catch {
+    /* No report yet: the file timed out before it settled anything. */
+  }
+  return undefined;
+}
+
 export async function runSchedule({
   root,
   directory,
@@ -41,6 +70,8 @@ export async function runSchedule({
   signal,
   verbose = false,
   continueOnFailure = false,
+  /** A number, or a function of the file, saying how long that file may run (see `DEFAULT_FILE_TIMEOUT_MS`). */
+  fileTimeout = DEFAULT_FILE_TIMEOUT_MS,
 }) {
   const parent = await mkdtemp(path.join(tmpdir(), 'yuantu-test-run-'));
   const results = [],
@@ -87,12 +118,25 @@ export async function runSchedule({
       reporter.searchParams.set('phase', phase);
       reporter.searchParams.set('timings', timings);
       console.log(`Log: ${result.log}`);
+      const requested = typeof fileTimeout === 'function' ? fileTimeout(file) : fileTimeout;
+      result.timeoutMs =
+        Number.isFinite(requested) && requested > 0
+          ? Math.round(requested)
+          : DEFAULT_FILE_TIMEOUT_MS;
       result.exitCode = await new Promise((resolve) => {
         const child = spawn(
           process.execPath,
           [
             '--test',
             '--test-concurrency=1',
+            /**
+             * A file whose last case has reported still holds the process open when a test leaves a handle behind —
+             * a Host whose teardown never ran because an earlier `t.after` hook threw, for instance. The isolation
+             * probe already treats a surviving process as a failure, so exiting once the runner is done turns a
+             * permanent hang into that recorded failure. Coverage collection keeps the normal exit: V8 writes its
+             * profile from the exit path this skips.
+             */
+            ...(isolation.env.NODE_V8_COVERAGE ? [] : ['--test-force-exit']),
             `--test-reporter=${reporter.href}`,
             '--test-reporter-destination=stdout',
             ...options,
@@ -113,14 +157,48 @@ export async function runSchedule({
           result.spawnError = error.message;
           console.error(error);
         });
-        // 'close' follows 'error' and waits for stdio; never delete its roots while still alive.
-        child.once('close', (code) => {
+        let settled = false,
+          grace;
+        const finish = (code) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(watchdog);
+          clearTimeout(grace);
           processes.delete(child);
           resolve(code ?? 1);
-        });
+        };
+        const watchdog = setTimeout(() => {
+          result.timedOut = true;
+          console.error(
+            `Test file timed out after ${Math.round(result.timeoutMs / 1000)}s: ${file} — ending its process tree`,
+          );
+          void terminateOwned(child.pid, child).catch((error) =>
+            console.error(`Watchdog termination failed for ${file}: ${error.message}`),
+          );
+          // The tree is being ended, so `close` should follow. An unkillable process must not re-create the hang
+          // this watchdog exists to end.
+          grace = setTimeout(() => {
+            console.error(`Test file did not close after termination: ${file}`);
+            finish(1);
+          }, WATCHDOG_CLOSE_GRACE_MS);
+        }, result.timeoutMs);
+        // 'close' follows 'error' and waits for stdio; never delete its roots while still alive.
+        child.once('close', (code) => finish(code));
         if (signal.aborted) cancel();
       });
       result.report = await readFileReport(timings, file, root);
+      if (result.timedOut) {
+        const last = await lastReportedCase(timings);
+        const where = last
+          ? `last reported case "${last.name}" (${Math.round(Number(last.durationMs) || 0)} ms)`
+          : 'no case had reported a result';
+        const message = `Test file timed out after ${Math.round(result.timeoutMs / 1000)}s: ${file} — ${where}; its process tree was ended`;
+        console.error(message);
+        result.report.problem = result.report.problem
+          ? `${message} (${result.report.problem})`
+          : message;
+        result.exitCode = 1;
+      }
       result.violations = readIsolationViolations(isolation);
       if (result.violations.length) {
         const evidence = result.violations.map((value) => JSON.stringify(value) + '\n').join('');

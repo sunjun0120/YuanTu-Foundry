@@ -15,6 +15,7 @@ import {
   fixture,
   context,
   waitUntil,
+  visible,
   exists,
   own,
   workspace,
@@ -45,7 +46,7 @@ test(
     };
     const opened = await call('terminal_open', { command: process.execPath, args: [script] });
     const id = /Terminal (\S+) started/.exec(opened.content)![1]!;
-    const output = async () => (await manager.read(id, 's', 0)).snapshot.output;
+    const output = async () => visible((await manager.read(id, 's', 0)).snapshot.output);
     await waitUntil(async () => (await output()).includes('OUTSIDE_DENIED'));
     assert.match(await output(), /READY true true/);
     assert.equal(await readFile(path.join(root, 'inside.txt'), 'utf8'), 'inside');
@@ -118,7 +119,7 @@ test('closing a restricted terminal kills its descendant before returning', wind
   const opened = await manager.open({ command: process.execPath, args: [script] }, context(), 's');
   let output = '';
   await waitUntil(async () => {
-    output = (await manager.read(opened.id, 's', 0)).snapshot.output;
+    output = visible((await manager.read(opened.id, 's', 0)).snapshot.output);
     return /CHILD \d+/.test(output);
   });
   const pid = Number(/CHILD (\d+)/.exec(output)![1]);

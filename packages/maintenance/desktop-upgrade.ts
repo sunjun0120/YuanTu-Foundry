@@ -27,6 +27,7 @@ import {
   type DatabaseBackup,
 } from '../storage/database-maintenance.ts';
 import { SESSION_DATABASE_POLICY } from '../storage/sqlite.ts';
+import { processAlive, processStartedAt } from '../platform/process-identity.ts';
 
 export interface DesktopRelease {
   version: string;
@@ -295,18 +296,36 @@ export function acknowledgeUpgrade(file: string, runningVersion: string): boolea
   });
   return true;
 }
+/**
+ * The upgraded desktop the installer launched, as (pid, start time).
+ *
+ * The pid alone is not enough: Windows reuses pids quickly, and an unrelated process holding the old number would
+ * keep rollback refusing "close the upgraded desktop" until that stranger exited. A record written before the start
+ * time was kept is a bare pid and is judged by the pid alone, as it always was.
+ */
+export function writeLaunchRecord(file: string, pid: number): void {
+  writeFileSync(file, JSON.stringify({ pid, startedAt: processStartedAt(pid) }), { flag: 'wx' });
+}
+export function readLaunchRecord(file: string): { pid: number; startedAt: number | null } {
+  const text = readFileSync(file, 'utf8').trim();
+  let record: { pid?: unknown; startedAt?: unknown };
+  try {
+    record = /^\d+$/.test(text) ? { pid: Number(text), startedAt: null } : JSON.parse(text);
+  } catch {
+    throw new Error('Invalid application PID in recovery record');
+  }
+  const { pid, startedAt } = record;
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0)
+    throw new Error('Invalid application PID in recovery record');
+  if (startedAt !== null && (typeof startedAt !== 'number' || !Number.isFinite(startedAt)))
+    throw new Error('Invalid application start time in recovery record');
+  return { pid, startedAt };
+}
 export function rollbackUpgrade(file: string): UpgradeJournal {
   const journal = JSON.parse(readFileSync(file, 'utf8')) as UpgradeJournal;
   if (existsSync(`${file}.pid`)) {
-    const pid = Number(readFileSync(`${file}.pid`, 'utf8'));
-    if (!Number.isSafeInteger(pid) || pid <= 0)
-      throw new Error('Invalid application PID in recovery record');
-    try {
-      process.kill(pid, 0);
-      throw new Error('Close the upgraded desktop before rollback');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    }
+    const { pid, startedAt } = readLaunchRecord(`${file}.pid`);
+    if (processAlive(pid, startedAt)) throw new Error('Close the upgraded desktop before rollback');
   }
   if (
     journal.journal !== path.resolve(file) ||

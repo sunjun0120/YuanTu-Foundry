@@ -33,6 +33,18 @@ export async function waitUntil(check: () => boolean | Promise<boolean>, ms = 12
   }
 }
 
+/**
+ * A terminal snapshot as a reader sees it. ConPTY repaints rather than streams, and it is free to draw a space as
+ * "cursor forward one" behind a colour change, so `READY true` can arrive as `READY\x1B[33m\x1B[1Ctrue`; matching
+ * the raw bytes made these assertions depend on how the console chose to paint.
+ */
+export function visible(output: string): string {
+  return output
+    .replace(/\x1B\[(\d*)C/g, (_, count: string) => ' '.repeat(Number(count || 1)))
+    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+    .replace(/\x1B\[[0-9;?]*[A-Za-z]/g, '');
+}
+
 export async function exists(file: string) {
   return Boolean(await stat(file).catch(() => undefined));
 }

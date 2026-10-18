@@ -7,10 +7,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore, WorkspaceFailure } from '../packages/storage/sqlite.ts';
 import {
+  collectFileDigests,
+  collectWorkingTree,
   freezeSnapshot,
   readManifest,
+  snapshotFileBytes,
   snapshotRef,
   snapshotMetadataRoot,
+  verifySnapshotStable,
 } from '../packages/workspaces/snapshot.ts';
 import { repositoryIdentity } from '../packages/workspaces/git.ts';
 
@@ -31,6 +35,9 @@ const GIT_ENV: NodeJS.ProcessEnv = {
   GIT_COMMITTER_NAME: 'Test',
   GIT_COMMITTER_EMAIL: 'test@example.com',
 };
+
+/** The short, content-addressed name a format-3 manifest's bytes are stored under. */
+const storedBlobName = (sha256: string): string => sha256.slice(0, 32);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
@@ -127,14 +134,16 @@ test('the baseline is the working directory, including staged edits, deletions a
   const identity = await repositoryIdentity(root);
   const manifest = await readManifest(identity!.repositoryRoot, snapshot.id);
   const byPath = new Map(manifest!.files.map((entry) => [entry.path, entry]));
-  const decode = (name: string): string =>
-    Buffer.from(byPath.get(name)!.blob, 'base64').toString('utf8');
-  assert.equal(decode('staged-then-edited.txt'), 'edited after staging\n');
-  assert.equal(decode('added.txt'), 'brand new\n');
+  const decode = async (name: string): Promise<string> =>
+    (await snapshotFileBytes(identity!.repositoryRoot, snapshot.id, byPath.get(name)!)).toString(
+      'utf8',
+    );
+  assert.equal(await decode('staged-then-edited.txt'), 'edited after staging\n');
+  assert.equal(await decode('added.txt'), 'brand new\n');
   // CRLF survives exactly: the baseline is bytes, and a checkout filter that "helpfully" normalised line endings
   // would hand the child a file the user does not have.
-  assert.equal(decode('crlf.txt'), 'first\r\nsecond\r\n');
-  assert.equal(decode("文档/it's a file.md"), '中文内容\n');
+  assert.equal(await decode('crlf.txt'), 'first\r\nsecond\r\n');
+  assert.equal(await decode("文档/it's a file.md"), '中文内容\n');
   // A deletion is part of the baseline, which is why the manifest is a list of what *is* there rather than a diff.
   assert.equal(byPath.has('src/app.ts'), false);
   // The baseline is a real tree in the repository, reachable from the snapshot's own ref.
@@ -210,7 +219,17 @@ test('legacy content-only snapshot manifests remain readable after upgrading the
   const snapshot = await freezeSnapshot({ projectRoot: harness.root });
   const identity = await repositoryIdentity(harness.root);
   const manifest = (await readManifest(identity!.repositoryRoot, snapshot.id))!;
-  const legacy = { ...manifest, format: 1 };
+  // A format 1 manifest embedded the bytes; build one from the format 3 entries so the reader is exercised against
+  // the shape it has to keep supporting.
+  const files = [];
+  for (const entry of manifest.files)
+    files.push({
+      ...entry,
+      blob: (await snapshotFileBytes(identity!.repositoryRoot, snapshot.id, entry)).toString(
+        'base64',
+      ),
+    });
+  const legacy = { ...manifest, format: 1, files };
   const hash = createHash('sha256').update('v1\u0000');
   for (const entry of legacy.files)
     hash.update(
@@ -223,6 +242,22 @@ test('legacy content-only snapshot manifests remain readable after upgrading the
   assert.deepEqual(await readManifest(identity!.repositoryRoot, legacyId), legacy);
   harness.store.recordWorkspaceSnapshot({ ...snapshot, id: legacyId, manifestHash: legacyId });
   assert.equal(harness.store.workspaceSnapshot(legacyId)?.sourceRoot, harness.root);
+});
+
+test('the stability check refuses equal-length rewrites of more than one file', async (t) => {
+  const harness = await repository(t);
+  const identity = await repositoryIdentity(harness.root);
+  assert.ok(identity);
+  const expected = await collectFileDigests(harness.root);
+  // Both files keep their byte length; only their contents change. A size check cannot see this, and a
+  // snapshot that mixed the old and new bytes would describe a tree that never existed.
+  await writeFile(path.join(harness.root, 'tracked.txt'), 'changed!\n');
+  await writeFile(path.join(harness.root, 'src', 'app.ts'), 'export const value = 2;\n');
+  await assert.rejects(
+    verifySnapshotStable(identity!, expected, new AbortController().signal),
+    (error: unknown) =>
+      error instanceof WorkspaceFailure && error.code === 'WORKSPACE_SOURCE_CHANGED',
+  );
 });
 
 test('an input that changes while it is being frozen is refused, not frozen half-way', async (t) => {
@@ -255,7 +290,9 @@ test('an input that changes while it is being frozen is refused, not frozen half
   const manifest = await readManifest(identity!.repositoryRoot, snapshot.id);
   const entry = manifest!.files.find((candidate) => candidate.path === 'tracked.txt')!;
   assert.equal(
-    createHash('sha256').update(Buffer.from(entry.blob, 'base64')).digest('hex'),
+    createHash('sha256')
+      .update(await snapshotFileBytes(identity!.repositoryRoot, snapshot.id, entry))
+      .digest('hex'),
     entry.sha256,
   );
 });
@@ -343,7 +380,10 @@ test('freezing runs no repository hook and no clean filter', async (t) => {
   const manifest = await readManifest(identity!.repositoryRoot, snapshot.id);
   const entry = manifest!.files.find((candidate) => candidate.path === 'tracked.txt')!;
   // The bytes are the file's, un-filtered: a filter that ran would have stored something else.
-  assert.equal(Buffer.from(entry.blob, 'base64').toString('utf8'), 'with filter\n');
+  assert.equal(
+    (await snapshotFileBytes(identity!.repositoryRoot, snapshot.id, entry)).toString('utf8'),
+    'with filter\n',
+  );
 });
 
 test('a directory that is not a repository root is refused, and a shared binding needs no snapshot', async (t) => {
@@ -388,4 +428,86 @@ test('a repository with no commit yet is refused with the reason a person can ac
       return true;
     },
   );
+});
+
+test('a working tree over the byte budget is refused by name before it is copied', async (t) => {
+  const harness = await repository(t);
+  await writeFile(path.join(harness.root, 'src', 'payload.bin'), 'x'.repeat(4_096));
+  // The budget is an argument here so the refusal is exercised without a real half-gigabyte tree.
+  await assert.rejects(
+    collectWorkingTree(harness.root, undefined, { maxTotalBytes: 1_024 }),
+    (error: unknown) => {
+      assert.ok(error instanceof WorkspaceFailure);
+      assert.equal(error.code, 'WORKSPACE_TOO_LARGE');
+      assert.match(error.message, /1024 byte budget/);
+      assert.match(
+        error.message,
+        /payload\.bin/,
+        'the refusal names the file that crossed the line',
+      );
+      return true;
+    },
+  );
+  // Under the budget the same tree freezes normally, so the bound is the budget and not the walk.
+  const entries = await collectWorkingTree(harness.root, undefined, { maxTotalBytes: 1_000_000 });
+  assert.deepEqual(
+    entries.map((entry) => entry.path),
+    ['src/app.ts', 'src/payload.bin', 'tracked.txt'],
+  );
+});
+
+test('the digest-only walk identifies the same tree without keeping its bytes', async (t) => {
+  const harness = await repository(t);
+  const entries = await collectWorkingTree(harness.root);
+  const digests = await collectFileDigests(harness.root);
+  // Same walk, same refusals, same answer about what the tree is — one of them just does not carry the content.
+  assert.deepEqual(
+    digests,
+    entries.map(({ path, mode, size, sha256 }) => ({ path, mode, size, sha256 })),
+  );
+  assert.ok(digests.every((digest) => !('blob' in digest)));
+});
+
+test('a published manifest names its bytes instead of embedding them', async (t) => {
+  const harness = await repository(t);
+  const snapshot = await freezeSnapshot({ projectRoot: harness.root });
+  const identity = (await repositoryIdentity(harness.root))!;
+  const manifest = (await readManifest(identity.repositoryRoot, snapshot.id))!;
+  assert.equal(manifest.format, 3);
+  assert.ok(manifest.files.length >= 2);
+  for (const entry of manifest.files) {
+    // No content in the manifest itself: reading it is now a metadata read whatever the tree's size.
+    assert.equal(entry.blob, undefined, entry.path);
+    const stored = path.join(
+      snapshotMetadataRoot(identity.repositoryRoot, snapshot.id),
+      'files',
+      storedBlobName(entry.sha256),
+    );
+    const bytes = await readFile(stored);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), entry.sha256, entry.path);
+    assert.equal(
+      bytes.toString('utf8'),
+      await readFile(path.join(harness.root, ...entry.path.split('/')), 'utf8'),
+      entry.path,
+    );
+  }
+});
+
+test('stored bytes that no longer match their digest are refused, not handed to a child', async (t) => {
+  const harness = await repository(t);
+  const snapshot = await freezeSnapshot({ projectRoot: harness.root });
+  const identity = (await repositoryIdentity(harness.root))!;
+  const manifest = (await readManifest(identity.repositoryRoot, snapshot.id))!;
+  const entry = manifest.files.find((candidate) => candidate.path === 'tracked.txt')!;
+  const stored = path.join(
+    snapshotMetadataRoot(identity.repositoryRoot, snapshot.id),
+    'files',
+    storedBlobName(entry.sha256),
+  );
+  await writeFile(stored, 'tampered\n');
+  await assert.rejects(snapshotFileBytes(identity.repositoryRoot, snapshot.id, entry), (error) => {
+    assert.ok(error instanceof WorkspaceFailure);
+    assert.equal(error.code, 'WORKSPACE_INTEGRITY');
+    return true;
+  });
 });

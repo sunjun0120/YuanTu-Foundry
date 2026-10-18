@@ -3,111 +3,36 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $inputData = [Console]::In.ReadToEnd() | ConvertFrom-Json
+# An application still starting under COM can answer Open with no document and no error; the next line would
+# then fail as a call on a null value, which names nothing. Ask again briefly, then say what actually happened.
+function Open-WithRetry([scriptblock]$open, [string]$name) {
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $opened = & $open
+    # The comma keeps PowerShell from enumerating a COM object on its way out of the function.
+    if ($opened) { return ,$opened }
+    Start-Sleep -Milliseconds 500
+  }
+  throw "$name did not open the document (it returned no document after 3 attempts)"
+}
 $app = $null
 $document = $null
 try {
+  # Creating and editing are built in JavaScript; this script only converts an existing file to PDF.
+  if ($inputData.operation -ne 'preview') { throw 'Unsupported Office operation' }
   switch ([string]$inputData.format) {
     'docx' {
       $app = New-Object -ComObject Word.Application
       $app.Visible = $false
       $app.DisplayAlerts = 0
       $app.AutomationSecurity = 3
-      if ($inputData.operation -eq 'create') {
-        $document = $app.Documents.Add()
-        $selection = $app.Selection
-        if ($inputData.title) {
-          $selection.Style = -63
-          $selection.TypeText([string]$inputData.title)
-          $selection.TypeParagraph()
-        }
-        $selection.Style = -1
-        foreach ($paragraph in @($inputData.paragraphs)) {
-          $selection.TypeText([string]$paragraph)
-          $selection.TypeParagraph()
-        }
-        $document.SaveAs2([string]$inputData.outputPath, 16)
-      } else {
-        $readOnly = $inputData.operation -eq 'preview'
-        $document = $app.Documents.Open([string]$inputData.sourcePath, $false, $readOnly, $false)
-        if ($inputData.operation -eq 'edit') {
-          foreach ($replacement in @($inputData.replacements)) {
-            $from = [string]$replacement.from
-            $to = [string]$replacement.to
-            # Find reads ^ as a special-character code even without wildcards; ^^ is a literal caret.
-            if ($from.Length -le 255 -and $to.Length -le 255) {
-              $find = $document.Content.Find
-              $found = $find.Execute($from.Replace('^', '^^'), $false, $false, $false,
-                $false, $false, $true, 1, $false, $to.Replace('^', '^^'), 2)
-              if (-not $found) { throw "Word text not found: $from" }
-              continue
-            }
-            # Find and Replace refuse text over 255 characters, so a longer replacement locates each match by its
-            # first 255 characters, confirms the whole text, and replaces it through the range.
-            $prefix = $from.Substring(0, [Math]::Min(255, $from.Length)).Replace('^', '^^')
-            $count = 0
-            $search = $document.Content
-            while ($true) {
-              $found = $search.Find.Execute($prefix, $false, $false, $false, $false, $false, $true, 0)
-              if (-not $found) { break }
-              $start = $search.Start
-              $candidate = $document.Range($start, $start + $from.Length)
-              if ($candidate.Text -eq $from) {
-                $candidate.Text = $to
-                $count++
-                $next = $start + $to.Length
-              } else {
-                $next = $start + 1
-              }
-              $end = $document.Content.End
-              if ($next -ge $end) { break }
-              $search = $document.Range($next, $end)
-            }
-            if ($count -eq 0) { throw "Word text not found: $from" }
-          }
-          $document.SaveAs2([string]$inputData.outputPath, 16)
-        } elseif ($inputData.operation -eq 'preview') {
-          $document.ExportAsFixedFormat([string]$inputData.outputPath, 17)
-        } else { throw 'Unsupported Word operation' }
-      }
+      $document = Open-WithRetry { $app.Documents.Open([string]$inputData.sourcePath, $false, $true, $false) } 'Word'
+      $document.ExportAsFixedFormat([string]$inputData.outputPath, 17)
     }
     'pptx' {
       $app = New-Object -ComObject PowerPoint.Application
       $app.AutomationSecurity = 3
-      if ($inputData.operation -eq 'create') {
-        $document = $app.Presentations.Add($false)
-        $slideNumber = 1
-        foreach ($slideData in @($inputData.slides)) {
-          $slide = $document.Slides.Add($slideNumber, 2)
-          $slide.Shapes.Title.TextFrame.TextRange.Text = [string]$slideData.title
-          $slide.Shapes.Placeholders.Item(2).TextFrame.TextRange.Text =
-            (@($slideData.body) | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
-          $slideNumber++
-        }
-        $document.SaveAs([string]$inputData.outputPath, 24)
-      } else {
-        $readOnly = $inputData.operation -eq 'preview'
-        $document = $app.Presentations.Open([string]$inputData.sourcePath, $readOnly, $false, $false)
-        if ($inputData.operation -eq 'edit') {
-          foreach ($replacement in @($inputData.replacements)) {
-            $found = $false
-            foreach ($slide in @($document.Slides)) {
-              foreach ($shape in @($slide.Shapes)) {
-                if ($shape.HasTextFrame -and $shape.TextFrame.HasText) {
-                  $range = $shape.TextFrame.TextRange
-                  if ($range.Text.Contains([string]$replacement.from)) {
-                    $range.Text = $range.Text.Replace([string]$replacement.from, [string]$replacement.to)
-                    $found = $true
-                  }
-                }
-              }
-            }
-            if (-not $found) { throw "PowerPoint text not found: $($replacement.from)" }
-          }
-          $document.SaveAs([string]$inputData.outputPath, 24)
-        } elseif ($inputData.operation -eq 'preview') {
-          $document.SaveAs([string]$inputData.outputPath, 32)
-        } else { throw 'Unsupported PowerPoint operation' }
-      }
+      $document = Open-WithRetry { $app.Presentations.Open([string]$inputData.sourcePath, $true, $false, $false) } 'PowerPoint'
+      $document.SaveAs([string]$inputData.outputPath, 32)
     }
     default { throw 'Unsupported Office format' }
   }

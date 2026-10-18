@@ -162,3 +162,30 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
     }),
   ];
 }
+
+/**
+ * What a run says about the plan phase, as a value rather than a literal inside the prompt.
+ *
+ * It changes once, when the user approves a plan mid-run with `exit_plan_mode` (see `approvedPlanNotice`). A
+ * prompt that still said "you have read-only tools" after the approval would be the run telling the model something
+ * untrue about its own capabilities, and the model would then refuse work it is in fact able to do.
+ */
+export function planPhaseNotice(planPhase: boolean, canAsk: boolean): string {
+  if (!planPhase) return '';
+  return canAsk
+    ? '\n\nPlanning mode: you have read-only tools and every permission-requiring operation is refused, so investigate the codebase and then end the planning phase with one tool call: exit_plan_mode to ask the user to approve the plan now, or submit_plan to record it for a decision later. Prefer exit_plan_mode when the user is present. Give a concrete, ordered plan either way. Do not attempt modifications.'
+    : '\n\nPlanning mode: you have read-only tools and every permission-requiring operation is refused, so investigate the codebase and then call submit_plan exactly once with a concrete, ordered plan. Do not attempt modifications.';
+}
+
+/** The plan notice once the user has approved the plan mid-run, which also says that read-only mode is over. */
+export function approvedPlanNotice(approved: Plan): string {
+  return (
+    '\n\nApproved plan (approved by the user during this run; carry it out in this session and report deviations):\n' +
+    JSON.stringify({
+      title: approved.title,
+      summary: approved.summary,
+      steps: approved.steps.map((step) => step.description),
+    }) +
+    '\nRead-only mode is over for this run: your write and command tools are available again, and each of them still asks for its own approval.'
+  );
+}

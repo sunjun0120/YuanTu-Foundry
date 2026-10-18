@@ -7,7 +7,7 @@ import {
   nextCalendarRun,
   normalizeTimeZone,
   wallClockInstant,
-} from '../packages/protocol/calendar.ts';
+} from '../packages/formats/calendar.ts';
 
 test('explicit calendar zones ignore host TZ and weekly calendars advance on local weekdays', () => {
   const after = new Date('2026-10-05T01:00:00Z');

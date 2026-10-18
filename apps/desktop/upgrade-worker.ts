@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   checkUpgrade,
@@ -8,6 +8,7 @@ import {
   prepareUpgrade,
   runUpgrade,
   rollbackUpgrade,
+  writeLaunchRecord,
   type UpgradeJournal,
   type StagedUpgrade,
   type DesktopRelease,
@@ -90,7 +91,7 @@ async function main() {
         ],
         { cwd: j.installDirectory, detached: true },
       );
-      writeFileSync(`${j.journal}.pid`, String(pid), { flag: 'wx' });
+      writeLaunchRecord(`${j.journal}.pid`, pid);
     },
     ready: async (j) => {
       const deadline = Date.now() + 120000;

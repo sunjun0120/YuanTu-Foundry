@@ -174,7 +174,14 @@ test(
       /default:/,
       'the help should explain resolution rather than hard-code a universal window',
     );
-    const source = await readFile(path.join(projectRoot, 'apps/cli/main.ts'), 'utf8');
+    const cliDirectory = path.join(projectRoot, 'apps/cli');
+    const source = (
+      await Promise.all(
+        (await readdir(cliDirectory))
+          .filter((file) => file.endsWith('.ts'))
+          .map((file) => readFile(path.join(cliDirectory, file), 'utf8')),
+      )
+    ).join('\n');
     // A round cap used to be documented here with a default. It is not a limit any more, and a flag for it
     // would be a bound the kernel has no place to enforce.
     assert.ok(

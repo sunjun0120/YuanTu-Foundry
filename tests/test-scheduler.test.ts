@@ -169,3 +169,43 @@ test('a caught isolation violation still fails the real runner in serial and par
     assert.match(output, /Isolation violations/);
   }
 });
+
+test('a file that never settles is ended by the watchdog and reported as a failure', async (t) => {
+  const root = await directory(t),
+    file = path.join(root, 'hang.test.mjs');
+  await writeFile(
+    file,
+    [
+      "import test from 'node:test';",
+      "test('a passing case', () => {});",
+      // A real interval keeps the loop alive, so this is a hang rather than a Node process that simply runs dry.
+      "test('a case that never settles', () => new Promise(() => setInterval(() => {}, 1000)));",
+      '',
+    ].join('\n'),
+  );
+  const child = spawn(process.execPath, [path.join(projectRoot, 'scripts/run-tests.mjs'), file], {
+    cwd: projectRoot,
+    env: { ...process.env, FOUNDRY_TEST_FILE_TIMEOUT_MS: '1500' },
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    output += chunk;
+  });
+  // The watchdog's own failure must not turn this test into the same kind of hang it exists to prevent.
+  const guard = setTimeout(() => child.kill('SIGKILL'), 60_000);
+  t.after(() => clearTimeout(guard));
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+  clearTimeout(guard);
+  assert.equal(code, 1, output);
+  assert.match(output, /Test file timed out after \d+s: .*hang\.test\.mjs/);
+  // The bound names the work that was running, which is what makes a hang actionable without a re-run.
+  assert.match(output, /last reported case "a passing case"/);
+});

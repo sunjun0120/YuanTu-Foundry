@@ -171,10 +171,10 @@ export async function prepareContext(input: {
    * of the system prompt, and moving it cost nothing here — the same bytes are counted either way — but every
    * budget decision below has to look at the messages it actually sends.
    */
+  // The catalogue does not change during one assembly, and it was serialised again for every size asked.
+  const toolChars = JSON.stringify(input.tools).length;
   const size = (messages: Message[]) =>
-    input.system.length +
-    JSON.stringify(input.tools).length +
-    contextMessageSize(withSummary(messages, summary));
+    input.system.length + toolChars + contextMessageSize(withSummary(messages, summary));
   const charsFit = (messages: Message[]) => size(messages) <= limit;
   const forecastOf = (messages: Message[]): RequestForecast =>
     forecastRequest({
@@ -264,8 +264,7 @@ export async function prepareContext(input: {
   };
   /** The same request against the character budget, the other ceiling a batch has to clear before it is sent. */
   const summaryCharsFit = (transcript: Message[]): boolean =>
-    input.system.length + JSON.stringify(input.tools).length + contextMessageSize(transcript) <=
-    limit;
+    input.system.length + toolChars + contextMessageSize(transcript) <= limit;
   /**
    * Shorten old tool results, and say how much that bought.
    *
@@ -475,6 +474,20 @@ export async function prepareContext(input: {
     new ContextLimitError(
       'Current turn exceeds context budget; start a new session with a smaller task',
     );
+  /**
+   * A forced compression needs something that was already answered or executed.
+   *
+   * A fresh session can hold a prompt plus the runtime's machine-written announcements (the skills catalogue is
+   * written as a user-role message). There is no completed turn to summarize there, but the extra user-role
+   * message made the boundary scan find one and spend a summary request whose failure then displaced the
+   * provider's own refusal in the reported error. The turn has nowhere to compact at, and saying so is the
+   * answer the caller already expects.
+   */
+  if (
+    input.forceCompact &&
+    !history.some((message) => message.role === 'assistant' || message.role === 'tool')
+  )
+    return abandonCompaction(turnFailure());
   const cuts = contextBoundaries(history);
   /**
    * How much of the newest conversation stays verbatim.
@@ -512,7 +525,7 @@ export async function prepareContext(input: {
   // Legacy boundary rule: without a policy the tail starts at a user turn, so the conversation keeps its shape.
   if (!input.forceCompact && retained === undefined)
     while (boundary >= covered && history[boundary]?.role !== 'user') boundary--;
-  const overhead = input.system.length + JSON.stringify(input.tools).length;
+  const overhead = input.system.length + toolChars;
   // Boundary selection is synchronous and precedes every summary/calibration update. Reuse a
   // boundary's view and prediction here; after summarizing, forecast the changed request anew.
   const boundaryViews = new Map<number, { messages: Message[]; forecast?: RequestForecast }>();
@@ -639,8 +652,10 @@ export async function prepareContext(input: {
       input.signal.throwIfAborted();
       let end = covered;
       let batch: Message[] = [];
-      for (let candidate = covered + 1; candidate <= boundary; candidate++) {
-        if (!cuts.includes(candidate)) continue;
+      // `cuts` is ascending and unique (`contextBoundaries`), so walking it is walking every cut in range.
+      for (const candidate of cuts) {
+        if (candidate <= covered) continue;
+        if (candidate > boundary) break;
         /**
          * The batch, exactly as the main request would send it.
          *

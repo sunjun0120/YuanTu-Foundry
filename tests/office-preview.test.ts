@@ -112,9 +112,10 @@ test('tool captures backend before approval and preserves default Excel extensio
     approve: async () => true,
   });
   args.backend = 'native';
+  // The legacy native backend keeps its Excel output as data HTML; `auto` (the default) would accept a PDF.
   await assert.rejects(
     tool.prepare!(
-      { source_path: args.source_path, output_path: 'native.pdf' },
+      { source_path: args.source_path, output_path: 'native.pdf', backend: 'native' },
       { signal: new AbortController().signal, approve: async () => true },
     ),
     /html/,

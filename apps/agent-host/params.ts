@@ -1,4 +1,4 @@
-import { commandRecords } from '../../packages/core/command-jobs.ts';
+import { commandRecords, hiddenCommandIds } from '../../packages/core/command-jobs.ts';
 import { pendingTaskDeliveries } from '../../packages/core/task-deliveries.ts';
 import type { BackgroundJobSnapshot } from '../../packages/protocol/rpc.ts';
 import type { Task } from '../../packages/protocol/index.ts';
@@ -56,12 +56,7 @@ export const durableBackground = (
   id?: string,
   cursor = 0,
 ): BackgroundJobSnapshot[] => {
-  const hidden = new Set(
-    store
-      .events(sessionId)
-      .filter((e) => e.type === 'background.hidden')
-      .flatMap((e) => (e.data.ids as string[]) ?? []),
-  );
+  const hidden = hiddenCommandIds(store, sessionId);
   return [...commandRecords(store, sessionId).values()]
     .filter((r) => r.status && (id ? r.id === id : !hidden.has(r.id)))
     .map((r) => {

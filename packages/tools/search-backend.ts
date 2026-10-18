@@ -20,7 +20,7 @@ import { executionPolicy } from './execution-policy.ts';
 import { resolveSandboxConfig } from './sandbox.ts';
 import { resolveSearchBinary, type ResolvedSearchBinary } from '../search/ripgrep-assets.ts';
 import { runRipgrep, type ManagedSearchProcess } from '../search/ripgrep.ts';
-import { emptyCoverage, type SearchBackend } from '../search/types.ts';
+import type { SearchBackend } from '../search/types.ts';
 
 /**
  * The ripgrep backend for one workspace.
@@ -42,7 +42,7 @@ export function createSearchBackend(root: string): SearchBackend {
     },
     async search(input, context) {
       const binary = await asset();
-      if (!binary) return input.fallback(input.files, emptyCoverage());
+      if (!binary) return input.fallback(input.files, input.inventory());
       const config = resolveSandboxConfig();
       let environment;
       try {
@@ -51,8 +51,9 @@ export function createSearchBackend(root: string): SearchBackend {
           context.executionPolicy ?? executionPolicy(config.mode, config),
         );
       } catch {
-        // The policy could not be honoured, so no program runs. The built-in scanner answers instead.
-        return input.fallback(input.files, emptyCoverage());
+        // The policy could not be honoured, so no program runs. The built-in scanner answers instead, with the
+        // coverage the enumeration had: the files it scanned are only as complete as the list it was given.
+        return input.fallback(input.files, input.inventory());
       }
       const processes: ManagedSearchProcess = {
         async start(executable, argv, signal) {

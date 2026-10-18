@@ -344,8 +344,13 @@ test(
     await app.evaluate(() => {
       const hosts = process
         ._getActiveHandles()
+        // The bundled Host is what a build launches; the tsc entry is the fallback when no bundle exists.
         .filter((handle) =>
-          handle.spawnargs?.some((arg) => /[\\/]apps[\\/]agent-host[\\/]main\.js$/.test(arg)),
+          handle.spawnargs?.some((arg) =>
+            /[\\/](?:apps[\\/]agent-host[\\/]main|packages[\\/]tools[\\/]host\.bundle)\.js$/.test(
+              arg,
+            ),
+          ),
         );
       if (hosts.length !== 1) throw new Error('Expected one active desktop Host');
       const host = hosts[0];

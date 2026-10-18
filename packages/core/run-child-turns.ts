@@ -46,7 +46,13 @@ export interface ChildTurnOptions {
 
 /** Build turns with the parent run's resources; resident activations own their registry. */
 export function createChildTurns(options: ChildTurnOptions): ChildTurns {
-  const { store, tools, emit, taskEffectScope } = options;
+  const { store, tools, taskEffectScope } = options;
+  /**
+   * The run this child's frames belong to, rebound by the residency when a new parent run continues an
+   * existing child. It is a variable rather than a captured constant because the same turn closure serves
+   * every later turn of a resident child.
+   */
+  let emit = options.emit;
   return (input_: {
     task: {
       id: string;
@@ -422,6 +428,13 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
         input_.childSignal?.removeEventListener('abort', end);
       }
     };
-    return { turn, ...(ownsRegistry ? { close: () => childRegistry.close() } : {}) };
+    const runner: ReturnType<ChildTurns> = {
+      turn,
+      ...(ownsRegistry ? { close: () => childRegistry.close() } : {}),
+      setEmit: (next: RunEmit) => {
+        emit = next;
+      },
+    };
+    return runner;
   };
 }

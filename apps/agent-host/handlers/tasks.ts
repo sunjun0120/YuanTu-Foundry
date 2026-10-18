@@ -67,6 +67,19 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     ownedSession(ctx.store, ctx.workspace, sessionId);
     return ctx.store.taskStepCheckpoints(sessionId, required(params, 'taskId'));
   },
+  'task.history': async (ctx, params) => {
+    const sessionId = required(params, 'sessionId');
+    ownedSession(ctx.store, ctx.workspace, sessionId);
+    return Object.fromEntries(
+      ctx.store.listTasks(sessionId).map((task) => [
+        task.id,
+        {
+          attempts: ctx.store.listTaskAttempts(sessionId, task.id),
+          steps: ctx.store.taskStepCheckpoints(sessionId, task.id),
+        },
+      ]),
+    );
+  },
   'task.approval.respond': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
