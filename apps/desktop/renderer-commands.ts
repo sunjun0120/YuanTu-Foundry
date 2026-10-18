@@ -46,6 +46,8 @@ export function setupCommandPalette(actions: {
   select(command: CarrierCommand): Promise<CarrierSnapshot | null>;
   invoke(command: CarrierCommand): Promise<CarrierSnapshot | null>;
   requestRender(): void;
+  /** Repaint only the composer's controls: what a keystroke can change. */
+  requestComposerUpdate(): void;
   /** Clicking the send button while a run is live is how a run is stopped. */
   onStop(): void;
 }): {
@@ -288,7 +290,7 @@ export function setupCommandPalette(actions: {
     selectedCommand = 0;
     menuDismissed = false;
     renderPalette();
-    actions.requestRender();
+    actions.requestComposerUpdate();
   }
   /**
    * A submitted line that names one of the window's own commands.

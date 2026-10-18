@@ -271,6 +271,17 @@ export function setupTranscript(options: {
    * a session with no contract says so rather than borrowing any of them. Nothing internal is shown: no hash, no
    * attempt id, no effect id, because none of them help the person decide whether to trust the work.
    */
+  /** The review reasons `ui.completionReason.*` has a sentence for; see `decideCompletion`. */
+  const COMPLETION_REASONS = new Set([
+    'pending-effects',
+    'manual-review',
+    'cancelled',
+    'definition-changed',
+    'repeated-failure',
+    'verification-changed-monitored-inputs',
+    'empty-acceptance',
+    'invalid-definition',
+  ]);
   function completionNotice(): HTMLElement | null {
     const completion = options.getState()?.session.completion ?? null;
     if (!completion) return null;
@@ -279,6 +290,13 @@ export function setupTranscript(options: {
     element.append(
       node('strong', `${t('ui.completionTitle')} · ${t(`ui.completionState.${summary.state}`)}`),
     );
+    // Why it is waiting, for the two states that wait on a person. Known reasons get their own sentence; any
+    // other one says only that a person has to look — the reason code itself is the runtime's bookkeeping.
+    if (summary.state === 'needs_review' || summary.state === 'limited') {
+      const code = summary.reason.split(':')[0]!.trim();
+      const known = COMPLETION_REASONS.has(code) ? code : 'other';
+      element.append(node('p', t(`ui.completionReason.${known}`), 'completion-reason'));
+    }
     if (completion.definition.objective)
       element.append(
         node('p', t('ui.completionObjective', { objective: completion.definition.objective })),

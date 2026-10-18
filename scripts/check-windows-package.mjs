@@ -74,6 +74,10 @@ export async function validateWindowsPackage(
     await readFile(path.join(resources, 'app/node_modules/typescript/package.json'), 'utf8'),
   );
   await readFile(path.join(resources, 'app/node_modules/typescript/lib/typescript.js'));
+  // Excluded by `electron-builder.config.cjs`: a rendering polyfill the desktop never uses, and 36 MB of native code.
+  for (const excluded of ['@napi-rs/canvas', '@napi-rs/canvas-win32-x64-msvc'])
+    if (await stat(path.join(resources, 'app/node_modules', excluded)).catch(() => null))
+      throw new Error(`Packaged app still contains ${excluded}`);
   const info = inspect
     ? await inspectWindowsRuntime(path.join(resources, 'runtime/node.exe'))
     : null;

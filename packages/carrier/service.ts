@@ -133,6 +133,22 @@ const TASK_EDIT_REFRESH: RefreshScope = {
   tasks: true,
   background: false,
 };
+/** A task action that may run checks or touch files: the task panel, the files it changed and its audit line. */
+const TASK_ACTION_REFRESH: RefreshScope = {
+  sessions: false,
+  changes: true,
+  audit: true,
+  tasks: true,
+  background: false,
+};
+/** A sub-agent workspace archived, removed or restored: what the parent sees as changed, and the audit line. */
+const WORKSPACE_REFRESH: RefreshScope = {
+  sessions: false,
+  changes: true,
+  audit: true,
+  tasks: false,
+  background: false,
+};
 /** Commands that only read, or only move what the controller or the transcript already publishes. */
 const NO_REFRESH: RefreshScope = {
   sessions: false,
@@ -150,6 +166,10 @@ export function refreshScopeFor(type: CarrierCommand['type']): RefreshScope {
     case 'enqueue':
     case 'clearQueue':
     case 'cancel':
+    case 'sandbox':
+    case 'compact':
+    case 'planApprove':
+    case 'planReject':
       return DECISION_REFRESH;
     case 'rename':
       return RENAME_REFRESH;
@@ -157,6 +177,12 @@ export function refreshScopeFor(type: CarrierCommand['type']): RefreshScope {
     case 'taskConfirm':
     case 'taskHistory':
       return TASK_EDIT_REFRESH;
+    case 'taskApproval':
+    case 'taskTrigger':
+    case 'taskPropose':
+      return TASK_ACTION_REFRESH;
+    case 'subagentWorkspace':
+      return WORKSPACE_REFRESH;
     case 'loadOlder':
     case 'refreshResources':
     case 'export':
@@ -689,17 +715,25 @@ export class CarrierService {
         this.currentSession = current;
       }
     }
-    if (scope.changes) {
-      const version = this.searchVersion;
-      const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
-      // Published under the same guard as the list above: two overlapping refreshes can cross a session switch,
-      // and a stale reply landing last would show the file changes of a session the user has left.
-      if (version === this.searchVersion && id === this.controller.sessionId)
-        this.changes = changes;
-    }
-    if (scope.audit) await this.refreshAudit(id);
-    if (scope.tasks) await this.refreshTasks(id);
-    if (scope.background) await this.backgroundPanel.refresh();
+    /**
+     * The panels below read independent Host state and publish into separate fields, each under its own session
+     * guard, so they go out together: a command waits for the slowest read rather than for the sum of them.
+     */
+    const reads: Promise<void>[] = [];
+    if (scope.changes) reads.push(this.refreshChanges(id));
+    if (scope.audit) reads.push(this.refreshAudit(id));
+    if (scope.tasks) reads.push(this.refreshTasks(id));
+    if (scope.background) reads.push(this.backgroundPanel.refresh());
+    const settled = await Promise.allSettled(reads);
+    const failed = settled.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+  private async refreshChanges(id: string | null): Promise<void> {
+    const version = this.searchVersion;
+    const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
+    // Published under the same guard as the session list: two overlapping refreshes can cross a session switch,
+    // and a stale reply landing last would show the file changes of a session the user has left.
+    if (version === this.searchVersion && id === this.controller.sessionId) this.changes = changes;
   }
   /** Refresh independently when a fallback or a background-generated title becomes available. */
   private async refreshSessionNames(): Promise<void> {

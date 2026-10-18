@@ -43,6 +43,8 @@ const EMPTY_COMPLETION_DEFINITION: CompletionRecord['definition'] = {
   acceptance: [],
   inputs: [],
 };
+/** The newest page a run-end sync reads; a run that added more than this falls back to the full window read. */
+const INCREMENTAL_TAIL = 100;
 import type { ToolResultOutput } from '../protocol/tool-result.ts';
 import type { ContextBreakdown } from '../core/budget.ts';
 import type {
@@ -103,6 +105,13 @@ export class SessionController {
   private active: Promise<RunResult> | null = null;
   private aborter: AbortController | null = null;
   private olderLoad: symbol | null = null;
+  /**
+   * Where the transcript in `state.messages` stops being the Host's: the offset just past the last message a
+   * history read put there. Messages after it are this controller's own (an optimistic bubble, live output) and
+   * are replaced by the next read; messages before it are the Host's and, the transcript being append-only, stay
+   * true. That is what lets a run's end read only what the run added. See `history`.
+   */
+  private committed: { sessionId: string; end: number } | null = null;
   /** Which session read is the current one; see `staleRead`. */
   private loadGeneration = 0;
   constructor(client: AgentHostClient) {
@@ -281,13 +290,57 @@ export class SessionController {
       this.publish();
     }
   }
-  private async history(sessionId: string): Promise<{
+  /**
+   * The transcript window to show, read from the Host.
+   *
+   * `incremental` is the run-end sync: the transcript is append-only (the fold only ever pushes), so the part this
+   * controller already holds up to `committed.end` is still right, and only the newest page has to be read. When
+   * that page does not reach back to `committed.end` (a run that added more than a page), or anything about the
+   * window looks inconsistent, the full read below is the answer instead — a guess is never kept.
+   */
+  private async history(
+    sessionId: string,
+    incremental = false,
+  ): Promise<{
     messages: Message[];
     statistics: SessionStatistics;
     historyStart: number;
     /** The run the session had active when the transcript was read, when the Host says. */
     activeRun: string | null | undefined;
   }> {
+    const base = this.state.historyStart;
+    const known =
+      incremental &&
+      this.committed?.sessionId === sessionId &&
+      this.state.sessionId === sessionId &&
+      base !== undefined
+        ? this.committed.end
+        : null;
+    if (known !== null && base !== undefined) {
+      const page = await readDisplayHistory(this.client, sessionId, Infinity, 0, {
+        tail: INCREMENTAL_TAIL,
+      });
+      const start = page.startOffset;
+      const end = start + page.messages.length;
+      const keep = known - base;
+      if (
+        start <= known &&
+        end >= known &&
+        keep >= 0 &&
+        keep <= this.state.messages.length &&
+        this.state.sessionId === sessionId &&
+        this.state.historyStart === base
+      )
+        return {
+          messages:
+            start <= base
+              ? page.messages
+              : [...this.state.messages.slice(0, keep), ...page.messages.slice(known - start)],
+          statistics: page.statistics ?? emptyStatistics(),
+          historyStart: Math.min(start, base),
+          activeRun: page.activeRun,
+        };
+    }
     const tail = Math.max(100, this.state.sessionId === sessionId ? this.state.messages.length : 0);
     const history = await readDisplayHistory(this.client, sessionId, Infinity, 0, { tail });
     return {
@@ -295,6 +348,20 @@ export class SessionController {
       statistics: history.statistics ?? emptyStatistics(),
       historyStart: history.startOffset,
       activeRun: history.activeRun,
+    };
+  }
+  /** Put a history read on screen, and remember how much of it is the Host's. */
+  private applyTranscript(
+    sessionId: string,
+    transcript: { messages: Message[]; statistics: SessionStatistics; historyStart: number },
+  ): void {
+    this.state.messages = transcript.messages;
+    this.state.historyStart = transcript.historyStart;
+    this.state.messageRevision++;
+    this.state.statistics = transcript.statistics;
+    this.committed = {
+      sessionId,
+      end: transcript.historyStart + transcript.messages.length,
     };
   }
   async loadOlder(): Promise<void> {
@@ -470,6 +537,10 @@ export class SessionController {
       approvals: [],
       questions: [],
       error: null,
+    };
+    this.committed = {
+      sessionId,
+      end: transcript.historyStart + transcript.messages.length,
     };
     /**
      * Live frames report a run's own cumulative usage, so the session's stored statistics are what they are added
@@ -830,7 +901,7 @@ export class SessionController {
         this.state.error = result.error ?? null;
       }
       if (!this.disposed && this.client.status === 'ready') {
-        const { messages, statistics, historyStart } = await this.history(sessionId);
+        const transcript = await this.history(sessionId, true);
         const workspaces = owns()
           ? await this.workspaceViews(
               sessionId,
@@ -838,10 +909,7 @@ export class SessionController {
             )
           : new Map();
         if (owns()) {
-          this.state.messages = messages;
-          this.state.historyStart = historyStart;
-          this.state.messageRevision++;
-          this.state.statistics = statistics;
+          this.applyTranscript(sessionId, transcript);
           this.refreshWorkspaceViews(workspaces);
         }
       }
@@ -855,13 +923,8 @@ export class SessionController {
       // Reconcile from the Host whenever it is still reachable instead of guessing which occurred.
       if (!this.disposed && this.client.status === 'ready') {
         try {
-          const { messages, statistics, historyStart } = await this.history(sessionId);
-          if (owns()) {
-            this.state.messages = messages;
-            this.state.historyStart = historyStart;
-            this.state.messageRevision++;
-            this.state.statistics = statistics;
-          }
+          const transcript = await this.history(sessionId);
+          if (owns()) this.applyTranscript(sessionId, transcript);
         } catch {
           // Preserve the original run error and the visible preview if history itself is unavailable.
         }
@@ -966,17 +1029,14 @@ export class SessionController {
     const owns = () =>
       this.state.sessionId === sessionId && this.runId === finishedRun && !this.state.running;
     try {
-      const { messages, statistics, historyStart } = await this.history(sessionId);
+      const transcript = await this.history(sessionId, true);
       if (this.disposed || !owns()) return;
       const workspaces = await this.workspaceViews(
         sessionId,
         this.state.subagents.map((child) => child.childSessionId ?? ''),
       );
       if (this.disposed || !owns()) return;
-      this.state.messages = messages;
-      this.state.historyStart = historyStart;
-      this.state.messageRevision++;
-      this.state.statistics = statistics;
+      this.applyTranscript(sessionId, transcript);
       this.refreshWorkspaceViews(workspaces);
     } catch {
     } finally {

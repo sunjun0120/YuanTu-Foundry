@@ -10,8 +10,10 @@ import {
   runWorkspaceGit,
   withRepositoryLock,
   workspaceGit,
+  writeBlob,
   WORKSPACE_GIT_IDENTITY,
   type RepositoryIdentity,
+  type TreeEntry,
 } from './git.ts';
 
 /**
@@ -376,8 +378,8 @@ function modeOf(info: { mode: number }): '100644' | '100755' {
 /**
  * One walk over the working tree, with the caller deciding what to keep.
  *
- * The refusals and the stability checks live here once. `collectWorkingTree` keeps every file's bytes because the
- * result export compares trees byte for byte; `collectFileDigests` keeps only what identifies those bytes; and
+ * The refusals and the stability checks live here once. `collectWorkingTree` keeps every file's bytes for callers
+ * that need them in memory; `collectTreeBlobs` writes each file to the object store for the result export; `collectFileDigests` keeps only what identifies those bytes; and
  * `collectStagedTree` writes the bytes to a staging directory so the freeze never holds the tree in memory. Two
  * copies of this walk would be two sets of refusals to keep in step.
  */
@@ -526,6 +528,30 @@ export async function collectStagedTree(
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     await writeFile(path.join(staging, blobName(sha256)), bytes);
     entries.push({ path: relative, mode: modeOf(info), size: bytes.length, sha256 });
+  });
+  return entries;
+}
+
+/**
+ * The walk a result export needs: each file written as a Git blob as it is read, keeping only the blob id.
+ *
+ * The export compares trees by object id, so the bytes only have to reach the object store once. Writing each
+ * file's blob as the walk reads it keeps the peak at one file, where collecting the tree first held every file
+ * base64-encoded (about 1.3 times the tree) and then decoded a second copy to hand to `writeTree`.
+ */
+export async function collectTreeBlobs(
+  repositoryRoot: string,
+  directory: string,
+  signal?: AbortSignal,
+  limits: { maxTotalBytes?: number } = {},
+): Promise<TreeEntry[]> {
+  const entries: TreeEntry[] = [];
+  await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
+    entries.push({
+      path: relative,
+      mode: modeOf(info),
+      blob: await writeBlob(repositoryRoot, bytes, signal),
+    });
   });
   return entries;
 }

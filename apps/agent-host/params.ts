@@ -1,4 +1,9 @@
-import { commandRecords, hiddenCommandIds } from '../../packages/core/command-jobs.ts';
+import {
+  commandRecord,
+  commandRecordsView,
+  hiddenCommandIds,
+} from '../../packages/core/command-jobs.ts';
+import type { CommandRecord } from '../../packages/protocol/jobs.ts';
 import { pendingTaskDeliveries } from '../../packages/core/task-deliveries.ts';
 import type { BackgroundJobSnapshot } from '../../packages/protocol/rpc.ts';
 import type { Task } from '../../packages/protocol/index.ts';
@@ -50,33 +55,49 @@ export const ownedSession = (store: SessionStore, workspace: string, sessionId: 
  * answered from the durable log instead of being told its job does not exist. `background.hidden` is how a client
  * says "I have read these" without deleting the evidence behind them.
  */
+export const DURABLE_BACKGROUND_LIMIT = 100;
 export const durableBackground = (
   store: SessionStore,
   sessionId: string,
   id?: string,
   cursor = 0,
 ): BackgroundJobSnapshot[] => {
-  const hidden = hiddenCommandIds(store, sessionId);
-  return [...commandRecords(store, sessionId).values()]
-    .filter((r) => r.status && (id ? r.id === id : !hidden.has(r.id)))
-    .map((r) => {
-      if (cursor > r.outputChars) throw Error('Invalid output cursor');
-      const offset = Math.max(0, r.outputChars - r.output.length),
-        start = Math.max(cursor, offset);
-      return {
-        id: r.id,
-        sessionId,
-        command: r.command,
-        cwd: r.cwd,
-        createdAt: r.createdAt,
-        finishedAt: r.finishedAt,
-        status: r.status!,
-        exitCode: r.exitCode ?? null,
-        output: r.output.slice(start - offset),
-        nextCursor: r.outputChars,
-        truncated: cursor < offset,
-      };
-    });
+  /**
+   * A lookup by id reads one record; a listing walks the kept fold once and keeps the newest
+   * `DURABLE_BACKGROUND_LIMIT` that were not hidden. Neither copies the session's whole command record first, and
+   * the listing is bounded because every entry carries its output tail: a long session's panel is the recent work,
+   * while a job outside the window stays readable by id through `background.poll`.
+   */
+  let selected: CommandRecord[];
+  if (id) {
+    const record = commandRecord(store, sessionId, id);
+    selected = record?.status ? [record] : [];
+  } else {
+    const hidden = hiddenCommandIds(store, sessionId);
+    selected = [];
+    for (const record of commandRecordsView(store, sessionId).values())
+      if (record.status && !hidden.has(record.id)) selected.push(record);
+    if (selected.length > DURABLE_BACKGROUND_LIMIT)
+      selected = selected.slice(-DURABLE_BACKGROUND_LIMIT);
+  }
+  return selected.map((r) => {
+    if (cursor > r.outputChars) throw Error('Invalid output cursor');
+    const offset = Math.max(0, r.outputChars - r.output.length),
+      start = Math.max(cursor, offset);
+    return {
+      id: r.id,
+      sessionId,
+      command: r.command,
+      cwd: r.cwd,
+      createdAt: r.createdAt,
+      finishedAt: r.finishedAt,
+      status: r.status!,
+      exitCode: r.exitCode ?? null,
+      output: r.output.slice(start - offset),
+      nextCursor: r.outputChars,
+      truncated: cursor < offset,
+    };
+  });
 };
 
 /**

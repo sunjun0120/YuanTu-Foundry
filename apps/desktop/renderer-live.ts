@@ -17,6 +17,7 @@
 import type { CarrierSnapshot, MessageDelta } from '../../packages/carrier/contract.ts';
 import { format, t } from './i18n.ts';
 import { renderMarkdown, type MarkdownActions } from './markdown.ts';
+import { markdownBlocks } from './markdown-blocks.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -63,6 +64,37 @@ export function setupLiveMessage(options: {
   const conversation = required('conversation');
   let liveKey = '';
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The live bubble's content element and the blocks already built into it.
+   *
+   * Only the last block of a streaming answer is still changing, so the blocks before it keep their nodes and
+   * only the tail is parsed again (see `markdownBlocks`). A transcript repaint that rebuilt the bubble leaves a
+   * different element in place, which is noticed and starts the blocks over.
+   */
+  let liveContent: HTMLElement | null = null;
+  let liveBlocks: { source: string; nodes: ChildNode[] }[] = [];
+  function paintLive(target: Element, text: string): void {
+    if (target !== liveContent) {
+      liveContent = node('div', '', 'message-content markdown');
+      liveBlocks = [];
+      target.replaceWith(liveContent);
+    }
+    const sources = markdownBlocks(text);
+    let keep = 0;
+    while (
+      keep < liveBlocks.length &&
+      keep < sources.length &&
+      liveBlocks[keep]!.source === sources[keep]
+    )
+      keep++;
+    for (const block of liveBlocks.slice(keep)) for (const child of block.nodes) child.remove();
+    liveBlocks.length = keep;
+    for (const source of sources.slice(keep)) {
+      const nodes = Array.from(renderMarkdown(source, markdownActions).childNodes);
+      liveContent.append(...nodes);
+      liveBlocks.push({ source, nodes });
+    }
+  }
   /**
    * Streamed text accumulated from the delta channel. Snapshots no longer arrive per token, so the
    * live bubble reads from this buffer and falls back to the snapshot's own copy (which the controller
@@ -114,8 +146,12 @@ export function setupLiveMessage(options: {
           full.length > 120_000
             ? `${format(t('ui.liveTail'), { count: full.length })}\n\n${full.slice(-120_000)}`
             : full || livePlaceholder();
-        target.replaceWith(renderMarkdown(preview, markdownActions));
-      } else target?.replaceWith(node('div', '', 'message-content'));
+        paintLive(target, preview);
+      } else {
+        target?.replaceWith(node('div', '', 'message-content'));
+        liveContent = null;
+        liveBlocks = [];
+      }
       if (
         nearBottom &&
         !isChildPageOpen() &&

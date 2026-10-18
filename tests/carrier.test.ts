@@ -116,8 +116,21 @@ test('each command refreshes only the panels its effect moves; unknown or sessio
     background: false,
   };
   assert.deepEqual(refreshScopeFor('approve'), decision);
-  for (const type of ['questionAnswer', 'enqueue', 'clearQueue', 'cancel'] as const)
+  for (const type of [
+    'questionAnswer',
+    'enqueue',
+    'clearQueue',
+    'cancel',
+    'sandbox',
+    'compact',
+    'planApprove',
+    'planReject',
+  ] as const)
     assert.deepEqual(refreshScopeFor(type), decision, type);
+  // A task action reads the task panel and the files it may have touched; a workspace action only the files.
+  for (const type of ['taskApproval', 'taskTrigger', 'taskPropose'] as const)
+    assert.deepEqual(refreshScopeFor(type), { ...decision, changes: true, tasks: true }, type);
+  assert.deepEqual(refreshScopeFor('subagentWorkspace'), { ...decision, changes: true });
   // A command that replaces the session, rewrites the changes or owns the task panels keeps the full read: the
   // scoped set above is what a run does repeatedly, and guessing beyond it is how a panel goes stale.
   const full = { sessions: true, changes: true, audit: true, tasks: true, background: true };
@@ -131,7 +144,6 @@ test('each command refreshes only the panels its effect moves; unknown or sessio
     'taskRefresh',
     'taskRetry',
     'goal',
-    'planApprove',
   ] as const)
     assert.deepEqual(refreshScopeFor(type), full, type);
   // A rename moves only the sidebar row; a task edit that starts nothing moves only the task panel.

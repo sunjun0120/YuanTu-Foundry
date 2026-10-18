@@ -178,9 +178,10 @@ export function createRunDelegation(options: RunDelegationOptions): SubAgentCoor
     }
     store.recordEvent(sessionId, 'subagent.finished', {
       runId,
+      // The newest `run.finished` by index, not a walk of the child's whole log: a resident child's log grows with
+      // every turn, and this runs at the end of each one.
       childRunId: data.sessionId
-        ? store.events(String(data.sessionId)).findLast((e) => e.type === 'run.finished')?.data
-            .runId
+        ? store.newestPayload(String(data.sessionId), 'run.finished')?.runId
         : undefined,
       id: data.id,
       sessionId: data.sessionId,

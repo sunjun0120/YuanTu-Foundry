@@ -182,12 +182,23 @@ let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
 let operation = false;
 let approvalBusy = new Set<string>();
 let transcriptKey = '';
+/**
+ * Where the shown window of history began at the last paint, for the session it belonged to.
+ *
+ * Following the newest message is for growth at the *end*. Older history arriving at the top also changes the
+ * transcript, and a short conversation counts as "near the bottom" even when scrolled to its top — so the
+ * snapshot pushed after a load-older reply used to jump the reader to the end, past the step they were on.
+ */
+let paintedWindow: { sessionId: string | null; historyStart: number; end: number } | null = null;
+/** Set once older history was prepended; cleared by a new message at the end or by another session. */
+let holdReadingPosition = false;
 let approvalKey = '';
 const commandsView = setupCommandPalette({
   getState: () => state,
   select,
   invoke,
   requestRender: render,
+  requestComposerUpdate: renderComposerState,
   onStop: () => sendButton.click(),
 });
 const backgroundView = setupBackgroundView({ getState: () => state, invoke });
@@ -289,6 +300,43 @@ const planView = setupPlanPanel({
   isBusy: () => Boolean(state?.session.running || operation),
   select,
 });
+/**
+ * The composer's own controls: whether it accepts input, and what the send button does and says.
+ *
+ * Split out of `render` because typing changes exactly this — an empty prompt disables Send — and nothing else
+ * in the window. A keystroke used to repaint every panel, the session list and the transcript key check to flip
+ * one button; it now repaints the button.
+ */
+function renderComposerState(): void {
+  if (!state) return;
+  const session = state.session;
+  const composerBlocked =
+    !state.ready ||
+    !state.configured ||
+    session.loading ||
+    operation ||
+    composerView.isStopping() ||
+    composerView.isQueueBusy() ||
+    attachmentsView.isBusy() ||
+    (composerView.isSending() && !session.running);
+  prompt.disabled = composerBlocked;
+  for (const button of element('attachments').querySelectorAll<HTMLButtonElement>('button'))
+    button.disabled = attachmentsView.isBusy();
+  sendButton.disabled = session.running
+    ? composerView.isStopping()
+    : composerBlocked || (!prompt.value.trim() && !attachmentsView.hasAny());
+  sendButton.dataset.mode = session.running ? 'stop' : 'send';
+  const sendLabel = session.running
+    ? composerView.isStopping()
+      ? t('ui.stopping')
+      : t('ui.stop')
+    : t('ui.send');
+  sendButton.setAttribute('aria-label', sendLabel);
+  sendButton.title = sendLabel;
+  element<HTMLButtonElement>('attach-image').disabled = composerBlocked;
+  element('attach-image').title = t('ui.addAttachment');
+  element('attach-image').setAttribute('aria-label', t('ui.addAttachment'));
+}
 function render(): void {
   if (!state) return;
   const session = state.session;
@@ -351,33 +399,8 @@ function render(): void {
   sessionManagement.render(state, blocked);
   element<HTMLButtonElement>('new-session').disabled = blocked;
   element<HTMLButtonElement>('choose-workspace').disabled = blocked;
-  const composerBlocked =
-    !state.ready ||
-    !state.configured ||
-    session.loading ||
-    operation ||
-    composerView.isStopping() ||
-    composerView.isQueueBusy() ||
-    attachmentsView.isBusy() ||
-    (composerView.isSending() && !session.running);
-  prompt.disabled = composerBlocked;
-  for (const button of element('attachments').querySelectorAll<HTMLButtonElement>('button'))
-    button.disabled = attachmentsView.isBusy();
   commandsView.render();
-  sendButton.disabled = session.running
-    ? composerView.isStopping()
-    : composerBlocked || (!prompt.value.trim() && !attachmentsView.hasAny());
-  sendButton.dataset.mode = session.running ? 'stop' : 'send';
-  const sendLabel = session.running
-    ? composerView.isStopping()
-      ? t('ui.stopping')
-      : t('ui.stop')
-    : t('ui.send');
-  sendButton.setAttribute('aria-label', sendLabel);
-  sendButton.title = sendLabel;
-  element<HTMLButtonElement>('attach-image').disabled = composerBlocked;
-  element('attach-image').title = t('ui.addAttachment');
-  element('attach-image').setAttribute('aria-label', t('ui.addAttachment'));
+  renderComposerState();
   /**
    * There is no enqueue-mode control any more: a message typed while the run is live is queued for after the
    * turn, always. The select that chose between that and steering the live run was one more thing in the
@@ -500,7 +523,21 @@ function render(): void {
   sessionPanels.todos(session.todos);
   sessionPanels.goal(session.goal);
   sessionPanels.deliverables(session.deliverables);
-  if (nearBottom && transcriptChanged && !childPageOpen() && !loadingOlderHistory)
+  const historyStart = session.historyStart ?? 0;
+  const end = historyStart + session.messages.length;
+  if (paintedWindow?.sessionId !== session.sessionId) holdReadingPosition = false;
+  else {
+    if (historyStart < paintedWindow.historyStart) holdReadingPosition = true;
+    if (end > paintedWindow.end || session.running) holdReadingPosition = false;
+  }
+  paintedWindow = { sessionId: session.sessionId, historyStart, end };
+  if (
+    nearBottom &&
+    transcriptChanged &&
+    !childPageOpen() &&
+    !loadingOlderHistory &&
+    !holdReadingPosition
+  )
     conversation.scrollTop = conversation.scrollHeight;
   updateJumpButton();
 }

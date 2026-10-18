@@ -14,6 +14,7 @@ import {
   WidthType,
 } from 'docx';
 import type { OfficeOperation } from './automation.ts';
+import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS } from './limits.ts';
 import { xmlText } from './xml-text.ts';
 
 export type DocumentBlock =
@@ -23,13 +24,8 @@ export type DocumentBlock =
   | { type: 'table'; rows: string[][]; header?: boolean }
   | { type: 'page_break' };
 
-/**
- * How many blocks and table cells one `office_create` call may hand the Word generator, declared once because
- * the tool schema and the generator both enforce them.
- */
-export const MAX_DOCUMENT_BLOCKS = 400;
-export const MAX_TABLE_ROWS = 200;
-export const MAX_TABLE_COLUMNS = 20;
+/** Declared in `limits.ts` so the tool schema can read them without loading `docx`. */
+export { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS };
 
 const HEADINGS = {
   1: HeadingLevel.HEADING_1,

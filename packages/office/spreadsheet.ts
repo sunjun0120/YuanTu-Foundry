@@ -3,6 +3,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import type { OfficeOperation } from './automation.ts';
+import { MAX_CREATED_SHEETS } from './limits.ts';
 import { readEntry } from './zip-entry.ts';
 
 /**
@@ -113,7 +114,7 @@ async function editWorkbook(
  * then failed — a request the tool could describe but never satisfy. The schema therefore derives its bound
  * from this constant rather than repeating it, which is the same rule `RUN_DEFAULTS` and `ENVIRONMENT` follow.
  */
-export const MAX_CREATED_SHEETS = 20;
+export { MAX_CREATED_SHEETS };
 export async function runSpreadsheetOperation(
   operation: OfficeOperation & { format: 'xlsx' },
 ): Promise<void> {

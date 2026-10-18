@@ -66,19 +66,23 @@ export function lineFramer(options: {
       const decoded = decoder.write(chunk);
       buffer += decoded;
       bufferedBytes += Buffer.byteLength(decoded, 'utf8');
-      let newline: number;
+      // Lines are consumed by offset and the remainder cut once: re-measuring the rest of the buffer after every
+      // line made a chunk carrying many small events quadratic in its size.
+      let newline: number,
+        start = 0;
       while ((newline = buffer.indexOf('\n', searchFrom)) >= 0) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        bufferedBytes = Buffer.byteLength(buffer, 'utf8');
-        searchFrom = 0;
-        if (Buffer.byteLength(line) > options.maxFrameBytes) {
+        const line = buffer.slice(start, newline);
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        bufferedBytes -= lineBytes + 1;
+        start = searchFrom = newline + 1;
+        if (lineBytes > options.maxFrameBytes) {
           failed = true;
           options.onError(new Error('Agent Host response exceeds frame limit'));
           return;
         }
         if (line.trim()) options.onLine(line);
       }
+      if (start) buffer = buffer.slice(start);
       searchFrom = buffer.length;
       if (bufferedBytes > options.maxFrameBytes) {
         failed = true;

@@ -1,8 +1,5 @@
 import { link, lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import JSZip from 'jszip';
-import mammoth from 'mammoth';
-import * as XLSX from 'xlsx';
 import type { Tool, FileChange, PreparedTool } from '../protocol/index.ts';
 import { Workspace } from '../tools/files.ts';
 import { verifyFileDelivery } from '../tools/file-delivery.ts';
@@ -11,14 +8,16 @@ import { runOfficeAutomation, type OfficeFormat, type OfficeOperation } from './
 import {
   PREVIEW_BACKENDS,
   previewExtensions,
-  renderPreview,
   type PreviewBackend,
   type PreviewType,
-} from './render.ts';
-import { readPptxSlides } from './read.ts';
-import { MAX_CREATED_SHEETS } from './spreadsheet.ts';
-import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS, MAX_TABLE_ROWS } from './document.ts';
-import { MAX_SLIDE_TABLE_ROWS } from './presentation.ts';
+} from './preview-backends.ts';
+import {
+  MAX_CREATED_SHEETS,
+  MAX_DOCUMENT_BLOCKS,
+  MAX_SLIDE_TABLE_ROWS,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
+} from './limits.ts';
 import { libreOfficePreview, type OfficePreview } from './preview.ts';
 import { assertExpansionWithinBudget } from './zip-entry.ts';
 
@@ -55,7 +54,8 @@ const INSPECT_TOTAL_BYTES = 48_000_000;
  * matters for SheetJS, which also reads spreadsheets that are not OOXML packages.
  */
 async function assertInspectablePackage(bytes: Buffer, format: OfficeFormat): Promise<void> {
-  let zip: JSZip;
+  const { default: JSZip } = await import('jszip');
+  let zip: InstanceType<typeof JSZip>;
   try {
     zip = await JSZip.loadAsync(bytes);
   } catch {
@@ -78,7 +78,9 @@ async function inspect(file: string, format: OfficeFormat): Promise<string> {
   if (!bytes.length || bytes.length > maximum)
     throw new Error('Office file must be 1 byte to 20 MB');
   await assertInspectablePackage(bytes, format);
+  // mammoth, SheetJS and the PPTX reader load with the first inspect, not with the Host's tool catalogue.
   if (format === 'docx') {
+    const { default: mammoth } = await import('mammoth');
     const result = await mammoth.extractRawText({ buffer: bytes });
     return JSON.stringify({
       format,
@@ -88,6 +90,7 @@ async function inspect(file: string, format: OfficeFormat): Promise<string> {
     });
   }
   if (format === 'xlsx') {
+    const XLSX = await import('xlsx');
     const book = XLSX.read(bytes, { type: 'buffer', sheetRows: 31 });
     return JSON.stringify({
       format,
@@ -108,6 +111,7 @@ async function inspect(file: string, format: OfficeFormat): Promise<string> {
       }),
     }).slice(0, 20000);
   }
+  const { readPptxSlides } = await import('./read.ts');
   const slides = await readPptxSlides(bytes);
   return JSON.stringify({ format, slideCount: slides.length, slides: slides.slice(0, 60) }).slice(
     0,
@@ -220,13 +224,14 @@ async function prepareWrite(
             cells: args.cells as Extract<OfficeOperation, { operation: 'edit' }>['cells'],
           };
         let previewType: PreviewType | undefined;
-        if (operation === 'preview')
+        if (operation === 'preview') {
+          const { renderPreview } = await import('./render.ts');
           previewType = await renderPreview(
             { format, sourcePath: original!.file, outputPath: staged, backend },
             renderer,
             ctx.signal,
           );
-        else await runOfficeAutomation(op!, ctx.signal);
+        } else await runOfficeAutomation(op!, ctx.signal);
         ctx.signal.throwIfAborted();
         const stagedBytes = await readFile(staged);
         if (!stagedBytes.length || stagedBytes.length > maximum)

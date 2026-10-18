@@ -24,6 +24,7 @@ function host(dispose: () => Promise<void>) {
       close() {
         closed.push('carrier');
       },
+      async drain() {},
     },
     terminals: {
       async closeAllAndWait() {

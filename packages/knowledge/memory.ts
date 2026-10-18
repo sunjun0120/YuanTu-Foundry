@@ -1,8 +1,9 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { userStateDirectory } from '../platform/user-state.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import path from 'node:path';
 import { atomicWriteFile } from '../platform/write-all.ts';
+import { StatCache, statKey } from '../platform/stat-cache.ts';
 
 /**
  * Durable memory is a markdown file the user can read and edit, not a database row.
@@ -73,9 +74,17 @@ export function renderMemory(memory: MemoryFile): string {
     );
   return lines.join('\n') + '\n';
 }
+/**
+ * Both memory files are read for the reminder on every round; an unchanged file is parsed once. Each caller gets
+ * its own copy, because a save edits the entries it was handed before writing them back.
+ */
+const parsedMemory = new StatCache<MemoryFile>(16);
 export function readMemoryFile(file: string): MemoryFile {
   try {
-    return parseMemory(readFileSync(file, 'utf8'));
+    const parsed = parsedMemory.get(file, statKey(statSync(file)), () =>
+      parseMemory(readFileSync(file, 'utf8')),
+    );
+    return { preamble: parsed.preamble, entries: parsed.entries.map((entry) => ({ ...entry })) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { preamble: '', entries: [] };
     throw error;

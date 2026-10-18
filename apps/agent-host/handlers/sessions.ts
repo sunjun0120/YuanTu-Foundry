@@ -143,7 +143,8 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
       }
       // Where each doomed session spilled is only answerable while its rows still exist: the project, and the
       // execution root a delegated child worked in when that was a directory of its own.
-      const spills = ctx.store.sessionTree(id).flatMap((sessionId) => {
+      const doomed = ctx.store.sessionTree(id);
+      const spills = doomed.flatMap((sessionId) => {
         const binding = ctx.store.workspaceBinding(sessionId);
         const roots = new Set([ctx.store.get(sessionId).workspace, binding.executionRoot]);
         return [...roots].map((root) => ({ root, sessionId }));
@@ -155,11 +156,17 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
             `spill cleanup failed for ${spill.sessionId}: ${(error as Error).message}\n`,
           ),
         );
-      ctx.sessionLifecyclePhases?.delete(id);
-      ctx.sessionSandboxes.delete(id);
-      ctx.sessionSandboxFiles.delete(id);
-      ctx.sessionSandboxNetwork.delete(id);
-      ctx.sessionPermissionPolicies.delete(id);
+      // Every session the delete removed, not only the one named: a delegated child had its own sandbox choice,
+      // policy and phase, and keys for sessions that no longer exist are memory nothing will ever release. A
+      // child still announced would also get a `sessionEnd` at shutdown for a session whose log is gone.
+      for (const sessionId of doomed) {
+        ctx.sessionLifecyclePhases?.delete(sessionId);
+        ctx.sessionSandboxes.delete(sessionId);
+        ctx.sessionSandboxFiles.delete(sessionId);
+        ctx.sessionSandboxNetwork.delete(sessionId);
+        ctx.sessionPermissionPolicies.delete(sessionId);
+        ctx.announced.delete(sessionId);
+      }
       return { deleted: true };
     } finally {
       ctx.restoring = false;

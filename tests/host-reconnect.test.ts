@@ -134,6 +134,45 @@ test('a failed recovery write rolls that session back instead of committing a pa
   check.close();
 });
 
+test('task recovery settles a dead run through the run-recovery path, and leaves one it cannot settle holding its session', async (t) => {
+  const { root, file, store, session } = await store_(t);
+  const task = store.createTask(session.id, { title: 'Interrupted task' });
+  const runId = store.beginRun(session.id);
+  store.startTaskAttempt(session.id, task.id, { kind: 'run', runId });
+  orphan(file, runId);
+  const raw = new DatabaseSync(file);
+  raw.exec(`CREATE TRIGGER test_fail_interrupted BEFORE INSERT ON session_events
+    WHEN NEW.type = 'run.interrupted'
+    BEGIN SELECT RAISE(ABORT, 'injected recovery failure'); END;`);
+  raw.close();
+  const original = console.error;
+  console.error = () => {};
+  try {
+    // The run pass fails for this session; the task pass used to release the run anyway, without its record.
+    assert.equal(store.reconcileInterruptedRuns(root), 0);
+    store.recoverInterruptedTasks(root);
+  } finally {
+    console.error = original;
+  }
+  assert.equal(store.get(session.id).activeRun, runId, 'an unsettled run keeps its session');
+  assert.deepEqual(
+    store.events(session.id).filter((event) => event.type === 'run.interrupted'),
+    [],
+  );
+  const check = new DatabaseSync(file);
+  assert.equal(check.prepare('SELECT status FROM runs WHERE id=?').get(runId)?.status, 'running');
+  check.exec('DROP TRIGGER test_fail_interrupted');
+  check.close();
+  // The task was released for review; the run itself is retried by the next start's run pass, intact.
+  assert.equal(store.reconcileInterruptedRuns(root), 1);
+  assert.equal(store.get(session.id).activeRun, null);
+  assert.equal(
+    store.events(session.id).filter((event) => event.type === 'run.interrupted').length,
+    1,
+  );
+  assert.equal(store.getTask(session.id, task.id).status, 'needs_review');
+});
+
 test('one unreadable session does not stop the rest from being converged, or the Host from starting', async (t) => {
   /**
    * `settleAbandonedRun` hydrates the transcript and reads the log, so a session this build cannot fold throws

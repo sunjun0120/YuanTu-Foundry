@@ -40,6 +40,8 @@ export interface HostCarrierOptions {
  * high water mark. Allow one maximum client frame and its delimiter.
  */
 const MAX_UNSENT_BYTES = HOST_RESPONSE_FRAME_BYTES + 1; // Include one frame's newline delimiter.
+/** How long a shutting-down Host waits for its socket peer to take the last answers. See `HostCarrier.drain`. */
+const SOCKET_DRAIN_MS = 2_000;
 
 /** Validate before opening storage or listening, also for embedders constructing a carrier directly. */
 export function validateHostListener(
@@ -203,10 +205,42 @@ export class HostCarrier {
     this.ingress?.destroy();
     if (this.stdio) this.stdioInput.destroy();
     else {
-      this.socket?.destroy();
+      // The connected socket stops *reading* here and keeps writing, for the same reason stdout does above: the
+      // answers to the runs this shutdown aborted arrive afterwards. `drain` ends it once they have been written.
+      this.socket?.pause();
+      if (this.outputDropped) this.socket?.destroy();
       for (const candidate of this.pending) candidate.destroy();
       this.server?.close();
     }
+  }
+
+  /**
+   * End the socket after the last answers were handed to it, within `timeoutMs`.
+   *
+   * Called by the lifecycle once every in-flight request has settled. `end` flushes what is queued and half-closes,
+   * which is what lets a client read the cancelled run it asked about rather than "Host exited"; a peer that does
+   * not read its replies cannot hold the process open past the bound. Stdio needs nothing: the process exit closes
+   * stdout after Node has flushed it.
+   */
+  async drain(timeoutMs = SOCKET_DRAIN_MS): Promise<void> {
+    const socket = this.socket;
+    if (this.stdio || !socket || socket.destroyed) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        socket.destroy();
+        resolve();
+      }, timeoutMs);
+      timer.unref();
+      socket.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.end(() => {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve();
+      });
+    });
   }
 
   /**

@@ -93,10 +93,86 @@ for (const producedMessages of [true, false])
     assert.equal(controller.snapshot.historyStart, 250, 'the stale page is discarded');
     releaseTail();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(controller.snapshot.historyStart, producedMessages ? 251 : 250);
-    assert.equal(controller.snapshot.messages.length, producedMessages ? 101 : 100);
+    // The run-end sync keeps the window it already held and appends what the run added.
+    assert.equal(controller.snapshot.historyStart, 250);
+    assert.equal(controller.snapshot.messages.length, producedMessages ? 102 : 100);
+    assert.deepEqual(
+      controller.snapshot.messages.map((m) => m.content),
+      messages.slice(250).map((m) => m.content),
+    );
     assert.equal(controller.snapshot.loading, false);
   });
+
+test('a run end reads only the newest page, keeps the older pages already loaded, and falls back when the run added more than a page', async (t) => {
+  let listener!: (event: AgentEvent) => void;
+  const messages: Message[] = Array.from({ length: 350 }, (_, i) => ({
+    role: 'user',
+    content: `Entry ${i}`,
+  }));
+  const tails: (number | undefined)[] = [];
+  const client = {
+    status: 'ready',
+    subscribe(fn: (event: AgentEvent) => void) {
+      listener = fn;
+      return () => {};
+    },
+    subscribeStatus() {
+      return () => {};
+    },
+    supports() {
+      return false;
+    },
+    async request(method: string, p: { tail?: number; offset: number; endOffset?: number }) {
+      if (method === 'session.get') {
+        tails.push(p.tail);
+        const start = p.tail === undefined ? p.offset : Math.max(0, messages.length - p.tail);
+        return {
+          messages: messages.slice(start, p.tail === undefined ? p.endOffset : undefined),
+          offset: start,
+          totalMessages: messages.length,
+        };
+      }
+      if (method === 'plan.get' || method === 'goal.get') return null;
+      if (method === 'todos.get') return { todos: [], change: null };
+      return [];
+    },
+  };
+  const controller = new SessionController(client as unknown as AgentHostClient);
+  t.after(() => controller.dispose());
+  await controller.load('s');
+  await controller.loadOlder();
+  await controller.loadOlder();
+  assert.equal(controller.snapshot.historyStart, 50);
+  const finishRun = async (runId: string, added: number, seq: number) => {
+    listener({ type: 'run.started', sessionId: 's', runId, seq, data: {} });
+    for (let i = 0; i < added; i++) messages.push({ role: 'user', content: `${runId} ${i}` });
+    tails.length = 0;
+    listener({
+      type: 'run.finished',
+      sessionId: 's',
+      runId,
+      seq: seq + 1,
+      data: { result: { status: 'completed' } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  await finishRun('small', 3, 10);
+  // One page of 100, not a re-read of the 300 messages already on screen.
+  assert.deepEqual(tails, [100]);
+  assert.equal(controller.snapshot.historyStart, 50);
+  assert.deepEqual(
+    controller.snapshot.messages.map((m) => m.content),
+    messages.slice(50).map((m) => m.content),
+  );
+  await finishRun('large', 150, 20);
+  // The newest page no longer reaches what was held, so the full window read answers instead.
+  assert.deepEqual(tails, [100, controller.snapshot.messages.length]);
+  assert.equal(controller.snapshot.messages.at(-1)?.content, 'large 149');
+  assert.equal(
+    controller.snapshot.historyStart + controller.snapshot.messages.length,
+    messages.length,
+  );
+});
 
 test('a real Host loads recent history and pages backwards without losing messages or statistics', async (t) => {
   let sessionId = '';

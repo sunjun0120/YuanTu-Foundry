@@ -545,6 +545,43 @@ test('the residency evicts the least recently used idle child at its cap', async
   assert.ok(closed.includes('a'), 'unloading releases what that child owned');
 });
 
+test('children that went idle while running ones held the residency over its cap are all unloaded at the next open', async () => {
+  const residency = new SubAgentResidency({ maxResident: 2 });
+  const releases: (() => void)[] = [];
+  const build = (id: string) =>
+    residency.open({
+      id,
+      childSessionId: `child-${id}`,
+      parentSessionId: 'parent',
+      objective: id,
+      depth: 1,
+      turn: () =>
+        new Promise((resolve) =>
+          releases.push(() =>
+            resolve({
+              usage: { inputTokens: 1, outputTokens: 1 },
+              text: 'x',
+              status: 'completed' as const,
+              rounds: 1,
+              toolCalls: 0,
+            }),
+          ),
+        ),
+      close: async () => undefined,
+    });
+  const turns = ['a', 'b', 'c'].map((id) => build(id).run(`${id}-turn`, false));
+  // Three running children: the cap does not refuse work in flight.
+  assert.equal(residency.size, 3);
+  for (const release of releases) release();
+  await Promise.all(turns);
+  build('d');
+  // Every idle child needed to get back under the cap went, not just the oldest one.
+  assert.deepEqual(
+    residency.list().map((child) => child.id),
+    ['c', 'd'],
+  );
+});
+
 test('idle children are reaped after the TTL, and a busy one is left alone', async (t) => {
   const closed: string[] = [];
   const residency = new SubAgentResidency({ idleTtlMs: 5 });

@@ -278,6 +278,7 @@ test(
           select: async () => null,
           invoke: async () => null,
           requestRender: () => {},
+          requestComposerUpdate: () => {},
           onStop: () => {},
         });
         localeApi.setLocale('en-US');

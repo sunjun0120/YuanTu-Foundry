@@ -36,6 +36,15 @@ export const RESIDENCY_DEFAULTS = {
   maxResident: 4,
   /** Idle activations are disposed after this long. Their sessions stay durable for a cold resume. */
   idleTtlMs: 600_000,
+  /**
+   * How often a Host looks for idle activations past the TTL.
+   *
+   * Reaping used to happen only when a run started, so a Host left idle kept every child's tools (and whatever
+   * processes they hold) loaded for as long as nobody typed. The cap is not enforced against running children
+   * — refusing a delegation because four others are busy would fail work rather than bound memory — so the
+   * sweep is what returns an idle Host to its resting size.
+   */
+  reapIntervalMs: 60_000,
 } as const;
 export interface ResidentChild {
   /** The delegation's task id, which is also the card id in the parent's log. */
@@ -323,7 +332,9 @@ export class SubAgentResidency {
   open(input: ResidentChildInput): ChildActivation {
     if (this.activations.has(input.childSessionId))
       throw new Error(`Sub-agent ${input.childSessionId} is already resident`);
-    if (this.activations.size >= this.maxResident) this.evictIdle();
+    // Every idle activation past the cap goes, not one: children that finished while the cap was exceeded by
+    // running ones are idle now, and evicting a single one per open would leave the excess resident.
+    while (this.activations.size >= this.maxResident && this.evictIdle());
     const activation = new ChildActivation(input);
     this.activations.set(input.childSessionId, activation);
     return activation;
@@ -403,16 +414,18 @@ export class SubAgentResidency {
       },
     );
   }
-  private evictIdle(): void {
+  /** Unloads the least recently used idle activation; false when every loaded one is running. */
+  private evictIdle(): boolean {
     const idle = [...this.activations.values()]
       .filter((activation) => activation.status === 'idle')
       .sort((a, b) => a.snapshot().lastUsedAt - b.snapshot().lastUsedAt);
     const victim = idle[0];
-    if (!victim) return;
+    if (!victim) return false;
     // Removed from the registry first, then released: the map is what callers observe, so it must reflect
     // the eviction immediately even though releasing the child's resources may take a moment.
     this.activations.delete(victim.childSessionId);
     this.release(victim);
+    return true;
   }
   /** Unloads activations that have been idle longer than the TTL. Returns how many were unloaded. */
   reapIdle(now = Date.now()): number {

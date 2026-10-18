@@ -849,6 +849,46 @@ const messages: Record<string, Pair> = {
   'ui.completionRepairs': ['已修复 {used}/{max} 轮', '{used} of {max} repair round(s) used'],
   'ui.completionUnfinished': ['未完成步骤：{steps}', 'Unfinished steps: {steps}'],
   'ui.completionFailedChecks': ['未通过的检查：{checks}', 'Failed checks: {checks}'],
+  /**
+   * Why a run is waiting for review, in the words a person acts on. The model's own "done" is not this: a run can
+   * finish its answer and still hold a call whose effect nobody confirmed, and that is what the line says.
+   */
+  'ui.completionReason.pending-effects': [
+    '有工具调用的结果尚未确认（例如命令可能已修改文件），请检查后再验收',
+    'A tool call’s effect is not confirmed yet (a command may have changed files); check it before accepting',
+  ],
+  'ui.completionReason.manual-review': [
+    '验收条件包含需要人工确认的项目',
+    'The acceptance criteria include items a person has to confirm',
+  ],
+  'ui.completionReason.cancelled': [
+    '运行被停止，结果未经验证',
+    'The run was stopped before it was verified',
+  ],
+  'ui.completionReason.definition-changed': [
+    '验收条件在运行中被修改，需要重新确认',
+    'The acceptance criteria changed during the run and need to be confirmed again',
+  ],
+  'ui.completionReason.repeated-failure': [
+    '同一检查反复失败，自动修复已停止',
+    'The same check kept failing, so automatic repair stopped',
+  ],
+  'ui.completionReason.verification-changed-monitored-inputs': [
+    '验证过程修改了被监控的输入文件，结果不可信',
+    'Verification changed the files it was checking, so its result cannot be trusted',
+  ],
+  'ui.completionReason.empty-acceptance': [
+    '没有可执行的验收条件',
+    'There are no acceptance criteria that can be checked',
+  ],
+  'ui.completionReason.invalid-definition': [
+    '验收条件无法执行，请检查其定义',
+    'The acceptance criteria cannot be run; check how they are defined',
+  ],
+  'ui.completionReason.other': [
+    '运行需要人工检查后才能视为完成',
+    'The run needs a person to check it before it counts as done',
+  ],
   'ui.completionRunEnded': ['本轮已结束', 'This run has ended'],
   'ui.completionNoContract': [
     '本次运行没有验收契约：上面是本轮的回答，不代表需求已被验证。',

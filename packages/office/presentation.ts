@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import pptxgenjs from 'pptxgenjs';
 import type { OfficeOperation } from './automation.ts';
-import { MAX_TABLE_COLUMNS } from './document.ts';
+import { MAX_SLIDE_TABLE_ROWS, MAX_TABLE_COLUMNS } from './limits.ts';
 import { xmlText } from './xml-text.ts';
 
 /**
@@ -11,11 +11,8 @@ import { xmlText } from './xml-text.ts';
 const PptxGenJS = pptxgenjs as unknown as typeof pptxgenjs.default;
 type Deck = InstanceType<typeof PptxGenJS>;
 
-/**
- * Rows one slide table may hold. Fifteen rows fit the content area at 14 pt, and still leave room for a few
- * bullets at the smallest table size; a longer table belongs on several slides or in a workbook.
- */
-export const MAX_SLIDE_TABLE_ROWS = 15;
+/** Declared in `limits.ts` so the tool schema can read it without loading `pptxgenjs`. */
+export { MAX_SLIDE_TABLE_ROWS };
 
 export type SlideSpec = { title: string; body?: string[]; table?: string[][]; notes?: string };
 

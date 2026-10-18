@@ -19,7 +19,7 @@ import {
   withRepositoryLock,
   writeTree,
 } from './git.ts';
-import { collectWorkingTree } from './snapshot.ts';
+import { collectTreeBlobs } from './snapshot.ts';
 import type { WorkspaceResultFile } from '../protocol/workspaces.ts';
 import {
   changeForResult,
@@ -200,16 +200,8 @@ export class WorkspaceResultsService implements WorkspaceResults, WorkspaceApply
       .at(-1);
     const comparisonTree = previous?.resultTree ?? snapshot.baseTree;
 
-    const entries = await collectWorkingTree(binding.executionRoot, signal);
-    const currentTree = await writeTree(
-      identity.repositoryRoot,
-      entries.map((entry) => ({
-        path: entry.path,
-        mode: entry.mode,
-        bytes: Buffer.from(entry.blob, 'base64'),
-      })),
-      signal,
-    );
+    const entries = await collectTreeBlobs(identity.repositoryRoot, binding.executionRoot, signal);
+    const currentTree = await writeTree(identity.repositoryRoot, entries, signal);
     const differences = await diffTrees(
       identity.repositoryRoot,
       comparisonTree,

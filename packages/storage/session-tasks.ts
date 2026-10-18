@@ -26,6 +26,7 @@ import {
   deadOwner,
   primeRunOwners,
   nextTaskTimestamp,
+  RUN_INTERRUPTED_REASON,
   resumeSteps,
   sameApprovalDescription,
   scheduledNextRunAt,
@@ -780,6 +781,40 @@ export class TaskJournal {
   }
   recoverInterruptedTasks(workspace?: string): number {
     primeRunOwners(this.port.db);
+    /**
+     * A dead run that still holds a task's session is settled through the one run-recovery path first.
+     *
+     * This pass used to release such a run itself — status `interrupted`, `active_run` cleared — without the
+     * interruption event, the answers to its unresolved tool calls or the lease delete that `settleAbandonedRun`
+     * writes. Host startup runs `reconcileInterruptedRuns` before this, so normally nothing is left; but a session
+     * whose settlement failed there was then half-released here, with a log that never heard the run ended. Each
+     * run settles in its own transaction, as there; one that still cannot is left holding its session — a state
+     * the next start or `session.recover` can retry — and is not released below.
+     */
+    const unsettled = new Set<string>();
+    const held = this.port.db
+      .prepare(
+        "SELECT DISTINCT s.id AS sessionId,s.active_run AS runId,r.owner_pid AS ownerPid,r.owner_started_at AS ownerStartedAt FROM sessions s JOIN runs r ON r.id=s.active_run JOIN tasks t ON t.session_id=s.id WHERE t.status='in_progress' AND r.status='running' AND (? IS NULL OR s.workspace=?)",
+      )
+      .all(workspace ?? null, workspace ?? null)
+      .filter((row) => deadOwner(row.ownerPid, row.ownerStartedAt));
+    for (const row of held) {
+      try {
+        this.port.transaction(() =>
+          this.port.settleAbandonedRun(
+            String(row.sessionId),
+            String(row.runId),
+            RUN_INTERRUPTED_REASON,
+          ),
+        );
+      } catch (error) {
+        unsettled.add(String(row.runId));
+        console.error(
+          `[session log] could not settle interrupted run ${String(row.runId)} of session ` +
+            `${String(row.sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     return this.port.transaction(() => {
       const rows = this.port.db
         .prepare(
@@ -825,13 +860,15 @@ export class TaskJournal {
           "UPDATE tasks SET next_run_at=NULL WHERE id IN (SELECT task_id FROM task_effects WHERE status='pending') AND (? IS NULL OR session_id IN (SELECT id FROM sessions WHERE workspace=?))",
         )
         .run(workspace ?? null, workspace ?? null);
-      // Release any run this recovery marked dead so it no longer blocks session mutation,
-      // mirroring the interrupted-run handling in beginRun.
+      // A dead run that holds no session any more (settled above, or superseded) only has its row closed. One
+      // that could not be settled keeps its session: releasing it here is the half-recovery described above.
       for (const runId of deadRunIds) {
+        if (unsettled.has(runId)) continue;
         this.port.db
-          .prepare("UPDATE runs SET status='interrupted' WHERE id=? AND status='running'")
-          .run(runId);
-        this.port.db.prepare('UPDATE sessions SET active_run=NULL WHERE active_run=?').run(runId);
+          .prepare(
+            "UPDATE runs SET status='interrupted' WHERE id=? AND status='running' AND NOT EXISTS (SELECT 1 FROM sessions WHERE active_run=?)",
+          )
+          .run(runId, runId);
       }
       return interrupted.length + legacy.length;
     });

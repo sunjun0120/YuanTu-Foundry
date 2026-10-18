@@ -12,7 +12,17 @@ import {
   parseWorkspaceMaintenanceCommand,
   type WorkspaceMaintenanceReply,
 } from './workspace-maintenance-contract.ts';
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, clipboard, Menu } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  safeStorage,
+  screen,
+  shell,
+  clipboard,
+  Menu,
+} from 'electron';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -43,6 +53,14 @@ import { mcpOAuthDirectory, registerMcpIpc } from './main-mcp.ts';
 import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
 import { workspaceHookReviewer } from './main-hook-trust.ts';
 import { registerAttachmentIpc } from './main-attachment.ts';
+import {
+  DEFAULT_WINDOW_SIZE,
+  MIN_WINDOW_SIZE,
+  restorableWindowState,
+  safeExportName,
+  WindowStateStore,
+  type WindowState,
+} from './window-state.ts';
 
 /**
  * The Electron main process: the window, the settings stores, the IPC channels and the Host child's lifecycle.
@@ -64,6 +82,7 @@ let switching = false;
 let quitting = false;
 let quitAllowed = false;
 const profileWrites = new Set<Promise<void>>();
+let windowStateStore: WindowStateStore | undefined;
 let settingsStore: ModelSettingsStore;
 let uiSettingsStore: UiSettingsStore;
 let permissionSettingsStore: PermissionSettingsStore;
@@ -74,6 +93,17 @@ let sandboxInitializing: Promise<SandboxSetupView> | undefined;
 let settingsAbort = new AbortController();
 const pagePath = path.join(__dirname, 'index.html');
 const trustedUrl = pathToFileURL(pagePath).href;
+
+/** The window's normal (unmaximised) bounds and whether it is maximised, as the next launch should restore them. */
+function currentWindowState(): WindowState | null {
+  if (!window || window.isDestroyed() || window.isMinimized() || window.isFullScreen()) return null;
+  return { bounds: window.getNormalBounds(), maximized: window.isMaximized() };
+}
+/** Saved when the window closes; a failure only costs the next launch its position, so it is not reported. */
+function saveWindowState(): void {
+  const state = currentWindowState();
+  if (state && windowStateStore) void windowStateStore.save(state).catch(() => {});
+}
 
 function assertSender(event: Electron.IpcMainInvokeEvent): void {
   if (
@@ -327,11 +357,17 @@ void app
       mkdirSync(runtime.workspace, { recursive: true });
     const workspace = realpathSync(runtime.workspace);
     if (!statSync(workspace).isDirectory()) throw new Error('Workspace must be a directory');
+    windowStateStore = new WindowStateStore(
+      path.join(app.getPath('userData'), 'window-state.json'),
+    );
+    const restored = restorableWindowState(
+      windowStateStore.load(),
+      screen.getAllDisplays().map((display) => display.workArea),
+    );
     window = new BrowserWindow({
-      width: 1220,
-      height: 860,
-      minWidth: 820,
-      minHeight: 620,
+      ...(restored ? restored.bounds : DEFAULT_WINDOW_SIZE),
+      minWidth: MIN_WINDOW_SIZE.width,
+      minHeight: MIN_WINDOW_SIZE.height,
       title: 'YuanTu Agent',
       backgroundColor: '#f8f9fb',
       autoHideMenuBar: true,
@@ -344,7 +380,9 @@ void app
       },
     });
     window.removeMenu();
+    if (restored?.maximized) window.maximize();
     window.on('close', (event) => {
+      saveWindowState();
       if (!quitAllowed) {
         event.preventDefault();
         app.quit();
@@ -630,7 +668,7 @@ void app
             title: mainText('desktop.exportTitle'),
             defaultPath: path.join(
               service.snapshot.workspace,
-              command.suggestedName || 'yuantu-session.md',
+              safeExportName(command.suggestedName),
             ),
             filters: [
               { name: 'Markdown', extensions: ['md'] },

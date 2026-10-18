@@ -4,6 +4,12 @@ module.exports = {
   extraMetadata: { main: 'dist/desktop/main.cjs' },
   directories: { output: 'dist/release', buildResources: 'build' },
   icon: 'build/icon.png',
+  /**
+   * No asar archive, on purpose. The Agent Host does not run inside Electron: it is started with the bundled
+   * standalone Node (`runtime/`), and so are its workers, the program runner and the sandbox helpers — and a plain
+   * Node process cannot read files out of an asar archive. Packing would mean unpacking `dist/packages` and every
+   * native module again, which is the same file layout with an extra indirection.
+   */
   asar: false,
   npmRebuild: false,
   // Package only compiled code, excluding release artifacts and unpacked apps.
@@ -18,6 +24,13 @@ module.exports = {
     '!dist/apps/cli/**/*',
     '!dist/**/*.map',
     '!dist/**/*.d.ts',
+    /**
+     * `@napi-rs/canvas` is an optional dependency of `pdfjs-dist`, used to polyfill `DOMMatrix` and `Path2D`
+     * for *rendering* pages. The desktop only extracts a PDF attachment's text, which works without it (pdfjs
+     * warns that rendering may be broken and carries on), so its ~36 MB native binary stays out of the package.
+     */
+    '!node_modules/@napi-rs/canvas/**',
+    '!node_modules/@napi-rs/canvas-*/**',
   ],
   extraResources: [
     { from: '.scratch/packaging/runtime', to: 'runtime' },

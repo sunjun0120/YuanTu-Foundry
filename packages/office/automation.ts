@@ -1,7 +1,5 @@
-import { createDocx, type DocumentBlock } from './document.ts';
-import { createPptx, type SlideSpec } from './presentation.ts';
-import { replaceOfficeText } from './replace.ts';
-import { runSpreadsheetOperation } from './spreadsheet.ts';
+import type { DocumentBlock } from './document.ts';
+import type { SlideSpec } from './presentation.ts';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -88,16 +86,20 @@ export async function runOfficeAutomation(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
+  // The generators are loaded by the first call that needs one, not by the Host's tool catalogue at start.
   if (operation.format === 'xlsx') {
+    const { runSpreadsheetOperation } = await import('./spreadsheet.ts');
     await runSpreadsheetOperation(operation as OfficeOperation & { format: 'xlsx' });
     return;
   }
   // Creating and editing Word and PowerPoint is pure JavaScript; only PDF conversion still needs local Office.
   if (operation.operation === 'create') {
-    await (operation.format === 'docx' ? createDocx(operation) : createPptx(operation));
+    if (operation.format === 'docx') await (await import('./document.ts')).createDocx(operation);
+    else await (await import('./presentation.ts')).createPptx(operation);
     return;
   }
   if (operation.operation === 'edit') {
+    const { replaceOfficeText } = await import('./replace.ts');
     await replaceOfficeText({ ...operation, format: operation.format });
     return;
   }

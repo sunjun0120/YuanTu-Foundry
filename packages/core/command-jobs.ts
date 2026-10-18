@@ -36,7 +36,7 @@ export function commandJournal(store: SessionStore, sessionId: string): CommandJ
         ...(cleanupConfirmed === undefined ? {} : { cleanupConfirmed }),
       }),
     read: (ids) => store.recordEvent(sessionId, 'command.collected', { ids: [...ids] }),
-    record: (id) => commandRecords(store, sessionId).get(id),
+    record: (id) => commandRecord(store, sessionId, id),
     records: () => [...commandRecords(store, sessionId).values()],
   };
 }
@@ -115,6 +115,28 @@ const commands = logProjection<CommandState>(
  */
 export function commandRecords(store: SessionStore, sessionId: string): Map<string, CommandRecord> {
   return new Map(commands.read(store, sessionId).records);
+}
+
+/**
+ * One command by id, read from the kept fold without copying the rest.
+ *
+ * `commandRecords` hands back a copy because its callers walk and keep it; a lookup by id is what `job_output` and
+ * `background.poll` do on every call, and copying a long session's whole record to read one entry was the cost.
+ */
+export function commandRecord(
+  store: SessionStore,
+  sessionId: string,
+  id: string,
+): CommandRecord | undefined {
+  return commands.read(store, sessionId).records.get(id);
+}
+
+/** Every command this session recorded, newest last, as the kept fold holds them: read it, do not keep it. */
+export function commandRecordsView(
+  store: SessionStore,
+  sessionId: string,
+): ReadonlyMap<string, CommandRecord> {
+  return commands.read(store, sessionId).records;
 }
 
 /** The ids a client hid from the background panel with `background.hidden`. */

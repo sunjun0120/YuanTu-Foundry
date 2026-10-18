@@ -57,10 +57,16 @@ async function fixture(t: test.TestContext, provider: Provider, extra = {}) {
   return { root, store, session, agent, events, retries };
 }
 /** An endpoint that fails every call, so a retry's only possible outcome is the same failure again. */
-async function failing(t: test.TestContext, status: number, headers: Record<string, string> = {}) {
+async function failing(
+  t: test.TestContext,
+  status: number,
+  headers: Record<string, string> = {},
+  onCall?: () => void,
+) {
   const calls = { n: 0 };
   const url = await httpFixture(t, (_body, res) => {
     calls.n++;
+    onCall?.();
     res.writeHead(status, { 'content-type': 'application/json', ...headers });
     res.end(JSON.stringify({ error: { message: 'fixture refused' } }));
   });
@@ -462,10 +468,14 @@ test('a turn the endpoint closed with nothing in it is re-sent, not stored as an
 });
 
 test('cancelling during the backoff stops before the next request', async (t) => {
-  const { calls, provider } = await failing(t, 503, { 'retry-after': '5' });
-  const { session, agent, retries } = await fixture(t, provider, { maxModelRetries: 2 });
+  // Cancelled half a second after the first request was answered — well inside the five-second backoff, and long
+  // enough for the client to have read the refusal and recorded the retry. A timer from the start of the run could
+  // fire before the first request was even sent on a loaded machine.
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 60);
+  const { calls, provider } = await failing(t, 503, { 'retry-after': '5' }, () =>
+    setTimeout(() => controller.abort(), 500),
+  );
+  const { session, agent, retries } = await fixture(t, provider, { maxModelRetries: 2 });
   const result = await agent.run({
     sessionId: session.id,
     prompt: 'Go',

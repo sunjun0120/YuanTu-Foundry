@@ -213,9 +213,35 @@ export function setupWorkspace() {
       );
     return list;
   }
+  /**
+   * Row buttons from the previous paint, by path, with what they showed.
+   *
+   * Expanding one folder or opening one file used to rebuild every row of the tree. A row whose entry, expansion
+   * and selection are unchanged is now the same element, so a repaint costs the rows that changed and the
+   * rest keep their nodes; rows for paths the paint no longer shows are dropped with it.
+   */
+  let rows = new Map<string, { signature: string; button: HTMLButtonElement }>();
+  let paintedRows = new Map<string, { signature: string; button: HTMLButtonElement }>();
   function entryButton(entry: WorkspaceEntry): HTMLButtonElement {
+    const signature = [
+      entry.kind,
+      entry.name,
+      expanded.has(entry.path),
+      selected === entry.path,
+    ].join('\u0000');
+    const cached = rows.get(entry.path);
+    if (cached?.signature === signature) {
+      paintedRows.set(entry.path, cached);
+      return cached.button;
+    }
+    const button = buildEntryButton(entry);
+    paintedRows.set(entry.path, { signature, button });
+    return button;
+  }
+  function buildEntryButton(entry: WorkspaceEntry): HTMLButtonElement {
     const button = element('button', '', 'workspace-entry-button');
     button.type = 'button';
+    button.dataset.path = entry.path;
     const glyph = element('span', '', 'workspace-entry-glyph');
     glyph.append(
       workspaceIcon(
@@ -247,8 +273,17 @@ export function setupWorkspace() {
   }
   function paintTree(): void {
     const scroll = tree.scrollTop;
+    // The focused row is re-focused after the repaint: keyboard navigation of the tree must not lose its place
+    // because a folder above it was expanded.
+    const focused =
+      document.activeElement instanceof HTMLElement && tree.contains(document.activeElement)
+        ? document.activeElement.closest<HTMLElement>('[data-path]')?.dataset.path
+        : undefined;
+    paintedRows = new Map();
     tree.replaceChildren(listNode(''));
+    rows = paintedRows;
     tree.scrollTop = scroll;
+    if (focused !== undefined) rows.get(focused)?.button.focus({ preventScroll: true });
   }
 
   function paintStatic(): void {

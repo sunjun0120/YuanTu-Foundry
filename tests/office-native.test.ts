@@ -1,7 +1,7 @@
 // @test-serial desktop-ui: Uses real Word and PowerPoint COM applications and their desktop state.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -159,3 +159,53 @@ test(
     await verifyFileDelivery(root, { path: 'presentation.pdf', format: 'pdf' });
   },
 );
+
+async function runOfficeOperation(
+  tool: ReturnType<typeof officeTools>[number],
+  args: Record<string, unknown>,
+): Promise<void> {
+  const registry = new ToolRegistry();
+  registry.register(tool);
+  const result = await registry.execute(
+    { id: 'create', name: tool.name, arguments: args },
+    {
+      signal: new AbortController().signal,
+      approve: async () => true,
+      fileJournal: { prepare: () => 'journal-id', applied() {} },
+    },
+  );
+  if (result.isError) throw new Error(result.content);
+}
+
+test('a .pdf preview falls back to LibreOffice only when Office is unavailable', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-pdf-fallback-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let rendered = 0;
+  const tools = officeTools(root, {
+    async render(input) {
+      rendered++;
+      await writeFile(input.outputPath, '%PDF-1.4\nfixture\n%%EOF');
+    },
+  });
+  const tool = (name: string) => tools.find((item) => item.name === name)!;
+  await runOfficeOperation(tool('office_create'), {
+    format: 'docx',
+    path: 'report.docx',
+    paragraphs: ['Body'],
+  });
+  const registry = new ToolRegistry();
+  registry.register(tool('office_preview'));
+  const result = await registry.execute(
+    {
+      id: 'pdf',
+      name: 'office_preview',
+      arguments: { source_path: 'report.docx', output_path: 'report.pdf' },
+    },
+    { signal: new AbortController().signal, approve: async () => true },
+  );
+  assert.equal(result.isError, false, result.content);
+  const type = JSON.parse(result.content).previewType;
+  // Which engine answers depends on the machine; that the fallback ran exactly when Office could not does not.
+  assert.equal(type, rendered ? 'libreoffice-pdf' : 'office-pdf');
+  if (process.platform !== 'win32') assert.equal(type, 'libreoffice-pdf');
+});

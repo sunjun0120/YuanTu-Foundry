@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { StatCache, statKey } from '../platform/stat-cache.ts';
 export function resourcePath(root: string, relative: string): string {
   const base = realpathSync(root),
     target = path.resolve(base, relative),
@@ -14,18 +15,22 @@ export function resourcePath(root: string, relative: string): string {
   }
   return target;
 }
+/** Skill files are read every round; an unchanged one is answered from here. See `StatCache`. */
+const texts = new StatCache<string>();
 export function resourceText(root: string, relative: string): string {
   const file = resourcePath(root, relative),
     stat = lstatSync(file);
   if (!stat.isFile() || stat.size > 32768)
     throw new Error(`Resource must be a regular file <=32KB: ${relative}`);
-  const bytes = readFileSync(file);
-  if (bytes.length > 32768) throw new Error('Resource exceeds 32KB');
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    throw new Error('Resource must be UTF-8');
-  }
+  return texts.get(file, statKey(stat), () => {
+    const bytes = readFileSync(file);
+    if (bytes.length > 32768) throw new Error('Resource exceeds 32KB');
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error('Resource must be UTF-8');
+    }
+  });
 }
 export function resourceEntries(root: string, relative: string): string[] {
   try {

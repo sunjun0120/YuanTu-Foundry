@@ -91,10 +91,12 @@ export async function* readSse(
           break;
         }
         const frame = buffer.slice(0, boundary.index);
-        if (Buffer.byteLength(frame, 'utf8') > maxFrameBytes)
-          throw new Error('Model stream frame exceeds 16MB limit');
+        const frameBytes = Buffer.byteLength(frame, 'utf8');
+        if (frameBytes > maxFrameBytes) throw new Error('Model stream frame exceeds 16MB limit');
         buffer = buffer.slice(boundary.index + boundary[0].length);
-        bufferedBytes = Buffer.byteLength(buffer, 'utf8');
+        // The separator is ASCII, so its length is its byte count: the remainder is counted down rather than
+        // re-measured, which kept a chunk carrying many small deltas from costing the square of its size.
+        bufferedBytes -= frameBytes + boundary[0].length;
         searchFrom = 0;
         const event = parseFrame(frame, allowDone);
         if (event === undefined) continue;

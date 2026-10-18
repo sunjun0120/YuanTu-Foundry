@@ -107,15 +107,29 @@ export class RunAim {
      *
      * Handed to `prepareContext` as well, so the summary request it makes carries the key of the prefix that
      * request actually replays, rather than of the compressed round it is compressing for.
+     *
+     * The round asks twice for the same request — once to record its envelope and once to send it — so the last
+     * answer is kept: the digest serializes the whole tool catalogue, and the second ask is for the same prompt
+     * and the same catalogue array. A different prompt or a different array is a different request and is hashed.
      */
-    const cacheKeyOf = (systemText: string, toolSpecs: readonly ToolSpec[]): string =>
-      cacheKeyFor(
-        modelInfo === undefined
-          ? undefined
-          : { ...modelInfo, model: effectiveModel ?? modelInfo.model },
-        systemText,
-        toolSpecs,
-      );
+    const route =
+      modelInfo === undefined
+        ? undefined
+        : { ...modelInfo, model: effectiveModel ?? modelInfo.model };
+    let last:
+      { system: string; tools: readonly ToolSpec[]; count: number; key: string } | undefined;
+    const cacheKeyOf = (systemText: string, toolSpecs: readonly ToolSpec[]): string => {
+      if (
+        last &&
+        last.tools === toolSpecs &&
+        last.count === toolSpecs.length &&
+        last.system === systemText
+      )
+        return last.key;
+      const key = cacheKeyFor(route, systemText, toolSpecs);
+      last = { system: systemText, tools: toolSpecs, count: toolSpecs.length, key };
+      return key;
+    };
     /**
      * The capacity of the route this round will actually use.
      *

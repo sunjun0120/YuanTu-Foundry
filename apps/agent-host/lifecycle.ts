@@ -1,4 +1,5 @@
 import { parseSetting } from '../../packages/protocol/settings.ts';
+import { RESIDENCY_DEFAULTS } from '../../packages/core/residency.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import { safeError } from '../shared/runtime.ts';
 import { settleInteraction } from './approvals.ts';
@@ -93,6 +94,8 @@ export async function serveHost(ctx: HostContext): Promise<void> {
   const removeSignals = installSignals(shutdown);
   const failures: unknown[] = [];
   let residentFailed = false;
+  /** Idle sub-agents past their TTL are unloaded on a timer, not only when the next run starts. */
+  let reaper: ReturnType<typeof setInterval> | undefined;
   const release = async (action: () => unknown): Promise<void> => {
     try {
       await action();
@@ -109,6 +112,15 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     // validator rejects outright) meant `YUANTU_WORKFLOWS=false` started the scheduler rather than stopping it.
     if (parseSetting(process.env, 'YUANTU_WORKFLOWS') !== false) ctx.scheduler.start();
     ctx.queueWake();
+    reaper = setInterval(() => {
+      try {
+        ctx.residency.reapIdle();
+      } catch (error) {
+        process.stderr.write(`[host] idle sub-agent sweep failed: ${safeError(error)}
+`);
+      }
+    }, RESIDENCY_DEFAULTS.reapIntervalMs);
+    reaper.unref();
     for await (const line of input) {
       if (ctx.closing) break;
       if (!line.trim()) continue;
@@ -134,8 +146,12 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     // are installed, a second interrupt is swallowed by the idempotent shutdown, so a Host waiting on a
     // minutes-long in-flight request could not be stopped from the console at all.
     removeSignals();
+    clearInterval(reaper);
     await release(shutdown);
     await Promise.allSettled([...ctx.tasks]);
+    // Every answer is written now, including those of the runs the shutdown aborted; a socket peer gets them
+    // before the connection ends (stdout is flushed by the exit itself).
+    await release(() => ctx.carrier.drain());
     // A failed release must not skip the remaining resources, but it must not turn shutdown into success.
     await residentCleanup.get(ctx)?.catch((error: unknown) => {
       residentFailed = true;
