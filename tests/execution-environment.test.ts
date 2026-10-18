@@ -17,6 +17,7 @@ import {
   requireExecutionCapabilities,
   localExecutionEnvironment,
 } from '../packages/tools/execution-environment.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const context = () => ({ signal: new AbortController().signal, approve: async () => true });
 
@@ -498,8 +499,7 @@ test('capability checks separate process filesystem confinement from network and
 });
 
 test('local file and process contracts resolve one workspace identity and reject foreign paths and links', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-environment-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-environment-');
   await mkdir(path.join(root, 'nested'));
   await writeFile(path.join(root, 'nested', 'file.txt'), 'shared');
   const environment = await localExecutionEnvironment(root, executionPolicy('host'));
@@ -531,8 +531,7 @@ test('nested async scopes restore the parent policy and preserve explicit hook s
 });
 
 test('paired file writes retain approval and effect records; refusal leaves bytes absent', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-environment-write-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-environment-write-');
   const environment = await localExecutionEnvironment(root, executionPolicy('host'));
   const records: string[] = [];
   const denied = await environment.files.write('denied.txt', 'no', {
@@ -562,8 +561,7 @@ test(
   'paired process cancellation waits for tree cleanup before closing',
   { timeout: 10000 },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-environment-process-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-environment-process-');
     const environment = await localExecutionEnvironment(root, executionPolicy('host'));
     const controller = new AbortController();
     const running = await environment.processes.start(

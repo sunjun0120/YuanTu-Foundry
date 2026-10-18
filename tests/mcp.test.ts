@@ -23,6 +23,7 @@ import {
 import { McpSettingsStore } from '../apps/desktop/mcp-settings.ts';
 import { parseMcpCommand } from '../apps/desktop/mcp-contract.ts';
 import { PRODUCT_SCOPE } from '../packages/protocol/product-scope.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const mcpManagementOptions = {
   skip: PRODUCT_SCOPE.mcpManagement ? false : 'MCP management is outside the current product scope',
@@ -116,8 +117,7 @@ test(
 );
 
 test('MCP credential reads migrate plaintext atomically with the supplied cipher', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-migration-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-migration-');
   const server = 'https://example.com/migration';
   const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
   const record = {
@@ -149,8 +149,7 @@ test('MCP credential reads migrate plaintext atomically with the supplied cipher
 });
 
 test('MCP plaintext migration never overwrites credentials refreshed by another store', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-migration-race-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-migration-race-');
   const server = 'https://example.com/migration-race';
   const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
   await writeFile(
@@ -180,8 +179,7 @@ test('MCP plaintext migration never overwrites credentials refreshed by another 
 });
 
 test('MCP credential migration fails closed and preserves the original file', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-migration-failure-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-migration-failure-');
   const server = 'https://example.com/migration';
   const file = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
   const original = JSON.stringify({
@@ -207,8 +205,7 @@ test('MCP credential migration fails closed and preserves the original file', as
 });
 
 test('MCP damaged protected entries never fall back and removal cannot resurrect legacy tokens', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-legacy-removal-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-legacy-removal-');
   const server = 'https://example.com/legacy-removal';
   const legacy = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
   const protectedFile = legacy.replace('.json', '.protected.json');
@@ -247,8 +244,7 @@ test('MCP damaged protected entries never fall back and removal cannot resurrect
 });
 
 test('MCP credential removal succeeds without a working system-vault cipher', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-unavailable-removal-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-unavailable-removal-');
   const server = 'https://example.com/unavailable-removal';
   const working = new McpOAuthTokenStore({ directory, cipher: testCipher() });
   await working.write(server, {
@@ -271,8 +267,7 @@ test('MCP credential removal succeeds without a working system-vault cipher', as
 });
 
 test('MCP removal during plaintext migration cannot restore revoked credentials', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-revoke-race-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-revoke-race-');
   const server = 'https://example.com/revoke-race';
   const legacy = path.join(directory, createHash('sha256').update(server).digest('hex') + '.json');
   await writeFile(
@@ -1364,8 +1359,7 @@ test('MCP rejects every request to a host other than the configured server', asy
 });
 
 test('MCP credential store fails closed on damaged or oversized entries', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-cred-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-mcp-cred-');
   const cipher = testCipher();
   const store = new McpOAuthTokenStore({ directory, cipher });
   const server = 'https://example.com/mcp';

@@ -11,9 +11,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
@@ -27,6 +24,7 @@ import type {
   ToolContext,
   ToolResult,
 } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
@@ -99,13 +97,7 @@ async function fixture(
   provider: Provider,
   options: { maxParallelToolCalls?: number; onEvent?: (event: AgentEvent) => void } = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-parallel-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-parallel-');
   const events: AgentEvent[] = [];
   const timeline: Timeline = { events: [], inFlight: 0, peak: 0 };
   const tools = createTools(root);

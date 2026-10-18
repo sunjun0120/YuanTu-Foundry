@@ -16,18 +16,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { foldMessages } from '../packages/storage/events.ts';
 import type { Message } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const transcript = (messages: readonly Message[]): string[] =>
   messages.map((message) => String(message.content));
 
 test('a read after a write sees the write, and repeated reads reuse one fold', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-cache-');
   store.append(session.id, { role: 'user', content: 'first' });
   const first = store.messages(session.id);
   assert.deepEqual(transcript(first), ['first']);
@@ -85,13 +80,7 @@ test('a write from another connection is visible to a store that already folded 
 });
 
 test('a batch that fails to write records none of it, and leaves no phantom in the fold', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-rollback-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-cache-rollback-');
   store.append(session.id, { role: 'user', content: 'kept' });
   const before = store.messages(session.id);
   assert.deepEqual(transcript(before), ['kept']);
@@ -121,13 +110,7 @@ test('a batch that fails to write records none of it, and leaves no phantom in t
 });
 
 test('a message that cannot be written is refused by the append, not by a later batch', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-bad-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-cache-bad-');
   store.append(session.id, { role: 'user', content: 'kept' });
   // A user message gives the session its title, and a message whose text is not text has none: the append
   // is where that is discovered, so a bad message never reaches a batch that is written later.
@@ -171,13 +154,7 @@ test('an uncommitted append is visible inside its own transaction, not before it
 });
 
 test('reads are frozen, because they are the store’s own fold', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-frozen-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-cache-frozen-');
   store.append(session.id, { role: 'user', content: 'immutable' });
   store.append(session.id, { role: 'user', content: 'too' });
   const messages = store.messages(session.id);
@@ -189,13 +166,7 @@ test('reads are frozen, because they are the store’s own fold', async (t) => {
 });
 
 test('a deleted session leaves nothing in the fold to read', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-delete-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-cache-delete-');
   store.append(session.id, { role: 'user', content: 'doomed' });
   assert.deepEqual(transcript(store.messages(session.id)), ['doomed']);
   store.delete(session.id);
@@ -268,12 +239,7 @@ test('a session another connection deleted is dropped from the fold, not served 
 });
 
 test('the fold is bounded by size as well as by count, and keeps the log just read', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-bytes-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-cache-bytes-');
   const journal = journalOf(store);
   journal.cacheBytes = 30_000;
   const ids = [0, 1, 2].map((index) => {

@@ -24,30 +24,22 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry, MAX_TOOL_OUTPUT, bounded } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { SPILL_DIRECTORY, spillOutput, spillResult } from '../packages/tools/spill.ts';
 import { Agent } from '../packages/core/agent.ts';
-import type { Message, ModelResponse, ToolContext } from '../packages/protocol/index.ts';
+import type { Message, ToolContext } from '../packages/protocol/index.ts';
+import { tempRoot, storeFixture } from './temp-fixture.ts';
+import { reply } from './provider-fixture.ts';
 
 const context = (overrides: Partial<ToolContext> = {}): ToolContext => ({
   signal: new AbortController().signal,
   approve: async () => true,
   ...overrides,
 });
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 
 test('output over the limit is written out whole and the result says where', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-');
   const tools = new ToolRegistry();
   const long = Array.from({ length: 4000 }, (_, index) => `line ${index} ${'x'.repeat(20)}`).join(
     '\n',
@@ -79,10 +71,7 @@ test('output over the limit is written out whole and the result says where', asy
 });
 
 test('a result a tool already truncated is not spilled as though it were complete', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-cut-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-cut-');
   const tools = new ToolRegistry();
   /**
    * The tool cuts its own output. This is what made the old length test wrong: `bounded` appends its marker
@@ -124,10 +113,7 @@ test('a tool that says it cut its own output is spilled, and the notice says wha
    * lie the item is about. The prose in the text could not say which case it was (nothing reads a sentence), so the
    * tool declares it and the notice repeats it.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-declared-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-declared-');
   const tools = new ToolRegistry();
   const captured = 'c'.repeat(MAX_TOOL_OUTPUT * 2);
   tools.register({
@@ -166,10 +152,7 @@ test('a tool that says it cut its own output is spilled, and the notice says wha
 test('a spill is written the way the credential store is: private to the user', async (t) => {
   if (process.platform === 'win32')
     return t.skip('POSIX permission bits are not a Windows concept');
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-mode-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-mode-');
   // A spill is a copy of output a tool read — file contents, a command's stdout — so it is as private as the
   // credentials in `packages/mcp/oauth.ts`, which is where this 0700/0600 pair is already used.
   spillOutput({ workspace: root, sessionId: 's1', tool: 'run_command', content: 'secret output' });
@@ -185,13 +168,7 @@ test('a spill is written the way the credential store is: private to the user', 
 });
 
 test('the model can read a spilled output back with read_file', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-read-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, session } = await storeFixture(t, 'yuantu-spill-read-');
   const tools = createTools(root);
   const long = Array.from({ length: 3000 }, (_, index) => `needle-${index}`).join('\n');
   // What a long tool output leaves behind once the result stage has spilled it.
@@ -329,11 +306,7 @@ test('spill reads accept equivalent workspace paths', async (t) => {
   assert.equal(await readFile(path.join(root, spilled.path), 'utf8'), body);
 });
 
-test('a spill that cannot be written falls back to plain truncation', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-fail-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+test('a spill that cannot be written falls back to plain truncation', async () => {
   const tools = new ToolRegistry();
   tools.register({
     name: 'noisy',
@@ -359,13 +332,7 @@ test('a spill that cannot be written falls back to plain truncation', async (t) 
 });
 
 test('a run spills through its own session, and the transcript points at the file', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-run-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-spill-run-');
   const long = 'z'.repeat(MAX_TOOL_OUTPUT * 2);
   const tools = createTools(root);
   // A tool whose output is longer than a result can carry: the run's own registry is what the pipeline
@@ -415,8 +382,7 @@ test('spill caps actual utf8 bytes without broken characters', async (t) => {
    * left half a surrogate pair behind. Both halves are asserted here — what lands on disk is within the byte cap,
    * and what it holds still decodes as whole characters of the content it came from.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-bytes-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-spill-bytes-');
   const limit = 8_000_000;
   const cases = [
     { name: 'ascii', content: 'a'.repeat(limit + 1), cut: true },
@@ -450,10 +416,7 @@ test('spill caps actual utf8 bytes without broken characters', async (t) => {
 });
 
 test('a tool name can neither escape the spill directory nor grow without bound', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-name-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-name-');
   // The name says which tool produced the spill, but it is a tool's own name and nothing in it may climb out
   // of the session's directory — a spill is a copy of whatever the tool read.
   const escaping = spillOutput({
@@ -486,10 +449,7 @@ test('a tool name can neither escape the spill directory nor grow without bound'
 });
 
 test('a session keeps only the newest spills', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-trim-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-trim-');
   const directory = path.join(root, SPILL_DIRECTORY, 'trim-session');
   await mkdir(directory, { recursive: true });
   // The older spills get explicit times, so "newest" does not depend on filesystem timestamp granularity —
@@ -515,10 +475,7 @@ test('a session keeps only the newest spills', async (t) => {
 });
 
 test('an unchanged projection is not written to disk again', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-projection-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-projection-');
   const input = {
     workspace: root,
     sessionId: 'projection-session',
@@ -539,10 +496,7 @@ test('an unchanged projection is not written to disk again', async (t) => {
 });
 
 test('two sessions with the same tool call do not share a spilled file', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-identity-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-spill-identity-');
   // The file name is the message's identity, and a tool call id is only unique within its own session.
   const one = spillResult({
     workspace: root,
@@ -567,10 +521,7 @@ test('two sessions with the same tool call do not share a spilled file', async (
 
 for (const count of [1000, 3000]) {
   test(`a git diff is spilled without losing captured bytes (${count} lines)`, async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-git-'));
-    t.after(async () => {
-      await rm(root, { recursive: true, force: true });
-    });
+    const root = await tempRoot(t, 'yuantu-spill-git-');
     const git = (args: string[]) =>
       promisify(execFile)('git', args, {
         cwd: root,

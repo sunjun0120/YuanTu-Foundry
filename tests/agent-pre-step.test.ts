@@ -10,45 +10,20 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { HookRegistry, ToolRegistry } from '../packages/tools/registry.ts';
 import type { PreStepContext } from '../packages/tools/registry.ts';
-import type {
-  AgentEvent,
-  ModelRequest,
-  ModelResponse,
-  Provider,
-} from '../packages/protocol/index.ts';
-
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
+import type { AgentEvent, ModelRequest, Provider } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { reply, toolCall } from './provider-fixture.ts';
 
 async function fixture(
   t: test.TestContext,
   provider: Provider,
   hooks: HookRegistry,
 ): Promise<{ store: SessionStore; sessionId: string; events: AgentEvent[]; agent: Agent }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pre-step-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-pre-step-');
   const events: AgentEvent[] = [];
   const agent = new Agent({
     store,

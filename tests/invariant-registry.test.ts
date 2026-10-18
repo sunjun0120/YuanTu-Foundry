@@ -14,7 +14,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { InvariantRegistry, InvariantViolationError } from '../packages/core/invariants.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { AGENT_EVENT_TYPES } from '../packages/protocol/index.ts';
 import { emittedEventTypesInvariant } from '../packages/protocol/invariants.ts';
@@ -26,17 +25,13 @@ import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { toolCall } from './provider-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const invariant = (over: Partial<Invariant> = {}): Invariant => ({
@@ -52,13 +47,7 @@ async function fixture(
   provider: Provider,
   extra: Record<string, unknown> = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-runtime-invariants-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-runtime-invariants-');
   const invariants = new InvariantRegistry({ timeoutMs: 200 });
   invariants.register(logTablesAgreeInvariant(store));
   invariants.register(emittedEventTypesInvariant());
@@ -180,13 +169,7 @@ test('the pipeline invariant reports the order a call actually took', async () =
 });
 
 test('the storage invariant compares the log fold, the transcript read and the rows on disk', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-invariants-storage-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-invariants-storage-');
   store.append(session.id, { role: 'user', content: 'hello' });
   store.append(session.id, { role: 'assistant', content: 'hi', toolCalls: [] });
   const registry = new InvariantRegistry();

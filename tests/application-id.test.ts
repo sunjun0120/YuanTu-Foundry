@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   APPLICATION_FORMAT,
@@ -11,6 +9,7 @@ import {
   SCHEMA_VERSION,
   SessionStore,
 } from '../packages/storage/sqlite.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * The file says what it is.
@@ -25,8 +24,7 @@ import {
  * below is that measurement, so the reason for the design is checked rather than remembered.
  */
 async function scratch(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-application-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-application-');
   return root;
 }
 /** The marker row, or nothing — read without opening the file as a session store. */

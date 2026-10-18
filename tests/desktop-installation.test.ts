@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { desktopPaths } from '../apps/desktop/install-paths.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('installed desktop uses its bundled Node and stable profile workspace under paths with spaces and Chinese', () => {
   const resources = path.resolve('C:/安装目录/YuanTu Agent/resources');
@@ -45,8 +45,7 @@ test('development launch preserves explicit Node and workspace; packaged launch 
 });
 
 test('the single-file Host bundle is preferred when built, and the compiled entry is the fallback', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-install-paths-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-install-paths-');
   const options = {
     packaged: false,
     resourcesPath: path.join(root, 'resources'),

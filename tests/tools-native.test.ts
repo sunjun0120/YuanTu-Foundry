@@ -1,14 +1,13 @@
 // @test-serial windows-sandbox: Executes npm validation under the real Windows restricted token.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tools-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-tools-');
   return { root, tools: createTools(root) };
 }
 const ctx = () => ({ signal: new AbortController().signal, approve: async () => true });

@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, access } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile, rm, mkdir, symlink, access } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createTools } from '../packages/catalog/index.ts';
 import { toolEnvironment, workerExecArgv } from '../packages/tools/environment.ts';
 import { projectRoot } from './process-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,8 +24,7 @@ async function inHostMode<T>(body: () => Promise<T>): Promise<T> {
 }
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tools-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-tools-');
   return { root, tools: createTools(root) };
 }
 const ctx = () => ({ signal: new AbortController().signal, approve: async () => true });
@@ -131,8 +130,7 @@ test('traversal, internal files and ambiguous replacement are rejected', async (
 
 test('directory links cannot escape workspace', async (t) => {
   const { root, tools } = await fixture(t);
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-outside-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-outside-');
   await writeFile(path.join(outside, 'secret.txt'), 'secret');
   await symlink(
     outside,
@@ -670,8 +668,7 @@ test('targeted validation refuses escaping and unsupported test files before app
 
 test('validation discovery ignores symlinked manifests', async (t) => {
   const { root, tools } = await fixture(t);
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-validation-outside-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-validation-outside-');
   await writeFile(
     path.join(outside, 'package.json'),
     JSON.stringify({ scripts: { test: 'echo escaped' } }),
@@ -687,8 +684,7 @@ test('validation discovery ignores symlinked manifests', async (t) => {
 
 test('approved mutation rejects a final-path symlink swap', async (t) => {
   const { root, tools } = await fixture(t);
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-mutation-outside-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-mutation-outside-');
   await writeFile(path.join(root, 'target.txt'), 'inside');
   await writeFile(path.join(outside, 'target.txt'), 'outside');
   const result = await tools.execute(

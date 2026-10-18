@@ -13,6 +13,7 @@ import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 
 /** The task text this run was given, without the runtime's own skill announcement. */
+import { toolCall as callTool } from './provider-fixture.ts';
 const taskPrompt = (messages: readonly { role: string; content: string }[]): string =>
   messages
     .filter((message) => message.role === 'user' && !isRuntimeContext(message.content))
@@ -58,12 +59,6 @@ const delegate = (tasks: unknown[], wait?: boolean): ModelResponse => ({
       arguments: { tasks, ...(wait === undefined ? {} : { wait }) },
     },
   ],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const callTool = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const report = (summary: string): ModelResponse => ({

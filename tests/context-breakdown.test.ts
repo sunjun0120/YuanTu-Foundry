@@ -1,15 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { contextBreakdown, estimateInputTokens } from '../packages/core/budget.ts';
 import type { ContextBreakdown } from '../packages/core/budget.ts';
 import { forecastRequest } from '../packages/core/forecast.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ToolSpec } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * Where a request's estimated input goes.
@@ -106,13 +103,7 @@ test('the forecast carries the breakdown, because that is the number being decid
 });
 
 test('a round emits the breakdown with its forecast', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-breakdown-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-breakdown-');
   const forecasts: Record<string, unknown>[] = [];
   const agent = new Agent({
     store,

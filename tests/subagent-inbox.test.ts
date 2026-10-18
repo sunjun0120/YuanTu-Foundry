@@ -1,8 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import type { ResidentTurnResult } from '../packages/core/residency.ts';
@@ -15,6 +12,7 @@ import type { SessionEvent } from '../packages/storage/events.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * *入队即回执* and the durable inbox.
@@ -36,6 +34,7 @@ import { isRuntimeContext } from '../packages/protocol/context.ts';
  */
 
 // ---- the fold ----
+import { reply, toolCall } from './provider-fixture.ts';
 
 const event = (type: string, data: Record<string, unknown>, seq: number): SessionEvent => ({
   seq,
@@ -524,18 +523,6 @@ test('an explicit ids list narrows the inbox to the children it names', async (t
 
 // ---- helpers ----
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const isChild = (request: ModelRequest) =>
   request.system.includes('You are a sub-agent delegated by a parent agent');
 const report = (summary: string): ModelResponse => ({
@@ -571,12 +558,7 @@ async function until(condition: () => boolean, timeoutMs = 3000): Promise<void> 
   }
 }
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-inbox-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-inbox-');
   return { root, store };
 }
 
@@ -832,13 +814,7 @@ const idle = (text = 'done'): ResidentTurnResult => ({
 });
 /** A `send_message` tool over a residency the test drives directly, so the child is whatever it says it is. */
 async function residentTool(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-inbox-signal-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-inbox-signal-');
   const residency = new SubAgentResidency();
   t.after(() => residency.disposeAll());
   const tool = createResidentMessageTool({

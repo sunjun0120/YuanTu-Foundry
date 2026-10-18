@@ -17,17 +17,12 @@ import { editSnippet } from '../packages/tools/file-change.ts';
 import { presentedSchema } from '../packages/tools/presented-schema.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
+import { toolCall as call } from './provider-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const call = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  toolCalls: [{ id, name, arguments: args }],
-  finishReason: 'tool_calls',
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const names = (request: ModelRequest) => request.tools.map((tool) => tool.name);

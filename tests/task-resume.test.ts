@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
@@ -9,14 +8,10 @@ import { createTools } from '../packages/catalog/index.ts';
 import type { Provider, TaskTrigger } from '../packages/protocol/index.ts';
 import { TaskScheduler } from '../apps/agent-host/scheduler.ts';
 import { dueTasks } from '../packages/protocol/task-trigger.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-resume-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-task-resume-');
   return { root, store, session: store.create(root) };
 }
 

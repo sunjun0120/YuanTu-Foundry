@@ -19,6 +19,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { toolCall as call } from './provider-fixture.ts';
 
 const SUBAGENT_MARK = 'You are a sub-agent delegated by a parent agent';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -26,12 +27,6 @@ const reply = (text: string): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const call = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const report = (summary: string): ModelResponse =>

@@ -30,19 +30,12 @@ import type {
   QuestionOutcome,
 } from '../packages/protocol/index.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
+import { reply, scriptedProvider } from './provider-fixture.ts';
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
 
 // ---- the kernel's side, where a decision is actually made ----
 
-const reply = (text = 'Finished', toolCalls: ModelResponse['toolCalls'] = []): ModelResponse => ({
-  text,
-  toolCalls,
-  // A response that carries calls has to say so: the kernel refuses "stop reason conflicts with tool calls"
-  // rather than guessing which of the two the provider meant.
-  finishReason: toolCalls.length ? 'tool_calls' : 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const writeCall = (file: string, id = 'call-write'): ModelResponse['toolCalls'][number] => ({
   id,
   name: 'write_file',
@@ -82,7 +75,7 @@ test('preauthorized writes retain their decision source in durable and live audi
       onEvent: (event) => events.push(event),
       provider: {
         async complete() {
-          return rounds++ ? reply() : reply('', [writeCall('authorized.txt')]);
+          return rounds++ ? reply('Finished') : reply('', [writeCall('authorized.txt')]);
         },
       },
     });
@@ -141,12 +134,7 @@ test('an allowed write records the request and the decision as two ordered facts
 
 test('a refusal is recorded as a decision, not as an unanswered request', async (t) => {
   const { store, tools, session } = await fixture(t);
-  let turns = 0;
-  const provider: Provider = {
-    async complete() {
-      return turns++ === 0 ? reply('', [writeCall('denied.txt')]) : reply('Understood.');
-    },
-  };
+  const provider = scriptedProvider(reply('', [writeCall('denied.txt')]), reply('Understood.'));
   const agent = new Agent({
     store,
     tools,
@@ -203,12 +191,10 @@ test('a planning run that refuses to write still records that it was asked and r
 
 test('a wait that ends without an answer leaves the request standing alone', async (t) => {
   const { store, tools, session } = await fixture(t);
-  let turns = 0;
-  const provider: Provider = {
-    async complete() {
-      return turns++ === 0 ? reply('', [writeCall('interrupted.txt')]) : reply('Never asked.');
-    },
-  };
+  const provider = scriptedProvider(
+    reply('', [writeCall('interrupted.txt')]),
+    reply('Never asked.'),
+  );
   const agent = new Agent({
     store,
     tools,

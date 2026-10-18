@@ -24,6 +24,7 @@ import type {
   JobSnapshot,
 } from '../packages/protocol/jobs.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const snapshot = (over: Partial<JobSnapshot> & { id: string; kind: JobKind }): JobSnapshot => ({
   sessionId: 'session-a',
@@ -52,8 +53,7 @@ const fake = (kind: JobKind, jobs: JobSnapshot[]): JobProducer => ({
   }),
 });
 async function root(t: test.TestContext) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-jobs-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-jobs-');
   return directory;
 }
 const ctx = (jobs?: JobRegistry): ToolContext => ({

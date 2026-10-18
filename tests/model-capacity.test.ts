@@ -20,12 +20,9 @@ import { parseArgs, type Options } from '../apps/shared/args.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { HookRegistry, ToolRegistry } from '../packages/tools/registry.ts';
 import type { PreStepContext } from '../packages/tools/registry.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { AgentEvent } from '../packages/protocol/index.ts';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import type { ProviderConfig } from '../packages/providers/config.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const route = (over: Partial<ProviderConfig> = {}): ProviderConfig => ({
   apiKey: 'secret',
@@ -165,13 +162,7 @@ test('a round re-aimed at another model is measured against that model’s windo
    * moves it onto that model's ceiling too. Without this, a run declared at 40K would keep compacting a 1M
    * model as if it were small, and a run declared at 1M would let a 128K model be overrun.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-capacity-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-capacity-');
   const hooks = new HookRegistry();
   hooks.register({
     preStep: (context: PreStepContext) =>

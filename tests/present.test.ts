@@ -26,17 +26,13 @@ import type {
   Provider,
   ToolContext,
 } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
+import { toolCall } from './provider-fixture.ts';
 
 const reply = (text: string): ModelResponse => ({
   text,
   finishReason: 'stop',
   toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const call = (name: string, args: Record<string, unknown>) => ({
@@ -50,8 +46,7 @@ const context = (deliverables?: ToolContext['deliverables']): ToolContext => ({
   ...(deliverables ? { deliverables } : {}),
 });
 async function workspace(t: test.TestContext, name = 'yuantu-present-') {
-  const root = await mkdtemp(path.join(tmpdir(), name));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, name);
   return root;
 }
 test('present is declared, carries no permission, and survives a read-only run', async (t) => {

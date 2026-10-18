@@ -28,22 +28,11 @@ import { capacityResolver, modelInfoFor } from '../apps/shared/runtime.ts';
 import { parseArgs } from '../apps/shared/args.ts';
 import type { Message, ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  finishReason: 'stop',
-  toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 /**
  * A workspace with one file the outline can describe, and a store the tests own so a "second process" can be
  * simulated by reopening it.
  */
+import { reply, toolCall } from './provider-fixture.ts';
 async function fixture(t: test.TestContext, provider: Provider, db?: string) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-runtime-context-'));
   const file = db ?? path.join(root, 'sessions.sqlite');

@@ -14,8 +14,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent, type AgentOptions } from '../packages/core/agent.ts';
 import { envelopeEvent } from '../packages/core/envelope.ts';
@@ -26,32 +25,17 @@ import {
 } from '../packages/protocol/context.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
-import type { ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';
+import type { Provider, Questioner } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { reply, toolCall, scriptedProvider } from './provider-fixture.ts';
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  finishReason: 'stop',
-  toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 async function fixture(
   t: test.TestContext,
   provider: Provider,
   files: Record<string, string> = {},
   options: Partial<AgentOptions> = {},
 ): Promise<{ root: string; store: SessionStore; sessionId: string; agent: Agent }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-envelope-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-envelope-');
   for (const [name, content] of Object.entries(files))
     await writeFile(path.join(root, name), content);
   const session = store.create(root);
@@ -70,11 +54,7 @@ const recordsOf = (store: SessionStore, sessionId: string) =>
   store.events(sessionId).filter((event) => event.type === 'context.envelope');
 
 test('a round records the prompt and the catalogue it was actually sent with', async (t) => {
-  const provider: Provider = {
-    async complete() {
-      return reply('一句话回答。');
-    },
-  };
+  const provider = scriptedProvider(reply('一句话回答。'));
   const { store, sessionId, agent } = await fixture(t, provider, {
     'AGENTS.md': '# 项目规则\n\n- 回答先给结论。\n',
   });
@@ -170,11 +150,7 @@ test('a reopened session does not re-copy a prompt and catalogue the log already
    * envelope rather than from an empty hand. The catalogue is the large half — tens of kilobytes of schemas — so
    * "one copy per run" would mean a session that runs a thousand times carrying a thousand copies of it.
    */
-  const provider: Provider = {
-    async complete() {
-      return reply('好。');
-    },
-  };
+  const provider = scriptedProvider(reply('好。'));
   const { root, store, sessionId, agent } = await fixture(t, provider, {
     'AGENTS.md': '# 规则\n\n- 一行。\n',
   });
@@ -329,11 +305,7 @@ test('a goal announced at the start of a run does not make the next run’s prom
 test('a workspace whose instructions changed does not erase what the earlier run was told', async (t) => {
   // The case the record exists for: the file on disk is one thing, and what a past round was told is another.
   const files = { 'AGENTS.md': '# 旧规则\n\n- 第一条。\n' };
-  const provider: Provider = {
-    async complete() {
-      return reply('好的。');
-    },
-  };
+  const provider = scriptedProvider(reply('好的。'));
   const { root, store, sessionId, agent } = await fixture(t, provider, files);
   await agent.run({ sessionId, prompt: '第一轮' });
   await writeFile(path.join(root, 'AGENTS.md'), '# 新规则\n\n- 第二条。\n');

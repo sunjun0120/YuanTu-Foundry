@@ -22,6 +22,7 @@ import {
   trustWorkspaceHooks,
   workspaceHookTrust,
 } from '../packages/resources/hook-trust.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 async function workspace(t: test.TestContext, command = 'echo start') {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-desktop-hooks-'));
@@ -167,8 +168,7 @@ test('nothing is asked when there are no hooks, the bridge is off, or trust is f
     await new HookTrustReview(ask, { ...env, YUANTU_TRUST_WORKSPACE_HOOKS: '1' }).review(root),
     'none',
   );
-  const bare = await mkdtemp(path.join(tmpdir(), 'yuantu-desktop-hooks-'));
-  t.after(() => rm(bare, { recursive: true, force: true }));
+  const bare = await tempRoot(t, 'yuantu-desktop-hooks-');
   assert.equal(await new HookTrustReview(ask, env).review(bare), 'none');
   assert.deepEqual(questions, []);
 });

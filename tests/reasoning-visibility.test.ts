@@ -1,10 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { AnthropicProvider } from '../packages/providers/anthropic.ts';
@@ -20,6 +18,7 @@ import type {
 } from '../packages/protocol/index.ts';
 import { httpFixture } from './http-fixture.ts';
 import { isSummaryRequest } from './summary-request.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 // ---- reasoning is a channel of its own, all the way to the message that gets stored ----
 //
@@ -81,12 +80,7 @@ test('a Responses endpoint reports its reasoning summary on the reasoning channe
 });
 
 test('reasoning travels on its own event, is stored with its turn, and is never sent back', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reasoning-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-reasoning-');
   await writeFile(path.join(root, 'a.txt'), 'hello\n');
   const session = store.create(root);
   const events: AgentEvent[] = [];
@@ -200,13 +194,7 @@ test('reasoning is not part of the prompt, so it cannot inflate the estimate', (
 });
 
 test('a discarded attempt takes its reasoning with it, and says so', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reasoning-reset-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-reasoning-reset-');
   const events: AgentEvent[] = [];
   let sends = 0;
   const agent = new Agent({

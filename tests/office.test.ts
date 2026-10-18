@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
@@ -19,6 +18,7 @@ import { MAX_CREATED_SHEETS, runSpreadsheetOperation } from '../packages/office/
 import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS } from '../packages/office/document.ts';
 import { MAX_SLIDE_TABLE_ROWS } from '../packages/office/presentation.ts';
 import { deliveryTool } from '../packages/tools/delivery.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from office.test.ts ----
 
@@ -101,8 +101,7 @@ test(
   'Excel creation, template edit and HTML preview preserve unaffected workbook parts',
   { timeout: 60000 },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-excel-workflow-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-excel-workflow-');
     const sheet = path.join(root, 'source.xlsx');
     const changed = path.join(root, 'changed.xlsx');
     await runOfficeAutomation({
@@ -157,8 +156,7 @@ test(
  * because the produced file is still structurally valid.
  */
 test('an XLSX edit of a self-closing cell leaves the following cell intact', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-excel-selfclosing-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-excel-selfclosing-');
   const source = path.join(root, 'template.xlsx');
   const output = path.join(root, 'edited.xlsx');
   // A minimal workbook whose first row is exactly the shape that triggered the bug: an empty
@@ -230,8 +228,7 @@ test('an XLSX edit of a self-closing cell leaves the following cell intact', asy
 // ---- merged from office-tools.test.ts ----
 
 test('XLSX inspection exposes full dimensions independently of the bounded sample', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-dimensions-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-dimensions-');
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     book,
@@ -257,8 +254,7 @@ test('XLSX inspection exposes full dimensions independently of the bounded sampl
 });
 
 test('Office tools create, inspect, edit and preview XLSX behind write approval', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-tools-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-tools-');
   const registry = new ToolRegistry();
   officeTools(root).forEach((tool) => registry.register(tool));
   const signal = new AbortController().signal;
@@ -332,8 +328,7 @@ test('Office tools create, inspect, edit and preview XLSX behind write approval'
 // ---- merged from delivery-tool.test.ts ----
 
 test('Agent verifies a delivered file without write approval and cannot escape workspace', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-delivery-tool-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-delivery-tool-');
   await writeFile(path.join(root, 'result.txt'), 'validated output');
   const registry = new ToolRegistry();
   registry.register(deliveryTool(root));
@@ -365,8 +360,7 @@ test('Agent verifies a delivered file without write approval and cannot escape w
  * extension claims one but whose bytes are plain text fails.
  */
 test('delivery verification covers the legacy Office formats, not just their extensions', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-delivery-legacy-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-delivery-legacy-');
   const ole = Buffer.concat([
     Buffer.from([208, 207, 17, 224, 161, 177, 26, 225]),
     Buffer.alloc(512, 7),
@@ -397,8 +391,7 @@ test('delivery verification covers the legacy Office formats, not just their ext
  * and this pins the two readers to it.
  */
 test('office_create advertises exactly the workbook the engine builds', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-sheets-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-sheets-');
   const tool = officeTools(root).find((item) => item.name === 'office_create')!;
   const schema = tool.inputSchema as { properties?: { sheets?: { maxItems?: number } } };
   const declared = schema.properties?.sheets?.maxItems;
@@ -426,8 +419,7 @@ test('office_create advertises exactly the workbook the engine builds', async (t
  * Office: a failure here is a failure of the generator, not of the machine.
  */
 test('office_create builds a Word document from blocks without Microsoft Office', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-create-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-docx-create-');
   const tool = officeTools(root).find((item) => item.name === 'office_create')!;
   await runOfficeOperation(tool, {
     format: 'docx',
@@ -475,8 +467,7 @@ test('office_create builds a Word document from blocks without Microsoft Office'
 });
 
 test('office_create builds a PowerPoint deck with bullets, a table and notes without Microsoft Office', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-create-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-pptx-create-');
   const tool = officeTools(root).find((item) => item.name === 'office_create')!;
   await runOfficeOperation(tool, {
     format: 'pptx',
@@ -514,8 +505,7 @@ test('office_create builds a PowerPoint deck with bullets, a table and notes wit
 });
 
 test('the old Word and PowerPoint argument shapes still create through the JS generators', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-legacy-args-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-legacy-args-');
   const docx = path.join(root, 'legacy.docx');
   const pptx = path.join(root, 'legacy.pptx');
   await runOfficeAutomation({
@@ -540,8 +530,7 @@ test('the old Word and PowerPoint argument shapes still create through the JS ge
 });
 
 test('office_create refuses tables and block lists past their published limits', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-create-limits-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-create-limits-');
   const tool = officeTools(root).find((item) => item.name === 'office_create')!;
   const wide = [Array.from({ length: MAX_TABLE_COLUMNS + 1 }, () => 'x')];
   await assert.rejects(
@@ -596,8 +585,7 @@ async function xmlParts(file: string, pattern: RegExp): Promise<string[]> {
 }
 
 test('control characters in model text are dropped instead of corrupting the package', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-control-chars-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-control-chars-');
   const docx = path.join(root, 'made.docx');
   const pptx = path.join(root, 'made.pptx');
   const edited = path.join(root, 'edited.docx');
@@ -644,8 +632,7 @@ test('control characters in model text are dropped instead of corrupting the pac
 });
 
 test('each ordered list in a Word document starts again at 1', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-ordered-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-docx-ordered-');
   const docx = path.join(root, 'lists.docx');
   await runOfficeAutomation({
     operation: 'create',
@@ -680,8 +667,7 @@ function frames(xml: string): { y: number; cy: number }[] {
 const SLIDE_HEIGHT_EMU = 6858000;
 
 test('a slide table at its row limit stays on the slide, under bullets too', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-tall-table-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-pptx-tall-table-');
   const pptx = path.join(root, 'tall.pptx');
   const table = Array.from({ length: MAX_SLIDE_TABLE_ROWS }, (_, row) => [`r${row}`, 'value']);
   await runOfficeAutomation({
@@ -714,8 +700,7 @@ test('a slide table at its row limit stays on the slide, under bullets too', asy
 });
 
 test('long bullet lists get a smaller font instead of overflowing their box', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-bullets-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-pptx-bullets-');
   const pptx = path.join(root, 'bullets.pptx');
   const long =
     'A bullet that runs on for quite a while to need more than one line of the slide width. '.repeat(
@@ -829,8 +814,7 @@ test('a small package of the same shape still reads part by part', async () => {
 });
 
 test('an oversized workbook part is refused before any worksheet is located', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-ooxml-bound-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-ooxml-bound-');
   const zip = new JSZip();
   zip.file('xl/workbook.xml', 'a'.repeat(24_000_000));
   zip.file('xl/_rels/workbook.xml.rels', '<Relationships/>');
@@ -918,8 +902,7 @@ const WORD_BODY = (text: string): string =>
   '</w:t></w:r></w:p></w:body></w:document>';
 
 test('a DOCX whose document part inflates past its ceiling is refused before mammoth reads it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-inspect-bound-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-docx-inspect-bound-');
   const bomb = await docxWithDocumentXml(WORD_BODY('a'.repeat(24_000_000))).generateAsync({
     type: 'nodebuffer',
     compression: 'DEFLATE',
@@ -938,8 +921,7 @@ test('a DOCX whose document part inflates past its ceiling is refused before mam
 });
 
 test('an XLSX whose worksheet part inflates past its ceiling is refused before SheetJS reads it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-xlsx-inspect-bound-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-xlsx-inspect-bound-');
   const bomb = await xlsxWithSheetXml(
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">' +
       `<c r="A1" t="inlineStr"><is><t>${'a'.repeat(24_000_000)}</t></is></c>` +
@@ -959,8 +941,7 @@ test('an XLSX whose worksheet part inflates past its ceiling is refused before S
 });
 
 test('a small DOCX of the same shape still inspects to its text', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-inspect-small-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-docx-inspect-small-');
   const bytes = await docxWithDocumentXml(
     WORD_BODY('Hello from the bounded inspect path'),
   ).generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
@@ -984,8 +965,7 @@ const SPLIT_RUNS =
   '</w:body></w:document>';
 
 test('a Word edit replaces text split across runs and keeps the first run formatting', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-edit-runs-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-docx-edit-runs-');
   const source = path.join(root, 'source.docx');
   const output = path.join(root, 'edited.docx');
   await writeFile(
@@ -1019,8 +999,7 @@ test('a Word edit replaces text split across runs and keeps the first run format
 });
 
 test('a Word edit that matches nothing fails and writes nothing', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-docx-edit-missing-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-docx-edit-missing-');
   const source = path.join(root, 'source.docx');
   await writeFile(
     source,
@@ -1044,8 +1023,7 @@ test('a Word edit that matches nothing fails and writes nothing', async (t) => {
 
 test('Word edits replace long text and treat ^ literally', async (t) => {
   // Word's COM Find refused text over 255 characters and read ^ as a code; the JS path has neither limit.
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-long-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-long-');
   const source = path.join(root, 'source.docx');
   const output = path.join(root, 'edited.docx');
   const long = 'Long clause '.repeat(30).trim(); // 359 characters
@@ -1074,8 +1052,7 @@ test('Word edits replace long text and treat ^ literally', async (t) => {
 });
 
 test('office_edit revises slide text and table cells of a PowerPoint deck without Office', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-pptx-edit-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-pptx-edit-');
   const tools = officeTools(root);
   const tool = (name: string) => tools.find((item) => item.name === name)!;
   await runOfficeOperation(tool('office_create'), {
@@ -1105,8 +1082,7 @@ test('office_edit revises slide text and table cells of a PowerPoint deck withou
 
 // ---- Built-in previews and engine fallback ----
 test('an .html preview of Word and PowerPoint needs nothing installed and runs no script', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-html-preview-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-html-preview-');
   let rendered = false;
   const tools = officeTools(root, {
     async render() {
@@ -1159,8 +1135,7 @@ test('a .pdf preview with no engine available says how to get a preview', async 
     t.skip('Office may be installed here; the no-engine path is pinned on other platforms');
     return;
   }
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-no-engine-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-no-engine-');
   const tools = officeTools(root, {
     async render() {
       throw new OfficeUnavailableError('LibreOffice is unavailable');

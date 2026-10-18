@@ -9,13 +9,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { createTools } from '../packages/catalog/index.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { MAX_TOOL_OUTPUT, ToolRegistry } from '../packages/tools/registry.ts';
 import { RUN_CODE, toolMode, toolSdk } from '../packages/tools/run-code.ts';
 import { TOOL_TIMEOUT_MARKER } from '../packages/tools/timeouts.ts';
@@ -34,6 +32,7 @@ import type {
   ToolCatalog,
   ToolContext,
 } from '../packages/protocol/index.ts';
+import { tempRoot, storeFixture } from './temp-fixture.ts';
 
 /** A real 1×1 PNG, so `read_image` accepts it (see `tests/tool-images.test.ts`). */
 const PNG = Buffer.from(
@@ -44,8 +43,7 @@ const PNG = Buffer.from(
 async function workspaceFixture(
   t: test.TestContext,
 ): Promise<{ root: string; tools: ToolRegistry; context: ToolContext }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-run-code-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-run-code-');
   await writeFile(path.join(root, 'alpha.txt'), 'first\nsecond\n');
   await writeFile(path.join(root, 'beta.txt'), 'third\n');
   return {
@@ -457,8 +455,7 @@ test('a program cannot read a workspace credential file past the file tools', as
 test('the runner worker cannot read the workspace it was started in', async (t) => {
   const { root } = await workspaceFixture(t);
   await writeFile(path.join(root, '.env'), 'SECRET=hunter2\n');
-  const runtime = await mkdtemp(path.join(tmpdir(), 'yuantu-runner-'));
-  t.after(() => rm(runtime, { recursive: true, force: true }));
+  const runtime = await tempRoot(t, 'yuantu-runner-');
   const sources = path.join(projectRoot, 'packages', 'tools');
   for (const file of ['code-process-entry.ts', 'environment.ts'])
     await writeFile(path.join(runtime, file), await readFile(path.join(sources, file)));
@@ -787,12 +784,7 @@ test('without a catalog the tool says so instead of guessing', async (t) => {
  * the file's text — which can only happen if `agent.ts` handed the tool the run's own registry.
  */
 test('a run gives its program the run’s own tools', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-run-code-run-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-run-code-run-');
   await writeFile(path.join(root, 'notes.txt'), 'alpha\nbeta\n');
   const session = store.create(root);
   const events: AgentEvent[] = [];

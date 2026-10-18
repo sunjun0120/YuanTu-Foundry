@@ -8,23 +8,17 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SHRINK_MARK, shortenMessages } from '../packages/core/shrink.ts';
 import { estimateMessageTokens } from '../packages/core/budget.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { SPILL_DIRECTORY, spillResult } from '../packages/tools/spill.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { tempRoot, storeFixture } from './temp-fixture.ts';
+import { reply } from './provider-fixture.ts';
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const useTool = (id: string, tag: string): ModelResponse => ({
   text: '',
   finishReason: 'tool_calls',
@@ -257,10 +251,7 @@ test('the budget is tokens, so the same budget costs the same in any script', ()
 });
 
 test('the same result always lands in the same file', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-shrink-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-shrink-');
   const first = spillResult({
     workspace: root,
     sessionId: 's1',
@@ -291,13 +282,7 @@ test('the same result always lands in the same file', async (t) => {
 });
 
 test('a long result is shortened for the model while the transcript keeps every character', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-shrink-agent-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-shrink-agent-');
   const tools = new ToolRegistry();
   const text = (tag: string) => `${tag}${tag.repeat(6000)}`;
   tools.register({
@@ -363,13 +348,7 @@ test('a long result is shortened for the model while the transcript keeps every 
 });
 
 test('a conversation that is nowhere near the window is left alone', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-shrink-early-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-shrink-early-');
   const tools = new ToolRegistry();
   tools.register({
     name: 'noisy',

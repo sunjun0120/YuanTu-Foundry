@@ -9,8 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   CompletionInputLimitError,
@@ -18,12 +17,12 @@ import {
   snapshotCompletionInputs,
 } from '../packages/core/completion-inputs.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const signal = new AbortController().signal;
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-completion-inputs-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-completion-inputs-');
   return root;
 }
 

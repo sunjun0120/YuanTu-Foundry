@@ -24,21 +24,11 @@ import type { SessionEvent } from '../packages/storage/events.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
-import type { Message, ModelResponse } from '../packages/protocol/index.ts';
+import type { Message } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 /** The rows as they exist on disk, read through a second connection: the independent view. */
+import { reply, toolCall } from './provider-fixture.ts';
 const rawRows = (file: string, sessionId: string): Message[] => {
   const db = new DatabaseSync(file);
   try {
@@ -380,13 +370,7 @@ test('settling an interrupted run records the uncertainty inside the same log', 
 });
 
 test('deleting a session deletes its log', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-log-delete-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-log-delete-');
   store.append(session.id, { role: 'user', content: 'doomed' });
   assert.equal(store.events(session.id).length, 1);
   store.delete(session.id);

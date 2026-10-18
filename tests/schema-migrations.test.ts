@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { riskWorker } from './risk-concurrency.ts';
 import {
@@ -12,6 +11,7 @@ import {
   SCHEMA_VERSION,
   SessionStore,
 } from '../packages/storage/sqlite.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * Old databases open, and the traversal says so rather than a handful of spot checks.
@@ -30,8 +30,7 @@ import {
  * are about what the upgrade did to that data, not merely that the constructor returned.
  */
 async function scratch(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-migration-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-migration-');
   return root;
 }
 /**

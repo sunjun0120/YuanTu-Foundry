@@ -9,8 +9,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir, homedir } from 'node:os';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import {
   credentialsPath,
@@ -18,10 +18,10 @@ import {
   saveCredential,
 } from '../packages/providers/credentials.ts';
 import { readConfig } from '../packages/providers/config.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 async function root(t: test.TestContext): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'yuantu-credentials-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await tempRoot(t, 'yuantu-credentials-');
   return dir;
 }
 const at = (dir: string): NodeJS.ProcessEnv => ({

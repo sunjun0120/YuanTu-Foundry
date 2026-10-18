@@ -19,6 +19,7 @@ import { emptyStatistics, addStatistics, addUsage } from '../packages/protocol/s
 import { redactSecrets } from '../packages/platform/redact.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * The user-role messages a person actually typed.
@@ -42,13 +43,7 @@ const reply = (text = 'Finished'): ModelResponse => ({
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 async function fixture(t: test.TestContext, provider: Provider, extra = {}) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-core-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-core-');
   const events: AgentEvent[] = [];
   const tools = createTools(root);
   const agent = new Agent({

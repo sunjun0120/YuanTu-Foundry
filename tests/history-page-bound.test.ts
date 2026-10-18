@@ -1,12 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { historyHandlers } from '../apps/agent-host/handlers/history.ts';
 import { createDispatcher, createRequestHandler } from '../apps/agent-host/dispatch.ts';
 import { lineFramer } from '../packages/client/host-transport.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * The unpaged `session.get` reply, which is the one history shape that had no bound at all.
@@ -20,8 +18,7 @@ import type { HostContext } from '../apps/agent-host/state.ts';
 const MESSAGE_BYTES = 1_000_000;
 const FRAME_BYTES = 64_000_000;
 async function fixture(t: test.TestContext, messages: number) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-history-bound-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-history-bound-');
   const history = Array.from({ length: messages }, (_, index) => ({
     id: `m${index}`,
     role: 'assistant',

@@ -21,12 +21,12 @@ import type {
   ToolResult,
 } from '../packages/protocol/index.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-question-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-question-');
   return { root, tools: createTools(root) };
 }
 const call = (args: Record<string, unknown>) => ({

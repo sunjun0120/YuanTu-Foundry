@@ -12,6 +12,7 @@ import { HookRegistry } from '../packages/tools/hooks.ts';
 import { SPILL_DIRECTORY, removeSpills, sweepSpills } from '../packages/tools/spill.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { ImageAttachment } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * What a deleted session leaves behind: nothing it alone owned, and nothing anybody else still needs.
@@ -145,8 +146,7 @@ test('deleting a session tree drops the bytes only the tree named, in one pass',
 });
 
 test('the startup sweep removes old orphaned spills, keeps live and recent ones, and enforces the budget', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-sweep-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-spill-sweep-');
   const now = Date.now();
   const day = 24 * 60 * 60 * 1000;
   const age = async (target: string, ms: number) => {
@@ -203,8 +203,7 @@ test('the sweep of a workspace with no spill directory is a no-op', async () => 
 });
 
 test('the startup sweep only treats a definite "no such session" as an orphan', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-spill-owner-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-spill-owner-');
   const store = new SessionStore(path.join(root, 'sessions.sqlite'));
   const session = store.create(root);
   const exists = spillOwnerExists(store);

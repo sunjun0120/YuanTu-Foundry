@@ -4,16 +4,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { createRunEmit, type RunEmit } from '../packages/core/run-emit.ts';
 import { createChildTurns } from '../packages/core/run-child-turns.ts';
 import { createResidentMessageTool } from '../packages/core/run-residency.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import type { AgentEvent } from '../packages/protocol/index.ts';
 import type { SessionStatistics } from '../packages/protocol/statistics.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 test('a resident child turn is rebound to the current parent run', async () => {
   const frames: AgentEvent[] = [];
@@ -91,12 +88,7 @@ test('a resident child turn is rebound to the current parent run', async () => {
 });
 
 test('send_message rebinds an existing activation before it starts the follow-up turn', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-run-rebind-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-run-rebind-');
   const parent = store.create(root);
   const child = store.create(root, parent.id);
   const emit: RunEmit = () => {};

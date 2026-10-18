@@ -27,8 +27,10 @@ import type {
   Provider,
   ToolContext,
 } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /** A real 1×1 PNG: signature, IHDR, IDAT and IEND, so the sniffer and an endpoint both accept it. */
+import { toolCall as call } from './provider-fixture.ts';
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64',
@@ -304,20 +306,13 @@ const context = (): ToolContext => ({
   approve: async () => true,
 });
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-image-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-image-');
   return root;
 }
 const reply = (text: string): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const call = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 

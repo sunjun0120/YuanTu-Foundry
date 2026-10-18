@@ -13,9 +13,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { cacheKeyFor } from '../packages/core/cache-key.ts';
 import { prepareContext } from '../packages/core/context.ts';
@@ -23,6 +20,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelRequest, ModelResponse, ToolSpec } from '../packages/protocol/index.ts';
 import { isSummaryRequest } from './summary-request.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const TOOLS: ToolSpec[] = [
   {
@@ -44,13 +42,7 @@ const reply = (text: string): ModelResponse => ({
 });
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-summary-prefix-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-summary-prefix-');
   return { store, session };
 }
 

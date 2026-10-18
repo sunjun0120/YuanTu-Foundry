@@ -18,6 +18,7 @@ import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelResponse } from '../packages/protocol/index.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /** What a second connection sees: the independent view of what has actually been written. */
 const rowsOnDisk = (file: string, sessionId: string): number => {
@@ -74,13 +75,7 @@ test('a batch is invisible to another process until it is flushed, and complete 
 });
 
 test('an event never overtakes the appends it is ordered against', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-batch-order-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-batch-order-');
   store.append(session.id, { role: 'user', content: 'before the run' });
   // `beginRun` records `run.started`, which must not be logged ahead of a message that was appended first.
   const runId = store.beginRun(session.id);

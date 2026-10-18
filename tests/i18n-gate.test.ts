@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { scanI18n, withoutComments } from '../scripts/i18n-gate.mjs';
 import { projectRoot } from './process-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * The gate's own coverage is the thing under test.
@@ -106,8 +107,7 @@ test('a content label is exempt inside a scanned file, and does not shelter copy
 });
 
 test('an exception that matches nothing is reported, so a rename cannot silently drop a module', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-i18n-missing-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-i18n-missing-');
   await put(root, 'apps/desktop/renderer.ts', 'export const x = 1;\n');
   const problems = await scanI18n(root);
   // Three of the four exceptions matched nothing here, and each one is named: the file it used to cover is now

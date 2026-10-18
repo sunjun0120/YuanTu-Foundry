@@ -7,7 +7,6 @@ import { Agent } from '../packages/core/agent.ts';
 import { workflowTool, WORKFLOW, WORKFLOW_CEILINGS } from '../packages/core/workflow.ts';
 import type { SubAgentAnswer } from '../packages/core/subagents.ts';
 import { DeferredApprovalError } from '../packages/protocol/failure.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type {
@@ -16,6 +15,7 @@ import type {
   Provider,
   ToolContext,
 } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * `workflow`: a script that orchestrates sub-agents.
@@ -36,6 +36,7 @@ import type {
  */
 
 /** A stub coordinator: records the prompts, answers from a table, so the tool is tested without an agent run. */
+import { reply, toolCall } from './provider-fixture.ts';
 function stubAgents(
   answer: (prompt: string, options: { model?: string }) => Promise<SubAgentAnswer> | SubAgentAnswer,
 ): {
@@ -621,18 +622,6 @@ test('a deferred approval is the run speaking, so the script cannot catch it', a
 
 // ---- through a real agent run ----
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const isChild = (request: ModelRequest) =>
   request.system.includes('You are a sub-agent delegated by a parent agent');
 /** Children answer through `submit_report`: a delegated child is asked for a structured report, always. */
@@ -650,13 +639,7 @@ const report = (summary: string): ModelResponse => ({
 });
 
 test('a workflow’s agent() can hold a real child to the schema the script declares', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-workflow-schema-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-workflow-schema-');
   /** The schema the script declares: nothing to do with the report contract. */
   const scriptSchema = {
     type: 'object',
@@ -716,13 +699,7 @@ test('a workflow’s agent() can hold a real child to the schema the script decl
 });
 
 test('a workflow runs real sub-agents through the same coordinator as delegate_task', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-workflow-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-workflow-');
   const seen: ModelRequest[] = [];
   let parentRound = 0;
   const provider: Provider = {
@@ -792,13 +769,7 @@ test('a workflow runs real sub-agents through the same coordinator as delegate_t
 });
 
 test('a run that cannot delegate is not offered the workflow tool', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-workflow-off-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-workflow-off-');
   let offered: string[] = [];
   const agent = new Agent({
     store,

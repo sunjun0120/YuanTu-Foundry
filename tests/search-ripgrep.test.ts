@@ -13,11 +13,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -41,12 +40,12 @@ import {
   type SearchPage,
   type WorkspaceAccess,
 } from '../packages/search/types.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const digest = (bytes: Buffer | string): string => createHash('sha256').update(bytes).digest('hex');
 
 async function tempDir(t: test.TestContext, prefix: string): Promise<string> {
-  const directory = await mkdtemp(path.join(tmpdir(), prefix));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, prefix);
   return directory;
 }
 

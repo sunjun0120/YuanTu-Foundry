@@ -21,6 +21,7 @@ import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol
  * untouched (a result that leaked would make the parent's undo write into a tree it does not have), and a follow-up
  * must not silently replace a result the parent was already reviewing.
  */
+import { toolCall as callTool } from './provider-fixture.ts';
 
 const GIT_ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -40,12 +41,6 @@ const reply = (text = 'Finished'): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const callTool = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const delegate = (tasks: unknown[], wait?: boolean): ModelResponse => ({

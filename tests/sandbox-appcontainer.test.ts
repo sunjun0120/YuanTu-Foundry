@@ -14,9 +14,9 @@ import { windows } from './sandbox-appcontainer-fixture.ts';
 import { RetryableCleanup } from '../packages/tools/cleanup-sequence.ts';
 import { createOwnedFileLease } from '../packages/tools/owned-file-lease.ts';
 import { finalizeAppContainerProbe } from '../packages/tools/appcontainer-runtime.ts';
-import { mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { tempRoot } from './temp-fixture.ts';
 
 test('AppContainer cleanup retains confirmed termination across partial control deletion', async () => {
   // Execute the production cleanup boundary with OS operations faulted. No machine grants or profiles.
@@ -117,8 +117,7 @@ test('failed cleanup can retry without releasing a completed workspace lease twi
 });
 
 test('probe cleanup failure returns an unavailable reason and retains the unconfirmed workspace', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-probe-retention-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-probe-retention-');
   const result = await finalizeAppContainerProbe(
     null,
     async () => {
@@ -132,8 +131,7 @@ test('probe cleanup failure returns an unavailable reason and retains the unconf
 
 for (const operation of ['writeFile', 'sync'] as const) {
   test(`a failed lease ${operation} releases only its own newly created lock`, async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lease-failure-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-lease-failure-');
     const sample = await open(path.join(root, 'sample'), 'wx');
     const prototype = Object.getPrototypeOf(sample);
     await sample.close();

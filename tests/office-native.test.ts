@@ -1,8 +1,7 @@
 // @test-serial desktop-ui: Uses real Word and PowerPoint COM applications and their desktop state.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   OfficeUnavailableError,
@@ -14,6 +13,7 @@ import { readPptxSlides } from '../packages/office/read.ts';
 import { verifyFileDelivery } from '../packages/tools/file-delivery.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // COM applications expect these standard folders even in a private test profile.
 test.before(async () => {
@@ -34,8 +34,7 @@ test(
   { skip: process.platform !== 'win32' && 'needs Windows', timeout: 240000 },
   async (t) => {
     try {
-      const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-workflow-'));
-      t.after(() => rm(root, { recursive: true, force: true }));
+      const root = await tempRoot(t, 'yuantu-office-workflow-');
       const source = path.join(root, 'source.docx');
       const output = path.join(root, 'edited.docx');
       const preview = path.join(root, 'preview.pdf');
@@ -128,8 +127,7 @@ test(
   'office_preview converts a JS-created PowerPoint file to PDF through local Office',
   { skip: process.platform !== 'win32' && 'needs Windows', timeout: 120000 },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-ppt-tools-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-ppt-tools-');
     const registry = new ToolRegistry();
     officeTools(root).forEach((tool) => registry.register(tool));
     const run = (id: string, name: string, args: Record<string, unknown>) =>
@@ -178,8 +176,7 @@ async function runOfficeOperation(
 }
 
 test('a .pdf preview falls back to LibreOffice only when Office is unavailable', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-office-pdf-fallback-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-office-pdf-fallback-');
   let rendered = 0;
   const tools = officeTools(root, {
     async render(input) {

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -14,10 +13,10 @@ import {
   readTestDurations,
   writeTestDurations,
 } from '../scripts/test-duration-history.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 async function directory(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-scheduler-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-scheduler-');
   return root;
 }
 

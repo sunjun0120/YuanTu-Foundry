@@ -21,10 +21,10 @@ import { Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
 import { fileHandlers } from '../apps/agent-host/handlers/files.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('image previews complete short reads without inventing zero-filled bytes', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-preview-short-read-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-preview-short-read-');
   const image = Buffer.concat([
     Buffer.from('89504e470d0a1a0a', 'hex'),
     Buffer.from('preview bytes'),
@@ -62,8 +62,7 @@ process.env.YUANTU_SEARCH_RG = '0';
 // ---- merged from file-review.test.ts ----
 
 test('file approvals show actual unified diff and successful results retain it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-review-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-review-');
   await writeFile(path.join(root, 'a.ts'), 'const n = 1;\n');
   const tools = createTools(root);
   // The gate wants the file read in this run before it can be edited; this test is about the diff a person is
@@ -94,8 +93,7 @@ test('file approvals show actual unified diff and successful results retain it',
 });
 
 test('file modified while approval is pending is not overwritten', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-review-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-review-');
   await writeFile(path.join(root, 'a.txt'), 'old');
   const tools = createTools(root);
   await tools.execute(
@@ -123,8 +121,7 @@ test('file modified while approval is pending is not overwritten', async (t) => 
 });
 
 test('denied new-file preview has no side effects', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-review-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-review-');
   let previewSeen = false;
   const result = await createTools(root).execute(
     { id: 'create', name: 'write_file', arguments: { path: 'new.txt', content: 'hello\n' } },
@@ -145,8 +142,7 @@ test('denied new-file preview has no side effects', async (t) => {
 });
 
 test('diff counts content beginning with plus signs and marks oversized previews', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-review-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-review-');
   const result = await createTools(root).execute(
     {
       id: 'new',
@@ -487,8 +483,7 @@ test('parallel undo requests cannot restore the same change twice', async (t) =>
 // ---- merged from write-all.test.ts ----
 
 test('short filesystem writes still persist every byte at the correct position', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-short-write-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-short-write-');
   const file = path.join(root, 'file.txt'),
     handle = await open(file, 'w+');
   try {
@@ -510,8 +505,7 @@ test('zero-progress write fails instead of looping or reporting success', async 
   );
 });
 test('atomicWriteFile replaces existing content and preserves permission bits', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-atomic-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-atomic-');
   const file = path.join(root, 'target.txt');
   await writeFile(file, 'before');
   await chmod(file, 0o600);
@@ -523,8 +517,7 @@ test('atomicWriteFile replaces existing content and preserves permission bits', 
   }
 });
 test('atomicWriteFile creates a missing target without leaving temporary files', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-atomic-create-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-atomic-create-');
   const file = path.join(root, 'fresh.txt');
   await atomicWriteFile(file, Buffer.from('new'));
   assert.equal(await readFile(file, 'utf8'), 'new');
@@ -535,8 +528,7 @@ test('atomicWriteFile creates a missing target without leaving temporary files',
 // ---- merged from workspace-scale.test.ts ----
 
 test('workspace walk stays bounded and skips credentials across a synthetic 600-file tree', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-workspace-scale-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-workspace-scale-');
   for (let directory = 0; directory < 12; directory++) {
     const folder = path.join(root, 'module-' + String(directory).padStart(2, '0'));
     await mkdir(folder);
@@ -569,8 +561,7 @@ test('case insensitive literal search agrees with escaped regex independent of l
    * which is why this is a differential test over both modes rather than a table of expected foldings: the
    * question is whether the two modes still answer identically, on any host.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-locale-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-search-locale-');
   /**
    * One line per case, so a match set names exactly which characters a mode folded.
    *

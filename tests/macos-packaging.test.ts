@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { desktopPaths } from '../apps/desktop/install-paths.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const require = createRequire(import.meta.url);
 const script = new URL('../scripts/prepare-macos-package.mjs', import.meta.url);
@@ -94,8 +94,7 @@ test(
   'macOS preparation rejects non-macOS before writing or fetching any runtime',
   { skip: process.platform === 'darwin' && 'asserts the non-macOS failure path' },
   async (t) => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-macos-preflight-'));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const directory = await tempRoot(t, 'yuantu-macos-preflight-');
     const child = spawnSync(process.execPath, [fileURLToPath(script)], {
       cwd: directory,
       encoding: 'utf8',
@@ -109,8 +108,7 @@ test(
 
 test('macOS packaging rejects a stale platform, target architecture or altered runtime', async (t) => {
   const { validateMacRuntime } = await import(script.href);
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-macos-manifest-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-macos-manifest-');
   const node = Buffer.from('standalone Node test fixture');
   const license = 'Node.js is licensed for use as follows:\nfixture license';
   const manifest = {
@@ -166,10 +164,7 @@ test(
      * publishes at the repository-relative `.scratch/packaging/runtime`, so the hook is driven from a
      * fixture staged for this test rather than from whatever a previous packaging run left behind.
      */
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-prepack-'));
-    t.after(async () => {
-      await rm(root, { recursive: true, force: true });
-    });
+    const root = await tempRoot(t, 'yuantu-prepack-');
     const runtime = path.join(root, '.scratch/packaging/runtime');
     await mkdir(runtime, { recursive: true });
     const node = Buffer.from('staged runtime fixture');

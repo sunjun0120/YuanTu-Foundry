@@ -9,10 +9,10 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
 import { ModelSettingsStore } from '../apps/desktop/model-settings.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('vision declarations use the same boolean parser in config and desktop', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-capabilities-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-capabilities-');
   const cipher = { available: () => false, encrypt: () => Buffer.alloc(0), decrypt: () => '' };
   for (const value of ['0', 'false']) {
     const env = {

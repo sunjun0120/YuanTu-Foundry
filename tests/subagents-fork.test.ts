@@ -6,9 +6,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { forkSeed } from '../packages/core/fork.ts';
 import { EXPLORE_TOOLS } from '../packages/core/subagents.ts';
@@ -21,17 +18,13 @@ import type { SubAgentProvider } from '../packages/core/subagent-providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { toolCall as call } from './provider-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const call = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const submitReport = (id: string): ModelResponse =>
@@ -59,13 +52,7 @@ async function fixture(
   provider: Provider,
   extra: Record<string, unknown> = {},
 ): Promise<{ store: SessionStore; sessionId: string; agent: Agent }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-fork-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-fork-');
   const agent = new Agent({
     store,
     provider,

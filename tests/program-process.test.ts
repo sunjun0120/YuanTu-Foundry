@@ -11,6 +11,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { workflowTool } from '../packages/core/workflow.ts';
 
 import { fixture } from './program-process-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('a program cannot reach the runner process through a host-realm constructor', async (t) => {
   const { run } = await fixture(t);
@@ -296,8 +297,7 @@ test('a disconnected workflow waits for its child and refuses automatic continua
 
 test('a tool wrapper cannot replace the program workspace identity', async (t) => {
   const { root, tools, run } = await fixture(t, 'host', { escaped: true });
-  const other = await mkdtemp(path.join(tmpdir(), 'yuantu-program-other-'));
-  t.after(() => rm(other, { recursive: true, force: true }));
+  const other = await tempRoot(t, 'yuantu-program-other-');
   tools.registerHooks({
     aroundTool: async (dispatch, next) =>
       next(dispatch.withScope({ ...dispatch.scope, workspaceRoot: other })),

@@ -24,6 +24,8 @@ import type { ModelResponse, ModelRequest, Provider } from '../packages/protocol
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { SubAgentCoordinator, resolveSubAgentOptions } from '../packages/core/subagents.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { reply, toolCall } from './provider-fixture.ts';
 
 /** Child transcripts also carry the runtime's skill announcement; a task or follow-up is not it. */
 const transcriptContents = (messages: readonly { content: string }[]): string[] =>
@@ -46,18 +48,8 @@ const transcriptContents = (messages: readonly { content: string }[]): string[] 
  * with the options the caller asked for.
  */
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const delegateCall = (tasks: Record<string, unknown>[]): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id: 'delegate-1', name: 'delegate_task', arguments: { tasks } }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
+const delegateCall = (tasks: Record<string, unknown>[]): ModelResponse =>
+  toolCall('delegate-1', 'delegate_task', { tasks });
 const outcome = (overrides: Partial<SubAgentOutcome> = {}): SubAgentOutcome => ({
   sessionId: 'child-session',
   status: 'completed',
@@ -114,13 +106,7 @@ for (const wait of [true, false]) {
 }
 
 test('a refused durable completion cannot emit a completed card', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settlement-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-settlement-');
   const child = store.create(root);
   const record = store.recordEvent.bind(store);
   store.recordEvent = (...args) => {
@@ -284,13 +270,7 @@ const toolText = (store: SessionStore, sessionId: string): string =>
     .join('\n');
 
 test('a refused capability leaves no child session behind', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-providers-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-providers-');
   const { provider: fake, requests } = recordingProvider(
     ['outputSchema', 'depthLimit', 'toolFilter', 'persona'],
     'no-model',
@@ -320,13 +300,7 @@ test('a refused capability leaves no child session behind', async (t) => {
 });
 
 test('the provider this run delegates to is the configured one, and it receives the request intact', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-providers-selected-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-providers-selected-');
   const { provider: fake, requests } = recordingProvider([...SUBAGENT_CAPABILITIES], 'sessions');
   let turn = 0;
   const agent = new Agent({
@@ -376,13 +350,7 @@ test('the provider this run delegates to is the configured one, and it receives 
 });
 
 test('a task that names a model runs the child on that model', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-providers-model-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-providers-model-');
   const childModels: string[] = [];
   const childPrompts: string[] = [];
   let turn = 0;
@@ -423,13 +391,7 @@ test('a task that names a model runs the child on that model', async (t) => {
 });
 
 test('without a resolver the built-in provider does not advertise agentOptions', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-providers-noresolver-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-providers-noresolver-');
   let turn = 0;
   const agent = new Agent({
     store,
@@ -467,40 +429,16 @@ test('without a resolver the built-in provider does not advertise agentOptions',
  * driving its siblings, and the promise that a parent run ending does not make the child unreachable.
  */
 
-const reply2 = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const isChild = (request: ModelRequest) =>
   request.system.includes('You are a sub-agent delegated by a parent agent');
-const report = (summary: string): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [
-    {
-      id: `report-${summary}`,
-      name: 'submit_report',
-      arguments: { summary, findings: [{ statement: summary, evidence: 'seen in the workspace' }] },
-    },
-  ],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
+const report = (summary: string): ModelResponse =>
+  toolCall(`report-${summary}`, 'submit_report', {
+    summary,
+    findings: [{ statement: summary, evidence: 'seen in the workspace' }],
+  });
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-residency-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-residency-');
   return { root, store };
 }
 
@@ -687,13 +625,13 @@ test('a follow-up turn reuses the child and updates its card', async (t) => {
         questions.push(asked);
         return asked.includes('Delegated task')
           ? report('first sweep done')
-          : reply2('follow-up answer');
+          : reply('follow-up answer');
       }
       if (request.messages.some((message) => message.content.includes('follow-up answer')))
-        return reply2('Done');
-      if (request.messages.some((message) => message.role === 'tool')) return reply2('Done');
+        return reply('Done');
+      if (request.messages.some((message) => message.role === 'tool')) return reply('Done');
       const hasChild = request.messages.some((message) => message.content.includes('job_list'));
-      if (hasChild) return reply2('Done');
+      if (hasChild) return reply('Done');
       return toolCall('delegate-1', 'delegate_task', { tasks: [{ objective: 'Sweep the repo' }] });
     },
   };
@@ -720,9 +658,9 @@ test('a follow-up turn reuses the child and updates its card', async (t) => {
   const asking: Provider = {
     async complete(request) {
       asks.push(request);
-      if (isChild(request)) return reply2('follow-up answer');
+      if (isChild(request)) return reply('follow-up answer');
       if (request.messages.some((message) => message.content.includes('follow-up answer')))
-        return reply2('Done');
+        return reply('Done');
       return toolCall('send-1', 'send_message', {
         childSessionId: child.childSessionId,
         message: 'What did you find in the config?',
@@ -790,8 +728,8 @@ test('a child cannot drive a sibling, and an unknown child is refused by name', 
             message.content.includes('No sub-agent of this session'),
           )
         )
-          return reply2('Done');
-        if (sent) return reply2('Done');
+          return reply('Done');
+        if (sent) return reply('Done');
         sent = true;
         return toolCall('send-1', 'send_message', {
           childSessionId: outsider.id,
@@ -829,7 +767,7 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
     async complete(request) {
       if (isChild(request)) {
         childTurns++;
-        if (childTurns > 1) return reply2('second turn answer');
+        if (childTurns > 1) return reply('second turn answer');
         // The first turn never finishes on its own: the parent's run end has to stop it.
         return new Promise((_resolve, reject) => {
           request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
@@ -839,8 +777,8 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
       }
       if (request.messages.some((message) => message.role === 'tool'))
         return request.messages.some((message) => message.content.includes('second turn answer'))
-          ? reply2('Done')
-          : reply2('Done');
+          ? reply('Done')
+          : reply('Done');
       return toolCall('delegate-1', 'delegate_task', {
         tasks: [{ objective: 'Slow work' }],
         wait: false,
@@ -876,10 +814,10 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
     store,
     provider: {
       async complete(request) {
-        if (isChild(request)) return reply2('second turn answer');
+        if (isChild(request)) return reply('second turn answer');
         if (request.messages.some((message) => message.content.includes('second turn answer')))
-          return reply2('Done');
-        if (asked) return reply2('Done');
+          return reply('Done');
+        if (asked) return reply('Done');
         asked = true;
         return toolCall('send-1', 'send_message', {
           childSessionId: child.childSessionId,
@@ -949,7 +887,7 @@ test('a message reaches a child that is still working, as a correction to its tu
     async complete(request) {
       if (isChild(request)) {
         childTurns++;
-        return childTurns === 1 ? toolCall('hold-1', 'hold_open', {}) : reply2('answered');
+        return childTurns === 1 ? toolCall('hold-1', 'hold_open', {}) : reply('answered');
       }
       parentTurns.push(String(request.messages.at(-1)?.content ?? ''));
       if (parentTurns.length === 1)
@@ -970,7 +908,7 @@ test('a message reaches a child that is still working, as a correction to its tu
           message: 'Change direction: only look at the config.',
         });
       }
-      return reply2('Done');
+      return reply('Done');
     },
   };
   const agent = new Agent({
@@ -1016,7 +954,7 @@ test('a child delegated in an earlier process is resumed from the log, not re-de
       if (isChild(request)) {
         childTurns++;
         childPrompts.push(String(request.messages.at(-1)?.content ?? ''));
-        return childTurns === 1 ? report('first sweep done') : reply2('resumed answer');
+        return childTurns === 1 ? report('first sweep done') : reply('resumed answer');
       }
       parentRound++;
       // Run one: delegate, then finish.
@@ -1024,7 +962,7 @@ test('a child delegated in an earlier process is resumed from the log, not re-de
         return toolCall('delegate-1', 'delegate_task', {
           tasks: [{ objective: 'Sweep the configuration' }],
         });
-      if (parentRound === 2) return reply2('Done');
+      if (parentRound === 2) return reply('Done');
       // Run two, in a process that never saw that delegation: look, then ask.
       if (parentRound === 3) return toolCall('list-1', 'job_list', {});
       if (parentRound === 4)
@@ -1032,7 +970,7 @@ test('a child delegated in an earlier process is resumed from the log, not re-de
           childSessionId,
           message: 'What did the config contain?',
         });
-      return reply2('Done');
+      return reply('Done');
     },
   };
   const run = () =>
@@ -1205,7 +1143,7 @@ test('a child keeps working across a restart however much it spent before', asyn
     usage: { inputTokens: 15_000, outputTokens: 0 },
   });
   const heavyReply = (text: string): ModelResponse => ({
-    ...reply2(text),
+    ...reply(text),
     usage: { inputTokens: 15_000, outputTokens: 0 },
   });
   const provider: Provider = {
@@ -1226,7 +1164,7 @@ test('a child keeps working across a restart however much it spent before', asyn
         return toolCall('delegate-1', 'delegate_task', {
           tasks: [{ objective: 'Sweep the repository' }],
         });
-      if (parentRound === 2) return reply2('Done');
+      if (parentRound === 2) return reply('Done');
       if (parentRound === 3)
         return toolCall('send-1', 'send_message', { childSessionId, message: 'One more thing' });
       if (parentRound === 4)

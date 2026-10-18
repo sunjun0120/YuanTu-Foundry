@@ -13,7 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
@@ -38,10 +38,10 @@ import {
 } from '../packages/search/types.ts';
 import { toolCardModel } from '../apps/desktop/tool-card-model.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('backend preparation and enumeration cannot grant a search a fresh time budget', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-deadline-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-search-deadline-');
   await writeFile(path.join(root, 'target.ts'), 'TARGET\n');
   const service = new WorkspaceSearchService(workspaceAccess(new Workspace(root)), {
     indexDirectory: null,
@@ -78,8 +78,7 @@ test('backend preparation and enumeration cannot grant a search a fresh time bud
 });
 
 test('a backend fallback keeps the enumeration coverage it was given', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-fallback-coverage-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-search-fallback-coverage-');
   await writeFile(path.join(root, 'target.ts'), 'TARGET\n');
   const access = workspaceAccess(new Workspace(root));
   const service = new WorkspaceSearchService(access, { indexDirectory: null });
@@ -132,8 +131,7 @@ test('a backend fallback keeps the enumeration coverage it was given', async (t)
 });
 
 test('service search honours a declared include scope instead of scanning unrelated files', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-scope-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-search-scope-');
   await writeFile(path.join(root, 'a-unrelated.txt'), 'TARGET\n');
   await writeFile(path.join(root, 'b-target.ts'), 'TARGET\n');
   const service = new WorkspaceSearchService(workspaceAccess(new Workspace(root)), {
@@ -161,8 +159,7 @@ test('service search honours a declared include scope instead of scanning unrela
  * against the built-in scanner on the same fixture and requires the two to agree match for match.
  */
 test('a subdirectory or file scope keeps workspace-relative results and include filters', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search-path-scope-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-search-path-scope-');
   await mkdir(path.join(root, 'src'));
   await writeFile(path.join(root, 'src', 'target.ts'), 'TARGET\n');
   await writeFile(path.join(root, 'src', 'other.ts'), 'TARGET\n');
@@ -231,8 +228,7 @@ async function filledTree(
 }
 
 test('a file named by include is found even when the tree is larger than the walk budget', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-include-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-include-');
   // 1005 filler files before the target, which is more candidates than the legacy budget holds.
   await filledTree(root, 1005, { marker: 'z-target.ts' });
   await writeFile(path.join(root, 'z-target.ts'), 'const marker = "NEEDLE-IN-TARGET";\n');
@@ -252,8 +248,7 @@ test('a file named by include is found even when the tree is larger than the wal
 });
 
 test('rejected files do not consume the candidate budget, but they are still visited entries', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-order-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-order-');
   await filledTree(root, 1200, { marker: 'z-target.ts' });
   await writeFile(path.join(root, 'z-target.ts'), 'the needle\n');
   const workspace = new Workspace(root);
@@ -287,8 +282,7 @@ test('rejected files do not consume the candidate budget, but they are still vis
 });
 
 test('a provably irrelevant directory is not even listed, and the result says so by staying complete', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-pruned-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-pruned-');
   await filledTree(root, 1200, { marker: 'z-target.ts' });
   const workspace = new Workspace(root);
   const access: WorkspaceAccess = {
@@ -317,8 +311,7 @@ test('a provably irrelevant directory is not even listed, and the result says so
 });
 
 test('a tree larger than the candidate budget reports an incomplete scan instead of a result', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-limit-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-limit-');
   await filledTree(root, 1005, { marker: 'z-target.ts' });
   const workspace = new Workspace(root);
   const access: WorkspaceAccess = {
@@ -348,8 +341,7 @@ test('a tree larger than the candidate budget reports an incomplete scan instead
 });
 
 test('a search whose zero matches came from a cut scan never says the scope has no such text', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-zero-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-zero-');
   await filledTree(root, 1005);
   const tools = createTools(root);
   const result = await tools.execute(
@@ -377,8 +369,7 @@ test('a search whose zero matches came from a cut scan never says the scope has 
 });
 
 test('the entry budget is recorded as its own reason, separately from the candidate budget', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-entries-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-entries-');
   for (let index = 0; index < 20; index++)
     await writeFile(path.join(root, `file-${index}.ts`), 'export const x = 1;\n');
   const workspace = new Workspace(root);
@@ -425,8 +416,7 @@ test('a planned file list carries no enumeration claim it cannot support', async
 });
 
 test('the coverage a search reports is a complete, closed payload', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-payload-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-payload-');
   await writeFile(path.join(root, 'a.txt'), 'alpha\n');
   const tools = createTools(root);
   const result = await tools.execute(
@@ -540,8 +530,7 @@ test('glob semantics and directory pruning stay exactly as the tool defined them
 });
 
 test('a pruned include search still finds files under the surviving directories', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-prune-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-prune-');
   await mkdir(path.join(root, 'src', 'nested'), { recursive: true });
   await mkdir(path.join(root, 'docs'), { recursive: true });
   await writeFile(path.join(root, 'src', 'nested', 'a.ts'), 'the needle\n');
@@ -572,8 +561,7 @@ test('a pruned include search still finds files under the surviving directories'
 });
 
 test('an excluded path is never enumerated, whatever the include pattern says', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-credentials-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coverage-credentials-');
   await mkdir(path.join(root, 'node_modules'));
   await writeFile(path.join(root, 'node_modules', 'dep.ts'), 'the needle\n');
   await writeFile(path.join(root, '.env'), 'the needle\n');

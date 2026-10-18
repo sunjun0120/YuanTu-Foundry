@@ -13,6 +13,7 @@ import { SessionController } from '../packages/client/session-controller.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { httpFixture } from './http-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 test('OpenAI stream can exceed 4 MB of discarded reasoning and still deliver a short answer', async (t) => {
   const url = await httpFixture(t, (_, res) => {
@@ -52,13 +53,7 @@ test('OpenAI stream can exceed 4 MB of discarded reasoning and still deliver a s
 });
 
 test('Agent persists visible text when a model stream fails after a delta', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-partial-response-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-partial-response-');
   const agent = new Agent({
     store,
     tools: createTools(root),

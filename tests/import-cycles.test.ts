@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { tempRoot } from './temp-fixture.ts';
 
 const gate = fileURLToPath(new URL('../scripts/check-import-cycles.mjs', import.meta.url));
 const cases = [
@@ -69,8 +69,7 @@ const cases = [
 
 for (const item of cases) {
   test(item.name, async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cycle-gate-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cycle-gate-');
     const sources = path.join(root, 'packages', 'fixture');
     await mkdir(sources, { recursive: true });
     for (const [name, body] of Object.entries(item.files))

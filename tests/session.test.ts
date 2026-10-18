@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { CarrierService } from '../packages/carrier/service.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from session-management.test.ts ----
 
@@ -267,8 +268,7 @@ test('session search uses the text projection and never indexes image payloads',
   // Regression: `list()` ran json_extract + instr over every message body — the same blob that holds
   // base64 image data — for every session on every search. It is an FTS5 index over a text-only
   // projection column now.
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-session-search-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-session-search-');
   const file = path.join(root, 'sessions.sqlite');
   const store = new SessionStore(file);
   const session = store.create(root);
@@ -332,8 +332,7 @@ test('session search reads the text projection, not the message body', async (t)
   // The decisive property of the projection: search no longer consults `messages.body` at all. The old
   // query ran json_extract over that blob, so rewriting a body changed what search returned — and
   // every search parsed the same blob that carries base64 image data.
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-session-projection-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-session-projection-');
   const file = path.join(root, 'sessions.sqlite');
   const store = new SessionStore(file);
   const session = store.create(root);
@@ -362,8 +361,7 @@ test('session search reads the text projection, not the message body', async (t)
 });
 
 test('session search scopes to one workspace and keeps displayContent precedence', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-session-scope-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-session-scope-');
   const store = new SessionStore(path.join(root, 'sessions.sqlite'));
   const first = store.create(root);
   store.append(first.id, {

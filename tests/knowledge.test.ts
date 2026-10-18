@@ -24,10 +24,10 @@ import {
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { Message, ModelRequest } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('concurrent pins competing for the last document slot preserve the quota and whole indexes', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-knowledge-quota-race-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-knowledge-quota-race-');
   const file = path.join(root, 'knowledge.sqlite');
   const store = new KnowledgeStore(file);
   try {
@@ -105,8 +105,7 @@ test('a file rewrite between reading and committing is refreshed as a complete s
 // ---- merged from knowledge.test.ts ----
 
 test('pinned project documents are searchable, refreshed and removable without indexing unselected files', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-index-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-doc-index-');
   const db = path.join(root, 'knowledge.sqlite');
   await writeFile(path.join(root, 'selected.md'), '部署：运行 npm run deploy。');
   await writeFile(path.join(root, 'unselected.md'), 'private-unselected-marker');
@@ -132,8 +131,7 @@ test('pinned project documents are searchable, refreshed and removable without i
  * and only the best chunk per document is returned.
  */
 test('search ranks by relevance instead of insertion recency and dedupes chunks', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-doc-rank-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-doc-rank-');
   const store = new KnowledgeStore(path.join(root, 'knowledge.sqlite'));
   // A short, dense match pinned FIRST, so it is the oldest row.
   await writeFile(path.join(root, 'dense.md'), `Dense\n${'alpha '.repeat(40)}end`);
@@ -166,8 +164,7 @@ test('search ranks by relevance instead of insertion recency and dedupes chunks'
 });
 
 test('indexing refuses paths outside workspace, links, credentials and oversized files', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-index-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-index-');
   const store = new KnowledgeStore(path.join(root, 'knowledge.sqlite'));
   await writeFile(path.join(root, '.env'), 'KEY=secret');
   await writeFile(path.join(root, 'huge.md'), 'x'.repeat(33000));
@@ -184,8 +181,7 @@ test('indexing refuses paths outside workspace, links, credentials and oversized
  * genuinely absent source file may drop the entry now.
  */
 test('a refresh failure keeps the index entry; only a removed file unpins it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-index-refresh-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-index-refresh-');
   const store = new KnowledgeStore(path.join(root, 'knowledge.sqlite'));
   const doc = path.join(root, 'guide.md');
   await writeFile(doc, '部署使用 npm run deploy。');

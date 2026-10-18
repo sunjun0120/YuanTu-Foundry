@@ -15,8 +15,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TOOL_RENDERERS, type ToolResultOutput } from '../packages/protocol/tool-result.ts';
 import type { Tool, ToolContext } from '../packages/protocol/index.ts';
@@ -24,14 +23,14 @@ import { commandTool } from '../packages/tools/command.ts';
 import { fileTools } from '../packages/tools/files.ts';
 import { toolCardModel } from '../apps/desktop/tool-card-model.ts';
 import { toolCardView } from '../apps/desktop/tool-cards.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const context = (): ToolContext => ({
   signal: new AbortController().signal,
   approve: async () => true,
 });
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tool-cards-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-tool-cards-');
   return root;
 }
 function toolNamed(tools: readonly Tool[], name: string): Tool {

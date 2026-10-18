@@ -31,6 +31,7 @@ import { LspClient } from '../packages/lsp/client.ts';
 import { LspManager } from '../packages/lsp/manager.ts';
 import { attachDiagnostics, lspTools } from '../packages/lsp/tools.ts';
 import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from lsp.test.ts ----
 
@@ -189,8 +190,7 @@ test('text edits apply from the end so earlier ranges stay valid', () => {
 });
 
 test('the server catalog merges .yuantu/lsp.json and can disable built-ins', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspcfg-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-lspcfg-');
   await mkdir(path.join(root, '.yuantu'), { recursive: true });
   await writeFile(
     path.join(root, '.yuantu', 'lsp.json'),
@@ -219,8 +219,7 @@ test('the server catalog merges .yuantu/lsp.json and can disable built-ins', asy
 });
 
 test('an explicit command clears an inherited package binding', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lsp-override-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-lsp-override-');
   await mkdir(path.join(root, '.yuantu'), { recursive: true });
   // A local package that would otherwise win: the built-in catalog names it and the resolver prefers its
   // real entry over the command on Windows.
@@ -265,8 +264,7 @@ test('configured uppercase extension resolves its server', async (t) => {
    * `.r` into the same string therefore cannot reorder two servers into a third rule — the first declared
    * one answers, which is what the resolved catalog's own order says.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspcase-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-lspcase-');
   await mkdir(path.join(root, '.yuantu'), { recursive: true });
   await writeFile(
     path.join(root, '.yuantu', 'lsp.json'),
@@ -308,8 +306,7 @@ test('configured uppercase extension resolves its server', async (t) => {
 });
 
 test('a malformed .yuantu/lsp.json is reported and the built-in catalog still works', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lspbad-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-lspbad-');
   await mkdir(path.join(root, '.yuantu'), { recursive: true });
   await writeFile(path.join(root, '.yuantu', 'lsp.json'), '{not json');
   const { servers, problems } = await resolveServers(root);
@@ -1147,8 +1144,7 @@ test('a WorkspaceEdit that also moves a file is refused whole, not half-applied'
 
 test('a WorkspaceEdit that reaches out of the workspace through a link is refused, not previewed', async (t) => {
   const { root, tools } = await workspace(t);
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-lsp-outside-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-lsp-outside-');
   const secret = 'OUTSIDE-THE-WORKSPACE-SECRET\n';
   await writeFile(path.join(outside, 'secret.fake'), secret);
   /**

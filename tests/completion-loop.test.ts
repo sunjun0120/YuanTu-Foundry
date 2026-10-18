@@ -13,13 +13,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /** A provider that plays a fixed script and keeps every request, so the feedback can be inspected. */
 function scripted(
@@ -53,12 +52,7 @@ function requestText(request: ModelRequest): string {
 }
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-completion-loop-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-completion-loop-');
   return { root, store, session: store.create(root) };
 }
 

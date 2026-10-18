@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, access, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { readFile, access, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { tempRoot } from './temp-fixture.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 test('public test and coverage entrypoints retain the isolated scheduler', async () => {
@@ -46,8 +46,7 @@ test('development check entrypoints include isolation lint', async () => {
 // Pending execution while the user has paused validation. These fixtures exercise the actual
 // native merger so line-only approximations and duplicate source denominators cannot pass.
 test('coverage unions complementary source ranges before enforcing aggregate floors', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-union-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-coverage-union-');
   const raw = path.join(directory, 'raw');
   await mkdir(raw);
   const source = 'function a() { return 1; }\nfunction b() { return 2; }\na(); b();\n';
@@ -96,8 +95,7 @@ test('coverage unions complementary source ranges before enforcing aggregate flo
 });
 
 test('coverage refuses absent raw evidence instead of reporting vacuous success', async (t) => {
-  const raw = await mkdtemp(path.join(tmpdir(), 'yuantu-coverage-missing-'));
-  t.after(() => rm(raw, { recursive: true, force: true }));
+  const raw = await tempRoot(t, 'yuantu-coverage-missing-');
   const result = spawnSync(
     process.execPath,
     ['--expose-internals', path.join(root, 'scripts/test-coverage.mjs'), '--aggregate', raw],

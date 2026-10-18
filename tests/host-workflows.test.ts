@@ -16,6 +16,7 @@ import { commandPid } from './process-pid-fixture.ts';
 import { sessionHandlers } from '../apps/agent-host/handlers/sessions.ts';
 import { startRun } from '../apps/agent-host/run-start.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from host-workflows.test.ts ----
 
@@ -1073,8 +1074,7 @@ test('Host persists Responses continuation and replays it after process restart'
 // ---- merged from host.test.ts ----
 
 test('JSONL Host accepts approvals, returns run results and cancels a streaming request', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-host-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-host-');
   let step = 0;
   const url = await httpFixture(t, (_, res) => {
     /**
@@ -1237,8 +1237,7 @@ test('JSONL Host accepts approvals, returns run results and cancels a streaming 
  * after which run.cancel silently no-opped for a live run and further runs were admitted.
  */
 test('a second concurrent run.start is rejected instead of starting a second run', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-host-race-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-host-race-');
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('done')));
   const child = spawn(
     process.execPath,

@@ -1,16 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   discoverTests,
   normalizeRepoPath,
   partitionTests,
 } from '../scripts/test-execution-policy.ts';
+import { tempRoot } from './temp-fixture.ts';
 test('discovery and default parallel partition retain resource metadata', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-policy-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-policy-');
   await mkdir(path.join(root, 'tests/nested'), { recursive: true });
   for (const file of ['b.test.ts', 'a.test.ts', 'helper.ts', 'nested/c.test.ts'])
     await writeFile(path.join(root, 'tests', file), 'export {};');

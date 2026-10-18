@@ -10,9 +10,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { HookRegistry, ToolRegistry } from '../packages/tools/registry.ts';
@@ -21,20 +18,10 @@ import type { StepEndReason, StepRecord } from '../packages/protocol/steps.ts';
 import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { connectClient, listeningHost } from './listening-host-fixture.ts';
 import { httpFixture } from './http-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 /** A tool call that fails, so a round produces a result without needing real workspace state. */
+import { reply, toolCall } from './provider-fixture.ts';
 const missingFile = (id: string): ModelResponse =>
   toolCall(id, 'read_file', { path: 'not-there.txt' });
 
@@ -43,13 +30,7 @@ async function fixture(
   provider: Provider,
   options: { hooks?: HookRegistry } = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-step-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-step-');
   const agent = new Agent({
     store,
     provider,

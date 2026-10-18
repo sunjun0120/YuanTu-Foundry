@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { lastRuntimeSnapshot } from '../packages/core/runtime-context.ts';
@@ -26,6 +24,7 @@ import {
   renderCompletionFeedback,
   type CompletionDecisionInput,
 } from '../packages/core/completion.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 test('only an assertion failure is handed back to the model as repair work', () => {
   assert.equal(isRepairableFailure('assertion-failed'), true);
@@ -330,13 +329,7 @@ test('the repeat counter starts at one and needs a previous fingerprint to grow'
 });
 
 test('the completion contract travels in the conversation, so a compaction cannot swallow the definition', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-completion-announce-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-completion-announce-');
   await writeFile(path.join(root, 'out.txt'), 'verified content');
   const agent = new Agent({
     store,

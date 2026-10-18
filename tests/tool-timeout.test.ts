@@ -15,11 +15,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import {
   TOOL_DEADLINE_DEFAULTS,
@@ -31,6 +28,7 @@ import {
 import type { Tool, ToolCall, ToolContext, ToolResult } from '../packages/protocol/index.ts';
 import { replayProvider } from './replay.ts';
 import { projectRoot } from './process-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const approve = async () => true;
 const call = (name: string): ToolCall => ({ id: `call-${name}`, name, arguments: {} });
@@ -61,12 +59,7 @@ function cooperative(name: string, seen: { reason?: unknown; aborted?: boolean }
 }
 
 test('a tool that never answers is cut off, and the model is told what happened', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tool-timeout-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-tool-timeout-');
   const tools = new ToolRegistry();
   tools.register(tool('hang', () => new Promise<ToolResult>(() => {})));
   tools.deadlines = { defaultMs: 80 };

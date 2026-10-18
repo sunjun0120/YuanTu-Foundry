@@ -14,13 +14,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { parseArgs } from '../apps/shared/args.ts';
 import { loadHookRegistry } from '../apps/shared/hooks.ts';
 import { projectRoot } from './process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 // ---- merged from extension-hooks.test.ts ----
 
@@ -185,13 +185,7 @@ const reply = (text = 'Finished'): ModelResponse => ({
 });
 /** An agent wired to a shared host-level hook registry, as the real host wires it. */
 async function fixture(t: test.TestContext, provider: Provider, hooks?: HookRegistry) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hooks-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-hooks-');
   const events: AgentEvent[] = [];
   const tools = createTools(root, undefined, 'standalone', hooks);
   const agent = new Agent({
@@ -373,13 +367,7 @@ test('a slow but successful close hook no longer fails a completed run', async (
       closed = true;
     },
   });
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hooks-slow-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-hooks-slow-');
   const agent = new Agent({
     store,
     provider: {

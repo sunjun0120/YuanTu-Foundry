@@ -14,8 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import {
@@ -25,6 +24,7 @@ import {
 } from '../packages/core/subagent-subprocess.ts';
 import { pausedSkip } from './product-scope-skip.ts';
 import type { ResolvedSubAgentStartRequest } from '../packages/core/subagent-providers.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /** A start request as the coordinator would build it, with only what this provider reads. */
 function request(
@@ -133,8 +133,7 @@ test('the refusal never recommends explore through a provider that cannot enforc
 
 for (const stream of ['stdout', 'stderr', 'combined'] as const) {
   test(`subprocess ${stream} over the byte budget cannot turn an early result into success`, async (t) => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-output-budget-'));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    const directory = await tempRoot(t, 'yuantu-output-budget-');
     const script = path.join(directory, 'fixture.mjs');
     const target =
       stream === 'combined' ? '(index % 2 ? process.stdout : process.stderr)' : `process.${stream}`;
@@ -167,8 +166,7 @@ for (const stream of ['stdout', 'stderr', 'combined'] as const) {
 }
 
 test('subprocess output exactly at its byte budget preserves a final Unicode result', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-output-boundary-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-output-boundary-');
   const script = path.join(directory, 'fixture.mjs');
   const final =
     '\n' +

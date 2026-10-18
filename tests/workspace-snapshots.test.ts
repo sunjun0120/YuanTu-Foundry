@@ -17,6 +17,7 @@ import {
   verifySnapshotStable,
 } from '../packages/workspaces/snapshot.ts';
 import { repositoryIdentity } from '../packages/workspaces/git.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * Freezing a working directory into a baseline.
@@ -397,8 +398,7 @@ test('a directory that is not a repository root is refused, and a shared binding
       return true;
     },
   );
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-not-a-repo-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-not-a-repo-');
   await assert.rejects(
     freezeSnapshot({ projectRoot: outside, signal: new AbortController().signal }),
     (error: unknown) => {

@@ -1,14 +1,14 @@
 // @test-serial windows-sandbox: Runs actual Windows Host commands with token and ACL enforcement.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { listeningHost, connectClient } from './listening-host-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { quoteWindowsArgument } from '../packages/tools/sandbox-windows.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const windows = { skip: process.platform !== 'win32' && 'needs Windows', timeout: 90000 };
 async function waitFor<T>(read: () => Promise<T | undefined>, timeout = 30000): Promise<T> {
@@ -47,8 +47,7 @@ test(
             ]),
       );
     });
-    const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-windows-host-outside-'));
-    t.after(() => rm(outside, { recursive: true, force: true }));
+    const outside = await tempRoot(t, 'yuantu-windows-host-outside-');
     await writeFile(path.join(outside, 'sentinel'), 'host-readable-marker');
     const server = createServer((socket) => socket.end('positive-network-control'));
     await new Promise<void>((resolve, reject) => {

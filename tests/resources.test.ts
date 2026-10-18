@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, utimes } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, symlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { discoverSkills, expandSkill } from '../packages/resources/skills.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { loadInstructions } from '../packages/tools/instructions.ts';
@@ -16,12 +15,12 @@ import {
   resetRepoMapCache,
 } from '../packages/tools/repo-map.ts';
 import type { Message, ModelRequest, Provider, ToolContext } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from resources.test.ts ----
 
 async function root(t: test.TestContext) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'yuantu-resources-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await tempRoot(t, 'yuantu-resources-');
   return dir;
 }
 /** The skills a workspace declares itself, without the ones the application ships. */
@@ -189,8 +188,7 @@ test('skills reject linked directories and extension manifests reject unknown ex
 // ---- merged from instructions.test.ts ----
 
 async function fixture(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-instructions-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-instructions-');
   return root;
 }
 
@@ -238,8 +236,7 @@ test('inherits one selected file per directory from root to target', async (t) =
 
 test('rejects targets outside the workspace and through directory links', async (t) => {
   const root = await fixture(t);
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-instructions-outside-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-instructions-outside-');
   await writeFile(path.join(outside, 'AGENTS.md'), 'outside instructions');
 
   assert.throws(() => loadInstructions(root, outside), /outside workspace/i);
@@ -328,8 +325,7 @@ test('rejects non-files and malformed UTF-8 instruction sources', async (t) => {
 // ---- merged from repo-map.test.ts ----
 
 async function fixture2(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-repo-map-');
   await mkdir(path.join(root, 'src'), { recursive: true });
   await writeFile(
     path.join(root, 'src', 'app.ts'),
@@ -379,8 +375,7 @@ test('repo map outlines each language and skips ignored, unsupported and linked 
   );
 
   // A workspace-relative symlink must not be followed out of the tree.
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-out-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-repo-map-out-');
   await writeFile(path.join(outside, 'escaped.ts'), 'export class Escaped {}\n');
   await symlink(outside, path.join(root, 'linked')).catch(() => undefined);
   assert.equal(
@@ -390,8 +385,7 @@ test('repo map outlines each language and skips ignored, unsupported and linked 
 });
 
 test('repo map output degrades within its budget instead of overflowing', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-budget-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-repo-map-budget-');
   for (let i = 1; i <= 40; i++)
     await writeFile(
       path.join(root, `module-${i}.ts`),
@@ -415,8 +409,7 @@ test('repo map output degrades within its budget instead of overflowing', async 
 });
 
 test('repo map keeps file and head limits when gathering deeply nested sources', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-limits-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-repo-map-limits-');
   const nested = path.join(root, 'src', 'a', 'b', 'c');
   await mkdir(nested, { recursive: true });
   await writeFile(
@@ -441,8 +434,7 @@ test('repo map keeps file and head limits when gathering deeply nested sources',
 
 test('prompt outline excludes credentials and linked source directories', async (t) => {
   const root = await fixture2(t);
-  const outside = await mkdtemp(path.join(tmpdir(), 'yuantu-repo-map-linked-'));
-  t.after(() => rm(outside, { recursive: true, force: true }));
+  const outside = await tempRoot(t, 'yuantu-repo-map-linked-');
   await writeFile(path.join(outside, 'escaped.ts'), 'export class Escaped {}\n');
   await symlink(
     outside,

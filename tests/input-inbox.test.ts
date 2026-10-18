@@ -22,23 +22,13 @@ import { ToolRegistry, HookRegistry } from '../packages/tools/registry.ts';
 import { SESSION_EVENT_TYPES, foldPendingInputs } from '../packages/storage/events.ts';
 import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { reply } from './provider-fixture.ts';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 
 async function fixture(t: test.TestContext, provider: Provider) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-inbox-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-inbox-');
   const agent = new Agent({
     store,
     provider,
@@ -131,13 +121,7 @@ test('an input the run never delivered is settled with a reason instead of vanis
 });
 
 test('clearing the inbox works with no run holding the session', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-inbox-clear-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-inbox-clear-');
   const agent = new Agent({
     store,
     provider: { complete: async () => reply() },

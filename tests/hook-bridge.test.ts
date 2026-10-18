@@ -7,6 +7,7 @@
  * fixtures need no shell of their own and behave the same on every platform.
  */
 import test from 'node:test';
+import { tempRoot, storeFixture } from './temp-fixture.ts';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -27,20 +28,14 @@ import {
 } from '../packages/resources/hook-trust.ts';
 import { resolveRunLimits } from '../packages/protocol/settings.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { ModelResponse, Provider, ToolContext } from '../packages/protocol/index.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { toolCall } from './provider-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 /** A Node command line the platform shell will accept, with both paths quoted. */
@@ -341,12 +336,7 @@ test('a read-only or planning run does not run external hooks', async (t) => {
 });
 
 test('a real Agent run refuses a gated write and shows the model the hook reason', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-hook-bridge-');
   await mkdir(path.join(root, '.claude'), { recursive: true });
   await writeFile(path.join(root, 'hook.mjs'), SCRIPTS.blocking);
   await writeFile(
@@ -392,10 +382,7 @@ test('the bridge is off when the setting says so, and a workspace without config
   assert.equal(result.isError, false, 'a disabled bridge is not a broken workspace');
   assert.deepEqual(await seen(), [], 'nothing ran, so nothing new was recorded');
 
-  const bare = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
-  t.after(async () => {
-    await rm(bare, { recursive: true, force: true });
-  });
+  const bare = await tempRoot(t, 'yuantu-hook-bridge-');
   const none = createTools(
     bare,
     undefined,
@@ -408,10 +395,7 @@ test('the bridge is off when the setting says so, and a workspace without config
 });
 
 test('malformed config names the offending file', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-hook-bridge-');
   await mkdir(path.join(root, '.yuantu'), { recursive: true });
   const write = (value: string) => writeFile(path.join(root, '.yuantu/hooks.json'), value);
   const load = () => loadHookDeclarations(root);
@@ -446,10 +430,7 @@ test('malformed config names the offending file', async (t) => {
 });
 
 test('the two config locations add up, and Claude’s seconds become our milliseconds', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-hook-bridge-');
   await mkdir(path.join(root, '.claude'), { recursive: true });
   await mkdir(path.join(root, '.yuantu'), { recursive: true });
   await writeFile(
@@ -517,10 +498,7 @@ test('one hook set is installed per event, no matter how many declarations it ho
 });
 
 test('somebody else’s settings.json is read for its hooks and left otherwise alone', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-hook-bridge-');
   await mkdir(path.join(root, '.claude'), { recursive: true });
   // Every key here but `hooks` belongs to Claude Code, including a hook event this build does not
   // implement. Refusing to start over them would make the bridge useless in the projects that have hooks.
@@ -551,10 +529,7 @@ test('somebody else’s settings.json is read for its hooks and left otherwise a
 });
 
 test('a guard declared inside a hook set runs, and is taken back out with it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-bridge-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-hook-bridge-');
   const tools = createTools(root);
   t.after(() => tools.close().catch(() => undefined));
   const dispose = tools.extensions.register({ guard: () => ({ deny: 'not in this hook set' }) });
@@ -631,8 +606,7 @@ test('trusting the declarations enables them, and the explicit switch trusts wit
   assert.equal(denied.isError, true, 'a trusted hook runs and decides');
   assert.match(denied.content, /no writes to src\/ without a review/);
 
-  const state = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-trust-'));
-  t.after(() => rm(state, { recursive: true, force: true }));
+  const state = await tempRoot(t, 'yuantu-hook-trust-');
   const notices: string[] = [];
   const forced = createTools(root, undefined, 'session-1', new HookRegistry(), {
     ...hookBridgeSettings({ YUANTU_STATE_DIR: state, YUANTU_TRUST_WORKSPACE_HOOKS: '1' }),

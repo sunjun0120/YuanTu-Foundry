@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { connectCodeProcess } from '../packages/tools/code-process.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const script = new URL('../scripts/build-program-runner.mjs', import.meta.url).href;
 
@@ -13,8 +13,7 @@ test(
   'standalone runner has a bounded deployment surface and performs real worker RPC',
   { timeout: 15000 },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-runner-build-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-runner-build-');
     const { buildProgramRunner } = await import(script);
     await buildProgramRunner(root);
     assert.deepEqual((await readdir(root)).sort(), [
@@ -109,8 +108,7 @@ test(
 );
 
 test('runner build refuses an output directory containing unrelated files', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-runner-dirty-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-runner-dirty-');
   await writeFile(path.join(root, 'secret.txt'), 'private fixture');
   const { buildProgramRunner } = await import(script);
   await assert.rejects(buildProgramRunner(root), /Unexpected runner output/);

@@ -12,13 +12,13 @@ import { CLI_COMMANDS, CLI_MAINTENANCE_COMMANDS } from '../apps/shared/cli-comma
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { projectRoot, runCli } from './process-fixture.ts';
 import { pausedSkip } from './product-scope-skip.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test(
   'CLI completes read/edit/test cycle through HTTP and can reopen its session without credentials',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-');
     await writeFile(path.join(root, 'value.txt'), 'bad');
     await writeFile(
       path.join(root, 'verify.cjs'),
@@ -110,8 +110,7 @@ test(
   'CLI creates and inspects durable task specifications without model credentials',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-cli-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-task-cli-');
     const db = path.join(root, 'sessions.sqlite');
     const store = new SessionStore(db);
     const session = store.create(root);
@@ -206,8 +205,7 @@ test(
      * it does send cannot help, because the gate lives in the handler it does not use. It started exactly the run the
      * Host defers, leaving the deferred approval to be consumed by whatever verification came next.
      */
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-retry-cli-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-task-retry-cli-');
     const db = path.join(root, 'sessions.sqlite');
     const store = new SessionStore(db);
     const session = store.create(root);
@@ -250,8 +248,7 @@ test(
   'CLI reviews a persisted task approval without model credentials',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-review-cli-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-task-review-cli-');
     const db = path.join(root, 'sessions.sqlite');
     const store = new SessionStore(db);
     const session = store.create(root);
@@ -357,8 +354,7 @@ test(
   'noninteractive CLI denies writes unless explicitly allowed',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-denial-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-denial-');
     let step = 0;
     const url = await httpFixture(t, (body, res) => {
       if (step++ === 0)
@@ -389,8 +385,7 @@ for (const effect of ['deny', 'ask'])
     'CLI permission ' + effect + ' overrides allow-command and blocks effects',
     { skip: pausedSkip('cli') },
     async (t) => {
-      const root = await mkdtemp(path.join(tmpdir(), 'yuantu-policy-cli-'));
-      t.after(() => rm(root, { recursive: true, force: true }));
+      const root = await tempRoot(t, 'yuantu-policy-cli-');
       await writeFile(
         path.join(root, 'effect.cjs'),
         'require("fs").writeFileSync("effect.txt","executed");',
@@ -436,8 +431,7 @@ test(
   'a CLI invocation converges child runs an earlier crashed invocation left running',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-child-runs-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-child-runs-');
     const file = path.join(root, '.yuantu', 'sessions.sqlite');
     const store = new SessionStore(file);
     const parent = store.create(root);
@@ -509,8 +503,7 @@ test(
   'CLI names why a run failed, in the line a person reads and in the JSON a program reads',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-failure-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-failure-');
     const url = await httpFixture(t, (_body, res) => {
       res.writeHead(503, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'fixture is down' } }));
@@ -542,8 +535,7 @@ test(
   'CLI reports a re-sent request instead of looking stuck',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-retry-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-retry-');
     let calls = 0;
     const url = await httpFixture(t, (_body, res) => {
       calls++;
@@ -661,8 +653,7 @@ test(
      * finishes; the loop reads the goal back from the durable log, starts round 2 with the continuation prompt,
      * and stops when that round records the goal complete. Without the driver there would be a single `result`.
      */
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-goal-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-goal-');
     const prompts: string[] = [];
     let step = 0;
     const url = await httpFixture(t, (body, res) => {
@@ -765,8 +756,7 @@ test(
   'a CLI run with no declared window discovers its budget and completes',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-auto-capacity-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-auto-capacity-');
     let probes = 0;
     const url = await httpFixture(t, (body, res, _headers, requestUrl) => {
       if (requestUrl === '/v1/models') {
@@ -816,8 +806,7 @@ test(
   'the CLI prints where the round’s window went, once, on stderr',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-budget-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-budget-');
     const url = await httpFixture(t, (_body, res) => sendFrames(res, frames('Done.')));
     const result = await runCli(['run', 'Say done', '--workspace', root], {
       YUANTU_BASE_URL: url,
@@ -853,8 +842,7 @@ test(
   'the CLI usage line reports the cache the provider reported, and only that',
   { skip: pausedSkip('cli') },
   async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-cache-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-cache-');
     const env = (url: string) => ({
       YUANTU_BASE_URL: url,
       YUANTU_MODEL: 'fixture-model',
@@ -900,8 +888,7 @@ test(
      * history, and it never echoes the key in either direction — a command that can print a secret puts it in
      * scrollback and in whatever collects that.
      */
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cli-credentials-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-cli-credentials-');
     const file = path.join(root, 'credentials.json');
     const env = { YUANTU_CREDENTIALS_FILE: file };
     const stored = await runCli(['credentials', 'set', 'anthropic'], env, 'sk-ant-from-stdin\n');

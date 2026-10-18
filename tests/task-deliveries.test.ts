@@ -8,20 +8,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { pendingTaskDeliveries, recordTaskDelivery } from '../packages/core/task-deliveries.ts';
 import { TaskScheduler } from '../apps/agent-host/scheduler.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-delivery-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-task-delivery-');
   return { root, store };
 }
 /** A task that is due now: the interval trigger arms it in the future, so the moment is pulled forward. */

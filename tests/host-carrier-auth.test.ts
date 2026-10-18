@@ -5,8 +5,7 @@ import { createServer, type Socket } from 'node:net';
 import { StringDecoder } from 'node:string_decoder';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { access, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { listeningHost, connectClient, connectSocket } from './listening-host-fixture.ts';
@@ -15,6 +14,7 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
 import { socketTransport } from '../packages/client/host-transport.ts';
 import { environmentProblems, isCredentialSetting } from '../packages/protocol/settings.ts';
 import { toolEnvironment } from '../packages/tools/environment.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 function repliesFrom(
   socket: Socket,
@@ -307,8 +307,7 @@ test('a client redacts its explicit TCP credential from an untrusted peer error'
 
 for (const configuration of ['missing-token', 'malformed-token', 'non-loopback'] as const) {
   test(`the Host rejects ${configuration} before opening its database`, async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-host-auth-startup-'));
-    t.after(() => rm(root, { recursive: true, force: true }));
+    const root = await tempRoot(t, 'yuantu-host-auth-startup-');
     const db = path.join(root, 'must-not-open.sqlite');
     const credential =
       configuration === 'missing-token'

@@ -17,6 +17,7 @@ import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createProvider } from '../packages/providers/index.ts';
 import type { HostTransport } from '../packages/client/host-transport.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * The user-role messages a person actually typed.
@@ -480,8 +481,7 @@ test('abnormal exit while stopping is reported as failed shutdown', async (t) =>
 });
 
 test('unresponsive Host shutdown is bounded and reports forced termination', async (t) => {
-  const temp = await mkdtemp(path.join(tmpdir(), 'yuantu-forced-'));
-  t.after(() => rm(temp, { recursive: true, force: true }));
+  const temp = await tempRoot(t, 'yuantu-forced-');
   const marker = path.join(temp, 'child.txt');
   const { client } = await setup(
     t,

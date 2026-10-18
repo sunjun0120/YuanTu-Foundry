@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build, type BuildOptions } from 'esbuild';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { tempRoot } from './temp-fixture.ts';
 
 const { commonJsModuleUrl } = await import(
   new URL('../scripts/commonjs-module-url.mjs', import.meta.url).href
@@ -22,8 +23,7 @@ async function bundleTo(options: BuildOptions) {
 }
 
 test('CommonJS desktop bundle loads native providers and their packaged helper', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-native-bundle-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-native-bundle-');
   const desktop = path.join(root, 'dist/desktop');
   const assets = path.join(root, 'dist/packages/tools/windows-sandbox');
   await mkdir(desktop, { recursive: true });
@@ -61,8 +61,7 @@ test('CommonJS desktop bundle loads native providers and their packaged helper',
 });
 
 test('CommonJS desktop regex search loads its packaged worker from another cwd', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-search #%-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-search #%-');
   const desktop = path.join(root, 'dist/desktop');
   const assets = path.join(root, 'dist/packages/tools/windows-sandbox');
   const workspace = path.join(root, 'workspace');

@@ -19,7 +19,6 @@ import type { PreStepContext } from '../packages/tools/registry.ts';
 import type {
   AgentEvent,
   ModelRequest,
-  ModelResponse,
   Provider,
   ReasoningEffort,
 } from '../packages/protocol/index.ts';
@@ -29,13 +28,8 @@ import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { anthropicThinkingBudget } from '../packages/providers/effort.ts';
 import { httpFixture, sendFrames } from './http-fixture.ts';
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 /** A one-tool round first, so the run reaches round 1 where the interesting override happens. */
+import { reply } from './provider-fixture.ts';
 function toolThenText(name = 'read_file'): Provider {
   let turn = 0;
   return {

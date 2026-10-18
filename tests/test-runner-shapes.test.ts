@@ -14,10 +14,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tempRoot } from './temp-fixture.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RUNNER = path.join(root, 'scripts', 'run-tests.mjs');
@@ -34,8 +34,7 @@ function runRunner(args: string[]) {
 }
 
 async function fixtures(t: test.TestContext) {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-runner-shapes-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-runner-shapes-');
   const runs = path.join(directory, 'runs.test.mjs');
   await writeFile(runs, "import test from 'node:test';\ntest('a case that runs', () => {});\n");
   const exits = path.join(directory, 'exits.test.mjs');

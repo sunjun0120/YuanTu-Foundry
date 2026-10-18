@@ -20,6 +20,8 @@ import type {
   Provider,
   Questioner,
 } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { reply, toolCall } from './provider-fixture.ts';
 
 async function setup(t: test.TestContext, handler: Parameters<typeof httpFixture>[1]) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-'));
@@ -389,13 +391,7 @@ test('the plan mode a session is in is read from its newest plan row', async (t)
    * mode. Every other status is a recorded decision — submitted, approved, rejected, or the abandonment a dead run
    * leaves behind — and continuing to plan after one of those would ignore what was already decided.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-plan-mode-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-plan-mode-');
   assert.equal(store.planMode(session.id), null, 'a session with no plan is not planning');
   const plan = store.createPlan(session.id);
   assert.deepEqual(store.planMode(session.id), { planId: plan.id });
@@ -684,31 +680,13 @@ test('a rejected plan cannot be executed and the phase cannot be smuggled', asyn
  * lift happens at a step boundary rather than inside the asking round, and that a declined or missing answer
  * leaves the run exactly as read-only as it was.
  */
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  finishReason: 'stop',
-  toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const PLAN_ARGS = { title: 'Add the loader', summary: 'Two steps', steps: ['Write it', 'Test it'] };
 async function planRun(
   t: test.TestContext,
   script: ModelResponse[],
   options: { question?: Questioner; approve?: () => Promise<boolean> } = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-exit-plan-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-exit-plan-');
   const plan = store.createPlan(session.id);
   const events: AgentEvent[] = [];
   const requests: string[] = [];

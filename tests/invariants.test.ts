@@ -35,18 +35,14 @@ import type {
 } from '../packages/protocol/index.ts';
 import { isSummaryRequest as isSharedSummaryRequest } from './summary-request.ts';
 import { emptyRequestTiming, type SessionStatistics } from '../packages/protocol/statistics.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { toolCall } from './provider-fixture.ts';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 /**
@@ -62,13 +58,7 @@ async function fixture(
   provider: Provider,
   extra: Record<string, unknown> = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-invariants-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-invariants-');
   const events: AgentEvent[] = [];
   const tools = createTools(root);
   const agent = new Agent({

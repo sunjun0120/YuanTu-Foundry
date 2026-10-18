@@ -11,6 +11,7 @@ import { lineFramer, socketTransport } from '../packages/client/host-transport.t
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { connectClient, listeningHost } from './listening-host-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('socket connection errors reach transport consumers and cannot look like clean exits', async () => {
   const socket = new Socket();
@@ -171,8 +172,7 @@ test('a Host that only listens is a real Host: the same dispatch answers on it',
 });
 
 test('the Host refuses an address it cannot parse before it serves anything', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-bad-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-carrier-bad-');
   const child = spawn(process.execPath, [hostPath, '--workspace', root, '--listen', 'not-a-port'], {
     cwd: root,
     env: { ...process.env, YUANTU_WORKFLOWS: 'false' },

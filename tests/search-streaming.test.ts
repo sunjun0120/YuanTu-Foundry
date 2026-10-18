@@ -12,14 +12,14 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm, readFile, utimes } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { Workspace } from '../packages/tools/files.ts';
 import { cachedLineIndex, clearLineIndexCache, readRange } from '../packages/search/lines.ts';
 import { scanText, searchOptions } from '../packages/search/text.ts';
 import type { Coverage, FileEntry, WorkspaceAccess } from '../packages/search/types.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * This suite is about the *built-in* scanner’s accounting — real bytes read, files read to EOF, the reason a
@@ -36,8 +36,7 @@ const TAIL_MARKER = 'TAIL-MARKER-XY-12345';
 const TAIL_FIXTURE = 'x\n'.repeat(130_000) + `${TAIL_MARKER}\n`;
 
 async function workspaceFor(t: test.TestContext, files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-streaming-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-streaming-');
   for (const [name, content] of Object.entries(files))
     await writeFile(path.join(root, name), content, 'utf8');
   return root;

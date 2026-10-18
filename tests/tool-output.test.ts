@@ -17,8 +17,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Ajv } from 'ajv';
 import { SessionController } from '../packages/client/session-controller.ts';
@@ -34,6 +33,7 @@ import type {
   ToolResult,
 } from '../packages/protocol/index.ts';
 import { projectRoot } from './process-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 /**
  * This suite is about the *built-in* scanner’s accounting — real bytes read, files read to EOF, the reason a
@@ -57,8 +57,7 @@ const context = (): ToolContext => ({
   approve: async () => true,
 });
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tool-output-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-tool-output-');
   return root;
 }
 function toolNamed(tools: readonly Tool[], name: string): Tool {

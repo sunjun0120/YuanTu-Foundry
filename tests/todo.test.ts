@@ -28,17 +28,12 @@ import type {
   TodoItem,
   ToolResult,
 } from '../packages/protocol/index.ts';
+import { toolCall } from './provider-fixture.ts';
 
 const reply = (text: string): ModelResponse => ({
   text,
   finishReason: 'stop',
   toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const list = (...items: [string, TodoItem['status']][]): TodoItem[] =>

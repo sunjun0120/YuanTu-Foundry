@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, rename } from 'node:fs/promises';
+import { writeFile, rename } from 'node:fs/promises';
 import { statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { markdownBlocks } from '../apps/desktop/markdown-blocks.ts';
 import { StatCache, statKey } from '../packages/platform/stat-cache.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('a streaming answer splits into blocks at blank lines, and a fence keeps its own blank lines', () => {
   const text = [
@@ -39,8 +39,7 @@ test('a streaming answer splits into blocks at blank lines, and a fence keeps it
 });
 
 test('a stat cache answers an unchanged file without reading it, and sees a rewrite or a rename', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-stat-cache-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await tempRoot(t, 'yuantu-stat-cache-');
   const file = path.join(directory, 'SKILL.md');
   await writeFile(file, 'one');
   const cache = new StatCache<string>(2);

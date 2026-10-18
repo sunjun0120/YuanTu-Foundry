@@ -1,18 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { tempRoot } from './temp-fixture.ts';
 
 const harness = new URL('../benchmarks/coding-evaluation/', import.meta.url);
 async function moduleFor(name: string): Promise<any> {
   return import(new URL(name, harness).href).catch(() => ({}));
 }
 async function temporary(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-coding-eval-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-coding-eval-');
   return root;
 }
 async function example() {

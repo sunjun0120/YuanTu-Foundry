@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { collectTurnChanges } from '../apps/desktop/turn-changes.ts';
 import type { StoredFileChange } from '../packages/storage/session-schema.ts';
 import type { FileChange, Message } from '../packages/protocol/index.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 const file = (path: string, added = 1): FileChange => ({
   path,
@@ -105,8 +104,7 @@ test('legacy receipts are displayed at their question end without duplicating jo
 });
 
 test('pre-log migrated runs use their receipts instead of stacking every card at the history end', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-legacy-turn-changes-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-legacy-turn-changes-');
   const database = path.join(root, 'sessions.sqlite');
   const legacy = new DatabaseSync(database);
   legacy.exec(`
@@ -166,8 +164,7 @@ test('pre-log migrated runs use their receipts instead of stacking every card at
 });
 
 test('file changes retain their finished run boundary across reload, independent of later questions', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-turn-changes-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-turn-changes-');
   const database = path.join(root, 'sessions.sqlite');
   const store = new SessionStore(database);
   const session = store.create(root);

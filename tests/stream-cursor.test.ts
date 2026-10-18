@@ -14,8 +14,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -24,23 +22,12 @@ import { SessionController } from '../packages/client/session-controller.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { connectClient, listeningHost } from './listening-host-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import type { AgentEvent, ModelResponse, Provider } from '../packages/protocol/index.ts';
-
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
+import type { AgentEvent, Provider } from '../packages/protocol/index.ts';
+import { tempRoot, storeFixture } from './temp-fixture.ts';
+import { reply } from './provider-fixture.ts';
 
 async function fixture(t: test.TestContext, provider: Provider) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cursor-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-cursor-');
   const events: AgentEvent[] = [];
   const agent = new Agent({
     store,
@@ -206,10 +193,7 @@ test('a client that missed a fact finds out and catches up without the Host rest
 });
 
 test('a cursor is a position in the log, and it only ever moves forward', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cursor-mark-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-cursor-mark-');
   // The mark is local bookkeeping, so it needs no Host — which is exactly why it can be pinned this directly.
   const client = new AgentHostClient({
     nodePath: process.execPath,

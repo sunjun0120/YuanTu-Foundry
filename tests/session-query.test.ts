@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import {
@@ -14,13 +13,8 @@ import {
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
-import type {
-  ModelRequest,
-  ModelResponse,
-  Provider,
-  Tool,
-  ToolContext,
-} from '../packages/protocol/index.ts';
+import type { ModelRequest, Provider, Tool, ToolContext } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * Session retrieval: the model can search the workspace's own history and walk a session's log.
@@ -37,6 +31,7 @@ import type {
  *   excludes them, and a session from another workspace refused by name;
  * - **read-only** — no `permission`, so a planning run keeps both tools.
  */
+import { reply, toolCall } from './provider-fixture.ts';
 
 interface Fixture {
   root: string;
@@ -49,12 +44,7 @@ interface Fixture {
   context: ToolContext;
 }
 async function fixture(t: test.TestContext): Promise<Fixture> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-session-query-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-session-query-');
   // A workspace is a path: the store resolves what it is given, so a literal like "ws" would come back as
   // `<cwd>/ws` and compare unequal to the value this test passes in. The temp directory is the real thing.
   const workspace = root;
@@ -624,19 +614,6 @@ test('a running agent is offered both tools and can search an earlier session', 
     'the excerpt is in the tool result the model reads',
   );
   assert.equal(round, 2);
-});
-
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
 });
 
 test('an isolated child queries its logical project history and refuses other projects', async (t) => {

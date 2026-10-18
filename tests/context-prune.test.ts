@@ -8,8 +8,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import {
@@ -22,19 +20,14 @@ import {
   worthPruning,
 } from '../packages/core/prune.ts';
 import { recentStart } from '../packages/core/shrink.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { SPILL_DIRECTORY } from '../packages/tools/spill.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /** The shipped policy, restated so a change to the defaults has to be a deliberate change to a test as well. */
+import { reply } from './provider-fixture.ts';
 const POLICY = { thresholdChars: 32_000, headChars: 12_000, tailChars: 4_000 } as const;
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const useTool = (id: string, tag: string): ModelResponse => ({
   text: '',
   finishReason: 'tool_calls',
@@ -223,13 +216,7 @@ test('the characters pruning frees are counted in code points, not UTF-16 units'
 });
 
 test('an oversized result loses its middle for the model while the transcript keeps every character', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-prune-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-prune-');
   const tools = new ToolRegistry();
   const text = (tag: string) => `${tag}${tag.repeat(60_000)}`;
   tools.register({
@@ -361,13 +348,7 @@ test('an oversized result loses its middle for the model while the transcript ke
 });
 
 test('a conversation that is nowhere near the window is left alone', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-prune-early-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-prune-early-');
   const tools = new ToolRegistry();
   tools.register({
     name: 'noisy',

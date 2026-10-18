@@ -21,21 +21,10 @@ import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
-import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
+import type { Provider } from '../packages/protocol/index.ts';
+import { reply, toolCall as call, scriptedProvider } from './provider-fixture.ts';
 
 const AT = '2026-01-01T00:00:00.000Z';
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  finishReason: 'stop',
-  toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const call = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 
 const OBJECTIVE = 'Produce the marker';
 
@@ -170,11 +159,7 @@ test('a paused goal is the user’s, and a verified contract does not reopen or 
     action: 'create',
     goal: { ...newGoal({ objective: OBJECTIVE }, AT), status: 'paused' },
   });
-  const provider: Provider = {
-    async complete() {
-      return reply('Done.');
-    },
-  };
+  const provider = scriptedProvider(reply('Done.'));
   const agent = new Agent({ store, tools, approve: async () => true, provider });
   const result = await agent.run({ sessionId: session.id, taskId: task.id, prompt: 'Do the work' });
   assert.equal(result.completion?.state, 'verified');

@@ -9,10 +9,10 @@ import { SCHEMA_VERSION, SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { projectRoot } from './process-fixture.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('durable tasks support session-scoped CRUD, filtering, and validation', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tasks-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-tasks-');
   const file = path.join(root, 'tasks.sqlite');
   const store = new SessionStore(file);
   const session = store.create(root);
@@ -116,8 +116,7 @@ test('task attempts are append-only, linked to runs, and enforce status transiti
 });
 
 test('interrupted task recovery preserves live owners and recovers dead attempts', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-recovery-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-task-recovery-');
   const file = path.join(root, 'sessions.sqlite');
   const store = new SessionStore(file);
   const session = store.create(root);
@@ -143,8 +142,7 @@ test('interrupted task recovery preserves live owners and recovers dead attempts
 });
 
 test('schema v3 migrates to the current schema with an empty durable task journal', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-v3-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-v3-');
   const file = path.join(root, 'legacy.sqlite');
   const db = new DatabaseSync(file);
   db.exec(`
@@ -246,8 +244,7 @@ test('reopening crashed run records unknown outcome and never repeats an operati
 });
 
 test('schema v2 journal migrates to the current schema without losing legacy snapshots', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-v2-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-v2-');
   const file = path.join(root, 'legacy.sqlite');
   const db = new DatabaseSync(file);
   db.exec(`
@@ -294,8 +291,7 @@ test('schema v2 journal migrates to the current schema without losing legacy sna
   }
 });
 test('opening an unsupported database version refuses without downgrading the schema', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-schema-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-schema-');
   const file = path.join(root, 'future.sqlite');
   const db = new DatabaseSync(file);
   db.exec('PRAGMA user_version=99');

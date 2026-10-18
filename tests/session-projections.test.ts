@@ -19,13 +19,9 @@ import { emptyStatistics, emptyRequestTiming } from '../packages/protocol/statis
 import type { SessionStatistics } from '../packages/protocol/statistics.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import type {
-  Message,
-  ModelResponse,
-  RunResult,
-  Usage,
-  Provider,
-} from '../packages/protocol/index.ts';
+import type { Message, RunResult, Usage, Provider } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { reply, toolCall } from './provider-fixture.ts';
 
 // ---- merged from session-projections.test.ts ----
 
@@ -39,12 +35,6 @@ import type {
  * rather than an empty state, and a fold that throws is not swallowed into a shorter view.
  */
 
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const event = (type: string, seq: number, data: Record<string, unknown> = {}): SessionEvent => ({
   seq,
   sessionId: 's',
@@ -264,13 +254,7 @@ test('a fold that throws is not swallowed into a shorter view', () => {
 });
 
 test('the messages projection is the transcript a session read returns', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-projection-messages-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-projection-messages-');
   store.append(session.id, { role: 'user', content: 'hello' });
   store.append(session.id, { role: 'assistant', content: 'hi', toolCalls: [] });
   const messages: Message[] = store.stateOf<Message[]>('messages', session.id);
@@ -581,32 +565,13 @@ test('a database written before the log existed gets its run and compaction fact
  * lose its cards, or gain stale "running" ones, when it upgrades).
  */
 
-const reply2 = (text = 'Done'): ModelResponse => ({
-  text,
-  toolCalls: [],
-  finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-
 test('a delegated run records the child identity and outcome in the parent log', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cards-run-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-cards-run-');
   const provider: Provider = {
     async complete(request) {
       if (request.system.includes('You are a sub-agent delegated by a parent agent'))
-        return reply2('child report');
-      if (request.messages.some((message) => message.role === 'tool')) return reply2('Done');
+        return reply('child report');
+      if (request.messages.some((message) => message.role === 'tool')) return reply('Done');
       return toolCall('delegate-1', 'delegate_task', { tasks: [{ objective: 'Investigate' }] });
     },
   };

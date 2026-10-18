@@ -31,6 +31,7 @@ import { nextCalendarRun, latestCalendarRun } from '../packages/formats/calendar
 /** Han characters, for the cases that assert which language a generated string is in. */
 const HAN = /\p{Script=Han}/u;
 import type { AcceptanceSpec } from '../packages/core/acceptance.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from task-spec.test.ts ----
 
@@ -859,8 +860,7 @@ test('event triggers match by name and optionally by source task', () => {
 // ---- merged from acceptance.test.ts ----
 
 async function workspace(t: test.TestContext): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-acceptance-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-acceptance-');
   return root;
 }
 

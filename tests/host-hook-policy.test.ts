@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { tempRoot } from './temp-fixture.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -156,8 +157,7 @@ test('real Host planning lifecycle never launches workspace hooks, including shu
   let continuedId = '',
     explicitId = '';
   // Trust is read from the user state directory, so the Host gets its own, outside the workspace.
-  const state = await mkdtemp(path.join(tmpdir(), 'yuantu-hook-trust-'));
-  t.after(() => rm(state, { recursive: true, force: true }));
+  const state = await tempRoot(t, 'yuantu-hook-trust-');
   const host = await listeningHost(
     t,
     {

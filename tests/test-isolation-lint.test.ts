@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inspectIsolation, lintTestIsolation } from '../scripts/test-isolation-lint.ts';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { tempRoot } from './temp-fixture.ts';
 
 test('conditional skips explain their reason without rejecting reason variables or disabled skips', () => {
   for (const expression of [
@@ -109,8 +109,7 @@ test('filesystem aliases and user-global writes are detected without banning pat
 });
 
 test('requested entries include local test helpers transitively', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lint-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-lint-');
   await mkdir(path.join(root, 'tests'));
   await writeFile(path.join(root, 'tests/one.test.ts'), "import './helper.ts';");
   await writeFile(path.join(root, 'tests/helper.ts'), "export * from './nested.ts';");

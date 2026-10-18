@@ -29,27 +29,10 @@ import {
 } from '../packages/protocol/goals.ts';
 import type { Goal } from '../packages/protocol/goals.ts';
 import { RUN_SCOPED_TOOLS } from '../packages/tools/registry.ts';
-import type {
-  AgentEvent,
-  ModelResponse,
-  Provider,
-  Tool,
-  ToolContext,
-} from '../packages/protocol/index.ts';
+import type { AgentEvent, Provider, Tool, ToolContext } from '../packages/protocol/index.ts';
+import { reply, toolCall } from './provider-fixture.ts';
 
 const AT = '2026-01-01T00:00:00.000Z';
-const reply = (text = 'Done'): ModelResponse => ({
-  text,
-  finishReason: 'stop',
-  toolCalls: [],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const toolCall = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
 const goal = (over: Partial<Goal> = {}): Goal => ({
   ...newGoal({ objective: 'Ship the loader' }, AT),
   ...over,
@@ -244,9 +227,7 @@ test('a turn the runtime started may report on the goal but not re-aim it', asyn
   assert.equal(state!.status, 'completed');
 });
 
-test('the tools write through the seam, and the fold reads back what they wrote', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-goal-tools-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+test('the tools write through the seam, and the fold reads back what they wrote', async () => {
   let state: Goal | null = null;
   const written: string[] = [];
   const context: ToolContext = {

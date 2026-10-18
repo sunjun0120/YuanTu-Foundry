@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { listeningHost, connectClient } from './listening-host-fixture.ts';
@@ -12,6 +10,7 @@ import {
   setBackgroundPolicy,
   backgroundAuthority,
 } from '../packages/core/background-deliveries.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('a cold automatic wake retains its read-only authority after a permission update', async (t) => {
   const url = await httpFixture(t, (_body, response) => sendFrames(response, frames('done')));
@@ -234,8 +233,7 @@ test('automatic wake budget cancels a stalled provider and cancellation pauses f
 test('a slow session hook cannot admit a second main run before the first slot is reserved', async (t) => {
   const url = await httpFixture(t, (_body, res) => sendFrames(res, frames('Done')));
   let ids: string[] = [];
-  const hookRoot = await mkdtemp(path.join(tmpdir(), 'yuantu-trusted-hook-'));
-  t.after(() => rm(hookRoot, { recursive: true, force: true }));
+  const hookRoot = await tempRoot(t, 'yuantu-trusted-hook-');
   const hook = path.join(hookRoot, 'slow-hook.mjs');
   writeFileSync(
     hook,

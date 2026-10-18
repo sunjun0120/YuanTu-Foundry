@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { partitionIsolatedTests, testResources } from '../scripts/test-resource-policy.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 test('resource declarations are explicit, validated, and only accepted in the file header', () => {
   assert.deepEqual(
@@ -24,8 +25,7 @@ test('resource declarations are explicit, validated, and only accepted in the fi
 });
 
 test('new files default to parallel and only actual resource declarations make them serial', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-resource-policy-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-resource-policy-');
   await mkdir(path.join(root, 'tests'));
   await writeFile(path.join(root, 'tests', 'plain.test.ts'), 'export {};');
   await writeFile(

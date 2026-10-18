@@ -11,6 +11,7 @@ import { runtimeSnapshotMessage } from '../packages/core/runtime-context.ts';
 import { frames, httpFixture, sendFrames, systemText } from './http-fixture.ts';
 import { generateSessionTitle } from '../packages/core/session-title.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 test('title output budget leaves room for reasoning before a short visible title', async (t) => {
   const url = await httpFixture(t, (body, res) => {
@@ -130,13 +131,7 @@ async function titleHost(t: test.TestContext, url: string): Promise<AgentHostCli
 }
 
 test('a machine-written first message does not name the session', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-title-store-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-title-store-');
   /**
    * A runtime snapshot is a user-role message the runtime wrote to itself. It used to be what the session was
    * named after — the sidebar showed `<runtime-context source="memory"> Machine-written snapshot …` — because
@@ -162,12 +157,7 @@ test('a machine-written first message does not name the session', async (t) => {
 });
 
 test('generated title is saved once and a manual title always wins', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-title-store-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-title-store-');
   const generated = store.create(root);
   store.append(generated.id, { role: 'user', content: '原始问题' });
   assert.equal(store.canGenerateTitle(generated.id), true);

@@ -11,15 +11,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { PermissionPolicy } from '../packages/core/permissions.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, ToolSpec } from '../packages/protocol/index.ts';
+import { tempRoot, storeFixture } from './temp-fixture.ts';
 
 const names = (specs: readonly ToolSpec[]): string[] => specs.map((spec) => spec.name).sort();
 const policyOf = (
@@ -27,10 +24,7 @@ const policyOf = (
 ) => new PermissionPolicy({ version: 1, rules });
 
 test('a policy that denies a kind trims that kind and leaves the rest', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-trim-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-trim-');
   const tools = createTools(root);
   const all = names(tools.specs());
   const noExternal = names(
@@ -53,10 +47,7 @@ test('a policy that denies a kind trims that kind and leaves the rest', async (t
 });
 
 test("the desktop's read-only mode sends what it will allow", async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-trim-mode-'));
-  t.after(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
+  const root = await tempRoot(t, 'yuantu-trim-mode-');
   const tools = createTools(root);
   const policy = new PermissionPolicy(permissionPolicyForMode('read-only'));
   const trimmed = tools.specs({ policy });
@@ -72,13 +63,7 @@ test("the desktop's read-only mode sends what it will allow", async (t) => {
 });
 
 test('a tool the policy denies is refused even when the model calls it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-trim-refuse-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-trim-refuse-');
   const seen: string[][] = [];
   let turn = 0;
   const policy = policyOf([

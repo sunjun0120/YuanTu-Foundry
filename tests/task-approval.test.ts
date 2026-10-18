@@ -8,6 +8,7 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
 import { dueTasks } from '../packages/protocol/task-trigger.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 test('an unattended approval survives restart and grants only the exact operation once', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-store-'));
@@ -86,13 +87,7 @@ test('an unattended approval survives restart and grants only the exact operatio
 });
 
 test('a stale approval view cannot authorize a replacement request', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-stale-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-stale-');
   const task = store.createTask(session.id, {
     title: 'Changing request',
     trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
@@ -122,13 +117,7 @@ test('a stale approval view cannot authorize a replacement request', async (t) =
 });
 
 test('rearming a task invalidates an identical old approval request', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-rearm-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-rearm-');
   const trigger = { kind: 'interval' as const, enabled: true, everyMinutes: 60 };
   const task = store.createTask(session.id, { title: 'Repeat request', trigger });
   const approval = {
@@ -215,13 +204,7 @@ test('a consumed approval pauses an interrupted event task for outcome review', 
 });
 
 test('scheduler finalization preserves an unknown approved-operation outcome', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-finalize-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-finalize-');
   const trigger = { kind: 'interval' as const, enabled: true, everyMinutes: 5 };
   const task = store.createTask(session.id, { title: 'Guarded effect', trigger });
   const attempt = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
@@ -253,13 +236,7 @@ test('scheduler finalization preserves an unknown approved-operation outcome', a
   assert.deepEqual(dueTasks([recorded], new Date(Date.now() + 3600_000)), []);
 });
 test('a rejected event approval stays paused until its trigger is rearmed', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-reject-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { root, store, session } = await storeFixture(t, 'yuantu-task-approval-reject-');
   const trigger = { kind: 'event' as const, enabled: true, on: 'session.created' as const };
   const task = store.createTask(session.id, { title: 'Event task', trigger });
   const attempt = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'event' });
@@ -474,13 +451,7 @@ test('a scheduled write waits for review, stays paused across Host restart, then
 });
 
 test('approved tool request ignores JSON property order but still checks approval detail', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-order-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-order-');
   const task = store.createTask(session.id, {
     title: 'Order-independent write',
     trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
@@ -521,13 +492,7 @@ test('approved tool request ignores JSON property order but still checks approva
 });
 
 test('an approval is bound to its operation kind and tool, not only its arguments', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-bound-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-bound-');
   const task = store.createTask(session.id, {
     title: 'Bound operation',
     trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
@@ -559,13 +524,7 @@ test('an approval is bound to its operation kind and tool, not only its argument
 });
 
 test('a pending approval cannot be resolved while the run that raised it is still live', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-window-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-window-');
   const trigger = { kind: 'interval' as const, enabled: true, everyMinutes: 60 };
   const task = store.createTask(session.id, { title: 'Narrow window', trigger });
   const attempt = store.startTaskAttempt(session.id, task.id, { kind: 'run', trigger: 'interval' });
@@ -594,13 +553,7 @@ test('a pending approval cannot be resolved while the run that raised it is stil
 });
 
 test('an oversized approval request is refused before it is stored', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-size-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-size-');
   const task = store.createTask(session.id, {
     title: 'Oversized request',
     trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
@@ -624,13 +577,7 @@ test('an oversized approval request is refused before it is stored', async (t) =
 });
 
 test('only a live scheduled run may register an approval request', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-inactive-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-inactive-');
   const task = store.createTask(session.id, {
     title: 'Inactive request',
     trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
@@ -654,13 +601,7 @@ test('only a live scheduled run may register an approval request', async (t) => 
 });
 
 test('a finalizing run does not clear a grant made under a later revision', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-task-approval-revision-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const session = store.create(root);
+  const { store, session } = await storeFixture(t, 'yuantu-task-approval-revision-');
   const trigger = { kind: 'interval' as const, enabled: true, everyMinutes: 60 };
   const task = store.createTask(session.id, { title: 'Revision guard', trigger });
   const approval = {

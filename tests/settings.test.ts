@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { ModelSettingsStore, testModelConnection } from '../apps/desktop/model-settings.ts';
@@ -23,6 +22,7 @@ import { SandboxEnvironment } from '../apps/desktop/sandbox-environment.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { PermissionSettingsStore } from '../apps/desktop/permission-settings-store.ts';
 import { format, locale, onLocaleChange, setLocale, t, translate } from '../apps/desktop/i18n.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from model-settings.test.ts ----
 
@@ -42,8 +42,7 @@ const cipher = {
   },
 };
 test('legacy settings migrate to a named vision-capable catalog while preserving encrypted credentials', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-catalog-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-catalog-');
   const file = path.join(root, 'settings.json');
   await writeFile(
     file,
@@ -65,8 +64,7 @@ test('legacy settings migrate to a named vision-capable catalog while preserving
   assert.doesNotMatch(JSON.stringify(store.view), /legacy-secret|encryptedApiKey/);
 });
 test('named connections persist independent keys, selection and vision settings across restart', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-catalog-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-catalog-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   const first = store.prepare({
@@ -140,8 +138,7 @@ test('named connections persist independent keys, selection and vision settings 
   assert.doesNotMatch(await readFile(file, 'utf8'), /first-private|second-private/);
 });
 test('model limits preserve omitted fields and support explicit clearing across restart', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-limit-edit-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-limit-edit-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   await store.save(
@@ -188,8 +185,7 @@ test('model limits preserve omitted fields and support explicit clearing across 
 });
 
 test('saving a smaller window validates preserved advanced limits before writing', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-limit-merge-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-limit-merge-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   await store.save(
@@ -216,8 +212,7 @@ test('saving a smaller window validates preserved advanced limits before writing
 });
 
 test('model runtime limits persist per connection and reach the Host environment', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-model-limits-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-model-limits-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   const configured = store.prepare({
@@ -381,8 +376,7 @@ test('catalog boundary rejects invalid identities, metadata and secret-bearing c
     assert.throws(() => parseSettingsCommand(input));
 });
 test('catalog views redact every connection credential and failed writes preserve the active catalog', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-catalog-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-catalog-');
   const file = path.join(root, 'settings.json');
   let failEncryption = false;
   const store = new ModelSettingsStore(
@@ -427,8 +421,7 @@ test('catalog views redact every connection credential and failed writes preserv
   assert.equal(await readFile(file, 'utf8'), originalBytes);
 });
 test('model settings persist encrypted credentials, reopen without env and never expose saved key', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settings-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-settings-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   await store.load();
@@ -458,8 +451,7 @@ test('model settings persist encrypted credentials, reopen without env and never
   );
 });
 test('unavailable secret storage refuses persistence rather than writing plaintext', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settings-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-settings-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, { ...cipher, available: () => false }, {});
   await store.load();
@@ -471,8 +463,7 @@ test('unavailable secret storage refuses persistence rather than writing plainte
 });
 
 test('OpenAI settings survive restart and changing protocol requires a new credential', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settings-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-settings-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   await store.save(
@@ -539,8 +530,7 @@ test('settings boundary validates payload and connection test uses supplied endp
 });
 
 test('one endpoint saves multiple models with one shared key and independent limits', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-model-group-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-model-group-');
   const file = path.join(root, 'settings.json');
   const store = new ModelSettingsStore(file, cipher, {});
   const command = parseSettingsCommand({
@@ -667,8 +657,7 @@ test('one endpoint saves multiple models with one shared key and independent lim
 });
 
 test('existing v2 connections with identical credentials appear as one editable endpoint', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-v2-model-group-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-v2-model-group-');
   const file = path.join(root, 'settings.json');
   const rows = ['first', 'second'].map((model) => ({
     connectionId: model,
@@ -801,8 +790,7 @@ test('the attachment reader answers in the same language, from the same dictiona
 });
 
 test('UI settings persist across reload and malformed files fall back to defaults', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-ui-settings-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-ui-settings-');
   const file = path.join(root, 'ui-settings.json');
   const store = new UiSettingsStore(file);
   await store.load();
@@ -896,8 +884,7 @@ test('permission modes map to fixed policies', () => {
 });
 
 test('permission mode defaults to ask and persists only fixed policies', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-permission-settings-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-permission-settings-');
   const file = path.join(root, 'permission-policy.json');
   const store = new PermissionSettingsStore(file);
   await store.load();
@@ -921,8 +908,7 @@ test('permission mode defaults to ask and persists only fixed policies', async (
 });
 
 test('a chosen permission policy is left alone when it is already valid', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-permission-settings-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-permission-settings-');
   const file = path.join(root, 'permission-policy.json');
   // Compact canonical JSON rather than the store's pretty form: a rewrite would be visible in these bytes.
   const compact = JSON.stringify(permissionPolicyForMode('read-only'));

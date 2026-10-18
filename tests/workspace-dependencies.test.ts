@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { nodeDependencyWarning } from '../packages/workspaces/dependencies.ts';
+import { tempRoot } from './temp-fixture.ts';
 
 async function project(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-dependencies-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const root = await tempRoot(t, 'yuantu-dependencies-');
   return root;
 }
 

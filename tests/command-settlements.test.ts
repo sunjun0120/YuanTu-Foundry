@@ -27,17 +27,12 @@ import type {
 } from '../packages/protocol/index.ts';
 
 /** Printed at the end of the output, so "the tail survived" is a claim about the *end* of what it said. */
+import { toolCall as call } from './provider-fixture.ts';
 const MARKER = 'SECRET-OUTPUT-42';
 const reply = (text: string): ModelResponse => ({
   text,
   toolCalls: [],
   finishReason: 'stop',
-  usage: { inputTokens: 10, outputTokens: 5 },
-});
-const call = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
-  text: '',
-  finishReason: 'tool_calls',
-  toolCalls: [{ id, name, arguments: args }],
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 /** A provider whose answers are scripted per run, recording the system prompt each request carried. */
