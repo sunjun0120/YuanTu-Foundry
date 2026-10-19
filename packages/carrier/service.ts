@@ -216,7 +216,12 @@ export class CarrierService {
           void this.refreshSessionNames().catch(() => {});
           return;
         }
-        if (event.sessionId !== this.controller.sessionId) return;
+        if (event.sessionId !== this.controller.sessionId) {
+          // Another session's run starting or ending changes its row (`activeRun`), not the one on screen.
+          if (event.type === 'run.started' || event.type === 'run.finished')
+            void this.refreshSessionNames().catch(() => {});
+          return;
+        }
         this.backgroundPanel.wake();
         if (event.type === 'run.started') void this.refreshSessionNames().catch(() => {});
         // The process record grows during a run, and a decision is only worth reading once it has been made:

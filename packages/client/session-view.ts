@@ -53,6 +53,14 @@ export interface ContextBudgetView {
   policyProblem?: string;
 }
 
+/** A run of a session that is not the one on screen; see `SessionSnapshot.otherRuns`. */
+export interface OtherRun {
+  sessionId: string;
+  runId: string;
+  approvals: PendingApproval[];
+  questions: PendingQuestion[];
+}
+
 export interface PendingApproval {
   id: string;
   approval: Approval;
@@ -212,6 +220,14 @@ export interface SessionSnapshot {
   approvals: PendingApproval[];
   /** Questions the run is blocked on, newest last. */
   questions: PendingQuestion[];
+  /**
+   * Runs of *other* sessions this client has seen start and not yet finish, with what each is waiting on.
+   *
+   * The Host runs several sessions at once, so switching away from a running session no longer stops watching it:
+   * its approvals and questions are kept here until the session is opened again, where they become `approvals`
+   * and `questions` once more. Optional for consumers built before it existed.
+   */
+  otherRuns?: OtherRun[];
   /** The latest plan for this session, which drives the plan panel and its approval gate. */
   plan: Plan | null;
   /**

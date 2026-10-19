@@ -104,13 +104,21 @@ export interface HostContext {
   permissionPolicy: PermissionPolicy | undefined;
   /** Per-session permission overrides. A session absent here still reads the process default. */
   sessionPermissionPolicies: Map<string, PermissionPolicy>;
-  /** Violations from the last run, so `invariants.list` can answer "does it currently hold?". */
+  /** Violations from the last run to report any, so `invariants.list` can answer "does it currently hold?". */
   lastViolations: InvariantViolation[];
+  /**
+   * The same answer per session. With several sessions running at once, the Host-wide "last" is whichever run
+   * happened to report most recently, which says nothing about the session an operator is asking about.
+   */
+  sessionViolations: Map<string, InvariantViolation[]>;
+  /** How many different sessions may hold a run at once (`YUANTU_HOST_MAX_RUNS`); a session itself is serial. */
+  maxActiveRuns: number;
   /**
    * Sessions already announced to `sessionStart`. The host first learns about an existing session on
    * its first run, so that is where a resumed session is announced.
    */
   announced: Set<string>;
+  /** The run each session holds. At most one per session and at most `maxActiveRuns` in all. */
   active: Map<string, ActiveRun>;
   approvals: Map<string, PendingApproval>;
   /** Questions waiting for an answer, keyed by the id the client answers with. */
@@ -120,7 +128,12 @@ export interface HostContext {
   /** In-flight requests and optional title calls, drained before their resources close. */
   tasks: Set<Promise<void>>;
   closing: boolean;
-  /** True while a plan is being executed or a change undone: the Host refuses a concurrent run. */
+  /**
+   * True while an exclusive operation (undo, plan approval, workspace import, compaction …) holds the Host.
+   *
+   * It is the one Host-wide barrier left: those operations rewrite state several sessions share, so they wait for
+   * every run to finish and no run is admitted while one is in progress.
+   */
   restoring: boolean;
   /**
    * An exclusive operation outside a run, cancellable by its owning session or by shutdown.
@@ -129,8 +142,9 @@ export interface HostContext {
    * orphan) — it has no session to be cancelled from, but shutdown still has to reach it.
    */
   manualOperation: { sessionId?: string; controller: AbortController } | undefined;
-  /** Sessions a background wake is currently running for. */
+  /** Sessions a background wake is currently running for. Per session: wakes of different sessions may overlap. */
   waking: Set<string>;
+  /** A wake pass is already queued for this microtask; Host-wide because the pass itself scans every session. */
   wakeQueued: boolean;
   /** True once a carrier has said it is ready; nothing wakes before that. */
   automaticReady: boolean;
@@ -172,6 +186,14 @@ export interface HostContext {
   /** One line of the carrier's JSONL, answered on the same carrier. */
   handle: (line: string) => Promise<void>;
 }
+
+/**
+ * Different sessions one Host runs at once unless `YUANTU_HOST_MAX_RUNS` says otherwise.
+ *
+ * Two rather than one so a long run no longer holds back another session's scheduled task or wake; not more,
+ * because every slot shares the same model rate gate and the same working tree.
+ */
+export const DEFAULT_HOST_MAX_RUNS = 2;
 
 /**
  * A slot `main` fills before the Host serves its first request.
@@ -217,6 +239,10 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     permissionPolicy,
     sessionPermissionPolicies: new Map<string, PermissionPolicy>(),
     lastViolations: [],
+    sessionViolations: new Map<string, InvariantViolation[]>(),
+    maxActiveRuns:
+      (parseSetting(process.env, 'YUANTU_HOST_MAX_RUNS') as number | undefined) ??
+      DEFAULT_HOST_MAX_RUNS,
     announced,
     active: new Map<string, ActiveRun>(),
     approvals: new Map<string, PendingApproval>(),
@@ -269,4 +295,37 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
       state.sessionLifecyclePhases.set(context.sessionId, context.readOnly);
   });
   return state;
+}
+
+/**
+ * Whether the Host has room for one more run at all: no exclusive operation holds it and a slot is free.
+ *
+ * Automatic starters (the scheduler, background wakes) ask this before they spend anything on a candidate, so a
+ * full Host leaves due work waiting rather than claiming it and then failing admission.
+ */
+export function runSlotFree(ctx: HostContext): boolean {
+  return !ctx.restoring && ctx.active.size < ctx.maxActiveRuns;
+}
+
+/** Whether `sessionId` could be admitted now: the Host has room and the session itself is idle. */
+export function sessionCanRun(ctx: HostContext, sessionId: string): boolean {
+  return runSlotFree(ctx) && !ctx.active.has(sessionId);
+}
+
+/**
+ * Why `run.start` for `sessionId` must be refused right now, or `undefined` when it may be admitted.
+ *
+ * The three refusals are kept apart because they ask different things of the caller: an exclusive operation and a
+ * full Host clear on their own, while a busy session clears only when that session's own run ends. Each still
+ * says "already has an active run", the phrase clients have matched on since the Host was globally serial.
+ */
+export function admissionRefusal(ctx: HostContext, sessionId: string): string | undefined {
+  if (ctx.restoring)
+    return 'This Host already has an active run (an exclusive operation is in progress)';
+  if (ctx.active.has(sessionId)) return 'This session already has an active run';
+  if (ctx.active.size >= ctx.maxActiveRuns)
+    return ctx.maxActiveRuns === 1
+      ? 'This Host already has an active run'
+      : `This Host already has an active run in each of its ${ctx.maxActiveRuns} run slots`;
+  return undefined;
 }

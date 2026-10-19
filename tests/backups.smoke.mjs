@@ -48,7 +48,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
     assert.deepEqual(
       await page
@@ -101,7 +101,7 @@ test(
     );
     assert.equal(restored.ok, true, JSON.stringify(restored));
     assert.ok(restored.recoveryDirectory);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     store = new SessionStore(file);
     assert.equal(store.messages(session.id).length, 1);
     store.close();

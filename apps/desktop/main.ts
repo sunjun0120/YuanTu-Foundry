@@ -682,7 +682,14 @@ void app
         if (switching && command.type !== 'snapshot') throw new Error('Workspace is changing');
         if (command.type === 'chooseWorkspace') {
           const state = service.snapshot;
-          if (!state.ready || state.session.running || state.session.loading)
+          // Changing the workspace replaces the Host, so a run of any session — not only the visible one — holds it.
+          if (
+            !state.ready ||
+            state.session.running ||
+            state.session.loading ||
+            (state.session.otherRuns?.length ?? 0) > 0 ||
+            state.sessions.some((item) => item.activeRun)
+          )
             throw new Error('Wait for the current operation to finish');
           switching = true;
           try {

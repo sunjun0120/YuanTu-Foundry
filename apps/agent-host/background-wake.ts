@@ -10,7 +10,7 @@ import {
 import type { RunResult } from '../../packages/protocol/index.ts';
 import { safeError } from '../shared/runtime.ts';
 import { sessionPermissionPolicy } from './session-policy.ts';
-import type { HostContext, WakeGrant } from './state.ts';
+import { runSlotFree, type HostContext, type WakeGrant } from './state.ts';
 
 /** The wake machinery the Host keeps for its whole lifetime. */
 export interface BackgroundWake {
@@ -65,14 +65,9 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
     ctx.wakeQueued = true;
     queueMicrotask(() => {
       ctx.wakeQueued = false;
-      if (
-        ctx.closing ||
-        ctx.active.size ||
-        ctx.restoring ||
-        ctx.manualOperation ||
-        !ctx.automaticReady
-      )
-        return;
+      // A wake needs a free run slot, not an idle Host: another session's long run is no reason for settled
+      // background work to sit unannounced. Exclusive operations still hold every wake back.
+      if (ctx.closing || !runSlotFree(ctx) || ctx.manualOperation || !ctx.automaticReady) return;
       // Nobody awaits this microtask, so a store failure here (a write lock held past `busy_timeout`, a full
       // disk, a session deleted by another process mid-scan) would otherwise reach the process as an uncaught
       // error. It is reported and this pass is dropped; the next settled producer asks for a wake again.
@@ -84,7 +79,10 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
         return;
       }
       for (const session of sessions) {
-        if (session.parentSessionId) continue;
+        // A session that is already running (or already waking) picks the work up in its own run; admitting a
+        // wake for it here would only be refused by `run.start` after the producers were claimed.
+        if (session.parentSessionId || ctx.active.has(session.id) || ctx.waking.has(session.id))
+          continue;
         let authority: ReturnType<typeof backgroundAuthority>;
         let accepted: ReturnType<typeof admitBackground>;
         try {

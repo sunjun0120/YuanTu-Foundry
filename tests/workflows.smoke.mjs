@@ -76,7 +76,8 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
-    const idle = () => page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    const idle = () =>
+      page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await idle();
     await page.locator('#prompt').fill('/goal Review the existing output');
     await page.locator('#send').click();
@@ -210,7 +211,8 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
-    const idle = () => page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    const idle = () =>
+      page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await idle();
     await page.locator('#prompt').fill('/goal Review the scheduled output');
     await page.locator('#send').click();
@@ -546,7 +548,8 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(20000);
-    const idle = () => page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    const idle = () =>
+      page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await idle();
     await page.locator('#new-session').click();
     await idle();

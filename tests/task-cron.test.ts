@@ -274,3 +274,43 @@ test('v26 checkpoint recovery retains the original periodic admission after migr
   assert.equal(store.claimTaskSchedule(store.getTask(session, task.id), 'recovery'), true);
   assert.equal(store.events(session).filter((e) => e.type === 'task.admitted').length, 1);
 });
+test('a busy session holds back only its own due task while another session starts in a free slot', async (t) => {
+  const { root, store, session, due } = await setup(t);
+  const other = store.create(root).id;
+  const trigger = {
+    kind: 'cron',
+    enabled: true,
+    expression: '* * * * *',
+    timeZone: 'UTC',
+  } as const;
+  const busyTask = store.createTask(session, { title: 'Busy', trigger });
+  const freeTask = store.createTask(other, { title: 'Free', trigger });
+  // The busy session's task is the older obligation, so a Host that stopped at the first refusal starts nothing.
+  due(busyTask.id, '2000-01-01T00:00:00.000Z');
+  due(freeTask.id, '2000-01-01T00:01:00.000Z');
+  let busy = true;
+  const runs: SchedulerRun[] = [];
+  const scheduler = new TaskScheduler({
+    store,
+    workspace: root,
+    canRun: (sessionId) => sessionId === undefined || !busy || sessionId !== session,
+    run: async (run) => {
+      runs.push(run);
+    },
+  });
+  t.after(() => scheduler.stop());
+  await scheduler.tick();
+  assert.deepEqual(
+    runs.map((run) => run.task.id),
+    [freeTask.id],
+  );
+  // Nothing was claimed for the busy session: its task is still due, and it starts once that session is idle.
+  assert.equal(store.getTask(session, busyTask.id).attemptCount, 0);
+  assert.equal(store.getTask(session, busyTask.id).nextRunAt, '2000-01-01T00:00:00.000Z');
+  busy = false;
+  await scheduler.tick();
+  assert.deepEqual(
+    runs.map((run) => run.task.id),
+    [freeTask.id, busyTask.id],
+  );
+});

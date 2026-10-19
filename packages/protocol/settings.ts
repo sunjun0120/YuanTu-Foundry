@@ -514,6 +514,18 @@ export const ENVIRONMENT = {
     range: [1_000, 86_400_000],
     description: '调度器两次查看之间的最长间隔（到期时刻会直接唤醒它；这里是上限与兜底）',
   },
+  /**
+   * How many *different* sessions one Host may run at the same time.
+   *
+   * A session is still strictly serial; this bounds the Host as a whole, so a long run in one session no longer
+   * holds back another session's scheduled task or background wake. Exclusive operations (undo, plan execution,
+   * workspace import, compaction) still wait for the whole Host to be idle. `1` restores the old global serial Host.
+   */
+  YUANTU_HOST_MAX_RUNS: {
+    kind: 'number',
+    range: [1, 8],
+    description: '同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行）',
+  },
   YUANTU_LIBREOFFICE_PATH: {
     kind: 'string',
     description: '可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com）',

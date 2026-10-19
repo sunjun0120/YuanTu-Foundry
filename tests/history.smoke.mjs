@@ -58,7 +58,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).first().click();
     await page.getByText('HISTORY_ENTRY_249', { exact: true }).waitFor();
     assert.equal(await page.locator('#messages > .message').count(), 100);
@@ -83,7 +83,7 @@ test(
     await page.locator('#prompt').fill('Reply');
     await page.locator('#send').click();
     await page.getByText('History reply', { exact: true }).waitFor();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
       await page.evaluate(() => window.savedHistoryNode.isConnected),
       true,
@@ -134,7 +134,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).first().click();
     await page.locator('#load-older-history').waitFor();
     await page.evaluate(() => {

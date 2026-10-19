@@ -3,7 +3,11 @@
  *
  * The list is a keyed rebuild rather than a patch, because every row carries a locale-formatted date and a
  * translated `aria-label`: the key holds the sessions, the current id, whether the window is blocked and the
- * locale, so a language switch or a run starting rebuilds the rows and nothing else does. A streaming run
+ * locale, so a language switch or a run starting rebuilds the rows and nothing else does.
+ *
+ * A row also says whether its session is running and how many approvals or questions it is waiting on. The Host
+ * runs several sessions at once, so the list stays usable while one of them runs: opening another session leaves
+ * the running one going, and its row is where a person sees that it still needs them. A streaming run
  * reports progress constantly, and re-creating the buttons under the pointer on each of those is how a row
  * becomes unclickable.
  *
@@ -12,6 +16,12 @@
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import type { SessionInfo } from '../../packages/protocol/index.ts';
+
+/** What a row says about its session's live run: running at all, and how many interactions wait on a person. */
+export interface SessionActivity {
+  running: boolean;
+  waiting: number;
+}
 import { locale, t } from './i18n.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -40,6 +50,7 @@ export function setupSessionList(options: {
     currentId: string | null,
     blocked: boolean,
     hasMore?: boolean,
+    activity?: ReadonlyMap<string, SessionActivity>,
   ): void;
 } {
   const count = required('session-count');
@@ -50,10 +61,18 @@ export function setupSessionList(options: {
     currentId: string | null,
     blocked: boolean,
     hasMore = false,
+    activity: ReadonlyMap<string, SessionActivity> = new Map(),
   ): void {
     // locale() belongs in the key: these rows carry a formatted date and a
     // translated aria-label, so a language switch has to rebuild them.
-    const nextSessionKey = JSON.stringify([sessions, currentId, blocked, hasMore, locale()]);
+    const nextSessionKey = JSON.stringify([
+      sessions,
+      currentId,
+      blocked,
+      hasMore,
+      [...activity],
+      locale(),
+    ]);
     if (nextSessionKey === sessionKey) return;
     sessionKey = nextSessionKey;
     // The list is a window over the newest sessions; `+` says the count is of the window, not of all of them.
@@ -90,6 +109,21 @@ export function setupSessionList(options: {
             }),
           ),
         );
+        const live = activity.get(item.id);
+        if (live?.running || live?.waiting) {
+          const badges = node('span', '', 'session-activity');
+          if (live.running) badges.append(node('span', t('ui.sessionRunning'), 'session-running'));
+          if (live.waiting) {
+            const waiting = node(
+              'span',
+              t('ui.sessionWaiting', { count: live.waiting }),
+              'session-waiting',
+            );
+            waiting.title = t('ui.sessionWaitingLabel', { count: live.waiting });
+            badges.append(waiting);
+          }
+          button.append(badges);
+        }
         button.setAttribute('aria-current', item.id === currentId ? 'true' : 'false');
         button.addEventListener('click', () => void options.select({ type: 'load', id: item.id }));
         const row = node('div', '', 'session-row');

@@ -83,7 +83,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(8000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
 
     const record = async (into, surface) => {
       await page.waitForTimeout(120);
@@ -313,7 +313,7 @@ test(
     await page.locator('#open-subagents').waitFor({ state: 'visible' });
     await page.locator('#prompt').fill('继续检查');
     await page.locator('#send').click();
-    await page.waitForFunction(() => document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-subagents').hover();
     await page.locator('#subagents-popover').waitFor({ state: 'visible' });
     const subagentPopoverBounds = await page.locator('#subagents-popover').boundingBox();
@@ -558,7 +558,7 @@ test(
     await page.waitForFunction(
       () =>
         document.querySelector('.message.assistant') &&
-        !document.querySelector('#new-session').disabled,
+        !document.querySelector('#choose-workspace').disabled,
     );
     const user = page.locator('.message.user').first();
     assert.equal(await user.locator('.message-label, .message-model').count(), 0);
@@ -591,7 +591,7 @@ test(
     await page.waitForFunction(
       () =>
         document.querySelectorAll('.message.user').length === 2 &&
-        !document.querySelector('#new-session').disabled,
+        !document.querySelector('#choose-workspace').disabled,
     );
     const last = page.locator('.message.user').last();
     assert.equal(await last.locator('.message-content').textContent(), long);

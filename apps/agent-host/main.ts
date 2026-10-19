@@ -11,7 +11,7 @@ import { serveHost } from './lifecycle.ts';
 import { createSchedulerNotifier } from './params.ts';
 import { TaskScheduler } from './scheduler.ts';
 import { openHostServices } from './services.ts';
-import { createHostState } from './state.ts';
+import { createHostState, runSlotFree, sessionCanRun } from './state.ts';
 
 /**
  * Assemble one Host process and hand it a carrier.
@@ -54,7 +54,10 @@ async function main(): Promise<void> {
   const scheduler = new TaskScheduler({
     store: ctx.store,
     workspace: ctx.workspace,
-    canRun: () => ctx.automaticReady && !ctx.closing && ctx.active.size === 0 && !ctx.restoring,
+    canRun: (sessionId) =>
+      ctx.automaticReady &&
+      !ctx.closing &&
+      (sessionId === undefined ? runSlotFree(ctx) : sessionCanRun(ctx, sessionId)),
     ...(ctx.workflowIntervalMs ? { intervalMs: ctx.workflowIntervalMs } : {}),
     run: async (scheduled) => {
       if (

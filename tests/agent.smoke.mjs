@@ -146,7 +146,8 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   app = await launch();
   let page = await app.firstWindow();
   page.setDefaultTimeout(20000);
-  const idle = () => page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+  const idle = () =>
+    page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
   await idle();
   await page.locator('#new-session').click();
   await idle();
@@ -439,7 +440,7 @@ test(
     await page.waitForFunction(() =>
       document.querySelector('#statistics-tokens').textContent.includes('110 tok'),
     );
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#statistics-tokens').hover();
     assert.equal(await page.locator('#statistics-tokens-panel').isVisible(), true);
     assert.match(await page.locator('#statistics-tokens-panel').innerText(), /80%/);
@@ -784,7 +785,7 @@ test(
       /private thought never shown/,
     );
     await page.locator('#run-status').getByText('正在生成工具调用…').waitFor();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(requestBudget, 100, 'the provider request retains the configured output budget');
     assert.match(await page.locator('#error').innerText(), /100\/100 output tokens/);
     assert.equal(await page.locator('#messages .tool-call').count(), 0);
@@ -867,7 +868,7 @@ test(
     await live.locator('summary').click();
     assert.equal(await live.locator('.reasoning-content').textContent(), thought);
 
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const answered = page.locator('#messages .message.assistant .message-content');
     assert.match(await answered.textContent(), /It is there\./);
     assert.doesNotMatch(
@@ -1051,7 +1052,7 @@ test(
     assert.match(await group.locator(':scope > summary').innerText(), /SECOND_THOUGHT/);
     assert.equal(await group.locator('.process-steps').isVisible(), false);
     releases[1]();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await group.count(), 1);
     assert.match(await group.locator(':scope > summary').innerText(), /搜索[\s\S]*needle/);
     assert.equal(await group.getAttribute('open'), null);
@@ -1165,7 +1166,7 @@ test(
     await page.locator('#send').click();
     await page.waitForFunction(
       () =>
-        !document.querySelector('#new-session').disabled &&
+        !document.querySelector('#choose-workspace').disabled &&
         document.querySelector('.message.assistant .message-content')?.textContent === 'Ready',
     );
     assert.doesNotMatch(await page.locator('#error').innerText(), /4MB|4 MB/);
@@ -1181,7 +1182,7 @@ test(
     await page.locator('#send').click();
     await page.waitForFunction(
       () =>
-        !document.querySelector('#new-session').disabled &&
+        !document.querySelector('#choose-workspace').disabled &&
         [...document.querySelectorAll('.message.assistant .message-content')].some(
           (node) => node.textContent?.length === 5_040_000,
         ),

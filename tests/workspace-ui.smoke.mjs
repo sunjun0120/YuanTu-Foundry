@@ -472,8 +472,13 @@ test(
     }
     assert.equal(view.workspace.kind, 'worktree', JSON.stringify(view.workspace));
     assert.equal(view.workspace.state, 'ready');
-    assert.match(view.workspace.executionRoot, /[\\/]\.yuantu[\\/]worktrees[\\/]/);
-    assert.notEqual(view.workspace.executionRoot, root);
+    // Managed worktrees live outside the repository and off every protected `.yuantu` path (see `worktree-home.ts`).
+    const fromRoot = path.relative(root, view.workspace.executionRoot);
+    assert.ok(
+      fromRoot.startsWith('..') || path.isAbsolute(fromRoot),
+      `worktree inside the parent: ${view.workspace.executionRoot}`,
+    );
+    assert.doesNotMatch(view.workspace.executionRoot, /[\\/]\.yuantu([\\/]|$)/);
     // And its work is outstanding rather than already merged: the status is the one a person has to act on.
     assert.equal(view.workspace.result?.status, 'ready', JSON.stringify(view.workspace.result));
     assert.deepEqual(view.workspace.result.paths, ['child.txt']);

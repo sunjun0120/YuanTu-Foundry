@@ -210,7 +210,7 @@ test(
     await page.locator('#send').click();
     await page.getByText('INSTALLED_HOST_REPLY', { exact: true }).waitFor();
     console.error('[verify] installed tools completed');
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const first = await page.evaluate(() => window.yuantu.invoke({ type: 'snapshot' }));
     assert.equal(first.ok, true, first.error);
     const transcript = JSON.stringify(first.state.session.messages);

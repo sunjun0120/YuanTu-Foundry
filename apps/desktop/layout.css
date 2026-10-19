@@ -208,6 +208,21 @@ body {
   margin-top: 4px;
   color: var(--muted);
 }
+#chat-sidebar .session-activity {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 10px;
+}
+#chat-sidebar .session-running {
+  color: var(--accent);
+}
+#chat-sidebar .session-waiting {
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
 #chat-sidebar .session-item.selected,
 #chat-sidebar .session-item:hover:enabled {
   background: var(--raised);

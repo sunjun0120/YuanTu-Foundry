@@ -116,7 +116,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(12000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).first().click();
     await page.waitForFunction(
       async () => !(await window.yuantu.invoke({ type: 'snapshot' })).state.session.loading,
@@ -324,7 +324,7 @@ for (const transition of ['Host recovery', 'model replacement']) {
         await page.locator('#prompt').fill(`Check permissions ${index}`);
         await page.locator('#send').click();
         await page.getByText(`PERMISSION_REPLY_${index}`, { exact: true }).waitFor();
-        await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+        await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
         assert.equal(
           requests.at(-1).tools.some((tool) => tool.name === 'write_file'),
           false,
@@ -345,7 +345,7 @@ for (const transition of ['Host recovery', 'model replacement']) {
       if (transition === 'Host recovery') {
         process.kill(before.hostPid, 'SIGKILL');
         await page.locator('#notice').waitFor();
-        await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+        await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       } else {
         const saved = await page.evaluate(
           (url) =>
@@ -566,7 +566,7 @@ test(
     // become available only after the run and history reconciliation have finished.
     const idle = async () => {
       try {
-        await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+        await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       } catch (error) {
         t.diagnostic(
           JSON.stringify(
@@ -836,7 +836,7 @@ test(
         path: artifactPath('qa.png').replace(/\.png$/, '-diff.png'),
       });
     await page.getByRole('button', { name: '允许一次' }).click();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await readFile(path.join(root, 'main.ts'), 'utf8'), 'const count = 2;\n');
     assert.equal(await page.locator('#messages .markdown h2').textContent(), '修改完成');
     assert.equal(await page.locator('#messages .markdown table').count(), 1);

@@ -69,10 +69,21 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
     ctx.queueWake();
     return { ready: true };
   },
-  'invariants.list': async (ctx) => ({
-    invariants: ctx.invariants.describe(),
-    violations: ctx.lastViolations,
-  }),
+  /**
+   * With a session, the violations that session's last reporting run left; without one, the Host's most recent.
+   * The second is only meaningful while one session runs at a time, which is why the first exists.
+   */
+  'invariants.list': async (ctx, params) => {
+    if (params.sessionId !== undefined && typeof params.sessionId !== 'string')
+      throw new Error('Invalid invariants session identity');
+    const sessionId = params.sessionId as string | undefined;
+    if (sessionId !== undefined) ownedSession(ctx.store, ctx.workspace, sessionId);
+    return {
+      invariants: ctx.invariants.describe(),
+      violations:
+        sessionId === undefined ? ctx.lastViolations : (ctx.sessionViolations.get(sessionId) ?? []),
+    };
+  },
   'sandbox.set': async (ctx, params) => {
     const mode = parseSandboxMode(params.mode);
     if (params.sessionId !== undefined && typeof params.sessionId !== 'string')

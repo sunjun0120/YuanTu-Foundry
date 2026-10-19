@@ -3,6 +3,7 @@ dist/
 artifacts/
 .scratch/
 .yuantu/
+.claude/
 .env
 .env.*
 !.env.example

@@ -99,7 +99,7 @@ test(
     await page.locator('#prompt').fill('Create an upgrade retention witness');
     await page.locator('#send').click();
     await page.getByText('UPGRADE_PRESERVED_REPLY', { exact: true }).waitFor();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const settings = await readFile(path.join(profile, 'model-settings.json'));
     await app.evaluate(({ dialog, Menu }, file) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });

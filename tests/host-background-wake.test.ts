@@ -241,7 +241,8 @@ test('a slow session hook cannot admit a second main run before the first slot i
   );
   const host = await listeningHost(
     t,
-    { YUANTU_BASE_URL: url, YUANTU_HOOKS_MODULE: hook },
+    // One slot, so the second session competes for the same reservation the first one is holding.
+    { YUANTU_BASE_URL: url, YUANTU_HOOKS_MODULE: hook, YUANTU_HOST_MAX_RUNS: '1' },
     (file) => {
       const root = path.dirname(file);
       const store = new SessionStore(file);

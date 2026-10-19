@@ -436,6 +436,12 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.stopping': ['正在停止…', 'Stopping...'],
   'ui.sessionShort': ['会话 {id}', 'Session {id}'],
   'ui.loadMoreSessions': ['加载更早的会话', 'Show older sessions'],
+  'ui.sessionRunning': ['运行中', 'Running'],
+  'ui.sessionWaiting': ['{count} 项待处理', '{count} waiting'],
+  'ui.sessionWaitingLabel': [
+    '该会话有 {count} 项审批或提问等待处理，打开会话后处理',
+    'This session has {count} approvals or questions waiting; open it to answer',
+  ],
   'ui.commandNeedsDescription': ['/{name} 需要描述内容。', '/{name} requires a description.'],
   'ui.maxImages': ['每条消息最多附加 4 张图片', 'Each message can include at most 4 images'],
   'ui.maxImageTotal': ['图片合计不能超过 10MB', 'Images must total no more than 10 MB'],

@@ -46,7 +46,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(10000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'system');
     const logo = async (theme) => {
       assert.equal(
@@ -291,7 +291,7 @@ test(
     await page.waitForFunction(() =>
       document.querySelector('#messages').textContent.includes('布局验证完成'),
     );
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.match(await page.locator('#chat-title').innerText(), /检查桌面布局/);
     // A title is a label, not a paragraph: past the cap it is cut with an ellipsis, and the whole name is
     // still reachable as the tooltip rather than being lost.
@@ -387,7 +387,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await page.locator('#open-background').isHidden(), true);
     assert.equal(await page.locator('#project-name').count(), 0);
     await page.locator('#open-background').evaluate((button) => {

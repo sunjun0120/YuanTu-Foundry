@@ -24,14 +24,15 @@ import { createAgent } from '../shared/runtime.ts';
 import { createRunApprover, createRunQuestioner } from './approvals.ts';
 import { ownedSession, required } from './params.ts';
 import { sessionPermissionPolicy } from './session-policy.ts';
-import type { ActiveRun, HostContext, WakeGrant } from './state.ts';
+import { admissionRefusal, type ActiveRun, type HostContext, type WakeGrant } from './state.ts';
 import { startSessionTitle } from './session-title.ts';
 
 /**
  * One run of one session, from admitting it to settling the work it started.
  *
  * A run is the Host's unit of exclusivity: while it holds `active`, nothing else may start in that session, and
- * the slot is therefore reserved *before* the first await — the reconciliation below does real filesystem I/O, so
+ * other sessions may start only while the Host has a free run slot (`admissionRefusal`). The slot is reserved
+ * *before* the first await — the reconciliation below does real filesystem I/O, so
  * a check-then-set across it would let a concurrent `run.start` (a duplicate dispatch, or a scheduler tick) pass
  * the same guard, and the loser's `finally` would then delete the winner's entry and leave a live run
  * uncancellable. Everything else here follows from what started the run: a person (who is asked for approvals and
@@ -52,7 +53,8 @@ export async function startRun(
   const sessionId = required(params, 'sessionId'),
     prompt = required(params, 'prompt');
   ownedSession(ctx.store, ctx.workspace, sessionId);
-  if (ctx.active.size || ctx.restoring) throw new Error('This Host already has an active run');
+  const refusal = admissionRefusal(ctx, sessionId);
+  if (refusal) throw new Error(refusal);
   const requestedTask =
     typeof params.taskId === 'string' ? ctx.store.getTask(sessionId, params.taskId) : undefined;
   const unattendedTaskId =
@@ -101,7 +103,7 @@ export async function startRun(
   const entry: ActiveRun = { controller };
   // Reserve the slot before the first await. The reconciliation below does real filesystem
   // I/O, so a check-then-set across it let a concurrent run.start (a duplicate dispatch, or
-  // a scheduler tick) pass the same `active.size` guard; the loser then ran its `finally` and
+  // a scheduler tick) pass the same admission guard; the loser then ran its `finally` and
   // deleted the winner's entry, leaving a live run uncancellable and re-admitting new runs.
   ctx.active.set(sessionId, entry);
   const admittedAt = Date.now();
@@ -205,8 +207,11 @@ export async function startRun(
     }
     // Kept for `invariants.list`: the run reports its own failure, but a host outlives the run and an
     // operator asking "does this deployment currently satisfy its promises" needs an answer afterwards.
-    if (event.type === 'invariant.violated')
-      ctx.lastViolations = (event.data.violations ?? []) as InvariantViolation[];
+    if (event.type === 'invariant.violated') {
+      const violations = (event.data.violations ?? []) as InvariantViolation[];
+      ctx.lastViolations = violations;
+      ctx.sessionViolations.set(sessionId, violations);
+    }
     // The Host adds the id below; avoid publishing a duplicate unanswerable event.
     if (event.type !== 'approval.required' && event.type !== 'question.required')
       ctx.carrier.send({ event });

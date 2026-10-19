@@ -57,13 +57,14 @@ test(
       });
       const page = await app.firstWindow();
       page.setDefaultTimeout(8000);
-      await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+      await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
     };
     let page = await launch();
     const row = (id) => page.locator(`[data-session-id="${id}"]`);
     const more = (id) => page.locator(`[data-menu-session-id="${id}"]`);
-    const idle = () => page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    const idle = () =>
+      page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const open = async (id, name) => {
       await idle();
       await more(id).hover();
@@ -275,7 +276,7 @@ test(
     assert.match(await chosen.innerText(), /蓝色/);
     await questions.getByRole('button', { name: '提交' }).click();
     await page.getByText('已按蓝色继续。', { exact: true }).waitFor();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     // The panel has to go with the answer, or it invites a second one nobody will read.
     assert.equal((await questions.innerText()).trim(), '');
   },
@@ -359,7 +360,7 @@ test(
     await page.locator('#prompt').fill('重启之后再说一次');
     await page.locator('#send').click();
     await page.getByText('重启后的回答。', { exact: true }).waitFor();
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     // The notice goes away once the user has acted on it.
     await page.waitForFunction(() => document.querySelector('#notice')?.hidden === true);
   },

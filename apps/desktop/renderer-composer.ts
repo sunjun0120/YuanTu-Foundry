@@ -44,6 +44,11 @@ export function setupComposer(actions: {
   const sendButton = required<HTMLButtonElement>('send');
   const composer = required<HTMLFormElement>('composer');
   let sending = false;
+  /**
+   * The session a send was made in. A send lasts as long as its run, and that run keeps going when another
+   * session is opened, so "sending" is only true of the sessions that sent — one entry per send in flight.
+   */
+  const sendingSessions: (string | null)[] = [];
   let stopping = false;
   let queueBusy = false;
 
@@ -83,8 +88,9 @@ export function setupComposer(actions: {
     actions.attachments.clear();
     actions.setError(null);
     const queuing = Boolean(actions.getState()?.session.running);
+    const fromSession = actions.getState()?.session.sessionId ?? null;
     if (queuing) queueBusy = true;
-    else sending = true;
+    else sendingSessions.push(fromSession);
     actions.requestRender();
     const command: CarrierCommand = queuing
       ? { type: 'enqueue', prompt: outgoingText, images, mode: 'follow-up' }
@@ -92,14 +98,15 @@ export function setupComposer(actions: {
     void actions
       .invoke(command)
       .then((ok) => {
-        if (!ok && !prompt.value) {
+        // A failed send gives its text back only to the session it was written in.
+        if (!ok && !prompt.value && actions.getState()?.session.sessionId === fromSession) {
           prompt.value = textToSend;
           actions.attachments.restore(images, files);
         }
       })
       .finally(() => {
         if (queuing) queueBusy = false;
-        else sending = false;
+        else sendingSessions.splice(sendingSessions.indexOf(fromSession), 1);
         actions.requestRender();
         prompt.focus();
       });
@@ -137,7 +144,8 @@ export function setupComposer(actions: {
     });
   }
   return {
-    isSending: () => sending,
+    isSending: () =>
+      sending || sendingSessions.includes(actions.getState()?.session.sessionId ?? null),
     isStopping: () => stopping,
     isQueueBusy: () => queueBusy,
   };

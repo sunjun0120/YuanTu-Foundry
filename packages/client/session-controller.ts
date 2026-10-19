@@ -48,6 +48,7 @@ import {
 const INCREMENTAL_TAIL = 100;
 import type {
   MessageDelta,
+  OtherRun,
   SessionSnapshot,
   StatisticsDelta,
   SubAgentDelta,
@@ -61,6 +62,7 @@ type RunContract =
 export type {
   ContextBudgetView,
   MessageDelta,
+  OtherRun,
   PendingApproval,
   PendingQuestion,
   SessionSnapshot,
@@ -106,8 +108,18 @@ export class SessionController {
   private unsubscribeStatus: () => void;
   private disposed = false;
   private runId: string | null = null;
+  /** The send this controller is waiting on for the session on screen. */
   private active: Promise<RunResult> | null = null;
   private aborter: AbortController | null = null;
+  /**
+   * Sends that were started here and are still settling, though their session is no longer on screen.
+   *
+   * Opening another session does not stop a run: the Host keeps it going, and the request that started it keeps
+   * waiting for its result. Its aborter is kept only so `dispose` can still release the request.
+   */
+  private detached = new Set<AbortController>();
+  /** Live runs of sessions other than the one on screen, keyed by session; see `SessionSnapshot.otherRuns`. */
+  private others = new Map<string, OtherRun>();
   private olderLoad: symbol | null = null;
   /**
    * Where the transcript in `state.messages` stops being the Host's: the offset just past the last message a
@@ -270,8 +282,35 @@ export class SessionController {
     if (this.active || this.state.running || this.state.loading)
       throw new Error('Session is already running or loading');
   }
+  /**
+   * Switching sessions only has to wait for a read in progress, not for a run.
+   *
+   * The run of the session being left goes on in the Host; this controller stops showing it and keeps following
+   * it as one of `otherRuns`, so its approvals and questions are still there when the session is opened again.
+   */
+  private assertCanSwitch(): void {
+    this.assertActive();
+    if (this.state.loading) throw new Error('Session is already loading');
+    this.detachForeground();
+  }
+  private detachForeground(): void {
+    const sessionId = this.state.sessionId;
+    if (this.aborter && this.active) this.detached.add(this.aborter);
+    this.active = null;
+    this.aborter = null;
+    if (!sessionId || !this.state.running || !this.runId) return;
+    this.others.set(sessionId, {
+      sessionId,
+      runId: this.runId,
+      approvals: structuredClone(this.state.approvals),
+      questions: structuredClone(this.state.questions),
+    });
+  }
+  private publishOthers(): void {
+    this.state.otherRuns = structuredClone([...this.others.values()]);
+  }
   async create(): Promise<string> {
-    this.assertIdle();
+    this.assertCanSwitch();
     this.state.loading = true;
     this.publish();
     try {
@@ -284,7 +323,7 @@ export class SessionController {
     }
   }
   async load(sessionId: string): Promise<void> {
-    this.assertIdle();
+    this.assertCanSwitch();
     this.state.loading = true;
     this.publish();
     try {
@@ -515,6 +554,13 @@ export class SessionController {
     }
     this.runId = liveRun;
     this.stateRevision++;
+    // A run this client was following in the background is on screen again: what it is waiting on comes with it.
+    const followed = this.others.get(sessionId);
+    this.others.delete(sessionId);
+    const pending =
+      running && followed && followed.runId === liveRun
+        ? followed
+        : { approvals: [], questions: [] };
     this.state = {
       queue: structuredClone(snapshot.items),
       compacting: false,
@@ -538,8 +584,9 @@ export class SessionController {
       loading: this.state.loading,
       status: running ? 'running' : 'idle',
       tools: [],
-      approvals: [],
-      questions: [],
+      approvals: pending.approvals,
+      questions: pending.questions,
+      otherRuns: structuredClone([...this.others.values()]),
       error: null,
     };
     this.committed = {
@@ -747,24 +794,30 @@ export class SessionController {
     this.state.error = null;
     this.runId = null;
     this.publish();
-    this.active = this.performSend(
+    const aborter = this.aborter;
+    const pending = this.performSend(
       this.state.sessionId,
       prompt,
-      this.aborter.signal,
+      aborter.signal,
       input.images,
       taskId,
       plan,
       contract,
     );
+    this.active = pending;
     try {
-      return await this.active;
+      return await pending;
     } finally {
-      this.active = null;
-      this.aborter = null;
-      if (!this.state.running && this.runId)
-        await this.refreshFinishedHistory(this.state.sessionId!, this.runId);
-      if (!this.runId && !this.state.running) this.state.loading = false;
-      this.publish();
+      this.detached.delete(aborter);
+      // A send whose session was left settles without touching the session now on screen.
+      if (this.active === pending) {
+        this.active = null;
+        this.aborter = null;
+        if (!this.state.running && this.runId)
+          await this.refreshFinishedHistory(this.state.sessionId!, this.runId);
+        if (!this.runId && !this.state.running) this.state.loading = false;
+        this.publish();
+      }
     }
   }
   private async performSend(
@@ -792,7 +845,8 @@ export class SessionController {
         this.state.status = result.status;
         this.state.error = result.error ?? null;
       }
-      if (!this.disposed && this.client.status === 'ready') {
+      // A session that was left is read again when it is opened; reading it now would only be thrown away.
+      if (!this.disposed && this.client.status === 'ready' && this.state.sessionId === sessionId) {
         const transcript = await this.history(sessionId, true);
         const workspaces = owns()
           ? await readWorkspaceViews(
@@ -814,7 +868,7 @@ export class SessionController {
       // The optimistic user bubble is only a preview. A rejected run may never have written it,
       // while a failed model call may already have written both it and a partial assistant reply.
       // Reconcile from the Host whenever it is still reachable instead of guessing which occurred.
-      if (!this.disposed && this.client.status === 'ready') {
+      if (!this.disposed && this.client.status === 'ready' && this.state.sessionId === sessionId) {
         try {
           const transcript = await this.history(sessionId);
           if (owns()) this.applyTranscript(sessionId, transcript);
@@ -891,6 +945,8 @@ export class SessionController {
     if (this.disposed) return;
     this.disposed = true;
     this.aborter?.abort();
+    for (const aborter of this.detached) aborter.abort();
+    this.detached.clear();
     this.unsubscribe();
     this.unsubscribeStatus();
     this.listeners.clear();
@@ -942,8 +998,68 @@ export class SessionController {
       }
     }
   }
+  /**
+   * Follow the runs of sessions that are not on screen: when they start and end, and what they wait on.
+   *
+   * Only those facts. A turn of another session is never folded here: the transcript of a session opened later
+   * is read from the Host, which is the only source of it.
+   */
+  private onOtherEvent(event: AgentEvent): void {
+    const sessionId = event.sessionId;
+    const run = this.others.get(sessionId);
+    switch (event.type) {
+      case 'run.started':
+        this.others.set(sessionId, { sessionId, runId: event.runId, approvals: [], questions: [] });
+        break;
+      case 'run.finished':
+        if (!run || run.runId !== event.runId) return;
+        this.others.delete(sessionId);
+        break;
+      case 'approval.required':
+        if (!run || run.runId !== event.runId) return;
+        run.approvals.push({
+          id: String(event.data.approvalId),
+          approval: structuredClone(event.data.approval as Approval),
+        });
+        break;
+      case 'question.required':
+        if (!run || run.runId !== event.runId) return;
+        run.questions.push({
+          id: String(event.data.questionId),
+          request: structuredClone(event.data.request as QuestionRequest),
+        });
+        break;
+      case 'approval.decided':
+      case 'question.answered':
+      case 'tool.finished': {
+        if (!run || run.runId !== event.runId) return;
+        const callId =
+          event.type === 'tool.finished'
+            ? event.data.callId
+            : event.type === 'approval.decided'
+              ? (event.data.approval as Approval | undefined)?.toolCall?.id
+              : (event.data.request as QuestionRequest | undefined)?.callId;
+        const approvals = run.approvals.filter((item) => item.approval.toolCall.id !== callId);
+        const questions = run.questions.filter((item) => item.request.callId !== callId);
+        if (approvals.length === run.approvals.length && questions.length === run.questions.length)
+          return;
+        run.approvals = approvals;
+        run.questions = questions;
+        break;
+      }
+      default:
+        return;
+    }
+    this.stateRevision++;
+    this.publishOthers();
+    this.publish();
+  }
   private onEvent(event: AgentEvent): void {
-    if (this.disposed || event.sessionId !== this.state.sessionId) return;
+    if (this.disposed) return;
+    if (event.sessionId !== this.state.sessionId) {
+      this.onOtherEvent(event);
+      return;
+    }
     this.stateRevision++;
     if (event.type === 'run.started') {
       this.olderLoad = null;

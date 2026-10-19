@@ -23,8 +23,13 @@ export interface TaskSchedulerOptions {
   store: SessionStore;
   /** Restricts the scheduler to one workspace; the Host owns exactly one. */
   workspace: string;
-  /** False while the Host cannot accept another run, so due work waits instead of failing. */
-  canRun: () => boolean;
+  /**
+   * False while the Host cannot accept another run, so due work waits instead of failing.
+   *
+   * Asked without a session for "is there a free run slot at all", and with one for "could this session start
+   * now". A busy session's task waits while another session's due task still starts in a free slot.
+   */
+  canRun: (sessionId?: string) => boolean;
   /** Starts one run and resolves when it settles. */
   run: (run: SchedulerRun) => Promise<void | Pick<RunResult, 'status' | 'error'>>;
   /**
@@ -186,6 +191,11 @@ export class TaskScheduler {
           this.recordWaiting(candidates.slice(candidates.indexOf(due)));
           break;
         }
+        if (!this.options.canRun(due.task.sessionId)) {
+          // Only this session is busy. Its task stays due (nothing was claimed) and the next look retries it.
+          this.recordWaiting([due]);
+          continue;
+        }
         const run = await this.execute(due.task, due.source, due.missed);
         if (run) started.push(run);
       }
@@ -274,6 +284,11 @@ export class TaskScheduler {
             if (!this.chain.has(waiting.id) && this.deferred.size < MAX_DEFERRED_EVENTS)
               this.deferred.set(waiting.id, { event, depth });
           break;
+        }
+        if (!this.options.canRun(task.sessionId)) {
+          if (this.deferred.size < MAX_DEFERRED_EVENTS)
+            this.deferred.set(task.id, { event, depth });
+          continue;
         }
         this.deferred.delete(task.id);
         this.chain.add(task.id);

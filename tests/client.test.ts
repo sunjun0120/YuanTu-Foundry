@@ -708,7 +708,7 @@ test('controller sends images and steers a pending Host approval without stale w
     ['builtin:office-documents'],
   );
 });
-test('controller rejects a second send and session switch during an active run', async (t) => {
+test('controller rejects a second send during an active run but lets another session open', async (t) => {
   let ready!: () => void;
   const waiting = new Promise<void>((resolve) => {
     ready = resolve;
@@ -718,13 +718,22 @@ test('controller rejects a second send and session switch during an active run',
     res.write(': wait\n\n');
     ready();
   });
-  const { controller } = await setup2(t, url);
+  const { client, controller } = await setup2(t, url);
+  const running = controller.sessionId!;
   const pending = controller.send('wait');
   await waiting;
   await assert.rejects(controller.send('second'), /running/i);
-  await assert.rejects(controller.create(), /running/i);
-  await controller.cancel();
-  await pending;
+  // The Host runs sessions side by side, so a run no longer pins the window to its session.
+  await controller.create();
+  assert.notEqual(controller.sessionId, running);
+  assert.equal(controller.running, false);
+  assert.deepEqual(
+    controller.snapshot.otherRuns?.map((run) => run.sessionId),
+    [running],
+  );
+  await client.request('run.cancel', { sessionId: running });
+  assert.equal((await pending).status, 'cancelled');
+  assert.deepEqual(controller.snapshot.otherRuns, []);
 });
 
 test('a completion snapshot accepts the next send immediately', async (t) => {

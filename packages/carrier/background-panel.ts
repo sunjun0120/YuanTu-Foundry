@@ -51,7 +51,28 @@ export class BackgroundPanel {
     this.owner = owner;
   }
 
+  /** The read in flight, which a later `refresh` waits for rather than skipping. */
+  private inflight: Promise<void> | null = null;
+
+  /**
+   * Read the panel again, and resolve once a read that *started after this call* has finished.
+   *
+   * A read already in flight may have begun before whatever the caller just changed, so skipping it (as this used
+   * to) could hand a `refreshBackground` caller the state from before its own change.
+   */
   async refresh(): Promise<void> {
+    if (this.inflight) await this.inflight.catch(() => {});
+    // Several callers may have waited on the same read; the first of them starts the next one, the rest join it.
+    if (this.inflight) return this.inflight;
+    const read = this.read();
+    this.inflight = read;
+    try {
+      await read;
+    } finally {
+      if (this.inflight === read) this.inflight = null;
+    }
+  }
+  private async read(): Promise<void> {
     const { client, controller } = this.owner;
     if (this.refreshing || !this.owner.ready()) return;
     const sessionId = controller.sessionId;

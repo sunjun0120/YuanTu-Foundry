@@ -62,7 +62,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
     await page.locator('#settings-endpoint-name').fill('Automatic gateway');
@@ -122,7 +122,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(8000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
     assert.equal(await page.locator('#settings-page').isVisible(), true);
     assert.equal(await page.locator('#chat-page').isVisible(), false);
@@ -287,7 +287,7 @@ test(
       const page = await app.firstWindow();
       page.setDefaultTimeout(10000);
       await page.getByRole('button', { name: '设置', exact: true }).waitFor();
-      await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+      await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
     };
     let page = await launch();
@@ -448,7 +448,7 @@ test(
       });
       const page = await app.firstWindow();
       page.setDefaultTimeout(10000);
-      await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+      await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
     };
     let page = await launch();
@@ -528,7 +528,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(10000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await page.locator('.workspace-resources').count(), 0);
     assert.equal(await page.locator('.composer-note').count(), 0);
     const session = await page.evaluate(
@@ -737,7 +737,7 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(10000);
-    await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const seeded = await page.evaluate(() =>
       window.yuantu.settings({
         type: 'save-group',
@@ -1053,7 +1053,7 @@ test(
       });
       const page = await app.firstWindow();
       page.setDefaultTimeout(10000);
-      await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+      await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
     };
     let page = await launch();

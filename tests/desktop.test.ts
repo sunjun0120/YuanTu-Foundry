@@ -102,7 +102,7 @@ test('startup failure exposes its phase and an actionable Host error', async (t)
   assert.ok(service.snapshot.error);
 });
 
-test('desktop service loads persisted sessions after restart and blocks session changes during runs', async (t) => {
+test('desktop service loads persisted sessions after restart and opens another session during a run', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-desktop-'));
   let release!: () => void;
   let started!: () => void;
@@ -141,10 +141,16 @@ test('desktop service loads persisted sessions after restart and blocks session 
   assert.doesNotMatch(JSON.stringify(service.snapshot), /desktop-secret/);
   const send = service.dispatch({ type: 'send', prompt: 'Hello' });
   await waiting;
-  await assert.rejects(service.dispatch({ type: 'create' }), /running|loading/);
+  // A run no longer pins the window: a new session opens while the first keeps running in the Host.
+  await service.dispatch({ type: 'create' });
+  assert.notEqual(service.snapshot.session.sessionId, first);
+  assert.deepEqual(
+    service.snapshot.session.otherRuns?.map((run) => run.sessionId),
+    [first],
+  );
   release();
   await send;
-  await service.dispatch({ type: 'create' });
+  assert.deepEqual(service.snapshot.session.otherRuns, []);
   assert.equal(service.snapshot.sessions.length, 2);
   await service.dispatch({ type: 'load', id: first });
   assert.equal(service.snapshot.session.messages.at(-1)?.content, 'Desktop answer');

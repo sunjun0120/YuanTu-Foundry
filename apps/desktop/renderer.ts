@@ -19,14 +19,13 @@ import { setupMessages } from './renderer-messages.ts';
 import { setupPlanPanel } from './renderer-plan.ts';
 import { setupQuestions } from './renderer-questions.ts';
 import { setupSessionPanels } from './renderer-session-panels.ts';
-import { setupSessionList } from './renderer-session-list.ts';
+import { setupSessionList, type SessionActivity } from './renderer-session-list.ts';
 import { setupTranscript } from './renderer-transcript.ts';
 import { setupTurnChanges } from './renderer-changes.ts';
 import { runStatusText } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
-import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { SlotRegistry, mountSlot, type SlotMount } from './slots.ts';
@@ -240,8 +239,38 @@ async function invoke(command: CarrierCommand): Promise<CarrierSnapshot | null> 
     return null;
   }
 }
+/**
+ * Which sessions are running and what each waits on, for the session list.
+ *
+ * Three witnesses, newest wins: the list's own `activeRun` (a run this window never saw start, such as a scheduled
+ * task), the runs the controller is following in the background, and the session on screen.
+ */
+function sessionActivity(snapshot: CarrierSnapshot): Map<string, SessionActivity> {
+  const activity = new Map<string, SessionActivity>();
+  for (const item of snapshot.sessions)
+    if (item.activeRun) activity.set(item.id, { running: true, waiting: 0 });
+  for (const run of snapshot.session.otherRuns ?? [])
+    activity.set(run.sessionId, {
+      running: true,
+      waiting: run.approvals.length + run.questions.length,
+    });
+  const current = snapshot.session;
+  if (current.sessionId) {
+    const waiting = current.approvals.length + current.questions.length;
+    if (current.running || waiting)
+      activity.set(current.sessionId, { running: current.running, waiting });
+    else activity.delete(current.sessionId);
+  }
+  return activity;
+}
 async function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
-  if (operation || composerView.isSending() || state?.session.running || state?.session.loading)
+  // Opening or creating a session leaves a running one going in the Host; anything else here waits for it.
+  const switching = command.type === 'load' || command.type === 'create';
+  if (
+    operation ||
+    state?.session.loading ||
+    (!switching && (composerView.isSending() || state?.session.running))
+  )
     return null;
   if (command.type === 'searchSessions') {
     localError = null;
@@ -397,8 +426,12 @@ function render(): void {
   element('notice').hidden = !notice;
   element('notice').textContent = notice;
   sessionManagement.render(state, blocked);
-  element<HTMLButtonElement>('new-session').disabled = blocked;
-  element<HTMLButtonElement>('choose-workspace').disabled = blocked;
+  const switchBlocked = !state.ready || session.loading || operation;
+  element<HTMLButtonElement>('new-session').disabled = switchBlocked;
+  element<HTMLButtonElement>('choose-workspace').disabled =
+    blocked ||
+    (session.otherRuns?.length ?? 0) > 0 ||
+    state.sessions.some((item) => item.activeRun);
   commandsView.render();
   renderComposerState();
   /**
@@ -433,8 +466,9 @@ function render(): void {
   sessionListView.render(
     state.sessions,
     session.sessionId,
-    blocked,
+    switchBlocked,
     state.sessionsHasMore === true,
+    sessionActivity(state),
   );
   // Message timestamps are locale-formatted, so they follow the language too.
   const paused = session.error === RUN_CANCELLED;
@@ -685,7 +719,8 @@ new ResizeObserver(() => {
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
 setupGeneralSettings();
-setupSandboxInitialization();
+// Windows 增强隔离入口暂不展示：AppContainer 后端尚未启用，初始化不改变实际沙箱。
+// 启用后改为在选择需要它的隔离策略时按需引导，renderer-sandbox-setup.ts 留作接入。
 modelSettings = setupModelSettings(
   () =>
     Boolean(
