@@ -1,3 +1,4 @@
+import { userInfo } from 'node:os';
 import { SESSION_DATABASE_POLICY, SessionStore } from '../../packages/storage/sqlite.ts';
 import {
   backupDatabase,
@@ -29,7 +30,14 @@ import {
 } from '../../packages/mcp/oauth.ts';
 import type { Options } from '../shared/args.ts';
 import { resolveWorkspace } from '../shared/runtime.ts';
+import { repositoryIdentity } from '../../packages/workspaces/git.ts';
+import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
+import { inventorySnapshots, sweepAbandonedStaging } from '../../packages/workspaces/snapshot.ts';
 import { readStandardInput } from './terminal.ts';
+import {
+  inspectWindowsSandboxLeases,
+  recoverWindowsSandboxLeases,
+} from '../../packages/tools/sandbox-windows.ts';
 
 /**
  * The commands that open no session store: database maintenance, workspace resources, settings, the model
@@ -64,6 +72,88 @@ export async function runStandaloneCommand(
     } finally {
       store.close();
     }
+    return true;
+  }
+  /**
+   * The workspace counterpart of `session-recover`: a worktree's operation lease whose owner pid is alive but which
+   * no process can prove is its owner — automatic recovery leaves such a lease alone, and every archive, remove,
+   * restore and run of that workspace refuses until it is gone. The operator's name and the reason are written to
+   * the delegating session's log with the release.
+   */
+  /**
+   * Snapshot housekeeping on demand: what the Host does at start-up, and a report of what it never does on its own.
+   *
+   * `--dry-run` only reports: every snapshot directory of the repository with its size and owners, which of them
+   * predate owners (a person decides about those — nothing deletes them automatically), and the staging an abandoned
+   * freeze left. Without it, this database's unused shares are released and abandoned staging is swept, exactly as at
+   * a Host start; close the Host first, since a release must not run beside a delegation.
+   */
+  if (command === 'workspace-gc') {
+    if (args.length || !options.db)
+      throw new Error('Usage: workspace-gc --db <file> [--workspace dir] [--dry-run] [--json]');
+    const root = resolveWorkspace(options.workspace ?? process.cwd());
+    const identity = await repositoryIdentity(root);
+    if (!identity) throw new Error(`${root} is not inside a Git working tree`);
+    const store = new SessionStore(options.db);
+    try {
+      const owner = store.snapshotOwner();
+      const recorded = new Set(store.workspaceSnapshotIds());
+      const signal = new AbortController().signal;
+      const outcome = options.dryRun
+        ? undefined
+        : {
+            released: await new WorkspaceManager({ store }).releaseUnusedSnapshots(signal),
+            sweptStaging: await sweepAbandonedStaging(identity.repositoryRoot),
+          };
+      const inventory = await inventorySnapshots(identity.repositoryRoot, signal);
+      const report = {
+        repositoryRoot: identity.repositoryRoot,
+        owner,
+        ...(outcome ?? {}),
+        snapshots: inventory.snapshots.map((entry) => ({
+          ...entry,
+          recordedHere: recorded.has(entry.id),
+          // Formats before 4 and pre-owner refs are never deleted automatically: these are for a person to decide.
+          needsDecision: entry.legacyRef || (entry.owners.length === 0 && entry.format !== 4),
+        })),
+        staging: inventory.staging,
+      };
+      process.stdout.write(JSON.stringify(report, null, options.json ? undefined : 2) + '\n');
+    } finally {
+      store.close();
+    }
+    return true;
+  }
+  if (command === 'workspace-lease-recover') {
+    if (args.length !== 1 || !options.db)
+      throw new Error('Usage: workspace-lease-recover <binding-id> --db <file> [--json]');
+    const store = new SessionStore(options.db);
+    try {
+      const recovered = store.recoverWorkspaceOperation(args[0]!, {
+        operator: operatorName(),
+        reason:
+          'Operator forced lease recovery from the command line: the owning process could not be confirmed dead',
+      });
+      process.stdout.write(JSON.stringify(recovered, null, options.json ? undefined : 2) + '\n');
+    } finally {
+      store.close();
+    }
+    return true;
+  }
+  /**
+   * The Windows sandbox's counterpart of `session-recover`: a lease whose owner process has exited, which refuses
+   * every sandboxed command until it is gone. `--dry-run` only reports the state; without it, the journals the dead
+   * process left are restored first and its locks removed after. A live or unidentifiable owner is refused, never
+   * guessed dead.
+   */
+  if (command === 'sandbox-recover') {
+    if (args.length) throw new Error('Usage: sandbox-recover [--dry-run] [--json]');
+    if (process.platform !== 'win32')
+      throw new Error('sandbox-recover reconciles the Windows sandbox and only runs on Windows');
+    const report = options.dryRun
+      ? await inspectWindowsSandboxLeases()
+      : await recoverWindowsSandboxLeases();
+    process.stdout.write(JSON.stringify(report, null, options.json ? undefined : 2) + '\n');
     return true;
   }
   if (['db-backup', 'db-verify', 'db-restore', 'db-recover', 'db-compact'].includes(command)) {
@@ -272,5 +362,14 @@ async function runMcp(args: string[], options: Options): Promise<void> {
   } finally {
     process.off('SIGINT', abort);
     process.off('SIGTERM', abort);
+  }
+}
+
+/** Who ran a maintenance command, as the operating system names them; the record says "unknown" rather than fail. */
+function operatorName(): string {
+  try {
+    return userInfo().username || 'unknown';
+  } catch {
+    return 'unknown';
   }
 }

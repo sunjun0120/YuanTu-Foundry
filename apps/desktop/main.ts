@@ -22,6 +22,7 @@ import {
   shell,
   clipboard,
   Menu,
+  nativeTheme,
 } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -29,8 +30,9 @@ import { pathToFileURL } from 'node:url';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
-import type { DesktopWireReply } from './contract.ts';
+import type { ArchivedSessionsReply, DesktopWireReply } from './contract.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
+import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
 import { redactSecrets } from '../../packages/platform/redact.ts';
 import { ModelSettingsStore, testModelConnection } from './model-settings.ts';
@@ -76,6 +78,10 @@ let openingService: CarrierService | null = null;
 let unsubscribe: (() => void) | undefined;
 /** What the window's mirror already holds; publishes and replies send only what differs from it. */
 const snapshotSender = new SnapshotSender();
+const runNotifier = createRunNotifier(
+  () => window,
+  () => uiSettingsStore?.view.notifications !== false,
+);
 let unsubscribeDelta: (() => void) | undefined;
 let unsubscribeSubAgentDelta: (() => void) | undefined;
 let unsubscribeStatisticsDelta: (() => void) | undefined;
@@ -183,6 +189,9 @@ function createService(workspace: string, config?: ProviderConfig): CarrierServi
       YUANTU_PERMISSION_POLICY: permissionSettingsStore.file,
       YUANTU_MCP_OAUTH_DIR: mcpOAuthDirectory(),
     },
+    // The window has no process-record panel, so the carrier does not read one for it. The desktop smoke
+    // suites still assert the record (approval decisions, restart persistence); they opt back in explicitly.
+    audit: process.env.FOUNDRY_TEST_DESKTOP_AUDIT === '1',
   });
 }
 /**
@@ -223,8 +232,10 @@ function attach(next: CarrierService): CarrierService {
   unsubscribeStatisticsDelta?.();
   // A replacement Host starts with launch defaults, even when it loads the same session.
   choices.reset();
+  runNotifier.reset();
   service = next;
   unsubscribe = next.subscribe((state) => {
+    runNotifier.update(state);
     if (state.ready && state.session.sessionId) choices.follow(state.session.sessionId);
     pendingState = state;
     pendingFlush ??= setImmediate(flushState);
@@ -330,6 +341,12 @@ void app
      * the text it produces is read by a person either way, and the same dictionary answers both sides.
      */
     setMainLocale(uiSettingsStore.view.language);
+    /**
+     * Native widgets — a `<select>`'s popup above all — are painted by Chromium in the process's theme, not the
+     * page's: with the default `system` theme a dark page on a light OS opened every dropdown as a white box
+     * before its options drew. Following the saved appearance keeps those widgets on the page's side.
+     */
+    nativeTheme.themeSource = uiSettingsStore.view.appearance;
     if (app.isPackaged && process.platform === 'win32') {
       Menu.setApplicationMenu(
         Menu.buildFromTemplate([
@@ -402,7 +419,8 @@ void app
       minWidth: MIN_WINDOW_SIZE.width,
       minHeight: MIN_WINDOW_SIZE.height,
       title: 'YuanTu Agent',
-      backgroundColor: '#f8f9fb',
+      // The colour shown before the page paints, in the same theme it is about to paint.
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#141416' : '#f8f9fb',
       autoHideMenuBar: true,
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),
@@ -465,6 +483,17 @@ void app
         }
       },
     );
+    ipcMain.handle('yuantu:archived-sessions', async (event): Promise<ArchivedSessionsReply> => {
+      try {
+        assertSender(event);
+        if (!service || quitting) throw new Error(mainText('desktop.quitting'));
+        const current = service;
+        const workspace = current.snapshot.workspace;
+        return { ok: true, workspace, sessions: await current.archivedSessions() };
+      } catch (error) {
+        return carrierErrorReply(error);
+      }
+    });
     ipcMain.handle('yuantu:files', async (event, input: unknown): Promise<FilesReply> => {
       try {
         assertSender(event);
@@ -559,6 +588,7 @@ void app
           // The renderer draws the interface in this language, so the messages this process produces for it have
           // to be in the same one -- otherwise the settings page is English and its validation errors are not.
           setMainLocale(uiSettingsStore.view.language);
+          nativeTheme.themeSource = uiSettingsStore.view.appearance;
           return { ok: true, kind: 'settings', settings: uiSettingsStore.view };
         } catch (error) {
           return { ok: false, error: safeError(error) };

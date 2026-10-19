@@ -54,6 +54,14 @@ export interface CompletionInputOptions {
    * it in production.
    */
   maxFiles?: number;
+  /**
+   * Told the size of the range once it is known and before any of it is read.
+   *
+   * The walk decides every limit on metadata alone, so this is the moment a caller can say "about to fingerprint
+   * N files" — the cost of the snapshot is the reads that follow, and a person watching a task end on a large tree
+   * otherwise saw nothing until they were done.
+   */
+  onCollected?: (scale: { files: number; bytes: number }) => void;
 }
 
 export class CompletionInputLimitError extends Error {
@@ -132,72 +140,119 @@ export function assertCompletionInputReadable(relative: string): void {
   }
 }
 
-interface Accumulator {
-  hash: ReturnType<typeof createHash>;
+/** One file the range holds, as it stood when the walk admitted it. */
+interface FileEntry {
+  absolute: string;
+  relative: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/**
+ * What a range is, in digest order: marker text (the root, a directory, an absent input) and the files between them.
+ *
+ * Collected before any content is read, so every limit — files, bytes per file, bytes in total — is decided on
+ * metadata alone: a range too large to fingerprint is refused before the first byte of it is hashed, rather than
+ * after most of it has been.
+ */
+interface Collection {
+  items: (string | FileEntry)[];
   files: number;
   bytes: number;
   maxFiles: number;
 }
 
-async function hashFile(
+/** How many files are read at once. Bounded, so a large range does not open thousands of handles together. */
+const HASH_CONCURRENCY = 8;
+
+function admitFile(
   absolute: string,
   relative: string,
-  state: Accumulator,
-  signal: AbortSignal,
-): Promise<void> {
-  signal.throwIfAborted();
-  const before = await lstat(absolute);
-  if (before.isSymbolicLink())
-    throw new CompletionInputLimitError(
-      `Symbolic links are not followed in completion inputs: ${relative}`,
-    );
-  if (before.size > MAX_FILE_BYTES)
+  stat: { size: number; mtimeMs: number },
+  collection: Collection,
+): void {
+  if (stat.size > MAX_FILE_BYTES)
     throw new CompletionInputLimitError(
       `Completion input exceeds the ${String(MAX_FILE_BYTES)} byte per-file limit: ${relative}`,
     );
   // Counted where a file is admitted, so the limit is exactly the number of files accepted: a check on the way into
   // a directory let the last entry through after the count had already reached it.
-  if (state.files >= state.maxFiles)
+  if (collection.files >= collection.maxFiles)
     throw new CompletionInputLimitError(
-      `Completion inputs exceed the ${String(state.maxFiles)} file limit`,
+      `Completion inputs exceed the ${String(collection.maxFiles)} file limit`,
     );
-  if (state.bytes + before.size > MAX_TOTAL_BYTES)
+  if (collection.bytes + stat.size > MAX_TOTAL_BYTES)
     throw new CompletionInputLimitError(
       `Completion inputs exceed the ${String(MAX_TOTAL_BYTES)} byte limit`,
     );
-  // Streamed rather than read whole: the limits above are chosen so a large input list is *refused*, and a
-  // reader that loaded each file into memory to decide would reach the limit the hard way.
-  const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  collection.items.push({ absolute, relative, size: stat.size, mtimeMs: stat.mtimeMs });
+  collection.files += 1;
+  collection.bytes += stat.size;
+}
+
+/**
+ * One file's own digest, streamed so memory stays one buffer whatever its size.
+ *
+ * A file that is not what the walk admitted — another size, another mtime, or a different number of bytes than it
+ * claimed — throws, and a throw discards the whole snapshot, so a file that moved while it was read can never
+ * reach a digest.
+ */
+async function hashFile(entry: FileEntry, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted();
+  const handle = await open(entry.absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
-    // Hashed as it is read, so memory stays one buffer whatever the file's size. A file that moves while it is read
-    // throws, and a throw discards the whole snapshot, so a half-hashed file can never reach a digest.
+    const hash = createHash('sha256');
     const buffer = Buffer.alloc(64 * 1024);
     let offset = 0;
-    state.hash.update('file\0').update(relative).update('\0');
     for (;;) {
       signal.throwIfAborted();
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
       if (!bytesRead) break;
-      state.hash.update(buffer.subarray(0, bytesRead));
+      hash.update(buffer.subarray(0, bytesRead));
       offset += bytesRead;
     }
     const after = await handle.stat();
-    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || offset !== before.size)
+    if (after.size !== entry.size || after.mtimeMs !== entry.mtimeMs || offset !== entry.size)
       throw new CompletionInputUnstableError(
-        `Completion input changed while it was being read: ${relative}`,
+        `Completion input changed while it was being read: ${entry.relative}`,
       );
-    state.files += 1;
-    state.bytes += offset;
-    state.hash.update('\0');
+    return hash.digest('hex');
   } finally {
     await handle.close();
   }
 }
 
+/**
+ * Every file's digest, read `HASH_CONCURRENCY` at a time.
+ *
+ * The walk used to open, read and close each file in turn, so a task's end on a large tree waited for the sum of
+ * every read — twice, before and after the checks. The digest's order is the walk's, not the reads', so reading
+ * in parallel changes nothing about what it covers. The first failure is the answer; reads already started are
+ * let finish before it is thrown, so no handle outlives the snapshot.
+ */
+async function hashFiles(files: readonly FileEntry[], signal: AbortSignal): Promise<string[]> {
+  const digests = new Array<string>(files.length);
+  let next = 0;
+  let failure: unknown;
+  const worker = async () => {
+    while (failure === undefined && next < files.length) {
+      const index = next++;
+      try {
+        digests[index] = await hashFile(files[index]!, signal);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(HASH_CONCURRENCY, files.length) }, worker));
+  if (failure !== undefined) throw failure;
+  return digests;
+}
+
 async function walk(
   absolute: string,
   relative: string,
-  state: Accumulator,
+  collection: Collection,
   runtimePaths: ReadonlySet<string>,
   signal: AbortSignal,
   includeCurrent: boolean,
@@ -209,20 +264,25 @@ async function walk(
       `Symbolic links are not followed in completion inputs: ${relative}`,
     );
   if (stat.isFile()) {
-    await hashFile(absolute, relative, state, signal);
+    admitFile(absolute, relative, stat, collection);
     return;
   }
   if (!stat.isDirectory())
     throw new CompletionInputLimitError(`Unsupported path type in completion inputs: ${relative}`);
-  if (!includeCurrent) {
-    state.hash.update('directory\0').update(relative).update('\0');
-  }
+  if (!includeCurrent) collection.items.push(`directory\0${relative}\0`);
   const entries = await readdir(absolute, { withFileTypes: true });
   entries.sort((left, right) => left.name.localeCompare(right.name, 'en'));
   for (const entry of entries) {
     const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
     if (excluded(childRelative, runtimePaths)) continue;
-    await walk(path.join(absolute, entry.name), childRelative, state, runtimePaths, signal, false);
+    await walk(
+      path.join(absolute, entry.name),
+      childRelative,
+      collection,
+      runtimePaths,
+      signal,
+      false,
+    );
   }
 }
 
@@ -259,15 +319,15 @@ export async function snapshotCompletionInputs(
       }),
     ),
   ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-  const state: Accumulator = {
-    hash: createHash('sha256'),
+  const collection: Collection = {
+    items: [],
     files: 0,
     bytes: 0,
     maxFiles: options.maxFiles ?? MAX_FILES,
   };
   // The identity of the root is hashed first, so two workspaces with identical content produce different
   // digests: evidence is evidence about *this* directory, not about a directory that happens to look like it.
-  state.hash.update('root\0').update(canonicalRoot).update('\0');
+  collection.items.push(`root\0${canonicalRoot}\0`);
   for (const relative of normalized) {
     signal.throwIfAborted();
     if (excluded(relative, runtimePaths)) continue;
@@ -286,10 +346,19 @@ export async function snapshotCompletionInputs(
     if (!exists) {
       // Absence is recorded rather than skipped: a file the checks read disappearing between two snapshots has
       // to change the digest, and "it was not there" is a fact about the range that was monitored.
-      state.hash.update('absent\0').update(relative).update('\0');
+      collection.items.push(`absent\0${relative}\0`);
       continue;
     }
-    await walk(absolute, relative, state, runtimePaths, signal, true);
+    await walk(absolute, relative, collection, runtimePaths, signal, true);
+  }
+  const files = collection.items.filter((item): item is FileEntry => typeof item !== 'string');
+  options.onCollected?.({ files: collection.files, bytes: collection.bytes });
+  const digests = await hashFiles(files, signal);
+  const hash = createHash('sha256');
+  let file = 0;
+  for (const item of collection.items) {
+    if (typeof item === 'string') hash.update(item);
+    else hash.update(`file\0${item.relative}\0${digests[file++]!}\0`);
   }
   const afterRoot = await realpath(canonicalRoot);
   if (afterRoot !== canonicalRoot)
@@ -297,8 +366,8 @@ export async function snapshotCompletionInputs(
   return {
     version: 1,
     rootId: createHash('sha256').update(canonicalRoot).digest('hex'),
-    digest: state.hash.digest('hex'),
-    files: state.files,
-    bytes: state.bytes,
+    digest: hash.digest('hex'),
+    files: collection.files,
+    bytes: collection.bytes,
   };
 }

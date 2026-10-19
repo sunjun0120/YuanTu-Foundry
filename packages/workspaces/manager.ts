@@ -15,6 +15,7 @@ import {
   realPathOrNull,
   samePath,
 } from '../platform/workspace-paths.ts';
+import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import {
   isManagedWorktreePath,
   linkedWorktreeName,
@@ -22,6 +23,7 @@ import {
   managedWorktreeRoot,
   pathExists,
   plainFileInfo,
+  openBlobReader,
   registeredWorktrees,
   repositoryIdentity,
   repositoryReadiness,
@@ -30,6 +32,7 @@ import {
   workspaceGit,
   workspaceGitList,
   writeFileExact,
+  type BlobReader,
   type RepositoryIdentity,
 } from './git.ts';
 import {
@@ -38,11 +41,51 @@ import {
   collectFileDigests,
   freezeSnapshot,
   readManifest,
-  snapshotRef,
+  claimSnapshotOwner,
+  releaseSnapshotOwner,
   type SnapshotFileDigest,
   type SnapshotManifest,
   type SnapshotManifestEntry,
 } from './snapshot.ts';
+import { removeResultArtifacts } from './result-files.ts';
+
+/**
+ * The start-up housekeeping in flight for a store (`startHousekeeping`), which every freeze and allocation waits for.
+ *
+ * Keyed by the store, not the manager: a Host builds a manager per run and per request over its one store, and all
+ * of them have to wait. The release pass must not run beside a delegation (see `releaseUnusedSnapshots`), and
+ * awaiting it at start-up would hold the Host's readiness behind Git; so the Host starts it and serves, and the only
+ * work that has to wait is the work it could race.
+ */
+const housekeepingOf = new WeakMap<object, Promise<void>>();
+
+/**
+ * The release pass in flight, which every freeze and allocation waits for.
+ *
+ * `housekeepingOf` covers the start-up pass; this covers a release requested later (after a session deletion or a
+ * workspace maintenance) in a Host that is otherwise idle. A run that begins while the pass runs has its snapshot
+ * work wait here rather than racing the pass, and the process that requested the release does not hold a Host lock
+ * for the whole of Git work.
+ */
+let snapshotRelease: Promise<void> = Promise.resolve();
+
+async function waitForSnapshotRelease(): Promise<void> {
+  await snapshotRelease;
+}
+
+async function withSnapshotRelease<T>(body: () => Promise<T>): Promise<T> {
+  const previous = snapshotRelease;
+  let done!: () => void;
+  snapshotRelease = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  try {
+    await previous;
+    return await body();
+  } finally {
+    done();
+  }
+}
 
 /** How many snapshot files a worktree fill copies at once. */
 const FILL_CONCURRENCY = 8;
@@ -180,11 +223,14 @@ export class WorkspaceManager {
     signal: AbortSignal;
   }): Promise<WorkspaceSnapshot> {
     this.requireMetadataWrites();
+    await housekeepingOf.get(this.store);
+    await waitForSnapshotRelease();
     const parent = this.store.get(input.parentSessionId);
     const source = input.sourceBinding.executionRoot;
     const snapshot = await freezeSnapshot({
       projectRoot: parent.workspace,
       sourceRoot: source,
+      owner: this.store.snapshotOwner(),
       signal: input.signal,
     });
     // Durable before it is used: a child allocated from a snapshot whose record was lost would have a directory
@@ -208,6 +254,8 @@ export class WorkspaceManager {
     signal: AbortSignal;
   }): Promise<WorkspaceBinding> {
     this.requireMetadataWrites();
+    await housekeepingOf.get(this.store);
+    await waitForSnapshotRelease();
     const { signal } = input;
     signal.throwIfAborted();
     const parent = this.store.get(input.parentSessionId);
@@ -357,23 +405,30 @@ export class WorkspaceManager {
      */
     let next = 0;
     let failed = false;
+    // A format-4 snapshot's bytes are Git blobs: one reader serves the whole fill (see `openBlobReader`).
+    const reader =
+      manifest.format >= 4 ? openBlobReader(identity.repositoryRoot, signal) : undefined;
     const worker = async () => {
       while (!failed && next < manifest.files.length) {
         const entry = manifest.files[next++]!;
         try {
           signal.throwIfAborted();
-          await this.fillFile(identity, target, entry, snapshotId);
+          await this.fillFile(identity, target, entry, snapshotId, reader);
         } catch (error) {
           failed = true;
           throw error;
         }
       }
     };
-    const settled = await Promise.allSettled(
-      Array.from({ length: Math.min(FILL_CONCURRENCY, manifest.files.length) }, worker),
-    );
-    const failure = settled.find((result) => result.status === 'rejected');
-    if (failure) throw failure.reason;
+    try {
+      const settled = await Promise.allSettled(
+        Array.from({ length: Math.min(FILL_CONCURRENCY, manifest.files.length) }, worker),
+      );
+      const failure = settled.find((result) => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    } finally {
+      reader?.close();
+    }
   }
 
   /**
@@ -389,6 +444,7 @@ export class WorkspaceManager {
     target: string,
     entry: SnapshotManifestEntry,
     snapshotId: string,
+    reader?: BlobReader,
   ): Promise<void> {
     const absolute = path.join(target, ...entry.path.split('/'));
     // `readManifest` already refuses paths that leave the tree; this is the last word before a write.
@@ -417,10 +473,10 @@ export class WorkspaceManager {
         );
       return;
     }
-    // A format-2 entry, or a file the worktree already holds: compare and write as before.
+    // A format-2 or format-4 entry, or a file the worktree already holds: compare and write as before.
     await writeFileExact(
       absolute,
-      await snapshotFileBytes(identity.repositoryRoot, snapshotId, entry),
+      await snapshotFileBytes(identity.repositoryRoot, snapshotId, entry, reader),
     );
   }
 
@@ -734,6 +790,130 @@ export class WorkspaceManager {
     return saved;
   }
 
+  /**
+   * Forgets a removed workspace for good: its records, its results' manifests and refs, its removal record and the
+   * ref that kept its work's objects alive. Its removal snapshot goes with the next release pass
+   * (`releaseUnusedSnapshots`), once nothing names it.
+   *
+   * A removed workspace can be restored, and that is what this gives up — which is why nothing calls it unless a
+   * retention period was configured (`purgeExpired`). The rows go first, in one transaction under the operation
+   * lease; the files follow, best effort, so a failure leaves unreferenced bytes rather than a record that points at
+   * nothing. Answers whether the workspace was purged.
+   */
+  async purgeRemoved(bindingId: string, signal: AbortSignal): Promise<boolean> {
+    this.requireMetadataWrites();
+    return this.withOperation(bindingId, signal, async (token) => {
+      const binding = this.store.workspaceById(bindingId);
+      if (!binding || binding.state !== 'removed') return false;
+      const { resultIds } = this.store.purgeRemovedWorkspace(binding.id, token);
+      const repository = binding.repositoryRoot;
+      for (const resultId of resultIds)
+        await removeResultArtifacts(repository, resultId, signal).catch(() => undefined);
+      await rm(this.removalRecord(binding), { force: true });
+      await withRepositoryLock(repository, async () => {
+        await runWorkspaceGit(['update-ref', '-d', `refs/yuantu/workspaces/${binding.id}`], {
+          cwd: repository,
+          allowFailure: true,
+          signal,
+        });
+      });
+      return true;
+    });
+  }
+
+  /**
+   * Starts the opt-in retention purge and then the snapshot release pass, in the background; freezes and allocations
+   * wait for both. Failures are diagnostics: housekeeping that did not happen is retried at the next start.
+   */
+  startHousekeeping(options: { retentionMs?: number }, signal: AbortSignal): Promise<void> {
+    const running = (async () => {
+      try {
+        if (options.retentionMs !== undefined) await this.purgeExpired(options.retentionMs, signal);
+        await this.releaseUnusedSnapshots(signal);
+      } catch (error) {
+        this.diagnostic(
+          `workspace housekeeping deferred: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    })();
+    housekeepingOf.set(this.store, running);
+    return running;
+  }
+
+  /**
+   * Releases this database's share of every snapshot it no longer names, deleting the ones nobody else holds.
+   *
+   * A snapshot is named by a binding built from it, a result compared against it, or a removal record. Removal
+   * records are files every database of the repository writes into one directory, so all of them are read — a
+   * snapshot another database's record names is kept — and a record that cannot be read stops the pass for that
+   * repository rather than being guessed at. The record goes first (`dropUnusedWorkspaceSnapshot`, one transaction
+   * against concurrent bindings), then this owner's ref; the snapshot itself is deleted only when no owner ref is left
+   * (`releaseSnapshotOwner`).
+   *
+   * A pass is serialised with every freeze and allocation through `snapshotRelease`: a run that begins while it is
+   * running waits before recording or allocating a snapshot, instead of racing the window between the record and the
+   * binding that names it. The Host requests a pass only when it has no run or manual operation in flight; start-up
+   * still runs one behind `housekeepingOf`. Answers how many snapshots were deleted outright.
+   */
+  async releaseUnusedSnapshots(signal: AbortSignal): Promise<number> {
+    return await withSnapshotRelease(() => this.releaseUnusedSnapshotsOwned(signal));
+  }
+
+  private async releaseUnusedSnapshotsOwned(signal: AbortSignal): Promise<number> {
+    const owner = this.store.snapshotOwner();
+    const repositories = new Map<string, { root: string; named: Set<string> } | null>();
+    const repositoryFor = async (projectRoot: string) => {
+      const key = canonicalKey(projectRoot);
+      if (repositories.has(key)) return repositories.get(key)!;
+      const identity = await repositoryIdentity(projectRoot, signal).catch(() => null);
+      const named = identity ? await removalNames(identity.repositoryRoot) : null;
+      const entry = identity && named ? { root: identity.repositoryRoot, named } : null;
+      repositories.set(key, entry);
+      return entry;
+    };
+    let deleted = 0;
+    for (const snapshotId of this.store.workspaceSnapshotIds()) {
+      signal.throwIfAborted();
+      const snapshot = this.store.workspaceSnapshot(snapshotId);
+      if (!snapshot) continue;
+      const repository = await repositoryFor(snapshot.projectRoot);
+      if (!repository) continue;
+      if (!this.store.dropUnusedWorkspaceSnapshot(snapshotId, repository.named)) continue;
+      try {
+        if (await releaseSnapshotOwner(repository.root, snapshotId, owner, signal)) deleted++;
+      } catch (error) {
+        this.diagnostic(
+          `snapshot ${snapshotId} release deferred: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return deleted;
+  }
+
+  /**
+   * The opt-in retention pass: purges every workspace removed more than `retentionMs` ago.
+   *
+   * Off unless a deployment asks for it (`YUANTU_WORKSPACE_RETENTION_DAYS`), because a removed workspace is the
+   * last copy of whatever its child wrote and nobody imported. One that cannot be purged now — busy, or a result
+   * still importing — is reported and left for the next pass. Answers how many were purged.
+   */
+  async purgeExpired(retentionMs: number, signal: AbortSignal, now = Date.now()): Promise<number> {
+    let purged = 0;
+    for (const binding of this.store.removedWorkspacesBefore(
+      new Date(now - retentionMs).toISOString(),
+    )) {
+      signal.throwIfAborted();
+      try {
+        if (await this.purgeRemoved(binding.id, signal)) purged++;
+      } catch (error) {
+        this.diagnostic(
+          `workspace ${binding.id} retention deferred: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return purged;
+  }
+
   /** Remove only a proven archived worktree, after saving every source file in a recoverable snapshot. */
   async remove(bindingId: string, signal: AbortSignal): Promise<void> {
     this.requireMetadataWrites();
@@ -755,12 +935,33 @@ export class WorkspaceManager {
     this.store.setWorkspaceState({ bindingId, expect: 'archived', to: 'removing' });
     try {
       await this.validate(binding, signal);
-      const snapshot = await freezeSnapshot({
-        projectRoot: binding.projectRoot,
-        sourceRoot: binding.executionRoot,
-        signal,
-      });
-      const manifest = await readManifest(binding.repositoryRoot, snapshot.id);
+      /**
+       * A workspace whose files are still exactly its baseline has nothing of its own to save.
+       *
+       * Its removal record then names the baseline itself — restoring it rebuilds the same files either way — and no
+       * second snapshot of the same tree is frozen, stored and kept until somebody purges it. This is the common case
+       * for a child that only read, and the one Claude Code also cleans up without asking.
+       */
+      const baseline =
+        binding.snapshotId !== null ? this.store.workspaceSnapshot(binding.snapshotId) : null;
+      const baselineManifest = baseline
+        ? await readManifest(binding.repositoryRoot, baseline.id)
+        : null;
+      const unchanged =
+        baselineManifest !== null &&
+        sameFiles(await collectFileDigests(binding.executionRoot, signal), baselineManifest.files);
+      const snapshot =
+        unchanged && baseline
+          ? baseline
+          : await freezeSnapshot({
+              projectRoot: binding.projectRoot,
+              sourceRoot: binding.executionRoot,
+              owner: this.store.snapshotOwner(),
+              signal,
+            });
+      const manifest = unchanged
+        ? baselineManifest
+        : await readManifest(binding.repositoryRoot, snapshot.id);
       if (!manifest)
         throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Removal snapshot is missing');
       const expected = new Set(manifest.files.map((entry) => entry.path));
@@ -785,7 +986,7 @@ export class WorkspaceManager {
       this.store.recordWorkspaceSnapshot(snapshot);
       const record = this.removalRecord(binding);
       await this.removalSnapshot(binding);
-      await mkdir(path.dirname(record), { recursive: true });
+      ensureRuntimeDirectory(path.dirname(record));
       if (!samePath(path.dirname(record), realPathOrNull(path.dirname(record)) ?? ''))
         throw new WorkspaceFailure(
           'WORKSPACE_IDENTITY_MISMATCH',
@@ -810,9 +1011,7 @@ export class WorkspaceManager {
         await this.validate(binding, signal);
         await assertPreserved();
         const current = await collectFileDigests(binding.executionRoot, signal);
-        const fingerprint = (files: readonly SnapshotFileDigest[]) =>
-          JSON.stringify(files.map(({ path, mode, sha256 }) => ({ path, mode, sha256 })));
-        if (fingerprint(current) !== fingerprint(manifest.files))
+        if (!sameFiles(current, manifest.files))
           throw new WorkspaceFailure(
             'WORKSPACE_SOURCE_CHANGED',
             'Workspace changed after its removal snapshot was saved',
@@ -931,18 +1130,15 @@ export class WorkspaceManager {
   async republishSnapshotRef(snapshot: WorkspaceSnapshot, signal: AbortSignal): Promise<void> {
     const identity = await repositoryIdentity(snapshot.projectRoot, signal);
     if (!identity) return;
-    const existing = await workspaceGit(['rev-parse', '--verify', snapshotRef(snapshot.id)], {
-      cwd: identity.worktreeRoot,
+    // This database's share, which is what keeps the baseline alive now (`snapshotOwnerRef`); recording it again is
+    // idempotent, and a snapshot from before owners existed gains one the same way.
+    await claimSnapshotOwner(
+      identity.repositoryRoot,
+      snapshot.id,
+      snapshot.baseCommit,
+      this.store.snapshotOwner(),
       signal,
-      allowFailure: true,
-    }).catch(() => '');
-    if (existing) return;
-    await withRepositoryLock(identity.repositoryRoot, async () => {
-      await runWorkspaceGit(['update-ref', snapshotRef(snapshot.id), snapshot.baseCommit], {
-        cwd: identity.worktreeRoot,
-        signal,
-      });
-    });
+    );
   }
 }
 
@@ -967,4 +1163,45 @@ export function insideManagedRoot(repositoryRoot: string, target: string): boole
 /** Reads a file out of a workspace, used by the results service for a diff of one path. */
 export async function readWorkspaceFile(root: string, relative: string): Promise<Buffer | null> {
   return await readFile(path.join(root, ...relative.split('/'))).catch(() => null);
+}
+
+/**
+ * Every snapshot id the removal records of one repository name, or `null` when one of them cannot be read.
+ *
+ * Every database writes its removal records into the same directory, so this is the whole repository's answer, not
+ * one store's. A record that is not plain JSON naming a snapshot answers `null`: the snapshot it was written for
+ * cannot be known, so no snapshot of this repository may be released on the strength of this listing.
+ */
+async function removalNames(repositoryRoot: string): Promise<Set<string> | null> {
+  const directory = path.join(repositoryRoot, '.yuantu', 'workspace-removals');
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? new Set() : null;
+  }
+  const named = new Set<string>();
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const record = JSON.parse(await readFile(path.join(directory, name), 'utf8')) as {
+        snapshotId?: unknown;
+      };
+      if (typeof record.snapshotId !== 'string') return null;
+      named.add(record.snapshotId);
+    } catch {
+      return null;
+    }
+  }
+  return named;
+}
+
+/** Whether two file lists are the same tree: every path, mode and content, in walk order. */
+function sameFiles(
+  left: readonly SnapshotFileDigest[],
+  right: readonly SnapshotFileDigest[],
+): boolean {
+  const fingerprint = (files: readonly SnapshotFileDigest[]) =>
+    JSON.stringify(files.map(({ path, mode, sha256 }) => ({ path, mode, sha256 })));
+  return fingerprint(left) === fingerprint(right);
 }

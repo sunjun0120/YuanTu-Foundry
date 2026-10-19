@@ -1,20 +1,18 @@
 /**
- * The general settings form's save button, and what a *failed* save does to it.
+ * The general settings form saves every change as it is made, and what a *failed* save does to it.
  *
- * A refusal (`{ok:false}`) always released the form: it is an ordinary reply on the ordinary path. A **rejected
- * promise** is the other failure — `ipcRenderer.invoke` rejects when the main-process handler throws or the
- * channel is gone — and `await` on it threw out of the submit listener before anything reset `pending`. Every
- * control stayed disabled for the rest of the window's life, the button among them, with the word "正在保存…"
- * frozen beside them: the only way to save a setting was to restart the app.
+ * A refusal (`{ok:false}`) is an ordinary reply on the ordinary path. A **rejected promise** is the other
+ * failure — `ipcRenderer.invoke` rejects when the main-process handler throws or the channel is gone — and an
+ * `await` on it that threw before anything reset the in-flight flag would swallow every later change for the
+ * rest of the window's life. Either way the form must go back to what is persisted and say why.
  *
  * `tests/settings.smoke.mjs` cannot see any of this: it drives `dist/desktop/renderer.js`, which was built
- * before this source, and this batch does not build. So the real `setupGeneralSettings` is driven here over the
- * smallest document its own code paths name — the same approach `tests/task-confirm-selection.test.ts` uses.
- * The pointer-and-pixels half stays with the smoke.
+ * before this source. So the real `setupGeneralSettings` is driven here over the smallest document its own
+ * code paths name — the same approach `tests/task-confirm-selection.test.ts` uses.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setLocale, t as text } from '../apps/desktop/i18n.ts';
+import { setLocale } from '../apps/desktop/i18n.ts';
 import type {
   UiSettings,
   UiSettingsCommand,
@@ -37,6 +35,7 @@ class FakeNode {
   hidden = false;
   disabled = false;
   value = '';
+  checked = false;
   id = '';
   constructor(tag: string) {
     this.tagName = tag.toUpperCase();
@@ -128,7 +127,6 @@ class FakeDocument {
 function generalSettingsPage(): {
   document: FakeDocument;
   form: FakeNode;
-  save: FakeNode;
   feedback: FakeNode;
   language: FakeNode;
   appearance: FakeNode;
@@ -165,9 +163,11 @@ function generalSettingsPage(): {
   const language = select('ui-language', 2);
   const appearance = select('ui-appearance', 3);
   const fontSize = select('ui-font-size', 3);
+  create('ui-notifications-title', 'span');
+  create('ui-notifications', 'input');
+  create('ui-notifications-note', 'small');
   const feedback = create('general-settings-feedback');
-  const save = create('general-settings-save', 'button');
-  return { document: new FakeDocument(ids), form, save, feedback, language, appearance, fontSize };
+  return { document: new FakeDocument(ids), form, feedback, language, appearance, fontSize };
 }
 function installDom(document_: FakeDocument, window_: unknown): () => void {
   const globals = globalThis as unknown as Record<string, unknown>;
@@ -201,6 +201,7 @@ class FakeBridge {
     language: 'zh-CN',
     appearance: 'system',
     fontSize: 'medium',
+    notifications: true,
   };
   private queued: Promise<UiSettingsReply> | null = null;
   queue(reply: Promise<UiSettingsReply>): void {
@@ -222,8 +223,6 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 interface Page {
-  form: FakeNode;
-  save: FakeNode;
   feedback: FakeNode;
   appearance: FakeNode;
   bridge: FakeBridge;
@@ -237,81 +236,79 @@ function open(t: test.TestContext): Page {
   // still registered here — `setLocale` with no document installed would reach it and read through `undefined`.
   setLocale('zh-CN');
   setupGeneralSettings();
-  return {
-    form: page.form,
-    save: page.save,
-    feedback: page.feedback,
-    appearance: page.appearance,
-    bridge,
-  };
+  return { feedback: page.feedback, appearance: page.appearance, bridge };
 }
-/** Fire the form's submit as a click on the save button does, and wait for the handler to finish. */
-async function submit(page: Page): Promise<void> {
-  await page.form.fire('submit', { preventDefault() {} }).catch(() => {});
-  await flush();
-}
-/** Change one control, which is what makes the save button usable at all. */
-function change(page: Page, value: string): void {
+/** Change one control, which saves it, and wait for the save to finish. */
+async function change(page: Page, value: string): Promise<void> {
   page.appearance.value = value;
-  void page.appearance.fire('change');
+  await page.appearance.fire('change').catch(() => {});
+  await flush();
 }
 
-test('a save whose promise rejects releases the form, and the next attempt still saves', async (t) => {
+test('a change saves itself without a save button', async (t) => {
   const page = open(t);
   await flush();
-  assert.equal(page.save.disabled, true, 'nothing has changed yet, so there is nothing to save');
-  change(page, 'dark');
-  assert.equal(page.save.disabled, false, 'a change is saveable');
+  assert.equal(page.bridge.saves.length, 0, 'loading the page saves nothing');
+  await change(page, 'dark');
+  assert.equal(page.bridge.saves.length, 1);
+  assert.equal(
+    page.bridge.saves[0]!.type === 'save' && page.bridge.saves[0]!.settings.appearance,
+    'dark',
+  );
+  assert.equal(page.feedback.hidden, true, 'a successful save says nothing');
+});
+
+test('a save whose promise rejects reverts the form, and the next change still saves', async (t) => {
+  const page = open(t);
+  await flush();
   // The failure this case is about: the IPC call itself rejects rather than answering `{ok:false}`.
   page.bridge.queue(Promise.reject(new Error('IPC 通道中断')));
-  await submit(page);
-  assert.equal(
-    page.save.disabled,
-    false,
-    'a rejected save must leave the form usable: `pending` has to be released on every path',
-  );
-  assert.equal(
-    page.appearance.disabled,
-    false,
-    'the controls are not locked by a save that never answered',
-  );
+  await change(page, 'dark');
+  assert.equal(page.appearance.value, 'system', 'the form shows what is stored, not the lost edit');
+  assert.equal(page.appearance.disabled, false, 'the controls are not locked');
   assert.equal(page.feedback.hidden, false, 'the failure is said out loud');
-  assert.notEqual(
-    page.feedback.textContent,
-    text('general.saving'),
-    'the form is not left claiming it is still saving',
-  );
   assert.equal(page.feedback.classList.contains('error'), true);
-  assert.match(
-    page.feedback.textContent,
-    /IPC 通道中断/,
-    'the reason reaches the person who clicked',
-  );
-  // The half that matters most: the button really can save again.
-  await submit(page);
-  assert.equal(page.bridge.saves.length, 2, 'the second click reached the bridge');
-  assert.equal(page.feedback.textContent, text('general.saved'));
+  assert.match(page.feedback.textContent, /IPC 通道中断/, 'the reason reaches the person');
+  // The half that matters most: a later change really is saved.
+  await change(page, 'dark');
+  assert.equal(page.bridge.saves.length, 2, 'the second change reached the bridge');
+  assert.equal(page.feedback.hidden, true, 'the error clears once a save succeeds');
+  assert.equal(page.appearance.value, 'dark');
+});
+
+test('a refusal is a different failure: the ordinary reply path reverts too', async (t) => {
+  const page = open(t);
+  await flush();
+  page.bridge.queue(Promise.resolve<UiSettingsReply>({ ok: false, error: '无效的通用设置' }));
+  await change(page, 'light');
+  assert.equal(page.feedback.textContent, '无效的通用设置');
+  assert.equal(page.feedback.classList.contains('error'), true);
+  assert.equal(page.appearance.value, 'system', 'the refused value is not left on screen');
+  await change(page, 'dark');
+  assert.equal(page.bridge.saves.length, 2, 'and it can be saved again');
+});
+
+test('a change made while a save is in flight is sent after it, not lost', async (t) => {
+  const page = open(t);
+  await flush();
+  let answer!: (reply: UiSettingsReply) => void;
+  page.bridge.queue(new Promise((resolve) => (answer = resolve)));
+  page.appearance.value = 'light';
+  const first = page.appearance.fire('change');
+  page.appearance.value = 'dark';
+  await page.appearance.fire('change');
+  assert.equal(page.bridge.saves.length, 1, 'one save at a time');
+  answer({
+    ok: true,
+    kind: 'settings',
+    settings: { language: 'zh-CN', appearance: 'light', fontSize: 'medium', notifications: true },
+  });
+  await first;
+  await flush();
+  assert.equal(page.bridge.saves.length, 2);
   assert.equal(
     page.bridge.saves[1]!.type === 'save' && page.bridge.saves[1]!.settings.appearance,
     'dark',
   );
-  assert.equal(page.save.disabled, true, 'the saved value is now what is persisted');
-});
-
-test('a refusal is a different failure: the ordinary reply path still releases the form', async (t) => {
-  const page = open(t);
-  await flush();
-  change(page, 'light');
-  // `{ok:false}` is a resolved answer, so this path was never the broken one; it is here so the two cannot be
-  // confused for each other or for the rejection above.
-  page.bridge.queue(Promise.resolve<UiSettingsReply>({ ok: false, error: '无效的通用设置' }));
-  await submit(page);
-  assert.equal(page.feedback.textContent, '无效的通用设置');
-  assert.equal(page.feedback.classList.contains('error'), true);
-  // The refusal puts the form back to what was persisted, so the button is disabled because there is nothing to
-  // save any more — not because a `pending` flag is stuck. Changing a control again is what tells the two apart.
-  assert.equal(page.appearance.disabled, false, 'a refusal does not lock the controls');
-  assert.equal(page.save.disabled, true, 'the form was reverted, so nothing is pending');
-  change(page, 'dark');
-  assert.equal(page.save.disabled, false, 'and it can be saved again');
+  assert.equal(page.appearance.value, 'dark', 'the newer edit stays on screen');
 });

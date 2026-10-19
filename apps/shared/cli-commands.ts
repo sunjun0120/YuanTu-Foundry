@@ -108,6 +108,24 @@ export const CLI_MAINTENANCE_COMMANDS: readonly CliCommand[] = [
     usage: 'session-recover <session-id> --db <file>     (clear a lease no process can prove dead)',
     runs: false,
   },
+  {
+    name: 'workspace-gc',
+    usage:
+      'workspace-gc --db <file> [--workspace dir] [--dry-run] (release snapshots this database no longer uses)',
+    runs: false,
+  },
+  {
+    name: 'workspace-lease-recover',
+    usage:
+      'workspace-lease-recover <binding-id> --db <file> (drop a workspace lease whose owner you know is gone)',
+    runs: false,
+  },
+  {
+    name: 'sandbox-recover',
+    usage:
+      'sandbox-recover [--dry-run]                     (restore and release a Windows sandbox lease a dead process left)',
+    runs: false,
+  },
 ];
 /** How many commands a run needs a model for. */
 export const countCliRunCommands = (): number =>

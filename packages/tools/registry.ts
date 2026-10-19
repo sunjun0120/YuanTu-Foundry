@@ -6,7 +6,7 @@ import {
   snapshotExecutionPolicy,
   withExecutionPolicy,
 } from './execution-policy.ts';
-import { resolveSandboxConfig } from './sandbox-provider.ts';
+import { resolveSandboxConfig, sandboxProvider, type SandboxMode } from './sandbox-provider.ts';
 import type { ValidateFunction } from 'ajv';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { JobRegistry } from '../protocol/jobs.ts';
@@ -565,6 +565,14 @@ export class ToolRegistry {
       if (denial) return materialize(errorResult(denial));
       context.signal.throwIfAborted();
 
+      // A command the backend would refuse whatever it is (a sandbox lease a dead process left) is refused here,
+      // before anyone is asked to approve it: an approval for an outcome already known only costs the person.
+      if (entry.tool.permission === 'command' && context.executionPolicy) {
+        const blocked = await commandBlocker(context.executionPolicy.mode);
+        if (blocked) return materialize(errorResult(blocked));
+        context.signal.throwIfAborted();
+      }
+
       invariant.enter(execution, 'prepare');
       let prepared = await entry.tool.prepare?.(call.arguments, scope);
       context.signal.throwIfAborted();
@@ -825,6 +833,14 @@ export class ToolRegistry {
       context.signal.removeEventListener('abort', abortWithRun);
       invariant.leave(execution, completed);
     }
+  }
+}
+/** The backend's own reason no command can run now; a failing check is no reason, so prepare still decides. */
+async function commandBlocker(mode: SandboxMode): Promise<Error | undefined> {
+  try {
+    return await sandboxProvider(mode).blocked?.();
+  } catch {
+    return undefined;
   }
 }
 export { ToolPipelineInvariant };

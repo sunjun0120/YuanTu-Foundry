@@ -115,6 +115,8 @@ export type CarrierCommand =
   | { type: 'planRefresh' }
   | { type: 'load' | 'undo' | 'deleteSession'; id: string }
   | { type: 'rename'; id: string; title: string }
+  /** Take a session out of the sidebar's list (`archived: true`) or bring it back. */
+  | { type: 'archiveSession'; id: string; archived: boolean }
   | { type: 'searchSessions'; query: string }
   /** Show the next page of older sessions in the list. */
   | { type: 'loadMoreSessions' }
@@ -325,6 +327,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     load: ['type', 'id'],
     rename: ['type', 'id', 'title'],
     deleteSession: ['type', 'id'],
+    archiveSession: ['type', 'id', 'archived'],
     searchSessions: ['type', 'query'],
     loadMoreSessions: ['type'],
     undo: ['type', 'id'],
@@ -391,9 +394,14 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
       value.indices.some((i) => !Number.isInteger(i) || i < 0))
   )
     return invalid();
-  if (['load', 'approve', 'undo', 'rename', 'deleteSession'].includes(String(value.type))) {
+  if (
+    ['load', 'approve', 'undo', 'rename', 'deleteSession', 'archiveSession'].includes(
+      String(value.type),
+    )
+  ) {
     if (typeof value.id !== 'string' || !value.id.trim() || value.id.length > 256) return invalid();
   }
+  if (value.type === 'archiveSession' && typeof value.archived !== 'boolean') return invalid();
   if (value.type === 'sandbox' && (value.mode === 'docker' || value.mode === 'sbx'))
     parseSandboxMode(value.mode);
   // The vocabulary is the sandbox seam's, so an unknown backend is refused here rather than at the far end of

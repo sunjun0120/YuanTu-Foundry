@@ -465,6 +465,25 @@ test('a crashing language server is reported instead of hanging', async (t) => {
   assert.match(diagnostics.content, /not running|exited/i);
 });
 
+test('a server that crashed is restarted for the next file, within its limit', async (t) => {
+  const { root, tools } = await workspace(t);
+  await writeFile(path.join(root, 'crash.fake'), 'CRASH\n');
+  await writeFile(path.join(root, 'fine.fake'), 'ok\n');
+  const started = await tools.execute(call('lsp_start', { language: 'fake' }), ctx());
+  assert.equal(started.isError, false, started.content);
+  const crashed = await tools.execute(call('lsp_diagnostics', { paths: ['crash.fake'] }), ctx());
+  assert.equal(crashed.isError, true);
+  // A manager lives for the session now; the crash must not leave the language dead until somebody restarts it.
+  const revived = await tools.execute(call('lsp_diagnostics', { paths: ['fine.fake'] }), ctx());
+  assert.equal(revived.isError, false, revived.content);
+  // Crashing it again and again stops being restarted after the limit, rather than looping.
+  for (let attempt = 0; attempt < 4; attempt++)
+    await tools.execute(call('lsp_diagnostics', { paths: ['crash.fake'] }), ctx());
+  const exhausted = await tools.execute(call('lsp_diagnostics', { paths: ['fine.fake'] }), ctx());
+  assert.equal(exhausted.isError, true);
+  assert.match(exhausted.content, /no running language server/i);
+});
+
 test('the diagnostics wait is bounded when a server never publishes', async (t) => {
   const { root, tools } = await workspace(t);
   await writeFile(path.join(root, 'slow.fake'), 'NODIAGNOSTICS\n');

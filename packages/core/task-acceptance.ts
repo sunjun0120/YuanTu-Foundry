@@ -43,8 +43,12 @@ export interface TaskVerification {
   error?: string;
 }
 
-export function captureTaskBaselines(root: string, task: Task): Promise<TaskBaselines> {
-  return captureAcceptanceBaselines(root, task.acceptance);
+export function captureTaskBaselines(
+  root: string,
+  task: Task,
+  prior?: Readonly<TaskBaselines>,
+): Promise<TaskBaselines> {
+  return captureAcceptanceBaselines(root, task.acceptance, prior);
 }
 
 /**
@@ -53,16 +57,27 @@ export function captureTaskBaselines(root: string, task: Task): Promise<TaskBase
  * Whichever source the list came from — a task, an explicit request, an approved plan, a resumed contract — the
  * check compares against what the path was when the run started; without the image it has nothing to compare to
  * and the verifier reports the definition as unexecutable.
+ *
+ * `prior` is the image the same definition already took. A baseline belongs to the definition, not to one attempt
+ * at it: a retry or a resumed contract that re-sampled would take the previous attempt's edits as the new "before",
+ * and a forbidden path the failed attempt changed would then pass. An image is reused only for the check id and
+ * path it was taken for; a check the prior images do not cover is captured now.
  */
 export async function captureAcceptanceBaselines(
   root: string,
   acceptanceList: readonly Acceptance[],
+  prior?: Readonly<TaskBaselines>,
 ): Promise<TaskBaselines> {
   const baselines: TaskBaselines = {};
   for (const acceptance of acceptanceList) {
     const check = acceptance.check;
-    if (check?.kind === 'forbidden-path' && check.expectation === 'unchanged' && check.path)
-      baselines[check.id] = await capturePathSnapshot(root, check.path);
+    if (check?.kind !== 'forbidden-path' || check.expectation !== 'unchanged' || !check.path)
+      continue;
+    const kept = prior?.[check.id];
+    baselines[check.id] =
+      kept && (kept.path === undefined || kept.path === check.path)
+        ? { ...kept, path: check.path }
+        : { ...(await capturePathSnapshot(root, check.path)), path: check.path };
   }
   return baselines;
 }

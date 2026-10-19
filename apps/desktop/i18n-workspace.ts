@@ -7,6 +7,7 @@
 export const workspaceMessages: Record<string, [string, string]> = {
   'session.actions': ['会话操作', 'Session actions'],
   'session.rename': ['重命名', 'Rename'],
+  'session.archive': ['归档', 'Archive'],
   'session.delete': ['删除', 'Delete'],
   'session.renameTitle': ['重命名会话', 'Rename session'],
   'session.deleteTitle': ['删除会话？', 'Delete session?'],
@@ -96,6 +97,7 @@ export const workspaceMessages: Record<string, [string, string]> = {
     'Automatic rounds stopped: this request’s rounds spent their token budget ({rounds} round(s) run). Send a message to continue.',
   ],
   'ui.deliverablesTitle': ['交付物', 'Deliverables'],
+  'ui.openDeliverable': ['在工作区预览中打开', 'Open in the workspace preview'],
   /**
    * The completion contract, in the words a person decides with.
    *
@@ -150,6 +152,10 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.completionReason.invalid-definition': [
     '验收条件无法执行，请检查其定义',
     'The acceptance criteria cannot be run; check how they are defined',
+  ],
+  'ui.completionReason.protected-path-changed': [
+    '合同要求不得改动的文件被修改，需要人工审查',
+    'A file the contract said must not change was modified; a person needs to review it',
   ],
   'ui.completionReason.other': [
     '运行需要人工检查后才能视为完成',

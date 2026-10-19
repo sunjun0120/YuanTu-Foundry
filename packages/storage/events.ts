@@ -285,6 +285,14 @@ export const SESSION_EVENT_TYPES = [
   'input.queued',
   'input.consumed',
   'input.discarded',
+  /**
+   * An operator dropped a workspace operation lease that no process could prove dead (`workspace-lease-recover`).
+   *
+   * Recorded on the delegating session, with who held the lease, who asked and why: automatic recovery only ever
+   * takes over a lease whose owner is provably gone, so this is the one way a live-looking lease ends, and a
+   * reader has to be able to tell that decision from a lease that was simply lost.
+   */
+  'workspace.lease.recovered',
 ] as const;
 export type SessionEventType = (typeof SESSION_EVENT_TYPES)[number];
 const KNOWN_EVENT_TYPES = new Set<string>(SESSION_EVENT_TYPES);
@@ -307,6 +315,8 @@ const KNOWN_EVENT_TYPES = new Set<string>(SESSION_EVENT_TYPES);
  * without them shows the same conversation and the same result.
  */
 export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
+  // An operator's record about a workspace lease; nothing a transcript or projection is built from.
+  'workspace.lease.recovered',
   'tool.execution.started',
   'tool.execution.finished',
   'context.summary.retry',

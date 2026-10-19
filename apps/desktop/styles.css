@@ -686,11 +686,21 @@ button {
   border: 0;
   transition:
     background 0.15s,
-    border-color 0.15s;
+    border-color 0.15s,
+    opacity 0s;
 }
+/*
+ * The dimming waits before it shows. Switching sessions disables nearly every button for the moment the read
+ * takes, and dimming them all at once and back made the whole window blink as though it had reloaded. A button
+ * that stays disabled still dims; one re-enabled within the delay never visibly changes. Re-enabling is instant.
+ */
 button:disabled {
   cursor: default;
   opacity: 0.5;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    opacity 0.15s 0.3s;
 }
 button:focus-visible,
 summary:focus-visible {
@@ -1121,6 +1131,57 @@ textarea::placeholder {
   font-size: 10px;
   color: #a7b0a9;
   margin-right: auto;
+}
+.verification-host:empty {
+  display: none;
+}
+.verification-editor {
+  margin-top: 8px;
+  border-top: 1px solid #edf0ed;
+  padding-top: 6px;
+}
+.verification-editor summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: #6c7a70;
+  user-select: none;
+}
+.verification-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px 2px 2px;
+}
+.verification-field {
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+  color: #6c7a70;
+}
+.verification-field-label {
+  color: #8b978e;
+}
+.verification-input,
+.verification-commands {
+  width: 100%;
+  border: 1px solid #dce3dc;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #34463a;
+  background: #fbfcfb;
+  font: inherit;
+  font-size: 12px;
+}
+.verification-commands {
+  min-height: 54px;
+  max-height: 160px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.verification-hint {
+  margin: 0;
+  color: #8b978e;
+  font-size: 10px;
+  line-height: 1.5;
 }
 #send span {
   margin-left: 12px;

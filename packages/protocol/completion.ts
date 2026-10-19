@@ -29,8 +29,10 @@ export type CheckFailureReason =
   | 'timeout'
   /** The command could not start, or an I/O or cleanup failure happened around it. */
   | 'environment-error'
-  /** The acceptance definition itself is unusable, or a path that must not change did change. */
+  /** The acceptance definition itself is unusable. */
   | 'invalid-definition'
+  /** A path the contract forbade changing was changed. Not repairable: a person has to look at the diff. */
+  | 'protected-path-changed'
   /** The criterion is a human judgement and nobody has confirmed it yet. */
   | 'manual-review';
 
@@ -179,6 +181,24 @@ export interface CompletionRecord {
   planId?: string;
   planHash?: string;
   goalObjective?: string;
+  /**
+   * The before-images of the contract's `forbidden-path` + `unchanged` checks, taken by the run that created it.
+   *
+   * They belong to the contract, not to a run: a resume compares against these rather than re-sampling, because a
+   * re-sample would treat the failed run's edits as the new "before". Absent for a contract with no such checks and
+   * for contracts recorded before this field existed.
+   */
+  baselines?: Record<string, CompletionPathBaseline>;
+}
+
+/** A bounded content image of one workspace path (the core verifier's `PathSnapshot`). */
+export interface CompletionPathBaseline {
+  version: 1;
+  state: 'absent' | 'present';
+  digest?: string;
+  entries: number;
+  bytes: number;
+  path?: string;
 }
 
 export const COMPLETION_STATES: readonly CompletionState[] = [
@@ -194,6 +214,7 @@ export const CHECK_FAILURE_REASONS: readonly CheckFailureReason[] = [
   'timeout',
   'environment-error',
   'invalid-definition',
+  'protected-path-changed',
   'manual-review',
 ] as const;
 

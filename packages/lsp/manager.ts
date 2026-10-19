@@ -27,10 +27,15 @@ export interface LspServerStatus {
 }
 
 /**
- * Owns one language server connection per language for a single workspace. The
- * manager is created per run and closed by the tool registry, matching the
- * browser session lifecycle.
+ * Owns one language server connection per language for a single workspace.
+ *
+ * A session's manager is pooled across its runs and closed when idle, when the session is deleted, or with the Host
+ * (`../catalog/resource-pool.ts`); a registry outside a session owns one for its own lifetime.
  */
+/** How many times a crashed server is restarted before it is left for an explicit start. */
+const MAX_RESTARTS = 3;
+const RESTART_TIMEOUT_MS = 30_000;
+
 export class LspManager {
   private readonly root: string;
   private servers?: LspServerDefinition[];
@@ -38,6 +43,8 @@ export class LspManager {
   private clients = new Map<string, LspClient>();
   private starting = new Map<string, Promise<LspClient>>();
   private closing = false;
+  /** How many times each language's server was restarted after it died on its own; see `revive`. */
+  private restarts = new Map<string, number>();
 
   constructor(root: string) {
     this.root = root;
@@ -84,14 +91,49 @@ export class LspManager {
       })
       .map(([language]) => language);
   }
-  /** Only ever returns an already-running client; editing never starts a server. */
+  /**
+   * Only ever returns a client that was started on purpose; editing never starts a server.
+   *
+   * A server that was started and then died on its own is restarted here (`revive`), within its limit: that is a
+   * server somebody already approved, not a new one.
+   */
   async runningForFile(file: string): Promise<LspClient | undefined> {
     if (!LspManager.enabled()) return undefined;
     const definition = await this.definitionForFile(file);
-    return definition ? this.running(definition.language) : undefined;
+    if (!definition) return undefined;
+    return this.running(definition.language) ?? (await this.revive(definition.language));
   }
 
-  async start(language: string, signal: AbortSignal): Promise<LspClient> {
+  /**
+   * Starts again a server that crashed, at most `MAX_RESTARTS` times until it is started on purpose again.
+   *
+   * A manager now lives for a whole session, so a server that exits — an out-of-memory kill, a crash on one file —
+   * would otherwise stay dead for the rest of it, and every request would answer "not running" until the model
+   * thought to start it again. Claude Code restarts a crashed server with a bounded count; so does this. A restart
+   * reuses the approval the first start had only while the execution policy is the one it was approved under —
+   * after a policy change the crashed server is left for an explicit `lsp_start`.
+   */
+  private async revive(language: string): Promise<LspClient | undefined> {
+    const crashed = this.clients.get(language);
+    if (!crashed || crashed.running || this.closing) return undefined;
+    const restarts = this.restarts.get(language) ?? 0;
+    if (restarts >= MAX_RESTARTS) return undefined;
+    try {
+      crashed.assertPolicy();
+    } catch {
+      return undefined;
+    }
+    this.restarts.set(language, restarts + 1);
+    try {
+      return await this.start(language, AbortSignal.timeout(RESTART_TIMEOUT_MS), true);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async start(language: string, signal: AbortSignal, revival = false): Promise<LspClient> {
+    // A start asked for on purpose gives the server its full restart allowance again.
+    if (!revival) this.restarts.delete(language);
     if (this.closing) throw new Error('Language server manager is closing');
     this.assertEnabled();
     signal.throwIfAborted();

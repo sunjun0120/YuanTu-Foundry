@@ -142,46 +142,17 @@ export function buildContextInput(
     // adapter it came back over.
     ...(model === null ? {} : { model }),
     ...(protocol === undefined ? {} : { protocol }),
-    // Shortening needs somewhere to put the full text. Without a spill seam nothing is shortened: a
-    // shortened result whose "read it here" path does not exist is worse than a long result.
-    shrink: {
-      policy: { keepRecent: toolResultKeepRecent, tokens: toolResultShrinkTokens },
-      spill: ({ message, content }) =>
-        spillResult({
-          workspace,
-          sessionId,
-          key: message.role === 'tool' ? message.toolCallId : 'message',
-          content,
-        }),
-      /**
-       * The round's own price for text, which is what turns the policy's token budget into a character cut.
-       *
-       * A tool message rather than the raw string: that is the shape the estimator prices everywhere else,
-       * images and protocol margin included, and building it here means "shortened to a 400-token budget"
-       * and "this request is 4,000 tokens over" are answers from the same arithmetic.
-       */
-      measure: (text) =>
-        estimateMessageTokens(
-          { role: 'tool', toolCallId: '', content: text, isError: false },
-          calibration?.factor ?? 1,
-        ),
-    },
-    shrinkPercent: contextShrinkPercent,
-    /**
-     * Dropping the middle of an oversized result needs nothing from the host, so this seam is mounted
-     * unconditionally: no spill target to write to, no calibrated measure to convert a budget with, and no
-     * workspace to reach. It is what keeps a session bounded in the cases the shortening seam declines —
-     * a read-only workspace, a full disk, or a spill directory that is gone.
-     */
-    prune: {
-      policy: {
-        thresholdChars: toolResultPruneThresholdChars,
-        headChars: toolResultPruneHeadChars,
-        tailChars: toolResultPruneTailChars,
-      },
-      keepRecent: toolResultKeepRecent,
-    },
-    prunePercent: contextShrinkPercent,
+    ...contextSeams({
+      workspace,
+      sessionId,
+      calibration,
+      toolResultKeepRecent,
+      toolResultShrinkTokens,
+      contextShrinkPercent,
+      toolResultPruneThresholdChars,
+      toolResultPruneHeadChars,
+      toolResultPruneTailChars,
+    }),
     onUsage: (response) => {
       usage.inputTokens += response.usage.inputTokens;
       usage.outputTokens += response.usage.outputTokens;
@@ -226,5 +197,87 @@ export function buildContextInput(
         coveredMessages,
       });
     },
+  };
+}
+
+/** The policy numbers and ports the two bounded passes are built from. */
+export interface ContextSeamOptions {
+  /** The execution root, for the spill target a shortened result is written under. */
+  workspace: string;
+  sessionId: string;
+  calibration: TokenCalibration | undefined;
+  toolResultKeepRecent: number;
+  toolResultShrinkTokens: number;
+  contextShrinkPercent: number | undefined;
+  toolResultPruneThresholdChars: number;
+  toolResultPruneHeadChars: number;
+  toolResultPruneTailChars: number;
+}
+
+/**
+ * The shortening and pruning seams, for every caller of `prepareContext` that stands in for a run.
+ *
+ * A run and a manual `/compact` used to write these by hand, each its own copy, and the copies drifted: the manual
+ * path never gained `prune`, so a compaction a person asked for replayed whole oversized results that the run's
+ * own rounds would have cut. One factory is the only way the two can stay the same request.
+ */
+export function contextSeams(
+  options: ContextSeamOptions,
+): Pick<
+  Parameters<typeof prepareContext>[0],
+  'shrink' | 'shrinkPercent' | 'prune' | 'prunePercent'
+> {
+  const {
+    workspace,
+    sessionId,
+    calibration,
+    toolResultKeepRecent,
+    toolResultShrinkTokens,
+    contextShrinkPercent,
+    toolResultPruneThresholdChars,
+    toolResultPruneHeadChars,
+    toolResultPruneTailChars,
+  } = options;
+  return {
+    // Shortening needs somewhere to put the full text. Without a spill seam nothing is shortened: a
+    // shortened result whose "read it here" path does not exist is worse than a long result.
+    shrink: {
+      policy: { keepRecent: toolResultKeepRecent, tokens: toolResultShrinkTokens },
+      spill: ({ message, content }) =>
+        spillResult({
+          workspace,
+          sessionId,
+          key: message.role === 'tool' ? message.toolCallId : 'message',
+          content,
+        }),
+      /**
+       * The round's own price for text, which is what turns the policy's token budget into a character cut.
+       *
+       * A tool message rather than the raw string: that is the shape the estimator prices everywhere else,
+       * images and protocol margin included, and building it here means "shortened to a 400-token budget"
+       * and "this request is 4,000 tokens over" are answers from the same arithmetic.
+       */
+      measure: (text) =>
+        estimateMessageTokens(
+          { role: 'tool', toolCallId: '', content: text, isError: false },
+          calibration?.factor ?? 1,
+        ),
+    },
+    shrinkPercent: contextShrinkPercent,
+    /**
+     * Dropping the middle of an oversized result needs nothing from the host, so this seam is mounted
+     * unconditionally: no spill target to write to, no calibrated measure to convert a budget with, and no
+     * workspace to reach. It is what keeps a session bounded in the cases the shortening seam declines —
+     * a read-only workspace, a full disk, or a spill directory that is gone.
+     */
+    prune: {
+      policy: {
+        thresholdChars: toolResultPruneThresholdChars,
+        headChars: toolResultPruneHeadChars,
+        tailChars: toolResultPruneTailChars,
+      },
+      keepRecent: toolResultKeepRecent,
+    },
+    prunePercent: contextShrinkPercent,
   };
 }

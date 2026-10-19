@@ -313,10 +313,12 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   await page.locator('#open-settings').click();
   await page.locator('.settings-sidebar nav button').first().click();
   await page.locator('#ui-language').selectOption('en-US');
-  // Saving makes the language survive the restart below, so the restored cards can be checked for
-  // the right locale rather than whichever language the app happens to start in.
-  await page.locator('#general-settings-save').click();
-  await page.waitForFunction(() => document.querySelector('#general-settings-save').disabled);
+  // The choice saves itself, which makes the language survive the restart below, so the restored cards
+  // can be checked for the right locale rather than whichever language the app happens to start in.
+  await page.waitForFunction(async () => {
+    const reply = await window.yuantu.uiSettings({ type: 'get' });
+    return reply.ok && reply.kind === 'settings' && reply.settings.language === 'en-US';
+  });
   await page.locator('#settings-back').click();
   await page.waitForFunction(() =>
     (document.querySelector('#subagents-panel')?.textContent ?? '').includes('Sub-agent 1/2'),

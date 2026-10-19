@@ -521,6 +521,7 @@ function dispatch(method, params) {
     case 'changes.list':
       return [];
     case 'session.audit':
+      if (read().traceAudit) note({ method: 'session.audit', params: params });
       return { entries: [], nextSeq: 0 };
     case 'task.list':
       return [];
@@ -575,6 +576,8 @@ process.stdin.on('data', function (chunk) {
 `;
 interface FakeHostOptions {
   strict?: boolean;
+  /** Log every `session.audit` the Host answers. */
+  traceAudit?: boolean;
   reply?: 'echo' | 'mismatch';
   sessions?: string[];
 }
@@ -598,6 +601,7 @@ async function fakeHost(root: string, options: FakeHostOptions = {}) {
           })),
           selections: {},
           reply: current.reply,
+          traceAudit: options.traceAudit === true,
         },
         null,
         2,
@@ -1009,4 +1013,32 @@ test('one parser validates the vocabulary every carrier sends', () => {
   assert.throws(() => parseCarrierCommand({ type: 'exec', command: 'rm -rf /' }), {
     message: 'Invalid carrier command',
   });
+});
+
+test('a carrier that shows no process record never reads one', { timeout: 30_000 }, async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-audit-'));
+  const host = await fakeHost(root, { sessions: ['session-a'], traceAudit: true });
+  const reads = async () =>
+    (await host.requests()).filter((entry) => entry.method === 'session.audit').length;
+  const start = async (audit: boolean | undefined) => {
+    const carrier = spawnedCarrier({
+      nodePath: process.execPath,
+      hostPath: host.script,
+      workspace: root,
+      env: host.env,
+      ...(audit === undefined ? {} : { audit }),
+    });
+    t.after(() => carrier.stop());
+    await carrier.start();
+    await carrier.dispatch({ type: 'load', id: 'session-a' });
+    await carrier.stop();
+  };
+  // The default is unchanged for every other embedder: the record is read.
+  await start(undefined);
+  const byDefault = await reads();
+  assert.ok(byDefault > 0, 'the default carrier read no process record');
+  // The desktop has no panel for it, and used to page up to five thousand entries per session for nothing.
+  await start(false);
+  assert.equal(await reads(), byDefault, 'a carrier told not to read the record read it anyway');
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 });

@@ -62,6 +62,13 @@ interface Checked {
 }
 const UNCHECKED: Checked = { seq: 0, count: 0 };
 /**
+ * How many sessions one process remembers checkpoints for.
+ *
+ * The map is an optimisation, not a record: dropping an entry only makes the next check read that session in
+ * full again. A Host can serve thousands of sessions over its life, so it is bounded rather than left to grow.
+ */
+const MAX_CHECKED_SESSIONS = 512;
+/**
  * The log, the transcript read and the write-through rows are the same history.
  *
  * `tests/invariants.test.ts` asserts this as I8 against a second SQLite connection, which is the strongest
@@ -135,7 +142,11 @@ export function logTablesAgreeInvariant(store: LogTableReader): Invariant {
         if (result.problems.length) {
           checked.delete(id);
           problems.push(...result.problems);
-        } else checked.set(id, result.next);
+        } else {
+          if (!checked.has(id) && checked.size >= MAX_CHECKED_SESSIONS)
+            checked.delete(checked.keys().next().value!);
+          checked.set(id, result.next);
+        }
       }
       if (problems.length) throw new Error(problems.join('; '));
     },

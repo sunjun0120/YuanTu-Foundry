@@ -448,3 +448,41 @@ test('command jobs are read and stopped through the unified surface, in their ow
   assert.equal(again.isError, false, again.content);
   assert.equal(JSON.parse(again.content.split('\n').slice(1).join('\n')).status, 'cancelled');
 });
+
+test('subagent output reads the window it returns, with the cursors the joined text had', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-job-window-'));
+  const store = new SessionStore(path.join(directory, 'sessions.sqlite'));
+  const residency = new SubAgentResidency();
+  t.after(async () => {
+    await residency.disposeAll();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const parent = store.create(directory);
+  const child = store.create(directory);
+  store.recordEvent(parent.id, 'subagent.assigned', {
+    id: 'window-task',
+    childSessionId: child.id,
+    role: 'explore',
+    objective: 'Talk a lot',
+  });
+  // Long enough that the window (3000 characters) cuts into the middle of a message.
+  const parts = ['first', 'a'.repeat(1800), 'b'.repeat(1700), 'last'];
+  for (const content of parts) {
+    store.append(child.id, { role: 'user', content: 'go' });
+    store.append(child.id, { role: 'assistant', content, toolCalls: [] });
+  }
+  const producer = subAgentJobProducer({ store, residency });
+  // The reference is what the producer used to build on every poll: every answer joined by a newline.
+  const joined = parts.join('\n');
+  for (const cursor of [0, 3, 6, 1900, joined.length - 2, joined.length]) {
+    const snapshot = await producer.output({ id: child.id, scope: parent.id, cursor, waitMs: 0 });
+    const start = Math.max(cursor, joined.length - 3000);
+    assert.equal(snapshot.output, joined.slice(start), `cursor ${String(cursor)}`);
+    assert.equal(snapshot.nextCursor, joined.length);
+  }
+  await assert.rejects(
+    producer.output({ id: child.id, scope: parent.id, cursor: joined.length + 1, waitMs: 0 }),
+    /cursor/,
+  );
+});

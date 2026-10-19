@@ -20,6 +20,7 @@ import { ToolRegistry } from '../../../packages/tools/registry.ts';
 import { workspaceResultTools } from '../../../packages/tools/workspaces.ts';
 import { createRunApprover } from '../approvals.ts';
 import { sessionExecutionPolicy, sessionPermissionPolicy } from '../session-policy.ts';
+import { releaseSnapshotsIfIdle } from '../snapshot-release.ts';
 import { executionPolicy, withExecutionPolicy } from '../../../packages/tools/execution-policy.ts';
 import { metadataWritesAllowed } from '../../shared/runtime.ts';
 
@@ -213,7 +214,7 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
   'workspace.archive': async (ctx, params) => {
     const { manager, binding } = maintenanceWorkspace(ctx, params);
     // Registered so Stop (for the owning session) and shutdown reach it: these rewrite or delete a whole tree.
-    return await withLocks(
+    const archived = await withLocks(
       ctx,
       {
         claims: maintenanceClaims(params, binding),
@@ -225,6 +226,9 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
         return { archived: true as const, bindingId: binding.id, state: 'archived' as const };
       },
     );
+    // Archiving leaves the snapshot it froze named by the archived binding; this releases older, unused ones.
+    await releaseSnapshotsIfIdle(ctx);
+    return archived;
   },
 
   /** Rebuild an archived or removed workspace from its own frozen input, keeping the same identity. */
@@ -248,7 +252,7 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
   },
   'workspace.remove': async (ctx, params) => {
     const { manager, binding } = maintenanceWorkspace(ctx, params);
-    return await withLocks(
+    const removed = await withLocks(
       ctx,
       {
         claims: maintenanceClaims(params, binding),
@@ -260,6 +264,9 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
         return { removed: true as const, bindingId: binding.id, state: 'removed' as const };
       },
     );
+    // The removal record keeps the snapshot the removal itself froze; older unused shares can go now.
+    await releaseSnapshotsIfIdle(ctx);
+    return removed;
   },
 };
 

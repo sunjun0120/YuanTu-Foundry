@@ -5,6 +5,7 @@ import {
   cleanupSandbox,
   markSandboxStarted,
 } from '../tools/sandbox.ts';
+import type { SandboxPlan } from '../tools/sandbox-provider.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -97,6 +98,8 @@ export interface PathSnapshot {
   digest?: string;
   entries: number;
   bytes: number;
+  /** The workspace path the image was taken of, recorded so a stored image is reused only for that path. */
+  path?: string;
 }
 
 interface CommandExecutionResult {
@@ -310,6 +313,40 @@ function captureChunk(
   if (kept.length < chunk.length) state.truncated = true;
 }
 
+/**
+ * The sandbox a check runs in, or the abort that arrived while it was being prepared.
+ *
+ * Preparing the native Windows sandbox journals and grants workspace access, which takes seconds (more for the
+ * first command of a process), and none of it can be interrupted half way. Stop used to wait for all of it, then
+ * for the cleanup that undid it: a check stopped before its command even started still took over ten seconds to
+ * end. The wait is what is abandoned, not the work — a plan that finishes preparing after the abort is cleaned up
+ * as soon as it exists, by the provider that owns it, so no grant is left behind by a cancelled check.
+ */
+async function preparedUnlessAborted(
+  preparing: Promise<SandboxPlan>,
+  signal: AbortSignal | undefined,
+): Promise<SandboxPlan> {
+  if (!signal) return preparing;
+  let onAbort!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new Error('Acceptance verification cancelled'));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([preparing, aborted]);
+  } catch (error) {
+    if (signal.aborted)
+      void preparing.then(
+        (plan) => cleanupSandbox(plan).catch(() => undefined),
+        () => undefined,
+      );
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    aborted.catch(() => undefined);
+  }
+}
+
 async function runCommand(
   root: string,
   spec: CommandAcceptanceSpec,
@@ -334,13 +371,10 @@ async function runCommand(
     MAX_TIMEOUT_MS,
   );
   signal?.throwIfAborted();
-  const plan = await prepareSandbox(root, cwd.target, spec.command, args);
-  try {
-    signal?.throwIfAborted();
-  } catch (error) {
-    await cleanupSandbox(plan);
-    throw error;
-  }
+  const plan = await preparedUnlessAborted(
+    prepareSandbox(root, cwd.target, spec.command, args),
+    signal,
+  );
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -579,7 +613,7 @@ async function verifyOne(
       ? undefined
       : spec.expectation === 'absent'
         ? 'assertion-failed'
-        : 'invalid-definition';
+        : 'protected-path-changed';
     return {
       id: spec.id,
       kind: spec.kind,

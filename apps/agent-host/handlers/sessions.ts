@@ -1,9 +1,13 @@
 import { undoFileChange } from '../../../packages/tools/file-undo.ts';
 import { removeSpills } from '../../../packages/tools/spill.ts';
+import { releaseSessionResources } from '../../../packages/catalog/resource-pool.ts';
+import { removeResultArtifacts } from '../../../packages/workspaces/result-files.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from '../session-policy.ts';
+import { releaseSnapshotsIfIdle } from '../snapshot-release.ts';
 import { ownedSession, required } from '../params.ts';
 import {
   assertUnlocked,
+  executionRoot,
   fileClaims,
   hostClaim,
   lockConflict,
@@ -89,12 +93,15 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'changes.undo': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
+    // The change was journalled where the session works: its own worktree when it has one. Both the lock and the
+    // undo have to name that directory, or a bound session would rewrite the project instead of its tree.
+    const root = executionRoot(ctx, sessionId);
     // Undo checks the files and then rewrites them, so nothing else may write in that directory meanwhile.
     return await withLocks(
       ctx,
-      { claims: fileClaims(sessionId, ctx.workspace), busy: 'Host is busy; wait before undo' },
+      { claims: fileClaims(sessionId, root), busy: 'Host is busy; wait before undo' },
       async () => {
-        await undoFileChange(ctx.store, sessionId, required(params, 'id'), ctx.workspace);
+        await undoFileChange(ctx.store, sessionId, required(params, 'id'), root);
         return { undone: true };
       },
     );
@@ -109,10 +116,11 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
     if (params.query !== undefined && typeof params.query !== 'string')
       throw new Error('Invalid search query');
     // The store validates the page fields; only the ones the caller sent are passed, so an absent field stays absent.
-    const page: { limit?: number; before?: string; id?: string } = {};
+    const page: { limit?: number; before?: string; id?: string; archived?: boolean } = {};
     if (params.limit !== undefined) page.limit = params.limit as number;
     if (params.before !== undefined) page.before = params.before as string;
     if (params.id !== undefined) page.id = params.id as string;
+    if (params.archived !== undefined) page.archived = params.archived as boolean;
     return ctx.store.list(params.query as string | undefined, ctx.workspace, page);
   },
   'session.rename': async (ctx, params) => {
@@ -121,19 +129,40 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
     assertSessionIdle(ctx, id, 'Host is busy; wait before changing sessions');
     return ctx.store.rename(id, required(params, 'title'));
   },
+  'session.archive': async (ctx, params) => {
+    const id = required(params, 'sessionId');
+    if (typeof params.archived !== 'boolean') throw new Error('Invalid archive flag');
+    ownedSession(ctx.store, ctx.workspace, id);
+    assertSessionIdle(ctx, id, 'Host is busy; wait before changing sessions');
+    return ctx.store.setArchived(id, params.archived);
+  },
   'session.delete': async (ctx, params) => {
     const id = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, id);
     // Every session the delete removes, so a delegated child that is still busy keeps its tree alive.
     const claims = [hostClaim('shared'), ...ctx.store.sessionTree(id).map(sessionClaim)];
-    return await withLocks(
+    const deleted = await withLocks(
       ctx,
-      { claims, busy: 'Host is busy; wait before changing sessions' },
-      async () => {
+      {
+        claims,
+        busy: 'Host is busy; wait before changing sessions',
+        // A delete can spend a while closing terminals and reclaiming files; Stop for the session and shutdown
+        // should be able to reach it rather than waiting for all of that to finish.
+        operation: { sessionId: id },
+      },
+      async (signal) => {
+        // Checked before anything irreversible: browser profiles and terminals belong to the session, and a Stop
+        // that arrived before the delete began should leave all of it as it was.
+        signal.throwIfAborted();
         await ctx.background.close(id);
         // A terminal holds a real process, so a deleted session must not leave a shell running behind it —
         // the same rule the background commands follow, for a stronger reason.
         await ctx.terminals.closeAllAndWait(id);
+        // Closing processes is already visible, but the profiles are the next irreversible step; a Stop before
+        // this point still leaves the session's saved logins for a delete the person runs again.
+        signal.throwIfAborted();
+        // What the doomed sessions kept between runs, browser profiles included: a login must not outlive its session.
+        for (const sessionId of ctx.store.sessionTree(id)) await releaseSessionResources(sessionId);
         /**
          * Checked before the session goes away, because the check reads its log. A `session-close`
          * violation cannot stop anything — the session is being deleted on purpose — so it is reported on
@@ -162,7 +191,30 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
           const roots = new Set([ctx.store.get(sessionId).workspace, binding.executionRoot]);
           return [...roots].map((root) => ({ root, sessionId }));
         });
+        /**
+         * The results the delete removes, and the repository each one keeps its manifest and ref in — also only
+         * answerable while the rows exist. The same rule as the store's: a result still `applying` is kept.
+         */
+        const results = new Map<string, string>();
+        for (const sessionId of doomed)
+          for (const result of [
+            ...ctx.store.workspaceResults(sessionId),
+            ...ctx.store.childWorkspaceResults(sessionId),
+          ]) {
+            const repositoryRoot = ctx.store.workspaceById(result.bindingId)?.repositoryRoot;
+            if (result.status !== 'applying' && repositoryRoot)
+              results.set(result.id, repositoryRoot);
+          }
+        // The destructive step: everything before it only released resources, so an abort here leaves the session
+        // and its log intact rather than half-deleted.
+        signal.throwIfAborted();
         ctx.store.delete(id);
+        for (const [resultId, repositoryRoot] of results)
+          await removeResultArtifacts(repositoryRoot, resultId).catch((error: unknown) =>
+            process.stderr.write(
+              `result cleanup failed for ${resultId}: ${(error as Error).message}\n`,
+            ),
+          );
         for (const spill of spills)
           await removeSpills(spill.root, spill.sessionId).catch((error: unknown) =>
             process.stderr.write(
@@ -183,6 +235,10 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
         return { deleted: true };
       },
     );
+    // The deleted session can be the last name a snapshot had; releasing here is safe because this Host has no run
+    // or manual operation in flight, and a run that starts now waits before recording a new snapshot.
+    await releaseSnapshotsIfIdle(ctx);
+    return deleted;
   },
   /**
    * An operator's way out of a lease that can never be confirmed dead.

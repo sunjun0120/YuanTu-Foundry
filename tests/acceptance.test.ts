@@ -299,7 +299,7 @@ test('a forbidden path that changed is never automatically repairable', async (t
     },
   ]);
   assert.equal(changed.passed, false);
-  assert.equal(changed.checks[0]!.failureReason, 'invalid-definition');
+  assert.equal(changed.checks[0]!.failureReason, 'protected-path-changed');
   // A path that must be absent but exists is the model's own output, which it can still remove.
   await writeFile(path.join(root, 'leftover.txt'), 'x');
   const leftover = await verifyAcceptance(root, [

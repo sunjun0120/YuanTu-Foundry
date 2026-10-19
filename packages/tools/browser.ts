@@ -7,7 +7,6 @@ import { atomicWriteFile } from '../platform/write-all.ts';
 import { validateFetchUrl } from './web.ts';
 import { assertPublicUrl, normalizedHostname } from './network-guard.ts';
 
-type Browser = import('playwright').Browser;
 type Page = import('playwright').Page;
 
 const MAX_PAGE_TEXT = 20_000;
@@ -40,9 +39,25 @@ function selectorOf(value: unknown): string {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-class BrowserSession {
-  private browser?: Browser;
+export interface BrowserSessionOptions {
+  /**
+   * A directory the browser keeps its profile in — cookies, storage, logins — across launches.
+   *
+   * Without one every launch is a fresh, empty profile, which is what a one-off registry wants. A session's pooled
+   * browser (`../catalog/resource-pool.ts`) passes its own, so a login survives the run that made it and the idle
+   * close that follows.
+   */
+  profileDirectory?: string;
+}
+
+export class BrowserSession {
+  /** Closes whatever the launch opened: the browser, or the persistent context that stands in for one. */
+  private closeLaunched?: () => Promise<void>;
   private page?: Page;
+  private readonly options: BrowserSessionOptions;
+  constructor(options: BrowserSessionOptions = {}) {
+    this.options = options;
+  }
   private opening?: Promise<Page>;
   private closing: Promise<void> = Promise.resolve();
   /**
@@ -95,15 +110,32 @@ class BrowserSession {
       throw new Error(MISSING);
     }
     signal.throwIfAborted();
-    let browser: Browser;
+    const viewport = { width: 1280, height: 800 };
+    let close: () => Promise<void>;
+    let newPage: () => Promise<Page>;
     try {
-      browser = await playwright.chromium.launch({ headless: true, timeout: DEFAULT_TIMEOUT_MS });
+      if (this.options.profileDirectory) {
+        const context = await playwright.chromium.launchPersistentContext(
+          this.options.profileDirectory,
+          { headless: true, timeout: DEFAULT_TIMEOUT_MS, viewport },
+        );
+        close = () => context.close();
+        // A persistent context opens with a page of its own; it is the one used, so no blank tab is left behind.
+        newPage = async () => context.pages()[0] ?? (await context.newPage());
+      } else {
+        const browser = await playwright.chromium.launch({
+          headless: true,
+          timeout: DEFAULT_TIMEOUT_MS,
+        });
+        close = () => browser.close();
+        newPage = () => browser.newPage({ viewport });
+      }
     } catch {
       throw new Error(MISSING);
     }
-    this.browser = browser;
+    this.closeLaunched = close;
     try {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      const page = await newPage();
       page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(DEFAULT_TIMEOUT_MS);
       // Adopted only after its request interception is installed. Caching it first meant a failed registration
@@ -138,8 +170,8 @@ class BrowserSession {
        * the next call would launch a second chromium and the first would hold the workspace and its sockets
        * for the life of the Host.
        */
-      this.browser = undefined;
-      await browser.close().catch(() => undefined);
+      this.closeLaunched = undefined;
+      await close().catch(() => undefined);
       throw error;
     }
   }
@@ -158,10 +190,10 @@ class BrowserSession {
     }
   }
   async close(): Promise<void> {
-    const browser = this.browser;
-    this.browser = undefined;
+    const close = this.closeLaunched;
+    this.closeLaunched = undefined;
     this.page = undefined;
-    if (browser) this.closing = browser.close().catch(() => undefined);
+    if (close) this.closing = close().catch(() => undefined);
     await this.closing;
   }
 }
@@ -187,8 +219,17 @@ function withBlocked(
   return blocked.length ? { ...result, blocked } : result;
 }
 
-export function browserTools(root: string): { tools: Tool[]; close: () => Promise<void> } {
-  const session = new BrowserSession();
+/**
+ * The browser tools over one session.
+ *
+ * With `shared`, the session belongs to a pool that outlives this registry, and closing the registry leaves it
+ * open; without, the tools own a fresh session and close it with the registry, as they always did.
+ */
+export function browserTools(
+  root: string,
+  shared?: BrowserSession,
+): { tools: Tool[]; close: () => Promise<void> } {
+  const session = shared ?? new BrowserSession();
   const workspace = new Workspace(root);
   const tools: Tool[] = [
     {
@@ -360,5 +401,5 @@ export function browserTools(root: string): { tools: Tool[]; close: () => Promis
       },
     },
   ];
-  return { tools, close: () => session.close() };
+  return { tools, close: shared ? async () => {} : () => session.close() };
 }

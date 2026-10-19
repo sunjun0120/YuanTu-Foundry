@@ -71,12 +71,38 @@ export function subAgentJobProducer(options: {
     residency.list(scope).find((entry) => entry.childSessionId === id);
   const durable = (id: string, scope: string) =>
     assignedChildren(store, scope).find((entry) => entry.childSessionId === id);
-  const transcript = (childSessionId: string) =>
-    store
-      .messages(childSessionId)
-      .filter((message) => message.role === 'assistant' && message.content)
-      .map((message) => message.content)
-      .join('\n');
+  /**
+   * The child's answer text from `cursor` on, at most the last `OUTPUT_WINDOW` characters of it.
+   *
+   * Positions are offsets into the child's assistant texts joined by newlines — the cursor a caller holds — but
+   * the joined text is never built: a poll used to concatenate the whole transcript to keep its last few thousand
+   * characters, so polling a long-lived child cost its entire history every time. The length is a sum, and only
+   * the messages the window reaches are joined.
+   */
+  const outputFrom = (childSessionId: string, cursor: number | undefined) => {
+    const parts: string[] = [];
+    for (const message of store.messages(childSessionId))
+      if (message.role === 'assistant' && message.content) parts.push(message.content);
+    let length = 0;
+    for (const [index, part] of parts.entries()) length += part.length + (index ? 1 : 0);
+    if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > length))
+      throw new Error('Invalid output cursor');
+    const start = cursor === undefined ? length : Math.max(cursor, length - OUTPUT_WINDOW);
+    const pieces: string[] = [];
+    let end = length;
+    for (let index = parts.length - 1; index >= 0 && end > start; index--) {
+      const piece = index ? `\n${parts[index]!}` : parts[index]!;
+      pieces.push(piece);
+      end -= piece.length;
+    }
+    return {
+      start,
+      output: pieces
+        .reverse()
+        .join('')
+        .slice(start - end),
+    };
+  };
   const describe = (child: ResidentChild): Record<string, unknown> => ({
     objective: child.objective,
     turns: child.turns,
@@ -105,15 +131,7 @@ export function subAgentJobProducer(options: {
         `No sub-agent of this session was delegated to ${id}; call job_list to see the ones it was`,
       );
     const childSessionId = child?.childSessionId ?? record!.childSessionId;
-    const text = transcript(childSessionId);
-    if (
-      cursor !== undefined &&
-      (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > text.length)
-    )
-      throw new Error('Invalid output cursor');
-    const start =
-      cursor === undefined ? text.length : Math.max(cursor, text.length - OUTPUT_WINDOW);
-    const output = text.slice(start);
+    const { start, output } = outputFrom(childSessionId, cursor);
     const spent = store.statistics(childSessionId);
     return {
       id,

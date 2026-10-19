@@ -189,6 +189,9 @@ export interface RunCompletion {
 }
 
 const MAX_AFFECTED_PATHS = COMPLETION_LIMITS.affectedPaths;
+/** The size from which a fingerprint is announced before it is taken (see `snapshotOptions`). */
+const FINGERPRINT_NOTICE_FILES = 2_000;
+const FINGERPRINT_NOTICE_BYTES = 64 * 1024 * 1024;
 
 /**
  * The run's completion contract, resolved from the caller's request.
@@ -246,6 +249,10 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
    * replace. There is at most one contract per run, and the conflicts are errors rather than a silent
    * precedence order — a caller that supplied two different definitions did not mean either one of them.
    */
+  /** The images a resumed contract recorded when it was created; `undefined` unless this run resumes one. */
+  let resumedBaselines: TaskBaselines | undefined;
+  /** Images an earlier attempt at the same plan contract recorded, reused where they still cover a check. */
+  let inheritedBaselines: TaskBaselines | undefined;
   const taskInputs = completionInputs ?? [];
   if (task && completion)
     throw new Error('A task already carries the acceptance definition for this run');
@@ -274,6 +281,15 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
     state.contractDefinitionHash = completionDefinitionHash(requestedSpec);
     state.contractSpec = requestedSpec;
     state.steps = requestedSpec.steps.map((step) => ({ ...step }));
+    // Executing the same approved plan again under the same definition is another attempt at one contract, so it
+    // keeps the images the first attempt took. Older records without images fall back to a fresh capture.
+    const previous = approvedPlan ? store.completionCurrent(sessionId) : null;
+    if (
+      previous?.contractId === state.contractId &&
+      previous.definitionHash === state.contractDefinitionHash &&
+      previous.baselines
+    )
+      inheritedBaselines = previous.baselines;
     const record = {
       runId,
       contractId: state.contractId,
@@ -321,6 +337,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
       ...step,
       status: step.status === 'completed' ? 'completed' : 'pending',
     }));
+    resumedBaselines = record.baselines ?? {};
     state.repairRounds = record.summary.repairRounds;
     state.repeatedFailures = record.summary.repeatedFailures;
     if (record.repairStartedAt !== undefined) state.repairStartedAt = record.repairStartedAt;
@@ -375,6 +392,20 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
    * entry point — and the two cannot disagree, because `completion_step` writes through the *same* checkpoint
    * call rather than keeping a second list.
    */
+  /**
+   * The options every fingerprint of this run is taken with, and the notice a large one sends first.
+   *
+   * A fingerprint of a large range is the slow part of a task's end, so it is announced once its size is known and
+   * before its files are read — live only, because the snapshot's own result is what the record keeps. A small range
+   * says nothing: a notice on every round would be noise about work that takes no time.
+   */
+  const snapshotOptions = (phase: 'before' | 'after' | 'final') => ({
+    runtimeStatePaths: store.databaseFiles(),
+    onCollected: (scale: { files: number; bytes: number }) => {
+      if (scale.files >= FINGERPRINT_NOTICE_FILES || scale.bytes >= FINGERPRINT_NOTICE_BYTES)
+        emit('completion.fingerprinting', { contractId: state.contractId, phase, ...scale });
+    },
+  });
   const registerTools = (): void => {
     if (state.contractId && !readOnly && !planPhase && state.steps.length) {
       tools.replace({
@@ -591,9 +622,12 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
       },
     });
     const before = monitored.length
-      ? await snapshotCompletionInputs(workspace, monitored, signal, {
-          runtimeStatePaths: store.databaseFiles(),
-        }).then(
+      ? await snapshotCompletionInputs(
+          workspace,
+          monitored,
+          signal,
+          snapshotOptions('before'),
+        ).then(
           (snapshot) => snapshot,
           (error: unknown) => {
             // A range that cannot be fingerprinted is not a range that can be declared verified: a digest over
@@ -635,9 +669,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
     state.acceptance = state.taskVerification.evidence;
     state.verificationRound += 1;
     const after = before
-      ? await snapshotCompletionInputs(workspace, monitored, signal, {
-          runtimeStatePaths: store.databaseFiles(),
-        }).then(
+      ? await snapshotCompletionInputs(workspace, monitored, signal, snapshotOptions('after')).then(
           (snapshot) => snapshot,
           (error: unknown) => {
             state.snapshotFailure = error instanceof Error ? error.message : String(error);
@@ -774,9 +806,12 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
     // `S1` was taken after the checks and before the cleanup; `S2` after it. A difference means the closing
     // phase itself wrote to the monitored source — a background build finishing, a formatter, a language
     // server — so the evidence describes a tree that no longer exists.
-    const settled = await snapshotCompletionInputs(workspace, state.lastMonitoredInputs, signal, {
-      runtimeStatePaths: store.databaseFiles(),
-    }).catch((error: unknown) => {
+    const settled = await snapshotCompletionInputs(
+      workspace,
+      state.lastMonitoredInputs,
+      signal,
+      snapshotOptions('final'),
+    ).catch((error: unknown) => {
       state.snapshotFailure = error instanceof Error ? error.message : String(error);
       return undefined;
     });
@@ -834,10 +869,35 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
   };
   const captureBaselines = async (): Promise<void> => {
     if (task || !state.contractSpec) return;
-    Object.assign(
-      baselines,
-      await captureAcceptanceBaselines(workspace, state.contractSpec.acceptance),
-    );
+    const acceptance = state.contractSpec.acceptance;
+    if (resumedBaselines) {
+      // A resume compares against what the contract's first run saw. Re-sampling would take the failed run's edits
+      // as the new "before", so a contract whose images were never recorded is refused rather than re-imaged.
+      const missing = acceptance.filter(
+        (item) =>
+          item.check?.kind === 'forbidden-path' &&
+          item.check.expectation === 'unchanged' &&
+          item.check.path &&
+          !resumedBaselines![item.check.id],
+      );
+      if (missing.length)
+        throw new Error(
+          'This completion contract has no recorded baseline for its unchanged-path checks; start a new contract instead of resuming',
+        );
+      Object.assign(
+        baselines,
+        await captureAcceptanceBaselines(workspace, acceptance, resumedBaselines),
+      );
+      return;
+    }
+    const captured = await captureAcceptanceBaselines(workspace, acceptance, inheritedBaselines);
+    Object.assign(baselines, captured);
+    if (Object.keys(captured).length && state.contractId)
+      store.recordEvent(sessionId, 'completion.updated', {
+        runId,
+        contractId: state.contractId,
+        baselines: captured,
+      });
   };
 
   return {

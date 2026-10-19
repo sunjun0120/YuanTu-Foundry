@@ -146,10 +146,7 @@ test(
       `en-US still shows Chinese (zh-CN baseline: ${before.size} strings):\n${report.join('\n')}`,
     );
 
-    // Persist the English selection so the main-process reply uses it too; subsequent switches preview it.
-    await page.locator('#open-settings').click();
-    await page.locator('.settings-sidebar nav button').first().click();
-    await page.locator('#general-settings-save').click();
+    // The English selection saved itself on change, so the main-process reply uses it too.
     await waitForPage(page, async () => {
       const reply = await window.yuantu.uiSettings({ type: 'get' });
       return reply.ok && reply.kind === 'settings' && reply.settings.language === 'en-US';

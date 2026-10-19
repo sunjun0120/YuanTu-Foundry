@@ -7,6 +7,7 @@ import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
+import { resultMetadataPath, resultRef } from '../packages/workspaces/result-files.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import { hostClaim, type HostContext } from '../apps/agent-host/state.ts';
 import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
@@ -188,6 +189,15 @@ test('a deleted session leaves a workspace this project can still list, remove a
   // bytes the child wrote in it, are what the orphan keeps.
   assert.deepEqual(listed[0]!.results, []);
   assert.equal(h.store.workspaceResult(result.id), null);
+  // And what the record kept in the repository went with it: the manifest, and the ref that kept its tree alive.
+  await assert.rejects(access(resultMetadataPath(binding.repositoryRoot, result.id)));
+  assert.equal(
+    execFileSync('git', ['for-each-ref', resultRef(result.id)], {
+      cwd: binding.repositoryRoot,
+      encoding: 'utf8',
+    }).trim(),
+    '',
+  );
   await access(path.join(binding.executionRoot, 'made.txt'));
   // Nothing was merged into the delegator's own directory, which is what makes this work "unmerged" rather than lost.
   await assert.rejects(access(path.join(h.root, 'made.txt')));

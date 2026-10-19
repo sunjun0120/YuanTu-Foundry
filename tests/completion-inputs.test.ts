@@ -208,6 +208,42 @@ test('a range that is too large is refused, not truncated', async (t) => {
   );
 });
 
+test('files read in parallel still digest in walk order, each bound to its own path', async (t) => {
+  const root = await fixture(t);
+  // More files than are read at once, so the reads interleave.
+  for (let index = 0; index < 40; index++)
+    await writeFile(path.join(root, `f${String(index).padStart(2, '0')}.txt`), `content ${index}`);
+  const first = await snapshotCompletionInputs(root, ['.'], signal);
+  assert.equal(first.files, 40);
+  assert.equal((await snapshotCompletionInputs(root, ['.'], signal)).digest, first.digest);
+  // Swapping two files' contents keeps the multiset of contents but not which path holds which.
+  await writeFile(path.join(root, 'f03.txt'), 'content 37');
+  await writeFile(path.join(root, 'f37.txt'), 'content 3');
+  assert.notEqual((await snapshotCompletionInputs(root, ['.'], signal)).digest, first.digest);
+});
+
+test('the size of a range is told before any of it is read', async (t) => {
+  const root = await fixture(t);
+  await writeFile(path.join(root, 'a.txt'), 'aaaa');
+  await writeFile(path.join(root, 'b.txt'), 'bb');
+  const told: { files: number; bytes: number }[] = [];
+  const snapshot = await snapshotCompletionInputs(root, ['.'], signal, {
+    onCollected: (scale) => told.push(scale),
+  });
+  assert.deepEqual(told, [{ files: 2, bytes: 6 }]);
+  assert.equal(snapshot.files, 2);
+  // A range refused on its size is refused before the notice: nothing is announced that will not be read.
+  told.length = 0;
+  await assert.rejects(
+    snapshotCompletionInputs(root, ['.'], signal, {
+      maxFiles: 1,
+      onCollected: (scale) => told.push(scale),
+    }),
+    CompletionInputLimitError,
+  );
+  assert.deepEqual(told, []);
+});
+
 test('the file limit admits exactly that many files and refuses one more', async (t) => {
   const root = await fixture(t);
   for (const name of ['a.txt', 'b.txt', 'c.txt']) await writeFile(path.join(root, name), name);

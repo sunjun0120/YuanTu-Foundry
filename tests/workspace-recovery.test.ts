@@ -421,6 +421,129 @@ test('a lease an older build renewed is judged by its pid alone', async (t) => {
   }
 });
 
+test('a removed workspace past its retention is purged with everything it kept in the repository', async (t) => {
+  const { store, manager, signal, binding } = await removalFixture(t);
+  await writeFile(path.join(binding.executionRoot, 'kept.txt'), 'unimported work\n');
+  await manager.archive(binding.id, signal);
+  await manager.remove(binding.id, signal);
+  const removalRecord = path.join(
+    binding.repositoryRoot,
+    '.yuantu',
+    'workspace-removals',
+    `${binding.id}.json`,
+  );
+  const { snapshotId } = JSON.parse(await readFile(removalRecord, 'utf8')) as {
+    snapshotId: string;
+  };
+  const day = 24 * 60 * 60 * 1000;
+  // Inside the retention period nothing happens: a removed workspace is still restorable.
+  assert.equal(await manager.purgeExpired(7 * day, signal), 0);
+  assert.equal(store.workspaceById(binding.id)!.state, 'removed');
+
+  assert.equal(await manager.purgeExpired(7 * day, signal, Date.now() + 8 * day), 1);
+  assert.equal(store.workspaceById(binding.id), null);
+  await assert.rejects(readFile(removalRecord));
+  // The snapshots go with the release pass, once nothing in this database names them: the removal snapshot, and
+  // the delegation's baseline, whose only binding this was.
+  const baseline = binding.snapshotId!;
+  assert.equal(await manager.releaseUnusedSnapshots(signal), 2);
+  assert.equal(store.workspaceSnapshot(snapshotId), null);
+  assert.equal(store.workspaceSnapshot(baseline), null);
+  await assert.rejects(
+    readFile(
+      path.join(
+        binding.repositoryRoot,
+        '.yuantu',
+        'workspace-snapshots',
+        snapshotId,
+        'manifest.json',
+      ),
+    ),
+  );
+  assert.equal(
+    git(binding.repositoryRoot, [
+      'for-each-ref',
+      `refs/yuantu/workspaces/${binding.id}`,
+      `refs/yuantu/snapshot-owners/${snapshotId}/`,
+      `refs/yuantu/snapshot-owners/${baseline}/`,
+    ]),
+    '',
+  );
+});
+
+test('removing a workspace that changed nothing saves no second copy of its baseline', async (t) => {
+  const { store, manager, signal, binding } = await removalFixture(t);
+  const before = store.workspaceSnapshotIds();
+  await manager.archive(binding.id, signal);
+  await manager.remove(binding.id, signal);
+  const record = JSON.parse(
+    await readFile(
+      path.join(binding.repositoryRoot, '.yuantu', 'workspace-removals', `${binding.id}.json`),
+      'utf8',
+    ),
+  ) as { snapshotId: string };
+  // The record names the baseline, and no snapshot was frozen for the removal.
+  assert.equal(record.snapshotId, binding.snapshotId);
+  assert.deepEqual(store.workspaceSnapshotIds(), before);
+  // Restoring rebuilds the same files it would have from a copy.
+  const restored = await manager.restore(binding.id, signal);
+  assert.equal(restored.state, 'ready');
+  assert.equal(await readFile(path.join(restored.executionRoot, 'a.txt'), 'utf8'), 'a\n');
+});
+
+test('an operator can drop a lease no process can prove dead, and the log says who did', async (t) => {
+  const { w, store, manager, signal, binding } = await removalFixture(t);
+  await manager.archive(binding.id, signal);
+  store.claimWorkspaceOperation(binding.id);
+  store.setWorkspaceState({ bindingId: binding.id, expect: 'archived', to: 'removing' });
+  // A live pid with no start time it can be checked against: automatic recovery must leave it alone.
+  const db = new DatabaseSync(w.db);
+  try {
+    db.prepare(
+      'UPDATE workspace_operation_leases SET owner_pid=?, owner_started_token=NULL WHERE binding_id=?',
+    ).run(process.ppid, binding.id);
+  } finally {
+    db.close();
+  }
+  await manager.reconcile(signal);
+  assert.equal(store.workspaceById(binding.id)!.state, 'removing');
+
+  const recovered = store.recoverWorkspaceOperation(binding.id, {
+    operator: 'fixture-operator',
+    reason: 'the owner is known to be gone',
+  });
+  assert.equal(recovered.released, true);
+  assert.equal(recovered.previousOwnerPid, process.ppid);
+  const parent = store.workspaceById(binding.id)!.parentSessionId!;
+  const record = store.events(parent).find((event) => event.type === 'workspace.lease.recovered');
+  assert.equal(record?.data.operator, 'fixture-operator');
+  assert.equal(record?.data.bindingId, binding.id);
+  assert.equal(record?.data.previousOwnerPid, process.ppid);
+  // With the lease gone, recovery converges the interrupted removal as it would any other.
+  await manager.reconcile(signal);
+  assert.equal(store.workspaceById(binding.id)!.state, 'blocked');
+  // Nothing left to release: a second call says so instead of recording another release.
+  assert.equal(
+    store.recoverWorkspaceOperation(binding.id, { operator: 'fixture-operator', reason: 'again' })
+      .released,
+    false,
+  );
+});
+
+test('a lease this process holds is not an operator’s to drop', async (t) => {
+  const { store, manager, signal, binding } = await removalFixture(t);
+  await manager.archive(binding.id, signal);
+  const token = store.claimWorkspaceOperation(binding.id);
+  try {
+    assert.throws(
+      () => store.recoverWorkspaceOperation(binding.id, { operator: 'x', reason: 'y' }),
+      (error: unknown) => error instanceof WorkspaceFailure && error.code === 'WORKSPACE_BUSY',
+    );
+  } finally {
+    store.releaseWorkspaceOperation(binding.id, token);
+  }
+});
+
 test('recovery leaves a live preparing workspace alone before its directory exists', async (t) => {
   const { w, store, manager, signal, binding } = await removalFixture(t);
   await manager.archive(binding.id, signal);

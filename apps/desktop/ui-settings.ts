@@ -15,6 +15,8 @@ export interface UiSettings {
   language: UiLanguage;
   appearance: UiAppearance;
   fontSize: UiFontSize;
+  /** System notifications when a run ends or waits on the person; see `main-notifications.ts`. */
+  notifications: boolean;
 }
 
 export type UiSettingsCommand = { type: 'get' } | { type: 'save'; settings: UiSettings };
@@ -35,6 +37,7 @@ const defaults: UiSettings = {
   language: 'zh-CN',
   appearance: 'system',
   fontSize: 'medium',
+  notifications: true,
 };
 
 export function defaultUiSettings(): UiSettings {
@@ -59,17 +62,22 @@ export function parseUiSettings(input: unknown): UiSettings {
     throw new Error(mainText('ui.settingsInvalid'));
   const value = input as Record<string, unknown>;
   if (
-    Object.keys(value).some((key) => !['language', 'appearance', 'fontSize'].includes(key)) ||
+    Object.keys(value).some(
+      (key) => !['language', 'appearance', 'fontSize', 'notifications'].includes(key),
+    ) ||
     (value.language !== 'zh-CN' && value.language !== 'en-US') ||
     (value.appearance !== 'system' &&
       value.appearance !== 'light' &&
       value.appearance !== 'dark') ||
-    (value.fontSize !== 'small' && value.fontSize !== 'medium' && value.fontSize !== 'large')
+    (value.fontSize !== 'small' && value.fontSize !== 'medium' && value.fontSize !== 'large') ||
+    (value.notifications !== undefined && typeof value.notifications !== 'boolean')
   )
     throw new Error(mainText('ui.settingsInvalid'));
   return {
     language: value.language,
     appearance: value.appearance,
     fontSize: value.fontSize,
+    // A settings file written before the switch existed has no answer, and the default is on.
+    notifications: value.notifications ?? defaults.notifications,
   } as UiSettings;
 }

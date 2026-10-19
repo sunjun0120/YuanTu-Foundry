@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, type Stats } from 'node:fs';
-import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { type Stats } from 'node:fs';
+import { lstat, open, readdir, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import {
   WORKSPACE_SCALE_LIMITS,
@@ -8,6 +8,7 @@ import {
   type WorkspaceSnapshot,
 } from '../protocol/workspaces.ts';
 import { isCredentialFileName } from '../platform/credential-paths.ts';
+import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import { gitPath, isUnsafeGitPath, samePath } from '../platform/workspace-paths.ts';
 import { sameStatKey, statKey, type StatKey } from '../platform/stat-cache.ts';
 import {
@@ -18,7 +19,8 @@ import {
   workspaceGit,
   workspaceGitList,
   openBlobBatch,
-  writeBlobs,
+  readBlob,
+  type BlobReader,
   WORKSPACE_GIT_IDENTITY,
   type RepositoryIdentity,
   type TreeEntry,
@@ -46,7 +48,12 @@ import {
  *    working tree. The baseline's own objects hang off a private ref so a later `gc` cannot collect them.
  */
 
-const SNAPSHOT_FORMAT = 3;
+/**
+ * Format 4 keeps a snapshot's bytes only as Git blobs the manifest names (`SnapshotManifestEntry.oid`), kept alive by
+ * one owner ref per session database (`snapshotOwnerRef`). Formats 1–3 stay readable; format 3 kept a second copy of
+ * the bytes in a `files` directory beside the manifest and a single `refs/yuantu/snapshots/<id>` ref.
+ */
+const SNAPSHOT_FORMAT = 4;
 /**
  * How much of a blob's digest names its file beside a format-3 manifest.
  *
@@ -159,6 +166,12 @@ export interface SnapshotManifestEntry extends SnapshotFileDigest {
    * `blob`; the field is still read so manifests written before the migration keep working.
    */
   blob?: string;
+  /**
+   * The Git blob holding the bytes — **format 4**, where Git's object store is the only copy.
+   *
+   * Format 3 entries carry neither field: their bytes are the files beside the manifest.
+   */
+  oid?: string;
 }
 
 /** A tree as the bytes-returning walk produces it: every entry carries its content. */
@@ -182,6 +195,12 @@ export interface FreezeSnapshotInput {
   projectRoot: string;
   /** The directory whose bytes are frozen. Defaults to `projectRoot`; the manager passes a binding's root. */
   sourceRoot?: string;
+  /**
+   * Who keeps this snapshot alive: the session database that will record it (`SessionStore.snapshotOwner`).
+   *
+   * Defaults to `STANDALONE_OWNER`, whose share is never released — a caller outside a store keeps what it froze.
+   */
+  owner?: string;
   signal?: AbortSignal;
 }
 
@@ -192,9 +211,83 @@ export function snapshotMetadataRoot(repositoryRoot: string, snapshotId: string)
   return path.join(repositoryRoot, '.yuantu', 'workspace-snapshots', snapshotId);
 }
 
-/** The ref that keeps a baseline's objects alive: an unreferenced object is garbage to a later `gc`. */
+/** How old a staging directory whose owner still looks alive must be before it counts as abandoned anyway. */
+const STAGING_ABANDONED_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Removes the staging directories of freezes that will never finish.
+ *
+ * A freeze stages its bytes in `.staging-<pid>-<uuid>` and removes the directory in a `finally`, so only a process
+ * that was killed outright leaves one — up to a whole tree's worth of bytes, kept forever. A directory is
+ * abandoned when its owner pid is gone, or when it is older than any freeze takes (the pid may since belong to
+ * another process). This process's own are never touched: a freeze of its own may be in flight. Returns how many
+ * were removed.
+ */
+export async function sweepAbandonedStaging(
+  repositoryRoot: string,
+  now = Date.now(),
+): Promise<number> {
+  const directory = path.join(repositoryRoot, '.yuantu', 'workspace-snapshots');
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    const match = /^\.staging-(\d+)-/.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (pid === process.pid) continue;
+    const target = path.join(directory, name);
+    let ownerGone = false;
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      ownerGone = (error as NodeJS.ErrnoException).code === 'ESRCH';
+    }
+    if (!ownerGone) {
+      const info = await lstat(target).catch(() => null);
+      if (!info || now - info.mtimeMs < STAGING_ABANDONED_MS) continue;
+    }
+    await rm(target, { recursive: true, force: true });
+    removed++;
+  }
+  return removed;
+}
+
+/**
+ * The single ref that kept a baseline's objects alive before owners were recorded (formats 3 and earlier).
+ *
+ * Still read: a snapshot that has one is never deleted automatically, because nothing says which databases use it.
+ */
 export function snapshotRef(snapshotId: string): string {
   return `refs/yuantu/snapshots/${snapshotId}`;
+}
+
+/**
+ * Where the owner refs live: one ref per snapshot per owner, `<prefix>/<snapshot id>/<owner>`.
+ *
+ * A namespace of its own rather than below `refs/yuantu/snapshots/<id>`, because Git cannot hold a ref and a
+ * directory of refs under the same name, and that name is taken by the pre-owner ref of older snapshots.
+ */
+export const SNAPSHOT_OWNER_REFS = 'refs/yuantu/snapshot-owners';
+
+/** The owner a caller that names none is recorded as; nothing ever releases it, so its snapshots are kept. */
+export const STANDALONE_OWNER = 'standalone';
+
+/**
+ * The ref through which `owner` keeps a snapshot alive.
+ *
+ * Each session database of a repository is one owner (`SessionStore.snapshotOwner`), so the set of refs under a
+ * snapshot is the set of databases that use it — visible to all of them, because refs live in the repository rather
+ * than in any one database.
+ */
+export function snapshotOwnerRef(snapshotId: string, owner: string): string {
+  if (!/^[0-9a-z-]{1,64}$/.test(owner))
+    throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid snapshot owner');
+  return `${SNAPSHOT_OWNER_REFS}/${snapshotId}/${owner}`;
 }
 
 /** The content-addressed name a format-3 manifest's bytes are stored under. */
@@ -251,20 +344,7 @@ export async function freezeSnapshot(input: FreezeSnapshotInput): Promise<Worksp
       'A sparse checkout is not supported by workspace isolation yet: part of the working tree is absent by design',
     );
 
-  /**
-   * The bytes are staged, not held.
-   *
-   * A freeze used to collect the whole tree base64-encoded into the manifest, which put ~2.3 copies of the tree in
-   * memory and made the published manifest a second copy on disk. The staging directory is content-addressed and
-   * renamed beside the manifest once the id is known, so the freeze's peak is one file and a published snapshot is
-   * a small manifest plus the bytes it names.
-   */
-  const staging = path.join(
-    identity.repositoryRoot,
-    '.yuantu',
-    'workspace-snapshots',
-    `.staging-${process.pid}-${randomUUID()}`,
-  );
+  const owner = input.owner ?? STANDALONE_OWNER;
   /**
    * Two walks, and they must agree — but the first one only hashes.
    *
@@ -287,37 +367,36 @@ export async function freezeSnapshot(input: FreezeSnapshotInput): Promise<Worksp
   const published = await readManifest(identity.repositoryRoot, snapshotId);
   if (published) {
     await verifySnapshotStable(identity, first, signal);
-    return snapshotOf(published, snapshotId);
+    // Another owner published it; this one still has to say it uses it, or the other's release would drop it.
+    return publishSnapshot(identity, snapshotId, published, owner, signal);
   }
-  try {
-    assertSameTree(first, await collectStagedTree(sourceRoot, staging, signal));
-    const metadata = snapshotMetadataRoot(identity.repositoryRoot, snapshotId);
-    await mkdir(metadata, { recursive: true });
-    const files = path.join(metadata, 'files');
-    /**
-     * A concurrent freeze of the same content may have published these bytes already. They are addressed by their
-     * digest, so whichever copy lands first is the same content; the loser's staging directory is simply dropped.
-     */
-    if (!existsSync(files)) await rename(staging, files);
-
-    const tree = await buildTree(identity, manifest, snapshotId, signal);
-    /**
-     * The commit is *not* part of the snapshot's identity, which is why it is made outside the lock and may be
-     * discarded: two freezes of one unchanged directory produce the same id and two different `commit-tree`
-     * timestamps, and only one of those commits can be the baseline the store records for that id.
-     */
-    const baseCommit = await commitBaseline(identity, tree, snapshotId, signal);
-    await checkIndexUntouched(identity, readiness.indexHash);
-    const stored: SnapshotManifest = {
-      ...manifest,
-      baseCommit,
-      baseTree: tree,
-      createdAt: new Date().toISOString(),
-    };
-    return publishSnapshot(identity, snapshotId, stored, signal);
-  } finally {
-    await rm(staging, { recursive: true, force: true });
-  }
+  /**
+   * The bytes go straight into Git's object store, and that is the only copy.
+   *
+   * Format 3 staged every file into a content-addressed directory beside the manifest and then imported the same
+   * bytes into Git to build the baseline tree — two copies of the tree per snapshot, and the directory copy shared
+   * nothing between snapshots of slightly different trees. The second walk now writes each file as a blob through one
+   * `fast-import` stream as it reads it, the manifest names each file's blob, and Git's own content addressing
+   * shares every unchanged file between every snapshot of the repository.
+   */
+  const collected = await collectObjectTree(identity.repositoryRoot, sourceRoot, signal);
+  assertSameTree(first, collected);
+  const tree = await buildTree(identity, collected, snapshotId, signal);
+  /**
+   * The commit is *not* part of the snapshot's identity, which is why it is made outside the lock and may be
+   * discarded: two freezes of one unchanged directory produce the same id and two different `commit-tree`
+   * timestamps, and only one of those commits can be the baseline the store records for that id.
+   */
+  const baseCommit = await commitBaseline(identity, tree, snapshotId, signal);
+  await checkIndexUntouched(identity, readiness.indexHash);
+  const stored: SnapshotManifest = {
+    ...manifest,
+    files: collected,
+    baseCommit,
+    baseTree: tree,
+    createdAt: new Date().toISOString(),
+  };
+  return publishSnapshot(identity, snapshotId, stored, owner, signal);
 }
 
 /**
@@ -330,26 +409,173 @@ export async function freezeSnapshot(input: FreezeSnapshotInput): Promise<Worksp
  * whose work was, in fact, never started.
  *
  * So the read and the write happen together under the repository lock, and the losing freeze adopts the published
- * record. `refs/yuantu/snapshots/<id>` keeps one commit per id for the same reason: it is a pointer to *the*
- * baseline, and the second writer must not move it to a commit the metadata does not name. The losing commit is left
- * unreferenced on purpose — it holds the same tree, and a later `gc` is free to collect it.
+ * record. The owner ref points at the *published* baseline commit for the same reason: it must keep alive the commit
+ * the metadata names, never the loser's. The losing commit is left unreferenced on purpose — it holds the same tree,
+ * and a later `gc` is free to collect it.
+ *
+ * Every publish, including one that finds the snapshot already there, records its owner (`snapshotOwnerRef`). The
+ * owner refs are the snapshot's reference count across every session database of the repository: a snapshot is
+ * deleted only when the last of them is released (`releaseSnapshotOwner`).
  */
 async function publishSnapshot(
   identity: RepositoryIdentity,
   snapshotId: string,
   manifest: SnapshotManifest,
+  owner: string,
   signal?: AbortSignal,
 ): Promise<WorkspaceSnapshot> {
   return withRepositoryLock(identity.repositoryRoot, async () => {
     const winner = await readManifest(identity.repositoryRoot, snapshotId);
-    if (winner) return snapshotOf(winner, snapshotId);
-    await publishManifest(identity.repositoryRoot, snapshotId, manifest);
-    await runWorkspaceGit(['update-ref', snapshotRef(snapshotId), manifest.baseCommit], {
-      cwd: identity.worktreeRoot,
+    if (!winner) await publishManifest(identity.repositoryRoot, snapshotId, manifest);
+    const durable = winner ?? manifest;
+    await runWorkspaceGit(['update-ref', snapshotOwnerRef(snapshotId, owner), durable.baseCommit], {
+      cwd: identity.repositoryRoot,
       ...(signal ? { signal } : {}),
     });
-    return snapshotOf(manifest, snapshotId);
+    return snapshotOf(durable, snapshotId);
   });
+}
+
+/**
+ * Records that `owner` uses a snapshot that is already published, by pointing its owner ref at the baseline.
+ *
+ * For callers that adopt an existing snapshot without freezing it (recovery, a restore) and for snapshots published
+ * before owners were recorded: from now on this owner's release decides for its share, as it would for a new one.
+ */
+export async function claimSnapshotOwner(
+  repositoryRoot: string,
+  snapshotId: string,
+  baseCommit: string,
+  owner: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await withRepositoryLock(repositoryRoot, async () => {
+    await runWorkspaceGit(['update-ref', snapshotOwnerRef(snapshotId, owner), baseCommit], {
+      cwd: repositoryRoot,
+      ...(signal ? { signal } : {}),
+    });
+  });
+}
+
+/**
+ * Releases `owner`'s share of a snapshot, and deletes the snapshot when that was the last share.
+ *
+ * Under the repository lock, so a concurrent freeze adopting the same snapshot either records its owner first (and
+ * the snapshot stays) or finds it gone and publishes it afresh. A snapshot is never deleted while any owner ref or a
+ * pre-owner `refs/yuantu/snapshots/<id>` ref still names it: a database this one cannot see may be using it. Only the
+ * metadata is removed here; the objects become unreachable and Git's own maintenance collects them. Answers whether
+ * the snapshot was deleted.
+ */
+export async function releaseSnapshotOwner(
+  repositoryRoot: string,
+  snapshotId: string,
+  owner: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const metadata = snapshotMetadataRoot(repositoryRoot, snapshotId);
+  return withRepositoryLock(repositoryRoot, async () => {
+    const options = { cwd: repositoryRoot, ...(signal ? { signal } : {}) };
+    await runWorkspaceGit(['update-ref', '-d', snapshotOwnerRef(snapshotId, owner)], {
+      ...options,
+      allowFailure: true,
+    });
+    const remaining = await workspaceGit(
+      [
+        'for-each-ref',
+        '--format=%(refname)',
+        `${SNAPSHOT_OWNER_REFS}/${snapshotId}/`,
+        snapshotRef(snapshotId),
+      ],
+      options,
+    );
+    if (remaining) return false;
+    await rm(metadata, { recursive: true, force: true });
+    return true;
+  });
+}
+
+/** One snapshot directory of a repository, as `workspace-gc` reports it. */
+export interface SnapshotInventoryEntry {
+  id: string;
+  /** The manifest's format, or `null` when the directory holds no readable manifest. */
+  format: number | null;
+  /** Bytes on disk under the snapshot's metadata directory (format 3 kept a copy of every file there). */
+  bytes: number;
+  owners: string[];
+  /** A pre-owner `refs/yuantu/snapshots/<id>` ref: kept until a person decides. */
+  legacyRef: boolean;
+}
+
+/**
+ * Every snapshot directory and staging directory one repository holds, with who keeps each.
+ *
+ * A report, never a decision: it is what `workspace-gc --dry-run` prints so a person can see which snapshots predate
+ * owners (`legacyRef`, or `owners` empty with a format below 4), how large each is, and what an abandoned freeze left.
+ */
+export async function inventorySnapshots(
+  repositoryRoot: string,
+  signal?: AbortSignal,
+): Promise<{ snapshots: SnapshotInventoryEntry[]; staging: { name: string; bytes: number }[] }> {
+  const directory = path.join(repositoryRoot, '.yuantu', 'workspace-snapshots');
+  const names = await readdir(directory).catch(() => [] as string[]);
+  const legacy = new Set(
+    (
+      await workspaceGit(['for-each-ref', '--format=%(refname)', 'refs/yuantu/snapshots/'], {
+        cwd: repositoryRoot,
+        ...(signal ? { signal } : {}),
+      })
+    )
+      .split('\n')
+      .filter(Boolean)
+      .map((ref) => ref.slice('refs/yuantu/snapshots/'.length)),
+  );
+  const snapshots: SnapshotInventoryEntry[] = [];
+  const staging: { name: string; bytes: number }[] = [];
+  for (const name of names.sort()) {
+    signal?.throwIfAborted();
+    const bytes = await directoryBytes(path.join(directory, name));
+    if (name.startsWith('.staging-')) {
+      staging.push({ name, bytes });
+      continue;
+    }
+    if (!/^[0-9a-f]{16,64}$/.test(name)) continue;
+    const manifest = await readManifest(repositoryRoot, name);
+    snapshots.push({
+      id: name,
+      format: manifest?.format ?? null,
+      bytes,
+      owners: await snapshotOwners(repositoryRoot, name, signal),
+      legacyRef: legacy.has(name),
+    });
+  }
+  return { snapshots, staging };
+}
+
+async function directoryBytes(target: string): Promise<number> {
+  const info = await lstat(target).catch(() => null);
+  if (!info) return 0;
+  if (!info.isDirectory()) return info.size;
+  let total = 0;
+  for (const name of await readdir(target).catch(() => [] as string[]))
+    total += await directoryBytes(path.join(target, name));
+  return total;
+}
+
+/** Every owner that has a share of a snapshot, as its owner refs name them. */
+export async function snapshotOwners(
+  repositoryRoot: string,
+  snapshotId: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const prefix = `${SNAPSHOT_OWNER_REFS}/${snapshotId}/`;
+  const refs = await workspaceGit(['for-each-ref', '--format=%(refname)', prefix], {
+    cwd: repositoryRoot,
+    ...(signal ? { signal } : {}),
+  });
+  return refs
+    .split('\n')
+    .filter(Boolean)
+    .map((ref) => ref.slice(prefix.length));
 }
 
 function snapshotOf(manifest: SnapshotManifest, snapshotId: string): WorkspaceSnapshot {
@@ -556,27 +782,32 @@ export async function collectWorkingTree(
 }
 
 /**
- * The freeze's own walk: each file's bytes go to `staging/<sha256 prefix>`, and the entry keeps only what
- * identifies them.
+ * The freeze's second walk: each file written as a Git blob as it is read, the entry keeping its digest and blob.
  *
- * This is what makes a freeze's memory independent of the tree's size. The staging directory is content-addressed,
- * so two files with the same content share one copy, and it is renamed beside the manifest once the snapshot id is
- * known; the caller removes it on every path that does not publish.
+ * This is what makes a freeze's memory independent of the tree's size and its disk cost one copy: the bytes reach
+ * the object store through one `fast-import` stream and nowhere else, and a file another snapshot already holds is
+ * the same object. A walk that fails part-way leaves only unreachable objects, which Git collects.
  */
-export async function collectStagedTree(
+async function collectObjectTree(
+  repositoryRoot: string,
   directory: string,
-  staging: string,
   signal?: AbortSignal,
   limits: { maxTotalBytes?: number } = {},
 ): Promise<SnapshotManifestEntry[]> {
   const entries: SnapshotManifestEntry[] = [];
-  await mkdir(staging, { recursive: true });
-  await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    await writeFile(path.join(staging, blobName(sha256)), bytes);
-    entries.push({ path: relative, mode: modeOf(info), size: bytes.length, sha256 });
-  });
-  return entries;
+  const batch = openBlobBatch(repositoryRoot, signal);
+  try {
+    await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      entries.push({ path: relative, mode: modeOf(info), size: bytes.length, sha256 });
+      await batch.add(bytes);
+    });
+  } catch (error) {
+    batch.abort();
+    throw error;
+  }
+  const blobs = await batch.finish();
+  return entries.map((entry, index) => ({ ...entry, oid: blobs[index]! }));
 }
 
 /**
@@ -742,67 +973,47 @@ function manifestDigest(
  */
 async function buildTree(
   identity: RepositoryIdentity,
-  manifest: Omit<SnapshotManifest, 'baseCommit' | 'baseTree' | 'createdAt'>,
+  entries: readonly SnapshotManifestEntry[],
   snapshotId: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const metadata = snapshotMetadataRoot(identity.repositoryRoot, snapshotId);
-  await mkdir(metadata, { recursive: true });
-  const indexFile = path.join(metadata, 'index');
-  await rm(indexFile, { force: true });
+  /**
+   * A private index of its own, so nothing here can write the user's — and outside the snapshot's metadata, which a
+   * concurrent release may delete: the index only lives for the length of this call.
+   */
+  const indexFile = path.join(
+    identity.commonDirectory,
+    `yuantu-snapshot-${snapshotId}-${process.pid}-${randomUUID()}.index`,
+  );
   const env = { GIT_INDEX_FILE: indexFile };
   const options = { cwd: identity.worktreeRoot, env, ...(signal ? { signal } : {}) };
-  /**
-   * Two Git processes for the whole manifest, not two per file.
-   *
-   * Each entry used to spawn its own `hash-object` and `update-index`; on Windows a Git spawn costs tens of
-   * milliseconds, so a baseline of 800 files took over a minute before the child could start. The bytes are the
-   * content-addressed files the freeze staged beside this manifest, written by one `fast-import` (`writeBlobs`)
-   * that answers one id per file in order, and entered by one `update-index -z --index-info`, whose NUL-terminated
-   * records carry any path Git can store. `hash-object --stdin-paths` was one process too, but it wrote a loose
-   * object file per blob, which was 15 of a 2000-file freeze's 19 s on Windows.
-   */
-  if (manifest.files.length) {
-    const filesDirectory = path.join(metadata, 'files');
-    const staged = manifest.files.map((entry) => {
-      // A format 2 manifest embeds its bytes; only a manifest this version wrote has the files beside it.
-      if (entry.blob === undefined) return path.join(filesDirectory, blobName(entry.sha256));
-      throw new WorkspaceFailure(
-        'WORKSPACE_INTEGRITY',
-        `A snapshot manifest without stored files cannot be rebuilt: ${entry.path}`,
-      );
-    });
-    try {
-      // One file in memory at a time: each staged file is read as the stream reaches it.
-      const blobs = await writeBlobs(
-        identity.repositoryRoot,
-        (async function* () {
-          for (const file of staged) yield await readFile(file);
-        })(),
-        signal,
-      );
-      if (
-        blobs.length !== manifest.files.length ||
-        !blobs.every((id) => /^[0-9a-f]{40,64}$/.test(id))
-      )
-        throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not hash every baseline file');
-      const records = manifest.files.map(
-        (entry, index) => `${entry.mode} ${blobs[index]}\t${entry.path}\0`,
-      );
+  try {
+    /**
+     * One Git process for the whole manifest, not one per file.
+     *
+     * Each entry used to spawn its own `hash-object` and `update-index`; on Windows a Git spawn costs tens of
+     * milliseconds, so a baseline of 800 files took over a minute before the child could start. The blobs are already
+     * in the object store (`collectObjectTree`), so the tree is one `update-index -z --index-info`, whose
+     * NUL-terminated records carry any path Git can store, and one `write-tree`.
+     */
+    if (entries.length) {
+      const records = entries.map((entry) => {
+        if (!entry.oid || !/^[0-9a-f]{40,64}$/.test(entry.oid))
+          throw new WorkspaceFailure('WORKSPACE_INTEGRITY', `No blob for ${entry.path}`);
+        return `${entry.mode} ${entry.oid}\t${entry.path}\0`;
+      });
       await runWorkspaceGit(['update-index', '--add', '-z', '--index-info'], {
         ...options,
         input: Buffer.from(records.join(''), 'utf8'),
       });
-    } catch (error) {
-      // The files beside the manifest are the snapshot's bytes and stay; a failure here is a failed build, not a
-      // reason to delete what a concurrent writer may already be using.
-      throw error;
     }
+    const tree = (await runWorkspaceGit(['write-tree'], options)).stdout.toString('utf8').trim();
+    if (!/^[0-9a-f]{40,64}$/.test(tree))
+      throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not produce a baseline tree');
+    return tree;
+  } finally {
+    await rm(indexFile, { force: true });
   }
-  const tree = (await runWorkspaceGit(['write-tree'], options)).stdout.toString('utf8').trim();
-  if (!/^[0-9a-f]{40,64}$/.test(tree))
-    throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not produce a baseline tree');
-  return tree;
 }
 
 /** The synthetic commit, created with the service's own identity and never on a branch. */
@@ -855,8 +1066,7 @@ async function publishManifest(
   snapshotId: string,
   manifest: SnapshotManifest,
 ): Promise<void> {
-  const directory = snapshotMetadataRoot(repositoryRoot, snapshotId);
-  await mkdir(directory, { recursive: true });
+  const directory = ensureRuntimeDirectory(snapshotMetadataRoot(repositoryRoot, snapshotId));
   const target = path.join(directory, 'manifest.json');
   const staging = `${target}.${process.pid}.tmp`;
   /**
@@ -905,7 +1115,7 @@ function validManifestEntries(manifest: SnapshotManifest): boolean {
   const seen = new Set<string>();
   for (const entry of manifest.files as unknown[]) {
     if (!entry || typeof entry !== 'object') return false;
-    const { path: relative, mode, size, sha256, blob } = entry as Record<string, unknown>;
+    const { path: relative, mode, size, sha256, blob, oid } = entry as Record<string, unknown>;
     if (
       typeof relative !== 'string' ||
       relative !== gitPath(relative) ||
@@ -920,7 +1130,11 @@ function validManifestEntries(manifest: SnapshotManifest): boolean {
       size < 0 ||
       typeof sha256 !== 'string' ||
       !/^[0-9a-f]{64}$/.test(sha256) ||
-      (blob !== undefined && (manifest.format === SNAPSHOT_FORMAT || typeof blob !== 'string'))
+      (blob !== undefined && (manifest.format >= 3 || typeof blob !== 'string')) ||
+      // A format-4 entry names its blob, and only a format-4 entry may.
+      (manifest.format >= 4
+        ? typeof oid !== 'string' || !/^[0-9a-f]{40,64}$/.test(oid)
+        : oid !== undefined)
     )
       return false;
     seen.add(relative);
@@ -938,8 +1152,8 @@ export async function readManifest(
   try {
     const parsed = JSON.parse(bytes.toString('utf8')) as SnapshotManifest;
     if (
-      // Formats 1 and 2 embedded the bytes; format 3 names them by digest. All three stay readable.
-      ![1, 2, SNAPSHOT_FORMAT].includes(parsed?.format ?? 0) ||
+      // Formats 1 and 2 embedded the bytes, format 3 stored them beside the manifest, format 4 names Git blobs.
+      ![1, 2, 3, SNAPSHOT_FORMAT].includes(parsed?.format ?? 0) ||
       !Array.isArray(parsed.files) ||
       typeof parsed.baseCommit !== 'string' ||
       typeof parsed.baseTree !== 'string' ||
@@ -951,7 +1165,7 @@ export async function readManifest(
      * id it is stored under and is treated as absent. Older formats used other naming schemes and rely on the entry
      * checks alone.
      */
-    if (parsed.format === SNAPSHOT_FORMAT && manifestDigest(parsed) !== snapshotId) return null;
+    if (parsed.format >= 3 && manifestDigest(parsed) !== snapshotId) return null;
     return parsed;
   } catch {
     return null;
@@ -1016,7 +1230,8 @@ export async function verifiedSnapshotFile(
   snapshotId: string,
   entry: SnapshotManifestEntry,
 ): Promise<string | null> {
-  if (entry.blob !== undefined) return null;
+  // Embedded (format 2) or a Git blob (format 4): there is no stored file to copy.
+  if (entry.blob !== undefined || entry.oid !== undefined) return null;
   const files = path.join(snapshotMetadataRoot(repositoryRoot, snapshotId), 'files');
   for (const file of [path.join(files, blobName(entry.sha256)), path.join(files, entry.sha256)]) {
     const info = await lstat(file).catch(() => null);
@@ -1046,8 +1261,26 @@ export async function snapshotFileBytes(
   repositoryRoot: string,
   snapshotId: string,
   entry: SnapshotManifestEntry,
+  /** One reader for a whole fill, so a format-4 snapshot is not one `cat-file` process per file. */
+  reader?: BlobReader,
 ): Promise<Buffer> {
   if (entry.blob !== undefined) return Buffer.from(entry.blob, 'base64');
+  if (entry.oid !== undefined) {
+    const bytes = reader ? await reader.read(entry.oid) : await readBlob(repositoryRoot, entry.oid);
+    if (!bytes)
+      throw new WorkspaceFailure(
+        'WORKSPACE_MISSING',
+        `The stored bytes for ${entry.path} are missing from snapshot ${snapshotId}`,
+        { path: entry.path },
+      );
+    if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256)
+      throw new WorkspaceFailure(
+        'WORKSPACE_INTEGRITY',
+        `The stored bytes for ${entry.path} do not match the digest recorded for it`,
+        { path: entry.path },
+      );
+    return bytes;
+  }
   const files = path.join(snapshotMetadataRoot(repositoryRoot, snapshotId), 'files');
   /**
    * The short name is what this build writes. The full digest is still read so snapshots published by the

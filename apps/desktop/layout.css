@@ -194,7 +194,7 @@ body {
   margin-bottom: 3px;
 }
 #chat-sidebar .session-item {
-  padding: 9px 35px 9px 12px;
+  padding: 9px 30px 9px 12px;
   color: var(--ink);
   border-radius: 7px;
 }
@@ -207,21 +207,6 @@ body {
   font-size: 10px;
   margin-top: 4px;
   color: var(--muted);
-}
-#chat-sidebar .session-activity {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-  font-size: 10px;
-}
-#chat-sidebar .session-running {
-  color: var(--accent);
-}
-#chat-sidebar .session-waiting {
-  padding: 0 5px;
-  border-radius: 4px;
-  color: var(--accent);
-  border: 1px solid var(--accent);
 }
 #chat-sidebar .session-item.selected,
 #chat-sidebar .session-item:hover:enabled {
@@ -241,8 +226,10 @@ body {
 }
 #chat-sidebar .session-more {
   color: var(--muted);
-  top: 9px;
-  right: 3px;
+  right: 4px;
+}
+#chat-sidebar .session-status {
+  right: 4px;
 }
 #chat-sidebar .session-more:hover,
 #chat-sidebar .session-more[aria-expanded='true'] {

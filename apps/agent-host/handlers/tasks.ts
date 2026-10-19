@@ -1,4 +1,4 @@
-import { DeferredApprovalError } from '../../../packages/protocol/failure.ts';
+﻿import { DeferredApprovalError } from '../../../packages/protocol/failure.ts';
 import {
   verifyTaskAcceptance,
   type TaskBaselines,
@@ -14,6 +14,7 @@ import { sessionPermissionPolicy } from '../session-policy.ts';
 import {
   acquireLocks,
   assertUnlocked,
+  executionRoot,
   fileClaims,
   hostClaim,
   sessionClaim,
@@ -41,17 +42,51 @@ const sessionVerifier = (ctx: HostContext, sessionId: string): Approver =>
   });
 
 /**
- * A manual confirm or verify, registered so Stop for its session and Host shutdown can abort it.
+ * A manual operation, registered so Stop for its session and Host shutdown can abort it.
  *
- * Its checks run commands one after another — up to 64 of them, each allowed minutes — and it used to be handed
- * no signal at all: Stop did nothing, and shutdown aborted every manual operation except this one and then waited
- * for it to finish. The caller removes it in the same `finally` that releases its locks.
+ * Its work runs commands or a model request 閳?up to 64 checks, each allowed minutes 閳?and it used to be handed no
+ * signal at all: Stop did nothing, and shutdown aborted every manual operation except this one and then waited for
+ * it to finish. The caller removes it in the same `finally` that releases its locks.
  */
-function manualVerification(ctx: HostContext, sessionId: string): ManualOperation {
+function manualOperation(
+  ctx: HostContext,
+  sessionId: string,
+  limitMs: number,
+  label: string,
+): ManualOperation {
   const operation: ManualOperation = { sessionId, controller: new AbortController() };
   ctx.manualOperations.add(operation);
+  /**
+   * And a limit on the whole of it, not only on each step: 64 checks of five minutes each is over five hours of a
+   * request nobody may be waiting for any more. Past the limit the operation is aborted like a Stop, and the
+   * attempt records why.
+   */
+  const limit = setTimeout(
+    () =>
+      operation.controller.abort(
+        new Error(`${label} exceeded its ${String(Math.round(limitMs / 60_000))}-minute limit`),
+      ),
+    limitMs,
+  );
+  limit.unref?.();
+  operationLimits.set(operation, limit);
   return operation;
 }
+
+function manualVerification(ctx: HostContext, sessionId: string): ManualOperation {
+  return manualOperation(ctx, sessionId, MANUAL_VERIFICATION_LIMIT_MS, 'Manual verification');
+}
+
+/** Ends what `manualOperation` started; called from the `finally` that releases the operation's locks. */
+function finishManualOperation(ctx: HostContext, operation: ManualOperation): void {
+  clearTimeout(operationLimits.get(operation));
+  operationLimits.delete(operation);
+  ctx.manualOperations.delete(operation);
+}
+
+/** The longest a manual confirm or verify may run in total. */
+const MANUAL_VERIFICATION_LIMIT_MS = 30 * 60_000;
+const operationLimits = new WeakMap<ManualOperation, NodeJS.Timeout>();
 
 export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.create': async (ctx, params) => {
@@ -174,6 +209,9 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     const task = ctx.store.getTask(sessionId, required(params, 'taskId'));
     if (task.status === 'in_progress') throw new Error('Task is running');
     const lease = acquireLocks(ctx, planning, 'Host is busy; wait before planning');
+    // Planning is a model request a person can wait on, so Stop for this session must reach it; it never occupied a
+    // run slot, and its own request timeout remains the shorter of the two bounds.
+    const operation = manualOperation(ctx, sessionId, 120_000, 'Task planning');
     let runId: string | undefined;
     const statistics = emptyStatistics();
     const started = performance.now();
@@ -184,7 +222,10 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       const proposal = await proposeTask(
         createProvider(readConfig()),
         task,
-        AbortSignal.timeout(Math.min(ctx.options.requestTimeoutMs ?? 120000, 120000)),
+        AbortSignal.any([
+          operation.controller.signal,
+          AbortSignal.timeout(Math.min(ctx.options.requestTimeoutMs ?? 120000, 120000)),
+        ]),
         (text) => {
           if (text && !statistics.firstTokenCount) {
             statistics.firstTokenMs = performance.now() - started;
@@ -217,6 +258,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
             ...(errorText ? { error: errorText } : {}),
           });
       } finally {
+        finishManualOperation(ctx, operation);
         lease.release();
       }
     }
@@ -224,9 +266,10 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.confirm': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    // Verification runs its checks in the project directory and compares them with recorded baselines, so nothing
-    // may write there meanwhile; another session working in its own worktree is no obstacle.
-    const confirming = fileClaims(sessionId, ctx.workspace);
+    // Verification runs its checks where the session works 閳?its own worktree when it has one, where the baselines
+    // were captured 閳?and compares them with those baselines, so nothing may write there meanwhile.
+    const root = executionRoot(ctx, sessionId);
+    const confirming = fileClaims(sessionId, root);
     assertUnlocked(ctx, confirming, 'Host is busy; wait before manual confirmation');
     const taskId = required(params, 'taskId');
     const task = ctx.store.getTask(sessionId, taskId);
@@ -257,7 +300,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     const operation = manualVerification(ctx, sessionId);
     try {
       const verified = await verifyTaskAcceptance(
-        ctx.workspace,
+        root,
         task,
         baselines,
         operation.controller.signal,
@@ -277,14 +320,17 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       });
       throw error;
     } finally {
-      ctx.manualOperations.delete(operation);
+      finishManualOperation(ctx, operation);
       lease.release();
     }
   },
   'task.verify': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    const verifying = fileClaims(sessionId, ctx.workspace);
+    // Baselines were captured in the directory the task ran in 閳?the session's worktree when it has one 閳?so the
+    // checks have to run there too; a project-relative command would judge a different tree.
+    const root = executionRoot(ctx, sessionId);
+    const verifying = fileClaims(sessionId, root);
     assertUnlocked(ctx, verifying, 'Host is busy; wait before verifying');
     const taskId = required(params, 'taskId');
     const task = ctx.store.getTask(sessionId, taskId);
@@ -316,7 +362,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
             }
           : sessionVerifier(ctx, sessionId);
       const verified = await verifyTaskAcceptance(
-        ctx.workspace,
+        root,
         task,
         baselines,
         operation.controller.signal,
@@ -347,7 +393,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
               /**
                * "Never run" is the more useful of the two truths.
                *
-               * A verification of a task that was never executed also fails for a definition-level reason — its
+               * A verification of a task that was never executed also fails for a definition-level reason 閳?its
                * steps are still pending, which is what not having run means. Reporting the cause rather than the
                * consequence is what tells the reader to run the task instead of to edit it.
                */
@@ -370,7 +416,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       });
       throw error;
     } finally {
-      ctx.manualOperations.delete(operation);
+      finishManualOperation(ctx, operation);
       lease.release();
     }
   },

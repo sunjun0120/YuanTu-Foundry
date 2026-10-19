@@ -11,6 +11,8 @@ import { TerminalSessions } from '../../packages/tools/terminal.ts';
 import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
 import { excludeRuntimeState } from '../../packages/workspaces/runtime-exclude.ts';
+import { repositoryIdentity } from '../../packages/workspaces/git.ts';
+import { sweepAbandonedStaging } from '../../packages/workspaces/snapshot.ts';
 import type { Options } from '../shared/args.ts';
 import { loadHookRegistry } from '../shared/hooks.ts';
 import { openStore } from '../shared/runtime.ts';
@@ -89,6 +91,16 @@ export async function openHostServices(options: Options, workspace: string): Pro
   await workspaces.reconcile(reconciliation.signal);
   await workspaceResults.reconcile(reconciliation.signal);
   /**
+   * Workspace housekeeping: the opt-in retention purge (off by default — a removed workspace is the last copy of
+   * unimported work), then the release of every snapshot this database no longer names. Not awaited, because it may
+   * walk Git for every snapshot; the manager makes every freeze and allocation wait for it instead.
+   */
+  const retentionDays = parseSetting(process.env, 'YUANTU_WORKSPACE_RETENTION_DAYS');
+  void workspaces.startHousekeeping(
+    typeof retentionDays === 'number' ? { retentionMs: retentionDays * 24 * 60 * 60 * 1000 } : {},
+    reconciliation.signal,
+  );
+  /**
    * Spills of sessions that no longer exist, and a workspace-wide budget.
    *
    * Housekeeping, so it is not awaited: it stats every spilled file, and a workspace with many sessions made the Host
@@ -99,6 +111,10 @@ export async function openHostServices(options: Options, workspace: string): Pro
     workspace,
     sessionExists: spillOwnerExists(store),
   }).catch(() => undefined);
+  // The staging a killed freeze left in this repository; housekeeping as well, so it is not awaited either.
+  void repositoryIdentity(workspace)
+    .then((identity) => (identity ? sweepAbandonedStaging(identity.repositoryRoot) : 0))
+    .catch(() => undefined);
   const background = new BackgroundCommands(workspace);
   /**
    * The host's terminals, one manager for the process.

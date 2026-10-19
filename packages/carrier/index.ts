@@ -16,9 +16,10 @@
  * appears. The interface layer — slots, components, the shell — is a separate, later step.
  */
 import type { ConnectedHostOptions, SpawnedHostOptions } from '../client/host-client.ts';
-import { CarrierService } from './service.ts';
+import { CarrierService, type CarrierOptions } from './service.ts';
 
 export { CarrierService } from './service.ts';
+export type { CarrierOptions } from './service.ts';
 export { mergeAuditWindow, refreshScopeFor } from './refresh-scope.ts';
 export type { RefreshScope } from './refresh-scope.ts';
 export { CarrierError, carrierIssue } from './errors.ts';
@@ -33,7 +34,7 @@ export type { MessageDelta, SubAgentDelta, StatisticsDelta } from './contract.ts
  * It spawns the Host, supervises it, and is the one that can bring it back after a crash — which is why the
  * failure report names a pid.
  */
-export function spawnedCarrier(options: SpawnedHostOptions): CarrierService {
+export function spawnedCarrier(options: SpawnedHostOptions & CarrierOptions): CarrierService {
   return new CarrierService(options);
 }
 
@@ -44,6 +45,6 @@ export function spawnedCarrier(options: SpawnedHostOptions): CarrierService {
  * the carrier's own business. Everything above the transport — framing, requests, the whole state machine —
  * is the same code, which is the point of the split.
  */
-export function connectedCarrier(options: ConnectedHostOptions): CarrierService {
+export function connectedCarrier(options: ConnectedHostOptions & CarrierOptions): CarrierService {
   return new CarrierService(options);
 }

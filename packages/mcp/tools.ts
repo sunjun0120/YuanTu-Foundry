@@ -186,6 +186,9 @@ class Connection {
    * installed on a connection its caller has already shut down.
    */
   private closeGeneration = 0;
+  /** The process behind the published stdio connection, and behind the one being opened; see `execute`. */
+  private serverPid: number | undefined;
+  private openedPid: number | undefined;
   /** Consecutive failures, and the moment this server may be asked again. Cleared by any answer. */
   private failures = 0;
   private retryAt = 0;
@@ -261,6 +264,19 @@ class Connection {
         throw new Error('MCP connection was closed while the server was being opened');
       }
       this.client = client;
+      /**
+       * A connection that drops is forgotten as it drops, so the next call reconnects instead of failing.
+       *
+       * Connections now outlive a run (`../catalog/resource-pool.ts`), and a stdio server that exited or an HTTP
+       * stream that closed between two turns used to be noticed only by the next request — which failed, and only
+       * then let the one after it reconnect. Claude Code leaves a dropped stdio server for a person to reconnect by
+       * hand; here the connection simply opens again on demand, with the same handshake bounds and failure backoff
+       * as the first time.
+       */
+      client.onclose = () => {
+        if (this.client === client) this.client = undefined;
+      };
+      this.serverPid = this.openedPid;
       return client;
     } finally {
       if (this.connecting === connecting) this.connecting = undefined;
@@ -397,6 +413,8 @@ class Connection {
           client.connect(transport, { signal, timeout: HANDSHAKE_TIMEOUT_MS }),
           deadline,
         ]);
+        this.openedPid =
+          transport instanceof StdioClientTransport ? (transport.pid ?? undefined) : undefined;
       } finally {
         signal.removeEventListener('abort', abandon);
       }
@@ -636,6 +654,16 @@ class Connection {
      */
     let connected = false;
     try {
+      /**
+       * A kept stdio connection whose server process is already gone is dropped before it is used.
+       *
+       * Its `close` can arrive just after the next call has picked the connection up, and the request written into
+       * the dead pipe then fails as "Connection closed" — the same error a server that received the call and died
+       * mid-way produces, so it cannot be retried without risking the call happening twice. Asking whether the
+       * process still exists *before* sending is the one check that is safe: nothing has been sent yet.
+       */
+      if (this.client && this.serverPid !== undefined && !processExists(this.serverPid))
+        await this.close();
       const client = await this.connect(signal);
       await this.discover(client, signal);
       connected = true;
@@ -787,4 +815,14 @@ export function mcpTools(
         throw new Error('MCP connection cleanup failed');
     },
   };
+}
+
+/** Whether a process exists; a pid this process may not signal still counts as existing. */
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
 }

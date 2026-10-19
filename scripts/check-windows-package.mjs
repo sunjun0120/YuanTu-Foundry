@@ -65,6 +65,8 @@ export async function validateWindowsPackage(
   const bundledHost = path.join(resources, 'app/dist/packages/tools/host.bundle.js');
   if ((await stat(bundledHost)).size < 1024 * 1024)
     throw new Error('Packaged Host bundle is missing or truncated');
+  // Office automation inlined into the bundle looks for its script beside the bundle, not under `dist/packages/office`.
+  await readFile(path.join(resources, 'app/dist/packages/tools/automation.ps1'));
   const metadata = JSON.parse(await readFile(path.join(resources, 'app/package.json'), 'utf8'));
   if (metadata.main !== 'dist/desktop/main.cjs')
     throw new Error('Packaged desktop entry point changed');

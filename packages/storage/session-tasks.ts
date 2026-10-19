@@ -779,6 +779,25 @@ export class TaskJournal {
       .get(sessionId, taskId);
     return row?.baselines ? (JSON.parse(String(row.baselines)) as Record<string, unknown>) : {};
   }
+  /**
+   * The images the current definition's first run took, which every later attempt at it compares against.
+   *
+   * `undefined` when no run of this definition has recorded any yet; the caller captures fresh ones then.
+   */
+  definitionRunAttemptBaselines(
+    sessionId: string,
+    taskId: string,
+  ): Record<string, unknown> | undefined {
+    this.port.getTask(sessionId, taskId);
+    const row = this.port.db
+      .prepare(
+        "SELECT a.baselines FROM task_attempts a JOIN tasks t ON t.id=a.task_id WHERE a.session_id=? AND a.task_id=? AND a.kind='run' AND a.ordinal>t.definition_attempt_floor AND a.baselines IS NOT NULL ORDER BY a.ordinal ASC LIMIT 1",
+      )
+      .get(sessionId, taskId);
+    return row?.baselines
+      ? (JSON.parse(String(row.baselines)) as Record<string, unknown>)
+      : undefined;
+  }
   recoverInterruptedTasks(workspace?: string): number {
     primeRunOwners(this.port.db);
     /**

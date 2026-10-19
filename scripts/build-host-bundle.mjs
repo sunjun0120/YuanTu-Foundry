@@ -18,7 +18,7 @@
  * loaded only by the browser tool), and TypeScript (a compiler in its own right, not a library to inline).
  */
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
@@ -44,6 +44,10 @@ await build({
   logLevel: 'warning',
 });
 const { size } = await stat(output);
+// Office automation resolves `automation.ps1` beside its own module. Inlined into this bundle, that module's directory
+// is `dist/packages/tools/`, so the script has to be here too or every Word/PowerPoint PDF preview from the desktop
+// Host fails with "script is missing from the runtime build".
+await copyFile('packages/office/automation.ps1', path.join(path.dirname(output), 'automation.ps1'));
 
 /**
  * One real request, not only `--help`.

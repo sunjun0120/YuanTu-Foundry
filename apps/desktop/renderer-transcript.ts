@@ -281,6 +281,7 @@ export function setupTranscript(options: {
     'verification-changed-monitored-inputs',
     'empty-acceptance',
     'invalid-definition',
+    'protected-path-changed',
   ]);
   function completionNotice(): HTMLElement | null {
     const completion = options.getState()?.session.completion ?? null;

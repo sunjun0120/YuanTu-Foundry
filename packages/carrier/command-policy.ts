@@ -51,6 +51,7 @@ export function describeSelection(selection: {
 export const MANAGING_COMMANDS = new Set<string>([
   'rename',
   'deleteSession',
+  'archiveSession',
   'taskRefresh',
   'taskVerify',
   'taskRetry',

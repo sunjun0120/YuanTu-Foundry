@@ -476,6 +476,12 @@ export const ENVIRONMENT = {
   },
   YUANTU_SUBAGENTS: { kind: 'boolean', description: '是否启用子代理委派' },
   YUANTU_SUBAGENT_CONCURRENCY: { kind: 'number', range: [1, 16], description: '子代理并发上限' },
+  YUANTU_WORKSPACE_RETENTION_DAYS: {
+    kind: 'number',
+    range: [1, 3650],
+    description:
+      '已移除的隔离工作区保留天数；超过后在 Host 启动时彻底清除（不可再恢复）。缺省不清除',
+  },
   /**
    * Where a write-capable sub-agent executes.
    *

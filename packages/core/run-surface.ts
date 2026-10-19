@@ -3,7 +3,7 @@ import type { ToolSpec } from '../protocol/index.ts';
 import type { PermissionPolicyView } from '../protocol/permissions.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
-import { loadedDeferredTools, sameToolSet } from './run-catalog.ts';
+import { LoadedDeferredTools, sameToolSet } from './run-catalog.ts';
 
 /**
  * What one run's next request is made of on the model's side: the system prompt, the tool schema it is sent, the
@@ -46,8 +46,10 @@ export class RunSurface {
   /** The deferred tools the transcript has loaded, or `undefined` outside the deferred tool mode. */
   private loaded: Set<string> | undefined;
   private readonly options: RunSurfaceOptions;
+  private readonly loadedTracker: LoadedDeferredTools;
   constructor(options: RunSurfaceOptions) {
     this.options = options;
+    this.loadedTracker = new LoadedDeferredTools(options.store, options.sessionId, options.tools);
     this.policy = options.policy;
     this.executionPolicy = options.executionPolicy;
     this.planNotice = options.planNotice;
@@ -94,7 +96,7 @@ export class RunSurface {
     }
   }
   private loadedNow(): Set<string> | undefined {
-    return loadedDeferredTools(this.options.store, this.options.sessionId, this.options.tools);
+    return this.loadedTracker.current();
   }
   private rebuild(): void {
     this.system = this.options.composeSystem(this.planNotice);

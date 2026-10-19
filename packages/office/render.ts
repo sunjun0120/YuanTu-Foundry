@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import mammoth from 'mammoth';
 import { OfficeUnavailableError, runOfficeAutomation, type OfficeFormat } from './automation.ts';
+import { environmentBlockedMessage } from '../tools/environment-blocked.ts';
 import type { OfficePreview } from './preview.ts';
 import { readPptxSlides } from './read.ts';
 import { runSpreadsheetOperation } from './spreadsheet.ts';
@@ -121,11 +122,15 @@ export async function renderPreview(
     } catch (libreError) {
       if (!(libreError instanceof OfficeUnavailableError)) throw libreError;
       throw new OfficeUnavailableError(
-        'No PDF engine is available on this machine. Choose an .html output_path for the built-in preview, ' +
-          'or install Microsoft Office or LibreOffice for a PDF. Office: ' +
-          officeError.message.slice(0, 300) +
-          ' LibreOffice: ' +
-          libreError.message,
+        environmentBlockedMessage(
+          'office-pdf-engine-unavailable',
+          'No PDF engine is available on this machine. Office: ' +
+            officeError.message.slice(0, 300) +
+            ' LibreOffice: ' +
+            libreError.message.slice(0, 300),
+          'Choose an .html output_path for the built-in preview (it does not prove page layout), ' +
+            'or a person can install Microsoft Office or LibreOffice for a PDF.',
+        ),
       );
     }
   }

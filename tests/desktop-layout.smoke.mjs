@@ -71,7 +71,6 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
     await page.locator('#ui-language').selectOption('en-US');
-    await page.locator('#general-settings-save').click();
     await page.waitForFunction(() => document.documentElement.lang === 'en-US');
     assert.equal(await page.locator('#general-settings-title').innerText(), 'General');
     assert.equal(
@@ -201,7 +200,6 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
     await page.locator('#ui-language').selectOption('zh-CN');
-    await page.locator('#general-settings-save').click();
     await page.waitForFunction(() => document.documentElement.lang === 'zh-CN');
     await page.locator('#settings-back').click();
     const theme = async (value) => {
@@ -217,19 +215,25 @@ test(
       }));
       assert.equal(colors.settings, colors.chat);
       assert.equal(colors.sidebar, colors.chatSidebar);
-      const field = page.locator('#ui-language');
-      const label = await field.locator('..').boundingBox();
+      // The native select is the value; the button over it is what is drawn and clicked.
+      const field = page.locator('#ui-language + .select-trigger');
+      const label = await page.locator('label[for="ui-language"]').boundingBox();
       const box = await field.boundingBox();
-      assert.ok(box.y >= label.y + 24, 'select must be separated from its label');
+      // The field sits in the row's right column, beside its label and note rather than under them.
+      assert.ok(box.x >= label.x + 24, 'select must be separated from its label');
       await field.click();
+      assert.equal(await page.locator('#ui-language ~ .select-popup').isVisible(), true);
       await page.keyboard.press('Escape');
+      assert.equal(await page.locator('#ui-language ~ .select-popup').isVisible(), false);
       // Neither pointer nor keyboard focus should add an outer ring.
       await field.click();
       assert.equal(await field.evaluate((el) => getComputedStyle(el).outlineStyle), 'none');
       await page.keyboard.press('Escape');
       await page.keyboard.press('Tab');
       assert.equal(
-        await page.locator('#ui-appearance').evaluate((el) => getComputedStyle(el).outlineStyle),
+        await page
+          .locator('#ui-appearance + .select-trigger')
+          .evaluate((el) => getComputedStyle(el).outlineStyle),
         'none',
       );
       await page.locator('#general-settings-title').click();

@@ -170,6 +170,7 @@ test('Host scopes session management to its workspace and desktop replaces delet
   const foreignRequests = [
     ['session.get', { sessionId: foreign.id }],
     ['session.rename', { sessionId: foreign.id, title: 'bad' }],
+    ['session.archive', { sessionId: foreign.id, archived: true }],
     ['session.delete', { sessionId: foreign.id }],
     ['session.recover', { sessionId: foreign.id }],
     ['changes.list', { sessionId: foreign.id }],

@@ -16,6 +16,7 @@ export function setupWorkspaceMaintenance() {
   const refresh = required<HTMLButtonElement>('workspace-maintenance-refresh');
   const list = required('workspace-maintenance-list');
   const feedback = required('workspace-maintenance-feedback');
+  const section = required('workspace-maintenance-section');
   let workspace = '';
   let blocked = true;
   let pending = false;
@@ -30,7 +31,6 @@ export function setupWorkspaceMaintenance() {
     return value;
   };
   function paint() {
-    required('workspace-maintenance-label').textContent = t('orphans.title');
     required('workspace-maintenance-title').textContent = t('orphans.title');
     required('workspace-maintenance-note').textContent = t('orphans.note');
     refresh.textContent = t('orphans.refresh');
@@ -43,6 +43,8 @@ export function setupWorkspaceMaintenance() {
           ? t('orphans.empty')
           : '';
     feedback.classList.toggle('error', failure !== null);
+    // A part of the archived-sessions page: it shows only while there is something retained, or a failure to say.
+    section.hidden = failure === null && !items?.length;
     list.replaceChildren();
     for (const item of items ?? []) {
       const row = node('li', '');

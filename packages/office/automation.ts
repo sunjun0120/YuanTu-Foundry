@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { environmentBlockedMessage } from '../tools/environment-blocked.ts';
 
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx';
 export type OfficeOperation =
@@ -118,8 +119,16 @@ async function runOfficePowerShell(
     typeof __dirname === 'string' ? __dirname : path.dirname(fileURLToPath(import.meta.url)),
     'automation.ps1',
   );
+  // Unavailable rather than a plain failure: the caller may still have LibreOffice, and nothing this call can
+  // change makes the script appear.
   if (!existsSync(script))
-    throw new Error('Office automation script is missing from the runtime build');
+    throw new OfficeUnavailableError(
+      environmentBlockedMessage(
+        'office-runtime-incomplete',
+        `The Office automation script is missing from the runtime build (${script}), so Word and PowerPoint cannot be converted to PDF through Office here.`,
+        'Choose an .html output_path for the built-in preview; the installation needs rebuilding or repair.',
+      ),
+    );
   signal?.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script], {

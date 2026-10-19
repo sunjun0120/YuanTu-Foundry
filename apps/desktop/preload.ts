@@ -13,6 +13,7 @@ import type {
 const mirror = new SnapshotMirror();
 const bridge: DesktopBridge = {
   workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
+  archivedSessions: () => ipcRenderer.invoke('yuantu:archived-sessions'),
   ...(PRODUCT_SCOPE.backups
     ? { backups: (command) => ipcRenderer.invoke('yuantu:backups', command) }
     : {}),
@@ -27,6 +28,11 @@ const bridge: DesktopBridge = {
       listener(view);
     ipcRenderer.on('yuantu:presets-view', receive);
     return () => ipcRenderer.removeListener('yuantu:presets-view', receive);
+  },
+  subscribeOpenSession(listener) {
+    const receive = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
+    ipcRenderer.on('yuantu:open-session', receive);
+    return () => ipcRenderer.removeListener('yuantu:open-session', receive);
   },
   uiSettings: (command) => ipcRenderer.invoke('yuantu:ui-settings', command),
   sandboxSetup: (command) => ipcRenderer.invoke('yuantu:sandbox-setup', command),

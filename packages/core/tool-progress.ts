@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
+import { environmentBlockedCode } from '../tools/environment-blocked.ts';
 
 export interface ToolObservation {
   call: ToolCall;
@@ -7,7 +8,8 @@ export interface ToolObservation {
   /** Set only for a successful program whose actual inner tools are observed in the same batch. */
   kind?: 'program-output';
 }
-export type ToolProgress = 'continue' | 'warn' | 'repeat-failure' | 'conclude';
+export type ToolProgress =
+  'continue' | 'warn' | 'repeat-failure' | 'environment-blocked' | 'conclude';
 /**
  * How often one call may fail the same way before the run is told so, and before it is stopped.
  *
@@ -18,6 +20,15 @@ export type ToolProgress = 'continue' | 'warn' | 'repeat-failure' | 'conclude';
  */
 const FAILURE_WARN = 3;
 const FAILURE_CONCLUDE = 5;
+/**
+ * The same counts for a refusal by one environment blocker (`EnvironmentBlockedError`), whatever the call was.
+ *
+ * Lower, and keyed by the blocker rather than the call, because a blocker refuses `npm test` and `node --test` alike:
+ * counting per call would let the model walk through every variant of a command before anything noticed, and no
+ * variant can succeed until a person changes the machine.
+ */
+const BLOCKED_WARN = 2;
+const BLOCKED_CONCLUDE = 3;
 const queries = new Set(['read_file', 'list_files', 'search_files', 'git_status', 'git_diff']);
 const digest = (value: unknown): string =>
   createHash('sha256')
@@ -40,9 +51,12 @@ export class ToolProgressGuard {
   private repeatedRounds = 0;
   /** Identical failures by call and output, across edits; cleared only when a person or policy intervenes. */
   private failures = new Map<string, number>();
+  /** Refusals per environment blocker, cleared with `failures`: a person acting is what may have changed it. */
+  private blocked = new Map<string, number>();
   reset(): void {
     this.resetQueries();
     this.failures.clear();
+    this.blocked.clear();
   }
   private resetQueries(): void {
     this.seen.clear();
@@ -50,8 +64,11 @@ export class ToolProgressGuard {
   }
   observeRound(observations: readonly ToolObservation[]): ToolProgress {
     const failing = this.observeFailures(observations);
+    const blocked = this.observeBlocked(observations);
     const queries = this.observeQueries(observations);
-    if (failing >= FAILURE_CONCLUDE || queries === 'conclude') return 'conclude';
+    if (failing >= FAILURE_CONCLUDE || blocked >= BLOCKED_CONCLUDE || queries === 'conclude')
+      return 'conclude';
+    if (blocked === BLOCKED_WARN) return 'environment-blocked';
     if (queries === 'warn') return 'warn';
     return failing === FAILURE_WARN ? 'repeat-failure' : 'continue';
   }
@@ -59,12 +76,27 @@ export class ToolProgressGuard {
   private observeFailures(observations: readonly ToolObservation[]): number {
     let highest = 0;
     for (const { call, result } of observations) {
-      if (!result.isError) continue;
+      if (!result.isError || environmentBlockedCode(result.content)) continue;
       const key = digest([call.name, call.arguments, result.content, result.output]);
       const count = (this.failures.get(key) ?? 0) + 1;
       this.failures.delete(key);
       this.failures.set(key, count);
       while (this.failures.size > 256) this.failures.delete(this.failures.keys().next().value!);
+      highest = Math.max(highest, count);
+    }
+    return highest;
+  }
+  /** The highest count any environment blocker has reached, counting each blocker once per round. */
+  private observeBlocked(observations: readonly ToolObservation[]): number {
+    const codes = new Set<string>();
+    for (const { result } of observations) {
+      const code = result.isError ? environmentBlockedCode(result.content) : undefined;
+      if (code) codes.add(code);
+    }
+    let highest = 0;
+    for (const code of codes) {
+      const count = (this.blocked.get(code) ?? 0) + 1;
+      this.blocked.set(code, count);
       highest = Math.max(highest, count);
     }
     return highest;
@@ -115,7 +147,9 @@ export function toolProgressNotice(action: Exclude<ToolProgress, 'continue'>): s
       ? 'Repeated queries with identical arguments returned unchanged results. Do not repeat those queries. Answer the question from the evidence already collected, or make one materially different, narrowly scoped check if a specific missing fact requires it.'
       : action === 'repeat-failure'
         ? 'The same call has now failed with identical output several times, including after changes in between. Repeating the same approach is not converging. Step back: re-read the failure, question the assumption behind the last changes, and try a materially different approach — or stop and report what blocks you.'
-        : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
+        : action === 'environment-blocked'
+          ? 'The same environment blocker has now refused more than one call (the "Environment blocked" results above). No call that needs it can succeed until a person changes the environment, so do not call such tools again in this run. Finish only what does not need it, then tell the user what is blocked, the remedy the result names, and what remains unverified.'
+          : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
     '\n</runtime-context>'
   );
 }

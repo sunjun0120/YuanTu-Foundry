@@ -745,6 +745,89 @@ export async function writeBlobs(
   return await batch.finish();
 }
 
+/** Blobs read back through one `cat-file --batch` process; see {@link openBlobReader}. */
+export interface BlobReader {
+  /** The blob's bytes, or `null` when the repository does not have it. */
+  read(objectId: string): Promise<Buffer | null>;
+  close(): void;
+}
+
+/**
+ * Reads many blobs through one Git process.
+ *
+ * A snapshot's bytes live only in the object store, so filling a worktree reads one blob per file; a `cat-file`
+ * process per blob costs tens of milliseconds each on Windows, which is the same arithmetic that made the freeze
+ * write through one `fast-import`. Requests are answered in order, so they are queued and each waits for the one
+ * before it. Raw bytes: `--batch` applies no filter, textconv or line-ending conversion.
+ */
+export function openBlobReader(repositoryRoot: string, signal?: AbortSignal): BlobReader {
+  signal?.throwIfAborted();
+  const child = spawn('git', [...MASKING_CONFIG, 'cat-file', '--batch'], {
+    cwd: repositoryRoot,
+    env: workspaceGitEnvironment(),
+    shell: false,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  let buffered: Buffer = Buffer.alloc(0);
+  let failure: Error | undefined;
+  const waiting: { resolve: (bytes: Buffer | null) => void; reject: (error: Error) => void }[] = [];
+  const fail = (error: Error) => {
+    failure ??= error;
+    for (const request of waiting.splice(0)) request.reject(failure);
+  };
+  const drain = () => {
+    for (;;) {
+      const request = waiting[0];
+      if (!request) return;
+      const newline = buffered.indexOf(0x0a);
+      if (newline < 0) return;
+      const header = buffered.subarray(0, newline).toString('utf8');
+      if (header.endsWith(' missing')) {
+        buffered = buffered.subarray(newline + 1);
+        waiting.shift();
+        request.resolve(null);
+        continue;
+      }
+      const match = /^[0-9a-f]{40,64} (\w+) (\d+)$/.exec(header);
+      if (!match) return fail(new Error(`Unexpected cat-file answer: ${header.slice(0, 200)}`));
+      const size = Number(match[2]);
+      // The object, then one newline.
+      if (buffered.length < newline + 1 + size + 1) return;
+      const bytes = Buffer.from(buffered.subarray(newline + 1, newline + 1 + size));
+      buffered = buffered.subarray(newline + 1 + size + 1);
+      waiting.shift();
+      request.resolve(match[1] === 'blob' ? bytes : null);
+    }
+  };
+  child.stdout.on('data', (chunk: Buffer) => {
+    buffered = buffered.length ? Buffer.concat([buffered, chunk]) : chunk;
+    drain();
+  });
+  child.stdin.on('error', () => {});
+  child.once('error', (error) => fail(error));
+  child.once('close', () => fail(new Error('Git blob reader closed')));
+  const abort = () =>
+    fail(signal?.reason instanceof Error ? signal.reason : new Error('Git command cancelled'));
+  signal?.addEventListener('abort', abort, { once: true });
+  return {
+    read(objectId) {
+      if (!/^[0-9a-f]{40,64}$/.test(objectId))
+        return Promise.reject(new Error('Invalid object id'));
+      if (failure) return Promise.reject(failure);
+      return new Promise((resolve, reject) => {
+        waiting.push({ resolve, reject });
+        child.stdin.write(`${objectId}\n`);
+      });
+    },
+    close() {
+      signal?.removeEventListener('abort', abort);
+      child.stdin.end();
+      child.kill();
+    },
+  };
+}
+
 /** Reads one object back as bytes, with no filter or textconv in the way. */
 export async function readBlob(
   repositoryRoot: string,

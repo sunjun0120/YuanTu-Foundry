@@ -67,6 +67,9 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     YUANTU_GIT_EXCLUDE: '0',
     FOUNDRY_TEST_ROOT: root,
     FOUNDRY_TEST_ARTIFACTS: paths.artifacts,
+    // The desktop window deliberately does not read the process record; its smoke suites still assert that record,
+    // so they opt the test process back in rather than making production pay for a panel it does not have.
+    FOUNDRY_TEST_DESKTOP_AUDIT: '1',
     FOUNDRY_TEST_ISOLATION: JSON.stringify({
       root,
       file,

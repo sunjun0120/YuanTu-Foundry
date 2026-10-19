@@ -172,6 +172,7 @@ registerSandboxProvider({
       return String(error);
     }
   },
+  blocked: async () => sandboxProvider(nativeSandboxBackend()).blocked?.(),
   prepare: (request) => prepareOwned(sandboxProvider(nativeSandboxBackend()), request),
   cleanup: async () => {
     throw new Error('A native plan must name the platform backend that owns its resources');

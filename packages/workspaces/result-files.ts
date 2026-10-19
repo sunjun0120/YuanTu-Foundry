@@ -1,11 +1,12 @@
 /** Result records on disk: manifests, digests, per-target leases and the file bytes a result moves. */
 import path from 'node:path';
+import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import { atomicWriteFile } from '../platform/write-all.ts';
 import type { FileChange, FileSnapshot } from '../protocol/index.ts';
 import { WorkspaceFailure, type WorkspaceResultFile } from '../protocol/workspaces.ts';
-import { readBlob } from './git.ts';
+import { readBlob, runWorkspaceGit, withRepositoryLock } from './git.ts';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
 /**
  * One import per target directory, at a time.
@@ -106,6 +107,29 @@ export function resultMetadataPath(repositoryRoot: string, resultId: string): st
 }
 
 /**
+ * Removes what a result kept in the repository once its record is gone: the manifest and the ref.
+ *
+ * Deleting a session removed its result rows and left both behind, so every delegation ever made kept a manifest
+ * on disk and a ref that stops Git from collecting the tree it names. A result id is minted by the export that
+ * made it and is never shared, so the record that is gone was its only owner. Best effort and idempotent: a
+ * manifest or ref that is already absent is not an error.
+ */
+export async function removeResultArtifacts(
+  repositoryRoot: string,
+  resultId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await rm(resultMetadataPath(repositoryRoot, resultId), { force: true });
+  await withRepositoryLock(repositoryRoot, async () => {
+    await runWorkspaceGit(['update-ref', '-d', resultRef(resultId)], {
+      cwd: repositoryRoot,
+      allowFailure: true,
+      ...(signal ? { signal } : {}),
+    });
+  });
+}
+
+/**
  * The digest a parent quotes when it applies a result.
  *
  * Over the files and their blobs rather than over the manifest text, because the manifest carries a timestamp and a
@@ -129,7 +153,7 @@ export async function writeResultManifest(
   manifest: WorkspaceResultManifest,
 ): Promise<void> {
   const target = resultMetadataPath(repositoryRoot, resultId);
-  await mkdir(path.dirname(target), { recursive: true });
+  ensureRuntimeDirectory(path.dirname(target));
   const staging = `${target}.${process.pid}.tmp`;
   await writeFile(staging, `${JSON.stringify(manifest, null, 2)}\n`);
   await rename(staging, target);

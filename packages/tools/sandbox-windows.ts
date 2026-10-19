@@ -20,7 +20,17 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, open, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +38,7 @@ import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
 import { testResource } from '../platform/test-lifecycle.ts';
 import { createOwnedFileLease } from './owned-file-lease.ts';
+import { EnvironmentBlockedError } from './environment-blocked.ts';
 import { WINDOWS_CAPABILITIES } from './execution-capabilities.ts';
 import {
   insideWorkspace,
@@ -610,11 +621,9 @@ async function acquireProcessLease(state: string): Promise<() => Promise<void>> 
   processLease ??= (async () => {
     const lockPath = path.join(state, 'workspace-owner.lock');
     const lease = await createOwnedFileLease(lockPath, { pid: process.pid }).catch(
-      (error: NodeJS.ErrnoException) => {
+      async (error: NodeJS.ErrnoException) => {
         if (error.code !== 'EEXIST') throw error;
-        throw new Error(
-          `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
-        );
+        throw await leaseRefusal(state, lockPath);
       },
     );
     return {
@@ -645,6 +654,186 @@ async function acquireProcessLease(state: string): Promise<() => Promise<void>> 
     });
     await lease.closing;
   };
+}
+/** Account-derived, so it stays independent of TEMP/USERPROFILE and MSIX AppData virtualization. */
+export function windowsSandboxStateDirectory(): string {
+  return path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
+}
+const OWNER_LOCK = 'workspace-owner.lock';
+/**
+ * Whether the process a lock names is still running.
+ *
+ * Our own pid counts only while this process really holds a lease: a lock carrying it with nothing held here
+ * was left by an earlier process that happened to get the same pid. `EPERM` is a process we may not signal,
+ * which is still a process.
+ */
+function processAlive(pid: number): boolean {
+  if (pid === process.pid) return processLease !== undefined || workspaceLeases.size > 0;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+/** A lock with no readable owner this young is a lease being published, not a leftover. */
+const PUBLISHING_GRACE_MS = 60_000;
+export type WindowsSandboxLeaseState = 'clear' | 'held' | 'stale' | 'needs-restore' | 'unreadable';
+export interface WindowsSandboxLeaseReport {
+  /**
+   * `held`: another live process owns the sandbox. `stale`: only dead owners' locks remain. `needs-restore`:
+   * a dead owner also left recovery journals, so workspace permissions still carry its grant. `unreadable`: a
+   * lock names no owner, and nothing can tell whether it is in use.
+   */
+  state: WindowsSandboxLeaseState;
+  directory: string;
+  /** Every lock except this process's own live ones. */
+  locks: { file: string; pid?: number; alive: boolean }[];
+  /** Recovery journals whose lock is not this process's own live one. */
+  journals: string[];
+}
+/**
+ * What the Windows sandbox's lease directory says about who holds it — read only, never repaired.
+ *
+ * The lease is released by the process that took it, after it restores the workspace's permissions. A process
+ * that dies in between leaves its locks, and possibly its journals, and every later command is refused until a
+ * person reconciles them (see `recoverWindowsSandboxLeases`). This is what turns that refusal into a reason.
+ */
+export async function inspectWindowsSandboxLeases(
+  directory = windowsSandboxStateDirectory(),
+  alive: (pid: number) => boolean = processAlive,
+): Promise<WindowsSandboxLeaseReport> {
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [] as string[];
+    throw error;
+  });
+  const locks: WindowsSandboxLeaseReport['locks'] = [];
+  const ours = new Set<string>();
+  let publishing = false;
+  for (const name of names.filter((entry) => entry.endsWith('.lock')).sort()) {
+    const file = path.join(directory, name);
+    const pid = await readFile(file, 'utf8')
+      .then((text) => {
+        const value: unknown = (JSON.parse(text) as { pid?: unknown }).pid;
+        return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+          ? value
+          : undefined;
+      })
+      .catch(() => undefined);
+    if (pid === undefined) {
+      const age = await stat(file).then(
+        (info) => Date.now() - info.mtimeMs,
+        () => Infinity,
+      );
+      if (age < PUBLISHING_GRACE_MS) publishing = true;
+      locks.push({ file, alive: false });
+      continue;
+    }
+    const live = alive(pid);
+    if (live && pid === process.pid) {
+      ours.add(name.slice(0, -'.lock'.length));
+      continue;
+    }
+    locks.push({ file, pid, alive: live });
+  }
+  const journals = names
+    .filter((entry) => entry.endsWith('.json') && !ours.has(entry.slice(0, -'.json'.length)))
+    .sort()
+    .map((entry) => path.join(directory, entry));
+  const state: WindowsSandboxLeaseState =
+    publishing || locks.some((lock) => lock.alive)
+      ? 'held'
+      : locks.some((lock) => lock.pid === undefined)
+        ? 'unreadable'
+        : journals.length
+          ? 'needs-restore'
+          : locks.length
+            ? 'stale'
+            : 'clear';
+  return { state, directory, locks, journals };
+}
+const RECOVER_COMMAND = '`yuantu-agent sandbox-recover` (add `--dry-run` to only inspect)';
+/** The refusal a person and the model read for a lease state other than `clear`. */
+export function leaseBlockedError(report: WindowsSandboxLeaseReport): EnvironmentBlockedError {
+  const pids = [
+    ...new Set(report.locks.flatMap((lock) => (lock.pid === undefined ? [] : [lock.pid]))),
+  ].join(', ');
+  switch (report.state) {
+    case 'held':
+      return new EnvironmentBlockedError(
+        'windows-sandbox-in-use',
+        `The Windows sandbox is in use by another YuanTu process${pids ? ` (pid ${pids})` : ''}; no command was started.`,
+        'Wait for that process to finish its command, or close it, and then ask again.',
+      );
+    case 'stale':
+      return new EnvironmentBlockedError(
+        'windows-sandbox-stale-lease',
+        `A YuanTu process that is no longer running (pid ${pids}) left the Windows sandbox lease behind in ${report.directory}; no command was started.`,
+        `A person can release it with ${RECOVER_COMMAND}, or switch this session to another execution environment.`,
+      );
+    case 'needs-restore':
+      return new EnvironmentBlockedError(
+        'windows-sandbox-needs-restore',
+        `A YuanTu process that is no longer running${pids ? ` (pid ${pids})` : ''} exited while workspace permissions were granted to the Windows sandbox; the original permissions are kept in ${report.journals.length} recovery journal(s) in ${report.directory}, and no command was started.`,
+        `A person can restore them and release the lease with ${RECOVER_COMMAND}.`,
+      );
+    default:
+      return new EnvironmentBlockedError(
+        'windows-sandbox-lease-unreadable',
+        `A Windows sandbox lock in ${report.directory} names no owner process; no command was started.`,
+        'A person has to inspect that directory; nothing removes such a lock automatically.',
+      );
+  }
+}
+/** Why an exclusive create of `lockPath` failed, classified once the directory has been read. */
+async function leaseRefusal(directory: string, lockPath: string): Promise<Error> {
+  const report = await inspectWindowsSandboxLeases(directory).catch(() => undefined);
+  return report && report.state !== 'clear'
+    ? leaseBlockedError(report)
+    : new Error(
+        `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
+      );
+}
+/**
+ * The operator's reconciliation of a lease a dead process left: restore every journal, then remove the locks.
+ *
+ * Refuses while any owner is alive or unidentifiable — this never decides that a running process is gone. A
+ * restore that fails (the workspace's permissions were changed since, or the folder is gone) stops here with the
+ * journal and every lock kept, so nothing is released over permissions that were not put back.
+ */
+export async function recoverWindowsSandboxLeases(
+  directory = windowsSandboxStateDirectory(),
+  alive: (pid: number) => boolean = processAlive,
+  restore: (root: string, journal: string, sid: string) => Promise<void> = (root, journal, sid) =>
+    journalOperation('restore', root, journal, sid),
+): Promise<WindowsSandboxLeaseReport & { restored: string[]; removed: string[] }> {
+  const report = await inspectWindowsSandboxLeases(directory, alive);
+  if (report.state === 'held' || report.state === 'unreadable') throw leaseBlockedError(report);
+  const restored: string[] = [];
+  for (const journal of report.journals) {
+    const record = JSON.parse((await readFile(journal, 'utf8')).replace(/^﻿/, '')) as {
+      root?: unknown;
+      sid?: unknown;
+    };
+    if (typeof record.root !== 'string' || typeof record.sid !== 'string')
+      throw new Error(`Recovery journal names no workspace; reconcile it manually: ${journal}`);
+    await restore(record.root, journal, record.sid);
+    restored.push(record.root);
+  }
+  // A grant that died between writing its next journal and replacing the old one leaves the `.next` file, which
+  // would make the next grant's exclusive create fail. Its journal is restored above, so it records nothing left.
+  for (const name of (await readdir(directory).catch(() => [] as string[])).filter((entry) =>
+    entry.endsWith('.json.next'),
+  ))
+    await rm(path.join(directory, name), { force: true });
+  // The owner lock goes last: while it exists, no other Host can start a lease over half-removed state.
+  const removed = report.locks
+    .map((lock) => lock.file)
+    .sort(
+      (a, b) => Number(path.basename(a) === OWNER_LOCK) - Number(path.basename(b) === OWNER_LOCK),
+    );
+  for (const file of removed) await rm(file, { force: true });
+  return { ...report, restored, removed };
 }
 async function journalOperation(
   operation: 'grant' | 'restore' | 'validate-control',
@@ -695,9 +884,7 @@ async function acquireWorkspace(root: string, sid: string, state: string): Promi
       const journal = path.join(state, `${name}.json`);
       const lock = await open(lockPath, 'wx').catch(async () => {
         await releaseProcess();
-        throw new Error(
-          `Windows workspace ACL is leased by another process or needs recovery: ${lockPath}`,
-        );
+        throw await leaseRefusal(state, lockPath);
       });
       try {
         await lock.writeFile(JSON.stringify({ pid: process.pid, root, journal }));
@@ -863,7 +1050,7 @@ async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   const dll = launcherPath();
   await mkdir(path.dirname(dll), { recursive: true });
   // Account-derived profile stays independent of TEMP/USERPROFILE and MSIX AppData virtualization.
-  const state = path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
+  const state = windowsSandboxStateDirectory();
   await mkdir(state, { recursive: true });
   if (path.resolve(await realpath(state)).toLowerCase() !== path.resolve(state).toLowerCase())
     throw new Error('Windows sandbox refuses redirected ACL state paths');
@@ -942,6 +1129,11 @@ export const windowsSandboxProvider: SandboxProvider = {
   description:
     'Windows Low integrity write-restricted token: journaled workspace write grants and private scratch; ambient Low integrity Everyone grants remain effective. Reads and network are not confined; strict process read-only is unsupported.',
   available: (env) => windowsSandboxAvailable(env),
+  blocked: async () => {
+    if (process.platform !== 'win32') return undefined;
+    const report = await inspectWindowsSandboxLeases();
+    return report.state === 'clear' ? undefined : leaseBlockedError(report);
+  },
   prepare: windowsPrepare,
   cleanup: windowsCleanup,
 };

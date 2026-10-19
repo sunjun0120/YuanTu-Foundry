@@ -13,6 +13,7 @@ import { assertPrunePolicy } from './prune.ts';
 import type { PruneOutcome } from './prune.ts';
 import type { TokenCalibration } from './calibration.ts';
 import { storedSummary, summaryTranscript, withSummary } from './context-summary.ts';
+import { firstHolding, lastHolding } from './boundary-search.ts';
 export {
   SUMMARY_INSTRUCTION_PREFIX,
   SUMMARY_SECTIONS,
@@ -548,14 +549,16 @@ export async function prepareContext(input: {
   ) {
     // A single long task can compact completed tool steps too. Keep its original
     // user request and prefer retaining the newest complete step when possible.
-    boundary =
-      cuts.find(
-        (cut) =>
-          cut > covered &&
-          cut > 0 &&
-          overhead + contextMessageSize(boundaryView(cut).messages) < limit * 0.65 &&
-          fits(boundaryView(cut).messages, boundaryForecast(cut)),
-      ) ?? -1;
+    // A later cut keeps a shorter tail, so "this tail fits" holds on a suffix of the candidates: the first one
+    // is found by bisection rather than by measuring every tail on the way (see `./boundary-search.ts`).
+    const candidates = cuts.filter((cut) => cut > covered && cut > 0);
+    const first = firstHolding(
+      candidates.length,
+      (index) =>
+        overhead + contextMessageSize(boundaryView(candidates[index]!).messages) < limit * 0.65 &&
+        fits(boundaryView(candidates[index]!).messages, boundaryForecast(candidates[index]!)),
+    );
+    boundary = first < 0 ? -1 : candidates[first]!;
   }
   if (boundary < 1 || (boundary === history.length && history.length === 1))
     return abandonCompaction(turnFailure());
@@ -652,10 +655,11 @@ export async function prepareContext(input: {
       input.signal.throwIfAborted();
       let end = covered;
       let batch: Message[] = [];
-      // `cuts` is ascending and unique (`contextBoundaries`), so walking it is walking every cut in range.
-      for (const candidate of cuts) {
-        if (candidate <= covered) continue;
-        if (candidate > boundary) break;
+      // `cuts` is ascending and unique (`contextBoundaries`), so these are every cut in range, in order. A longer
+      // batch never fits where a shorter one did not, so the batch ends at the last cut of a fitting prefix, found
+      // by bisection: each probe serialises one candidate batch, and a walk serialised every one of them.
+      const range = cuts.filter((candidate) => candidate > covered && candidate <= boundary);
+      const last = lastHolding(range.length, (index) => {
         /**
          * The batch, exactly as the main request would send it.
          *
@@ -666,11 +670,12 @@ export async function prepareContext(input: {
          * screenshot" would describe a different conversation; the instruction asks for the picture to be
          * mentioned rather than reproduced, which the verbatim batch makes possible instead of impossible.
          */
-        const next = history.slice(covered, candidate);
-        const transcript = summaryTranscript(next, summary);
-        if (!summaryCharsFit(transcript) || !fitsSummary(transcript)) break;
-        batch = next;
-        end = candidate;
+        const transcript = summaryTranscript(history.slice(covered, range[index]!), summary);
+        return summaryCharsFit(transcript) && fitsSummary(transcript);
+      });
+      if (last >= 0) {
+        end = range[last]!;
+        batch = history.slice(covered, end);
       }
       if (end === covered)
         return abandonCompaction(

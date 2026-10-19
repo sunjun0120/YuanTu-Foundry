@@ -33,6 +33,12 @@ import { fileObservationEnabled } from '../tools/fs-observation.ts';
 import { runCodeTool, toolMode } from '../tools/run-code.ts';
 import { DEFERRED_TOOLS, loadToolsTool } from '../tools/deferred-tools.ts';
 import { parseSetting } from '../protocol/settings.ts';
+import {
+  acquireBrowserSession,
+  acquireLspManager,
+  acquireMcpTools,
+  pooledScope,
+} from './resource-pool.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -146,10 +152,22 @@ export function createTools(
   const knowledge = knowledgeTools(root);
   registry.onClose(knowledge.close);
   for (const tool of knowledge.tools) registry.register(tool);
-  const mcp = mcpTools(root);
+  /**
+   * Language servers, the browser and MCP connections, kept for the session rather than the run.
+   *
+   * A session's registry borrows them from the pool and returns them when it closes; they stay open between its
+   * runs and close when idle, with the session, or with the Host (`./resource-pool.ts`). A registry outside a
+   * session — a delegated child, a one-shot command — owns fresh ones for its own lifetime, as before.
+   */
+  const pooled = pooledScope(scope);
+  const heldMcp = pooled ? acquireMcpTools(root, scope) : undefined;
+  const mcp = heldMcp
+    ? { tools: heldMcp.value.tools, close: async () => heldMcp.release() }
+    : mcpTools(root);
   registry.onClose(mcp.close);
   for (const tool of mcp.tools) registry.register(tool);
-  const lsp = new LspManager(root);
+  const heldLsp = pooled ? acquireLspManager(root, scope) : undefined;
+  const lsp = heldLsp?.value ?? new LspManager(root);
   const annotate = parseSetting(process.env, 'YUANTU_LSP_AFTER_EDIT') !== false;
   /**
    * The fast search backend, when one is prepared for this platform.
@@ -188,11 +206,12 @@ export function createTools(
     commandTool(root),
   ])
     registry.register(tool);
-  const browser = browserTools(root);
-  registry.onClose(browser.close);
+  const heldBrowser = pooled ? acquireBrowserSession(root, scope) : undefined;
+  const browser = browserTools(root, heldBrowser?.value);
+  registry.onClose(heldBrowser ? async () => heldBrowser.release() : browser.close);
   for (const tool of browser.tools) registry.register(tool);
   const languageServers = lspTools(root, lsp);
-  registry.onClose(languageServers.close);
+  registry.onClose(heldLsp ? async () => heldLsp.release() : languageServers.close);
   for (const tool of languageServers.tools) registry.register(tool);
   // `workspace/symbol` is only consulted for a server the operator already started; nothing here
   // launches one, so the repo-map tool degrades to its heuristic index instead of paying for a server.

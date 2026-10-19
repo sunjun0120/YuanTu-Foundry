@@ -69,6 +69,16 @@ const AUDIT_PAGE = 500;
  *   socket bridge, an embedded host). There is no process to restart, so a dead link is reported as failed and
  *   reconnecting is the carrier's own business.
  */
+export interface CarrierOptions {
+  /**
+   * Whether the snapshot carries the session's process record (`audit`); defaults to `true`.
+   *
+   * A carrier whose window has no panel for it passes `false`: the record is then never read from the Host, and
+   * the snapshot's `audit` stays empty. Reading it was paging up to five thousand entries per session and sending
+   * them to a renderer that discarded them.
+   */
+  audit?: boolean;
+}
 export class CarrierService {
   private client: AgentHostClient;
   private controller: SessionController;
@@ -110,6 +120,8 @@ export class CarrierService {
   });
   private changes: CarrierSnapshot['changes'] = deepFreeze([]);
   private audit: CarrierSnapshot['audit'] = deepFreeze([]);
+  /** Whether this carrier reads the process record at all; see `CarrierOptions.audit`. */
+  private readonly readsAudit: boolean;
   /** The session and seq the held audit window ends at; see `refreshAudit`. Empty means "read from the start". */
   private auditCursor: { sessionId: string; seq: number } = { sessionId: '', seq: 0 };
   private tasks: CarrierSnapshot['tasks'] = deepFreeze([]);
@@ -152,12 +164,14 @@ export class CarrierService {
   private subagentDeltaListeners = new Set<(delta: SubAgentDelta) => void>();
   private statisticsDeltaListeners = new Set<(delta: StatisticsDelta) => void>();
   private unsubscribers: (() => void)[];
-  constructor(options: HostClientOptions) {
+  constructor(options: HostClientOptions & CarrierOptions) {
+    const { audit, ...clientOptions } = options;
+    this.readsAudit = audit !== false;
     // `workspace` is the spawning shape's own key; the connected shape learns it from `host.info`.
-    this.supervisesHost = 'workspace' in options;
-    this.env = options.env ?? {};
-    this.workspace = 'workspace' in options ? options.workspace : '';
-    this.client = new AgentHostClient({ ...options, deferAutomatic: true });
+    this.supervisesHost = 'workspace' in clientOptions;
+    this.env = clientOptions.env ?? {};
+    this.workspace = 'workspace' in clientOptions ? clientOptions.workspace : '';
+    this.client = new AgentHostClient({ ...clientOptions, deferAutomatic: true });
     this.controller = new SessionController(this.client);
     this.backgroundPanel = new BackgroundPanel({
       client: this.client,
@@ -391,6 +405,18 @@ export class CarrierService {
       this.publish();
     }
   }
+  /** The newest session the sidebar lists, or a new one when it lists none. */
+  private async openNewestListed(): Promise<void> {
+    const remaining = await this.client.request('session.list', { limit: 1, archived: false });
+    if (remaining[0]) await this.controller.load(remaining[0].id);
+    else await this.controller.create();
+  }
+  /** On demand, like the orphan inventory: the settings page asks for it, every snapshot does not carry it. */
+  async archivedSessions(): Promise<SessionInfo[]> {
+    if (!this.ready || this.client.status !== 'ready') throw new CarrierError('hostNotReady');
+    // The settings page shows a list, not a history: bound what one request may return. The UI says "newest 500".
+    return this.client.request('session.list', { archived: true, limit: 500 });
+  }
   get busy(): boolean {
     return this.restoring || this.managing || this.controller.running || this.controller.loading;
   }
@@ -579,7 +605,7 @@ export class CarrierService {
      */
     const reads: Promise<void>[] = [];
     if (scope.changes) reads.push(this.refreshChanges(id));
-    if (scope.audit) reads.push(this.refreshAudit(id));
+    if (scope.audit && this.readsAudit) reads.push(this.refreshAudit(id));
     if (scope.tasks) reads.push(this.refreshTasks(id));
     if (scope.background) reads.push(this.backgroundPanel.refresh());
     const settled = await Promise.allSettled(reads);
@@ -622,6 +648,8 @@ export class CarrierService {
       const next = await this.client.request('session.list', {
         ...(this.sessionQuery ? { query: this.sessionQuery } : {}),
         limit: want,
+        // Archived sessions live on their own settings page, not in the sidebar.
+        archived: false,
         ...(page.length ? { before: page.at(-1)!.id } : {}),
       });
       page.push(...next);
@@ -676,6 +704,7 @@ export class CarrierService {
   private auditRefreshQueued = false;
   /** Same coalescing as the task refresh: a burst of decisions costs one round of RPCs. */
   private scheduleAuditRefresh(): void {
+    if (!this.readsAudit) return;
     if (this.auditRefreshing) {
       this.auditRefreshQueued = true;
       return;
@@ -934,6 +963,19 @@ export class CarrierService {
             title: command.title,
           });
           break;
+        case 'archiveSession': {
+          await this.client.request('session.archive', {
+            sessionId: command.id,
+            archived: command.archived,
+          });
+          // The open session left the list, so the window moves to the newest one still in it, as a delete does.
+          if (command.archived && this.controller.sessionId === command.id) {
+            this.sessionQuery = '';
+            this.transcript.close();
+            await this.openNewestListed();
+          }
+          break;
+        }
         case 'deleteSession': {
           await this.client.request('session.delete', { sessionId: command.id });
           this.sandboxSelections.delete(command.id);
@@ -944,11 +986,7 @@ export class CarrierService {
           // A transcript belongs to the session that opened it; leaving it up would show one
           // conversation's child while another is on screen.
           this.transcript.close();
-          if (this.controller.sessionId === command.id) {
-            const remaining = await this.client.request('session.list', { limit: 1 });
-            if (remaining[0]) await this.controller.load(remaining[0].id);
-            else await this.controller.create();
-          }
+          if (this.controller.sessionId === command.id) await this.openNewestListed();
           break;
         }
         case 'undo': {

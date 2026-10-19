@@ -152,7 +152,9 @@ export async function startRun(
         controller.signal,
       );
     }
-    await reconcilePendingFileChanges(ctx.store, sessionId, ctx.workspace);
+    // The previous run journalled its writes against the directory it executed in; a bound session works in its
+    // worktree, so reconciling against the project would judge the wrong tree.
+    await reconcilePendingFileChanges(ctx.store, sessionId, entry.root ?? ctx.workspace);
   } catch (error) {
     clearTimeout(wakeTimer);
     ctx.active.delete(sessionId);

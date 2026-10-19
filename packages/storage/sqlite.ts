@@ -1,6 +1,9 @@
-import { mkdirSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
+import { canonicalKey } from '../platform/workspace-paths.ts';
 import type { Surface, SurfaceOp } from '../protocol/context.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
 import { type Goal } from '../protocol/goals.ts';
@@ -150,8 +153,28 @@ export class SessionStore implements PlanRepository {
     // backend keeps beside the database. All four are written by the runtime rather than by the work.
     return [file, `${file}-wal`, `${file}-shm`, `${file}-journal`, `${file}.users`];
   }
+  /**
+   * The name this database's share of a workspace snapshot is kept under (`refs/yuantu/snapshot-owners/<id>/<this>`).
+   *
+   * Derived from where the file is, not stored in it: a copy of the database at another path is another owner, so
+   * two stores can never release each other's share. A database that moved keeps its old refs, which then never
+   * reach zero — a leak `workspace-gc --dry-run` reports, and never a snapshot deleted while it is in use. An
+   * in-memory store gets a name of its own for its lifetime.
+   */
+  snapshotOwner(): string {
+    this.ownerName ??=
+      this.file === ':memory:'
+        ? `memory-${randomUUID()}`
+        : createHash('sha256')
+            .update(canonicalKey(realpathSync.native(this.file)))
+            .digest('hex')
+            .slice(0, 32);
+    return this.ownerName;
+  }
+  private ownerName: string | undefined;
   constructor(file: string, options: { backupRetention?: BackupPolicy } = {}) {
-    if (file !== ':memory:') mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+    // A database under `<workspace>/.yuantu` must not follow a link out of the workspace.
+    if (file !== ':memory:') ensureRuntimeDirectory(path.dirname(path.resolve(file)));
     this.file = file === ':memory:' ? file : path.resolve(file);
     this.releaseDatabase = registerDatabase(file);
     try {
@@ -197,6 +220,10 @@ export class SessionStore implements PlanRepository {
   workspaceBindingsByState(states: readonly WorkspaceState[]): WorkspaceBinding[] {
     return this.parts.workspaces.byState(states);
   }
+  /** Removed workspaces removed before `before` (ISO), for the opt-in retention pass. */
+  removedWorkspacesBefore(before: string): WorkspaceBinding[] {
+    return this.parts.workspaces.removedBefore(before);
+  }
   /**
    * The managed workspaces of this project whose session is gone.
    *
@@ -225,6 +252,52 @@ export class SessionStore implements PlanRepository {
   }
   releaseWorkspaceOperation(bindingId: string, token: string): void {
     this.parts.workspaces.releaseOperation(bindingId, token);
+  }
+  /** Forget a removed workspace's rows; see `SessionWorkspaces.purgeRemoved` for what it refuses. */
+  purgeRemovedWorkspace(bindingId: string, token: string): { resultIds: string[] } {
+    return this.parts.workspaces.purgeRemoved(bindingId, token);
+  }
+  /** Every workspace snapshot this database has recorded. */
+  workspaceSnapshotIds(): string[] {
+    return this.parts.workspaces.snapshotIds();
+  }
+  /** Drop a snapshot's record when nothing in this database names it; see `SessionWorkspaces.dropUnusedSnapshot`. */
+  dropUnusedWorkspaceSnapshot(snapshotId: string, namedByRemovals: ReadonlySet<string>): boolean {
+    return this.parts.workspaces.dropUnusedSnapshot(snapshotId, namedByRemovals);
+  }
+  /**
+   * An operator's release of a workspace operation lease no process can prove dead (`workspace-lease-recover`).
+   *
+   * The release and its record are one transaction: the delegating session's log says which lease was dropped,
+   * whose it was, who asked and why, so a later reader can tell an operator's decision from a lost lease.
+   */
+  recoverWorkspaceOperation(
+    bindingId: string,
+    input: { operator: string; reason: string },
+  ): ReturnType<SessionWorkspaces['forceReleaseOperation']> & { bindingId: string; at: string } {
+    return this.transaction(() => {
+      const released = this.parts.workspaces.forceReleaseOperation(bindingId);
+      const at = new Date().toISOString();
+      const parent = this.workspaceById(bindingId)?.parentSessionId ?? null;
+      let parentExists = false;
+      if (parent)
+        try {
+          this.get(parent);
+          parentExists = true;
+        } catch {
+          // An orphan's delegating session may be gone too; the release is still reported to the operator.
+        }
+      if (released.released && parent && parentExists)
+        this.recordEvent(parent, 'workspace.lease.recovered', {
+          bindingId,
+          previousOwnerPid: released.previousOwnerPid,
+          previousOwnerStartedAt: released.previousOwnerStartedAt,
+          operator: input.operator,
+          reason: input.reason,
+          at,
+        });
+      return { bindingId, ...released, at };
+    });
   }
   recordWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
     return this.parts.workspaces.recordSnapshot(snapshot);
@@ -498,6 +571,9 @@ export class SessionStore implements PlanRepository {
   latestRunAttemptBaselines(sessionId: string, taskId: string) {
     return this.parts.tasks.latestRunAttemptBaselines(sessionId, taskId);
   }
+  definitionRunAttemptBaselines(sessionId: string, taskId: string) {
+    return this.parts.tasks.definitionRunAttemptBaselines(sessionId, taskId);
+  }
   recoverInterruptedTasks(workspace?: string) {
     return this.parts.tasks.recoverInterruptedTasks(workspace);
   }
@@ -595,6 +671,10 @@ export class SessionStore implements PlanRepository {
   /** Rename a session by hand; a manual name is never replaced by a generated one. */
   rename(id: string, title: string): Session {
     return this.parts.lifecycle.rename(id, title);
+  }
+  /** Archive a session, or bring it back to the list; nothing it holds changes. */
+  setArchived(id: string, archived: boolean): Session {
+    return this.parts.lifecycle.setArchived(id, archived);
   }
   /** Whether a model-generated title may still replace this session's own (see `./session-lifecycle.ts`). */
   canGenerateTitle(id: string): boolean {

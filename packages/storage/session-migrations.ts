@@ -404,6 +404,9 @@ export class SessionMigrations {
         this.port.db.exec('ALTER TABLE sessions ADD COLUMN parent_session_id TEXT');
       if (!columns.has('fork_message_count'))
         this.port.db.exec('ALTER TABLE sessions ADD COLUMN fork_message_count INTEGER');
+      // When a person archived the session (v32): set, it leaves the sidebar's list; cleared, it comes back.
+      if (!columns.has('archived_at'))
+        this.port.db.exec('ALTER TABLE sessions ADD COLUMN archived_at TEXT');
       const taskColumns = new Set(
         this.port.db
           .prepare('PRAGMA table_info(tasks)')
@@ -626,6 +629,8 @@ export class SessionMigrations {
       // Older hosts do not honour the cross-process workspace cleanup lease.
       { from: 29, upTo: 30, run: () => {} },
       { from: 30, upTo: 31, run: (from) => migrateSegmentedSearchText(this.port, from) },
+      // The `archived_at` column is added with the other derived columns above; nothing to carry along.
+      { from: 31, upTo: 32, run: () => {} },
     ];
   }
 

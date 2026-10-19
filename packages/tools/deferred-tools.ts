@@ -115,7 +115,24 @@ export function loadedTools(
   deferrable: ReadonlySet<string>,
 ): Set<string> {
   const loaded = new Set<string>();
-  for (const message of messages) {
+  addLoadedTools(messages, deferrable, loaded);
+  return loaded;
+}
+
+/**
+ * The same reading as `loadedTools`, from `from` on and into a set the caller keeps.
+ *
+ * The transcript only grows, so a caller that remembers how far it has read only has to look at what was
+ * appended since: a long deferred-mode session no longer walks every tool call it has ever made at every round.
+ */
+export function addLoadedTools(
+  messages: readonly Message[],
+  deferrable: ReadonlySet<string>,
+  loaded: Set<string>,
+  from = 0,
+): void {
+  for (let index = from; index < messages.length; index++) {
+    const message = messages[index]!;
     if (message.role !== 'assistant') continue;
     for (const call of message.toolCalls) {
       if (call.name !== LOAD_TOOLS) {
@@ -128,7 +145,6 @@ export function loadedTools(
         if (typeof name === 'string' && deferrable.has(name)) loaded.add(name);
     }
   }
-  return loaded;
 }
 
 /** One catalog line per group that still has a hidden tool: the group's hint and its hidden names. */

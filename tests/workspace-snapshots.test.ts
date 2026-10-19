@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore, WorkspaceFailure } from '../packages/storage/sqlite.ts';
@@ -12,7 +12,11 @@ import {
   freezeSnapshot,
   readManifest,
   snapshotFileBytes,
+  releaseSnapshotOwner,
+  snapshotOwnerRef,
+  snapshotOwners,
   snapshotRef,
+  STANDALONE_OWNER,
   snapshotMetadataRoot,
   verifySnapshotStable,
 } from '../packages/workspaces/snapshot.ts';
@@ -36,9 +40,6 @@ const GIT_ENV: NodeJS.ProcessEnv = {
   GIT_COMMITTER_NAME: 'Test',
   GIT_COMMITTER_EMAIL: 'test@example.com',
 };
-
-/** The short, content-addressed name a format-3 manifest's bytes are stored under. */
-const storedBlobName = (sha256: string): string => sha256.slice(0, 32);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
@@ -147,8 +148,11 @@ test('the baseline is the working directory, including staged edits, deletions a
   assert.equal(await decode("文档/it's a file.md"), '中文内容\n');
   // A deletion is part of the baseline, which is why the manifest is a list of what *is* there rather than a diff.
   assert.equal(byPath.has('src/app.ts'), false);
-  // The baseline is a real tree in the repository, reachable from the snapshot's own ref.
-  assert.equal(git(root, ['rev-parse', `${snapshotRef(snapshot.id)}^{tree}`]), snapshot.baseTree);
+  // The baseline is a real tree in the repository, reachable from its owner's ref.
+  assert.equal(
+    git(root, ['rev-parse', `${snapshotOwnerRef(snapshot.id, STANDALONE_OWNER)}^{tree}`]),
+    snapshot.baseTree,
+  );
   assert.equal(git(root, ['cat-file', '-t', snapshot.baseCommit]), 'commit');
   // The identity a child will run under: a synthetic commit that is not in the user's history. `HEAD`'s own
   // history is what must not grow — the baseline hangs off a private ref instead, which is why it is counted
@@ -220,15 +224,15 @@ test('legacy content-only snapshot manifests remain readable after upgrading the
   const snapshot = await freezeSnapshot({ projectRoot: harness.root });
   const identity = await repositoryIdentity(harness.root);
   const manifest = (await readManifest(identity!.repositoryRoot, snapshot.id))!;
-  // A format 1 manifest embedded the bytes; build one from the format 3 entries so the reader is exercised against
-  // the shape it has to keep supporting.
+  // A format 1 manifest embedded the bytes; build one from the current entries so the reader is exercised against
+  // the shape it has to keep supporting. Format 1 named no blob.
   const files = [];
-  for (const entry of manifest.files)
+  for (const { oid: _oid, ...entry } of manifest.files)
     files.push({
       ...entry,
-      blob: (await snapshotFileBytes(identity!.repositoryRoot, snapshot.id, entry)).toString(
-        'base64',
-      ),
+      blob: (
+        await snapshotFileBytes(identity!.repositoryRoot, snapshot.id, { ...entry, oid: _oid })
+      ).toString('base64'),
     });
   const legacy = { ...manifest, format: 1, files };
   const hash = createHash('sha256').update('v1\u0000');
@@ -468,22 +472,20 @@ test('the digest-only walk identifies the same tree without keeping its bytes', 
   assert.ok(digests.every((digest) => !('blob' in digest)));
 });
 
-test('a published manifest names its bytes instead of embedding them', async (t) => {
+test('a published manifest names its bytes as Git blobs, and keeps no second copy', async (t) => {
   const harness = await repository(t);
   const snapshot = await freezeSnapshot({ projectRoot: harness.root });
   const identity = (await repositoryIdentity(harness.root))!;
   const manifest = (await readManifest(identity.repositoryRoot, snapshot.id))!;
-  assert.equal(manifest.format, 3);
+  assert.equal(manifest.format, 4);
   assert.ok(manifest.files.length >= 2);
   for (const entry of manifest.files) {
-    // No content in the manifest itself: reading it is now a metadata read whatever the tree's size.
+    // No content in the manifest itself: reading it is a metadata read whatever the tree's size.
     assert.equal(entry.blob, undefined, entry.path);
-    const stored = path.join(
-      snapshotMetadataRoot(identity.repositoryRoot, snapshot.id),
-      'files',
-      storedBlobName(entry.sha256),
-    );
-    const bytes = await readFile(stored);
+    const bytes = execFileSync('git', ['cat-file', 'blob', entry.oid!], {
+      cwd: harness.root,
+      env: GIT_ENV,
+    });
     assert.equal(createHash('sha256').update(bytes).digest('hex'), entry.sha256, entry.path);
     assert.equal(
       bytes.toString('utf8'),
@@ -491,25 +493,32 @@ test('a published manifest names its bytes instead of embedding them', async (t)
       entry.path,
     );
   }
+  // Format 3 also copied every file into `files/` beside the manifest; Git's object store is now the only copy.
+  await assert.rejects(
+    readdir(path.join(snapshotMetadataRoot(identity.repositoryRoot, snapshot.id), 'files')),
+  );
 });
 
-test('stored bytes that no longer match their digest are refused, not handed to a child', async (t) => {
+test('a blob that is not the bytes an entry recorded is refused, not handed to a child', async (t) => {
   const harness = await repository(t);
   const snapshot = await freezeSnapshot({ projectRoot: harness.root });
   const identity = (await repositoryIdentity(harness.root))!;
   const manifest = (await readManifest(identity.repositoryRoot, snapshot.id))!;
   const entry = manifest.files.find((candidate) => candidate.path === 'tracked.txt')!;
-  const stored = path.join(
-    snapshotMetadataRoot(identity.repositoryRoot, snapshot.id),
-    'files',
-    storedBlobName(entry.sha256),
+  const other = manifest.files.find((candidate) => candidate.oid !== entry.oid)!;
+  await assert.rejects(
+    snapshotFileBytes(identity.repositoryRoot, snapshot.id, { ...entry, oid: other.oid }),
+    (error) => {
+      assert.ok(error instanceof WorkspaceFailure);
+      assert.equal(error.code, 'WORKSPACE_INTEGRITY');
+      return true;
+    },
   );
-  await writeFile(stored, 'tampered\n');
-  await assert.rejects(snapshotFileBytes(identity.repositoryRoot, snapshot.id, entry), (error) => {
-    assert.ok(error instanceof WorkspaceFailure);
-    assert.equal(error.code, 'WORKSPACE_INTEGRITY');
-    return true;
-  });
+  // A blob the repository does not have is reported as missing bytes, not as a crash.
+  await assert.rejects(
+    snapshotFileBytes(identity.repositoryRoot, snapshot.id, { ...entry, oid: 'f'.repeat(40) }),
+    (error) => error instanceof WorkspaceFailure && error.code === 'WORKSPACE_MISSING',
+  );
 });
 
 test('credential names are matched by family and without case, tracked or not', async (t) => {
@@ -595,12 +604,17 @@ test('a manifest edited on disk is not trusted', async (t) => {
   });
   const write = (manifest: unknown) => writeFile(manifestFile, JSON.stringify(manifest));
 
-  // Format 3 is named by its digest: any change to the entries no longer answers to the id.
+  // Formats 3 and 4 are named by their digest: any change to the entries no longer answers to the id.
   await write({ ...original, files: [...original.files, forged({})] });
   assert.equal(await readManifest(identity.repositoryRoot, snapshot.id), null);
 
   // Older formats are not digest-named, so their entries are checked one by one.
-  const legacy = { ...original, format: 2 };
+  // Format 2 named no blobs, so the current entries lose theirs to become format 2 ones.
+  const legacy = {
+    ...original,
+    format: 2,
+    files: original.files.map(({ oid: _oid, ...entry }: Record<string, unknown>) => entry),
+  };
   await write(legacy);
   assert.ok(
     await readManifest(identity.repositoryRoot, snapshot.id),
@@ -633,4 +647,32 @@ test('a manifest edited on disk is not trusted', async (t) => {
   // Embedded bytes belong to the formats that embedded them.
   await write({ ...original, files: original.files.map((entry: object) => ({ ...entry, blob })) });
   assert.equal(await readManifest(identity.repositoryRoot, snapshot.id), null);
+});
+
+test('a snapshot two owners hold survives the first release and goes with the last', async (t) => {
+  const harness = await repository(t);
+  const identity = (await repositoryIdentity(harness.root))!;
+  const left = await freezeSnapshot({ projectRoot: harness.root, owner: 'owner-a' });
+  // The same content from another database: the same snapshot, and a second share of it.
+  const right = await freezeSnapshot({ projectRoot: harness.root, owner: 'owner-b' });
+  assert.equal(right.id, left.id);
+  assert.deepEqual((await snapshotOwners(identity.repositoryRoot, left.id)).sort(), [
+    'owner-a',
+    'owner-b',
+  ]);
+  assert.equal(await releaseSnapshotOwner(identity.repositoryRoot, left.id, 'owner-a'), false);
+  assert.ok(await readManifest(identity.repositoryRoot, left.id), 'one owner left, so it stays');
+  assert.equal(await releaseSnapshotOwner(identity.repositoryRoot, left.id, 'owner-b'), true);
+  assert.equal(await readManifest(identity.repositoryRoot, left.id), null);
+  assert.equal(git(harness.root, ['for-each-ref', `refs/yuantu/snapshot-owners/${left.id}/`]), '');
+});
+
+test('a snapshot with a ref from before owners existed is never deleted by a release', async (t) => {
+  const harness = await repository(t);
+  const identity = (await repositoryIdentity(harness.root))!;
+  const snapshot = await freezeSnapshot({ projectRoot: harness.root, owner: 'owner-a' });
+  // What an older build left: one ref, no owner. Nothing says which databases still use it.
+  git(harness.root, ['update-ref', snapshotRef(snapshot.id), snapshot.baseCommit]);
+  assert.equal(await releaseSnapshotOwner(identity.repositoryRoot, snapshot.id, 'owner-a'), false);
+  assert.ok(await readManifest(identity.repositoryRoot, snapshot.id));
 });

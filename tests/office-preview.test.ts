@@ -185,8 +185,10 @@ test('a preview that waited in the queue is not timed out before it starts', asy
   const source = path.join(root, 'source.xlsx');
   await writeFile(source, 'fixture');
   const script = path.join(root, 'slow-renderer.mjs');
-  // Each conversion takes 700ms, and the budget is 1000ms: a job that waited for the first one must still be
-  // inside its own budget while it runs, which is the case the enqueue-time timer made impossible.
+  // Each conversion takes 1500ms, and the budget is 2500ms: a job that waited for the first one must still be
+  // inside its own budget while it runs, which is the case the enqueue-time timer made impossible. The budget
+  // leaves a second for process start-up under load, and is still shorter than two conversions back to back
+  // (3000ms), so a timer started at enqueue still fails this test.
   await writeFile(
     script,
     `
@@ -195,7 +197,7 @@ test('a preview that waited in the queue is not timed out before it starts', asy
     const args = process.argv.slice(2);
     const output = args[args.indexOf('--outdir') + 1];
     const input = args.at(-1);
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     await writeFile(path.join(output, path.basename(input, path.extname(input)) + '.pdf'),
       '%PDF-1.4\\nfixture\\n%%EOF');
   `,
@@ -203,7 +205,7 @@ test('a preview that waited in the queue is not timed out before it starts', asy
   const renderer = createLibreOfficePreview({
     executable: process.execPath,
     prefixArgs: [script],
-    timeoutMs: 1000,
+    timeoutMs: 2500,
   });
   await Promise.all([
     renderer.render({ format: 'xlsx', sourcePath: source, outputPath: path.join(root, '1.pdf') }),

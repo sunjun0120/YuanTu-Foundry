@@ -405,6 +405,30 @@ test('stdio MCP discovers tools, validates arguments, calls and closes its proce
   await tools.close();
   assert.throws(() => process.kill(pid, 0));
 });
+test('a stdio server that exits between calls is reconnected without a failed call', async (t) => {
+  const root = await setup(t, {
+    local: { transport: 'stdio', command: process.execPath, args: [fixture, 'pid.txt'] },
+  });
+  const tools = createTools(root);
+  (t as test.TestContext & { mcpCleanups: (() => Promise<void>)[] }).mcpCleanups.push(() =>
+    tools.close(),
+  );
+  const call = (id: string) =>
+    tools.execute(
+      { id, name: 'mcp_local_call_tool', arguments: { name: 'echo', arguments: { text: id } } },
+      ctx(),
+    );
+  assert.equal((await call('first')).isError, false);
+  // Between two turns the server goes away — killed, crashed, or an editor restarted it.
+  const first = Number(await readFile(path.join(root, 'pid.txt'), 'utf8'));
+  process.kill(first);
+  assert.ok(await waitForExit(first));
+  // The connection noticed it close, so the next call opens a new one instead of failing once first.
+  const second = await call('second');
+  assert.equal(second.isError, false, second.content);
+  assert.match(second.content, /second/);
+  assert.notEqual(Number(await readFile(path.join(root, 'pid.txt'), 'utf8')), first);
+});
 /** Waits for a killed fixture to be gone, so "the server really exited" is an answer rather than a guess. */
 async function waitForExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;

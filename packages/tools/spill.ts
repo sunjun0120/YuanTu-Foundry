@@ -1,7 +1,8 @@
 import path from 'node:path';
-import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import type { SpilledOutput } from '../protocol/index.ts';
 
 /**
@@ -79,7 +80,7 @@ export function spillOutput(input: {
   const directory = path.join(input.workspace, SPILL_DIRECTORY, input.sessionId);
   const file = path.join(directory, spillName(input.tool));
   const text = truncateUtf8(input.content, MAX_SPILL_BYTES);
-  mkdirSync(directory, { recursive: true, mode: DIRECTORY_MODE });
+  ensureRuntimeDirectory(directory, { mode: DIRECTORY_MODE });
   // `wx` rather than `w`: the name carries a timestamp and a UUID, so a file already being there means
   // something else put it there, and clobbering it is not this function's business. The pipeline treats a
   // failed spill as plain truncation, which is the honest outcome.
@@ -214,7 +215,7 @@ export function spillResult(input: {
   } catch {
     /* Not there yet, or unreadable: writing it is the answer either way. */
   }
-  mkdirSync(directory, { recursive: true, mode: DIRECTORY_MODE });
+  ensureRuntimeDirectory(directory, { mode: DIRECTORY_MODE });
   /**
    * `w`, not `wx`: this name is the message's identity, so rewriting an existing file is the intended repair
    * when the projection's output changed, and the early return above is what keeps the common case from

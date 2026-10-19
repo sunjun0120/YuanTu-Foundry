@@ -1,13 +1,12 @@
-import { estimateMessageTokens } from '../../../packages/core/budget.ts';
 import { calibrationRoute, TokenCalibration } from '../../../packages/core/calibration.ts';
 import { prepareContext, withoutSummarySection } from '../../../packages/core/context.ts';
+import { contextSeams } from '../../../packages/core/run-context.ts';
 import { contextBoundaries, foldContextEnvelopes } from '../../../packages/protocol/context.ts';
 import { resolveRunLimits } from '../../../packages/protocol/settings.ts';
-import { spillResult } from '../../../packages/tools/spill.ts';
 import { createProvider, readConfig } from '../../../packages/providers/index.ts';
 import { modelInfoFor, resolveConnectionCapacities } from '../../shared/runtime.ts';
 import { ownedSession, required } from '../params.ts';
-import { assertUnlocked, hostClaim, sessionClaim, withLocks } from '../state.ts';
+import { assertUnlocked, executionRoot, hostClaim, sessionClaim, withLocks } from '../state.ts';
 import type { Handler } from '../dispatch.ts';
 
 /**
@@ -105,25 +104,15 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
         // request then caches nothing rather than reading an entry that is not its own.
         cacheKeyFor: (systemText) => (systemText === replay.system ? replay.cacheKey : undefined),
         calibration,
-        shrink: {
-          policy: {
-            keepRecent: limits.toolResultKeepRecent,
-            tokens: limits.toolResultShrinkTokens,
-          },
-          spill: ({ message, content }) =>
-            spillResult({
-              workspace: ctx.workspace,
-              sessionId,
-              key: message.role === 'tool' ? message.toolCallId : 'message',
-              content,
-            }),
-          measure: (text) =>
-            estimateMessageTokens(
-              { role: 'tool', toolCallId: '', content: text, isError: false },
-              calibration.factor,
-            ),
-        },
-        shrinkPercent: limits.contextShrinkPercent,
+        // The run's own shortening and pruning seams, from the same factory: a copy here drifted once already.
+        // The spill target is the directory the session works in, so a shortened result a later round reads is
+        // reachable through the same workspace the tools resolve against.
+        ...contextSeams({
+          workspace: executionRoot(ctx, sessionId),
+          sessionId,
+          calibration,
+          ...limits,
+        }),
         onUsage: () => {},
         onCompaction: () => {},
         forceCompact: true,

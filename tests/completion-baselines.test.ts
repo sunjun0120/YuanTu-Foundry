@@ -141,3 +141,72 @@ test('an approved plan with an unchanged check is verified when the file is unto
   assert.equal(result.status, 'completed', result.error);
   assert.equal(result.completion?.state, 'verified');
 });
+
+/**
+ * A baseline belongs to the definition, not to one attempt at it.
+ *
+ * A retry or a resume that re-sampled would take the failed attempt's edits as the new "before", and the protected
+ * file the failed attempt changed would then pass without anyone touching it again.
+ */
+const CHANGE_KEEP = [
+  { calls: [{ name: 'read_file', input: { path: 'keep.txt' } }] },
+  {
+    calls: [
+      { name: 'edit_file', input: { path: 'keep.txt', old_text: 'original', new_text: 'changed' } },
+    ],
+  },
+  { text: 'Done.' },
+];
+
+function agentWith(
+  root: string,
+  store: Awaited<ReturnType<typeof fixture>>['store'],
+  turns: Parameters<typeof scripted>[0],
+) {
+  return new Agent({
+    store,
+    tools: createTools(root),
+    approve: async () => true,
+    provider: scripted(turns),
+  });
+}
+
+test('a task retry still compares against the first attempt’s baseline', async (t) => {
+  const { root, store, session } = await fixture(t);
+  const task = store.createTask(session.id, { title: 'Leave keep.txt alone', acceptance: KEEP });
+  const first = await agentWith(root, store, CHANGE_KEEP).run({
+    sessionId: session.id,
+    taskId: task.id,
+    prompt: 'Change it',
+  });
+  assert.equal(first.status, 'needs_review');
+  const retry = await agentWith(root, store, [{ text: 'Nothing to do.' }]).run({
+    sessionId: session.id,
+    taskId: task.id,
+    prompt: 'Change it',
+  });
+  assert.equal(retry.status, 'needs_review');
+  const check = retry.acceptance?.checks.find((item) => item.id === 'keep');
+  assert.equal(check?.passed, false);
+  assert.equal(check?.detail, 'Forbidden path changed');
+});
+
+test('a resumed contract still compares against the baseline its first run recorded', async (t) => {
+  const { root, store, session } = await fixture(t);
+  const first = await agentWith(root, store, CHANGE_KEEP).run({
+    sessionId: session.id,
+    prompt: 'Change it',
+    completion: spec,
+  });
+  assert.equal(first.status, 'needs_review');
+  const contractId = store.completionCurrent(session.id)?.contractId;
+  assert.ok(contractId);
+  assert.ok(store.completionCurrent(session.id)?.baselines?.keep);
+  const resumed = await agentWith(root, store, [{ text: 'Nothing to do.' }]).run({
+    sessionId: session.id,
+    prompt: 'Continue',
+    resumeCompletionId: contractId,
+  });
+  assert.equal(resumed.status, 'needs_review');
+  assert.notEqual(resumed.completion?.state, 'verified');
+});

@@ -203,7 +203,15 @@ export class Agent {
         : change;
     // Checked before the run row exists, so a malformed request leaves nothing to close.
     if (input.planPhase && !input.planId) throw new Error('Planning phase requires a plan record');
-    const baselines: TaskBaselines = task ? await captureTaskBaselines(workspace, task) : {};
+    // A retry compares against the images this definition's first run took, never against what the failed attempt left.
+    const baselines: TaskBaselines = task
+      ? await captureTaskBaselines(
+          workspace,
+          task,
+          store.definitionRunAttemptBaselines(input.sessionId, task.id) as
+            TaskBaselines | undefined,
+        )
+      : {};
     const runId = store.beginRun(input.sessionId);
     /**
      * Everything from here on runs with the run row open and the session's lease held.

@@ -415,6 +415,19 @@
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
 }
+.deliverables .deliverable-open {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: #3f6b4f;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.deliverables .deliverable-open:hover,
+.deliverables .deliverable-open:focus-visible {
+  color: #244b35;
+}
 .deliverables .deliverable-description {
   color: #6f7568;
 }

@@ -25,6 +25,10 @@ export interface SessionActivity {
 import { locale, t } from './i18n.ts';
 import { memo } from './renderer-memo.ts';
 
+/** A speech bubble with a question mark: the session is waiting on the user. */
+const WAITING_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5c3.6 0 6.5 2.5 6.5 5.6S11.6 12.7 8 12.7c-.7 0-1.4-.1-2-.3L2.6 14l.9-2.8C2.2 10.2 1.5 8.7 1.5 7.1 1.5 4 4.4 1.5 8 1.5Z" fill="currentColor"/><path d="M6.4 5.6c.1-.9.8-1.5 1.7-1.5.9 0 1.6.6 1.6 1.4 0 .6-.3 1-.9 1.3-.5.3-.7.5-.7 1v.2" fill="none" stroke="var(--status-icon-ink, #fff)" stroke-width="1.2" stroke-linecap="round"/><circle cx="8.1" cy="9.6" r=".75" fill="var(--status-icon-ink, #fff)"/></svg>';
+
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
   if (!value) throw new Error(`Missing element: ${id}`);
@@ -108,24 +112,27 @@ export function setupSessionList(options: {
             }),
           ),
         );
+        /**
+         * The row's state is one icon in the place the `⋯` takes on hover: a spinner while the session runs, and
+         * a waiting mark when an approval or question needs the user — that one wins, because it is the one asking
+         * for something. The label goes on the row itself, since the icon is drawn but never hovered.
+         */
         const live = activity.get(item.id);
+        const row = node('div', '', 'session-row');
         if (live?.running || live?.waiting) {
-          const badges = node('span', '', 'session-activity');
-          if (live.running) badges.append(node('span', t('ui.sessionRunning'), 'session-running'));
-          if (live.waiting) {
-            const waiting = node(
-              'span',
-              t('ui.sessionWaiting', { count: live.waiting }),
-              'session-waiting',
-            );
-            waiting.title = t('ui.sessionWaitingLabel', { count: live.waiting });
-            badges.append(waiting);
-          }
-          button.append(badges);
+          const label = live.waiting
+            ? t('ui.sessionWaitingLabel', { count: live.waiting })
+            : t('ui.sessionRunning');
+          const status = node('span', '', `session-status ${live.waiting ? 'waiting' : 'running'}`);
+          status.setAttribute('role', 'img');
+          status.setAttribute('aria-label', label);
+          status.innerHTML = live.waiting ? WAITING_ICON : '<span class="session-spinner"></span>';
+          button.append(status);
+          button.title = `${item.title || item.id}\n${label}`;
+          row.classList.add('has-status');
         }
         button.setAttribute('aria-current', item.id === currentId ? 'true' : 'false');
         button.addEventListener('click', () => void options.select({ type: 'load', id: item.id }));
-        const row = node('div', '', 'session-row');
         row.append(button, options.createMenuButton(item, blocked));
         return row;
       }),

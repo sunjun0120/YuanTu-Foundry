@@ -729,8 +729,28 @@ test('UI settings contract accepts only supported language, appearance and font 
     }),
     {
       type: 'save',
-      settings: { language: 'en-US', appearance: 'dark', fontSize: 'large' },
+      settings: { language: 'en-US', appearance: 'dark', fontSize: 'large', notifications: true },
     },
+    'a settings file from before the notification switch reads as switched on',
+  );
+  assert.equal(
+    parseUiSettings({
+      language: 'zh-CN',
+      appearance: 'system',
+      fontSize: 'medium',
+      notifications: false,
+    }).notifications,
+    false,
+  );
+  assert.throws(
+    () =>
+      parseUiSettings({
+        language: 'zh-CN',
+        appearance: 'system',
+        fontSize: 'medium',
+        notifications: 'no',
+      }),
+    /通用设置/,
   );
   assert.throws(
     () =>
@@ -795,13 +815,19 @@ test('UI settings persist across reload and malformed files fall back to default
   const store = new UiSettingsStore(file);
   await store.load();
   assert.deepEqual(store.view, defaultUiSettings());
-  await store.save({ language: 'en-US', appearance: 'dark', fontSize: 'large' });
+  await store.save({
+    language: 'en-US',
+    appearance: 'dark',
+    fontSize: 'large',
+    notifications: false,
+  });
   const reopened = new UiSettingsStore(file);
   await reopened.load();
   assert.deepEqual(reopened.view, {
     language: 'en-US',
     appearance: 'dark',
     fontSize: 'large',
+    notifications: false,
   });
   assert.match(await readFile(file, 'utf8'), /"appearance": "dark"/);
   await writeFile(file, '{"appearance":"invalid"}');

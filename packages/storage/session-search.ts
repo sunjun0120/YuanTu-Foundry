@@ -16,6 +16,8 @@ export interface SessionListPage {
   limit?: number;
   before?: string;
   id?: string;
+  /** `true` lists only archived sessions, `false` only the rest; absent lists both. */
+  archived?: boolean;
 }
 
 export interface SessionSearchPort {
@@ -48,7 +50,8 @@ export class SessionSearch {
       (page.limit !== undefined &&
         (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > MAX_SESSION_PAGE)) ||
       (page.before !== undefined && typeof page.before !== 'string') ||
-      (page.id !== undefined && typeof page.id !== 'string')
+      (page.id !== undefined && typeof page.id !== 'string') ||
+      (page.archived !== undefined && typeof page.archived !== 'boolean')
     )
       throw new Error('Invalid session page');
     // Titles and the full-text index are written with the message, so a list or a search has to see the
@@ -62,7 +65,8 @@ export class SessionSearch {
     // so a partial word still matches a session name.
     return this.port.db
       .prepare(
-        `SELECT id,workspace,created_at AS createdAt,active_run AS activeRun,title,parent_session_id AS parentSessionId FROM sessions
+        `SELECT id,workspace,created_at AS createdAt,active_run AS activeRun,title,parent_session_id AS parentSessionId,
+                archived_at AS archivedAt FROM sessions
          WHERE (? IS NULL OR workspace=?)
            AND (parent_session_id IS NULL OR fork_message_count IS NOT NULL)
            AND (?='' OR instr(lower(title),lower(?))>0 OR
@@ -71,6 +75,7 @@ export class SessionSearch {
                WHERE m.session_id=sessions.id AND messages_fts MATCH ?)))
            AND (? IS NULL OR (created_at,rowid) < (SELECT created_at,rowid FROM sessions WHERE id=?))
            AND (? IS NULL OR id=?)
+           AND (? IS NULL OR (archived_at IS NOT NULL)=?)
          ORDER BY created_at DESC,rowid DESC
          LIMIT ?`,
       )
@@ -85,6 +90,8 @@ export class SessionSearch {
         page.before ?? null,
         page.id ?? null,
         page.id ?? null,
+        page.archived === undefined ? null : Number(page.archived),
+        page.archived === undefined ? null : Number(page.archived),
         // SQLite reads a negative LIMIT as "no limit".
         page.limit ?? -1,
       ) as unknown as Session[];

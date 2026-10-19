@@ -53,6 +53,12 @@ export const AGENT_EVENT_TYPES = [
    * (same name, in the session log) is what a reopened session reads to answer "did anything verify this".
    */
   'completion.updated',
+  /**
+   * A completion fingerprint of a large range is about to be read: its phase (`before` or `after` the checks, or the
+   * `final` re-read) and how many files and bytes it covers. Live only, and only past a size worth announcing — the
+   * reads that follow are what make a task's end slow on a large tree, and nothing said so until they were done.
+   */
+  'completion.fingerprinting',
   'context.compacting',
   'context.compacted',
   /**

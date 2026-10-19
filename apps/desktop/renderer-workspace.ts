@@ -743,6 +743,11 @@ export function setupWorkspace() {
   paintTree();
   paintPreview();
   return {
+    /** Show one file in the panel, opening the panel if it is closed; the deliverable path's affordance. */
+    async open(path: string): Promise<void> {
+      setOpen(true);
+      await showFile(path);
+    },
     previewChanges(path: string, content: HTMLElement, key: string): void {
       let tab = files.get(path);
       if (!tab) {

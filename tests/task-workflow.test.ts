@@ -142,6 +142,24 @@ test('tool-calling proposal is rejected without execution or task changes', asyn
   await assert.rejects(access(path.join(f.root, 'forbidden.txt')));
 });
 
+test('a task proposal can be stopped from its session', async (t) => {
+  const f = await fixture(t, 'draft', 5000);
+  const task = await f.create();
+  const pending = f.client.request('task.propose', {
+    sessionId: f.sessionId,
+    taskId: task.id,
+  });
+  // Wait until the model request is actually in flight; cancelling before that tests nothing.
+  for (let attempt = 0; attempt < 100 && f.requests() === 0; attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(f.requests(), 1);
+  assert.deepEqual(await f.client.request('run.cancel', { sessionId: f.sessionId }), {
+    cancelled: true,
+  });
+  await assert.rejects(pending, /abort|cancel|Task planning/i);
+  assert.equal((await f.get(task)).title, 'Test task');
+});
+
 test('task edit rejects stale revisions and clears all completion evidence', async (t) => {
   const f = await fixture(t, 'checkpoint');
   /**
@@ -414,9 +432,16 @@ test('Stop cancels a manual verification that is still running its checks', asyn
   );
   // Let the check's process start before stopping it.
   await new Promise((resolve) => setTimeout(resolve, 1000));
+  const stopped = Date.now();
   const cancelled = await f.client.request('run.cancel', { sessionId: f.sessionId });
   assert.equal(cancelled.cancelled, true, 'Stop did not see the manual verification');
   assert.notEqual(await outcome, 'finished');
+  // A check stopped while its sandbox was still being prepared used to wait for the whole preparation and its
+  // cleanup — over ten seconds under the native Windows sandbox — before the verification ended.
+  assert.ok(
+    Date.now() - stopped < 5_000,
+    `the verification ran on ${Date.now() - stopped}ms after Stop`,
+  );
   assert.ok(Date.now() - started < 20_000, 'the verification ran on after Stop');
   const attempts = await f.client.request('task.attempts', {
     sessionId: f.sessionId,

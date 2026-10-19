@@ -693,7 +693,7 @@ test('Host model retry after a successful edit does not repeat the edit or its a
   assert.equal(await readFile(path.join(root, 'theme.txt'), 'utf8'), 'blue\n');
 });
 
-test('Host MCP approval precedes stdio startup and closes the server before run completion', async (t) => {
+test('Host MCP approval precedes stdio startup, and the server lives for the session until the Host stops', async (t) => {
   const root = await workspace(t);
   const { mkdir } = await import('node:fs/promises');
   await mkdir(path.join(root, '.yuantu'));
@@ -759,10 +759,22 @@ test('Host MCP approval precedes stdio startup and closes the server before run 
   assert.equal(result.status, 'completed', result.error);
   assert.equal(approvals.length, 1);
   const pid = Number(await readFile(path.join(root, 'mcp-pid.txt'), 'utf8'));
-  assert.throws(() => process.kill(pid, 0));
+  // Kept for the session's next run rather than closed with this one: the next turn does not handshake again.
+  assert.doesNotThrow(() => process.kill(pid, 0), 'the MCP server was closed with the run');
   const snapshot = await client.request('session.get', { sessionId: session.id });
   assert.equal(snapshot.session.activeRun, null);
   await client.stop();
+  // The Host closes what its sessions kept when it shuts down.
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    assert.ok(Date.now() < deadline, 'the MCP server outlived the Host');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   await client.start();
   assert.deepEqual(
     (await client.request('session.get', { sessionId: session.id })).messages,
@@ -881,6 +893,50 @@ test('Host reserves session deletion until a blocked background cleanup actually
   }
   assert.deepEqual(ctx.locks.claims(), []);
   assert.throws(() => store.get(session.id), /Session not found/);
+});
+
+test('session deletion can be stopped before it removes the session', async (t) => {
+  const root = await workspace(t);
+  const store = new SessionStore(':memory:');
+  t.after(() => store.close());
+  const session = store.create(root);
+  let release!: () => void, entered!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const cleaning = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const ctx = {
+    workspace: root,
+    store,
+    active: new Map(),
+    locks: new ResourceLocks(),
+    manualOperations: new Set(),
+    background: {
+      close: async () => {
+        entered();
+        await blocked;
+      },
+    },
+    terminals: { closeAllAndWait: async () => {} },
+    invariants: { run: async () => [] },
+    announced: new Set(),
+    sessionSandboxes: new Map(),
+    sessionSandboxFiles: new Map(),
+    sessionSandboxNetwork: new Map(),
+    sessionPermissionPolicies: new Map(),
+  } as unknown as HostContext;
+  const deleting = sessionHandlers['session.delete']!(ctx, { sessionId: session.id });
+  await cleaning;
+  const operation = [...ctx.manualOperations][0];
+  assert.ok(operation, 'the delete is registered as a cancellable manual operation');
+  operation.controller.abort(new Error('stopped by the person'));
+  release();
+  await assert.rejects(deleting, /stopped by the person/);
+  assert.equal(store.get(session.id).id, session.id);
+  assert.equal(ctx.manualOperations.size, 0);
+  assert.deepEqual(ctx.locks.claims(), []);
 });
 
 test('session.recover refuses the session this Host is running and recovers a stuck one', async (t) => {

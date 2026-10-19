@@ -13,6 +13,7 @@ import {
   loadedTools,
 } from '../packages/tools/deferred-tools.ts';
 import { toolMode } from '../packages/tools/run-code.ts';
+import { LoadedDeferredTools, loadedDeferredTools } from '../packages/core/run-catalog.ts';
 import { editSnippet } from '../packages/tools/file-change.ts';
 import { presentedSchema } from '../packages/tools/presented-schema.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -117,6 +118,42 @@ test('the loaded set is read from the transcript: named loads and direct calls',
     },
   ];
   assert.deepEqual([...loadedTools(messages, DEFERRED_TOOLS)].sort(), ['lsp_hover', 'web_fetch']);
+});
+
+test('a run reads only what the transcript gained, and answers as a full read would', () => {
+  const messages: Message[] = [{ role: 'user', content: 'go' }];
+  let goal: { status: string } | null = null;
+  const store = {
+    messages: () => messages,
+    goal: () => goal,
+  } as unknown as Pick<SessionStore, 'messages' | 'goal'>;
+  const tools = { toolMode: 'deferred' as const, deferrable: DEFERRED_TOOLS };
+  const tracker = new LoadedDeferredTools(store, 's1', tools);
+  const calls = (...names: string[]): Message => ({
+    role: 'assistant',
+    content: '',
+    toolCalls: names.map((name, index) => ({ id: `${name}-${index}`, name, arguments: {} })),
+  });
+  const agrees = () =>
+    assert.deepEqual(
+      [...tracker.current()!].sort(),
+      [...loadedDeferredTools(store, 's1', tools)!].sort(),
+    );
+  agrees();
+  messages.push(calls('web_fetch'));
+  agrees();
+  // Only appended messages are read: a message rewritten in the already-read prefix is not looked at again.
+  messages[1] = calls('lsp_hover');
+  assert.deepEqual([...tracker.current()!], ['web_fetch']);
+  messages.push(calls('read_file', 'lsp_hover'));
+  assert.deepEqual([...tracker.current()!].sort(), ['lsp_hover', 'web_fetch']);
+  // The goal is read fresh at every call.
+  goal = { status: 'active' };
+  assert.ok(tracker.current()!.has('update_goal'));
+  // A transcript that came back shorter is read again from the start.
+  messages.splice(1);
+  messages.push(calls('web_search'));
+  assert.deepEqual([...tracker.current()!].sort(), ['update_goal', 'web_search']);
 });
 
 test('load_tools refuses names it cannot load, including ones a restricted run does not offer', async (t) => {

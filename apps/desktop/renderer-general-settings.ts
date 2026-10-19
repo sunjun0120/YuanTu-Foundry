@@ -62,7 +62,8 @@ export function setupGeneralSettings(): { show(): void } {
     byId<HTMLSelectElement>('ui-font-size').options[0]!.textContent = t('general.fontSmall');
     byId<HTMLSelectElement>('ui-font-size').options[1]!.textContent = t('general.fontMedium');
     byId<HTMLSelectElement>('ui-font-size').options[2]!.textContent = t('general.fontLarge');
-    byId<HTMLButtonElement>('general-settings-save').textContent = t('general.save');
+    byId('ui-notifications-title').textContent = t('general.notifications');
+    byId('ui-notifications-note').textContent = t('general.notificationsNote');
   };
   onLocaleChange(translate);
   translate();
@@ -70,30 +71,26 @@ export function setupGeneralSettings(): { show(): void } {
   const language = byId<HTMLSelectElement>('ui-language');
   const appearance = byId<HTMLSelectElement>('ui-appearance');
   const fontSize = byId<HTMLSelectElement>('ui-font-size');
+  const notifications = byId<HTMLInputElement>('ui-notifications');
   const feedback = byId('general-settings-feedback');
-  const save = byId<HTMLButtonElement>('general-settings-save');
   let persisted: UiSettings | undefined;
-  let pending = false;
+  // One save in flight at a time; a change made meanwhile is sent once that save answers.
+  let saving = false;
+  let again = false;
 
   const current = (): UiSettings => ({
     language: language.value as UiSettings['language'],
     appearance: appearance.value as UiSettings['appearance'],
     fontSize: fontSize.value as UiSettings['fontSize'],
+    notifications: notifications.checked,
   });
   const fill = (settings: UiSettings) => {
     persisted = settings;
     language.value = settings.language;
     appearance.value = settings.appearance;
     fontSize.value = settings.fontSize;
+    notifications.checked = settings.notifications;
     apply(settings);
-    update();
-  };
-  const update = () => {
-    const changed = persisted && JSON.stringify(current()) !== JSON.stringify(persisted);
-    save.disabled = pending || !changed;
-    language.disabled = pending;
-    appearance.disabled = pending;
-    fontSize.disabled = pending;
   };
   const status = (text: string, error = false) => {
     feedback.textContent = text;
@@ -103,45 +100,58 @@ export function setupGeneralSettings(): { show(): void } {
   const show = () => {
     showSettingsPanel('general-settings-content');
   };
+  /**
+   * Every change is saved as it is made. A failed save — a refusal, or a promise that rejects because the answer
+   * never arrived — puts the form back to what is persisted and says why, so the page never shows a value that
+   * is not stored. `saving` is released on every path, the throwing one included: a save that never answers
+   * must not swallow every later change.
+   */
+  const save = async (): Promise<void> => {
+    if (saving) {
+      again = true;
+      return;
+    }
+    saving = true;
+    try {
+      do {
+        again = false;
+        const settings = current();
+        if (persisted && JSON.stringify(settings) === JSON.stringify(persisted)) continue;
+        try {
+          const reply = await window.yuantu.uiSettings({ type: 'save', settings });
+          if (reply.ok && reply.kind === 'settings') {
+            // A newer edit waiting to be sent stays on screen; only the stored copy moves forward.
+            if (again) persisted = reply.settings;
+            else fill(reply.settings);
+            status('');
+          } else {
+            again = false;
+            if (persisted) fill(persisted);
+            // A refusal, or an answer to a question this form did not ask: either way the form keeps what it had.
+            status(reply.ok ? t('ui.settingsRequestInvalid') : reply.error, true);
+          }
+        } catch (error) {
+          again = false;
+          if (persisted) fill(persisted);
+          status(
+            error instanceof Error && error.message ? error.message : t('ui.operationFailed'),
+            true,
+          );
+        }
+      } while (again);
+    } finally {
+      saving = false;
+    }
+  };
 
-  for (const control of [language, appearance, fontSize])
+  for (const control of [language, appearance, fontSize, notifications])
     control.addEventListener('change', () => {
       apply(current());
-      status('');
-      update();
+      return save();
     });
   byId('general-settings').addEventListener('click', show);
-  byId<HTMLFormElement>('general-settings-form').addEventListener('submit', async (event) => {
+  byId<HTMLFormElement>('general-settings-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    pending = true;
-    status(t('general.saving'));
-    update();
-    try {
-      const reply = await window.yuantu.uiSettings({ type: 'save', settings: current() });
-      if (reply.ok && reply.kind === 'settings') {
-        fill(reply.settings);
-        status(t('general.saved'));
-      } else {
-        if (persisted) fill(persisted);
-        // A refusal, or an answer to a question this form did not ask: either way the form keeps what it had.
-        status(reply.ok ? t('ui.settingsRequestInvalid') : reply.error, true);
-      }
-    } catch (error) {
-      /**
-       * A rejected promise is not a refusal: the answer never arrived, so there is nothing to adopt and nothing
-       * to undo — the edit stays in the form and one more click sends it again. What must not happen is what
-       * used to: `await` threw out of this listener with `pending` still true, which disabled every control
-       * behind the word "正在保存…" for the rest of the window's life.
-       */
-      status(
-        error instanceof Error && error.message ? error.message : t('ui.operationFailed'),
-        true,
-      );
-    } finally {
-      // On every path, including the one that threw: a save that never answers must not lock the form.
-      pending = false;
-      update();
-    }
   });
   void window.yuantu.uiSettings({ type: 'get' }).then((reply) => {
     if (reply.ok && reply.kind === 'settings') fill(reply.settings);

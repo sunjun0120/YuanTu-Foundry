@@ -120,6 +120,8 @@ export class SnapshotMirror {
     ][]) {
       if ((this.versions.get(key) ?? 0) >= entry.version) continue;
       if (entry.messages && this.versions.get(key) !== entry.messages.base) {
+        // Bounded: a tail whose base never arrives must not accumulate for the life of the window.
+        if (this.waiting.size >= 16) this.waiting.delete(this.waiting.keys().next().value!);
         this.waiting.set(entry.messages.base, entry);
         continue;
       }
@@ -133,7 +135,9 @@ export class SnapshotMirror {
     }
     const current = this.versions.get('session') ?? 0;
     for (const [base, entry] of this.waiting)
-      if (entry.version <= current) this.waiting.delete(base);
+      // A tail cut against a session older than the one already mirrored can never be applied; one overtaken by a
+      // newer whole session is equally dead. Both are removed rather than left waiting for a base that is gone.
+      if (base < current || entry.version <= current) this.waiting.delete(base);
     return { state: this.state as unknown as CarrierSnapshot, changed };
   }
   private put(key: SnapshotSection, entry: SnapshotEntry): void {

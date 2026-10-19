@@ -288,12 +288,15 @@ export interface HostMethods {
   /**
    * Newest first. `limit` (1–500) returns one page and `before` (the last id of the previous page) continues it;
    * `id` narrows the answer to that one session, or to nothing when it is gone. With neither, the whole list.
+   * `archived` keeps only archived sessions (`true`) or only the others (`false`); absent, both.
    */
   'session.list': {
-    params: { query?: string; limit?: number; before?: string; id?: string };
+    params: { query?: string; limit?: number; before?: string; id?: string; archived?: boolean };
     result: SessionInfo[];
   };
   'session.rename': { params: { sessionId: string; title: string }; result: SessionInfo };
+  /** Archive a session (`archived: true`) or bring it back; nothing it holds changes. */
+  'session.archive': { params: { sessionId: string; archived: boolean }; result: SessionInfo };
   'session.delete': { params: { sessionId: string }; result: { deleted: true } };
   /**
    * Converge a session whose lease owner cannot be confirmed dead (capability `session-recover-v1`).

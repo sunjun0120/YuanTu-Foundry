@@ -44,8 +44,18 @@ export type DesktopReply =
 export type DesktopWireReply =
   | { ok: true; patch: import('./snapshot-patch.ts').SnapshotPatch }
   | Extract<DesktopReply, { ok: false }>;
+/** The archived sessions of the open project, for their settings page. */
+export type ArchivedSessionsReply =
+  | {
+      ok: true;
+      workspace: string;
+      sessions: import('../../packages/protocol/index.ts').SessionInfo[];
+    }
+  | Extract<DesktopReply, { ok: false }>;
 export interface DesktopBridge {
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
+  /** Read on demand by the settings page; unarchiving and deleting go through `invoke`. */
+  archivedSessions?(): Promise<ArchivedSessionsReply>;
   backups?(command: BackupCommand): Promise<BackupReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
   /**
@@ -76,6 +86,8 @@ export interface DesktopBridge {
    * it says so.
    */
   subscribePresets(listener: (view: PermissionPresetView) => void): () => void;
+  /** A system notification about a session was clicked: open that session (`main-notifications.ts`). */
+  subscribeOpenSession?(listener: (sessionId: string) => void): () => void;
   uiSettings(command: UiSettingsCommand): Promise<UiSettingsReply>;
   /** Native Windows maintenance is absent in the browser bridge. */
   sandboxSetup?(command: SandboxSetupCommand): Promise<SandboxSetupReply>;

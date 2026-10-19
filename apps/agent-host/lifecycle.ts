@@ -1,5 +1,6 @@
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { RESIDENCY_DEFAULTS } from '../../packages/core/residency.ts';
+import { closeAllToolResources } from '../../packages/catalog/resource-pool.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import { safeError } from '../shared/runtime.ts';
 import { settleInteraction } from './approvals.ts';
@@ -183,6 +184,8 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     ctx.sessionLifecyclePhases?.clear();
     // Every release is attempted, in order, even when another resource refuses to close.
     await release(() => ctx.terminals.closeAllAndWait());
+    // The language servers, browsers and MCP connections sessions kept between runs (`resource-pool.ts`).
+    await release(() => closeAllToolResources());
     await release(() => ctx.background.close());
     await release(() => ctx.store.close());
     await release(() => ctx.hooks.close());

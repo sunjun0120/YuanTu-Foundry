@@ -16,7 +16,7 @@
  * rather than merely old, and it is why `freshness` is computed rather than assumed.
  */
 import path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import { DatabaseSync } from 'node:sqlite';
 import type { FileFingerprint, Freshness, SymbolRecord } from './types.ts';
 
@@ -90,7 +90,7 @@ export class SourceIndex {
     if (!this.directory) return;
     let database: DatabaseSync | null = null;
     try {
-      mkdirSync(this.directory, { recursive: true });
+      ensureRuntimeDirectory(this.directory);
       database = new DatabaseSync(path.join(this.directory, 'index.sqlite'));
       database.exec('PRAGMA journal_mode = WAL');
       database.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');

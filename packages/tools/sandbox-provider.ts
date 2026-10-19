@@ -66,6 +66,14 @@ export interface SandboxProvider {
    * exception for a caller that only wanted to know.
    */
   available(env?: NodeJS.ProcessEnv): Promise<string | null>;
+  /**
+   * A state of this machine that would make `prepare` refuse every command right now, checked *before* a person
+   * is asked to approve one.
+   *
+   * Only for refusals no command can get past (a lease left by a dead process, not a bad argument). Cheap and
+   * side-effect free: it reads state, it never repairs it. Absent means the backend has no such state.
+   */
+  blocked?(): Promise<Error | undefined>;
   prepare(request: SandboxRequest): Promise<SandboxPlan>;
   /** Records possible guest execution on the original owner plan before a spawn or worker handoff. */
   started?(plan: SandboxPlan): void;

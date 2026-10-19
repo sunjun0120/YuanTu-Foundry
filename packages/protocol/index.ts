@@ -7,6 +7,7 @@ export * from './tasks.ts';
 
 export type {
   CheckFailureReason,
+  CompletionPathBaseline,
   CompletionRecord,
   CompletionRepairPolicy,
   CompletionSpec,
@@ -601,4 +602,6 @@ export interface SessionInfo {
   activeRun: string | null;
   /** Set when this session belongs to a sub-agent run rather than to the user. */
   parentSessionId?: string | null;
+  /** When a person archived it; absent or null while it is listed. */
+  archivedAt?: string | null;
 }

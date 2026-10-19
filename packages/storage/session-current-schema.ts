@@ -40,12 +40,12 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
         format INTEGER NOT NULL,
         created_at TEXT NOT NULL
       );
-      -- title/title_source/parent_session_id/fork_message_count are the derived columns an upgraded database
-      -- receives as ADD COLUMN; a new one declares them here, in the order that upgrade leaves them in.
+      -- title/title_source/parent_session_id/fork_message_count/archived_at are the derived columns an upgraded
+      -- database receives as ADD COLUMN; a new one declares them here, in the order that upgrade leaves them in.
       CREATE TABLE sessions (
         id TEXT PRIMARY KEY, workspace TEXT NOT NULL, created_at TEXT NOT NULL, active_run TEXT,
         title TEXT NOT NULL DEFAULT '', title_source TEXT NOT NULL DEFAULT 'fallback',
-        parent_session_id TEXT, fork_message_count INTEGER
+        parent_session_id TEXT, fork_message_count INTEGER, archived_at TEXT
       );
       CREATE TABLE messages (
         seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id),

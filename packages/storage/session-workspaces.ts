@@ -167,6 +167,111 @@ export class SessionWorkspaces {
       );
   }
 
+  /**
+   * Drops a binding's operation lease whoever holds it, and says who that was.
+   *
+   * For the one case automatic recovery cannot decide: an owner pid that is alive with no recorded start time (a
+   * lease an older build wrote), or a start time the platform cannot read. A person who knows the owner is gone
+   * says so; the lease is dropped and the caller records who asked. A lease this process holds is refused — it is
+   * not a leftover, and dropping it would let a second operation run beside the live one.
+   */
+  forceReleaseOperation(bindingId: string): {
+    released: boolean;
+    previousOwnerPid: number | null;
+    previousOwnerStartedAt: number | null;
+  } {
+    const id = workspaceId(bindingId);
+    if (!this.bindingById(id))
+      throw new WorkspaceFailure('WORKSPACE_NOT_FOUND', 'Unknown workspace operation binding');
+    const row = this.db
+      .prepare(
+        'SELECT owner_pid,token,owner_started_at,owner_started_token FROM workspace_operation_leases WHERE binding_id=?',
+      )
+      .get(id);
+    if (!row) return { released: false, previousOwnerPid: null, previousOwnerStartedAt: null };
+    if (Number(row.owner_pid) === process.pid)
+      throw new WorkspaceFailure(
+        'WORKSPACE_BUSY',
+        'This process holds the workspace operation lease; it is not a leftover',
+      );
+    this.db.prepare('DELETE FROM workspace_operation_leases WHERE binding_id=?').run(id);
+    return {
+      released: true,
+      previousOwnerPid: Number(row.owner_pid),
+      previousOwnerStartedAt:
+        row.owner_started_at !== null && row.owner_started_token === row.token
+          ? Number(row.owner_started_at)
+          : null,
+    };
+  }
+
+  /**
+   * Forgets a removed workspace: its binding, its results and their receipts. Its snapshots are released afterwards
+   * by the same pass as every other snapshot this database no longer names (`dropUnusedSnapshot`).
+   *
+   * This is the irreversible step, which is why it is narrow: only a `removed` binding, only while the caller holds
+   * its operation lease, and never while one of its results is still `applying` (startup recovery needs that one).
+   * The rows go first and the caller removes the files after, so a failure there leaves bytes nobody points at — a
+   * leak — rather than a record that points at nothing. Returns what the caller has to remove from the repository.
+   */
+  purgeRemoved(bindingId: string, token: string): { resultIds: string[] } {
+    return this.port.transaction(() => {
+      const id = workspaceId(bindingId);
+      this.assertOperation(id, token);
+      const binding = this.bindingById(id);
+      if (!binding || binding.state !== 'removed')
+        throw new WorkspaceFailure('WORKSPACE_BUSY', 'Only a removed workspace can be purged');
+      const results = this.db
+        .prepare('SELECT id,status FROM workspace_results WHERE binding_id=?')
+        .all(id);
+      if (results.some((row) => row.status === 'applying'))
+        throw new WorkspaceFailure(
+          'WORKSPACE_BUSY',
+          'A result of this workspace is still being imported; let recovery finish it first',
+        );
+      const resultIds = results.map((row) => String(row.id));
+      for (const resultId of resultIds) {
+        this.db.prepare('DELETE FROM workspace_apply_receipts WHERE result_id=?').run(resultId);
+        this.db.prepare('DELETE FROM workspace_results WHERE id=?').run(resultId);
+      }
+      this.db.prepare('DELETE FROM workspace_bindings WHERE id=?').run(id);
+      return { resultIds };
+    });
+  }
+
+  /** Every snapshot this database has recorded. */
+  snapshotIds(): string[] {
+    return this.db
+      .prepare('SELECT id FROM workspace_snapshots ORDER BY created_at,id')
+      .all()
+      .map((row) => String(row.id));
+  }
+
+  /**
+   * Drops a snapshot's record when nothing in this database names it any more, and says whether it did.
+   *
+   * "Names" is every way this database can still need the bytes: a binding built from it, a result compared against
+   * it, or — passed in, because they are files rather than rows — a removal record of one of its workspaces. The
+   * check and the delete are one transaction, so a binding recorded meanwhile either lands first and keeps the
+   * snapshot or finds the record gone and records it again.
+   */
+  dropUnusedSnapshot(snapshotId: string, namedByRemovals: ReadonlySet<string>): boolean {
+    return this.port.transaction(() => {
+      if (namedByRemovals.has(snapshotId)) return false;
+      const named =
+        this.db
+          .prepare('SELECT 1 FROM workspace_bindings WHERE snapshot_id=? LIMIT 1')
+          .get(snapshotId) ??
+        this.db
+          .prepare('SELECT 1 FROM workspace_results WHERE snapshot_id=? LIMIT 1')
+          .get(snapshotId);
+      if (named) return false;
+      return (
+        this.db.prepare('DELETE FROM workspace_snapshots WHERE id=?').run(snapshotId).changes > 0
+      );
+    });
+  }
+
   releaseOperation(bindingId: string, token: string): void {
     this.db
       .prepare(
@@ -265,6 +370,16 @@ export class SessionWorkspaces {
       .prepare(`SELECT ${BINDING_COLUMNS} FROM workspace_bindings WHERE session_id=?`)
       .get(workspaceId(sessionId));
     return row ? bindingFromRow(row as Record<string, unknown>) : null;
+  }
+
+  /** Removed workspaces whose removal is older than `before` (an ISO time), oldest first. */
+  removedBefore(before: string): WorkspaceBinding[] {
+    return this.db
+      .prepare(
+        `SELECT ${BINDING_COLUMNS} FROM workspace_bindings WHERE state='removed' AND updated_at<? ORDER BY updated_at,id`,
+      )
+      .all(before)
+      .map((row) => bindingFromRow(row as Record<string, unknown>));
   }
 
   byState(states: readonly WorkspaceState[]): WorkspaceBinding[] {

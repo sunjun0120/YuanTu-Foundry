@@ -44,6 +44,8 @@ export interface Session {
   activeRun: string | null;
   /** The session that delegated to this one, when this session belongs to a sub-agent run. */
   parentSessionId?: string | null;
+  /** When a person archived it; absent or null while it is listed. Only the session list reads it. */
+  archivedAt?: string | null;
 }
 /** How many sessions one search may return, and how many matching messages it shows per session. */
 export const MAX_SEARCH_SESSIONS = 10;
@@ -411,7 +413,7 @@ export function projectionFoldIdentity(projection: SessionProjection<unknown>): 
  * of the constructor have to agree, and the failure they would produce apart is silent in one direction (an
  * older build opening a newer file) and fatal in the other.
  */
-export const SCHEMA_VERSION = 31;
+export const SCHEMA_VERSION = 32;
 /**
  * Every table this build creates, so "is this file ours?" can be answered without guessing.
  *

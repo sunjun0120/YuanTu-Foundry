@@ -26,7 +26,9 @@ import { runStatusText } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
+import { setupArchivedSessions } from './renderer-archived-sessions.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
+import { setupSelectMenus } from './renderer-select-menu.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { SlotRegistry, mountSlot, type SlotMount } from './slots.ts';
 declare global {
@@ -58,9 +60,11 @@ function node<K extends keyof HTMLElementTagNameMap>(
   value.className = className;
   return value;
 }
+setupSelectMenus();
 const statisticsView = setupStatistics();
 const workspaceView = setupWorkspace();
 const workspaceMaintenance = setupWorkspaceMaintenance();
+const archivedSessions = setupArchivedSessions({ select });
 /** What a panel-level slot is given: the carrier snapshot a panel draws from, and nothing else. */
 interface PanelSlotContext {
   readonly session: CarrierSnapshot['session'];
@@ -328,6 +332,10 @@ const planView = setupPlanPanel({
   isOperating: () => operation,
   isBusy: () => Boolean(state?.session.running || operation),
   select,
+  setError: (message) => {
+    localError = message;
+    render();
+  },
 });
 /**
  * The composer's own controls: whether it accepts input, and what the send button does and says.
@@ -372,6 +380,7 @@ function render(): void {
   pendingPaint = undefined;
   const session = state.session;
   workspaceMaintenance.update(state);
+  archivedSessions.update(state);
   // Every panel in a slot renders here, in the order the slot decides — the built-ins included. Nothing below
   // this line calls a panel directly; adding one is a `register`, not an edit to this function.
   const slotContext: PanelSlotContext = { session, workspace: state.workspace };
@@ -465,10 +474,15 @@ function render(): void {
     ? t('ui.sessionShort', { id: session.sessionId.slice(0, 8) })
     : '';
   element('welcome').hidden = Boolean(session.messages.length || session.running);
+  /**
+   * The rows are not disabled for a switch in progress: `select` already ignores a click while one runs, and the
+   * row menu checks its own `blocked` when clicked. Disabling them rebuilt every row twice per switch and dimmed
+   * the whole sidebar for the length of the read — the blink that made a switch look like a reload.
+   */
   sessionListView.render(
     state.sessions,
     session.sessionId,
-    switchBlocked,
+    !state.ready,
     state.sessionsHasMore === true,
     sessionActivity(state),
   );
@@ -599,7 +613,10 @@ function updateJumpButton(): void {
 function childPageOpen(): boolean {
   return document.body.dataset.subagentPage === 'open';
 }
-const sessionPanels = setupSessionPanels(() => state);
+const sessionPanels = setupSessionPanels(
+  () => state,
+  (path) => void workspaceView.open(path),
+);
 
 const questionsView = setupQuestions({
   invoke,
@@ -688,6 +705,10 @@ function paintPending(): void {
   }
   for (const view of new Set([...pending].map((key) => SECTION_VIEWS[key]!))) view();
 }
+// A clicked system notification names the session it was about; the window is already in front by then.
+window.yuantu.subscribeOpenSession?.((sessionId) => {
+  if (state?.session.sessionId !== sessionId) void select({ type: 'load', id: sessionId });
+});
 window.yuantu.subscribe((next, changed) => {
   const first = !state;
   state = next;

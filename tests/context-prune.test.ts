@@ -20,6 +20,8 @@ import {
   worthPruning,
 } from '../packages/core/prune.ts';
 import { recentStart } from '../packages/core/shrink.ts';
+import { contextSeams } from '../packages/core/run-context.ts';
+import { resolveRunLimits } from '../packages/protocol/settings.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { SPILL_DIRECTORY } from '../packages/tools/spill.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
@@ -371,4 +373,27 @@ test('a conversation that is nowhere near the window is left alone', async (t) =
   const result = await agent.run({ sessionId: session.id, prompt: 'Inspect' });
   assert.equal(result.status, 'completed', result.error);
   assert.ok(!body(requests.at(-1)!.messages).includes(PRUNE_MARK));
+});
+
+test('the seams a manual compaction uses are the run’s own, prune included', () => {
+  const limits = resolveRunLimits({});
+  const seams = contextSeams({
+    workspace: '.',
+    sessionId: 's1',
+    calibration: undefined,
+    ...limits,
+  });
+  // Manual `/compact` wrote its own copy of these and never gained `prune`: a compaction a person asked for
+  // replayed whole oversized results that the run's own rounds would have cut.
+  assert.deepEqual(seams.prune, {
+    policy: {
+      thresholdChars: limits.toolResultPruneThresholdChars,
+      headChars: limits.toolResultPruneHeadChars,
+      tailChars: limits.toolResultPruneTailChars,
+    },
+    keepRecent: limits.toolResultKeepRecent,
+  });
+  assert.equal(seams.prunePercent, limits.contextShrinkPercent);
+  assert.equal(seams.shrink?.policy.tokens, limits.toolResultShrinkTokens);
+  assert.equal(seams.shrinkPercent, limits.contextShrinkPercent);
 });

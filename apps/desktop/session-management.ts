@@ -81,16 +81,25 @@ export function setupSessionManagement(actions: {
       titleInput.select();
     } else el('session-dialog-cancel').focus();
   };
+  /** Archiving needs no confirmation: nothing is lost, and the settings page brings it back. */
+  const archive = () => {
+    if (!target || blocked) return;
+    const { id } = target;
+    hideMenu();
+    void actions.select({ type: 'archiveSession', id, archived: true });
+  };
   for (const [kind, label] of [
     ['rename', t('session.rename')],
+    ['archive', t('session.archive')],
     ['delete', t('session.delete')],
   ] as const) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
     button.setAttribute('role', 'menuitem');
+    button.dataset.action = kind;
     if (kind === 'delete') button.className = 'danger-text';
-    button.addEventListener('click', () => open(kind));
+    button.addEventListener('click', () => (kind === 'archive' ? archive() : open(kind)));
     menu.append(button);
   }
   el('session-dialog-cancel').addEventListener('click', () => {
@@ -201,7 +210,8 @@ export function setupSessionManagement(actions: {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'session-more';
-      button.textContent = '⋯';
+      button.innerHTML =
+        '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="3.5" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="12.5" cy="8" r="1.25"/></svg>';
       button.disabled = disabled;
       button.dataset.menuSessionId = item.id;
       button.setAttribute(

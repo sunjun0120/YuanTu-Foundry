@@ -35,7 +35,11 @@ function node<K extends keyof HTMLElementTagNameMap>(
   return value;
 }
 
-export function setupSessionPanels(getState: () => CarrierSnapshot | null): {
+export function setupSessionPanels(
+  getState: () => CarrierSnapshot | null,
+  /** Open a presented file in the workspace preview; absent in a harness that has no preview. */
+  open?: (path: string) => void,
+): {
   todos(todos: TodoItem[]): void;
   goal(goal: Goal | null): void;
   deliverables(files: PresentedFile[]): void;
@@ -180,7 +184,23 @@ export function setupSessionPanels(getState: () => CarrierSnapshot | null): {
     required('deliverables').replaceChildren(
       ...files.map((file) => {
         const item = node('li', '', 'deliverable');
-        item.append(node('span', file.path, 'deliverable-path'));
+        /**
+         * A presented file is something the run claims it produced; a path a person cannot act on makes them go
+         * looking for it by hand. Where a preview exists, the path is the affordance — it opens that file in the
+         * workspace panel, which is also the surface that refuses anything outside the workspace.
+         */
+        const path = node('span', file.path, 'deliverable-path');
+        if (open) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = file.path;
+          button.className = 'deliverable-path deliverable-open';
+          button.translate = false;
+          button.title = t('ui.openDeliverable');
+          button.setAttribute('aria-label', `${t('ui.openDeliverable')}: ${file.path}`);
+          button.addEventListener('click', () => open(file.path));
+          item.append(button);
+        } else item.append(path);
         if (file.description)
           item.append(
             document.createTextNode(' — '),

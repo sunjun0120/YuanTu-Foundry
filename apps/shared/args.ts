@@ -17,6 +17,8 @@ export interface Options {
   /** Path to a JSON completion contract, read and normalized before any model request is made. */
   completionSpec?: string;
   json: boolean;
+  /** Report what a maintenance command would do without doing it (`workspace-gc`, `sandbox-recover`). */
+  dryRun?: boolean;
   allowWrite: boolean;
   allowCommand: boolean;
   maxContextChars?: number;
@@ -259,6 +261,7 @@ export function parseArgs(
     }
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--json') options.json = true;
+    else if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--allow-write') options.allowWrite = true;
     else if (arg === '--allow-command') options.allowCommand = true;
     else if (arg === '--no-subagents') options.subagents = false;

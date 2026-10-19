@@ -174,20 +174,21 @@ test('two allocations hold the same baseline in different directories', async (t
   );
 });
 
-test('a stored file changed after one allocation used it is refused by the next', async (t) => {
-  // Later allocations of a snapshot skip re-hashing stored bytes an earlier one already checked; that shortcut must
-  // end the moment the stored file changes, or a second child would receive bytes nobody froze.
+test('a manifest whose blobs were swapped fills nothing a child could mistake for the baseline', async (t) => {
+  // A format-4 manifest names each file's Git blob, and the blob id is not part of the snapshot's identity (the
+  // digest is over paths and contents). So a manifest edited to point a path at another file's blob still reads
+  // back; what must stop it is the content check on the way into the worktree.
   const harness = await fixture(t);
   const identity = (await repositoryIdentity(harness.root))!;
-  const manifest = (await readManifest(identity.repositoryRoot, harness.snapshotId))!;
-  const entry = manifest.files.find((candidate) => candidate.path === 'same.txt')!;
-  const stored = path.join(
+  const manifestFile = path.join(
     snapshotMetadataRoot(identity.repositoryRoot, harness.snapshotId),
-    'files',
-    entry.sha256.slice(0, 32),
+    'manifest.json',
   );
-  // Same length as 'dirty base\n', so only the content and the file's times differ.
-  await writeFile(stored, 'tampered!!\n');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  assert.ok(manifest.files.length >= 2);
+  const [first, second] = manifest.files;
+  [first.oid, second.oid] = [second.oid, first.oid];
+  await writeFile(manifestFile, JSON.stringify(manifest));
   await assert.rejects(
     harness.manager.allocate({
       parentSessionId: harness.parentSessionId,
@@ -529,6 +530,8 @@ test('a manifest that names a path outside the worktree allocates nothing and wr
   // Format 2 is not digest-named, so only the entry checks stand between this path and the write. A worktree
   // lives at `<root>/.yuantu/worktrees/<id>`, so three levels up is the user's own repository root.
   manifest.format = 2;
+  // Format 2 entries name no blob: the bytes travel embedded.
+  for (const entry of manifest.files) delete entry.oid;
   manifest.files.push({
     path: '../../../escaped-proof.txt',
     mode: '100644',

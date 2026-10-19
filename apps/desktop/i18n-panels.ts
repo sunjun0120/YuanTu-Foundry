@@ -7,10 +7,29 @@ import { carrierMessages } from './i18n-carrier.ts';
  */
 /** Management panels: retained workspaces, carrier errors, backups, upgrades, background tasks, MCP and the first settings groups. */
 export const panelMessages: Record<string, [string, string]> = {
-  'orphans.title': ['保留的工作区', 'Retained workspaces'],
+  'archived.title': ['已归档会话', 'Archived sessions'],
+  'archived.note': [
+    '归档的会话不在侧栏显示，消息和工作区都保留。可在这里取消归档，或彻底删除。列表最多显示最近 500 个。',
+    'Archived sessions are hidden from the sidebar; their messages and workspaces are kept. Unarchive or delete them here. At most the newest 500 are listed.',
+  ],
+  'archived.loading': ['正在读取已归档会话…', 'Loading archived sessions…'],
+  'archived.empty': ['当前项目没有已归档的会话。', 'No archived sessions in this project.'],
+  'archived.at': ['归档于 {time}', 'Archived {time}'],
+  'archived.unarchive': ['取消归档', 'Unarchive'],
+  'archived.delete': ['删除', 'Delete'],
+  'archived.confirmDelete': ['确认删除', 'Confirm delete'],
+  'archived.deleteConfirm': [
+    '将删除“{title}”的消息、图片和文件撤销记录，无法恢复。',
+    'Messages, images, and file undo records for “{title}” will be deleted permanently.',
+  ],
+  'archived.failed': [
+    '操作未完成：会话正在运行或正在处理其他操作，请稍后重试。',
+    'Not done: a session is running or another operation is in progress. Try again shortly.',
+  ],
+  'orphans.title': ['已删除会话留下的工作区', 'Workspaces left by deleted sessions'],
   'orphans.note': [
-    '会话删除后保留的隔离目录和恢复记录。归档后可清理目录，已保存的源码可恢复。操作遵循当前会话选择的权限；没有当前会话时使用项目默认权限。',
-    'Isolated directories and recovery records retained after session deletion. Archive before removing a directory; preserved source files can be restored. Operations follow the selected session permissions, or project defaults when no session is selected.',
+    '子代理在隔离目录中工作、而其会话已被删除时，目录和恢复记录会留在这里。归档后可清理目录，已保存的源码可恢复。操作遵循当前会话选择的权限；没有当前会话时使用项目默认权限。',
+    'When a sub-agent worked in an isolated directory and its session was deleted, the directory and recovery records stay here. Archive before removing a directory; preserved source files can be restored. Operations follow the selected session permissions, or project defaults when no session is selected.',
   ],
   'orphans.refresh': ['刷新列表', 'Refresh list'],
   'orphans.loading': ['正在读取或处理工作区…', 'Loading or updating workspaces…'],
@@ -71,8 +90,6 @@ export const panelMessages: Record<string, [string, string]> = {
   'general.fontSmall': ['小', 'Small'],
   'general.fontMedium': ['标准', 'Standard'],
   'general.fontLarge': ['大', 'Large'],
-  'general.saving': ['正在保存…', 'Saving...'],
-  'general.saved': ['通用设置已保存。', 'General settings saved.'],
   'background.title': ['后台任务', 'Background tasks'],
   'background.runningCount': ['{count} 个后台任务运行中', '{count} background task(s) running'],
   'background.totalCount': ['{count} 个后台任务', '{count} background task(s)'],
@@ -188,11 +205,15 @@ export const panelMessages: Record<string, [string, string]> = {
   'general.appearance': ['外观', 'Appearance'],
   'general.appearanceNote': ['选择应用的明暗外观。', 'Choose the application appearance.'],
   'general.fontSize': ['字号', 'Text size'],
+  'general.notifications': ['系统通知', 'System notifications'],
+  'general.notificationsNote': [
+    '窗口不在前台时，会话完成或需要你审批、回答时弹出系统通知。',
+    'When the window is in the background, notify when a session finishes or needs your approval or answer.',
+  ],
   'general.fontSizeNote': [
     '调整聊天内容和操作界面的基础字号。',
     'Adjust the base size of chat and interface text.',
   ],
-  'general.save': ['保存设置', 'Save settings'],
   'sandboxSetup.title': ['Windows 增强隔离', 'Windows enhanced isolation'],
   'sandboxSetup.exitUnconfirmed': [
     '初始化尚未结束，清理状态未确认。重新打开应用后请检查增强隔离状态。',

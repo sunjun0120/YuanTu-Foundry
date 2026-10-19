@@ -59,6 +59,8 @@ export class SessionCompletion {
     let planId: string | undefined;
     let planHash: string | undefined;
     let goalObjective: string | undefined;
+    let baselines: CompletionRecord['baselines'];
+    let baselinesContract: string | undefined;
     for (const row of rows) {
       let data: Record<string, unknown>;
       try {
@@ -92,7 +94,13 @@ export class SessionCompletion {
       if (typeof data.planId === 'string') planId = data.planId;
       if (typeof data.planHash === 'string') planHash = data.planHash;
       if (typeof data.goalObjective === 'string') goalObjective = data.goalObjective;
+      // Images belong to the contract that recorded them; a later contract in the same session must not inherit them.
+      if (data.baselines && typeof data.baselines === 'object' && !Array.isArray(data.baselines)) {
+        baselines = data.baselines as CompletionRecord['baselines'];
+        baselinesContract = contractId;
+      }
     }
+    if (baselinesContract !== contractId) baselines = undefined;
     if (!contractId || !summary) return null;
     if (!definition) {
       // A contract whose creating record is missing is reported as a contract with an empty definition rather
@@ -127,6 +135,7 @@ export class SessionCompletion {
       ...(planId === undefined ? {} : { planId }),
       ...(planHash === undefined ? {} : { planHash }),
       ...(goalObjective === undefined ? {} : { goalObjective }),
+      ...(baselines === undefined ? {} : { baselines }),
     };
   }
 

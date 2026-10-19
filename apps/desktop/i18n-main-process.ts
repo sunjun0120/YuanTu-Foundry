@@ -8,6 +8,11 @@ export const mainProcessMessages: Record<string, [string, string]> = {
   'ui.settingsRequestInvalid': ['无效的通用设置请求', 'Invalid interface settings request'],
   'ui.settingsInvalid': ['无效的通用设置', 'Invalid interface settings'],
   'desktop.quitting': ['桌面正在退出。', 'The desktop is shutting down.'],
+  'notify.done': ['已完成', 'Finished'],
+  'notify.failed': ['运行出错', 'Run failed'],
+  'notify.approval': ['等待你的审批', 'Waiting for your approval'],
+  'notify.question': ['等待你的回答', 'Waiting for your answer'],
+  'notify.waitingBody': ['{title}：{count} 项待处理', '{title}: {count} waiting'],
   'desktop.startWithNode': [
     '请通过 npm run desktop 启动，或指定真实 Node 24 的 YUANTU_NODE_PATH。',
     'Start this with `npm run desktop`, or point YUANTU_NODE_PATH at a real Node 24.',

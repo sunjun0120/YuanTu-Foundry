@@ -56,27 +56,24 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 
 这些问题是在盘点时发现的，和多会话改动直接相关，建议在实现锁之前或同时处理。
 
-### 4.1 调度器触发的验收会在其他会话运行时失败（很可能是 bug）
+### 4.1 调度器触发的验收会在其他会话运行时失败（已修复）
 
-`main.ts` 的调度器回调在 `pendingApproval` 已批准、处于 `acceptance` 阶段时，会调用 `ctx.dispatch('task.verify', …)`。
-调度器之前问的是 `canRun(sessionId)`，即"有空槽且本会话空闲"。但 `task.verify` 自己检查的是
-`ctx.active.size`：只要**别的**会话在运行，它就抛出 `Host is busy; wait before verifying`。
+`task.verify` 现在只检查本会话与执行目录的 `session` + `root` 独占锁，不再看全局 `ctx.active.size`；
+调度器在其他会话运行时走验收分支不会再被误判为 Host 忙。锁表把“同一目录的写”与“别的会话在跑”分开，
+与第 5 节的设计一致。
 
-在 `YUANTU_HOST_MAX_RUNS >= 2` 时，这条路径会被当作一次失败计入调度器的失败退避。
-按本设计改成"会话 + 执行目录"锁后，这个问题自然消失；在那之前，至少应让调度器在
-`ctx.active.size > 0` 时不要走验收分支。
+### 4.2 验收与撤销使用会话的执行目录（已修复）
 
-### 4.2 验收与撤销用的是项目目录，而不是会话的执行目录（待确认）
+`task.verify`、`task.confirm` 和 `changes.undo` 现在都用 `executionRoot(ctx, sessionId)` 作为
+`fileClaims`、`verifyTaskAcceptance` 与 `undoFileChange` 的根；`run.start` 的待处理文件对账也用
+`ActiveRun.root`，手工压缩的 spill 目标同样跟随执行目录。这与 baseline 采集、`workspace.apply` 的
+“会话在哪个目录工作，就在哪个目录验收/撤销”一致：对 `worktree` 绑定的会话，检查和改写都落在它自己的树里。
 
-`task.verify`、`task.confirm` 把 `ctx.workspace` 传给 `verifyTaskAcceptance`，`changes.undo` 把 `ctx.workspace`
-传给 `undoFileChange`。而 `workspace.apply` 用的是 `ctx.store.workspaceBinding(sessionId).executionRoot`。
-对 `worktree` 模式的会话，两者不同。需要确认这是有意为之（比如验收只针对已导入项目目录的结果），
-还是遗漏。这也决定了第 5 节里这几个操作该锁哪个目录。
+### 4.3 `manualOperation` 单槽位（已修复）
 
-### 4.3 `manualOperation` 只有一个槽位
-
-`ctx.manualOperation` 是单个对象，后台唤醒用 `!ctx.manualOperation` 判断能否启动。
-锁拆分后，可能有多个手动操作同时进行，它需要变成按会话的映射（或从锁表推导）。
+`HostContext.manualOperations` 现为 `Set<ManualOperation>`，每个操作带自己的 `sessionId` 和
+`AbortController`；`withLocks` 在请求声明 `operation` 时注册，`finally` 移除，shutdown/Stop 按会话中止。
+后台唤醒不再用“有没有一个手动操作”判断全局，而是按会话与锁判断。
 
 ## 5. 设计
 

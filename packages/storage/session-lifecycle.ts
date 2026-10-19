@@ -8,7 +8,7 @@ import { hashesIn } from './session-blobs.ts';
 const BLOB_CANDIDATE_BATCH = 200;
 
 /**
- * What a person may do to a session *after* it exists: rename it, let a model name it, and delete it.
+ * What a person may do to a session *after* it exists: rename it, let a model name it, archive it, and delete it.
  *
  * All three mutate something a run may be using, so all three ask the same question first — `assertMutable`
  * refuses a session with an active run, or one whose file restoration is in flight, because both are cases where
@@ -72,6 +72,19 @@ export class SessionLifecycle {
         .prepare("UPDATE sessions SET title=?,title_source='manual' WHERE id=?")
         .run(title.trim(), id);
       return this.port.get(id);
+    });
+  }
+  /**
+   * Archive a session, or bring it back. Nothing in it is touched: archiving only takes it out of the sidebar's
+   * list, so the same `assertMutable` guard as a rename applies — a running session stays where its run is seen.
+   */
+  setArchived(id: string, archived: boolean): Session {
+    return this.port.transaction(() => {
+      this.assertMutable(id);
+      const archivedAt = archived ? new Date().toISOString() : null;
+      this.port.db.prepare('UPDATE sessions SET archived_at=? WHERE id=?').run(archivedAt, id);
+      // `get` leaves the column out (only the list reads it), so the answer carries it explicitly.
+      return { ...this.port.get(id), archivedAt };
     });
   }
   /**

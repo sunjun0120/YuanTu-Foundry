@@ -260,6 +260,33 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Nothing is written before approval, and the change check runs again when execution starts.',
   ],
   'plan.rejectedHint': ['计划已被拒绝，可重新制定。', 'The plan was rejected; you can plan again.'],
+  'verification.summary': ['验收（可选）', 'Verification (optional)'],
+  'verification.objective': ['验收目标', 'Objective'],
+  'verification.objectivePlaceholder': ['默认使用本轮请求', 'Defaults to this request'],
+  'verification.commands': [
+    '验收命令（每行一条，退出码 0 通过）',
+    'Verification commands (one per line; exit code 0 passes)',
+  ],
+  'verification.commandsPlaceholder': ['例如：npm test', 'e.g. npm test'],
+  'verification.inputs': [
+    '监测路径（逗号分隔，可留空）',
+    'Monitored paths (comma separated, optional)',
+  ],
+  'verification.inputsPlaceholder': ['例如：src/, package.json', 'e.g. src/, package.json'],
+  'verification.hint': [
+    '带验收的请求结束时才会报告“验收通过”；监测路径留空时不会检测验收后的文件变化。',
+    'A request with verification is reported verified only at the end; with no monitored path, later file changes are not checked.',
+  ],
+  'verification.needCommand': [
+    '验收至少需要一条命令。',
+    'Verification needs at least one command.',
+  ],
+  'verification.tooMany': ['验收命令最多 32 条。', 'At most 32 verification commands.'],
+  'verification.defaultObjective': ['本轮请求', 'This request'],
+  'verification.busy': [
+    '运行中不能启动新的验收；请等本轮结束后再发送。',
+    'A new verification cannot start while a run is active; wait for this turn to end.',
+  ],
   'plan.discard': ['放弃这份计划', 'Discard this plan'],
   /**
    * The one action a *planning* row needs, now that such a row keeps the session in plan mode.
@@ -437,7 +464,6 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.sessionShort': ['会话 {id}', 'Session {id}'],
   'ui.loadMoreSessions': ['加载更早的会话', 'Show older sessions'],
   'ui.sessionRunning': ['运行中', 'Running'],
-  'ui.sessionWaiting': ['{count} 项待处理', '{count} waiting'],
   'ui.sessionWaitingLabel': [
     '该会话有 {count} 项审批或提问等待处理，打开会话后处理',
     'This session has {count} approvals or questions waiting; open it to answer',
