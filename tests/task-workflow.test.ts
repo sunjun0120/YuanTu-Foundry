@@ -385,3 +385,43 @@ test('task verification refuses a command acceptance denied by permission policy
   assert.equal(verified.attempt.verification?.passed, false);
   await assert.rejects(access(outside));
 });
+
+test('Stop cancels a manual verification that is still running its checks', async (t) => {
+  const f = await fixture(t);
+  // The check sleeps far longer than this test may take; only cancellation can end it in time.
+  const task = await f.create([
+    {
+      description: 'A slow check',
+      met: false,
+      check: {
+        id: 'slow',
+        kind: 'command',
+        command: process.execPath,
+        args: ['-e', 'setTimeout(() => {}, 60000)'],
+      },
+    },
+  ]);
+  await f.client.request('sandbox.set', { sessionId: f.sessionId, mode: 'host' });
+  await f.client.request('permission.update', {
+    sessionId: f.sessionId,
+    policy: { version: 1, rules: [{ effect: 'allow', kind: 'command' }] },
+  });
+  const started = Date.now();
+  const verifying = f.client.request('task.verify', { sessionId: f.sessionId, taskId: task.id });
+  const outcome = verifying.then(
+    () => 'finished',
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  // Let the check's process start before stopping it.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const cancelled = await f.client.request('run.cancel', { sessionId: f.sessionId });
+  assert.equal(cancelled.cancelled, true, 'Stop did not see the manual verification');
+  assert.notEqual(await outcome, 'finished');
+  assert.ok(Date.now() - started < 20_000, 'the verification ran on after Stop');
+  const attempts = await f.client.request('task.attempts', {
+    sessionId: f.sessionId,
+    taskId: task.id,
+  });
+  assert.equal(attempts.at(-1)?.kind, 'verify');
+  assert.equal(attempts.at(-1)?.status, 'blocked');
+});

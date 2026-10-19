@@ -368,6 +368,8 @@ function renderComposerState(): void {
 }
 function render(): void {
   if (!state) return;
+  // A full paint draws whatever pushes were waiting for the next frame.
+  pendingPaint = undefined;
   const session = state.session;
   workspaceMaintenance.update(state);
   // Every panel in a slot renders here, in the order the slot decides — the built-ins included. Nothing below
@@ -493,7 +495,12 @@ function render(): void {
   subagentView.update(session.subagents);
   transcriptView.updateRunning();
   element('tools').hidden = true;
-  const nextApprovalKey = JSON.stringify([session.approvals, [...approvalBusy], locale()]);
+  // An approval does not change once raised, so its id stands for it: the key no longer serializes every diff.
+  const nextApprovalKey = JSON.stringify([
+    session.approvals.map((item) => item.id),
+    [...approvalBusy],
+    locale(),
+  ]);
   if (nextApprovalKey !== approvalKey) {
     approvalKey = nextApprovalKey;
     element('approvals').replaceChildren(
@@ -663,6 +670,24 @@ const SECTION_VIEWS: Partial<Record<keyof CarrierSnapshot, () => void>> = {
   taskAttempts: renderTasks,
   taskSteps: renderTasks,
 };
+/**
+ * Sections pushed since the last paint, drawn once per frame: `'all'` when one of them needs the full `render()`.
+ *
+ * `state` follows every push as it arrives, so a click or a delta in between reads the newest one; only the
+ * drawing waits. A burst of publishes — a tool finishing as the next starts — used to redraw the page per publish.
+ * The timer backs the frame callback up, since a hidden window may not get frames.
+ */
+let pendingPaint: Set<keyof CarrierSnapshot> | 'all' | undefined;
+function paintPending(): void {
+  const pending = pendingPaint;
+  pendingPaint = undefined;
+  if (!pending || !state) return;
+  if (pending === 'all') {
+    render();
+    return;
+  }
+  for (const view of new Set([...pending].map((key) => SECTION_VIEWS[key]!))) view();
+}
 window.yuantu.subscribe((next, changed) => {
   const first = !state;
   state = next;
@@ -670,12 +695,23 @@ window.yuantu.subscribe((next, changed) => {
   // back and rebuilt the session" is the more useful of the two to leave on screen. Without this the window
   // recovered silently and kept an error banner from the request that died with the Host.
   if (state.recovery) localError = null;
-  // A bridge that names no sections (a test double, an older preload) means "anything may have changed".
-  if (first || !changed?.length || !changed.every((key) => SECTION_VIEWS[key])) {
+  // The first state paints at once: there is nothing on screen yet to keep.
+  if (first) {
     render();
     return;
   }
-  for (const view of new Set(changed.map((key) => SECTION_VIEWS[key]!))) view();
+  const scheduled = pendingPaint !== undefined;
+  // A bridge that names no sections (a test double, an older preload) means "anything may have changed".
+  if (pendingPaint === 'all' || !changed?.length || !changed.every((key) => SECTION_VIEWS[key]))
+    pendingPaint = 'all';
+  else {
+    const sections: Set<keyof CarrierSnapshot> = pendingPaint ?? new Set();
+    for (const key of changed) sections.add(key);
+    pendingPaint = sections;
+  }
+  if (scheduled) return;
+  requestAnimationFrame(paintPending);
+  setTimeout(paintPending, 50);
 });
 window.yuantu.subscribeDelta((delta) => {
   liveView.delta(delta);

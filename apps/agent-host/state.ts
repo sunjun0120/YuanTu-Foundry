@@ -19,12 +19,30 @@ import type { HostLaunch } from './cli.ts';
 import type { HostCarrier } from './carrier.ts';
 import type { TaskScheduler } from './scheduler.ts';
 import type { HostServices } from './services.ts';
+import { canonicalKey } from '../../packages/platform/workspace-paths.ts';
+import { ResourceLocks, type Lease, type LockClaim, type LockMode } from './resource-locks.ts';
 
 /** One admitted run: how to stop it, the result it will settle to, and the agent it is driving. */
 export interface ActiveRun {
   controller: AbortController;
   task?: Promise<RunResult>;
   agent?: Agent;
+  /**
+   * The directory the run executes in, read once at admission so the claims it implies do not need the store.
+   * Absent on an entry made without admission (tests that reserve a slot directly); the claim then reads it.
+   */
+  root?: string;
+}
+
+/**
+ * An exclusive operation outside a run, cancellable by its owning session or by shutdown.
+ *
+ * `sessionId` is absent for an operation addressed by workspace binding (archive, restore or remove of an
+ * orphan) — it has no session to be cancelled from, but shutdown still has to reach it.
+ */
+export interface ManualOperation {
+  sessionId?: string;
+  controller: AbortController;
 }
 
 /** An approval the run is waiting on, keyed by the id the client answers with. */
@@ -129,19 +147,15 @@ export interface HostContext {
   tasks: Set<Promise<void>>;
   closing: boolean;
   /**
-   * True while an exclusive operation (undo, plan approval, workspace import, compaction …) holds the Host.
+   * Locks held by operations outside a run (undo, verification, import, compaction …).
    *
-   * It is the one Host-wide barrier left: those operations rewrite state several sessions share, so they wait for
-   * every run to finish and no run is admitted while one is in progress.
+   * Runs take no lease here: the claims a run implies are derived from `active` (see `runClaims`), so a run cannot
+   * forget to release them. Each operation claims only what it touches — its session, the directory it writes, a
+   * workspace binding — rather than the whole Host; `docs/host-resource-locks.md` has the table.
    */
-  restoring: boolean;
-  /**
-   * An exclusive operation outside a run, cancellable by its owning session or by shutdown.
-   *
-   * `sessionId` is absent for an operation addressed by workspace binding (archive, restore or remove of an
-   * orphan) — it has no session to be cancelled from, but shutdown still has to reach it.
-   */
-  manualOperation: { sessionId?: string; controller: AbortController } | undefined;
+  locks: ResourceLocks;
+  /** Operations outside a run that Stop and shutdown can reach. Several may run at once, in different sessions. */
+  manualOperations: Set<ManualOperation>;
   /** Sessions a background wake is currently running for. Per session: wakes of different sessions may overlap. */
   waking: Set<string>;
   /** A wake pass is already queued for this microtask; Host-wide because the pass itself scans every session. */
@@ -255,8 +269,8 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     requestIds: new Set<string>(),
     tasks: new Set<Promise<void>>(),
     closing: false,
-    restoring: false,
-    manualOperation: undefined,
+    locks: new ResourceLocks(),
+    manualOperations: new Set<ManualOperation>(),
     waking: new Set<string>(),
     wakeQueued: false,
     automaticReady: false,
@@ -297,32 +311,136 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
   return state;
 }
 
+/** The Host as a whole. Every run and operation holds it shared; only orphan maintenance takes it alone. */
+export const hostClaim = (mode: LockMode): LockClaim => ({ key: 'host', mode });
+/** One session. Always exclusive: a session runs one thing at a time, whether a run or an operation. */
+export const sessionClaim = (sessionId: string): LockClaim => ({
+  key: `session:${sessionId}`,
+  mode: 'exclusive',
+});
+/** One execution directory, by canonical path so two spellings of the same directory are one key. */
+export const rootClaim = (root: string, mode: LockMode): LockClaim => ({
+  key: `root:${canonicalKey(root)}`,
+  mode,
+});
+/** One workspace binding. */
+export const bindingClaim = (bindingId: string): LockClaim => ({
+  key: `binding:${bindingId}`,
+  mode: 'exclusive',
+});
+
+/** The directory `sessionId` executes in; the project itself when the binding cannot be read. */
+export function executionRoot(ctx: HostContext, sessionId: string): string {
+  try {
+    return ctx.store.workspaceBinding(sessionId).executionRoot;
+  } catch {
+    return ctx.workspace;
+  }
+}
+
 /**
- * Whether the Host has room for one more run at all: no exclusive operation holds it and a slot is free.
+ * What a run of `sessionId` holds: the Host and its directory shared, its session alone.
+ *
+ * Shared on the directory is what lets two sessions on the same project run together, exactly as they did before
+ * this table existed; an operation that must not see the directory change under it is what takes it alone.
+ */
+export function runClaims(ctx: HostContext, sessionId: string, root?: string): LockClaim[] {
+  return [
+    hostClaim('shared'),
+    sessionClaim(sessionId),
+    rootClaim(root ?? executionRoot(ctx, sessionId), 'shared'),
+  ];
+}
+
+/** What an operation that checks and then writes files in `root` for `sessionId` holds. */
+export function fileClaims(sessionId: string, root: string): LockClaim[] {
+  return [hostClaim('shared'), sessionClaim(sessionId), rootClaim(root, 'exclusive')];
+}
+
+function heldByRuns(ctx: HostContext): LockClaim[] {
+  return [...ctx.active].flatMap(([sessionId, run]) => runClaims(ctx, sessionId, run.root));
+}
+
+/** The held claim `claims` collides with, counting both leases and active runs. */
+export function lockConflict(
+  ctx: HostContext,
+  claims: readonly LockClaim[],
+): LockClaim | undefined {
+  return ctx.locks.conflict(claims, heldByRuns(ctx));
+}
+
+/** Refuse with `busy` unless every claim is free right now; for operations that finish without an await. */
+export function assertUnlocked(ctx: HostContext, claims: readonly LockClaim[], busy: string): void {
+  if (lockConflict(ctx, claims)) throw new Error(busy);
+}
+
+/**
+ * Take `claims` now, or refuse with `busy`; the caller releases the lease in its own `finally`.
+ *
+ * For the handlers whose existing `try`/`finally` already brackets the work; everything else uses `withLocks`.
+ */
+export function acquireLocks(ctx: HostContext, claims: readonly LockClaim[], busy: string): Lease {
+  const lease = ctx.locks.tryAcquire(claims, heldByRuns(ctx));
+  if (!lease) throw new Error(busy);
+  return lease;
+}
+
+/**
+ * Run `body` holding `claims`, or refuse with `busy`.
+ *
+ * The lease is taken synchronously, before the body's first await, for the same reason `run.start` reserves its
+ * slot first: a check-then-set across an await would let a second request pass the same check. With `operation`,
+ * the body is also registered as a manual operation, so Stop for that session and shutdown can abort it through
+ * the signal it is handed.
+ */
+export async function withLocks<T>(
+  ctx: HostContext,
+  request: { claims: readonly LockClaim[]; busy: string; operation?: { sessionId?: string } },
+  body: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const lease = acquireLocks(ctx, request.claims, request.busy);
+  const controller = new AbortController();
+  const manual = request.operation ? { ...request.operation, controller } : undefined;
+  if (manual) ctx.manualOperations.add(manual);
+  try {
+    return await body(controller.signal);
+  } finally {
+    if (manual) ctx.manualOperations.delete(manual);
+    lease.release();
+  }
+}
+
+/**
+ * Whether the Host has room for one more run at all: nothing holds the Host alone and a slot is free.
  *
  * Automatic starters (the scheduler, background wakes) ask this before they spend anything on a candidate, so a
  * full Host leaves due work waiting rather than claiming it and then failing admission.
  */
 export function runSlotFree(ctx: HostContext): boolean {
-  return !ctx.restoring && ctx.active.size < ctx.maxActiveRuns;
+  return ctx.active.size < ctx.maxActiveRuns && !lockConflict(ctx, [hostClaim('shared')]);
 }
 
-/** Whether `sessionId` could be admitted now: the Host has room and the session itself is idle. */
+/** Whether `sessionId` could be admitted now: the Host has room and nothing holds what its run would claim. */
 export function sessionCanRun(ctx: HostContext, sessionId: string): boolean {
-  return runSlotFree(ctx) && !ctx.active.has(sessionId);
+  return (
+    runSlotFree(ctx) && !ctx.active.has(sessionId) && !lockConflict(ctx, runClaims(ctx, sessionId))
+  );
 }
 
 /**
  * Why `run.start` for `sessionId` must be refused right now, or `undefined` when it may be admitted.
  *
- * The three refusals are kept apart because they ask different things of the caller: an exclusive operation and a
- * full Host clear on their own, while a busy session clears only when that session's own run ends. Each still
+ * The refusals are kept apart because they ask different things of the caller: a busy session clears only when
+ * that session's own run or operation ends, while a held directory and a full Host clear on their own. Each still
  * says "already has an active run", the phrase clients have matched on since the Host was globally serial.
  */
 export function admissionRefusal(ctx: HostContext, sessionId: string): string | undefined {
-  if (ctx.restoring)
-    return 'This Host already has an active run (an exclusive operation is in progress)';
   if (ctx.active.has(sessionId)) return 'This session already has an active run';
+  const held = lockConflict(ctx, runClaims(ctx, sessionId));
+  if (held)
+    return held.key.startsWith('session:')
+      ? 'This session already has an active run (an exclusive operation is in progress)'
+      : 'This Host already has an active run (an exclusive operation is in progress)';
   if (ctx.active.size >= ctx.maxActiveRuns)
     return ctx.maxActiveRuns === 1
       ? 'This Host already has an active run'

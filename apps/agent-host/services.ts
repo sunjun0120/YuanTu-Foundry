@@ -10,6 +10,7 @@ import { sweepSpills } from '../../packages/tools/spill.ts';
 import { TerminalSessions } from '../../packages/tools/terminal.ts';
 import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
+import { excludeRuntimeState } from '../../packages/workspaces/runtime-exclude.ts';
 import type { Options } from '../shared/args.ts';
 import { loadHookRegistry } from '../shared/hooks.ts';
 import { openStore } from '../shared/runtime.ts';
@@ -57,6 +58,10 @@ export function spillOwnerExists(store: Pick<SessionStore, 'get'>): (sessionId: 
 
 export async function openHostServices(options: Options, workspace: string): Promise<HostServices> {
   const store = openStore(options);
+  // The store has just created `<workspace>/.yuantu`; keep it out of the user's `git status` (best effort).
+  await excludeRuntimeState(workspace).catch((error: unknown) =>
+    console.error('agent-host: could not exclude .yuantu from Git', error),
+  );
   store.reconcileInterruptedRuns(workspace);
   store.recoverInterruptedTasks(workspace);
   // Sub-agent sessions are hidden from the session list and have no tasks, so a run they left behind

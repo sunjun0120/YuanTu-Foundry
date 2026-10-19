@@ -594,3 +594,43 @@ test('the window receives only changed snapshot sections and never an older one'
     ['background', 'session', 'tasks'],
   );
 });
+
+test('a session that grew travels as its new messages and is rebuilt whole by the mirror', () => {
+  const sender = new SnapshotSender();
+  const mirror = new SnapshotMirror();
+  const m1 = Object.freeze({ role: 'user', content: 'one' });
+  const m2 = Object.freeze({ role: 'assistant', content: 'two' });
+  const m3 = Object.freeze({ role: 'tool', content: 'three' });
+  const snapshot = (messages: unknown[]) =>
+    ({ session: Object.freeze({ sessionId: 's1', messages }) }) as unknown as CarrierSnapshot;
+
+  mirror.apply(sender.diff(snapshot([m1])));
+  const grown = sender.diff(snapshot([m1, m2]));
+  const entry = grown.sections.session!;
+  assert.deepEqual(entry.messages?.tail, [m2]);
+  assert.equal(entry.messages?.keep, 1);
+  assert.deepEqual((entry.value as CarrierSnapshot['session']).messages, []);
+  assert.deepEqual(mirror.apply(grown).state.session.messages, [m1, m2]);
+
+  // A tail that overtakes the session it was cut against waits for it instead of being applied to the wrong one.
+  const reply = sender.diff(snapshot([m1, m3]));
+  const push = sender.diff(snapshot([m1, m3, m2]));
+  assert.deepEqual(mirror.apply(push).changed, []);
+  const applied = mirror.apply(reply);
+  assert.deepEqual(applied.changed, ['session']);
+  assert.deepEqual(applied.state.session.messages, [m1, m3, m2]);
+
+  // Nothing shared — another session, or older history in front — goes whole.
+  const other = sender.diff(snapshot([m3]));
+  assert.equal(other.sections.session!.messages, undefined);
+  assert.deepEqual(mirror.apply(other).state.session.messages, [m3]);
+});
+
+test('the audit window is compared by reference and not serialized', () => {
+  const sender = new SnapshotSender();
+  const audit = Object.freeze([{ seq: 1 }]);
+  const snapshot = (value: unknown) => ({ audit: value }) as unknown as CarrierSnapshot;
+  assert.ok(sender.diff(snapshot(audit)).sections.audit);
+  assert.deepEqual(sender.diff(snapshot(audit)).sections, {});
+  assert.ok(sender.diff(snapshot(Object.freeze([{ seq: 1 }, { seq: 2 }]))).sections.audit);
+});

@@ -1,6 +1,7 @@
 import type { Acceptance, Task } from '../../packages/protocol/index.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import { locale } from './i18n.ts';
+import { memo } from './renderer-memo.ts';
 import {
   el,
   evidence,
@@ -85,6 +86,7 @@ export function setupTasks(send: (command: CarrierCommand) => Promise<CarrierSna
     busy = false,
     key = '',
     session = '';
+  const tasksKey = memo<string>();
   let edit: { task: Task; form: HTMLFormElement; revision: string } | undefined;
   let schedule: { taskId: string; form: HTMLFormElement; revision: string } | undefined;
   // The unconfirmed ticks belong to the session and task, not to the frame that drew them.
@@ -150,7 +152,9 @@ export function setupTasks(send: (command: CarrierCommand) => Promise<CarrierSna
       (next?.tasks ?? []).map((task) => task.id),
     );
     document.getElementById('tasks-panel')!.hidden = !next?.tasks.length;
-    const newKey = JSON.stringify([next?.tasks, next?.taskAttempts, next?.taskSteps, locale()]);
+    const newKey = tasksKey([next?.tasks, next?.taskAttempts, next?.taskSteps, locale()], () =>
+      JSON.stringify([next?.tasks, next?.taskAttempts, next?.taskSteps, locale()]),
+    );
     if (edit || schedule) {
       const target = edit?.task.id ?? schedule!.taskId;
       const current = next?.tasks.find((t) => t.id === target);

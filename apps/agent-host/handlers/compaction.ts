@@ -7,6 +7,7 @@ import { spillResult } from '../../../packages/tools/spill.ts';
 import { createProvider, readConfig } from '../../../packages/providers/index.ts';
 import { modelInfoFor, resolveConnectionCapacities } from '../../shared/runtime.ts';
 import { ownedSession, required } from '../params.ts';
+import { assertUnlocked, hostClaim, sessionClaim, withLocks } from '../state.ts';
 import type { Handler } from '../dispatch.ts';
 
 /**
@@ -24,7 +25,10 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
   'context.compact': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring) throw new Error('Host is busy; wait before compacting');
+    // A summary rewrites only this session's own context, so only this session has to be idle.
+    const claims = [hostClaim('shared'), sessionClaim(sessionId)];
+    const busy = 'Host is busy; wait before compacting';
+    assertUnlocked(ctx, claims, busy);
     const history = ctx.store.messages(sessionId);
     const covered = ctx.store.contextSurface(sessionId)?.coveredMessages ?? 0;
     const boundary = contextBoundaries(history).at(-1) ?? 0;
@@ -57,10 +61,7 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
           ? 'the last request envelope was recorded with a truncated prompt, so a summary request could not replay it byte for byte'
           : 'no request envelope is recorded for this session, so a summary request could not replay the round it compresses',
       };
-    ctx.restoring = true;
-    const controller = new AbortController();
-    ctx.manualOperation = { sessionId, controller };
-    try {
+    return await withLocks(ctx, { claims, busy, operation: { sessionId } }, async (signal) => {
       // The same defaults the kernel uses, from the same owner (see `packages/protocol/settings.ts`).
       const limits = resolveRunLimits(ctx.options);
       const config = readConfig();
@@ -80,7 +81,7 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
         route,
       );
       const provider = createProvider(config);
-      const capacityFor = await resolveConnectionCapacities(ctx.options, config, controller.signal);
+      const capacityFor = await resolveConnectionCapacities(ctx.options, config, signal);
       const capacity = capacityFor(config.model);
       await prepareContext({
         store: ctx.store,
@@ -93,7 +94,7 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
         protocol: routeInfo.protocol,
         model: routeInfo.model,
         limit: limits.maxContextChars,
-        signal: controller.signal,
+        signal: signal,
         maxOutputTokens: capacity.maxOutputTokens ?? limits.maxOutputTokens,
         maxContextTokens: capacity.contextWindow,
         summaryTimeoutMs: limits.summaryTimeoutMs,
@@ -145,9 +146,6 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
         compacted: true,
         coveredMessages: ctx.store.contextSurface(sessionId)!.coveredMessages,
       };
-    } finally {
-      ctx.manualOperation = undefined;
-      ctx.restoring = false;
-    }
+    });
   },
 };

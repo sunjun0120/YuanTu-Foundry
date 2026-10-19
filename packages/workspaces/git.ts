@@ -779,6 +779,7 @@ export async function writeTree(
   repositoryRoot: string,
   entries: readonly TreeEntry[],
   signal?: AbortSignal,
+  trees?: TreeIdCache,
 ): Promise<string> {
   const root: TreeNode = { files: [], directories: new Map() };
   // Entries that arrive with bytes rather than an id share one blob stream instead of one process each.
@@ -806,7 +807,33 @@ export async function writeTree(
     const blob = entry.blob ?? ids.get(entry)!;
     node.files.push({ name, mode: entry.mode, blob });
   }
-  return await materializeTree(repositoryRoot, root, signal);
+  return await materializeTree(repositoryRoot, root, signal, trees);
+}
+
+/**
+ * Tree ids already written, keyed by the listing they were written from.
+ *
+ * `writeTree` spawns one `git mktree` per directory, in sequence — thousands of processes for a large repository,
+ * every time a worktree child's turn is exported, although a turn usually changes one or two directories. A
+ * directory whose listing is unchanged is the same tree, so its id is reused without a process. The bound keeps a
+ * long-lived Host from holding one entry per directory it has ever seen.
+ */
+export class TreeIdCache {
+  private readonly ids = new Map<string, string>();
+  private readonly limit: number;
+  constructor(limit = 50_000) {
+    this.limit = limit;
+  }
+  get(listing: string): string | undefined {
+    return this.ids.get(listing);
+  }
+  set(listing: string, tree: string): void {
+    if (this.ids.size >= this.limit) this.ids.clear();
+    this.ids.set(listing, tree);
+  }
+  clear(): void {
+    this.ids.clear();
+  }
 }
 
 interface TreeNode {
@@ -818,11 +845,14 @@ async function materializeTree(
   repositoryRoot: string,
   node: TreeNode,
   signal?: AbortSignal,
+  trees?: TreeIdCache,
 ): Promise<string> {
   const lines: string[] = [];
   for (const file of node.files) lines.push(`${file.mode} blob ${file.blob}\t${file.name}`);
   for (const [name, child] of node.directories)
-    lines.push(`040000 tree ${await materializeTree(repositoryRoot, child, signal)}\t${name}`);
+    lines.push(
+      `040000 tree ${await materializeTree(repositoryRoot, child, signal, trees)}\t${name}`,
+    );
   // Sorted by name, which is the order Git writes its own tree objects in and what makes a tree id a function of
   // its contents rather than of the order a walk happened to produce them.
   lines.sort((left, right) => {
@@ -830,15 +860,19 @@ async function materializeTree(
     const b = right.slice(right.indexOf('\t') + 1);
     return a < b ? -1 : a > b ? 1 : 0;
   });
+  const input = `${lines.join('\0')}\0`;
+  const known = trees?.get(input);
+  if (known) return known;
   // `-z`: each record ends in NUL and its name is taken verbatim, so a newline or a leading quote is just a name.
   const output = await runWorkspaceGit(['mktree', '-z'], {
     cwd: repositoryRoot,
-    input: `${lines.join('\0')}\0`,
+    input,
     ...(signal ? { signal } : {}),
   });
   const tree = output.stdout.toString('utf8').trim();
   if (!/^[0-9a-f]{40,64}$/.test(tree))
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Git did not write a tree');
+  trees?.set(input, tree);
   return tree;
 }
 

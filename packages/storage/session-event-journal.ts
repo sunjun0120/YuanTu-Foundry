@@ -178,14 +178,25 @@ export class SessionEventJournal {
    * The transcript is folded from the log, so this is the write-through side of the I8 promise: both are
    * written from a single call, and a divergence here is the only way to see that the two halves of that
    * call stopped agreeing. It is also what a second connection would read, minus the connection.
+   *
+   * `offset` skips the rows a reader already holds: the run-end check reads only what a run added.
    */
-  messagesFromTable(sessionId: string): Message[] {
+  messagesFromTable(sessionId: string, offset = 0): Message[] {
     this.port.get(sessionId);
     this.flush(sessionId);
     return this.port.db
-      .prepare('SELECT body FROM messages WHERE session_id=? ORDER BY seq')
-      .all(sessionId)
+      .prepare('SELECT body FROM messages WHERE session_id=? ORDER BY seq LIMIT -1 OFFSET ?')
+      .all(sessionId, offset)
       .map((row) => this.hydrateMessage(JSON.parse(String(row.body))) as Message);
+  }
+  /** How many `messages` rows the session has on disk, without reading them. */
+  messageRowCount(sessionId: string): number {
+    this.port.get(sessionId);
+    this.flush(sessionId);
+    const row = this.port.db
+      .prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?')
+      .get(sessionId);
+    return Number(row?.count ?? 0);
   }
 
   /**

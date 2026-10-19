@@ -34,6 +34,13 @@ export class SessionChoices {
    */
   private applied = new Map<string, SessionChoice>();
   private showing: string | undefined;
+  /**
+   * A switch failed half way and the first half could not be put back, so nothing here knows the pair in force.
+   *
+   * `view()` refuses while this is set rather than answering with the session's remembered pair: after a sandbox
+   * that moved and an approval policy that did not, that answer is exactly the pair *not* being enforced.
+   */
+  private uncertain = false;
   /** A move in flight for a session; a second state update carrying the same id must not start a second one. */
   private moving: string | undefined;
   private current: Promise<void> | undefined;
@@ -56,6 +63,7 @@ export class SessionChoices {
     this.showing = undefined;
     this.moving = undefined;
     this.current = undefined;
+    this.uncertain = false;
   }
   remember(sessionId: string, choice: SessionChoice): void {
     this.sessions.set(sessionId, choice);
@@ -75,21 +83,47 @@ export class SessionChoices {
    *
    * The cached pair is committed only after both settings succeed. Invalidate it on a failure so a retry
    * reapplies both halves instead of assuming a partly completed update left enforcement unchanged.
+   *
+   * Both halves or neither: when the approval half fails after the sandbox has already moved, the sandbox is put
+   * back to the pair that was in force before. Left as it was, the carrier enforced the new sandbox with the old
+   * approval floor while the chip drew the old preset — from `guarded` to `unconfined`, isolation already gone
+   * under a chip that still said otherwise. When there is nothing known to put back, or putting it back fails too,
+   * the pair is marked unknown (see `uncertain`) and stays so until a later switch succeeds.
    */
   async apply(choice: SessionChoice, sessionId: string | undefined): Promise<void> {
     const target = this.deps.service();
     if (!target) throw new Error('The desktop is not connected to a carrier yet.');
     const prior = sessionId ? this.applied.get(sessionId) : undefined;
+    const before = this.live;
+    let sandboxMoved = false;
     try {
-      if (!prior || prior.sandbox !== choice.sandbox)
+      if (!prior || prior.sandbox !== choice.sandbox) {
         await target.dispatch({ type: 'sandbox', mode: choice.sandbox });
+        sandboxMoved = true;
+      }
       if (!prior || prior.permission !== choice.permission)
         await target.updatePermissionPolicy(permissionPolicyForMode(choice.permission));
     } catch (error) {
       this.live = undefined;
       if (sessionId) this.applied.delete(sessionId);
+      if (sandboxMoved) {
+        let restored = false;
+        if (before)
+          try {
+            await target.dispatch({ type: 'sandbox', mode: before.sandbox });
+            restored = true;
+          } catch (rollback) {
+            console.error(
+              'desktop: could not put the sandbox back after a failed switch',
+              rollback,
+            );
+          }
+        if (restored) this.live = { ...before! };
+        else this.uncertain = true;
+      }
       throw error;
     }
+    this.uncertain = false;
     this.live = { ...choice };
     if (sessionId) this.applied.set(sessionId, { ...choice });
     /**
@@ -131,14 +165,33 @@ export class SessionChoices {
       console.error('desktop: could not apply the session sandbox', error);
     });
   }
+  /** Whether a failed switch left the pair in force unknown; see `uncertain`. */
+  get unknown(): boolean {
+    return this.uncertain;
+  }
+  /**
+   * Leaves the unknown state by applying the session's own pair again, both halves.
+   *
+   * This is what the chip's "read again" means after a failed switch: reading cannot learn which pair the carrier
+   * holds, but writing one known pair makes it known.
+   */
+  async recover(sessionId: string | undefined): Promise<void> {
+    if (!this.uncertain) return;
+    await this.apply(this.choiceFor(sessionId), sessionId);
+  }
   /** Tell the window which pair its session is in, once it is actually in it. */
   push(): void {
+    if (this.uncertain) return;
     const window = this.deps.window();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:presets-view', this.view());
   }
   /** Both knobs as the chip renders them, and which preset (if any) that pair currently is. */
   view(): PermissionPresetView {
+    if (this.uncertain)
+      throw new Error(
+        'A preset switch failed half way and could not be undone, so the sandbox and approval settings in force are unknown. Read them again to reapply this session’s preset.',
+      );
     const sandbox = this.deps.sandbox();
     const choice =
       this.live ??

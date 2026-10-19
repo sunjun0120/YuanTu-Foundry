@@ -11,6 +11,7 @@ import type {
 } from '../protocol/index.ts';
 import type { AgentHostClient } from './host-client.ts';
 import { readDisplayHistory } from './display-history.ts';
+import { deepFreeze } from './freeze.ts';
 import type { InputMode, QueuedInput } from '../core/run-queue.ts';
 import { validateUserInput } from '../protocol/images.ts';
 import type {
@@ -71,6 +72,15 @@ export type {
   SubAgentView,
 } from './session-view.ts';
 
+/** The frozen copy of `value` held in `cache`, made the first time it is asked for. */
+function frozenCopy<T extends object>(cache: WeakMap<T, T>, value: T): T {
+  let frozen = cache.get(value);
+  if (!frozen) {
+    frozen = deepFreeze(structuredClone(value));
+    cache.set(value, frozen);
+  }
+  return frozen;
+}
 export class SessionController {
   private client: AgentHostClient;
   private statisticsBase = emptyStatistics();
@@ -146,6 +156,26 @@ export class SessionController {
   }
   get snapshot(): SessionSnapshot {
     return structuredClone(this.state);
+  }
+  /** Frozen copies of messages already handed out by `frozenSnapshot`, keyed by this controller's own object. */
+  private frozenMessages = new WeakMap<Message, Message>();
+  /** The same for sub-agent cards, which are edited in place: `editSubAgent` drops a card's copy before an edit. */
+  private frozenSubAgents = new WeakMap<SubAgentView, SubAgentView>();
+  /**
+   * The same state as `snapshot`, frozen, with every message shared with the previous call's view.
+   *
+   * A message is never edited once it is in `state.messages` — reads replace the array, events push to it — so
+   * the copy made the first time it was handed out stays right. Cloning the whole transcript (base64 images
+   * included) for every tool call was what a long session paid per publish; this clones only what is new, and a
+   * consumer can tell an unchanged prefix by reference.
+   */
+  get frozenSnapshot(): Readonly<SessionSnapshot> {
+    const { messages, subagents, ...rest } = this.state;
+    const view = structuredClone(rest) as SessionSnapshot;
+    view.messages = messages.map((message) => frozenCopy(this.frozenMessages, message));
+    // A child that streams for minutes grows its card's text; a card left alone is not copied again for it.
+    view.subagents = subagents.map((card) => frozenCopy(this.frozenSubAgents, card));
+    return deepFreeze(view);
   }
   /*
    * Scalar reads that do not clone. `snapshot` deep-copies every message (base64 images included), so a caller
@@ -253,8 +283,14 @@ export class SessionController {
       }
     }
   }
-  private subagents(): SubAgentView[] {
-    return this.state.subagents;
+  /**
+   * The card that matches, about to be edited in place: its frozen copy is dropped so the next `frozenSnapshot`
+   * copies it again. Every edit of a card goes through here; the cards nobody touched stay shared.
+   */
+  private editSubAgent(match: (entry: SubAgentView) => boolean): SubAgentView | undefined {
+    const view = this.state.subagents.find(match);
+    if (view) this.frozenSubAgents.delete(view);
+    return view;
   }
   private publish(): void {
     this.stateRevision++;
@@ -971,7 +1007,9 @@ export class SessionController {
   ): void {
     for (const child of this.state.subagents) {
       const workspace = child.childSessionId ? workspaces.get(child.childSessionId) : undefined;
-      if (workspace) child.workspace = workspace;
+      if (!workspace) continue;
+      this.frozenSubAgents.delete(child);
+      child.workspace = workspace;
     }
   }
   private async refreshFinishedHistory(sessionId: string, finishedRun: string): Promise<void> {
@@ -1238,7 +1276,7 @@ export class SessionController {
         break;
       }
       case 'subagent.delta': {
-        const view = this.subagents().find((entry) => entry.id === event.data.id);
+        const view = this.editSubAgent((entry) => entry.id === event.data.id);
         if (!view) break;
         // Same contract as streamed assistant text: keep the snapshot accurate, deliver the slice on
         // the delta channel, and skip the publish — a child streams for as long as it runs.
@@ -1248,13 +1286,13 @@ export class SessionController {
         return;
       }
       case 'subagent.tool': {
-        const view = this.subagents().find((entry) => entry.id === event.data.id);
+        const view = this.editSubAgent((entry) => entry.id === event.data.id);
         if (!view) break;
         foldSubAgentTool(view, event.data);
         break;
       }
       case 'subagent.progress': {
-        const view = this.subagents().find((entry) => entry.id === event.data.id);
+        const view = this.editSubAgent((entry) => entry.id === event.data.id);
         if (!view) break;
         // Same contract as the streamed text: keep the snapshot accurate and deliver the numbers on the
         // delta channel, because a working child reports them once a second and a full snapshot per second
@@ -1279,7 +1317,7 @@ export class SessionController {
          * A card that has not appeared yet is not an error worth reporting: a frame can outrun the `started` frame it
          * belongs to when a child finishes fast, and the durable read after the run is what fills the card in then.
          */
-        const view = this.subagents().find(
+        const view = this.editSubAgent(
           (entry) =>
             entry.id === String(event.data.id) ||
             entry.childSessionId === String(event.data.childSessionId),
@@ -1289,7 +1327,7 @@ export class SessionController {
         break;
       }
       case 'subagent.finished': {
-        const view = this.subagents().find((entry) => entry.id === event.data.id);
+        const view = this.editSubAgent((entry) => entry.id === event.data.id);
         if (!view) break;
         foldSubAgentFinished(view, event.data);
         break;

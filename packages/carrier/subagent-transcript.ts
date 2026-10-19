@@ -3,6 +3,7 @@ import type { AgentHostClient } from '../client/host-client.ts';
 import type { SessionController } from '../client/session-controller.ts';
 import type { SubAgentTranscript } from './contract.ts';
 import { CarrierError } from './errors.ts';
+import { deepFreeze } from '../client/freeze.ts';
 
 /** Keep the newest process records and the final reply within a bounded child history window. */
 const SUBAGENT_TRANSCRIPT_MESSAGES = 200;
@@ -21,7 +22,8 @@ export interface SubAgentTranscriptOwner {
  * poll that backs off while the child is quiet.
  */
 export class SubAgentTranscriptViewer {
-  current: SubAgentTranscript | null = null;
+  /** Frozen and replaced whenever it changes, so a snapshot can share it and a consumer compare it by reference. */
+  current: Readonly<SubAgentTranscript> | null = null;
   private offset = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private delay = SUBAGENT_TRANSCRIPT_POLL_MS;
@@ -62,7 +64,7 @@ export class SubAgentTranscriptViewer {
       { tail: SUBAGENT_TRANSCRIPT_MESSAGES },
     );
     if (version !== this.version) return;
-    this.current = {
+    this.current = deepFreeze({
       subagentId,
       childSessionId,
       objective: summary.objective,
@@ -71,7 +73,7 @@ export class SubAgentTranscriptViewer {
       ...(summary.error ? { error: summary.error } : {}),
       messages: history.messages,
       truncated: history.truncated || history.startOffset > 0,
-    };
+    });
     this.offset = history.nextOffset;
     this.startPolling();
   }
@@ -147,31 +149,32 @@ export class SubAgentTranscriptViewer {
         (entry) =>
           entry.id === transcript.subagentId && entry.childSessionId === transcript.childSessionId,
       );
-      const previousResult = JSON.stringify([
-        transcript.status,
-        transcript.report,
-        transcript.error,
-      ]);
-      if (current) {
-        transcript.status = current.status;
-        transcript.report = current.report;
-        transcript.error = current.error;
-      }
+      const result = current
+        ? { status: current.status, report: current.report, error: current.error }
+        : { status: transcript.status, report: transcript.report, error: transcript.error };
+      const moved =
+        JSON.stringify([transcript.status, transcript.report, transcript.error]) !==
+        JSON.stringify([result.status, result.report, result.error]);
       if (!history.messages.length) {
-        const moved =
-          previousResult !==
-          JSON.stringify([transcript.status, transcript.report, transcript.error]);
-        if (moved) this.owner.publish();
+        if (moved) {
+          this.current = deepFreeze({ ...transcript, ...result });
+          this.owner.publish();
+        }
         return moved;
       }
       const combined = replaceWindow
         ? history.messages
         : [...transcript.messages, ...history.messages];
-      transcript.messages = combined.slice(-SUBAGENT_TRANSCRIPT_MESSAGES);
-      transcript.truncated ||=
-        history.truncated ||
-        (replaceWindow && history.startOffset > 0) ||
-        combined.length > SUBAGENT_TRANSCRIPT_MESSAGES;
+      this.current = deepFreeze({
+        ...transcript,
+        ...result,
+        messages: combined.slice(-SUBAGENT_TRANSCRIPT_MESSAGES),
+        truncated:
+          transcript.truncated ||
+          history.truncated ||
+          (replaceWindow && history.startOffset > 0) ||
+          combined.length > SUBAGENT_TRANSCRIPT_MESSAGES,
+      });
       this.owner.publish();
       return true;
     } finally {

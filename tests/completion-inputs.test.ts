@@ -208,6 +208,20 @@ test('a range that is too large is refused, not truncated', async (t) => {
   );
 });
 
+test('the file limit admits exactly that many files and refuses one more', async (t) => {
+  const root = await fixture(t);
+  for (const name of ['a.txt', 'b.txt', 'c.txt']) await writeFile(path.join(root, name), name);
+  const exact = await snapshotCompletionInputs(root, ['.'], signal, { maxFiles: 3 });
+  assert.equal(exact.files, 3);
+  // The check used to run on the way into each entry with `>`, so the last file of a directory got through after
+  // the count had already reached the limit: a limit of 2 accepted these three files.
+  await assert.rejects(
+    snapshotCompletionInputs(root, ['.'], signal, { maxFiles: 2 }),
+    (error: unknown) =>
+      error instanceof CompletionInputLimitError && /2 file limit/.test(error.message),
+  );
+});
+
 test('the fingerprint accepts any file the workspace snapshot accepts', async (t) => {
   const root = await fixture(t);
   // 17 MiB: above the fingerprint's former 16 MiB bound, below the bound the workspace snapshot shares with it.

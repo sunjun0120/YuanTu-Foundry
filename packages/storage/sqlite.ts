@@ -335,8 +335,11 @@ export class SessionStore implements PlanRepository {
   turnTiming(sessionId: string): TurnTiming {
     return this.parts.reads.turnTiming(sessionId);
   }
-  messagesFromTable(sessionId: string): Message[] {
-    return this.journal.messagesFromTable(sessionId);
+  messagesFromTable(sessionId: string, offset = 0): Message[] {
+    return this.journal.messagesFromTable(sessionId, offset);
+  }
+  messageRowCount(sessionId: string): number {
+    return this.journal.messageRowCount(sessionId);
   }
   /** The session's checklist as the model last wrote it. */
   todos(sessionId: string): TodoItem[] {

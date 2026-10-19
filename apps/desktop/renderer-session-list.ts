@@ -23,6 +23,7 @@ export interface SessionActivity {
   waiting: number;
 }
 import { locale, t } from './i18n.ts';
+import { memo } from './renderer-memo.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -56,6 +57,7 @@ export function setupSessionList(options: {
   const count = required('session-count');
   const list = required('sessions');
   let sessionKey = '';
+  const rowsKey = memo<string>();
   function render(
     sessions: SessionInfo[],
     currentId: string | null,
@@ -65,14 +67,11 @@ export function setupSessionList(options: {
   ): void {
     // locale() belongs in the key: these rows carry a formatted date and a
     // translated aria-label, so a language switch has to rebuild them.
-    const nextSessionKey = JSON.stringify([
-      sessions,
-      currentId,
-      blocked,
-      hasMore,
-      [...activity],
-      locale(),
-    ]);
+    const activityKey = JSON.stringify([...activity]);
+    const nextSessionKey = rowsKey(
+      [sessions, currentId, blocked, hasMore, activityKey, locale()],
+      () => JSON.stringify([sessions, currentId, blocked, hasMore, activityKey, locale()]),
+    );
     if (nextSessionKey === sessionKey) return;
     sessionKey = nextSessionKey;
     // The list is a window over the newest sessions; `+` says the count is of the window, not of all of them.

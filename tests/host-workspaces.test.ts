@@ -9,6 +9,7 @@ import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import { PermissionPolicy } from '../packages/core/permissions.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 import { HookRegistry } from '../packages/tools/registry.ts';
@@ -68,7 +69,8 @@ async function host(t: test.TestContext): Promise<Harness> {
     store,
     workspace: root,
     active: new Map(),
-    restoring: false,
+    locks: new ResourceLocks(),
+    manualOperations: new Set(),
     options: { allowWrite: true },
     launchSandbox: { mode: 'host' },
     defaultSandboxMode: 'host',
@@ -135,7 +137,7 @@ for (const boundary of ['deny', 'read-only', 'revoke-while-approving'] as const)
     await assert.rejects(access(path.join(h.root, 'made.txt')));
     assert.equal(h.store.fileChanges(h.sessionId).length, 0);
     assert.equal(h.store.workspaceResult(result.id)!.status, 'ready');
-    assert.equal(h.ctx.restoring, false);
+    assert.deepEqual(h.ctx.locks.claims(), []);
     assert.equal(h.ctx.approvals.size, 0);
   });
 }
@@ -194,7 +196,7 @@ test('run.cancel aborts only the manual operation belonging to that session', as
   const h = await host(t);
   const other = h.store.create(h.root);
   const controller = new AbortController();
-  h.ctx.manualOperation = { sessionId: h.sessionId, controller };
+  h.ctx.manualOperations.add({ sessionId: h.sessionId, controller });
   assert.deepEqual(await h.dispatch('run.cancel', { sessionId: other.id }), { cancelled: false });
   assert.equal(controller.signal.aborted, false);
   assert.deepEqual(await h.dispatch('run.cancel', { sessionId: h.sessionId }), { cancelled: true });
@@ -217,8 +219,8 @@ test('cancelling workspace.apply settles its approval without importing and rele
     /abort|cancel/i,
   );
   assert.equal(h.ctx.approvals.size, 0);
-  assert.equal(h.ctx.manualOperation, undefined);
-  assert.equal(h.ctx.restoring, false);
+  assert.equal(h.ctx.manualOperations.size, 0);
+  assert.deepEqual(h.ctx.locks.claims(), []);
   await assert.rejects(access(path.join(h.root, 'made.txt')));
   assert.equal(h.store.fileChanges(h.sessionId).length, 0);
   h.ctx.options.allowWrite = true;
@@ -255,7 +257,7 @@ test('workspace.apply reports a conflict introduced before tool preparation as a
   assert.deepEqual(response.files, []);
   assert.equal(await readFile(path.join(h.root, 'made.txt'), 'utf8'), 'parent edited it\n');
   assert.equal(h.store.fileChanges(h.sessionId).length, 0);
-  assert.equal(h.ctx.restoring, false);
+  assert.deepEqual(h.ctx.locks.claims(), []);
 });
 
 test('a real client keeps workspace.apply pending beyond its ordinary request deadline for approval', async (t) => {
@@ -539,32 +541,32 @@ test('archive and restore keep the same workspace identity through the RPC surfa
    * Registered while it runs, so Stop for this session and the Host's own shutdown can reach it. The handler
    * used to pass `new AbortController().signal`, whose abort checks the manager honours and no caller can set.
    */
-  assert.equal(h.ctx.manualOperation?.sessionId, child.id);
+  assert.equal([...h.ctx.manualOperations][0]?.sessionId, child.id);
   const archived = (await archiving) as {
     archived: true;
     bindingId: string;
     state: string;
   };
-  const afterArchive = h.ctx.manualOperation;
+  const afterArchive = [...h.ctx.manualOperations][0];
   assert.equal(afterArchive, undefined);
   assert.equal(archived.archived, true);
   assert.equal(archived.bindingId, binding.id);
   assert.equal(h.store.workspaceById(binding.id)!.state, 'archived');
   const removing = h.dispatch('workspace.remove', { sessionId: child.id });
-  assert.equal(h.ctx.manualOperation?.sessionId, child.id);
+  assert.equal([...h.ctx.manualOperations][0]?.sessionId, child.id);
   const removed = (await removing) as {
     removed: boolean;
   };
-  const afterRemove = h.ctx.manualOperation;
+  const afterRemove = [...h.ctx.manualOperations][0];
   assert.equal(afterRemove, undefined);
   assert.equal(removed.removed, true);
   const restoring = h.dispatch('workspace.restore', { sessionId: child.id });
-  assert.equal(h.ctx.manualOperation?.sessionId, child.id);
+  assert.equal([...h.ctx.manualOperations][0]?.sessionId, child.id);
   const restored = (await restoring) as {
     restored: true;
     binding: { id: string; state: string; executionRoot: string };
   };
-  const afterRestore = h.ctx.manualOperation;
+  const afterRestore = [...h.ctx.manualOperations][0];
   assert.equal(afterRestore, undefined);
   assert.equal(restored.restored, true);
   assert.equal(restored.binding.id, binding.id, 'a restore is the same workspace, not a new one');

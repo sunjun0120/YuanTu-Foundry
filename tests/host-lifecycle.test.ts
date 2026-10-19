@@ -9,6 +9,7 @@ function host(dispose: () => Promise<void>) {
   const ctx = {
     closing: false,
     active: new Map(),
+    manualOperations: new Set(),
     approvals: new Map(),
     questions: new Map(),
     tasks: new Set(),

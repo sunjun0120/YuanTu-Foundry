@@ -16,6 +16,7 @@ import { commandPid } from './process-pid-fixture.ts';
 import { sessionHandlers } from '../apps/agent-host/handlers/sessions.ts';
 import { startRun } from '../apps/agent-host/run-start.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from host-workflows.test.ts ----
@@ -850,7 +851,8 @@ test('Host reserves session deletion until a blocked background cleanup actually
     workspace: root,
     store,
     active: new Map(),
-    restoring: false,
+    locks: new ResourceLocks(),
+    manualOperations: new Set(),
     background: {
       close: async () => {
         entered();
@@ -877,7 +879,7 @@ test('Host reserves session deletion until a blocked background cleanup actually
     release();
     await deleting;
   }
-  assert.equal(ctx.restoring, false);
+  assert.deepEqual(ctx.locks.claims(), []);
   assert.throws(() => store.get(session.id), /Session not found/);
 });
 
@@ -896,7 +898,8 @@ test('session.recover refuses the session this Host is running and recovers a st
     workspace: root,
     store,
     active: new Map(),
-    restoring: false,
+    locks: new ResourceLocks(),
+    manualOperations: new Set(),
   } as unknown as HostContext;
 
   // The state the automatic rules cannot end: the recorded owner is this Host, which is alive.

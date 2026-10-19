@@ -28,6 +28,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
+import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
 import type { DesktopWireReply } from './contract.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -184,7 +185,38 @@ function createService(workspace: string, config?: ProviderConfig): CarrierServi
     },
   });
 }
+/**
+ * The newest published state not yet sent to the window.
+ *
+ * Host events arrive in bursts — one read of its pipe can carry a tool's finish, a message and the next tool's
+ * start — and each one publishes. Sending each publish diffed, serialized and redrew the window once per event;
+ * the burst now goes out as one patch at the end of the turn of the event loop that carried it.
+ */
+let pendingState: CarrierSnapshot | undefined;
+let pendingFlush: ReturnType<typeof setImmediate> | undefined;
+function flushState(): void {
+  if (pendingFlush) clearImmediate(pendingFlush);
+  pendingFlush = undefined;
+  const state = pendingState;
+  pendingState = undefined;
+  if (!state || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+  const patch = snapshotSender.diff(state);
+  if (Object.keys(patch.sections).length) window.webContents.send('yuantu:state', patch);
+}
+/**
+ * A command's reply: the snapshot as it is now. A state still waiting to be pushed goes out first, as it did
+ * before pushes were batched: the window's listeners are told about a change only by a push, so a reply that
+ * absorbed it would leave the page undrawn, and sent after the reply it would carry older values.
+ */
+function replyPatch(state: CarrierSnapshot) {
+  flushState();
+  return snapshotSender.diff(state);
+}
 function attach(next: CarrierService): CarrierService {
+  // What the previous service published is no longer the state to show.
+  if (pendingFlush) clearImmediate(pendingFlush);
+  pendingFlush = undefined;
+  pendingState = undefined;
   unsubscribe?.();
   unsubscribeDelta?.();
   unsubscribeSubAgentDelta?.();
@@ -194,17 +226,18 @@ function attach(next: CarrierService): CarrierService {
   service = next;
   unsubscribe = next.subscribe((state) => {
     if (state.ready && state.session.sessionId) choices.follow(state.session.sessionId);
-    if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
-      const patch = snapshotSender.diff(state);
-      if (Object.keys(patch.sections).length) window.webContents.send('yuantu:state', patch);
-    }
+    pendingState = state;
+    pendingFlush ??= setImmediate(flushState);
   });
-  // Streamed text travels on its own channel so a token never serialises the whole snapshot.
+  // Streamed text travels on its own channel so a token never serialises the whole snapshot. A state still
+  // waiting to go out is sent first: it may be the one that announces the message this slice belongs to.
   unsubscribeDelta = next.subscribeDelta((delta) => {
+    flushState();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:delta', delta);
   });
   unsubscribeSubAgentDelta = next.subscribeSubAgentDelta((delta) => {
+    flushState();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:subagent-delta', delta);
   });
@@ -468,7 +501,20 @@ void app
         try {
           assertSender(event);
           const command = parsePermissionPresetCommand(input);
-          if (command.type === 'get') return { ok: true, view: choices.view() };
+          if (command.type === 'get') {
+            // After a switch that failed half way and could not be undone, a read is the retry: the pair in force
+            // is unknown until one known pair has been written again.
+            if (choices.unknown) {
+              assertPresetChangeAllowed();
+              switching = true;
+              try {
+                await choices.recover(service?.snapshot.session.sessionId ?? undefined);
+              } finally {
+                switching = false;
+              }
+            }
+            return { ok: true, view: choices.view() };
+          }
           const preset = permissionPreset(command.preset);
           assertPresetChangeAllowed();
           switching = true;
@@ -657,11 +703,11 @@ void app
         if (!service || quitting) throw new Error('Desktop is shutting down');
         if (command.type === 'copyText') {
           clipboard.writeText(command.text);
-          return { ok: true, patch: snapshotSender.diff(service.snapshot) };
+          return { ok: true, patch: replyPatch(service.snapshot) };
         }
         if (command.type === 'openLink') {
           await shell.openExternal(command.url);
-          return { ok: true, patch: snapshotSender.diff(service.snapshot) };
+          return { ok: true, patch: replyPatch(service.snapshot) };
         }
         if (command.type === 'export') {
           const result = await dialog.showSaveDialog(window!, {
@@ -677,7 +723,7 @@ void app
           });
           if (!result.canceled && result.filePath)
             await writeFile(result.filePath, command.content, 'utf8');
-          return { ok: true, patch: snapshotSender.diff(service.snapshot) };
+          return { ok: true, patch: replyPatch(service.snapshot) };
         }
         if (switching && command.type !== 'snapshot') throw new Error('Workspace is changing');
         if (command.type === 'chooseWorkspace') {
@@ -717,7 +763,7 @@ void app
                 }
               }
             }
-            return { ok: true, patch: snapshotSender.diff(service.snapshot) };
+            return { ok: true, patch: replyPatch(service.snapshot) };
           } finally {
             switching = false;
           }
@@ -725,7 +771,7 @@ void app
         if (command.type !== 'snapshot') await choices.following;
         const state = await service.dispatch(command);
         if (command.type !== 'snapshot') await choices.following;
-        return { ok: true, patch: snapshotSender.diff(state) };
+        return { ok: true, patch: replyPatch(state) };
       } catch (error) {
         return carrierErrorReply(error);
       }

@@ -158,6 +158,22 @@ test('a result that is already a shortened view is left alone', () => {
   assert.equal(message.role === 'tool' ? message.content : '', shortened);
 });
 
+test('an already shortened result is recognised before it is measured', () => {
+  const shortened = `head${SHRINK_MARK} 4000 of 5000 characters removed]tail`;
+  const measured: string[] = [];
+  shortenMessages(
+    withOldResult(shortened),
+    { keepRecent: 0, tokens: 100 },
+    () => null,
+    (text) => {
+      measured.push(text);
+      return text.length;
+    },
+  );
+  // Measuring is the cost the round pays per result; one that already carries the marker has nothing to learn.
+  assert.ok(!measured.includes(shortened), 'the shortened result was measured again');
+});
+
 test('shortening keeps both ends and says how much it took, or does nothing at all', () => {
   const content = `HEAD${'m'.repeat(8000)}TAIL`;
   const removed = content.length - 1000;

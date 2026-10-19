@@ -24,7 +24,13 @@ import { createAgent } from '../shared/runtime.ts';
 import { createRunApprover, createRunQuestioner } from './approvals.ts';
 import { ownedSession, required } from './params.ts';
 import { sessionPermissionPolicy } from './session-policy.ts';
-import { admissionRefusal, type ActiveRun, type HostContext, type WakeGrant } from './state.ts';
+import {
+  admissionRefusal,
+  executionRoot,
+  type ActiveRun,
+  type HostContext,
+  type WakeGrant,
+} from './state.ts';
 import { startSessionTitle } from './session-title.ts';
 
 /**
@@ -100,7 +106,7 @@ export async function startRun(
       ? ctx.store.executablePlan(sessionId, params.planId)
       : undefined;
   const controller = new AbortController();
-  const entry: ActiveRun = { controller };
+  const entry: ActiveRun = { controller, root: executionRoot(ctx, sessionId) };
   // Reserve the slot before the first await. The reconciliation below does real filesystem
   // I/O, so a check-then-set across it let a concurrent run.start (a duplicate dispatch, or
   // a scheduler tick) pass the same admission guard; the loser then ran its `finally` and

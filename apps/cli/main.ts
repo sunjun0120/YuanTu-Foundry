@@ -16,6 +16,7 @@ import { runStandaloneCommand } from './maintenance.ts';
 import { runAgentCommand } from './run.ts';
 import { runRecordCommand } from './task-commands.ts';
 import { createApprover, createQuestioner } from './terminal.ts';
+import { excludeRuntimeState } from '../../packages/workspaces/runtime-exclude.ts';
 
 // Public CLI is paused; refuse before parsing arguments or opening workspace state.
 requireProductEntry('cli');
@@ -49,6 +50,8 @@ async function main(): Promise<void> {
   const store = openStore(options);
   try {
     const workspace = resolveWorkspace(options.workspace ?? process.cwd());
+    // Keep the runtime's `.yuantu` out of the user's `git status`; best effort, never a reason to fail a command.
+    await excludeRuntimeState(workspace).catch(() => undefined);
     // A sub-agent session is hidden from the session list and has no tasks, so a `running` run an
     // earlier crashed invocation left behind would never be looked at again — by anything. The Host does
     // this at startup; the CLI is one-shot, so it converges its workspace on every invocation instead.

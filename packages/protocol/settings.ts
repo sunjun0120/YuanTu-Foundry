@@ -470,6 +470,10 @@ export const ENVIRONMENT = {
     description: '是否启用固定 ripgrep 快速搜索后端（0 关闭；缺省启用，但仍需已核验的固定资产）',
   },
   YUANTU_LSP_AFTER_EDIT: { kind: 'boolean', description: '编辑后是否附加诊断' },
+  YUANTU_GIT_EXCLUDE: {
+    kind: 'boolean',
+    description: '是否把工作区 .yuantu 的运行期状态写入仓库的 .git/info/exclude（缺省开启）',
+  },
   YUANTU_SUBAGENTS: { kind: 'boolean', description: '是否启用子代理委派' },
   YUANTU_SUBAGENT_CONCURRENCY: { kind: 'number', range: [1, 16], description: '子代理并发上限' },
   /**

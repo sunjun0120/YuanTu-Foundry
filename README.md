@@ -611,7 +611,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 73 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 74 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -673,6 +673,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_REPO_MAP` | `on` / `off` | 是否注入结构大纲 |
 | `YUANTU_SEARCH_RG` | `0` / `1` | 是否启用固定 ripgrep 快速搜索后端（0 关闭；缺省启用，但仍需已核验的固定资产） |
 | `YUANTU_LSP_AFTER_EDIT` | `0` / `1` | 编辑后是否附加诊断 |
+| `YUANTU_GIT_EXCLUDE` | `0` / `1` | 是否把工作区 .yuantu 的运行期状态写入仓库的 .git/info/exclude（缺省开启） |
 | `YUANTU_SUBAGENTS` | `0` / `1` | 是否启用子代理委派 |
 | `YUANTU_SUBAGENT_CONCURRENCY` | `1–16` | 子代理并发上限 |
 | `YUANTU_SUBAGENT_WORKSPACE` | `auto` / `shared` / `worktree` | 子代理执行目录：auto 自动隔离（默认），shared 沿用委派者目录（旧行为，不做隔离），worktree 连只读子代理也隔离 |
@@ -717,7 +718,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v31 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 50 / 46 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 259 个 | `tests/*.test.ts` |
+| 行为测试文件 | 263 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 6 个 | `CLI_MAINTENANCE_COMMANDS` |

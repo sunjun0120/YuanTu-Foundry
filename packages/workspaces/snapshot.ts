@@ -398,6 +398,14 @@ async function walkWorkingTree(
   signal: AbortSignal | undefined,
   limits: { maxTotalBytes?: number },
   onFile: (file: { relative: string; info: Stats; bytes: Buffer }) => void | Promise<void>,
+  /**
+   * A file this answers `true` for is not read: `onKnown` is told about it instead. Every check before the read —
+   * the listing, the credential and link refusals, the size and budget limits — still applies to it.
+   */
+  known?: {
+    has(relative: string, info: Stats): boolean;
+    onKnown(file: { relative: string; info: Stats }): void;
+  },
 ): Promise<void> {
   const budget = limits.maxTotalBytes ?? MAX_TOTAL_BYTES;
   const cwd = directory;
@@ -506,6 +514,10 @@ async function walkWorkingTree(
         { bytes: totalBytes + info.size, budget, path: relative },
       );
     totalBytes += info.size;
+    if (known?.has(relative, info)) {
+      known.onKnown({ relative, info });
+      continue;
+    }
     const bytes = await readFile(absolute);
     if (bytes.length !== info.size)
       throw new WorkspaceFailure(
@@ -580,21 +592,80 @@ export async function collectTreeBlobs(
   directory: string,
   signal?: AbortSignal,
   limits: { maxTotalBytes?: number } = {},
+  cache?: TreeBlobCache,
 ): Promise<TreeEntry[]> {
-  const files: { path: string; mode: '100644' | '100755' }[] = [];
+  const files: { path: string; mode: '100644' | '100755'; blob?: string; key: StatKey }[] = [];
   const batch = openBlobBatch(repositoryRoot, signal);
+  const startedAt = Date.now();
   try {
-    await walkWorkingTree(directory, signal, limits, async ({ relative, info, bytes }) => {
-      files.push({ path: relative, mode: modeOf(info) });
-      await batch.add(bytes);
-    });
+    await walkWorkingTree(
+      directory,
+      signal,
+      limits,
+      async ({ relative, info, bytes }) => {
+        files.push({ path: relative, mode: modeOf(info), key: statKey(info) });
+        await batch.add(bytes);
+      },
+      cache && {
+        has: (relative, info) => cache.blobFor(relative, info) !== undefined,
+        onKnown: ({ relative, info }) =>
+          files.push({
+            path: relative,
+            mode: modeOf(info),
+            blob: cache.blobFor(relative, info)!,
+            key: statKey(info),
+          }),
+      },
+    );
   } catch (error) {
     batch.abort();
     throw error;
   }
   const blobs = await batch.finish();
-  return files.map((file, index): TreeEntry => ({ ...file, blob: blobs[index]! }));
+  let written = 0;
+  const entries = files.map((file) => ({ ...file, blob: file.blob ?? blobs[written++]! }));
+  cache?.replace(entries, startedAt);
+  return entries.map((entry): TreeEntry => ({
+    path: entry.path,
+    mode: entry.mode,
+    blob: entry.blob,
+  }));
 }
+
+/**
+ * The blob id of each file a working tree held the last time it was exported, keyed by what a write changes.
+ *
+ * A worktree child's turn usually touches a handful of files, and the export at its end read, hashed and imported
+ * every file in the tree — the whole repository, every turn. A file whose size, times, inode and mode are what
+ * they were last time is the same bytes, so its blob id is reused without reading it; this is the same bet Git's
+ * own index makes. The one case it cannot see is a write inside the clock's granularity of the walk that recorded
+ * it, so a file modified that close to the walk is read again (Git calls these racily clean).
+ */
+export class TreeBlobCache {
+  private entries = new Map<string, { key: StatKey; mode: string; blob: string }>();
+  private recordedAt = 0;
+  blobFor(relative: string, info: Stats): string | undefined {
+    const entry = this.entries.get(relative);
+    if (!entry || entry.mode !== modeOf(info) || !sameStatKey(entry.key, statKey(info))) return;
+    // The modification time, as Git judges it; the change time is still part of the key compared above.
+    if (info.mtimeMs >= this.recordedAt - RACY_WINDOW_MS) return;
+    return entry.blob;
+  }
+  /** What one walk found, recorded as of when that walk started. */
+  replace(
+    entries: readonly { path: string; mode: string; blob: string; key: StatKey }[],
+    walkStartedAt: number,
+  ): void {
+    this.entries = new Map(entries.map((entry) => [entry.path, entry]));
+    this.recordedAt = walkStartedAt;
+  }
+  clear(): void {
+    this.entries.clear();
+    this.recordedAt = 0;
+  }
+}
+/** Wider than the coarsest timestamp a supported filesystem keeps (FAT's two seconds). */
+const RACY_WINDOW_MS = 3_000;
 
 /**
  * The same walk, keeping only what identifies the bytes.

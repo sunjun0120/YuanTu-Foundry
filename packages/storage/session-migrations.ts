@@ -1,5 +1,9 @@
 import type { Message } from '../protocol/index.ts';
-import { createDatabaseBackup, type BackupPolicy } from './database-maintenance.ts';
+import {
+  createDatabaseBackup,
+  RECOVERY_COPY_ADMISSION,
+  type BackupPolicy,
+} from './database-maintenance.ts';
 import { createCurrentSessionSchema, createLookupIndexes } from './session-current-schema.ts';
 import {
   APPLICATION_ID,
@@ -78,12 +82,20 @@ export class SessionMigrations {
     }
     if (file !== ':memory:' && version < SCHEMA_VERSION && this.hasTable('sessions')) {
       try {
+        /**
+         * Admitted against free space, not the history budget.
+         *
+         * The budget bounds how much *old* history is kept; it is a constant, so a database that has grown past it
+         * could never be migrated, and freeing disk space would not help. The copy taken here is the one way back
+         * from this migration, and `createBackup` never prunes the copy it has just made.
+         */
         createDatabaseBackup(
           this.port.db,
           file,
           SESSION_DATABASE_POLICY,
           'migration',
           options.backupRetention,
+          RECOVERY_COPY_ADMISSION,
         );
       } catch (error) {
         throw new Error(
@@ -441,6 +453,21 @@ export class SessionMigrations {
       );
       if (!runColumns.has('owner_started_at'))
         this.port.db.exec('ALTER TABLE runs ADD COLUMN owner_started_at INTEGER');
+      // The same identity for a workspace operation lease; see `operationIsLive` for why it carries its token.
+      const leaseColumns = new Set(
+        this.port.db
+          .prepare('PRAGMA table_info(workspace_operation_leases)')
+          .all()
+          .map((row) => row.name),
+      );
+      if (!leaseColumns.has('owner_started_at'))
+        this.port.db.exec(
+          'ALTER TABLE workspace_operation_leases ADD COLUMN owner_started_at INTEGER',
+        );
+      if (!leaseColumns.has('owner_started_token'))
+        this.port.db.exec(
+          'ALTER TABLE workspace_operation_leases ADD COLUMN owner_started_token TEXT',
+        );
       // After the derived columns above: `sessions_parent` names one of them.
       createLookupIndexes(this.port.db);
       // Session search index (v10). The projection column is filled by `append`, and the triggers keep

@@ -51,7 +51,9 @@ export interface ShrinkOutcome {
  * relationship to the first would be a way to configure the runtime into losing detail for nothing.
  */
 function worthShortening(content: string, tokens: number, measure: MeasureText): boolean {
-  return measure(content) > tokens * 2 && !content.includes(SHRINK_MARK);
+  // The marker first: it is a substring scan, and measuring an already-shortened result again pays a whole count
+  // to learn nothing.
+  return !content.includes(SHRINK_MARK) && measure(content) > tokens * 2;
 }
 /**
  * How many *characters* hold the token budget for this text.

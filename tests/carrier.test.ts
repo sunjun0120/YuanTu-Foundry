@@ -206,6 +206,12 @@ test('a spawned carrier drives a real Host in Node, with no shell in the process
   );
   const snapshot = await carrier.dispatch({ type: 'send', prompt: 'Hello' });
   assert.equal(snapshot.session.messages.at(-1)?.content, 'Carrier answer');
+  // Snapshots taken while nothing moved share every frozen section instead of cloning it again.
+  const again = carrier.snapshot;
+  for (const key of ['session', 'sessions', 'changes', 'audit', 'tasks', 'resources'] as const) {
+    assert.equal(again[key], snapshot[key], `${key} is shared`);
+    assert.ok(Object.isFrozen(again[key]), `${key} is frozen`);
+  }
   assert.equal(snapshot.sessions[0]?.title, 'Carrier answer');
   // The shell owns the clipboard, links, the save dialog and the folder picker. They travel in the same
   // vocabulary (one parser validates them for every carrier) and are refused here rather than silently ignored.

@@ -16,10 +16,11 @@ import {
   readBlob,
   repositoryIdentity,
   runWorkspaceGit,
+  TreeIdCache,
   withRepositoryLock,
   writeTree,
 } from './git.ts';
-import { collectTreeBlobs } from './snapshot.ts';
+import { collectTreeBlobs, TreeBlobCache } from './snapshot.ts';
 import type { WorkspaceResultFile } from '../protocol/workspaces.ts';
 import {
   changeForResult,
@@ -153,6 +154,23 @@ export class WorkspaceResultsService implements WorkspaceResults, WorkspaceApply
     this.store = options.store;
     this.options = options;
   }
+  /**
+   * What the last export of each working tree found, so the next one reads only what changed (`TreeBlobCache`),
+   * and the trees each repository already holds (`TreeIdCache`). Bounded by count, newest kept: a Host that served
+   * many children does not keep a listing of every tree it ever exported.
+   */
+  private readonly blobCaches = new Map<string, TreeBlobCache>();
+  private readonly treeCaches = new Map<string, TreeIdCache>();
+  private static readonly CACHED_TREES = 8;
+  private cacheFor<T>(caches: Map<string, T>, key: string, create: () => T): T {
+    let cache = caches.get(key);
+    if (cache) caches.delete(key);
+    else cache = create();
+    caches.set(key, cache);
+    if (caches.size > WorkspaceResultsService.CACHED_TREES)
+      caches.delete(caches.keys().next().value!);
+    return cache;
+  }
 
   private diagnostic(message: string): void {
     this.options.onDiagnostic?.(message);
@@ -200,14 +218,45 @@ export class WorkspaceResultsService implements WorkspaceResults, WorkspaceApply
       .at(-1);
     const comparisonTree = previous?.resultTree ?? snapshot.baseTree;
 
-    const entries = await collectTreeBlobs(identity.repositoryRoot, binding.executionRoot, signal);
-    const currentTree = await writeTree(identity.repositoryRoot, entries, signal);
-    const differences = await diffTrees(
-      identity.repositoryRoot,
-      comparisonTree,
-      currentTree,
-      signal,
-    );
+    const blobs = this.cacheFor(this.blobCaches, binding.executionRoot, () => new TreeBlobCache());
+    const trees = this.cacheFor(this.treeCaches, identity.repositoryRoot, () => new TreeIdCache());
+    const freeze = async (cached: boolean) => {
+      const entries = await collectTreeBlobs(
+        identity.repositoryRoot,
+        binding.executionRoot,
+        signal,
+        {},
+        cached ? blobs : undefined,
+      );
+      const currentTree = await writeTree(
+        identity.repositoryRoot,
+        entries,
+        signal,
+        cached ? trees : undefined,
+      );
+      const differences = await diffTrees(
+        identity.repositoryRoot,
+        comparisonTree,
+        currentTree,
+        signal,
+      );
+      return { currentTree, differences };
+    };
+    let frozen: Awaited<ReturnType<typeof freeze>>;
+    try {
+      frozen = await freeze(true);
+    } catch (error) {
+      // A remembered id whose object is gone (a `git gc` in between) fails the write loudly; the export is then
+      // done the long way, once, rather than failed for the cache's sake.
+      signal.throwIfAborted();
+      blobs.clear();
+      trees.clear();
+      this.diagnostic(
+        `Workspace export retried without its caches: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      frozen = await freeze(false);
+    }
+    const { currentTree, differences } = frozen;
 
     const resultId = randomUUID();
     const files: WorkspaceResultFile[] = [];

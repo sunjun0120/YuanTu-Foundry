@@ -23,6 +23,11 @@ import {
   type WorkspaceState,
 } from '../protocol/workspaces.ts';
 import { samePath } from '../platform/workspace-paths.ts';
+import {
+  ownStartedAt,
+  primeProcessStartTimes,
+  processAlive,
+} from '../platform/process-identity.ts';
 
 /**
  * The durable half of workspace isolation.
@@ -88,20 +93,51 @@ export class SessionWorkspaces {
     return this.port.db;
   }
 
+  /**
+   * Whether the process holding this binding's operation lease is still the one that took it.
+   *
+   * The pid alone is not an identity: after a crash the system can hand that pid to an unrelated process, and the
+   * lease then looked held forever — every archive, remove and restore of the worktree refused with
+   * `WORKSPACE_BUSY`, and so did every run of its session. The owner's start time is recorded with the lease, as it
+   * is for a run, and a pid that now belongs to a different process counts as dead.
+   *
+   * The start time is trusted only when it was written with the lease's current token. An older build renews a
+   * lease with an upsert that does not know the column, which would pair its own pid with the previous owner's
+   * start time; such a row is judged by the pid alone, exactly as it was before the column existed.
+   */
   operationIsLive(bindingId: string): boolean {
     const row = this.db
-      .prepare('SELECT owner_pid FROM workspace_operation_leases WHERE binding_id=?')
+      .prepare(
+        'SELECT owner_pid,token,owner_started_at,owner_started_token FROM workspace_operation_leases WHERE binding_id=?',
+      )
       .get(workspaceId(bindingId));
     if (!row) return false;
+    const startedAt =
+      row.owner_started_at !== null && row.owner_started_token === row.token
+        ? Number(row.owner_started_at)
+        : null;
+    return processAlive(Number(row.owner_pid), Number.isFinite(startedAt) ? startedAt : null);
+  }
+
+  /**
+   * Answer the owner's start time before a write transaction asks for it.
+   *
+   * On Windows the lookup is a subprocess; asked inside `BEGIN IMMEDIATE` it would hold the database's only write
+   * lock for as long as that takes (see `primeRunOwners`).
+   */
+  primeOperationOwner(bindingId: string): void {
     try {
-      process.kill(Number(row.owner_pid), 0);
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+      const row = this.db
+        .prepare('SELECT owner_pid FROM workspace_operation_leases WHERE binding_id=?')
+        .get(workspaceId(bindingId));
+      if (row) primeProcessStartTimes([Number(row.owner_pid)]);
+    } catch {
+      // An optimisation: without it the owner is looked up inside the transaction, as before.
     }
   }
 
   claimOperation(bindingId: string): string {
+    this.primeOperationOwner(bindingId);
     return this.port.transaction(() => {
       if (!this.bindingById(workspaceId(bindingId)))
         throw new WorkspaceFailure('WORKSPACE_NOT_FOUND', 'Unknown workspace operation binding');
@@ -110,10 +146,12 @@ export class SessionWorkspaces {
       const token = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO workspace_operation_leases(binding_id,owner_pid,token,created_at) VALUES(?,?,?,?)
-        ON CONFLICT(binding_id) DO UPDATE SET owner_pid=excluded.owner_pid,token=excluded.token,created_at=excluded.created_at`,
+          `INSERT INTO workspace_operation_leases(binding_id,owner_pid,token,created_at,owner_started_at,owner_started_token)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(binding_id) DO UPDATE SET owner_pid=excluded.owner_pid,token=excluded.token,created_at=excluded.created_at,
+          owner_started_at=excluded.owner_started_at,owner_started_token=excluded.owner_started_token`,
         )
-        .run(bindingId, process.pid, token, new Date().toISOString());
+        .run(bindingId, process.pid, token, new Date().toISOString(), ownStartedAt(), token);
       return token;
     });
   }
@@ -365,9 +403,16 @@ export class SessionWorkspaces {
       if (input.operationToken)
         this.db
           .prepare(
-            'INSERT INTO workspace_operation_leases(binding_id,owner_pid,token,created_at) VALUES(?,?,?,?)',
+            'INSERT INTO workspace_operation_leases(binding_id,owner_pid,token,created_at,owner_started_at,owner_started_token) VALUES(?,?,?,?,?,?)',
           )
-          .run(id, process.pid, workspaceId(input.operationToken), now);
+          .run(
+            id,
+            process.pid,
+            workspaceId(input.operationToken),
+            now,
+            ownStartedAt(),
+            workspaceId(input.operationToken),
+          );
       return this.bindingById(id)!;
     });
   }

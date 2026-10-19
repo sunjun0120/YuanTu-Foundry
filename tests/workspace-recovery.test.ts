@@ -372,6 +372,55 @@ test('a real process exit leaves a cleanup lease that recovery can safely take o
   assert.equal(await readFile(path.join(binding.executionRoot, 'a.txt'), 'utf8'), 'a\n');
 });
 
+test('a cleanup lease whose pid now belongs to another process can be taken over', async (t) => {
+  const { w, store, manager, signal, binding } = await removalFixture(t);
+  await manager.archive(binding.id, signal);
+  const token = store.claimWorkspaceOperation(binding.id);
+  store.setWorkspaceState({ bindingId: binding.id, expect: 'archived', to: 'removing' });
+  /**
+   * The crashed owner's pid has been handed to a live process — this one stands in for it — whose start time is
+   * not the one the lease recorded. By pid alone the lease looked held forever and the worktree could never be
+   * archived, removed or restored again.
+   */
+  const db = new DatabaseSync(w.db);
+  try {
+    db.prepare('UPDATE workspace_operation_leases SET owner_started_at=1 WHERE binding_id=?').run(
+      binding.id,
+    );
+  } finally {
+    db.close();
+  }
+  assert.equal(store.workspaceById(binding.id)!.state, 'removing');
+  await manager.reconcile(signal);
+  assert.equal(store.workspaceById(binding.id)!.state, 'blocked');
+  assert.equal((await manager.restore(binding.id, signal)).state, 'ready');
+  // The forsaken token is no longer the lease's: releasing it now is a no-op, not a release of someone else's.
+  store.releaseWorkspaceOperation(binding.id, token);
+});
+
+test('a lease an older build renewed is judged by its pid alone', async (t) => {
+  const { w, store, manager, signal, binding } = await removalFixture(t);
+  await manager.archive(binding.id, signal);
+  const token = store.claimWorkspaceOperation(binding.id);
+  try {
+    store.setWorkspaceState({ bindingId: binding.id, expect: 'archived', to: 'removing' });
+    // An older build's upsert changes the token but not the start-time columns it does not know about, so the
+    // recorded start time is someone else's. It must not be read as evidence that the live owner is gone.
+    const db = new DatabaseSync(w.db);
+    try {
+      db.prepare(
+        "UPDATE workspace_operation_leases SET owner_started_at=1, owner_started_token='stale' WHERE binding_id=?",
+      ).run(binding.id);
+    } finally {
+      db.close();
+    }
+    await new WorkspaceManager({ store: w.open() }).reconcile(signal);
+    assert.equal(store.workspaceById(binding.id)!.state, 'removing');
+  } finally {
+    store.releaseWorkspaceOperation(binding.id, token);
+  }
+});
+
 test('recovery leaves a live preparing workspace alone before its directory exists', async (t) => {
   const { w, store, manager, signal, binding } = await removalFixture(t);
   await manager.archive(binding.id, signal);

@@ -11,7 +11,15 @@ import { executionEnvironment, safeError } from '../../shared/runtime.ts';
 import { ownedSession, required, withWaiting } from '../params.ts';
 import { createVerifier } from '../approvals.ts';
 import { sessionPermissionPolicy } from '../session-policy.ts';
-import type { HostContext } from '../state.ts';
+import {
+  acquireLocks,
+  assertUnlocked,
+  fileClaims,
+  hostClaim,
+  sessionClaim,
+  type HostContext,
+  type ManualOperation,
+} from '../state.ts';
 import type { Handler } from '../dispatch.ts';
 
 /**
@@ -31,6 +39,19 @@ const sessionVerifier = (ctx: HostContext, sessionId: string): Approver =>
     options: ctx.options,
     approvalSources: ctx.approvalSources,
   });
+
+/**
+ * A manual confirm or verify, registered so Stop for its session and Host shutdown can abort it.
+ *
+ * Its checks run commands one after another — up to 64 of them, each allowed minutes — and it used to be handed
+ * no signal at all: Stop did nothing, and shutdown aborted every manual operation except this one and then waited
+ * for it to finish. The caller removes it in the same `finally` that releases its locks.
+ */
+function manualVerification(ctx: HostContext, sessionId: string): ManualOperation {
+  const operation: ManualOperation = { sessionId, controller: new AbortController() };
+  ctx.manualOperations.add(operation);
+  return operation;
+}
 
 export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.create': async (ctx, params) => {
@@ -100,8 +121,11 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.trigger': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before editing tasks');
+    assertUnlocked(
+      ctx,
+      [hostClaim('shared'), sessionClaim(sessionId)],
+      'Host is busy; wait before editing tasks',
+    );
     const taskId = required(params, 'taskId');
     // A changed trigger is a new rule, so failures counted under the old one no longer delay it.
     ctx.scheduler.clearFailures(taskId);
@@ -113,8 +137,11 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.update': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before editing tasks');
+    assertUnlocked(
+      ctx,
+      [hostClaim('shared'), sessionClaim(sessionId)],
+      'Host is busy; wait before editing tasks',
+    );
     const update = { ...params } as Record<string, unknown>;
     delete update.sessionId;
     delete update.taskId;
@@ -141,10 +168,12 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.propose': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring) throw new Error('Host is busy; wait before planning');
+    // Planning rewrites this task's own definition from one model request: only this session has to be idle.
+    const planning = [hostClaim('shared'), sessionClaim(sessionId)];
+    assertUnlocked(ctx, planning, 'Host is busy; wait before planning');
     const task = ctx.store.getTask(sessionId, required(params, 'taskId'));
     if (task.status === 'in_progress') throw new Error('Task is running');
-    ctx.restoring = true;
+    const lease = acquireLocks(ctx, planning, 'Host is busy; wait before planning');
     let runId: string | undefined;
     const statistics = emptyStatistics();
     const started = performance.now();
@@ -188,15 +217,17 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
             ...(errorText ? { error: errorText } : {}),
           });
       } finally {
-        ctx.restoring = false;
+        lease.release();
       }
     }
   },
   'task.confirm': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before manual confirmation');
+    // Verification runs its checks in the project directory and compares them with recorded baselines, so nothing
+    // may write there meanwhile; another session working in its own worktree is no obstacle.
+    const confirming = fileClaims(sessionId, ctx.workspace);
+    assertUnlocked(ctx, confirming, 'Host is busy; wait before manual confirmation');
     const taskId = required(params, 'taskId');
     const task = ctx.store.getTask(sessionId, taskId);
     if (required(params, 'expectedUpdatedAt') !== task.updatedAt)
@@ -222,13 +253,14 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     }
     const baselines = ctx.store.latestRunAttemptBaselines(sessionId, taskId) as TaskBaselines;
     const attempt = ctx.store.startTaskAttempt(sessionId, taskId, { kind: 'review', baselines });
-    ctx.restoring = true;
+    const lease = acquireLocks(ctx, confirming, 'Host is busy; wait before manual confirmation');
+    const operation = manualVerification(ctx, sessionId);
     try {
       const verified = await verifyTaskAcceptance(
         ctx.workspace,
         task,
         baselines,
-        undefined,
+        operation.controller.signal,
         sessionVerifier(ctx, sessionId),
       );
       return ctx.store.finishTaskAttempt(sessionId, taskId, attempt.id, {
@@ -245,13 +277,15 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       });
       throw error;
     } finally {
-      ctx.restoring = false;
+      ctx.manualOperations.delete(operation);
+      lease.release();
     }
   },
   'task.verify': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring) throw new Error('Host is busy; wait before verifying');
+    const verifying = fileClaims(sessionId, ctx.workspace);
+    assertUnlocked(ctx, verifying, 'Host is busy; wait before verifying');
     const taskId = required(params, 'taskId');
     const task = ctx.store.getTask(sessionId, taskId);
     const baselines = ctx.store.latestRunAttemptBaselines(sessionId, taskId) as TaskBaselines;
@@ -259,7 +293,8 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       kind: 'verify',
       baselines,
     });
-    ctx.restoring = true;
+    const lease = acquireLocks(ctx, verifying, 'Host is busy; wait before verifying');
+    const operation = manualVerification(ctx, sessionId);
     try {
       const acceptanceEffects = new Map<string, string>();
       const approvalForVerification: Approver =
@@ -284,7 +319,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
         ctx.workspace,
         task,
         baselines,
-        undefined,
+        operation.controller.signal,
         async (approval, signal) => {
           const allowed = await approvalForVerification(approval, signal);
           if (allowed)
@@ -335,7 +370,8 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
       });
       throw error;
     } finally {
-      ctx.restoring = false;
+      ctx.manualOperations.delete(operation);
+      lease.release();
     }
   },
   'task.retry': async (ctx, params) => {

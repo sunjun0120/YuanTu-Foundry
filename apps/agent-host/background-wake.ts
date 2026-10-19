@@ -10,7 +10,7 @@ import {
 import type { RunResult } from '../../packages/protocol/index.ts';
 import { safeError } from '../shared/runtime.ts';
 import { sessionPermissionPolicy } from './session-policy.ts';
-import { runSlotFree, type HostContext, type WakeGrant } from './state.ts';
+import { runSlotFree, sessionCanRun, type HostContext, type WakeGrant } from './state.ts';
 
 /** The wake machinery the Host keeps for its whole lifetime. */
 export interface BackgroundWake {
@@ -66,8 +66,8 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
     queueMicrotask(() => {
       ctx.wakeQueued = false;
       // A wake needs a free run slot, not an idle Host: another session's long run is no reason for settled
-      // background work to sit unannounced. Exclusive operations still hold every wake back.
-      if (ctx.closing || !runSlotFree(ctx) || ctx.manualOperation || !ctx.automaticReady) return;
+      // background work to sit unannounced. An operation holds back only the wakes whose claims it collides with.
+      if (ctx.closing || !runSlotFree(ctx) || !ctx.automaticReady) return;
       // Nobody awaits this microtask, so a store failure here (a write lock held past `busy_timeout`, a full
       // disk, a session deleted by another process mid-scan) would otherwise reach the process as an uncaught
       // error. It is reported and this pass is dropped; the next settled producer asks for a wake again.
@@ -79,9 +79,14 @@ export function createBackgroundWake(ctx: HostContext): BackgroundWake {
         return;
       }
       for (const session of sessions) {
-        // A session that is already running (or already waking) picks the work up in its own run; admitting a
-        // wake for it here would only be refused by `run.start` after the producers were claimed.
-        if (session.parentSessionId || ctx.active.has(session.id) || ctx.waking.has(session.id))
+        // A session that is already running (or already waking) picks the work up in its own run, and one an
+        // operation holds — or one the Host has no slot left for — would only be refused by `run.start` after the
+        // producers were claimed.
+        if (
+          session.parentSessionId ||
+          ctx.waking.has(session.id) ||
+          !sessionCanRun(ctx, session.id)
+        )
           continue;
         let authority: ReturnType<typeof backgroundAuthority>;
         let accepted: ReturnType<typeof admitBackground>;

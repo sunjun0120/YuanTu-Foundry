@@ -27,7 +27,7 @@ export function createShutdown(ctx: HostContext): () => void {
     ctx.scheduler.stop();
     cancelSessionTitles(ctx);
     for (const run of ctx.active.values()) run.controller.abort();
-    ctx.manualOperation?.controller.abort();
+    for (const operation of ctx.manualOperations) operation.controller.abort();
     settleInteraction(ctx);
     // Unloading happens after the runs above were aborted: an activation's in-flight turn is stopped by its
     // own run's abort, and disposal then waits for it to unwind before releasing that child's tools.

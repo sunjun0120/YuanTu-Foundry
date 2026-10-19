@@ -1,4 +1,5 @@
 import { AgentHostClient, type HostClientOptions } from '../client/host-client.ts';
+import { deepFreeze } from '../client/freeze.ts';
 import {
   SessionController,
   type MessageDelta,
@@ -44,13 +45,6 @@ export type { RefreshScope } from './refresh-scope.ts';
  */
 const HOST_RECOVERY_ATTEMPTS = 3;
 const HOST_RECOVERY_DELAY_MS = 250;
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value)) deepFreeze(child);
-  }
-  return value;
-}
 /** How many more sessions the sidebar shows each time it is asked for more. */
 const SESSION_PAGE = 100;
 /** The largest page the Host answers in one `session.list` call (`MAX_SESSION_PAGE` in the store). */
@@ -96,7 +90,7 @@ export class CarrierService {
    * the path and reports it in `host.info`), so the first `start()` overwrites whatever the carrier guessed.
    */
   private workspace: string;
-  private sessions: SessionInfo[] = [];
+  private sessions: SessionInfo[] = deepFreeze([]);
   /**
    * How many sessions the sidebar shows: a window over the newest, grown by `loadMoreSessions`.
    *
@@ -106,18 +100,21 @@ export class CarrierService {
    */
   private sessionLimit = SESSION_PAGE;
   private sessionsHasMore = false;
-  private resources: CarrierSnapshot['resources'] = {
+  /**
+   * The panels' state, each frozen where it is assigned: snapshots share it until it is replaced (see `snapshot`).
+   */
+  private resources: CarrierSnapshot['resources'] = deepFreeze({
     instructions: [],
     skills: [],
     extensions: [],
-  };
-  private changes: CarrierSnapshot['changes'] = [];
-  private audit: CarrierSnapshot['audit'] = [];
+  });
+  private changes: CarrierSnapshot['changes'] = deepFreeze([]);
+  private audit: CarrierSnapshot['audit'] = deepFreeze([]);
   /** The session and seq the held audit window ends at; see `refreshAudit`. Empty means "read from the start". */
   private auditCursor: { sessionId: string; seq: number } = { sessionId: '', seq: 0 };
-  private tasks: CarrierSnapshot['tasks'] = [];
-  private taskAttempts: CarrierSnapshot['taskAttempts'] = {};
-  private taskSteps: CarrierSnapshot['taskSteps'] = {};
+  private tasks: CarrierSnapshot['tasks'] = deepFreeze([]);
+  private taskAttempts: CarrierSnapshot['taskAttempts'] = deepFreeze({});
+  private taskSteps: CarrierSnapshot['taskSteps'] = deepFreeze({});
   private restoring = false;
   private managing = false;
   private sessionQuery = '';
@@ -428,25 +425,28 @@ export class CarrierService {
   private currentSessionView(): CarrierSnapshot['session'] {
     const revision = this.controller.revision;
     if (this.sessionView?.revision !== revision)
-      this.sessionView = { revision, value: deepFreeze(this.controller.snapshot) };
+      this.sessionView = { revision, value: this.controller.frozenSnapshot };
     return this.sessionView.value;
   }
   /**
    * What the interface should show. `session` is shared between snapshots taken while the session did not move
    * (cloning every message, images included, for each background or task change was most of a publish's cost),
-   * so it is frozen: a consumer that needs to change it copies it first.
+   * so it is frozen: a consumer that needs to change it copies it first. The panels' sections are frozen where they
+   * are assigned and shared the same way, so a publish no longer clones each of them and the window's sender can
+   * tell an unchanged one by reference instead of serializing it.
    */
   get snapshot(): CarrierSnapshot {
     const env = { ...process.env, ...this.env };
     const configured = this.isConfigured(env);
     return {
       sessionQuery: this.sessionQuery,
-      currentSession: structuredClone(this.currentSession),
-      changes: structuredClone(this.changes),
-      audit: structuredClone(this.audit),
+      currentSession: this.currentSession,
+      changes: this.changes,
+      // Frozen when it is replaced (`refreshAudit`), so every snapshot shares it until a read adds an entry.
+      audit: this.audit,
       startupStage: this.startupStage,
       recovery: this.recovery ? { ...this.recovery } : null,
-      resources: structuredClone(this.resources),
+      resources: this.resources,
       workspace: this.workspace,
       model: redactSecrets(env.YUANTU_MODEL || '', env),
       configured,
@@ -456,15 +456,16 @@ export class CarrierService {
       // Only a carrier that started the Host may name its process: for a connected carrier the pid belongs to
       // whoever launched it, and reporting it would attribute that process's death to this link.
       hostPid: (this.supervisesHost ? this.client.pid : undefined) ?? null,
-      sessions: structuredClone(this.sessions),
+      sessions: this.sessions,
       sessionsHasMore: this.sessionsHasMore,
       background: this.backgroundPanel.jobs,
       backgroundState: this.backgroundPanel.state,
-      tasks: structuredClone(this.tasks),
-      taskAttempts: structuredClone(this.taskAttempts),
-      taskSteps: structuredClone(this.taskSteps),
+      tasks: this.tasks,
+      taskAttempts: this.taskAttempts,
+      taskSteps: this.taskSteps,
       session: this.currentSessionView(),
-      subagentTranscript: structuredClone(this.transcript.current),
+      // Replaced, never edited, whenever it changes (`SubAgentTranscriptViewer`), so it is shared like the panels.
+      subagentTranscript: this.transcript.current,
       error: this.error instanceof CarrierError ? this.error.message : this.error,
       errorDetail: carrierIssue(this.error, (value) => this.safeError(new Error(value))),
     };
@@ -490,9 +491,12 @@ export class CarrierService {
     return () => this.statisticsDeltaListeners.delete(listener);
   }
   private publish(): void {
+    if (!this.listeners.size) return;
+    // One snapshot per publish, shared by every listener: the getter clones each small section again.
+    const snapshot = this.snapshot;
     for (const listener of this.listeners) {
       try {
-        listener(this.snapshot);
+        listener(snapshot);
       } catch {
         /* Window teardown must not interrupt Host cleanup. */
       }
@@ -502,9 +506,9 @@ export class CarrierService {
   private async refreshTasks(sessionId = this.controller.sessionId): Promise<void> {
     const version = ++this.taskRefreshVersion;
     if (!sessionId) {
-      this.tasks = [];
-      this.taskAttempts = {};
-      this.taskSteps = {};
+      this.tasks = deepFreeze([]);
+      this.taskAttempts = deepFreeze({});
+      this.taskSteps = deepFreeze({});
       return;
     }
     const tasks = await this.client.request('task.list', { sessionId });
@@ -530,11 +534,13 @@ export class CarrierService {
       ),
     );
     if (version !== this.taskRefreshVersion || sessionId !== this.controller.sessionId) return;
-    this.tasks = tasks;
-    this.taskAttempts = Object.fromEntries(pairs.map(([id, value]) => [id, value.attempts]));
+    this.tasks = deepFreeze(tasks);
+    this.taskAttempts = deepFreeze(
+      Object.fromEntries(pairs.map(([id, value]) => [id, value.attempts])),
+    );
     // The step journal is the durable record of what survived an interruption, so the UI reads it
     // rather than inferring progress from the mutable step list.
-    this.taskSteps = Object.fromEntries(pairs.map(([id, value]) => [id, value.steps]));
+    this.taskSteps = deepFreeze(Object.fromEntries(pairs.map(([id, value]) => [id, value.steps])));
   }
   private tasksRefreshing = false;
   private tasksRefreshQueued = false;
@@ -562,9 +568,9 @@ export class CarrierService {
       const version = ++this.searchVersion;
       const { sessions, hasMore, current } = await this.sessionWindow(id);
       if (version === this.searchVersion) {
-        this.sessions = sessions;
+        this.sessions = deepFreeze(sessions);
         this.sessionsHasMore = hasMore;
-        this.currentSession = current;
+        this.currentSession = deepFreeze(current);
       }
     }
     /**
@@ -585,16 +591,17 @@ export class CarrierService {
     const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
     // Published under the same guard as the session list: two overlapping refreshes can cross a session switch,
     // and a stale reply landing last would show the file changes of a session the user has left.
-    if (version === this.searchVersion && id === this.controller.sessionId) this.changes = changes;
+    if (version === this.searchVersion && id === this.controller.sessionId)
+      this.changes = deepFreeze(changes);
   }
   /** Refresh independently when a fallback or a background-generated title becomes available. */
   private async refreshSessionNames(): Promise<void> {
     const version = ++this.searchVersion;
     const { sessions, hasMore, current } = await this.sessionWindow(this.controller.sessionId);
     if (version !== this.searchVersion) return;
-    this.sessions = sessions;
+    this.sessions = deepFreeze(sessions);
     this.sessionsHasMore = hasMore;
-    this.currentSession = current;
+    this.currentSession = deepFreeze(current);
     this.publish();
   }
   /**
@@ -636,7 +643,7 @@ export class CarrierService {
    */
   private async refreshAudit(sessionId: string | null): Promise<void> {
     if (!sessionId) {
-      this.audit = [];
+      this.audit = deepFreeze([]);
       this.auditCursor = { sessionId: '', seq: 0 };
       return;
     }
@@ -659,7 +666,10 @@ export class CarrierService {
     // A load can finish after the user moved on; publishing another session's record would be worse than
     // showing a stale one, so the answer is dropped unless it is still the open session.
     if (sessionId !== this.controller.sessionId) return;
-    this.audit = entries;
+    // A read that found nothing new keeps the frozen window it had, so the window is not sent again for it.
+    if (continuing && entries.length === this.audit.length && entries.at(-1) === this.audit.at(-1))
+      return;
+    this.audit = deepFreeze(entries);
     this.auditCursor = { sessionId, seq: entries.at(-1)?.seq ?? afterSeq };
   }
   private auditRefreshing = false;
@@ -758,7 +768,7 @@ export class CarrierService {
           }
           // The same order the launch path uses, so a recovered window is in the state a fresh one would be.
           await this.refresh();
-          this.resources = await this.client.request('resources.list', {});
+          this.resources = deepFreeze(await this.client.request('resources.list', {}));
           if (open) await this.controller.load(open);
           else if (this.sessions[0]) await this.controller.load(this.sessions[0].id);
           else await this.controller.create();
@@ -796,7 +806,7 @@ export class CarrierService {
       await this.refresh();
       this.startupStage = 'resources';
       this.publish();
-      this.resources = await this.client.request('resources.list', {});
+      this.resources = deepFreeze(await this.client.request('resources.list', {}));
       this.startupStage = 'history';
       this.publish();
       if (sessionId) await this.controller.load(sessionId);
@@ -836,7 +846,7 @@ export class CarrierService {
       tasks: this.tasks,
       configured: this.snapshot.configured,
       setTasks: (tasks) => {
-        this.tasks = tasks;
+        this.tasks = deepFreeze(tasks);
       },
       setRestoring: (restoring) => {
         this.restoring = restoring;
@@ -1026,7 +1036,7 @@ export class CarrierService {
         // The palette and settings surface invoke this to pick up instruction/extension edits
         // without restarting the app; without a case here the request was silently a no-op.
         case 'refreshResources':
-          this.resources = await this.client.request('resources.list', {});
+          this.resources = deepFreeze(await this.client.request('resources.list', {}));
           break;
         // The shell owns the save dialog and the file write; the service only answers with state.
         case 'export':

@@ -225,6 +225,65 @@ test('the storage invariant compares the log fold, the transcript read and the r
   );
 });
 
+test('the storage invariant reads only what was appended since its last pass, and still sees a rewrite', async (t) => {
+  const { store, session } = await storeFixture(t, 'yuantu-invariants-incremental-');
+  store.append(session.id, { role: 'user', content: 'one' });
+  store.append(session.id, { role: 'assistant', content: 'two', toolCalls: [] });
+  const reads: { afterSeq: number; offset: number }[] = [];
+  let rewrite = false;
+  const reader: LogTableReader = {
+    events: (id, afterSeq = 0) => {
+      reads.push({ afterSeq, offset: -1 });
+      return store.events(id, afterSeq);
+    },
+    messages: (id) => store.messages(id),
+    messagesFromTable: (id, offset = 0) => {
+      reads.push({ afterSeq: -1, offset });
+      const rows = store.messagesFromTable(id, offset);
+      return rewrite && offset === 0
+        ? [{ ...rows[0]!, content: 'rewritten' }, ...rows.slice(1)]
+        : rows;
+    },
+    messageRowCount: (id) => store.messageRowCount(id),
+    childSessions: () => [],
+  };
+  const registry = new InvariantRegistry();
+  registry.register(logTablesAgreeInvariant(reader));
+  await registry.assert('run-end', { sessionId: session.id });
+  assert.deepEqual(reads.splice(0), [
+    { afterSeq: 0, offset: -1 },
+    { afterSeq: -1, offset: 0 },
+  ]);
+  const seen = store.lastSeq(session.id);
+  store.append(session.id, { role: 'user', content: 'three' });
+  await registry.assert('run-end', { sessionId: session.id });
+  assert.deepEqual(reads.splice(0), [
+    { afterSeq: seen, offset: -1 },
+    { afterSeq: -1, offset: 2 },
+  ]);
+  // An old row that changed is outside the appended part; the totals still agree, so the incremental read passes —
+  // which is why a session's first check in a process is full. A history that shrank is caught by the totals.
+  rewrite = true;
+  const fresh = new InvariantRegistry();
+  fresh.register(logTablesAgreeInvariant(reader));
+  assert.match(
+    (await fresh.run('run-end', { sessionId: session.id }))[0]?.detail ?? '',
+    /write-through rows are not the fold of the log \(first difference at message 0\)/,
+  );
+  rewrite = false;
+  // A row count that disagrees with the transcript sends the check back to a full read rather than letting it pass.
+  // (The first check is full and never asks for the count, so the miscount only matters from the second on.)
+  const miscounted = new InvariantRegistry();
+  miscounted.register(
+    logTablesAgreeInvariant({ ...reader, messageRowCount: (id) => store.messageRowCount(id) + 1 }),
+  );
+  await miscounted.assert('run-end', { sessionId: session.id });
+  store.append(session.id, { role: 'assistant', content: 'four', toolCalls: [] });
+  reads.splice(0);
+  await miscounted.assert('run-end', { sessionId: session.id });
+  assert.ok(reads.some((read) => read.afterSeq === 0));
+});
+
 test('a real run satisfies every built-in invariant the host registers', async (t) => {
   let turns = 0;
   const provider: Provider = {

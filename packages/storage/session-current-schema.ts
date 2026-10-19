@@ -231,11 +231,15 @@ export function createCurrentSessionSchema(db: DatabaseSync): void {
       );
       CREATE INDEX workspace_bindings_session ON workspace_bindings(session_id);
       CREATE INDEX workspace_bindings_state ON workspace_bindings(state,created_at);
+      -- owner_started_at and owner_started_token are the derived columns an upgraded database receives as ADD COLUMN
+      -- (see SessionWorkspaces.operationIsLive).
       CREATE TABLE workspace_operation_leases (
         binding_id TEXT PRIMARY KEY REFERENCES workspace_bindings(id) ON DELETE CASCADE,
         owner_pid INTEGER NOT NULL,
         token TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        owner_started_at INTEGER,
+        owner_started_token TEXT
       );
       -- A frozen input. No session reference at all: one snapshot is shared by every child of a delegation call,
       -- and the whole point of it is that it outlives the sessions built from it.

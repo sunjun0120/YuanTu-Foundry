@@ -47,6 +47,13 @@ export interface CompletionInputOptions {
    * user's own SQLite resource is source, and silently dropping it is how a monitored change goes unnoticed.
    */
   runtimeStatePaths?: readonly string[];
+  /**
+   * The most files the range may hold; defaults to the workspace snapshot's own limit.
+   *
+   * Exposed so the boundary itself can be exercised without creating two hundred thousand files; no caller narrows
+   * it in production.
+   */
+  maxFiles?: number;
 }
 
 export class CompletionInputLimitError extends Error {
@@ -129,6 +136,7 @@ interface Accumulator {
   hash: ReturnType<typeof createHash>;
   files: number;
   bytes: number;
+  maxFiles: number;
 }
 
 async function hashFile(
@@ -146,6 +154,12 @@ async function hashFile(
   if (before.size > MAX_FILE_BYTES)
     throw new CompletionInputLimitError(
       `Completion input exceeds the ${String(MAX_FILE_BYTES)} byte per-file limit: ${relative}`,
+    );
+  // Counted where a file is admitted, so the limit is exactly the number of files accepted: a check on the way into
+  // a directory let the last entry through after the count had already reached it.
+  if (state.files >= state.maxFiles)
+    throw new CompletionInputLimitError(
+      `Completion inputs exceed the ${String(state.maxFiles)} file limit`,
     );
   if (state.bytes + before.size > MAX_TOTAL_BYTES)
     throw new CompletionInputLimitError(
@@ -208,10 +222,6 @@ async function walk(
   for (const entry of entries) {
     const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
     if (excluded(childRelative, runtimePaths)) continue;
-    if (state.files > MAX_FILES)
-      throw new CompletionInputLimitError(
-        `Completion inputs exceed the ${String(MAX_FILES)} file limit`,
-      );
     await walk(path.join(absolute, entry.name), childRelative, state, runtimePaths, signal, false);
   }
 }
@@ -249,7 +259,12 @@ export async function snapshotCompletionInputs(
       }),
     ),
   ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-  const state: Accumulator = { hash: createHash('sha256'), files: 0, bytes: 0 };
+  const state: Accumulator = {
+    hash: createHash('sha256'),
+    files: 0,
+    bytes: 0,
+    maxFiles: options.maxFiles ?? MAX_FILES,
+  };
   // The identity of the root is hashed first, so two workspaces with identical content produce different
   // digests: evidence is evidence about *this* directory, not about a directory that happens to look like it.
   state.hash.update('root\0').update(canonicalRoot).update('\0');

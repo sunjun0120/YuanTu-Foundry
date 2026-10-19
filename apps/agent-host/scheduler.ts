@@ -27,9 +27,10 @@ export interface TaskSchedulerOptions {
    * False while the Host cannot accept another run, so due work waits instead of failing.
    *
    * Asked without a session for "is there a free run slot at all", and with one for "could this session start
-   * now". A busy session's task waits while another session's due task still starts in a free slot.
+   * now". A busy session's task waits while another session's due task still starts in a free slot. With the
+   * task as well, the answer is for what that task would start, which is not always a run (see `main.ts`).
    */
-  canRun: (sessionId?: string) => boolean;
+  canRun: (sessionId?: string, task?: Task) => boolean;
   /** Starts one run and resolves when it settles. */
   run: (run: SchedulerRun) => Promise<void | Pick<RunResult, 'status' | 'error'>>;
   /**
@@ -191,7 +192,7 @@ export class TaskScheduler {
           this.recordWaiting(candidates.slice(candidates.indexOf(due)));
           break;
         }
-        if (!this.options.canRun(due.task.sessionId)) {
+        if (!this.options.canRun(due.task.sessionId, due.task)) {
           // Only this session is busy. Its task stays due (nothing was claimed) and the next look retries it.
           this.recordWaiting([due]);
           continue;
@@ -285,7 +286,7 @@ export class TaskScheduler {
               this.deferred.set(waiting.id, { event, depth });
           break;
         }
-        if (!this.options.canRun(task.sessionId)) {
+        if (!this.options.canRun(task.sessionId, task)) {
           if (this.deferred.size < MAX_DEFERRED_EVENTS)
             this.deferred.set(task.id, { event, depth });
           continue;

@@ -43,9 +43,23 @@ export interface TaskVerification {
   error?: string;
 }
 
-export async function captureTaskBaselines(root: string, task: Task): Promise<TaskBaselines> {
+export function captureTaskBaselines(root: string, task: Task): Promise<TaskBaselines> {
+  return captureAcceptanceBaselines(root, task.acceptance);
+}
+
+/**
+ * The before-image of every `forbidden-path` + `unchanged` check in an acceptance list.
+ *
+ * Whichever source the list came from — a task, an explicit request, an approved plan, a resumed contract — the
+ * check compares against what the path was when the run started; without the image it has nothing to compare to
+ * and the verifier reports the definition as unexecutable.
+ */
+export async function captureAcceptanceBaselines(
+  root: string,
+  acceptanceList: readonly Acceptance[],
+): Promise<TaskBaselines> {
   const baselines: TaskBaselines = {};
-  for (const acceptance of task.acceptance) {
+  for (const acceptance of acceptanceList) {
     const check = acceptance.check;
     if (check?.kind === 'forbidden-path' && check.expectation === 'unchanged' && check.path)
       baselines[check.id] = await capturePathSnapshot(root, check.path);

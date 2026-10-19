@@ -349,6 +349,7 @@ export class Agent {
         },
       });
       completion.registerTools();
+      await completion.captureBaselines();
       /**
        * The wrapper every model call of this run goes through, and the accounting it produces.
        *

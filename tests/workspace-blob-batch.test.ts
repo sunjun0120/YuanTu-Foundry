@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { openBlobBatch, readBlob, writeBlobs, writeTree } from '../packages/workspaces/git.ts';
+import {
+  openBlobBatch,
+  readBlob,
+  TreeIdCache,
+  writeBlobs,
+  writeTree,
+} from '../packages/workspaces/git.ts';
+import { collectTreeBlobs, TreeBlobCache } from '../packages/workspaces/snapshot.ts';
 
 /**
  * The one-process blob writer behind freezes and result exports.
@@ -104,4 +111,47 @@ test('a tree takes any name Git allows, including newlines and a leading quote',
     .filter(Boolean)
     .sort();
   assert.deepEqual(listed, [...names, 'dir/"quoted"\nchild.txt'].sort());
+});
+
+test('a second export reuses the blobs of unchanged files and the trees of unchanged directories', async (t) => {
+  const root = await repository(t);
+  await mkdir(path.join(root, 'src', 'deep'), { recursive: true });
+  await writeFile(path.join(root, 'src', 'deep', 'a.txt'), 'a\n');
+  await writeFile(path.join(root, 'src', 'b.txt'), 'b\n');
+  await writeFile(path.join(root, 'top.txt'), 'top\n');
+  // Older than the racy window, so the cache may trust their stat; a file written just now is always re-read.
+  const old = new Date(Date.now() - 60_000);
+  for (const file of ['src/deep/a.txt', 'src/b.txt', 'top.txt'])
+    await utimes(path.join(root, file), old, old);
+  const blobs = new TreeBlobCache();
+  const trees = new TreeIdCache();
+  const first = await collectTreeBlobs(root, root, undefined, {}, blobs);
+  const firstTree = await writeTree(root, first, undefined, trees);
+  const deep = await stat(path.join(root, 'src', 'deep', 'a.txt'));
+  assert.equal(
+    blobs.blobFor('src/deep/a.txt', deep),
+    first.find((e) => e.path === 'src/deep/a.txt')!.blob,
+  );
+
+  await writeFile(path.join(root, 'top.txt'), 'changed\n');
+  // A fresh write is inside the racy window and must be read again, not trusted by its stat.
+  assert.equal(blobs.blobFor('top.txt', await stat(path.join(root, 'top.txt'))), undefined);
+  const second = await collectTreeBlobs(root, root, undefined, {}, blobs);
+  assert.equal(
+    second.find((e) => e.path === 'top.txt')!.blob,
+    hashObject(root, Buffer.from('changed\n')),
+  );
+  assert.equal(
+    second.find((e) => e.path === 'src/b.txt')!.blob,
+    first.find((e) => e.path === 'src/b.txt')!.blob,
+  );
+  const secondTree = await writeTree(root, second, undefined, trees);
+  // The same answer Git gives without any cache, and an unchanged subtree keeps its id.
+  assert.equal(secondTree, await writeTree(root, second));
+  assert.notEqual(secondTree, firstTree);
+  const subtree = (tree: string) =>
+    execFileSync('git', ['rev-parse', `${tree}:src`], { cwd: root })
+      .toString('utf8')
+      .trim();
+  assert.equal(subtree(secondTree), subtree(firstTree));
 });

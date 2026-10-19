@@ -11,7 +11,7 @@ import { serveHost } from './lifecycle.ts';
 import { createSchedulerNotifier } from './params.ts';
 import { TaskScheduler } from './scheduler.ts';
 import { openHostServices } from './services.ts';
-import { createHostState, runSlotFree, sessionCanRun } from './state.ts';
+import { createHostState, fileClaims, lockConflict, runSlotFree, sessionCanRun } from './state.ts';
 
 /**
  * Assemble one Host process and hand it a carrier.
@@ -22,6 +22,10 @@ import { createHostState, runSlotFree, sessionCanRun } from './state.ts';
  * scheduler and the dispatcher — are built in an order where each one's *closure* may name the ones after it,
  * because none of them runs before the read loop does. `serveHost` takes it from there.
  */
+/** A task whose next step is the acceptance check a person has already approved. */
+const approvedAcceptance = (task: Task | undefined): boolean =>
+  task?.pendingApproval?.state === 'approved' && task.pendingApproval.phase === 'acceptance';
+
 async function main(): Promise<void> {
   const launch = resolveLaunch(process.argv.slice(2));
   if (!launch) return;
@@ -54,16 +58,21 @@ async function main(): Promise<void> {
   const scheduler = new TaskScheduler({
     store: ctx.store,
     workspace: ctx.workspace,
-    canRun: (sessionId) =>
-      ctx.automaticReady &&
-      !ctx.closing &&
-      (sessionId === undefined ? runSlotFree(ctx) : sessionCanRun(ctx, sessionId)),
+    canRun: (sessionId, task) => {
+      if (!ctx.automaticReady || ctx.closing) return false;
+      if (sessionId === undefined) return runSlotFree(ctx);
+      // An approved acceptance resumes as `task.verify`, not as a run: it needs no run slot, but it does need the
+      // project directory to itself. Asking the run's question instead let it start while another session was
+      // writing there, be refused, and count that refusal as one of the task's failures.
+      if (approvedAcceptance(task))
+        return (
+          !ctx.active.has(sessionId) && !lockConflict(ctx, fileClaims(sessionId, ctx.workspace))
+        );
+      return sessionCanRun(ctx, sessionId);
+    },
     ...(ctx.workflowIntervalMs ? { intervalMs: ctx.workflowIntervalMs } : {}),
     run: async (scheduled) => {
-      if (
-        scheduled.task.pendingApproval?.state === 'approved' &&
-        scheduled.task.pendingApproval.phase === 'acceptance'
-      ) {
+      if (approvedAcceptance(scheduled.task)) {
         const verified = (await ctx.dispatch('task.verify', {
           sessionId: scheduled.task.sessionId,
           taskId: scheduled.task.id,

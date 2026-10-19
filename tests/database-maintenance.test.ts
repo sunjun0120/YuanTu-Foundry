@@ -279,7 +279,7 @@ test('managed snapshot checksum rejects valid SQLite content tampering before re
   assert.deepEqual(readFileSync(file), before);
 });
 
-test('retention bounds count and bytes; insufficient capacity leaves migration unchanged', (t) => {
+test('retention bounds count and bytes; a database past the history budget still migrates', (t) => {
   const { root, file } = fixture(t);
   const store = new SessionStore(file);
   store.create(root);
@@ -293,16 +293,22 @@ test('retention bounds count and bytes; insufficient capacity leaves migration u
   assert.equal(readdirSync(`${file}.backups`).filter((name) => name.endsWith('.sqlite')).length, 2);
   db.exec(`PRAGMA user_version=${SCHEMA_VERSION - 1}`);
   db.close();
-  assert.throws(
-    () => new SessionStore(file, { backupRetention: { maxCount: 2, maxBytes: 1 } }),
-    /capacity/i,
-  );
-  const original = new DatabaseSync(file);
-  assert.equal(
-    Number(original.prepare('PRAGMA user_version').get()?.user_version),
-    SCHEMA_VERSION - 1,
-  );
-  original.close();
+  /**
+   * A budget smaller than the database used to refuse the migration's backup, and with it the migration: the
+   * store could not be opened at all, and freeing disk space did not help because the budget is a constant. The
+   * migration copy is admitted against free space instead, and it is the one copy the budget never prunes.
+   */
+  const migrated = new SessionStore(file, { backupRetention: { maxCount: 2, maxBytes: 1 } });
+  migrated.close();
+  const upgraded = new DatabaseSync(file);
+  assert.equal(Number(upgraded.prepare('PRAGMA user_version').get()?.user_version), SCHEMA_VERSION);
+  upgraded.close();
+  const kept = readdirSync(`${file}.backups`).filter((name) => name.endsWith('.sqlite'));
+  assert.equal(kept.length, 1, 'only the migration copy survives a one-byte budget');
+  const metadata = JSON.parse(readFileSync(`${file}.backups/${kept[0]}.json`, 'utf8')) as {
+    reason?: string;
+  };
+  assert.equal(metadata.reason, 'migration');
 });
 
 /**

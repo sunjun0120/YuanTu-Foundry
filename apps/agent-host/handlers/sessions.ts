@@ -2,7 +2,20 @@ import { undoFileChange } from '../../../packages/tools/file-undo.ts';
 import { removeSpills } from '../../../packages/tools/spill.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from '../session-policy.ts';
 import { ownedSession, required } from '../params.ts';
+import {
+  assertUnlocked,
+  fileClaims,
+  hostClaim,
+  lockConflict,
+  sessionClaim,
+  withLocks,
+  type HostContext,
+} from '../state.ts';
 import type { Handler } from '../dispatch.ts';
+
+/** A change to one session's own rows: only that session has to be idle. */
+const assertSessionIdle = (ctx: HostContext, sessionId: string, busy: string) =>
+  assertUnlocked(ctx, [hostClaim('shared'), sessionClaim(sessionId)], busy);
 
 /**
  * A session's own state, and the two ways it stops existing.
@@ -59,16 +72,14 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'plan.approve': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before approving a plan');
+    assertSessionIdle(ctx, sessionId, 'Host is busy; wait before approving a plan');
     // The hash is the text the human reviewed, so an edit between review and approval is refused.
     return ctx.store.approvePlan(sessionId, required(params, 'planId'), required(params, 'hash'));
   },
   'plan.reject': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before rejecting a plan');
+    assertSessionIdle(ctx, sessionId, 'Host is busy; wait before rejecting a plan');
     return ctx.store.rejectPlan(
       sessionId,
       required(params, 'planId'),
@@ -78,14 +89,15 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'changes.undo': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring) throw new Error('Host is busy; wait before undo');
-    ctx.restoring = true;
-    try {
-      await undoFileChange(ctx.store, sessionId, required(params, 'id'), ctx.workspace);
-      return { undone: true };
-    } finally {
-      ctx.restoring = false;
-    }
+    // Undo checks the files and then rewrites them, so nothing else may write in that directory meanwhile.
+    return await withLocks(
+      ctx,
+      { claims: fileClaims(sessionId, ctx.workspace), busy: 'Host is busy; wait before undo' },
+      async () => {
+        await undoFileChange(ctx.store, sessionId, required(params, 'id'), ctx.workspace);
+        return { undone: true };
+      },
+    );
   },
   'session.create': async (ctx) => {
     const created = ctx.store.create(ctx.workspace);
@@ -106,71 +118,71 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'session.rename': async (ctx, params) => {
     const id = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, id);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before changing sessions');
+    assertSessionIdle(ctx, id, 'Host is busy; wait before changing sessions');
     return ctx.store.rename(id, required(params, 'title'));
   },
   'session.delete': async (ctx, params) => {
     const id = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, id);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before changing sessions');
-    ctx.restoring = true;
-    try {
-      await ctx.background.close(id);
-      // A terminal holds a real process, so a deleted session must not leave a shell running behind it —
-      // the same rule the background commands follow, for a stronger reason.
-      await ctx.terminals.closeAllAndWait(id);
-      /**
-       * Checked before the session goes away, because the check reads its log. A `session-close`
-       * violation cannot stop anything — the session is being deleted on purpose — so it is reported on
-       * stderr, where an operator sees the promises this deployment is not keeping.
-       */
-      const closingViolations = await ctx.invariants.run('session-close', { sessionId: id });
-      for (const violation of closingViolations)
-        process.stderr.write(
-          `invariant violated on session close: ${violation.name} (${violation.owner}): ${violation.detail}\n`,
-        );
-      if (ctx.announced.delete(id)) {
-        const failures = await underSessionPolicy(ctx, id, () =>
-          ctx.hooks.sessionEnd(
-            { sessionId: id, reason: 'delete', readOnly: sessionLifecycleReadOnly(ctx, id) },
-            new AbortController().signal,
-          ),
-        );
-        for (const failure of failures)
-          process.stderr.write(`sessionEnd hook failed: ${failure}\n`);
-      }
-      // Where each doomed session spilled is only answerable while its rows still exist: the project, and the
-      // execution root a delegated child worked in when that was a directory of its own.
-      const doomed = ctx.store.sessionTree(id);
-      const spills = doomed.flatMap((sessionId) => {
-        const binding = ctx.store.workspaceBinding(sessionId);
-        const roots = new Set([ctx.store.get(sessionId).workspace, binding.executionRoot]);
-        return [...roots].map((root) => ({ root, sessionId }));
-      });
-      ctx.store.delete(id);
-      for (const spill of spills)
-        await removeSpills(spill.root, spill.sessionId).catch((error: unknown) =>
+    // Every session the delete removes, so a delegated child that is still busy keeps its tree alive.
+    const claims = [hostClaim('shared'), ...ctx.store.sessionTree(id).map(sessionClaim)];
+    return await withLocks(
+      ctx,
+      { claims, busy: 'Host is busy; wait before changing sessions' },
+      async () => {
+        await ctx.background.close(id);
+        // A terminal holds a real process, so a deleted session must not leave a shell running behind it —
+        // the same rule the background commands follow, for a stronger reason.
+        await ctx.terminals.closeAllAndWait(id);
+        /**
+         * Checked before the session goes away, because the check reads its log. A `session-close`
+         * violation cannot stop anything — the session is being deleted on purpose — so it is reported on
+         * stderr, where an operator sees the promises this deployment is not keeping.
+         */
+        const closingViolations = await ctx.invariants.run('session-close', { sessionId: id });
+        for (const violation of closingViolations)
           process.stderr.write(
-            `spill cleanup failed for ${spill.sessionId}: ${(error as Error).message}\n`,
-          ),
-        );
-      // Every session the delete removed, not only the one named: a delegated child had its own sandbox choice,
-      // policy and phase, and keys for sessions that no longer exist are memory nothing will ever release. A
-      // child still announced would also get a `sessionEnd` at shutdown for a session whose log is gone.
-      for (const sessionId of doomed) {
-        ctx.sessionLifecyclePhases?.delete(sessionId);
-        ctx.sessionSandboxes.delete(sessionId);
-        ctx.sessionSandboxFiles.delete(sessionId);
-        ctx.sessionSandboxNetwork.delete(sessionId);
-        ctx.sessionPermissionPolicies.delete(sessionId);
-        ctx.announced.delete(sessionId);
-      }
-      return { deleted: true };
-    } finally {
-      ctx.restoring = false;
-    }
+            `invariant violated on session close: ${violation.name} (${violation.owner}): ${violation.detail}\n`,
+          );
+        if (ctx.announced.delete(id)) {
+          const failures = await underSessionPolicy(ctx, id, () =>
+            ctx.hooks.sessionEnd(
+              { sessionId: id, reason: 'delete', readOnly: sessionLifecycleReadOnly(ctx, id) },
+              new AbortController().signal,
+            ),
+          );
+          for (const failure of failures)
+            process.stderr.write(`sessionEnd hook failed: ${failure}\n`);
+        }
+        // Where each doomed session spilled is only answerable while its rows still exist: the project, and the
+        // execution root a delegated child worked in when that was a directory of its own.
+        const doomed = ctx.store.sessionTree(id);
+        const spills = doomed.flatMap((sessionId) => {
+          const binding = ctx.store.workspaceBinding(sessionId);
+          const roots = new Set([ctx.store.get(sessionId).workspace, binding.executionRoot]);
+          return [...roots].map((root) => ({ root, sessionId }));
+        });
+        ctx.store.delete(id);
+        for (const spill of spills)
+          await removeSpills(spill.root, spill.sessionId).catch((error: unknown) =>
+            process.stderr.write(
+              `spill cleanup failed for ${spill.sessionId}: ${(error as Error).message}\n`,
+            ),
+          );
+        // Every session the delete removed, not only the one named: a delegated child had its own sandbox choice,
+        // policy and phase, and keys for sessions that no longer exist are memory nothing will ever release. A
+        // child still announced would also get a `sessionEnd` at shutdown for a session whose log is gone.
+        for (const sessionId of doomed) {
+          ctx.sessionLifecyclePhases?.delete(sessionId);
+          ctx.sessionSandboxes.delete(sessionId);
+          ctx.sessionSandboxFiles.delete(sessionId);
+          ctx.sessionSandboxNetwork.delete(sessionId);
+          ctx.sessionPermissionPolicies.delete(sessionId);
+          ctx.announced.delete(sessionId);
+        }
+        return { deleted: true };
+      },
+    );
   },
   /**
    * An operator's way out of a lease that can never be confirmed dead.
@@ -185,7 +197,8 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
     ownedSession(ctx.store, ctx.workspace, id);
     if (ctx.active.has(id))
       throw new Error('This Host is running the session; cancel that run before recovering it');
-    if (ctx.restoring) throw new Error('Host is busy; wait before recovering a session');
+    if (lockConflict(ctx, [hostClaim('shared'), sessionClaim(id)]))
+      throw new Error('Host is busy; wait before recovering a session');
     return ctx.store.recoverSession(
       id,
       'Operator forced recovery: the owning process could not be confirmed dead',

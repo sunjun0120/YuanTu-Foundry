@@ -31,6 +31,7 @@ import {
 } from './completion-inputs.ts';
 import type { RunEmit } from './run-emit.ts';
 import {
+  captureAcceptanceBaselines,
   verifyCompletionAcceptance,
   type TaskBaselines,
   type verifyTaskAcceptance,
@@ -138,7 +139,12 @@ export interface RunCompletionOptions {
   workspace: string;
   /** The run's cancellation signal, which the fingerprints and the checks observe. */
   signal: AbortSignal;
-  /** The before-images the checks compare against, captured before the run wrote anything. */
+  /**
+   * The before-images the checks compare against, captured before the run wrote anything.
+   *
+   * A task's are taken before the run row exists; any other source's are added by `captureBaselines` once the
+   * contract is resolved, into this same object.
+   */
   baselines: TaskBaselines;
   /**
    * The approval seam an acceptance command goes through.
@@ -161,6 +167,14 @@ export interface RunCompletion {
   state: RunCompletionState;
   /** Registers the two contract tools, when this run has a contract and may speak about it. */
   registerTools(): void;
+  /**
+   * The before-images a non-task contract's `unchanged` checks compare against.
+   *
+   * Called once the contract is resolved and before the first model request. A task's images were taken before the
+   * run started; every other source — an explicit request, an approved plan, a resumed contract — is known only
+   * here, and without an image its `unchanged` check is a definition the verifier cannot execute.
+   */
+  captureBaselines(): Promise<void>;
   /** The one verification round this run carries; `undefined` when it carries no contract to judge. */
   verifyRound(): Promise<CompletionDecision | undefined>;
   /**
@@ -818,5 +832,20 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
       };
     }
   };
-  return { state, registerTools, verifyRound, settleFinalInputs, finalizeVerdict };
+  const captureBaselines = async (): Promise<void> => {
+    if (task || !state.contractSpec) return;
+    Object.assign(
+      baselines,
+      await captureAcceptanceBaselines(workspace, state.contractSpec.acceptance),
+    );
+  };
+
+  return {
+    state,
+    registerTools,
+    captureBaselines,
+    verifyRound,
+    settleFinalInputs,
+    finalizeVerdict,
+  };
 }

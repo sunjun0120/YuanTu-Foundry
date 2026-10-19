@@ -90,6 +90,48 @@ test('change subscribers are told without a copy, and scalar reads match the sna
   assert.equal(calls.length, seen, 'an unsubscribed listener is not called');
 });
 
+test('frozen snapshots share every message an earlier one handed out', async (t) => {
+  let emit: (event: AgentEvent) => void = () => {};
+  const client = {
+    status: 'ready',
+    subscribe: (listener: (event: AgentEvent) => void) => {
+      emit = listener;
+      return () => {};
+    },
+    subscribeStatus: () => () => {},
+    async request(method: string) {
+      if (method === 'session.get')
+        return {
+          messages: [
+            { role: 'user', content: 'one', createdAt: '2026-01-01T00:00:00.000Z' },
+            { role: 'assistant', content: 'two', createdAt: '2026-01-01T00:00:01.000Z' },
+          ],
+        };
+      if (method === 'plan.get') return null;
+      if (method === 'subagents.list') return [];
+      throw new Error(`Unexpected method: ${method}`);
+    },
+  };
+  const controller = new SessionController(client as unknown as AgentHostClient);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  const first = controller.frozenSnapshot;
+  assert.ok(Object.isFrozen(first) && Object.isFrozen(first.messages[0]));
+  assert.deepEqual(first, controller.snapshot);
+  emit({ type: 'run.started', sessionId: 'session-1', runId: 'run-1', data: {} } as AgentEvent);
+  emit({
+    type: 'tool.finished',
+    sessionId: 'session-1',
+    runId: 'run-1',
+    data: { callId: 'call-1', name: 'read', content: 'ok' },
+  } as unknown as AgentEvent);
+  const second = controller.frozenSnapshot;
+  assert.equal(second.messages.length, 3);
+  assert.equal(second.messages[0], first.messages[0]);
+  assert.equal(second.messages[1], first.messages[1]);
+  assert.deepEqual(second, controller.snapshot);
+});
+
 // ---- merged from client.test.ts ----
 
 async function setup(t: test.TestContext, env: NodeJS.ProcessEnv = {}, extra = {}) {

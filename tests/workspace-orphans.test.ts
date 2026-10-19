@@ -8,7 +8,8 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
-import type { HostContext } from '../apps/agent-host/state.ts';
+import { hostClaim, type HostContext } from '../apps/agent-host/state.ts';
+import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { spawnedCarrier } from '../packages/carrier/index.ts';
 import { projectRoot } from './process-fixture.ts';
@@ -71,7 +72,8 @@ async function host(t: test.TestContext): Promise<Harness> {
     store,
     workspace: root,
     active: new Map(),
-    restoring: false,
+    locks: new ResourceLocks(),
+    manualOperations: new Set(),
     options: { allowWrite: true },
     launchSandbox: { mode: 'host' },
     defaultSandboxMode: 'host',
@@ -376,9 +378,9 @@ test('busy Hosts refuse orphan writes while keeping their inventory readable', a
     parentSessionId: h.sessionId,
     delete: true,
   });
-  h.ctx.restoring = true;
+  const holding = h.ctx.locks.tryAcquire([hostClaim('exclusive')])!;
   await assert.rejects(h.dispatch('workspace.archive', { bindingId: binding.id }), /Host is busy/);
-  h.ctx.restoring = false;
+  holding.release();
   h.ctx.active.set(h.sessionId, { controller: new AbortController() });
   await assert.rejects(h.dispatch('workspace.archive', { bindingId: binding.id }), /Host is busy/);
   assert.equal(((await h.dispatch('workspaces.orphaned', {})) as OrphanEntry[]).length, 1);

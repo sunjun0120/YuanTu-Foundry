@@ -2,7 +2,17 @@ import { required, ownedSession } from '../params.ts';
 import { WorkspaceManager } from '../../../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../../../packages/workspaces/results.ts';
 import type { Handler } from '../dispatch.ts';
-import type { HostContext } from '../state.ts';
+import {
+  bindingClaim,
+  executionRoot,
+  fileClaims,
+  hostClaim,
+  rootClaim,
+  sessionClaim,
+  withLocks,
+  type HostContext,
+} from '../state.ts';
+import type { LockClaim } from '../resource-locks.ts';
 import { WorkspaceFailure, type WorkspaceBinding } from '../../../packages/protocol/workspaces.ts';
 import { samePath } from '../../../packages/platform/workspace-paths.ts';
 import { nodeDependencyWarning } from '../../../packages/workspaces/dependencies.ts';
@@ -108,12 +118,10 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
   'workspace.apply': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before importing a sub-agent result');
-    ctx.restoring = true;
-    const controller = new AbortController();
-    ctx.manualOperation = { sessionId, controller };
-    try {
+    // The import checks the target's bytes and then writes them, so it holds the directory it writes alone.
+    const claims = fileClaims(sessionId, executionRoot(ctx, sessionId));
+    const busy = 'Host is busy; wait before importing a sub-agent result';
+    return await withLocks(ctx, { claims, busy, operation: { sessionId } }, async (signal) => {
       const service = new WorkspaceResultsService({ store: ctx.store });
       const resultId = required(params, 'resultId');
       const expectedDigest = required(params, 'expectedDigest');
@@ -121,7 +129,7 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
         parentSessionId: sessionId,
         resultId,
         expectedDigest,
-        signal: controller.signal,
+        signal,
       });
       if (preview.conflicts.length)
         return {
@@ -150,7 +158,7 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
             arguments: { resultId, expectedDigest },
           },
           {
-            signal: controller.signal,
+            signal,
             sessionId,
             workspaceRoot: ctx.store.workspaceBinding(sessionId).executionRoot,
             executionPolicyForCall: () => sessionExecutionPolicy(ctx, sessionId),
@@ -192,10 +200,7 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
           },
         ],
       };
-    } finally {
-      ctx.manualOperation = undefined;
-      ctx.restoring = false;
-    }
+    });
   },
 
   /**
@@ -207,69 +212,79 @@ export const workspaceHandlers: Readonly<Record<string, Handler>> = {
    */
   'workspace.archive': async (ctx, params) => {
     const { manager, binding } = maintenanceWorkspace(ctx, params);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before archiving a workspace');
-    ctx.restoring = true;
-    const controller = new AbortController();
-    // Registered so Stop (for the owning session) and shutdown reach it: archiving rewrites a whole tree, and
-    // passing a controller nobody owns — which is what this used to do — made the manager's abort checks and
-    // `ctx.restoring` into an uncancellable, process-wide refusal.
-    ctx.manualOperation = {
-      ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
-      controller,
-    };
-    try {
-      await manager.archive(binding.id, controller.signal);
-      return { archived: true as const, bindingId: binding.id, state: 'archived' as const };
-    } finally {
-      ctx.manualOperation = undefined;
-      ctx.restoring = false;
-    }
+    // Registered so Stop (for the owning session) and shutdown reach it: these rewrite or delete a whole tree.
+    return await withLocks(
+      ctx,
+      {
+        claims: maintenanceClaims(params, binding),
+        busy: 'Host is busy; wait before archiving a workspace',
+        operation: typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {},
+      },
+      async (signal) => {
+        await manager.archive(binding.id, signal);
+        return { archived: true as const, bindingId: binding.id, state: 'archived' as const };
+      },
+    );
   },
 
   /** Rebuild an archived or removed workspace from its own frozen input, keeping the same identity. */
   'workspace.restore': async (ctx, params) => {
     const { manager, binding } = maintenanceWorkspace(ctx, params);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before restoring a workspace');
-    ctx.restoring = true;
-    const controller = new AbortController();
-    ctx.manualOperation = {
-      ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
-      controller,
-    };
-    try {
-      // The restored binding is returned rather than the one that was asked for: a restore re-validates the
-      // directory and may move the binding's state, and a client that showed the old state would be showing a
-      // record that is no longer what the service believes.
-      const restored = await manager.restore(binding.id, controller.signal);
-      return { restored: true as const, binding: restored };
-    } finally {
-      ctx.manualOperation = undefined;
-      ctx.restoring = false;
-    }
+    return await withLocks(
+      ctx,
+      {
+        claims: maintenanceClaims(params, binding),
+        busy: 'Host is busy; wait before restoring a workspace',
+        operation: typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {},
+      },
+      async (signal) => {
+        // The restored binding is returned rather than the one that was asked for: a restore re-validates the
+        // directory and may move the binding's state, and a client that showed the old state would be showing a
+        // record that is no longer what the service believes.
+        const restored = await manager.restore(binding.id, signal);
+        return { restored: true as const, binding: restored };
+      },
+    );
   },
   'workspace.remove': async (ctx, params) => {
     const { manager, binding } = maintenanceWorkspace(ctx, params);
-    if (ctx.active.size || ctx.restoring)
-      throw new Error('Host is busy; wait before removing a workspace');
-    ctx.restoring = true;
-    const controller = new AbortController();
-    ctx.manualOperation = {
-      ...(typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {}),
-      controller,
-    };
-    try {
-      await manager.remove(binding.id, controller.signal);
-      return { removed: true as const, bindingId: binding.id, state: 'removed' as const };
-    } finally {
-      ctx.manualOperation = undefined;
-      ctx.restoring = false;
-    }
+    return await withLocks(
+      ctx,
+      {
+        claims: maintenanceClaims(params, binding),
+        busy: 'Host is busy; wait before removing a workspace',
+        operation: typeof params.sessionId === 'string' ? { sessionId: params.sessionId } : {},
+      },
+      async (signal) => {
+        await manager.remove(binding.id, signal);
+        return { removed: true as const, bindingId: binding.id, state: 'removed' as const };
+      },
+    );
   },
 };
 
 /** A binding ID is a recovery address, never an alternative authority over a live session. */
+/**
+ * What archiving, restoring or removing a binding holds.
+ *
+ * Addressed through its session, it is that session, the binding and the binding's directory — another session
+ * working elsewhere is no obstacle. An orphan has no session left to hold, and is the one case that still waits for
+ * the whole Host to be idle: nothing names who else might be relying on that directory.
+ */
+function maintenanceClaims(
+  params: Record<string, unknown>,
+  binding: WorkspaceBinding,
+): LockClaim[] {
+  if (typeof params.sessionId !== 'string')
+    return [hostClaim('exclusive'), bindingClaim(binding.id)];
+  return [
+    hostClaim('shared'),
+    sessionClaim(params.sessionId),
+    bindingClaim(binding.id),
+    rootClaim(binding.executionRoot, 'exclusive'),
+  ];
+}
+
 function maintenanceWorkspace(ctx: HostContext, params: Record<string, unknown>) {
   if (params.bindingId !== undefined && params.sessionId !== undefined)
     throw new Error('Specify either a session or a binding');

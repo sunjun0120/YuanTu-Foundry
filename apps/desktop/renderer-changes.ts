@@ -3,6 +3,7 @@ import { fileChangeAction, undoConfirmKey } from '../../packages/client/change-a
 import { collectTurnChanges, type TurnChangedFile, type TurnChanges } from './turn-changes.ts';
 import { diffView } from './diff-view.ts';
 import { locale, t } from './i18n.ts';
+import { memo } from './renderer-memo.ts';
 
 /** Rows a collapsed card previews before the whole-list toggle appears. */
 const COLLAPSED_ROWS = 3;
@@ -36,6 +37,7 @@ export function setupTurnChanges(options: {
     string,
     { key: string; path: string; identity: string; view: HTMLElement }
   >();
+  const changesText = memo<string>();
   const previewIdentity = (file: TurnChangedFile) => JSON.stringify([file.entries, locale()]);
 
   function previewView(file: TurnChangedFile): HTMLElement {
@@ -170,9 +172,10 @@ export function setupTurnChanges(options: {
       options.clearPreviews();
     }
     blocked = nextBlocked;
+    const changes = state.changes;
     const next = JSON.stringify([
       sessionId,
-      state.changes,
+      changesText([changes], () => JSON.stringify(changes)),
       state.session.messageRevision,
       state.session.historyStart,
       state.session.running,

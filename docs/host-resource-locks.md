@@ -1,6 +1,6 @@
 # Host 资源锁：把全局独占缩小到会话与执行目录
 
-状态：设计稿，尚未实现。写于 2026-10-19，以当时工作区（含未提交的多会话并发改动）为准。
+状态：已实现（2026-10-19）。设计稿写于同日，第 3、4 节保留当时的盘点；实现与设计的出入见第 10 节。
 
 ## 1. 背景与目标
 
@@ -82,8 +82,9 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 
 ### 5.1 资源与模式
 
-三种资源键：
+四种资源键：
 
+- `host`：整个 Host。每个运行和操作都**共享**持有；只有孤立工作区的维护**独占**它。
 - `session:<id>`：会话本身。总是**独占**。
 - `root:<执行目录绝对路径>`：执行目录。分**共享**与**独占**两种模式。
 - `binding:<id>`：工作区绑定。总是**独占**。
@@ -95,7 +96,7 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 
 | 操作                                                             | 获取的锁                                                          |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `run.start`                                                      | `session` 独占 + `root` 共享                                      |
+| `run.start`                                                      | `host` 共享 + `session` 独占 + `root` 共享                        |
 | 第一类（只动数据库行）                                           | `session` 独占                                                    |
 | `session.delete`                                                 | 子树中每个会话的 `session` 独占                                   |
 | `changes.undo`、`task.verify`、`task.confirm`、`workspace.apply` | `session` 独占 + `root` 独占                                      |
@@ -167,3 +168,30 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 1. 4.2：验收和撤销该对项目目录还是会话执行目录生效。
 2. `context.compact` 与 `task.propose` 会调用模型，是否需要占用 `maxActiveRuns` 的一个槽位，以免绕过并发上限。
 3. 是否值得在锁冲突时提供"排队等待"选项，还是一直保持立即拒绝。
+
+## 10. 实现记录
+
+**代码位置**
+
+- 锁表：`apps/agent-host/resource-locks.ts`。纯内存，只有 `claims`、`conflict`、`tryAcquire` 三个方法，租约的 `release` 可重复调用。
+- Host 侧的键与判断都在 `apps/agent-host/state.ts`：`hostClaim`、`sessionClaim`、`rootClaim`、`bindingClaim` 生成键；`runClaims`、`fileClaims` 是两组常用组合；`lockConflict`、`assertUnlocked`、`acquireLocks`、`withLocks` 负责判断与加锁。
+- `ctx.restoring` 与 `ctx.manualOperation` 已删除，由 `ctx.locks` 与 `ctx.manualOperations`（集合）取代。`run.cancel` 中止该会话的全部手动操作，关闭流程中止所有手动操作。
+
+**与设计的出入**
+
+- 运行**不在锁表里登记租约**。运行持有的键由 `ctx.active` 推导（`runClaims`），每次判断时与锁表中的租约合并计算。这样运行不可能忘记释放，测试里直接往 `active` 放条目的写法也照样有效。运行的执行目录在准入时读一次，存进 `ActiveRun.root`。
+- 增加了 `host` 键（见 5.1）。孤立工作区的归档、恢复、删除没有所属会话可锁，仍然要求整个 Host 空闲，所以独占 `host`；其他操作都共享它。
+- 没有单独的 `canAcquire`。调度器、后台唤醒、`run.start` 都通过 `runSlotFree`、`sessionCanRun`、`admissionRefusal` 判断，它们内部改为基于锁表实现，签名不变。
+- 错误文本保持原样，没有附加冲突资源。唯一新增的是会话被手动操作占用时，`run.start` 返回 `This session already has an active run (an exclusive operation is in progress)`；目录或 Host 被占用时仍是 `This Host already has an active run (an exclusive operation is in progress)`。
+- `task.propose` 与 `context.compact` 只锁本会话，不占用运行槽位（9.2 暂按"不占用"处理）。
+
+**第 4 节的处理**
+
+- 4.1 已修复：调度器的 `canRun` 现在会收到任务本身。已批准的验收会以 `task.verify` 恢复，这时检查的是验收需要的锁（本会话 + 项目目录独占），而不是运行槽位；拿不到就继续等待，不再计入失败退避。
+- 4.2 未改变行为：撤销、验收、人工确认仍然作用于项目目录（`ctx.workspace`），锁的也是项目目录。是否改为会话执行目录仍待确认。
+- 4.3 已处理：`manualOperation` 改为集合 `manualOperations`。
+
+**测试**
+
+- 新增 `tests/host-resource-locks.test.ts`：锁表的共享与独占规则和全有或全无；会话 A 运行时会话 B 仍可改名；同一目录的运行挡住验收，而在独立目录里的运行不会；会话或目录被手动操作占用时的准入文本；只有独占 `host` 才挡住所有运行。
+- 已有测试中手工构造 `HostContext` 的地方改用 `locks` 与 `manualOperations`。
