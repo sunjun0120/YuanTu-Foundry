@@ -298,6 +298,7 @@ test(
   { timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-live-permission-'));
+    const profileRoot = await mkdtemp(path.join(tmpdir(), 'yuantu-live-permission-profile-'));
     const results = [];
     const url = await httpFixture(t, (body, response) => {
       // Answer the verification nudge with the final answer; treating it as a new instruction started a second
@@ -341,12 +342,13 @@ test(
     t.after(async () => {
       await app?.close();
       await rm(root, { recursive: true, force: true });
+      await rm(profileRoot, { recursive: true, force: true });
     });
     app = await electron.launch({
       executablePath: electronPath,
       args: [
         path.resolve('dist/desktop/main.cjs'),
-        `--user-data-dir=${path.join(root, 'profile')}`,
+        `--user-data-dir=${path.join(profileRoot, 'profile')}`,
       ],
       env,
     });
