@@ -122,6 +122,7 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
             repairRounds: completion.state.repairRounds,
             failedCheckIds: [],
           },
+          completion.state.automatic,
         ),
       );
     }

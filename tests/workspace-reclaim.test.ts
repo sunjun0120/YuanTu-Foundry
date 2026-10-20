@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { sweepAbandonedStaging } from '../packages/workspaces/snapshot.ts';
 import {
@@ -19,6 +19,7 @@ import {
 
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
+import { acquireHostLock, hostPresenceDirectory } from '../packages/platform/host-lock.ts';
 import { releaseSnapshotsIfIdle } from '../apps/agent-host/snapshot-release.ts';
 import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
@@ -175,6 +176,12 @@ test('workspace-gc reports with --dry-run and releases without it', async (t) =>
     { format: entry.format, owners: entry.owners, recordedHere: entry.recordedHere },
     { format: 4, owners: [owner], recordedHere: true },
   );
+  // A live workspace Host is the one thing that must never be released beside: refuse instead of racing it.
+  const lock = acquireHostLock(root);
+  const refused = await runCli(['workspace-gc', '--db', db, '--workspace', root, '--json']);
+  assert.notEqual(refused.code, 0);
+  assert.match(refused.stderr, /Host is running in this workspace/);
+  lock.release();
   // Nothing names it — no binding was built from it — so a real run releases the only share and the snapshot goes.
   const applied = await report(false);
   assert.equal(applied.released, 1);
@@ -198,11 +205,49 @@ test('an idle Host can release an unused snapshot without waiting for the next s
     signal: new AbortController().signal,
   });
   const ctx = {
+    workspace: root,
     store,
     active: new Map(),
     locks: new ResourceLocks(),
     manualOperations: new Set(),
   } as unknown as HostContext;
+  assert.equal(await releaseSnapshotsIfIdle(ctx), 1);
+  assert.equal(store.workspaceSnapshot(snapshot.id), null);
+});
+
+test('a second live Host marker defers the release until that Host is gone', async (t) => {
+  const { root, store } = await storeFixture(
+    t,
+    'yuantu-reclaim-other-host-',
+    '.yuantu/sessions.sqlite',
+  );
+  git(root, ['init', '-q']);
+  await writeFile(path.join(root, 'a.txt'), 'a\n');
+  git(root, ['add', 'a.txt']);
+  git(root, ['commit', '-q', '-m', 'base']);
+  const manager = new WorkspaceManager({ store });
+  const session = store.create(root);
+  const snapshot = await manager.freeze({
+    parentSessionId: session.id,
+    sourceBinding: manager.resolve(session.id),
+    signal: new AbortController().signal,
+  });
+  const directory = hostPresenceDirectory(root);
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    path.join(directory, 'other.json'),
+    JSON.stringify({ version: 1, pid: process.ppid, startedAt: null, token: 'other-host' }),
+  );
+  const ctx = {
+    workspace: root,
+    store,
+    active: new Map(),
+    locks: new ResourceLocks(),
+    manualOperations: new Set(),
+  } as unknown as HostContext;
+  assert.equal(await releaseSnapshotsIfIdle(ctx), 0);
+  assert.ok(store.workspaceSnapshot(snapshot.id));
+  await rm(directory, { recursive: true, force: true });
   assert.equal(await releaseSnapshotsIfIdle(ctx), 1);
   assert.equal(store.workspaceSnapshot(snapshot.id), null);
 });
@@ -221,6 +266,7 @@ test('a busy Host defers the release to the next idle moment', async (t) => {
     signal: new AbortController().signal,
   });
   const ctx = {
+    workspace: root,
     store,
     active: new Map([['running', {}]]),
     manualOperations: new Set(),

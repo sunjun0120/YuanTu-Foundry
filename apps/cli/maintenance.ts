@@ -30,7 +30,8 @@ import {
 } from '../../packages/mcp/oauth.ts';
 import type { Options } from '../shared/args.ts';
 import { resolveWorkspace } from '../shared/runtime.ts';
-import { repositoryIdentity } from '../../packages/workspaces/git.ts';
+import { acquireMaintenanceGate, hostLockHolders } from '../../packages/platform/host-lock.ts';
+import { repositoryIdentity, runWorkspaceGit } from '../../packages/workspaces/git.ts';
 import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
 import { inventorySnapshots, sweepAbandonedStaging } from '../../packages/workspaces/snapshot.ts';
 import { readStandardInput } from './terminal.ts';
@@ -92,6 +93,13 @@ export async function runStandaloneCommand(
     if (args.length || !options.db)
       throw new Error('Usage: workspace-gc --db <file> [--workspace dir] [--dry-run] [--json]');
     const root = resolveWorkspace(options.workspace ?? process.cwd());
+    if (!options.dryRun) {
+      const running = hostLockHolders(root);
+      if (running.length)
+        throw new Error(
+          `A Host is running in this workspace (pid ${running.map((entry) => String(entry.pid)).join(', ')}); close it before workspace-gc`,
+        );
+    }
     const identity = await repositoryIdentity(root);
     if (!identity) throw new Error(`${root} is not inside a Git working tree`);
     const store = new SessionStore(options.db);
@@ -101,10 +109,32 @@ export async function runStandaloneCommand(
       const signal = new AbortController().signal;
       const outcome = options.dryRun
         ? undefined
-        : {
-            released: await new WorkspaceManager({ store }).releaseUnusedSnapshots(signal),
-            sweptStaging: await sweepAbandonedStaging(identity.repositoryRoot),
-          };
+        : await (async () => {
+            // Re-check under the gate: a Host may have started between the early check and this point, and a Host
+            // starting now waits or is refused by the same gate instead of racing the release.
+            const gate = acquireMaintenanceGate(root);
+            try {
+              const running = hostLockHolders(root);
+              if (running.length)
+                throw new Error(
+                  `A Host is running in this workspace (pid ${running.map((entry) => String(entry.pid)).join(', ')}); close it before workspace-gc`,
+                );
+              const released = await new WorkspaceManager({ store }).releaseUnusedSnapshots(signal);
+              // The snapshot directories are metadata; their Git objects are only reclaimed by Git itself.
+              const gc = await runWorkspaceGit(['gc', '--auto'], {
+                cwd: identity.repositoryRoot,
+                signal,
+                allowFailure: true,
+              });
+              return {
+                released,
+                gc: gc.code === 0 ? ('ok' as const) : (`exit ${String(gc.code)}` as const),
+                sweptStaging: await sweepAbandonedStaging(identity.repositoryRoot),
+              };
+            } finally {
+              gate.release();
+            }
+          })();
       const inventory = await inventorySnapshots(identity.repositoryRoot, signal);
       const report = {
         repositoryRoot: identity.repositoryRoot,

@@ -102,7 +102,27 @@ socket.once('data',data=>{result.network=data.toString();socket.destroy();fs.wri
         network: 'unrestricted',
       });
       assert.equal(selected.mode, 'windows');
-      const result = await client.run(sessionId, 'execute the basic native probe');
+      const result = await client.run(sessionId, 'execute the basic native probe', {
+        completion: {
+          version: 1,
+          objective: 'Produce the native boundary probe evidence',
+          constraints: [],
+          steps: [],
+          inputs: ['probe.cjs', 'probe-result.json'],
+          acceptance: [
+            {
+              description: 'The real probe recorded its network positive control',
+              met: false,
+              check: {
+                id: 'probe-evidence',
+                kind: 'file-contains',
+                path: 'probe-result.json',
+                expected: 'positive-network-control',
+              },
+            },
+          ],
+        },
+      });
       assert.equal(result.status, 'completed');
       assert.ok(!JSON.stringify(receipts).includes('"is_error":true'), JSON.stringify(receipts));
       const evidence = JSON.parse(await readFile(report, 'utf8'));

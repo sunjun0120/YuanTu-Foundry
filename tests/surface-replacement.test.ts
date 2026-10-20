@@ -62,13 +62,13 @@ function compactingAgent(
     maxContextChars: 100000,
     /**
      * The window has to hold the fixed part of a request — the system prompt and the kernel's run-scoped tool
-     * schemas, about 3.2K tokens — plus a batch of the conversation, because a summary request now replays that
+     * schemas, about 4.2K tokens — plus a batch of the conversation, because a summary request now replays that
      * same fixed part (its own system prompt and the same tool schemas) before the conversation it summarizes.
      * Below that floor no batch fits, the run fails with "an earlier turn is too large to summarize", and these
      * tests are about the surface rather than about that verdict. It still has to be below three turns of
-     * `history()` (about 3.3K tokens) plus the fixed part, or nothing would compact at all.
+     * `history()` (about 3.1K tokens) plus the fixed part, or nothing would compact at all.
      */
-    maxContextTokens: 5600,
+    maxContextTokens: 6400,
     maxOutputTokens: 128,
   });
 }

@@ -384,11 +384,11 @@ test('normal requests reserve estimated input tokens before setting output allow
     approve: async () => false,
     /**
      * A reservation needs a window to be made against: with no window there is nothing for the input to be
-     * reserved *from*, and the request asks for its whole output cap. 4 000 tokens is above the ~3.2K the system
-     * prompt and the run's own tool schemas cost, so this short prompt is sent and the allowance the provider
-     * sees is what the window has left rather than the 2 000 the fixture asked for.
+     * reserved *from*, and the request asks for its whole output cap. 5 200 tokens is above the ~4.2K the
+     * system prompt and the run's own tool schemas now cost, so this short prompt is sent and the allowance the
+     * provider sees is what the window has left rather than the 2 000 the fixture asked for.
      */
-    maxContextTokens: 4000,
+    maxContextTokens: 5200,
     maxOutputTokens: 2000,
     provider: {
       async complete(request) {
@@ -473,11 +473,11 @@ test('optional token window triggers compaction even when character budget fits'
     tools: new ToolRegistry(),
     approve: async () => false,
     // The character budget is deliberately generous, so the window is the only thing that can trigger a
-    // compaction here. 5 600 tokens is the floor such a fixture has: a summary request replays the round's own
-    // prefix — the system prompt and the run-scoped tool schemas, about 3.2K tokens — and then the batch, so a
+    // compaction here. 6 600 tokens is the floor such a fixture has: a summary request replays the round's own
+    // prefix — the system prompt and the run-scoped tool schemas, about 4.2K tokens — and then the batch, so a
     // window that cannot carry that fixed part plus one batch refuses to summarize anything at all.
     maxContextChars: 100000,
-    maxContextTokens: 5600,
+    maxContextTokens: 6600,
     maxOutputTokens: 128,
     provider: {
       async complete(request: ModelRequest) {
@@ -626,10 +626,10 @@ test('a small explicit context window clips default output instead of rejecting 
     tools: new ToolRegistry(),
     approve: async () => false,
     // As small as a window can be and still admit anything at all: the system prompt and the run's own tool
-    // schemas cost about 3.2K tokens before a single message, so a window below that cannot carry any request
+    // schemas cost about 4.2K tokens before a single message, so a window below that cannot carry any request
     // and the round is refused rather than clipped. Above it, the 256K default output allowance is clipped to
     // what is left, which is what this test is about.
-    maxContextTokens: 4000,
+    maxContextTokens: 5200,
     provider: {
       async complete(request) {
         allowance = request.maxOutputTokens;
@@ -691,11 +691,11 @@ async function setup(t: test.TestContext) {
 /**
  * A window that compacts this fixture and can still send one batch of it.
  *
- * 6 100 tokens measured: the largest single batch costs about 5.3K with the fixed part and the instruction, and
- * the whole history about 6.8K, so the window has a little under a thousand tokens of room on either side.
- * `maxContextChars` is a ceiling here, not the trigger — the window is.
+ * 6 900 tokens measured: the largest single batch costs about 6.2K with the fixed part and the instruction, and
+ * the whole history about 7.5K, so the window has room on either side. `maxContextChars` is a ceiling here, not
+ * the trigger — the window is.
  */
-const SUMMARY_WINDOW_TOKENS = 6100;
+const SUMMARY_WINDOW_TOKENS = 6900;
 
 test('overflow summaries retain project constraints and persist without deleting full transcript', async (t) => {
   const { db, store, session } = await setup(t);
@@ -708,7 +708,7 @@ test('overflow summaries retain project constraints and persist without deleting
       // The summary reaches the round as the first message rather than as part of the prompt, so "the model was
       // told about the constraint" is a claim about the conversation now.
       assert.match(JSON.stringify(request.messages), /blue theme/);
-      assert.ok(JSON.stringify(request.messages).length + request.system.length < 4000);
+      assert.ok(JSON.stringify(request.messages).length + request.system.length < 6000);
       return reply2('Continued with the blue theme.');
     },
   };

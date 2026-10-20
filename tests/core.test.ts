@@ -34,6 +34,58 @@ const typedUserMessages = (messages: readonly Message[]): Extract<Message, { rol
       message.role === 'user' && !isRuntimeContext(message.content),
   );
 
+test('changing queries and scratch probes cannot extend investigation indefinitely', async (t) => {
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      requests++;
+      if (!request.tools.length) return reply('Conclusion from collected evidence');
+      if (requests > 25) return reply('Investigation failed to converge');
+      return {
+        ...reply(),
+        finishReason: 'tool_calls',
+        toolCalls: [
+          {
+            id: `probe-${requests}`,
+            name: 'write_file',
+            arguments: {
+              path: `.scratch/probe-${requests}.txt`,
+              content: `new evidence ${requests}`,
+            },
+          },
+        ],
+      };
+    },
+  });
+  const result = await ctx.agent.run({
+    sessionId: ctx.session.id,
+    prompt: 'Why is it slow?',
+    autoVerify: true,
+  });
+  assert.equal(result.text, 'Conclusion from collected evidence');
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.completion, undefined);
+  assert.ok(requests <= 21, `${requests} requests`);
+});
+
+test('investigation wall time converges even when each query returns new evidence', () => {
+  let now = 0;
+  const guard = new ToolProgressGuard({ now: () => now });
+  const read = (path: string) => [
+    {
+      call: { id: path, name: 'read_file', arguments: { path } },
+      result: { isError: false, content: path },
+    },
+  ];
+  assert.equal(guard.observeRound(read('a')), 'continue');
+  now = 65_000;
+  assert.equal(guard.observeRound(read('b')), 'investigation-warn');
+  now = 125_000;
+  assert.equal(guard.observeRound(read('c')), 'investigation-conclude');
+  guard.reset();
+  assert.equal(guard.observeRound(read('d')), 'continue');
+});
+
 // ---- merged from core.test.ts ----
 
 const reply = (text = 'Finished'): ModelResponse => ({
@@ -748,34 +800,52 @@ test('each user turn persists the selected model identity without changing provi
   );
 });
 
-test('default runs with new evidence continue beyond twenty rounds and cumulative token budget', async (t) => {
-  let rounds = 0;
-  const { root, session, agent, store } = await fixture(t, {
-    async complete(request) {
-      assert.ok(Number.isFinite(request.maxOutputTokens));
-      rounds++;
-      await writeFile(path.join(root, 'a.txt'), 'new content ' + rounds);
-      return {
-        ...reply(rounds > 24 ? 'Completed long task' : 'Reading'),
-        usage: { inputTokens: 12000, outputTokens: 100 },
-        ...(rounds <= 24
-          ? {
-              finishReason: 'tool_calls' as const,
-              toolCalls: [
-                { id: 'read-' + rounds, name: 'read_file', arguments: { path: 'a.txt' } },
-              ],
-            }
-          : {}),
-      };
-    },
+for (const firstMutation of ['file', 'shell'] as const) {
+  test(`implementation runs continue beyond twenty rounds and cumulative token budget (${firstMutation})`, async (t) => {
+    let rounds = 0;
+    const { root, session, agent, store } = await fixture(t, {
+      async complete(request) {
+        assert.ok(Number.isFinite(request.maxOutputTokens));
+        rounds++;
+        await writeFile(path.join(root, 'a.txt'), 'new content ' + rounds);
+        return {
+          ...reply(rounds > 24 ? 'Completed long task' : 'Reading'),
+          usage: { inputTokens: 12000, outputTokens: 100 },
+          ...(rounds <= 24
+            ? {
+                finishReason: 'tool_calls' as const,
+                toolCalls: [
+                  rounds === 1
+                    ? firstMutation === 'file'
+                      ? {
+                          id: 'write-source',
+                          name: 'write_file',
+                          arguments: { path: 'implemented.txt', content: 'implemented' },
+                        }
+                      : {
+                          id: 'write-source',
+                          name: 'run_command',
+                          arguments: { command: 'node implement.cjs' },
+                        }
+                    : { id: 'read-' + rounds, name: 'read_file', arguments: { path: 'a.txt' } },
+                ],
+              }
+            : {}),
+        };
+      },
+    });
+    await writeFile(path.join(root, 'a.txt'), 'content');
+    await writeFile(
+      path.join(root, 'implement.cjs'),
+      "require('node:fs').writeFileSync('implemented.txt','implemented')",
+    );
+    const result = await agent.run({ sessionId: session.id, prompt: 'Complete a long task' });
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(rounds, 25);
+    assert.ok(result.usage.inputTokens > 100000);
+    assert.equal(store.get(session.id).activeRun, null);
   });
-  await writeFile(path.join(root, 'a.txt'), 'content');
-  const result = await agent.run({ sessionId: session.id, prompt: 'Complete a long task' });
-  assert.equal(result.status, 'completed', result.error);
-  assert.equal(rounds, 25);
-  assert.ok(result.usage.inputTokens > 100000);
-  assert.equal(store.get(session.id).activeRun, null);
-});
+}
 
 test('a retried task receives persisted attempt evidence and a no-replay recovery instruction', async (t) => {
   let calls = 0;

@@ -350,6 +350,8 @@ export class ToolRegistry {
       .filter(({ tool }) => this.offers(tool.name))
       .filter(({ tool }) => !options.readOnly || !tool.permission)
       .filter(({ tool }) => !options.policy?.deniesEveryCall(tool))
+      // Plugin registration order must not change the serialized prompt after a restart.
+      .sort((a, b) => (a.tool.name < b.tool.name ? -1 : a.tool.name > b.tool.name ? 1 : 0))
       .map(({ tool }) => ({
         name: tool.name,
         description: tool.description,
@@ -371,7 +373,13 @@ export class ToolRegistry {
         if (spec.name !== LOAD_TOOLS) return [spec];
         if (mode !== 'deferred' || (loaded && !hidden.length)) return [];
         return hidden.length
-          ? [{ ...spec, description: `${spec.description}\n${deferredCatalog(hidden)}` }]
+          ? // Loading one schema changes the declarations; it need not also rewrite the loader's description.
+            [
+              {
+                ...spec,
+                description: `${spec.description}\n${deferredCatalog(all.filter((tool) => this.deferrable.has(tool.name)))}`,
+              },
+            ]
           : [spec];
       });
     /**
@@ -502,13 +510,15 @@ export class ToolRegistry {
     });
     const invariant = this.pipelineInvariant;
     let completed = false;
+    let commandExecuted = false;
     const materialize = (
       result: ToolResult,
       extra: { notice?: boolean; additionalContext?: string[] } = {},
     ): ToolExecutionResult => {
       invariant.enter(execution, 'result');
       completed = true;
-      return finalResult(result, call.name, context.spill, extra);
+      const final = finalResult(result, call.name, context.spill, extra);
+      return commandExecuted ? { ...final, commandExecuted: true } : final;
     };
     try {
       invariant.enter(execution, 'validate');
@@ -582,6 +592,14 @@ export class ToolRegistry {
             description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}${entry.tool.permission === 'command' && context.executionPolicy ? '\n' + describeExecutionBoundary(context.executionPolicy) : ''}`,
             toolCall: call,
             ...(prepared?.change ? { change: prepared.change } : {}),
+            ...(entry.tool.permission === 'command' && context.executionPolicy
+              ? {
+                  boundary: {
+                    processFiles: context.executionPolicy.processFiles,
+                    network: context.executionPolicy.network,
+                  },
+                }
+              : {}),
           }
         : undefined;
 
@@ -803,6 +821,8 @@ export class ToolRegistry {
 
       context.signal.throwIfAborted();
       invariant.enter(execution, 'post-execute');
+      // Extensions may redact or block a result, but cannot undo a command that already ran.
+      commandExecuted = result.commandExecuted === true;
       // Invalid attachments are a failed tool result; observers and finalizers still run normally.
       result = normalizeImages(result);
       const post = await this.hooks.postExecute(execution, result, context.signal);

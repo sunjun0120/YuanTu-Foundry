@@ -118,14 +118,77 @@ async function inspect(file: string, format: OfficeFormat): Promise<string> {
     20000,
   );
 }
-function changeFor(relative: string, operation: string): FileChange {
+const OUTLINE_LINES = 200;
+/**
+ * The text a person approves, drawn as diff lines.
+ *
+ * An Office file is binary, so there is no patch to show; the approval used to read only "Create Office file
+ * via create", and whoever was asked could not see what the document would say. The arguments already hold
+ * every word that goes in, so they are laid out the way the file will read: `+` for what is written, `-` for
+ * the text an edit replaces. A preview writes nothing new, so it names its source instead.
+ */
+function officeOutline(
+  args: Record<string, unknown>,
+  operation: 'create' | 'edit' | 'preview',
+): string[] {
+  const lines: string[] = [];
+  const add = (value: unknown) => {
+    for (const line of String(value ?? '').split(/\r?\n/)) lines.push('+' + line);
+  };
+  const row = (cells: unknown) =>
+    Array.isArray(cells) ? cells.map((c) => c ?? '').join(' | ') : '';
+  if (operation === 'preview')
+    return [`  ${String(args.source_path)} → ${String(args.output_path)}`];
+  if (operation === 'edit') {
+    for (const item of (args.replacements as { from?: unknown; to?: unknown }[] | undefined) ??
+      []) {
+      lines.push('-' + String(item.from ?? ''));
+      add(item.to);
+    }
+    for (const item of (args.cells as
+      { sheet?: unknown; cell?: unknown; value?: unknown }[] | undefined) ?? [])
+      add(`${String(item.sheet)}!${String(item.cell)} = ${String(item.value ?? '')}`);
+    return lines;
+  }
+  if (args.title) add('# ' + String(args.title));
+  for (const paragraph of (args.paragraphs as unknown[] | undefined) ?? []) add(paragraph);
+  for (const block of (args.blocks as Record<string, unknown>[] | undefined) ?? []) {
+    if (block.type === 'heading')
+      add('#'.repeat(Number(block.level ?? 1)) + ' ' + String(block.text));
+    else if (block.type === 'paragraph') add(block.text);
+    else if (block.type === 'list')
+      ((block.items as unknown[] | undefined) ?? []).forEach((item, index) =>
+        add(`${block.ordered ? `${index + 1}.` : '-'} ${String(item)}`),
+      );
+    else if (block.type === 'table')
+      for (const cells of (block.rows as unknown[]) ?? []) add(row(cells));
+    else if (block.type === 'page_break') add('———');
+  }
+  for (const sheet of (args.sheets as { name?: unknown; rows?: unknown[] }[] | undefined) ?? []) {
+    add(`[${String(sheet.name)}]`);
+    for (const cells of sheet.rows ?? []) add(row(cells));
+  }
+  ((args.slides as Record<string, unknown>[] | undefined) ?? []).forEach((slide, index) => {
+    add(`## ${index + 1}. ${String(slide.title ?? '')}`);
+    for (const bullet of (slide.body as unknown[] | undefined) ?? []) add('- ' + String(bullet));
+    for (const cells of (slide.table as unknown[] | undefined) ?? []) add(row(cells));
+  });
+  return lines;
+}
+function changeFor(
+  relative: string,
+  operation: 'create' | 'edit' | 'preview',
+  args: Record<string, unknown>,
+): FileChange {
+  const outline = officeOutline(args, operation);
+  const shown = outline.slice(0, OUTLINE_LINES);
   return {
     path: relative,
     kind: 'create',
-    patch: `Create Office file via ${operation}: ${relative}`,
-    added: 0,
-    removed: 0,
-    truncated: false,
+    patch: shown.join('\n'),
+    added: outline.filter((line) => line.startsWith('+')).length,
+    removed: outline.filter((line) => line.startsWith('-')).length,
+    truncated: outline.length > shown.length,
   };
 }
 async function sourceBytes(
@@ -184,7 +247,7 @@ async function prepareWrite(
     operation === 'create'
       ? undefined
       : await sourceBytes(workspace, String(args.source_path), format);
-  const change = changeFor(relative, operation);
+  const change = changeFor(relative, operation, args);
   return {
     change,
     approvalDescription: `Creates ${relative}; source remains unchanged.`,

@@ -116,16 +116,16 @@ test('I1: every request is a projection of the persisted transcript', async (t) 
     provider,
     // An empty registry on purpose: the character budget in this scenario measures the *message*
     // projection, and the real tool schemas (~22 KB) would dominate a small window on their own.
-    // The kernel still installs its own run-scoped tools (session retrieval and the goal tools, ~6.7 KB of
+    // The kernel still installs its own run-scoped tools (session retrieval and the goal tools, ~7.3 KB of
     // schema), which is why the budget below is not the bare message size: it has to cover the system prompt
-    // (~1.4 KB), those schemas and the transcript, or the run is refused before it can compact — and it has to
+    // (~4 KB), those schemas and the transcript, or the run is refused before it can compact — and it has to
     // stay under 65% of that for the retained tail, or the compaction is refused as useless. The summary
-    // request carries the same system prompt and schemas *plus* the instruction (~2 KB with the section
-    // skeleton), so the batch it can hold is the budget minus roughly 10 KB rather than minus the old summary
+    // request carries the same system prompt and schemas *plus* the instruction (~1.4 KB with the section
+    // skeleton), so the batch it can hold is the budget minus roughly 12.7 KB rather than minus the old summary
     // prompt.
     tools: new ToolRegistry(),
     approve: async () => true,
-    maxContextChars: 18_500,
+    maxContextChars: 21_000,
   });
   // Enough history that the run has to summarise before it can continue, in *two* turns rather than one long
   // one: a summary batch must fit the same ceiling with the same fixed overhead, and a batch that is the whole

@@ -116,8 +116,15 @@ test(
       const result = Array.isArray(last?.content)
         ? last.content.find((block: { type: string }) => block.type === 'tool_result')
         : undefined;
-      if (result) {
-        results.push(result);
+      if (
+        result ||
+        body.messages.some(
+          (message: { content: unknown }) =>
+            Array.isArray(message.content) &&
+            message.content.some((block) => block.type === 'tool_result'),
+        )
+      ) {
+        if (result) results.push(result);
         sendFrames(response, frames('done'));
       } else
         sendFrames(
@@ -157,7 +164,14 @@ test(
       sessionId: session.id,
       policy: permissionPolicyForMode('full-access'),
     });
-    assert.equal((await run).status, 'completed');
+    const completed = await run;
+    /**
+     * `echo` changes nothing in the project, so the automatic-verification gate has nothing to ask for: the
+     * sandbox switch is what this test is about, and a query command is allowed to finish without checks.
+     */
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.completion, undefined);
+    assert.equal(results.length, 1, 'the command must not be replayed by the sandbox switch');
     assert.match(JSON.stringify(results[0]), /SWITCHED_PENDING_COMMAND/);
     assert.doesNotMatch(JSON.stringify(results[0]), /"is_error":true/);
     assert.match(systems[1]!, /Command environment: host/);
@@ -233,8 +247,15 @@ test('the Host selects the visible session policy without changing another sessi
     const result = Array.isArray(last?.content)
       ? last.content.find((b: { type: string }) => b.type === 'tool_result')
       : undefined;
-    if (result) {
-      results.push(result);
+    if (
+      result ||
+      body.messages.some(
+        (message: { content: unknown }) =>
+          Array.isArray(message.content) &&
+          message.content.some((block) => block.type === 'tool_result'),
+      )
+    ) {
+      if (result) results.push(result);
       sendFrames(response, frames('done'));
     } else
       sendFrames(
@@ -255,14 +276,17 @@ test('the Host selects the visible session policy without changing another sessi
     b = await client.request('session.create', {});
   await client.request('sandbox.set', { sessionId: a.id, mode: 'host' });
   await client.request('sandbox.set', { sessionId: b.id, mode: 'seatbelt' });
-  assert.equal((await client.run(a.id, 'run a')).status, 'completed');
+  const ran = await client.run(a.id, 'run a');
+  // The command is a query: it changes no project file, so automatic verification has nothing to require.
+  assert.equal(ran.status, 'completed');
+  assert.equal(ran.completion, undefined);
   assert.notEqual(results[0]?.is_error, true);
   assert.match(JSON.stringify(results[0]?.content), /SESSION_POLICY_COMMAND/);
   assert.match(systems[0]!, /Command environment: host/);
   assert.equal((await client.run(b.id, 'run b')).status, 'completed');
   assert.equal(results[1]?.is_error, true);
   assert.doesNotMatch(JSON.stringify(results[1]?.content), /SESSION_POLICY_COMMAND/);
-  assert.match(systems[2]!, /macOS native Seatbelt/);
+  assert.match(systems.at(-1)!, /macOS native Seatbelt/);
 });
 
 test(
@@ -322,7 +346,10 @@ test(
       policy: permissionPolicyForMode('full-access'),
     });
     assert.equal(own.resolvedApprovals, 1);
-    assert.equal((await run).status, 'completed');
+    const completed = await run;
+    // A query command leaves the project unchanged; it needs no verification and ends completed.
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.completion, undefined);
     assert.match(JSON.stringify(results[0]), /ISOLATED_PENDING_COMMAND/);
     assert.doesNotMatch(JSON.stringify(results[0]), /"is_error":true/);
   },

@@ -138,7 +138,7 @@ export function anthropicTools(
  * at most four breakpoints; system + last tool + last message uses three.
  */
 export function markLastContentBlock(
-  messages: { role: 'user' | 'assistant'; content: Record<string, unknown>[] }[],
+  messages: { role: 'user' | 'assistant' | 'system'; content: Record<string, unknown>[] }[],
   cache: boolean,
 ): void {
   if (!cache) return;

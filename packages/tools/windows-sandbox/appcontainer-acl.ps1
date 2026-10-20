@@ -101,7 +101,7 @@ function Safe-Tree {
   $items = @((Get-Item -LiteralPath $Root -Force)) + @(Get-ChildItem -LiteralPath $Root -Force -Recurse)
   if ($items.Count -gt 100000) { throw 'Windows sandbox ACL tree exceeds 100000 objects' }
   foreach ($item in $items) {
-    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Windows sandbox refuses reparse points in ACL trees' }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Windows sandbox refuses reparse points in ACL trees: $($item.FullName)" }
     [YuantuAcl]::Pin($item.FullName)
   }
   return $items

@@ -155,3 +155,20 @@ test('a second export reuses the blobs of unchanged files and the trees of uncha
       .trim();
   assert.equal(subtree(secondTree), subtree(firstTree));
 });
+
+test('a tree walk reports every listed path, ending at the total', async (t) => {
+  const root = await repository(t);
+  await mkdir(path.join(root, 'src'));
+  for (const name of ['a.txt', 'b.txt', 'src/c.txt']) await writeFile(path.join(root, name), name);
+
+  const progress: { processed: number; total: number }[] = [];
+  const entries = await collectTreeBlobs(root, root, undefined, {}, undefined, (update) =>
+    progress.push(update),
+  );
+  assert.equal(entries.length, 3);
+  assert.deepEqual(
+    progress.map((update) => update.processed),
+    [1, 2, 3],
+  );
+  assert.ok(progress.every((update) => update.total === 3));
+});

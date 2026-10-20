@@ -266,6 +266,18 @@ export async function verifyCompletionAcceptance(
       description: step.description,
       status: step.status,
     })),
-    ...(completionReason ? { completionReason, error: REASON_DETAIL[completionReason] } : {}),
+    ...(completionReason
+      ? {
+          completionReason,
+          error:
+            completionReason === 'checks-failed' &&
+            evidence.checks.some((check) => check.failureReason === 'environment-error')
+              ? 'Verification was blocked by the execution environment; inspect the failed or unexecuted checks. ' +
+                evidence.checks
+                  .find((check) => check.failureReason === 'environment-error')!
+                  .detail.slice(0, 1000)
+              : REASON_DETAIL[completionReason],
+        }
+      : {}),
   };
 }

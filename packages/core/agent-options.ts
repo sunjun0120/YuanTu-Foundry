@@ -248,6 +248,8 @@ export type AgentRunInput = UserInput & {
    * request or an approved plan, which have no task row to read a definition from.
    */
   completion?: CompletionSpec;
+  /** Let the agent select checks for ordinary desktop requests and approved plans. */
+  autoVerify?: boolean;
   /** A previously recorded contract to continue, by id. Conflicts with `completion` and with `taskId`. */
   resumeCompletionId?: string;
   /** How much repair this run may spend before it stops. Callers may lower it or raise it to the ceilings. */

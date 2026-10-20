@@ -168,13 +168,15 @@ export interface CompletionRecord {
   sessionId: string;
   originRunId: string;
   latestRunId: string;
-  source: 'task' | 'request' | 'approved-plan';
+  source: 'task' | 'request' | 'approved-plan' | 'automatic';
   definition: CompletionSpec;
   definitionHash: string;
   summary: CompletionSummary;
   steps: CompletionStep[];
   affectedPaths: string[];
   policy: CompletionRepairPolicy;
+  /** Last executed checks; unlike an agent's summary these contain actual exit codes and output. */
+  evidence?: AcceptanceEvidence;
   repairStartedAt?: number;
   failureFingerprint?: string;
   taskId?: string;

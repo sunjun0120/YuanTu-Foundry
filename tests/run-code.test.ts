@@ -693,10 +693,10 @@ test('the declaration list names every tool a program can call, and no others', 
   const tools = createTools(process.cwd());
   const native = tools.specs({ mode: 'native' });
   const sdk = toolSdk(native);
-  assert.match(sdk, /tools\.read_file\(\{ path: string/);
-  assert.match(sdk, /tools\.search_files\(\{ query: string/);
+  assert.match(sdk, /tools\.read_file\(\{[^}\n]*path: string/);
+  assert.match(sdk, /tools\.search_files\(\{[^}\n]*query: string/);
   // Optional parameters are marked, which is the one thing a JSON schema said and a declaration still can.
-  assert.match(sdk, /tools\.read_file\(\{ path: string, start_line\?: number/);
+  assert.match(sdk, /tools\.read_file\(\{[^}\n]*start_line\?: number/);
   // The tool that runs the program is not offered inside it (and neither is anything not in this registry).
   assert.doesNotMatch(sdk, /tools\.run_code\(/);
   assert.equal(sdk.split('\n').length, native.length - 1);
@@ -709,7 +709,7 @@ test('folding the catalog sends one schema and keeps the tools reachable', () =>
   const folded = tools.specs();
   assert.equal(folded.length, 1);
   assert.equal(folded[0]!.name, RUN_CODE);
-  assert.match(folded[0]!.description, /tools\.read_file\(\{ path: string/);
+  assert.match(folded[0]!.description, /tools\.read_file\(\{[^}\n]*path: string/);
   // The lever, stated as a measurement: the schema cost of the catalog is what folding is for.
   assert.ok(
     JSON.stringify(folded).length < JSON.stringify(native).length / 2,

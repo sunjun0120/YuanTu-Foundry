@@ -8,6 +8,16 @@ import { collectMetrics } from './metrics.mjs';
 import { assertOfflineReceipt } from './live-self-check.mjs';
 import { runE09Sample, waitForWorkloadReady } from './scenario.mjs';
 
+export const OFFLINE_SPILL_VERIFICATION_SOURCE =
+  "import('./packages/tools/spill.ts').then(({spillOutput})=>{const fs=require('node:fs');const content='verified spill';const result=spillOutput({workspace:process.cwd(),sessionId:'automatic-check',tool:'check',content});if(!result||fs.readFileSync(result.path,'utf8')!==content)throw new Error('Spill content mismatch');console.log('Spill content checked')})";
+const OFFLINE_SPILL_VERIFICATION_COMMAND = [
+  process.execPath,
+  '-e',
+  OFFLINE_SPILL_VERIFICATION_SOURCE,
+]
+  .map((part) => (/[\s"]/u.test(part) ? JSON.stringify(part) : part))
+  .join(' ');
+
 export function redact(text, secrets = []) {
   let result = String(text);
   for (const secret of secrets.filter((value) => typeof value === 'string' && value.length))
@@ -105,7 +115,7 @@ export class JsonlRunCollector {
     return { events: this.events, runs: this.runs, terminalSeen: true, exitCode };
   }
 }
-export function approvalAllowed(approval, prepared, caseDef) {
+export function approvalAllowed(approval, prepared, caseDef, offlineProbe = false) {
   const tool = approval?.toolCall?.name;
   const args = approval?.toolCall?.arguments ?? {};
   if (approval?.kind === 'write' && ['write_file', 'edit_file'].includes(tool)) {
@@ -126,6 +136,20 @@ export function approvalAllowed(approval, prepared, caseDef) {
       caseDef.id === 'E09' &&
       prepared.workspace.scenario &&
       args.command === 'node evaluation-workload.cjs'
+    )
+      return true;
+    /**
+     * The offline E09 fixture asks the model to call `verify_work`; the Host reports that acceptance command as a
+     * `run_command` approval whose id is `acceptance:…`. It is the fixture's own spill check, not an arbitrary
+     * command, so allow exactly that one command line.
+     */
+    if (
+      offlineProbe &&
+      caseDef.id === 'E09' &&
+      prepared.workspace.scenario &&
+      typeof approval.toolCall?.id === 'string' &&
+      approval.toolCall.id.startsWith('acceptance:') &&
+      args.command === OFFLINE_SPILL_VERIFICATION_COMMAND
     )
       return true;
     return caseDef.publicCheck.some((test) => args.command === `node --test ${test}`);
@@ -263,7 +287,12 @@ export async function runHostSample(input, signal) {
     if (event.type === 'approval.required') {
       const approval = event.data.approval;
       const approvalId = event.data.approvalId;
-      const allow = approvalAllowed(approval, input.prepared, input.caseDef);
+      const allow = approvalAllowed(
+        approval,
+        input.prepared,
+        input.caseDef,
+        input.offlineProbe === true,
+      );
       interactions.push({ type: 'fixed-approval', atMs, approvalId, allow });
       interactionPromises.push(
         client.request('approval.respond', { approvalId, allow }).catch(() => {

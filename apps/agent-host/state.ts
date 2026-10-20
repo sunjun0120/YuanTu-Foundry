@@ -132,6 +132,13 @@ export interface HostContext {
   /** How many different sessions may hold a run at once (`YUANTU_HOST_MAX_RUNS`); a session itself is serial. */
   maxActiveRuns: number;
   /**
+   * Sessions running a model request outside a run (`task.propose`, `context.compact`).
+   *
+   * They are not runs — no agent loop, no run row claimed here — but they spend the same model capacity, so they
+   * count against `maxActiveRuns` and make a concurrent `run.start` wait for the next free slot.
+   */
+  modelSlots?: Set<string>;
+  /**
    * Sessions already announced to `sessionStart`. The host first learns about an existing session on
    * its first run, so that is where a resumed session is announced.
    */
@@ -257,6 +264,7 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
     maxActiveRuns:
       (parseSetting(process.env, 'YUANTU_HOST_MAX_RUNS') as number | undefined) ??
       DEFAULT_HOST_MAX_RUNS,
+    modelSlots: new Set<string>(),
     announced,
     active: new Map<string, ActiveRun>(),
     approvals: new Map<string, PendingApproval>(),
@@ -410,6 +418,35 @@ export async function withLocks<T>(
   }
 }
 
+function modelSlotCount(ctx: HostContext): number {
+  return ctx.modelSlots?.size ?? 0;
+}
+
+/**
+ * Reserve one model slot for a request outside a run.
+ *
+ * `task.propose` and `context.compact` call a provider just as a run does; counting them against the same ceiling
+ * keeps a burst of those requests from multiplying the Host's model concurrency. The returned function releases the
+ * slot and is idempotent, so it can sit in a `finally` beside the lease.
+ */
+export function acquireModelSlot(ctx: HostContext, sessionId: string): () => void {
+  if (ctx.active.size + modelSlotCount(ctx) >= ctx.maxActiveRuns)
+    throw new Error(
+      ctx.maxActiveRuns === 1
+        ? 'This Host already has an active run'
+        : `This Host already has an active run in each of its ${ctx.maxActiveRuns} run slots`,
+    );
+  const slots = (ctx.modelSlots ??= new Set<string>());
+  if (slots.has(sessionId)) throw new Error('This session already has a model request in progress');
+  slots.add(sessionId);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    slots.delete(sessionId);
+  };
+}
+
 /**
  * Whether the Host has room for one more run at all: nothing holds the Host alone and a slot is free.
  *
@@ -417,7 +454,10 @@ export async function withLocks<T>(
  * full Host leaves due work waiting rather than claiming it and then failing admission.
  */
 export function runSlotFree(ctx: HostContext): boolean {
-  return ctx.active.size < ctx.maxActiveRuns && !lockConflict(ctx, [hostClaim('shared')]);
+  return (
+    ctx.active.size + modelSlotCount(ctx) < ctx.maxActiveRuns &&
+    !lockConflict(ctx, [hostClaim('shared')])
+  );
 }
 
 /** Whether `sessionId` could be admitted now: the Host has room and nothing holds what its run would claim. */
@@ -441,7 +481,7 @@ export function admissionRefusal(ctx: HostContext, sessionId: string): string | 
     return held.key.startsWith('session:')
       ? 'This session already has an active run (an exclusive operation is in progress)'
       : 'This Host already has an active run (an exclusive operation is in progress)';
-  if (ctx.active.size >= ctx.maxActiveRuns)
+  if (ctx.active.size + modelSlotCount(ctx) >= ctx.maxActiveRuns)
     return ctx.maxActiveRuns === 1
       ? 'This Host already has an active run'
       : `This Host already has an active run in each of its ${ctx.maxActiveRuns} run slots`;

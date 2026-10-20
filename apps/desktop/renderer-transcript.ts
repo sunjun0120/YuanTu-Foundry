@@ -125,9 +125,27 @@ export function setupTranscript(options: {
       }
     }
     processMessageCount = startIndex + messages.length;
+    /**
+     * A provisional answer was the model's first attempt before a verification nudge; the nudge makes it answer
+     * again, and both are real transcript rows. Keep the later answer and drop the earlier one, or the person
+     * reads the same conclusion twice. A provisional answer with nothing after it (the run ended or was stopped
+     * before the second answer) is still the only answer there is, so it stays.
+     */
+    const answerAfter = messages.map(() => false);
+    let laterAnswer = false;
+    for (let index = messages.length - 1; index >= 0; index--) {
+      answerAfter[index] = laterAnswer;
+      const message = messages[index]!;
+      if (message.role === 'assistant' && message.content.trim()) laterAnswer = true;
+    }
     const rows = messages
-      .map((message, index) => ({ index: startIndex + index, message }))
-      .filter(({ message }) => !(message.role === 'user' && isRuntimeContext(message.content)));
+      .map((message, index) => ({ index: startIndex + index, message, position: index }))
+      .filter(({ message, position }) => {
+        if (message.role === 'user' && isRuntimeContext(message.content)) return false;
+        if (message.role === 'assistant' && message.provisional && answerAfter[position])
+          return false;
+        return true;
+      });
     const fragments = transcriptCache.views(identity, rows, (message) => {
       const view = messageView(message);
       const thought = view.querySelector<HTMLElement>(':scope > .message-reasoning');
@@ -282,6 +300,8 @@ export function setupTranscript(options: {
     'empty-acceptance',
     'invalid-definition',
     'protected-path-changed',
+    'missing-verification',
+    'superseded',
   ]);
   function completionNotice(): HTMLElement | null {
     const completion = options.getState()?.session.completion ?? null;
@@ -289,11 +309,19 @@ export function setupTranscript(options: {
     const summary = completion.summary;
     const element = node('div', '', `completion-notice completion-${summary.state}`);
     element.append(
-      node('strong', `${t('ui.completionTitle')} · ${t(`ui.completionState.${summary.state}`)}`),
+      node(
+        'strong',
+        `${t(completion.source === 'automatic' ? 'ui.automaticVerificationTitle' : 'ui.completionTitle')} · ${t(completion.source === 'automatic' && summary.state === 'verified' ? 'ui.verificationChecksPassed' : `ui.completionState.${summary.state}`)}`,
+      ),
     );
     // Why it is waiting, for the two states that wait on a person. Known reasons get their own sentence; any
     // other one says only that a person has to look — the reason code itself is the runtime's bookkeeping.
-    if (summary.state === 'needs_review' || summary.state === 'limited') {
+    if (
+      summary.state === 'needs_review' ||
+      summary.state === 'limited' ||
+      summary.reason === 'missing-verification' ||
+      summary.reason === 'superseded'
+    ) {
       const code = summary.reason.split(':')[0]!.trim();
       const known = COMPLETION_REASONS.has(code) ? code : 'other';
       element.append(node('p', t(`ui.completionReason.${known}`), 'completion-reason'));
@@ -330,6 +358,37 @@ export function setupTranscript(options: {
           }),
         ),
       );
+    if (completion.evidence?.checks.length) {
+      const details = node('details', '', 'completion-evidence');
+      details.append(
+        node(
+          'summary',
+          t('ui.verificationDetails', { count: String(completion.evidence.checks.length) }),
+        ),
+      );
+      for (const check of completion.evidence.checks) {
+        const criterion = completion.definition.acceptance.find(
+          (item) => item.check?.id === check.id,
+        );
+        details.append(
+          node(
+            'p',
+            `${t(check.passed ? 'ui.verificationCheckPassed' : 'ui.verificationCheckFailed')} · ${criterion?.description ?? check.id}`,
+          ),
+        );
+        if (check.command) {
+          details.append(
+            node(
+              'p',
+              t('ui.verificationExitCode', { code: String(check.command.exitCode ?? '—') }),
+            ),
+          );
+          const output = [check.command.stdout, check.command.stderr].filter(Boolean).join('\n');
+          if (output) details.append(node('pre', output));
+        } else details.append(node('p', check.detail));
+      }
+      element.append(details);
+    }
     return element;
   }
   function render(messages: Message[], startIndex: number, runPaused: boolean): void {

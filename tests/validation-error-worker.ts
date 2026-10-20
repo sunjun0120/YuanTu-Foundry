@@ -66,7 +66,10 @@ async function main(): Promise<void> {
     }, 10_000);
     try {
       const result = await settle;
-      const overflow = result.isError && /metadata exceeds tool output limit/.test(result.content);
+      const overflow =
+        result.isError &&
+        result.commandExecuted === true &&
+        /metadata exceeds tool output limit/.test(result.content);
       await report(overflow ? 'caught=true' : `caught=unexpected:${result.content.slice(0, 160)}`);
     } finally {
       clearTimeout(fallback);

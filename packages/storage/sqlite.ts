@@ -25,7 +25,7 @@ import type {
 } from '../protocol/index.ts';
 import type { PlanBody, PlanRepository } from '../protocol/plans.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
-import type { SessionRecovery } from './session-runs.ts';
+import type { RunTaskSettlement, SessionRecovery } from './session-runs.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { StepRecord } from '../protocol/steps.ts';
 import type { TodoChange } from '../protocol/todos.ts';
@@ -59,7 +59,7 @@ export { normalizePlanBody, planHash } from '../protocol/plans.ts';
 export type { PlanBody } from '../protocol/plans.ts';
 export { LEASE_RENEW_INTERVAL_MS } from '../protocol/session-lease.ts';
 export type { SessionLease } from '../protocol/session-lease.ts';
-export type { SessionRecovery } from './session-runs.ts';
+export type { RunTaskSettlement, SessionRecovery } from './session-runs.ts';
 /**
  * The workspace vocabulary is re-exported for the same reason the row shapes are: a caller that has to name a
  * state, a failure code or a binding should not have to know which package physically declares it.
@@ -853,7 +853,13 @@ export class SessionStore implements PlanRepository {
   statistics(sessionId: string): SessionStatistics {
     return this.parts.reads.statistics(sessionId);
   }
-  finishRun(result: RunResult, options: { completeGoalObjective?: string } = {}): void {
+  finishRun(
+    result: RunResult,
+    options: {
+      completeGoalObjective?: string;
+      settleTask?: () => RunTaskSettlement | undefined;
+    } = {},
+  ): void {
     return this.parts.runs.finishRun(result, options);
   }
 }

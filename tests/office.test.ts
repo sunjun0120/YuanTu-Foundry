@@ -1155,3 +1155,41 @@ test('a .pdf preview with no engine available says how to get a preview', async 
     /No PDF engine is available.*\.html output_path/s,
   );
 });
+
+test('an office_create approval shows the words the document will hold', async (t) => {
+  const root = await tempRoot(t, 'office-outline-');
+  const tool = officeTools(root).find((item) => item.name === 'office_create')!;
+  const prepared = await tool.prepare!(
+    {
+      format: 'docx',
+      path: '收入报告.docx',
+      title: '收入报告',
+      paragraphs: ['已支付收入 2,700'],
+      blocks: [
+        { type: 'heading', text: '明细', level: 2 },
+        { type: 'list', items: ['甲公司 1,800', '乙公司 900'] },
+        {
+          type: 'table',
+          rows: [
+            ['客户', '金额'],
+            ['甲公司', '1800'],
+          ],
+        },
+      ],
+    },
+    {} as never,
+  );
+  const change = prepared!.change!;
+  assert.equal(change.path, '收入报告.docx');
+  assert.deepEqual(change.patch.split('\n'), [
+    '+# 收入报告',
+    '+已支付收入 2,700',
+    '+## 明细',
+    '+- 甲公司 1,800',
+    '+- 乙公司 900',
+    '+客户 | 金额',
+    '+甲公司 | 1800',
+  ]);
+  assert.equal(change.added, 7);
+  assert.equal(change.truncated, false);
+});

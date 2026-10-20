@@ -13,6 +13,62 @@ import { SessionController } from '../packages/client/session-controller.ts';
 import type { AgentHostClient } from '../packages/client/host-client.ts';
 import type { CompletionRecord } from '../packages/protocol/completion.ts';
 import type { AgentEvent } from '../packages/protocol/index.ts';
+import { foldCompletion } from '../packages/client/session-event-fold.ts';
+
+test('live automatic verification preserves real check evidence without leaking it to a later contract', () => {
+  const previous = record();
+  const evidence = {
+    passed: true,
+    durationMs: 5,
+    checks: [
+      {
+        id: 'auto-1',
+        kind: 'command' as const,
+        passed: true,
+        durationMs: 5,
+        detail: 'Passed',
+        command: {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: '1 test passed',
+          stderr: '',
+          outputTruncated: false,
+        },
+      },
+    ],
+  };
+  const folded = foldCompletion(
+    previous,
+    {
+      type: 'completion.updated',
+      sessionId: 's1',
+      runId: 'r1',
+      seq: 1,
+      data: {
+        contractId: previous.contractId,
+        source: 'automatic',
+        summary: previous.summary,
+        evidence,
+      },
+    },
+    's1',
+  );
+  assert.equal(folded?.source, 'automatic');
+  assert.equal(folded?.evidence?.checks[0]?.command?.stdout, '1 test passed');
+  const later = foldCompletion(
+    folded ?? null,
+    {
+      type: 'completion.updated',
+      sessionId: 's1',
+      runId: 'r2',
+      seq: 2,
+      data: { contractId: 'different-contract', source: 'automatic', summary: previous.summary },
+    },
+    's1',
+  );
+  assert.equal(later?.evidence, undefined);
+});
 
 class FakeClient {
   status = 'ready';

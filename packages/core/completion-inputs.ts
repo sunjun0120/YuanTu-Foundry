@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { WORKSPACE_SCALE_LIMITS } from '../protocol/workspaces.ts';
+import { runWorkspaceGit } from '../workspaces/git.ts';
 import { normalizeCompletionPath } from './completion-contract.ts';
 
 /**
@@ -22,7 +23,10 @@ import { normalizeCompletionPath } from './completion-contract.ts';
  *
  * - **What is covered is stated, not implied.** `inputs` is a list of paths, and the digest covers exactly those.
  *   A caller that monitored nothing gets a digest of nothing, which is why an explicit `CompletionSpec` must name
- *   at least one input and a task may fall back to the workspace root.
+ *   at least one input and a task may fall back to the workspace root. That fallback is Git's own view of the
+ *   root — tracked files plus untracked files Git would commit, ignoring what `.gitignore` excludes — rather than
+ *   every file a recursive directory listing happens to find. A root outside a Git working tree keeps the
+ *   filesystem walk, because then there is no index to ask.
  * - **Exceeding a bound is a refusal, not a truncation.** A digest computed over the first N files of a larger
  *   tree is a digest of a different tree; reporting it as a pass would be the exact false assurance this is for.
  * - **Identity is the resolved root, not the logical session.** Two workspaces with identical content are still
@@ -87,13 +91,19 @@ const MAX_TOTAL_BYTES = WORKSPACE_SCALE_LIMITS.totalBytes;
 const MAX_FILE_BYTES = WORKSPACE_SCALE_LIMITS.fileBytes;
 
 /**
- * Directory names the default source range never descends into.
+ * Directory names the *implicit* source range never descends into.
  *
  * Excluded because they are *derived*: a checkout's `.git`, a dependency tree, the runtime's own state directory,
  * scratch space and build output all change for reasons that have nothing to do with whether the work is correct,
  * and including them would make the fingerprint flap on every build. The list is documented rather than
  * discovered, and the coverage boundary it creates is reported with the digest (`files` counts exactly what was
- * hashed) rather than left implicit.
+ * hashed) rather than left implicit. It applies to paths Git already reports too: a repository that commits
+ * `dist/` still gets a digest of the source, not of the build that produced it.
+ *
+ * A path the contract names explicitly is not filtered by this list. `inputs`/a check path is the *subject* of
+ * the evidence, and silently dropping it was how a declared `dist/out.txt` could pass, be changed, and still read
+ * as verified: the two snapshots compared an empty range to an empty range. The exclusions describe the fallback
+ * range of `.`, not a path a caller asked to be watched.
  */
 export const COMPLETION_INPUT_EXCLUDED_SEGMENTS: readonly string[] = [
   '.git',
@@ -113,16 +123,35 @@ export const COMPLETION_INPUT_EXCLUDED_SEGMENTS: readonly string[] = [
  */
 const FORBIDDEN_SEGMENTS: readonly string[] = ['.ssh', '.aws', '.gnupg', '.env'];
 
-function excluded(relative: string, runtimePaths: ReadonlySet<string>): boolean {
+/**
+ * Whether a walked path is outside the range being fingerprinted.
+ *
+ * `defaultSegments` is true only while walking the implicit whole-workspace range. An explicit input is the
+ * subject of the evidence, so the derived-directory heuristic does not apply to it or its subtree; otherwise an
+ * explicit `dist/out.txt` would contribute nothing to the digest and its later change would be invisible.
+ *
+ * Protected paths are skipped in every walk — a private key is never read to prove the source did not change —
+ * and the runtime's own state files stay excluded by their exact relative path even under an explicit directory,
+ * because their writes describe the runtime rather than the work.
+ */
+function excluded(
+  relative: string,
+  runtimePaths: ReadonlySet<string>,
+  defaultSegments: boolean,
+): boolean {
   // A walk that started at the root names its children `./child`, so the leading segment is stripped before
   // anything is compared: without this, the runtime's own database — matched by its exact relative path — would
   // only be excluded when it happened to be named some other way, and the snapshot would flag every round.
   const normalized = relative.replace(/^\.\//, '');
   const segments = normalized.split('/');
-  if (segments.some((segment) => COMPLETION_INPUT_EXCLUDED_SEGMENTS.includes(segment))) return true;
   // Credential paths are skipped by a walk exactly as they are refused by name: a range of `.` that descended
   // into `.ssh` would read a private key in order to prove the source did not change.
   if (segments.some(isProtectedSegment)) return true;
+  if (
+    defaultSegments &&
+    segments.some((segment) => COMPLETION_INPUT_EXCLUDED_SEGMENTS.includes(segment))
+  )
+    return true;
   return runtimePaths.has(normalized);
 }
 
@@ -256,6 +285,7 @@ async function walk(
   runtimePaths: ReadonlySet<string>,
   signal: AbortSignal,
   includeCurrent: boolean,
+  defaultSegments: boolean,
 ): Promise<void> {
   signal.throwIfAborted();
   const stat = await lstat(absolute);
@@ -274,7 +304,7 @@ async function walk(
   entries.sort((left, right) => left.name.localeCompare(right.name, 'en'));
   for (const entry of entries) {
     const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
-    if (excluded(childRelative, runtimePaths)) continue;
+    if (excluded(childRelative, runtimePaths, defaultSegments)) continue;
     await walk(
       path.join(absolute, entry.name),
       childRelative,
@@ -282,7 +312,81 @@ async function walk(
       runtimePaths,
       signal,
       false,
+      defaultSegments,
     );
+  }
+}
+
+/**
+ * The paths Git would commit from this root: what is tracked, plus what is untracked but not ignored.
+ *
+ * This is the default range because it is the repository's own answer to "what is the project", and it is the
+ * difference between reading a source tree and reading every dependency and build product a person happened to
+ * leave in the directory. Untracked files stay in: a task that creates `out.txt` and verifies it has not committed
+ * anything, and dropping the file it just produced would be the false assurance the fingerprint exists to prevent.
+ *
+ * `undefined` means Git could not answer — not a repository, no Git, a listing over the output cap. The caller
+ * falls back to the filesystem walk, which is slower but keeps the old coverage rather than refusing to verify.
+ */
+async function gitVisiblePaths(root: string, signal: AbortSignal): Promise<string[] | undefined> {
+  try {
+    const result = await runWorkspaceGit(
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { cwd: root, signal, allowFailure: true, maxBytes: 256 * 1024 * 1024 },
+    );
+    if (result.code !== 0) return undefined;
+    return [...new Set(result.stdout.toString('utf8').split('\0').filter(Boolean))];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The implicit `.` range, in Git's order.
+ *
+ * The paths are sorted before hashing, exactly as a directory walk sorts its entries: `git ls-files` is stable but
+ * its `--others` half is not promised to be, and a digest must not depend on the order a listing happened to use.
+ * A path Git reports that no longer exists is skipped — the working tree is the subject, and a staged deletion is
+ * an absent file rather than an unreadable one.
+ */
+async function snapshotGitVisible(
+  root: string,
+  listed: readonly string[],
+  collection: Collection,
+  runtimePaths: ReadonlySet<string>,
+  signal: AbortSignal,
+): Promise<void> {
+  const paths = [...listed].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  for (const relative of paths) {
+    signal.throwIfAborted();
+    if (excluded(relative, runtimePaths, true)) continue;
+    const absolute = path.resolve(root, relative);
+    if (!contained(root, absolute))
+      throw new CompletionInputLimitError(
+        `Completion input escapes the execution root: ${relative}`,
+      );
+    let stat;
+    try {
+      stat = await lstat(absolute);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (stat.isSymbolicLink())
+      throw new CompletionInputLimitError(
+        `Symbolic links are not followed in completion inputs: ${relative}`,
+      );
+    // A submodule is a directory Git tracks as one entry; walk it so its contents are covered exactly as a
+    // recursive listing would have covered them.
+    if (stat.isDirectory()) {
+      await walk(absolute, relative, collection, runtimePaths, signal, false, true);
+      continue;
+    }
+    if (!stat.isFile())
+      throw new CompletionInputLimitError(
+        `Unsupported path type in completion inputs: ${relative}`,
+      );
+    admitFile(absolute, relative, stat, collection);
   }
 }
 
@@ -330,12 +434,36 @@ export async function snapshotCompletionInputs(
   collection.items.push(`root\0${canonicalRoot}\0`);
   for (const relative of normalized) {
     signal.throwIfAborted();
-    if (excluded(relative, runtimePaths)) continue;
+    /**
+     * A path named by the contract is the subject of its evidence, so the derived-directory heuristic may not
+     * remove it. `dist/out.txt` declared as an acceptance input is not build output to be ignored: skipping it
+     * made the two snapshots compare an empty range to an empty range, and a later change to the file left the
+     * verdict at `verified`.
+     *
+     * `.` is the one name that still means the implicit range (a task without `completionInputs`), and it keeps
+     * the exclusions. In a Git working tree it also narrows to Git's view of the root: tracked files and untracked
+     * files that are not ignored, so a dependency tree `.gitignore` already excludes is never read to prove the
+     * source did not change. The runtime's own state files are refused rather than silently skipped: a contract
+     * that names the database cannot be monitored, and dropping it would be the same false assurance in another
+     * form.
+     */
+    const implicitRange = relative === '.';
+    if (!implicitRange && runtimePaths.has(relative))
+      throw new CompletionInputLimitError(
+        `Completion input names the runtime’s own state and cannot be monitored: ${relative}`,
+      );
     const absolute = path.resolve(canonicalRoot, relative);
     if (!contained(canonicalRoot, absolute))
       throw new CompletionInputLimitError(
         `Completion input escapes the execution root: ${relative}`,
       );
+    if (implicitRange) {
+      const listed = await gitVisiblePaths(canonicalRoot, signal);
+      if (listed) {
+        await snapshotGitVisible(canonicalRoot, listed, collection, runtimePaths, signal);
+        continue;
+      }
+    }
     let exists = true;
     try {
       await lstat(absolute);
@@ -349,7 +477,7 @@ export async function snapshotCompletionInputs(
       collection.items.push(`absent\0${relative}\0`);
       continue;
     }
-    await walk(absolute, relative, collection, runtimePaths, signal, true);
+    await walk(absolute, relative, collection, runtimePaths, signal, true, implicitRange);
   }
   const files = collection.items.filter((item): item is FileEntry => typeof item !== 'string');
   options.onCollected?.({ files: collection.files, bytes: collection.bytes });

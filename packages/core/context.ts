@@ -1,7 +1,7 @@
 import type { Message, ModelResponse, Provider, ToolSpec, Usage } from '../protocol/index.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { contextMessageSize } from '../protocol/images.ts';
-import { contextBoundaries, contextTail } from '../protocol/context.ts';
+import { contextBoundaries } from '../protocol/context.ts';
 
 import { ContextLimitError, estimateInputTokens } from './budget.ts';
 import { WINDOW_EXHAUSTED, forecastRequest, windowPressure } from './forecast.ts';
@@ -14,6 +14,7 @@ import type { PruneOutcome } from './prune.ts';
 import type { TokenCalibration } from './calibration.ts';
 import { storedSummary, summaryTranscript, withSummary } from './context-summary.ts';
 import { firstHolding, lastHolding } from './boundary-search.ts';
+import { projectToolResults } from './context-tool-results.ts';
 export {
   SUMMARY_INSTRUCTION_PREFIX,
   SUMMARY_SECTIONS,
@@ -186,7 +187,8 @@ export async function prepareContext(input: {
       maxContextTokens: input.maxContextTokens,
       ...(factors() ? { factors: factors()! } : { factor: messageWeight() }),
     });
-  const current = contextTail(history, covered);
+  const toolResults = projectToolResults(store, sessionId, history, covered, input.runId);
+  const current = toolResults.messages;
   /**
    * The policy this round compresses under, when a window is known.
    *
@@ -281,6 +283,7 @@ export async function prepareContext(input: {
       input.shrink.policy,
       input.shrink.spill,
       input.shrink.measure,
+      toolResults.preserved,
     );
     return { messages: outcome.messages, shortened: outcome.shortened, freed: outcome.freedChars };
   };
@@ -295,7 +298,12 @@ export async function prepareContext(input: {
   const prune = (messages: Message[]): PruneOutcome => {
     if (!input.prune) return { messages, pruned: 0, prunedChars: 0 };
     assertPrunePolicy(input.prune.policy);
-    return pruneMessages(messages, input.prune.policy, input.prune.keepRecent);
+    return pruneMessages(
+      messages,
+      input.prune.policy,
+      input.prune.keepRecent,
+      toolResults.preserved,
+    );
   };
   let forecast = forecastOf(current);
   let visible = current;
@@ -436,6 +444,7 @@ export async function prepareContext(input: {
       fitsAsIs = undefined;
     }
   }
+  toolResults.remember(visible);
   const fitsNow = fitsOnce();
   /**
    * Compress when the conversation reaches the threshold, when the request no longer fits, or when a person
@@ -533,7 +542,7 @@ export async function prepareContext(input: {
   const boundaryView = (cut: number) => {
     let view = boundaryViews.get(cut);
     if (!view) {
-      view = { messages: contextTail(history, cut) };
+      view = { messages: toolResults.tail(cut) };
       boundaryViews.set(cut, view);
     }
     return view;
@@ -573,7 +582,8 @@ export async function prepareContext(input: {
       shortened += applied.shortened;
       freedChars += applied.freed;
       const appliedForecast = forecastOf(applied.messages);
-      if (fits(applied.messages, appliedForecast))
+      if (fits(applied.messages, appliedForecast)) {
+        toolResults.remember(applied.messages, tail);
         return {
           system: input.system,
           messages: withSummary(applied.messages, summary),
@@ -585,6 +595,7 @@ export async function prepareContext(input: {
           compacted: false,
           ...policyNote,
         };
+      }
     }
     /**
      * The same last word for a tail that shortening could not bring under — either because no result was
@@ -597,7 +608,8 @@ export async function prepareContext(input: {
       pruned += dropped.pruned;
       prunedChars += dropped.prunedChars;
       const droppedForecast = forecastOf(dropped.messages);
-      if (fits(dropped.messages, droppedForecast))
+      if (fits(dropped.messages, droppedForecast)) {
+        toolResults.remember(dropped.messages, tail);
         return {
           system: input.system,
           messages: withSummary(dropped.messages, summary),
@@ -609,6 +621,7 @@ export async function prepareContext(input: {
           compacted: false,
           ...policyNote,
         };
+      }
     }
     // The verdict is this tail's: after a compression the remaining messages are what has to fit, and saying
     // anything else would send the reader to compress a conversation that is already as small as it gets.

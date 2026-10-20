@@ -135,14 +135,14 @@ const SCENARIOS: Scenario[] = [
     // on its own and the tool result after it is large enough that it cannot come along, so the conversation
     // still takes two summary batches before the round's own request is sent.
     //
-    // 22 000 rather than the 20 000 that first cleared it, because 20 000 cleared it by a handful of characters:
-    // the prefix this budget has to hold is `system + tool schemas`, which grows whenever *any* tool description
-    // grows — or whenever the system prompt itself gains a paragraph, which is what happened next: the
-    // answer-scope rules added 767 characters and pushed 21 000 over the edge into "compaction is impossible", a
+    // 26 000 rather than the 22 000 that last cleared it: the prefix this budget has to hold is
+    // `system + tool schemas`, which grows whenever *any* tool description grows — or whenever the system prompt
+    // itself gains a paragraph. The answer-scope rules added another 700-odd characters, and the first summary
+    // batch now measures 22 710 characters against the fixed part; at 22 000 the compaction is impossible, a
     // failure that names the context budget rather than the cause. The margin below is that growth allowance.
     // Raising it does not change the shape: all three scripted answers are still consumed, which is what says the
     // conversation still takes two summary batches.
-    options: { maxContextChars: 22_000 },
+    options: { maxContextChars: 26_000 },
     tools: 'empty',
     script: [
       {

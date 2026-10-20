@@ -852,10 +852,16 @@ async function journalOperation(
       [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid, ...preparation })),
     },
   });
-  if (result.code !== 0)
-    throw new Error(
-      `Windows sandbox ACL ${operation} failed; recovery journal ${journal}: ${result.error}`,
-    );
+  if (result.code !== 0) {
+    const detail = `Windows sandbox ACL ${operation} failed; recovery journal ${journal}: ${result.error}`;
+    if (operation === 'grant')
+      throw new EnvironmentBlockedError(
+        'windows-sandbox-acl-failed',
+        detail,
+        'Resolve the named ACL or workspace link problem before retrying. Keep the configured isolation.',
+      );
+    throw new Error(detail);
+  }
 }
 async function acquireWorkspace(root: string, sid: string, state: string): Promise<void> {
   for (const existing of workspaceLeases.keys()) {

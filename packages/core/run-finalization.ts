@@ -137,15 +137,6 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
       error = stale;
     }
   }
-  ({ status, error } = finishRunTask({
-    store,
-    sessionId,
-    task,
-    taskAttempt,
-    status,
-    error,
-    verification: completion.state.taskVerification,
-  }));
   completion.finalizeVerdict(status, error);
   result = {
     runId,
@@ -195,6 +186,22 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
    * promises were broken is exactly what `failed` means.
    */
   await checkRunEnd(result, [...emittedTypes]);
+  /**
+   * The verdict was computed for the status the run believed it had. A run-end invariant can still lower it, so
+   * status, error and the completion summary move together here, before either terminal row is written. The
+   * previous order wrote the task attempt first and only then discovered the invariant failure, which is how a
+   * failed run kept a completed attempt (and could announce `task.completed` to a dependent task).
+   */
+  if (result.status !== status) {
+    status = result.status;
+    error = result.error;
+    completion.finalizeVerdict(status, error);
+    result.status = status;
+    if (error === undefined) delete result.error;
+    else result.error = error;
+    if (completion.state.summary) result.completion = completion.state.summary;
+    else delete result.completion;
+  }
   if (result.completion?.state === 'verified' && result.status !== 'completed')
     result.completion = {
       ...result.completion,
@@ -208,9 +215,41 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
     boundGoal.objective === completion.state.contractSpec?.objective
       ? boundGoal.objective
       : undefined;
+  /**
+   * The task attempt, the completion record and the run row are one commit.
+   *
+   * `settleTask` runs inside `finishRun`'s transaction, before anything terminal is written. A failure there
+   * aborts the whole commit, so an attempt can never be durable as completed beside a run that failed to
+   * finalize; the retry below re-runs the same commit, and only when the settlement itself was what threw does it
+   * fall back to writing the run row alone (an open attempt is honest, a falsely completed one is not).
+   */
+  let taskSettlementFailed = false;
+  const settleTask =
+    task && taskAttempt
+      ? () => {
+          try {
+            return finishRunTask({
+              store,
+              sessionId,
+              task,
+              taskAttempt,
+              status: result.status,
+              error: result.error,
+              verification: completion.state.taskVerification,
+            });
+          } catch (cause) {
+            taskSettlementFailed = true;
+            throw cause;
+          }
+        }
+      : undefined;
+  const finalizationOptions = {
+    ...(completeGoalObjective === undefined ? {} : { completeGoalObjective }),
+    ...(settleTask ? { settleTask } : {}),
+  };
   try {
-    // Verdict, bound goal and run end commit together; live observers only see that committed state.
-    store.finishRun(result, { completeGoalObjective });
+    // Verdict, bound goal, task attempt and run end commit together; live observers only see that committed state.
+    store.finishRun(result, finalizationOptions);
   } catch {
     result.status = 'failed';
     result.error = 'Failed to persist run finalization';
@@ -227,7 +266,7 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
      * the next process's reconciliation converges, and that is the smaller loss of the two.
      */
     try {
-      store.finishRun(result);
+      store.finishRun(result, taskSettlementFailed ? {} : finalizationOptions);
     } catch (error) {
       // The run is over whether or not the row says so; without this the session stays locked to it.
       store.forsakeRun(runId);

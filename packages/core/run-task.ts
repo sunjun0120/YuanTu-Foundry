@@ -1,4 +1,5 @@
 import type { RunStatus, Task, TaskStep } from '../protocol/index.ts';
+import type { RunTaskSettlement } from '../storage/session-runs.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import type { AgentRunInput } from './agent-options.ts';
@@ -137,44 +138,55 @@ export interface FinishRunTaskOptions {
   verification: RunCompletionState['taskVerification'];
 }
 
-/** Persist terminal attempt evidence before the run's final verdict is built. */
-export function finishRunTask(options: FinishRunTaskOptions): {
-  status: RunStatus;
-  error: string | undefined;
-} {
-  const { store, sessionId, task, taskAttempt, verification } = options;
-  let { status, error } = options;
-  if (task && taskAttempt) {
-    try {
-      const persistedTask = store.finishTaskAttempt(sessionId, task.id, taskAttempt.id, {
-        // The verification round already settled acceptance-command effects.
-        resolvedEffectIds: [],
-        status:
-          status === 'completed' || status === 'needs_review'
-            ? status
-            : status === 'cancelled'
-              ? 'cancelled'
-              : status === 'limited'
-                ? 'needs_review'
-                : 'blocked',
-        ...(verification ? { verification: verification.evidence } : {}),
-        ...(error ? { error } : {}),
-        ...(verification
-          ? {
-              acceptance: verification.acceptance,
-              steps: verification.steps,
-            }
-          : {}),
-      });
-      if (status === 'completed' && persistedTask.status === 'needs_review') {
-        status = 'needs_review';
-        error = 'Task side effect outcome unknown; inspect state before retrying.';
-      }
-    } catch {
-      status = 'failed';
-      error = 'Failed to persist task finalization';
-    }
-  }
+/** The status a task attempt takes for the run status that produced it. */
+function taskAttemptStatus(
+  status: RunStatus,
+): 'completed' | 'needs_review' | 'cancelled' | 'blocked' {
+  if (status === 'completed' || status === 'needs_review') return status;
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'limited') return 'needs_review';
+  return 'blocked';
+}
 
-  return { status, error };
+/**
+ * Persist terminal attempt evidence inside the run's own finalization transaction.
+ *
+ * This is deliberately not a transaction of its own. It is handed to `SessionStore.finishRun`, which runs it
+ * before writing the completion record and the run row, so the Task, the Attempt and the Run either commit
+ * together or commit nothing. The earlier shape wrote the task first and learned about a failed run-end invariant
+ * or a failed run write afterwards, leaving Task=completed beside Run=failed and letting the Host announce
+ * `task.completed` for a run that never finished.
+ *
+ * It throws when the attempt cannot be written: the caller's transaction must roll back rather than persist a
+ * run row whose attempt still says in_progress or, worse, claims a completion the run never reached.
+ */
+export function finishRunTask(options: FinishRunTaskOptions): RunTaskSettlement | undefined {
+  const { store, sessionId, task, taskAttempt, status, error, verification } = options;
+  if (!task || !taskAttempt) return undefined;
+  const persistedTask = store.finishTaskAttempt(sessionId, task.id, taskAttempt.id, {
+    // The verification round already settled acceptance-command effects.
+    resolvedEffectIds: [],
+    status: taskAttemptStatus(status),
+    ...(verification ? { verification: verification.evidence } : {}),
+    ...(error ? { error } : {}),
+    ...(verification
+      ? {
+          acceptance: verification.acceptance,
+          steps: verification.steps,
+        }
+      : {}),
+  });
+  return {
+    task: persistedTask,
+    // The attempt's own rules can settle lower than the run claimed (an unknown command effect, an unfinished
+    // step). Carry that correction so the run row and its completion record are written with it, not after it.
+    ...(status === 'completed' && persistedTask.status === 'needs_review'
+      ? {
+          runDowngrade: {
+            status: 'needs_review' as const,
+            error: 'Task side effect outcome unknown; inspect state before retrying.',
+          },
+        }
+      : {}),
+  };
 }

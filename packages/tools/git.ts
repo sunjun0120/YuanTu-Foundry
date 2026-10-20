@@ -75,6 +75,8 @@ export function gitCommandLine(safeDirectory: string): string[] {
     '-c',
     'core.fsmonitor=false',
     '-c',
+    'core.quotePath=false',
+    '-c',
     'diff.external=',
     '-c',
     'diff.trustExitCode=false',

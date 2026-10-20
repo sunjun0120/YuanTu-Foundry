@@ -5,11 +5,89 @@ import os from 'node:os';
 import path from 'node:path';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { EnvironmentBlockedError } from '../packages/tools/environment-blocked.ts';
+import { verifyCompletionAcceptance } from '../packages/core/task-acceptance.ts';
 import {
   registerSandboxProvider,
   sandboxProvider,
   type SandboxPlan,
 } from '../packages/tools/sandbox.ts';
+
+test('one sandbox startup blocker skips remaining commands but still checks files', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-blocked-'));
+  const original = sandboxProvider('host');
+  let preparations = 0;
+  registerSandboxProvider({
+    ...original,
+    prepare: async () => {
+      preparations++;
+      throw new EnvironmentBlockedError(
+        'windows-sandbox-acl-failed',
+        'Windows sandbox refuses reparse points in ACL trees: fixture/link',
+        'Resolve the workspace link.',
+      );
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  await writeFile(path.join(root, 'out.txt'), 'ok');
+  const result = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, [
+      { id: 'first', kind: 'command', command: process.execPath },
+      { id: 'second', kind: 'command', command: process.execPath },
+      { id: 'file', kind: 'file-exact', path: 'out.txt', expected: 'ok' },
+    ]),
+  );
+  assert.equal(preparations, 1);
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[1]?.failureReason, 'environment-error');
+  assert.match(result.checks[1]!.detail, /Not executed.*first/);
+  assert.equal(result.checks[1]?.command, undefined);
+  assert.equal(result.checks[2]?.passed, true);
+  const verdict = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyCompletionAcceptance(
+      root,
+      [
+        {
+          description: 'check',
+          met: false,
+          check: { id: 'first', kind: 'command', command: process.execPath },
+        },
+      ],
+      [],
+      {},
+    ),
+  );
+  assert.match(verdict.error!, /blocked by the execution environment/);
+  assert.match(verdict.error!, /fixture\/link/);
+});
+
+test('a command-specific preparation failure does not suppress independent command checks', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-independent-'));
+  const original = sandboxProvider('host');
+  registerSandboxProvider({
+    ...original,
+    prepare: async (request) => {
+      if (request.command === '-invalid')
+        throw new Error('Sandbox executable cannot begin with an option');
+      return original.prepare(request);
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const result = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, [
+      { id: 'invalid', kind: 'command', command: '-invalid' },
+      { id: 'valid', kind: 'command', command: process.execPath, args: ['-e', 'process.exit(0)'] },
+    ]),
+  );
+  assert.equal(result.checks[0]?.passed, false);
+  assert.equal(result.checks[1]?.passed, true);
+});
 
 for (const scenario of [
   'normal',

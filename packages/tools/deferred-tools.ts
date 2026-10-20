@@ -147,7 +147,7 @@ export function addLoadedTools(
   }
 }
 
-/** One catalog line per group that still has a hidden tool: the group's hint and its hidden names. */
+/** One stable catalogue line per offered deferred group, regardless of which members are already loaded. */
 export function deferredCatalog(tools: readonly { name: string }[]): string {
   const hidden = new Set(tools.map((tool) => tool.name));
   const grouped = new Set(DEFERRED_GROUPS.flatMap((group) => group.names));
@@ -156,7 +156,7 @@ export function deferredCatalog(tools: readonly { name: string }[]): string {
     return shown.length ? [`- ${hint}: ${shown.join(', ')}`] : [];
   });
   // A deferrable name no group lists (an embedder's own set) is still named, just without a hint.
-  const rest = [...hidden].filter((name) => !grouped.has(name));
+  const rest = [...hidden].filter((name) => !grouped.has(name)).sort();
   if (rest.length) lines.push(`- other: ${rest.join(', ')}`);
   return lines.join('\n');
 }

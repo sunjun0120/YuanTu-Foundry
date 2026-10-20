@@ -14,6 +14,15 @@ async function temporary(t: test.TestContext) {
   const root = await tempRoot(t, 'yuantu-coding-eval-');
   return root;
 }
+/** The platform modules `spill.ts` imports at runtime, for oracle workspaces that copy only the candidate file. */
+async function copySpillDependencies(root: string): Promise<void> {
+  await mkdir(path.join(root, 'packages/platform'), { recursive: true });
+  for (const name of ['runtime-directory.ts', 'workspace-paths.ts'])
+    await writeFile(
+      path.join(root, 'packages/platform', name),
+      await readFile(path.resolve('packages/platform', name)),
+    );
+}
 async function example() {
   return JSON.parse(await readFile(new URL('manifest.example.json', harness), 'utf8'));
 }
@@ -261,6 +270,7 @@ test('external oracle detects byte-cap regression and cannot trust a rewritten p
   const root = await temporary(t);
   await mkdir(path.join(root, 'packages/tools'), { recursive: true });
   await mkdir(path.join(root, 'tests'), { recursive: true });
+  await copySpillDependencies(root);
   await writeFile(path.join(root, 'package.json'), '{"type":"module"}');
   await writeFile(
     path.join(root, 'packages/tools/spill.ts'),
@@ -400,6 +410,33 @@ test('adapter handles split UTF-8 JSONL and refuses missing, duplicate or wrong 
     c.write(encoded.subarray(0, -1));
     c.finish(0);
   }, /partial/i);
+});
+
+test('the offline spill verification exception cannot authorize arbitrary or live commands', async () => {
+  const { approvalAllowed, OFFLINE_SPILL_VERIFICATION_SOURCE } = await moduleFor('adapters.mjs');
+  const prepared = { workspace: { scenario: {}, directory: process.cwd(), baseFiles: [] } };
+  const caseDef = { id: 'E09', publicCheck: [], allowedPaths: [] };
+  const approval = (command: string) => ({
+    kind: 'command',
+    toolCall: { id: 'acceptance:auto-1', name: 'run_command', arguments: { command } },
+  });
+  assert.equal(
+    approvalAllowed(approval("echo './packages/tools/spill.ts'"), prepared, caseDef),
+    false,
+  );
+  assert.equal(
+    approvalAllowed(approval("echo './packages/tools/spill.ts'"), prepared, caseDef, true),
+    false,
+  );
+  const command = [process.execPath, '-e', OFFLINE_SPILL_VERIFICATION_SOURCE]
+    .map((part) => (/[\s"]/u.test(part) ? JSON.stringify(part) : part))
+    .join(' ');
+  assert.equal(approvalAllowed(approval(command), prepared, caseDef), false);
+  assert.equal(approvalAllowed(approval(command), prepared, caseDef, true), true);
+  assert.equal(
+    approvalAllowed(approval(command + ' && echo extra'), prepared, caseDef, true),
+    false,
+  );
 });
 
 test('live authorization refuses missing budget/model/receipt and controlled environment removes hooks and credentials', async () => {
@@ -607,7 +644,7 @@ test('real Host bridge uses only a loopback fixture and settles success/cancel w
   const { fakeEndpointSelfCheck, assertOfflineReceipt } = await moduleFor('live-self-check.mjs');
   const { CONTINUE_PROMPT } = await moduleFor('scenario.mjs');
   const { applyReference } = await moduleFor('cases.mjs');
-  const { runHostSample } = await moduleFor('adapters.mjs');
+  const { runHostSample, OFFLINE_SPILL_VERIFICATION_SOURCE } = await moduleFor('adapters.mjs');
   const { captureSourceManifest, freezeInputs, materializeCase, copyFiles, hash } =
     await moduleFor('materialize.mjs');
   const { copyLockedDependencies } = await moduleFor('dependencies.mjs');
@@ -682,7 +719,20 @@ test('real Host bridge uses only a loopback fixture and settles success/cancel w
                   new_text: referenceSpill,
                 },
               }
-            : null;
+            : continuationStep === 2
+              ? {
+                  name: 'verify_work',
+                  arguments: {
+                    commands: [
+                      {
+                        command: process.execPath,
+                        args: ['-e', OFFLINE_SPILL_VERIFICATION_SOURCE],
+                      },
+                    ],
+                    inputs: ['packages/tools/spill.ts'],
+                  },
+                }
+              : null;
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const delta = call
         ? {
@@ -840,7 +890,7 @@ test('real Host bridge uses only a loopback fixture and settles success/cancel w
     null,
     'scheduled E09 phase cancellation is not external sample cancellation',
   );
-  assert.equal(scenario.runs.at(-1).status, 'completed');
+  assert.equal(scenario.runs.at(-1).status, 'completed', JSON.stringify(scenario.runs.at(-1)));
   const { executeOracle } = await moduleFor('verify.mjs');
   /**
    * What this case has to prove here is the *scenario*: the workload was owned, cancelled and not replayed, the
@@ -952,6 +1002,7 @@ test('E09 retention oracle and reference preserve the full E05 behavioral contra
   const { executeOracle } = await moduleFor('verify.mjs');
   const root = await temporary(t);
   await mkdir(path.join(root, 'packages/tools'), { recursive: true });
+  await copySpillDependencies(root);
   await writeFile(path.join(root, 'package.json'), '{"type":"module"}');
   await writeFile(
     path.join(root, 'packages/tools/spill.ts'),

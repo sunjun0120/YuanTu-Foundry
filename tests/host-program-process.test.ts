@@ -53,7 +53,27 @@ test(
       policy: { version: 1, rules: [{ kind: 'write', effect: 'allow' }] },
     });
     const session = await client.request('session.create', {});
-    const result = await client.run(session.id, 'Use a program');
+    const result = await client.run(session.id, 'Use a program', {
+      completion: {
+        version: 1,
+        objective: 'Write the approved fixture',
+        constraints: [],
+        steps: [],
+        inputs: ['approved.txt'],
+        acceptance: [
+          {
+            description: 'The program wrote the approved content',
+            met: false,
+            check: {
+              id: 'program-output',
+              kind: 'file-contains',
+              path: 'approved.txt',
+              expected: 'approved',
+            },
+          },
+        ],
+      },
+    });
     assert.equal(result.status, 'completed', result.error);
     assert.equal(requests, 2);
     assert.match(output, /true:blocked/);

@@ -118,6 +118,10 @@ export function setupWorkspace() {
       const reply = await window.yuantu.invoke({ type: 'openLink', url });
       if (!reply.ok) throw new Error(reply.error);
     },
+    async openLocal(path: string) {
+      const reply = await window.yuantu.openWorkspacePath?.(path, 'open');
+      if (!reply?.ok) throw new Error(reply?.error ?? 'Open failed');
+    },
   };
 
   function paintLayout(): void {

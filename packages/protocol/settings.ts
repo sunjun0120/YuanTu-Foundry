@@ -242,6 +242,12 @@ export const ENVIRONMENT = {
   },
   YUANTU_CONNECTION_ID: { kind: 'string', description: '设置文件中的连接名（仅标注）' },
   YUANTU_SUPPORTS_VISION: { kind: 'boolean', description: '该模型是否接受图片' },
+  YUANTU_DEEPSEEK_COMPAT: {
+    kind: 'enum',
+    values: ['auto', 'on', 'off'],
+    description:
+      'DeepSeek 原生历史兼容：auto 仅识别官方端点的已知模型；on 显式声明网关支持思考回传与历史系统提示更新；off 禁用',
+  },
   YUANTU_PROMPT_CACHE: {
     kind: 'string',
     // The four modes and the spellings the older boolean accepted. A `string` kind rather than an `enum` because

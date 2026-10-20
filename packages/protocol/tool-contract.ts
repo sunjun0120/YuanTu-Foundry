@@ -168,6 +168,8 @@ export interface ToolResult {
   content: string;
   isError: boolean;
   change?: FileChange;
+  /** A command ran, even if it failed. The registry preserves this across extension result processing. */
+  commandExecuted?: true;
   /**
    * The value this result carries, and the view that draws it, when the tool declares a contract.
    *

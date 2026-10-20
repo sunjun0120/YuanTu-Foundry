@@ -30,7 +30,12 @@ import { pathToFileURL } from 'node:url';
 import { mkdirSync, realpathSync, statSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
-import type { ArchivedSessionsReply, DesktopWireReply } from './contract.ts';
+import type {
+  ArchivedSessionsReply,
+  DesktopWireReply,
+  OpenWorkspacePathReply,
+} from './contract.ts';
+import { workspaceFilePath } from './workspace-file-path.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -518,6 +523,38 @@ void app
         return { ok: false, error: safeError(error) };
       }
     });
+    ipcMain.handle(
+      'yuantu:open-workspace-path',
+      async (event, input: unknown): Promise<OpenWorkspacePathReply> => {
+        try {
+          assertSender(event);
+          if (!service || quitting) throw new Error(mainText('desktop.quitting'));
+          if (!input || typeof input !== 'object') throw new Error('Invalid path request');
+          const { path: requested, action } = input as {
+            path?: unknown;
+            action?: unknown;
+          };
+          if (typeof requested !== 'string' || !requested || requested.length > 4096)
+            throw new Error('Invalid workspace path');
+          if (requested.includes('\0')) throw new Error('Invalid workspace path');
+          if (action !== 'open' && action !== 'reveal') throw new Error('Invalid file action');
+          /**
+           * Resolve twice: the first check keeps `..` inside the workspace, and the real path check refuses a
+           * symlink or junction that points out of it. The runtime directory is never a user-facing file.
+           */
+          const root = realpathSync.native(service.snapshot.workspace);
+          const target = workspaceFilePath(root, requested);
+          if (action === 'reveal') shell.showItemInFolder(target);
+          else {
+            const failure = await shell.openPath(target);
+            if (failure) throw new Error(failure);
+          }
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, error: safeError(error) };
+        }
+      },
+    );
     registerMcpIpc(ctx);
     /** Hold the shell operation guard across both halves of a preset update. */
     const assertPresetChangeAllowed = (): void => {

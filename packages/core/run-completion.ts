@@ -63,6 +63,7 @@ import {
  * never moved afterwards — a resume must not restart the clock it is being measured against.
  */
 export interface RunCompletionState {
+  automatic: boolean;
   policy: CompletionRepairPolicy;
   contractId: string | undefined;
   contractDefinitionHash: string | undefined;
@@ -165,8 +166,19 @@ export interface RunCompletionOptions {
 
 export interface RunCompletion {
   state: RunCompletionState;
-  /** Registers the two contract tools, when this run has a contract and may speak about it. */
-  registerTools(): void;
+  /** Install agent-selected checks once; explicit user/task contracts are never replaced. */
+  configureAutomatic(spec: CompletionSpec, plan?: Plan): void;
+  /**
+   * Record that this run changed the workspace.
+   *
+   * A run that carries no contract has nothing of its own to record, so the session's previous `verified`
+   * verdict would otherwise outlive the edit: the completion record is session-scoped, and a cancelled turn
+   * writes no replacement. The old evidence describes a tree that no longer exists, so it is downgraded at the
+   * first observed change rather than at finalization, where a cancelled run might never get the chance.
+   */
+  noteWorkspaceChange(): void;
+  /** Predeclare tools for automatic verification before its contract exists. */
+  registerTools(automatic?: boolean): void;
   /**
    * The before-images a non-task contract's `unchanged` checks compare against.
    *
@@ -219,6 +231,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
   const { completion, resumeCompletionId, completionInputs, approvedPlan, repairPolicy } =
     options.request;
   const state: RunCompletionState = {
+    automatic: false,
     policy: normalizeCompletionRepairPolicy(repairPolicy),
     contractId: undefined,
     contractDefinitionHash: undefined,
@@ -253,6 +266,10 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
   let resumedBaselines: TaskBaselines | undefined;
   /** Images an earlier attempt at the same plan contract recorded, reused where they still cover a check. */
   let inheritedBaselines: TaskBaselines | undefined;
+  /** Whether this run observed a workspace change of its own, for the invalidation below. */
+  let workspaceChanged = false;
+  /** Whether the session's previous verdict has already been marked stale by this run. */
+  let priorEvidenceInvalidated = false;
   const taskInputs = completionInputs ?? [];
   if (task && completion)
     throw new Error('A task already carries the acceptance definition for this run');
@@ -330,6 +347,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
     if (record.sessionId !== sessionId)
       throw new Error('The requested completion contract belongs to another session');
     state.contractId = record.contractId;
+    state.automatic = record.source === 'automatic';
     state.contractDefinitionHash = record.definitionHash;
     state.contractSpec = record.definition;
     state.affectedPaths = [...record.affectedPaths];
@@ -384,11 +402,10 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
     emit('completion.updated', record);
   }
   /**
-   * The two tools that speak about the contract, registered only when there is one.
+   * Contract tools are predeclared for writable automatic verification runs, keeping the catalogue stable.
    *
-   * A planning run, a read-only run and a run with no contract get neither: a tool that records progress on
-   * steps nobody defined, or widens a scope nobody is verifying, is an invitation to believe the runtime is
-   * checking something it is not. `task_step` stays registered for a task as well — it is the compatibility
+   * Planning and read-only runs get neither. Before registration, calls explicitly refuse to record progress
+   * or widen a scope nobody is verifying. `task_step` stays registered for a task as well — it is the compatibility
    * entry point — and the two cannot disagree, because `completion_step` writes through the *same* checkpoint
    * call rather than keeping a second list.
    */
@@ -406,12 +423,95 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         emit('completion.fingerprinting', { contractId: state.contractId, phase, ...scale });
     },
   });
-  const registerTools = (): void => {
-    if (state.contractId && !readOnly && !planPhase && state.steps.length) {
+  const configureAutomatic = (spec: CompletionSpec, plan?: Plan): void => {
+    if (state.contractId || task || completion || resumeCompletionId)
+      throw new Error('Verification checks are already registered and cannot be replaced');
+    const normalized = normalizeCompletionSpec(spec);
+    const contractId = randomUUID();
+    const definitionHash = completionDefinitionHash(normalized);
+    const record = {
+      runId,
+      contractId,
+      definitionHash,
+      source: 'automatic' as const,
+      ...(plan ? { planId: plan.id, planHash: plan.hash } : {}),
+      definition: normalized,
+      policy: state.policy,
+      steps: normalized.steps,
+      affectedPaths: state.affectedPaths,
+      summary: {
+        version: 1 as const,
+        state: 'unverified' as const,
+        reason: 'contract-created',
+        contractId,
+        definitionHash,
+        verificationRound: 0,
+        repairRounds: 0,
+        repeatedFailures: 0,
+        failedCheckIds: [],
+        unfinishedStepIds: [],
+      },
+    };
+    // Persist before making a new definition usable by tools or the verifier.
+    store.recordEvent(sessionId, 'completion.updated', record);
+    state.contractId = contractId;
+    state.contractDefinitionHash = definitionHash;
+    state.contractSpec = normalized;
+    state.automatic = true;
+    state.steps = normalized.steps.map((step) => ({ ...step }));
+    registerTools(true);
+    emit('completion.updated', record);
+  };
+  /**
+   * Mark the session's previous `verified` verdict stale once this run changes the workspace.
+   *
+   * A completion record is session-scoped: it outlives the run that produced it, and a plain or cancelled turn
+   * writes no replacement of its own. Without this, the badge from an earlier run survives an edit the current
+   * run has already made, and the desktop reads exactly that record. Only `verified` is downgraded —
+   * `needs_review`/`limited`/`unverified` already make no pass claim, and replacing them would discard why a
+   * person was asked to look.
+   *
+   * The record carries this run's id and an empty evidence list, so neither the old digest nor its passed checks
+   * can be read as evidence for the new tree. The write is best-effort: invalidation is bookkeeping, and a failed
+   * write must not fail a run that is still working. Finalization retries it.
+   */
+  const invalidatePriorEvidence = (): void => {
+    if (state.contractId || !workspaceChanged || priorEvidenceInvalidated) return;
+    const current = store.completionCurrent(sessionId);
+    if (current?.summary.state !== 'verified') return;
+    const invalidated: CompletionSummary = {
+      ...current.summary,
+      state: 'unverified',
+      reason: 'superseded',
+    };
+    // The digest described the previous tree. Keeping it would let a reader treat it as evidence for this one.
+    delete invalidated.inputDigest;
+    const record = {
+      runId,
+      contractId: current.contractId,
+      summary: invalidated,
+      // The old checks judged the old bytes. Keeping them would let the notice expand to a pass under an
+      // `unverified` heading; an empty list is the honest evidence for a verdict that no longer exists.
+      evidence: { passed: false, durationMs: 0, checks: [] },
+    };
+    try {
+      store.recordEvent(sessionId, 'completion.updated', record);
+      priorEvidenceInvalidated = true;
+      emit('completion.updated', record);
+    } catch {
+      /* The evidence is still stale; finalization tries again before the run is persisted. */
+    }
+  };
+  const noteWorkspaceChange = (): void => {
+    workspaceChanged = true;
+    invalidatePriorEvidence();
+  };
+  const registerTools = (automatic = false): void => {
+    if ((state.contractId || automatic) && (automatic || (!readOnly && !planPhase))) {
       tools.replace({
         name: 'completion_step',
         description:
-          'Record durable progress on this run’ completion steps: mark one step in_progress, completed, blocked or skipped by its id. This is the same list acceptance is judged against, so call it as you finish each step. Use it for progress only — it cannot confirm an acceptance criterion.',
+          'Record durable progress on this run’ completion steps: mark one step in_progress, completed, blocked or skipped by its id. Requires an active verification contract; register checks with verify_work first when using automatic verification. This is the same list acceptance is judged against, so call it as you finish each step. Use it for progress only — it cannot confirm an acceptance criterion.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -427,6 +527,16 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         },
         execute: async (args, context) => {
           context.signal.throwIfAborted();
+          if (context.readOnly || context.executionPolicy?.files === 'read-only')
+            return {
+              isError: true,
+              content: 'Completion tools are unavailable in read-only or planning mode.',
+            };
+          if (!state.contractId)
+            return {
+              isError: true,
+              content: 'No verification contract is registered. Call verify_work first.',
+            };
           try {
             const id = String(args.id);
             const index = state.steps.findIndex((step) => step.id === id);
@@ -475,7 +585,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
       tools.replace({
         name: 'completion_scope',
         description:
-          'Declare the workspace paths this change touches, so a missed caller, export, config or test is visible instead of assumed. Declaring a path grants no permission: writes still need their own approval. Use it when a cross-file refactor finds a new reference.',
+          'Declare the workspace paths this change touches, so a missed caller, export, config or test is visible instead of assumed. Requires an active verification contract; register checks with verify_work first when using automatic verification. Declaring a path grants no permission: writes still need their own approval. Use it when a cross-file refactor finds a new reference.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -492,6 +602,16 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         },
         execute: async (args, context) => {
           context.signal.throwIfAborted();
+          if (context.readOnly || context.executionPolicy?.files === 'read-only')
+            return {
+              isError: true,
+              content: 'Completion tools are unavailable in read-only or planning mode.',
+            };
+          if (!state.contractId)
+            return {
+              isError: true,
+              content: 'No verification contract is registered. Call verify_work first.',
+            };
           try {
             const raw = Array.isArray(args.paths) ? args.paths : [];
             const note = args.note === undefined ? undefined : String(args.note);
@@ -575,7 +695,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
      */
     const inputPaths = state.contractSpec.inputs.length
       ? state.contractSpec.inputs
-      : taskSubject
+      : taskSubject || state.automatic
         ? ['.']
         : [];
     /**
@@ -775,6 +895,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         steps: roundSteps,
         affectedPaths: state.affectedPaths,
         policy: state.policy,
+        evidence: state.taskVerification.evidence,
         ...(state.repairStartedAt === undefined ? {} : { repairStartedAt: state.repairStartedAt }),
         failureFingerprint: fingerprint,
       });
@@ -787,6 +908,7 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         : {}),
       verificationRound: state.verificationRound,
       summary: decision.summary,
+      evidence: state.taskVerification.evidence,
       steps: roundSteps,
       failureFingerprint: fingerprint,
     });
@@ -866,6 +988,8 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
         unfinishedStepIds: [],
       };
     }
+    // A change observed after the live invalidation write failed is retried here, before the run is persisted.
+    invalidatePriorEvidence();
   };
   const captureBaselines = async (): Promise<void> => {
     if (task || !state.contractSpec) return;
@@ -902,6 +1026,8 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
 
   return {
     state,
+    configureAutomatic,
+    noteWorkspaceChange,
     registerTools,
     captureBaselines,
     verifyRound,

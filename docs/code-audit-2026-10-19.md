@@ -57,7 +57,7 @@
 - Agent Host 的多会话准入：`YUANTU_HOST_MAX_RUNS`（默认 2）、按会话的 `admissionRefusal`、调度器 `canRun(sessionId)`、按会话的不变量记录。
 - 桌面端的多会话跟随：切换会话不再等待运行结束、`otherRuns`、按会话的 composer sending 状态。
 - 移除桌面设置页的 Windows 增强隔离段；新增 `.claude/` 到 `.gitignore`。
-- 同目录新增一份 Host 资源锁设计稿（状态为“尚未实现”）。
+- 同目录新增一份 Host 资源锁设计稿（后续已实现，见 `host-resource-locks.md`）。
 
 这些改动正好覆盖此前的“单 Host 单活动会话”限制，但不是本报告的审阅基线，也未经本轮验收。合入前至少需要验证：两个会话并发时的审批/取消归属、共享 rate gate 的公平性、终端与后台命令的归属、SQLite 单连接的写串行、`restoring` 全局屏障是否仍会阻塞无关会话、`manualOperation` 单槽位是否足够。
 

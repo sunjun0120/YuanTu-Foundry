@@ -52,4 +52,10 @@ test('a command approval carries the boundary of the backend it will run on; oth
   await registry.execute({ id: '2', name: 'fake_write', arguments: {} }, context);
   assert.match(approvals[0]!.description, /\nIsolation: Runs on the host/);
   assert.doesNotMatch(approvals[1]!.description, /Isolation:/);
+  // The same facts as data, so the desktop can say them in the reader's language.
+  assert.deepEqual(approvals[0]!.boundary, {
+    processFiles: 'unrestricted',
+    network: 'unrestricted',
+  });
+  assert.equal(approvals[1]!.boundary, undefined);
 });

@@ -239,7 +239,7 @@ export function planCompletionSpec(
   return normalizeCompletionSpec({
     version: 1,
     objective: plan.title,
-    constraints: [plan.summary, ...(additions.constraints ?? [])],
+    constraints: [...(plan.summary.trim() ? [plan.summary] : []), ...(additions.constraints ?? [])],
     steps:
       additions.steps ??
       expected.map((description, index) => ({

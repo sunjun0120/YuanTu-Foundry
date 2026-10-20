@@ -15,6 +15,7 @@ import { COMPLETION_LIMITS } from '../protocol/completion.ts';
 import type { CheckFailureReason } from '../protocol/index.ts';
 import type { Approver } from '../protocol/index.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
+import { environmentBlockedCode } from '../tools/environment-blocked.ts';
 import {
   VerificationAssertionError,
   VerificationDefinitionError,
@@ -652,12 +653,35 @@ export async function verifyAcceptance(
   const started = Date.now();
   const checks: AcceptanceCheckResult[] = [];
   const ids = new Set<string>();
+  let commandBlocker: AcceptanceCheckResult | undefined;
   for (const spec of specs) {
+    options.signal?.throwIfAborted();
     if (ids.has(spec.id)) throw new Error(`Duplicate acceptance check id: ${spec.id}`);
     ids.add(spec.id);
-    checks.push(
-      await verifyOne(canonicalRoot, spec, options.signal, maxOutputBytes, options.approve),
+    if (spec.kind === 'command' && commandBlocker) {
+      checks.push({
+        id: spec.id,
+        kind: spec.kind,
+        passed: false,
+        durationMs: 0,
+        failureReason: 'environment-error',
+        detail: `Not executed: sandbox startup was blocked in check ${commandBlocker.id}. ${commandBlocker.detail}`,
+      });
+      continue;
+    }
+    const check = await verifyOne(
+      canonicalRoot,
+      spec,
+      options.signal,
+      maxOutputBytes,
+      options.approve,
     );
+    checks.push(check);
+    if (
+      spec.kind === 'command' &&
+      environmentBlockedCode(check.detail)?.startsWith('windows-sandbox-')
+    )
+      commandBlocker = check;
   }
   return {
     passed: checks.every((check) => check.passed),

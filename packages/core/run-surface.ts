@@ -95,6 +95,10 @@ export class RunSurface {
       this.rebuildCatalog();
     }
   }
+  /** Run-owned tools can appear when automatic verification creates a contract. */
+  refreshTools(): void {
+    this.rebuildCatalog();
+  }
   private loadedNow(): Set<string> | undefined {
     return this.loadedTracker.current();
   }

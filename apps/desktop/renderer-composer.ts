@@ -11,16 +11,10 @@
  * them is *asked* of `commands` and the command it answers with is run here, because running it means holding
  * the send state this module owns.
  */
-import type {
-  CarrierCommand,
-  CarrierSnapshot,
-  RunVerification,
-} from '../../packages/carrier/contract.ts';
+import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import { attachmentPrompt, type DocumentAttachment } from './attachment-contract.ts';
 import type { ImageAttachment } from '../../packages/protocol/index.ts';
 import { type SlashOutcome } from './renderer-commands.ts';
-import { createVerificationEditor, type VerificationDraft } from './renderer-verification.ts';
-import { t } from './i18n.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -49,11 +43,6 @@ export function setupComposer(actions: {
   const prompt = required<HTMLTextAreaElement>('prompt');
   const sendButton = required<HTMLButtonElement>('send');
   const composer = required<HTMLFormElement>('composer');
-  const verification = createVerificationEditor({
-    host: required('composer-verification'),
-    includeObjective: true,
-    defaultObjective: () => prompt.value.trim(),
-  });
   let sending = false;
   /**
    * The session a send was made in. A send lasts as long as its run, and that run keeps going when another
@@ -96,31 +85,6 @@ export function setupComposer(actions: {
     }
     const images = actions.attachments.images();
     const queuing = Boolean(actions.getState()?.session.running);
-    let draft: VerificationDraft | undefined;
-    try {
-      draft = verification.value();
-    } catch (error) {
-      actions.setError(error instanceof Error ? error.message : String(error));
-      actions.requestRender();
-      return;
-    }
-    if (draft && queuing) {
-      actions.setError(t('verification.busy'));
-      actions.requestRender();
-      return;
-    }
-    const contract: RunVerification | undefined = draft
-      ? {
-          completion: {
-            version: 1,
-            objective: draft.objective ?? t('verification.defaultObjective'),
-            constraints: [],
-            steps: [],
-            acceptance: draft.acceptance,
-            inputs: draft.inputs,
-          },
-        }
-      : undefined;
     prompt.value = '';
     actions.attachments.clear();
     actions.setError(null);
@@ -134,12 +98,10 @@ export function setupComposer(actions: {
           type: 'send',
           prompt: outgoingText,
           images,
-          ...(contract ? { verification: contract } : {}),
         };
     void actions
       .invoke(command)
       .then((ok) => {
-        if (ok && contract) verification.close();
         // A failed send gives its text back only to the session it was written in.
         if (!ok && !prompt.value && actions.getState()?.session.sessionId === fromSession) {
           prompt.value = textToSend;

@@ -108,6 +108,16 @@ export const workspaceMessages: Record<string, [string, string]> = {
    * the runtime's bookkeeping.
    */
   'ui.completionTitle': ['验收状态', 'Verification'],
+  'ui.automaticVerificationTitle': ['自动验证', 'Automatic verification'],
+  'ui.verificationChecksPassed': ['检查通过', 'Checks passed'],
+  'ui.verificationDetails': ['检查详情（{count}）', 'Check details ({count})'],
+  'ui.verificationCheckPassed': ['通过', 'Passed'],
+  'ui.verificationCheckFailed': ['未通过', 'Failed'],
+  'ui.verificationExitCode': ['退出码：{code}', 'Exit code: {code}'],
+  'ui.completionReason.missing-verification': [
+    '尚未提供可执行的检查，结果未经验证。',
+    'No executable checks were provided; the result is unverified.',
+  ],
   'ui.completionState.verified': ['验收通过', 'Verified'],
   'ui.completionState.unverified': ['尚未验证', 'Not verified'],
   'ui.completionState.needs_review': ['需要审查', 'Needs review'],
@@ -156,6 +166,10 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.completionReason.protected-path-changed': [
     '合同要求不得改动的文件被修改，需要人工审查',
     'A file the contract said must not change was modified; a person needs to review it',
+  ],
+  'ui.completionReason.superseded': [
+    '本次修改后，之前的验证结果已失效，需要重新验证。',
+    'The workspace changed after the previous verification, so that result no longer applies; verify it again.',
   ],
   'ui.completionReason.other': [
     '运行需要人工检查后才能视为完成',

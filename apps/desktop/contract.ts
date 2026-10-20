@@ -52,6 +52,9 @@ export type ArchivedSessionsReply =
       sessions: import('../../packages/protocol/index.ts').SessionInfo[];
     }
   | Extract<DesktopReply, { ok: false }>;
+/** What a person can do with a workspace file from a deliverable or a local Markdown link. */
+export type WorkspaceFileAction = 'open' | 'reveal';
+export type OpenWorkspacePathReply = { ok: true } | { ok: false; error: string };
 export interface DesktopBridge {
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
   /** Read on demand by the settings page; unarchiving and deleting go through `invoke`. */
@@ -66,6 +69,13 @@ export interface DesktopBridge {
    * attachment — for one directory listing.
    */
   files(command: FilesCommand): Promise<FilesReply>;
+  /**
+   * Open or reveal one workspace file with the operating system.
+   *
+   * The renderer may name a path from a deliverable or a Markdown link; the main process resolves it against the
+   * active workspace, rejects links that escape it (including a symlink or junction), and only then asks the shell.
+   */
+  openWorkspacePath?(path: string, action: WorkspaceFileAction): Promise<OpenWorkspacePathReply>;
   mcp?(command: McpCommand): Promise<McpReply>;
   /**
    * The two security knobs as one choice, which is now the only way either of them moves.

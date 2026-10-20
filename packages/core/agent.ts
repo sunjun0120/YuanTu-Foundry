@@ -23,6 +23,7 @@ import { assemblePrompt, type PromptTrace } from './prompt-sections.ts';
 import { abandonRun, submitPrompt } from './run-admission.ts';
 import { RunAim } from './run-aim.ts';
 import { createRunCompletion } from './run-completion.ts';
+import { createAutomaticVerification } from './automatic-verification.ts';
 import { buildContextInput } from './run-context.ts';
 import { createRunDelegation, registerRunReport } from './run-delegation.ts';
 import { createRunEmit, type RunEmission } from './run-emit.ts';
@@ -357,6 +358,24 @@ export class Agent {
         },
       });
       completion.registerTools();
+      const automaticVerification = createAutomaticVerification({
+        enabled:
+          input.autoVerify === true &&
+          !task &&
+          !input.reportRequired &&
+          (this.options.subagentDepth ?? 0) === 0,
+        objective: input.prompt,
+        isReadOnly: () => readOnly,
+        plan: input.approvedPlan,
+        tools,
+        completion,
+        workspace,
+        signal,
+        runtimeStatePaths: store.databaseFiles(),
+        // A run without a contract of its own still invalidates the session's previous verdict when it edits.
+        onChange: () => completion.noteWorkspaceChange(),
+      });
+      automaticVerification.register();
       await completion.captureBaselines();
       /**
        * The wrapper every model call of this run goes through, and the accounting it produces.
@@ -411,7 +430,18 @@ export class Agent {
        * belongs to has spoken in this very round.
        */
       let humanTurn = input.authority !== 'automatic';
-      const progressGuard = new ToolProgressGuard();
+      const progressGuard = new ToolProgressGuard({
+        workspace,
+        // Model processing time excludes a person thinking about an approval or answering a question.
+        now: () => statistics.modelMs,
+        investigate: () =>
+          !task &&
+          !input.approvedPlan &&
+          !input.reportRequired &&
+          !completion.state.contractId &&
+          !automaticVerification.hasProjectWork &&
+          !store.goal(input.sessionId),
+      });
       let concludeQueries = false;
       const consume = (mode: InputMode): boolean => {
         const item = queue.take(mode);
@@ -516,6 +546,7 @@ export class Agent {
               previousAttempt,
               instructions: instructions.text,
               planNotice: () => planNotice,
+              verificationNotice: () => automaticVerification.guidance,
             }),
           );
           this.lastPrompt = assembled.trace;
@@ -655,6 +686,7 @@ export class Agent {
             progressGuard.reset();
             concludeQueries = false;
             readOnly = false;
+            automaticVerification.register(approved);
             surface.setPlanNotice(approvedPlanNotice(approved));
             // The delegation guard was built with this run's original promise; a run that may now write may also
             // delegate work that writes, so the coordinator is told rather than left refusing a general child.
@@ -705,6 +737,7 @@ export class Agent {
            * grows, so the catalog changes once per load or goal transition, not per round.
            */
           surface.refreshLoaded();
+          if (automaticVerification.takeToolsChanged()) surface.refreshTools();
           const requestSpecs = concludeQueries ? [] : surface.specs;
           const contextInput = buildContextInput({
             store,
@@ -796,6 +829,12 @@ export class Agent {
             onAnswerText: (answer) => {
               text = answer;
             },
+            // A nudged answer is still real model output and stays in the model's history, but the transcript
+            // must not show it beside the answer the nudge produces (see `Message.provisional`).
+            provisionalAnswer: async () => {
+              await automaticVerification.assessChanges();
+              return automaticVerification.willNudge();
+            },
             commitStepTiming: (answered) => steps.commitTiming(answered),
             statistics,
             usage,
@@ -812,6 +851,33 @@ export class Agent {
               continue;
             }
             status = 'completed';
+            const verificationGate = await automaticVerification.beforeAnswer();
+            if (verificationGate === 'continue') {
+              injectContext(
+                store,
+                input.sessionId,
+                emit,
+                // Wrapped like every other machine-written context: the transcript hides it by its tag, and the
+                // model still reads exactly the instruction it needs. Unwrapped, the nudge appeared as if the
+                // person had typed it between the two answers.
+                '<runtime-context source="automatic-verification">\n' +
+                  'The work has no verification checks yet. Inspect the project guidance and relevant tests, then call verify_work with executable commands and args before finishing. If verification is blocked or unavailable, state the limitation honestly; do not invent passing evidence.\n' +
+                  '</runtime-context>',
+                { source: 'automatic-verification' },
+              );
+              progressGuard.reset();
+              concludeQueries = false;
+              steps.end(round, 'queued-input');
+              continue;
+            }
+            if (verificationGate === 'review') {
+              status = 'needs_review';
+              error =
+                automaticVerification.reviewError ??
+                'The work ended without executable verification checks.';
+              steps.end(round, 'final');
+              break;
+            }
             // The contract, the effect ledger and the verification round decide it (see `./run-verdict.ts`).
             const verdict = await settleAnswerRound({
               store,
@@ -835,11 +901,11 @@ export class Agent {
           if (concludeQueries) {
             store.resolvePending(
               input.sessionId,
-              'Not executed: repeated unchanged tool calls reached the conclusion-only round.',
+              'Not executed: the run reached a conclusion-only round.',
             );
             status = 'needs_review';
             error =
-              'Repeated tool calls produced no new information; further tools were not executed.';
+              'The investigation or repetition limit was reached; further tools were not executed.';
             steps.end(round, 'final');
             break;
           }
@@ -851,7 +917,9 @@ export class Agent {
           // The calls run inside the batch that owns their grouping, their effect journal and the order their
           // results are recorded in (see `run-tools.ts`); what comes back is what the model is told *after* those
           // results, which is the loop's own step.
+          await automaticVerification.beforeTools(response.toolCalls);
           const { injected, changedGoals, observations } = await batch.run(response.toolCalls);
+          automaticVerification.observe(observations);
           for (const goal of changedGoals) announcements.goal(goal);
           // Context a post-execute policy asked to inject becomes a persisted user message *after* the
           // batch's tool results, never a field riding along inside a tool block (see `run-input.ts`).
@@ -861,17 +929,24 @@ export class Agent {
               callId: entry.callId,
               notes: entry.notes.length,
             });
-          const progress =
+          let progress =
             injected.length || changedGoals.length
               ? (progressGuard.reset(), 'continue')
               : progressGuard.observeRound(observations);
+          if (progress === 'investigation-warn' || progress === 'investigation-conclude') {
+            await automaticVerification.assessChanges();
+            if (automaticVerification.hasProjectWork) {
+              progressGuard.reset();
+              progress = 'continue';
+            }
+          }
           if (progress !== 'continue') {
             injectContext(store, input.sessionId, emit, toolProgressNotice(progress), {
               source: 'tool-progress',
               round,
               action: progress,
             });
-            concludeQueries = progress === 'conclude';
+            concludeQueries = progress === 'conclude' || progress === 'investigation-conclude';
           }
           // Submitting the plan ends the planning run: the next step is a human decision, and letting
           // the loop continue would only burn rounds on a phase that cannot change anything.

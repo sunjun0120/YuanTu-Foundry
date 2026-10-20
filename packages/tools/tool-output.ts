@@ -48,6 +48,9 @@ export function safeSpill(
  * passes its own check and can drive its siblings, which is precisely what that check exists to prevent.
  */
 export const RUN_SCOPED_TOOLS = [
+  'verify_work',
+  'completion_step',
+  'completion_scope',
   'task_step',
   'submit_plan',
   'exit_plan_mode',

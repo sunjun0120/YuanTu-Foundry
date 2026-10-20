@@ -9,6 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -17,6 +18,7 @@ import {
   snapshotCompletionInputs,
 } from '../packages/core/completion-inputs.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { workspaceGitEnvironment } from '../packages/workspaces/git.ts';
 import { WORKSPACE_SCALE_LIMITS } from '../packages/protocol/workspaces.ts';
 import { tempRoot } from './temp-fixture.ts';
 
@@ -102,6 +104,73 @@ test('derived directories are excluded by name, and the file count says what was
   assert.equal(snapshot.bytes, 'source'.length);
 });
 
+function git(root: string, args: string[]): void {
+  execFileSync('git', args, {
+    cwd: root,
+    env: workspaceGitEnvironment(),
+    stdio: 'ignore',
+  });
+}
+
+test('the implicit range is Git’s view: tracked and untracked source, never ignored trees', async (t) => {
+  const root = await fixture(t);
+  git(root, ['init', '-q', '-b', 'main']);
+  await writeFile(path.join(root, '.gitignore'), 'ignored/\n');
+  await mkdir(path.join(root, 'ignored'));
+  await writeFile(path.join(root, 'ignored/big.bin'), 'not source');
+  await writeFile(path.join(root, 'tracked.txt'), 'tracked');
+  await writeFile(path.join(root, 'new.txt'), 'new');
+  git(root, ['add', '.gitignore', 'tracked.txt']);
+  git(root, ['commit', '-q', '-m', 'base']);
+
+  const first = await snapshotCompletionInputs(root, ['.'], signal);
+  // `.gitignore`, the tracked file, and the untracked file Git would commit. The ignored tree is not read.
+  assert.equal(first.files, 3);
+
+  await writeFile(path.join(root, 'ignored/big.bin'), 'changed');
+  const ignored = await snapshotCompletionInputs(root, ['.'], signal);
+  assert.equal(ignored.digest, first.digest, 'an ignored file is outside the Git-visible range');
+
+  await writeFile(path.join(root, 'new.txt'), 'changed');
+  const changed = await snapshotCompletionInputs(root, ['.'], signal);
+  assert.notEqual(changed.digest, first.digest, 'an untracked source file is still monitored');
+});
+
+test('an explicit input under a derived directory is still the evidence’s subject', async (t) => {
+  const root = await fixture(t);
+  const explicit: string[] = [];
+  for (const segment of COMPLETION_INPUT_EXCLUDED_SEGMENTS) {
+    await mkdir(path.join(root, segment), { recursive: true });
+    const file = `${segment}/explicit.txt`;
+    await writeFile(path.join(root, file), segment);
+    explicit.push(file);
+  }
+  // The list describes the implicit `.` range. A path the contract names is what the evidence is *about*, so
+  // silently dropping it was how a declared `dist/out.txt` could change without moving the digest.
+  const before = await snapshotCompletionInputs(root, explicit, signal);
+  assert.equal(before.files, explicit.length, 'every declared file was hashed');
+
+  await writeFile(path.join(root, explicit[0]!), 'changed');
+  const after = await snapshotCompletionInputs(root, explicit, signal);
+  assert.notEqual(after.digest, before.digest);
+});
+
+test('an explicitly named directory is covered whole', async (t) => {
+  const root = await fixture(t);
+  await mkdir(path.join(root, 'dist/nested'), { recursive: true });
+  await writeFile(path.join(root, 'dist/out.txt'), 'one');
+  await writeFile(path.join(root, 'dist/nested/two.txt'), 'two');
+
+  const explicit = await snapshotCompletionInputs(root, ['dist'], signal);
+  assert.equal(
+    explicit.files,
+    2,
+    'the declared directory is the subject, not build output to skip',
+  );
+  const implicit = await snapshotCompletionInputs(root, ['.'], signal);
+  assert.equal(implicit.files, 0, 'the implicit range keeps its derived-directory boundary');
+});
+
 test('the runtime’s own database does not invalidate the evidence it is recording', async (t) => {
   const root = await fixture(t);
   const store = new SessionStore(path.join(root, 'sessions.sqlite'));
@@ -123,6 +192,24 @@ test('the runtime’s own database does not invalidate the evidence it is record
   const unexcluded = await snapshotCompletionInputs(root, ['.'], signal);
   assert.notEqual(unexcluded.digest, before.digest);
   store.close();
+});
+
+test('an explicit runtime state path is refused rather than silently unmonitored', async (t) => {
+  const root = await fixture(t);
+  const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+  store.create(root);
+  try {
+    // Naming the database cannot make it evidence about the work: it is rewritten by the run itself. Refusing is
+    // the honest answer; silently dropping it would repeat the empty-range false pass this file exists to prevent.
+    await assert.rejects(
+      snapshotCompletionInputs(root, ['.yuantu/sessions.sqlite'], signal, {
+        runtimeStatePaths: store.databaseFiles(),
+      }),
+      /cannot be monitored/,
+    );
+  } finally {
+    store.close();
+  }
 });
 
 test('a user file that merely looks like a database is still monitored', async (t) => {

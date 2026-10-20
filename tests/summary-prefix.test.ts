@@ -262,7 +262,7 @@ test('a real run names every request after the prompt that request carries', asy
     approve: async () => false,
     maxContextChars: 100000,
     // High enough to hold a batch of the conversation, low enough that the conversation itself does not fit.
-    maxContextTokens: 5800,
+    maxContextTokens: 6600,
     maxOutputTokens: 128,
     provider: {
       async complete(request: ModelRequest) {

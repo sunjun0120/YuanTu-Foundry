@@ -212,6 +212,9 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.copied': ['已复制', 'Copied'],
   'ui.copyFailed': ['复制失败', 'Copy failed'],
   'ui.openLinkFailed': ['打开链接失败', 'Failed to open link'],
+  'ui.openWorkspaceFile': ['打开工作区文件', 'Open workspace file'],
+  'ui.openWithDefaultApp': ['用默认应用打开', 'Open with default app'],
+  'ui.revealInFolder': ['显示所在文件夹', 'Show in folder'],
   'ui.image': ['图片', 'Image'],
   'ui.imageNotLoaded': ['未加载', 'not loaded'],
   'ui.removeImage': ['移除 {name}', 'Remove {name}'],
@@ -238,6 +241,41 @@ export const conversationMessages: Record<string, [string, string]> = {
   ],
   'ui.queueItem': ['{mode}：{prompt}', '{mode}: {prompt}'],
   'ui.approvalRequired': ['需要你的确认', 'Approval required'],
+  'approval.title.command': ['执行命令', 'Run a command'],
+  'approval.title.write': ['修改文件', 'Change files'],
+  'approval.title.external': ['访问外部服务', 'Use an external service'],
+  'approval.why.command': [
+    'Agent 想通过 {tool} 运行下面的命令。命令可能修改文件或产生其他影响，所以要先征得你同意。',
+    'The agent wants to run the command below through {tool}. A command can change files or have other effects, so it needs your consent first.',
+  ],
+  'approval.why.write': [
+    'Agent 想通过 {tool} 写入工作区文件。下面是将要写入的内容，确认无误再允许。',
+    'The agent wants to write workspace files through {tool}. The content to be written is below; allow it once it looks right.',
+  ],
+  'approval.why.external': [
+    'Agent 想通过 {tool} 访问外部服务，相关内容可能发送到本机以外。',
+    'The agent wants to use an external service through {tool}; the request may send data off this machine.',
+  ],
+  'approval.directory': ['运行目录：{directory}', 'Directory: {directory}'],
+  'approval.boundary': ['隔离：{files}；{network}。', 'Isolation: {files}; {network}.'],
+  'approval.files.unrestricted': [
+    '直接在本机运行，没有系统隔离，可读写当前账户能访问的任何文件',
+    'runs on this machine with no operating-system isolation and can read or change any file this account can',
+  ],
+  'approval.files.workspace-write-partial': [
+    '在受限 Windows 令牌下运行，写入只部分限制在工作区内，且可以读取本机任意文件',
+    'runs under a restricted Windows token; writes are only partly confined to the workspace and it can read files anywhere on this machine',
+  ],
+  'approval.files.read-only': ['在沙箱中运行，不能写文件', 'runs sandboxed with no file writes'],
+  'approval.files.workspace-write': [
+    '在沙箱中运行，只能写入工作区',
+    'runs sandboxed; file writes are confined to the workspace',
+  ],
+  'approval.network.denied': ['网络访问已阻止', 'network access is blocked'],
+  'approval.network.unrestricted': ['可以访问网络', 'it can reach the network'],
+  'approval.raw': ['完整操作参数', 'Full operation details'],
+  'approval.allow': ['允许一次', 'Allow once'],
+  'approval.deny': ['拒绝', 'Deny'],
   'ui.externalService': ['访问外部服务', 'Access external service'],
   'ui.runCommand': ['执行命令', 'Run command'],
   'ui.modifyFiles': ['修改文件', 'Modify files'],
@@ -260,33 +298,6 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Nothing is written before approval, and the change check runs again when execution starts.',
   ],
   'plan.rejectedHint': ['计划已被拒绝，可重新制定。', 'The plan was rejected; you can plan again.'],
-  'verification.summary': ['验收（可选）', 'Verification (optional)'],
-  'verification.objective': ['验收目标', 'Objective'],
-  'verification.objectivePlaceholder': ['默认使用本轮请求', 'Defaults to this request'],
-  'verification.commands': [
-    '验收命令（每行一条，退出码 0 通过）',
-    'Verification commands (one per line; exit code 0 passes)',
-  ],
-  'verification.commandsPlaceholder': ['例如：npm test', 'e.g. npm test'],
-  'verification.inputs': [
-    '监测路径（逗号分隔，可留空）',
-    'Monitored paths (comma separated, optional)',
-  ],
-  'verification.inputsPlaceholder': ['例如：src/, package.json', 'e.g. src/, package.json'],
-  'verification.hint': [
-    '带验收的请求结束时才会报告“验收通过”；监测路径留空时不会检测验收后的文件变化。',
-    'A request with verification is reported verified only at the end; with no monitored path, later file changes are not checked.',
-  ],
-  'verification.needCommand': [
-    '验收至少需要一条命令。',
-    'Verification needs at least one command.',
-  ],
-  'verification.tooMany': ['验收命令最多 32 条。', 'At most 32 verification commands.'],
-  'verification.defaultObjective': ['本轮请求', 'This request'],
-  'verification.busy': [
-    '运行中不能启动新的验收；请等本轮结束后再发送。',
-    'A new verification cannot start while a run is active; wait for this turn to end.',
-  ],
   'plan.discard': ['放弃这份计划', 'Discard this plan'],
   /**
    * The one action a *planning* row needs, now that such a row keeps the session in plan mode.
@@ -398,6 +409,10 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Shared workspace: the same directory as this session, so its changes appear directly in the change list — not isolated',
   ],
   'subagent.workspace.problem': ['工作区不可用：{reason}', 'Workspace unusable: {reason}'],
+  'subagent.workspace.exporting': [
+    '正在导出改动：{processed}/{total} 个文件',
+    'Exporting changes: {processed}/{total} files',
+  ],
   'subagent.workspace.result.ready': [
     '成果待合入（{count} 个路径）',
     'Result awaiting import ({count} path(s))',

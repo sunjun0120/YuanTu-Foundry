@@ -176,6 +176,7 @@ export async function startRun(
     'task_step',
     'completion_step',
     'completion_scope',
+    'verify_work',
   ]);
   let substantiveToolCalls = 0;
   /**
@@ -304,6 +305,7 @@ export async function startRun(
       prompt,
       admittedAt,
       taskId: plannedTaskId,
+      autoVerify: !plannedTaskId,
       // A run the clock started is not the user's turn: it may report on the session's goal but not change
       // who is in charge of it (see `HUMAN_ONLY_GOAL_ACTIONS`). A manual retry of the same task is the
       // user's own request and keeps the default.
@@ -400,6 +402,7 @@ export async function startRun(
             prompt,
             signal: controller.signal,
             authority: 'automatic',
+            autoVerify: true,
             ...(contract ? { resumeCompletionId: contract.contractId } : {}),
           });
           return {

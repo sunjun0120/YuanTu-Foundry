@@ -7,6 +7,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import {
   acquireLocks,
+  acquireModelSlot,
   admissionRefusal,
   fileClaims,
   hostClaim,
@@ -99,4 +100,19 @@ test('only an operation holding the Host alone stops every run', async (t) => {
   assert.equal(runSlotFree(ctx), false);
   orphan.release();
   assert.equal(runSlotFree(ctx), true);
+});
+
+test('model requests outside a run occupy the same slots', async (t) => {
+  const { ctx, a, b, c } = await host(t);
+  const first = acquireModelSlot(ctx, a);
+  assert.equal(runSlotFree(ctx), true);
+  const second = acquireModelSlot(ctx, b);
+  assert.equal(runSlotFree(ctx), false);
+  assert.match(admissionRefusal(ctx, c)!, /run slot/);
+  assert.throws(() => acquireModelSlot(ctx, c), /run slot/);
+  first();
+  first();
+  assert.equal(runSlotFree(ctx), true);
+  second();
+  assert.equal(admissionRefusal(ctx, c), undefined);
 });

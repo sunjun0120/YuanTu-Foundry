@@ -6,6 +6,13 @@ import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { cacheFields } from './cache.ts';
 import { validateImages } from '../protocol/images.ts';
 import { readSse } from './sse.ts';
+import {
+  assistantHash,
+  deepseekCapabilities,
+  nativeState,
+  projectNativeSystem,
+} from './native-history.ts';
+import { observedRequestBody } from './request-observation.ts';
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Invalid model stream object');
@@ -44,9 +51,13 @@ export class OpenAIProvider implements Provider {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     request.signal.throwIfAborted();
     const cache = cacheFields(this.config, request.cacheKey, 'openai');
+    const model = request.model ?? this.config.model;
+    const capabilities = deepseekCapabilities(this.config, this.endpoint, model);
+    const route = { protocol: 'openai' as const, model, endpoint: this.endpoint };
+    const prompt = projectNativeSystem(request, route, capabilities.systemUpdates);
     const toolImages: Record<string, unknown>[] = [];
     const messages: Record<string, unknown>[] = [
-      { role: 'system', content: request.system },
+      { role: 'system', content: prompt.system },
       ...request.messages.flatMap((message, index) => {
         if (message.role === 'tool') {
           const images = validateImages(message.images);
@@ -84,10 +95,21 @@ export class OpenAIProvider implements Provider {
           }
           return messages;
         }
-        if (message.role === 'assistant')
+        if (message.role === 'assistant') {
+          const replay = capabilities.reasoning ? nativeState(message, route) : undefined;
+          if (replay)
+            return [
+              ...(prompt.updates.has(index)
+                ? [{ role: 'system', content: prompt.updates.get(index) }]
+                : []),
+              ...structuredClone(replay.output),
+            ];
           return {
             role: 'assistant',
             content: message.content || null,
+            // Old or foreign messages have no trusted native thought. Keep DeepSeek's field present without
+            // treating display-only reasoning as output from this route.
+            ...(capabilities.reasoning ? { reasoning_content: '' } : {}),
             ...(message.toolCalls.length
               ? {
                   tool_calls: message.toolCalls.map((call) => ({
@@ -98,6 +120,7 @@ export class OpenAIProvider implements Provider {
                 }
               : {}),
           };
+        }
         const images = validateImages(message.images);
         return {
           role: 'user',
@@ -113,6 +136,7 @@ export class OpenAIProvider implements Provider {
         };
       }),
     ];
+    if (prompt.pending !== undefined) messages.push({ role: 'system', content: prompt.pending });
     let response: Response;
     try {
       response = await fetchModel(
@@ -125,7 +149,7 @@ export class OpenAIProvider implements Provider {
             'content-type': 'application/json',
             authorization: `Bearer ${this.config.apiKey}`,
           },
-          body: JSON.stringify({
+          body: observedRequestBody(request, route, {
             model: request.model ?? this.config.model,
             // The protocol's own field, passed through unchanged: a level is what this API takes, so there is
             // nothing to translate and nothing to invent. `none` sends no field at all, which is how a policy
@@ -137,7 +161,7 @@ export class OpenAIProvider implements Provider {
             stream: true,
             stream_options: { include_usage: true },
             max_completion_tokens: request.maxOutputTokens,
-            ...(cache.key ? { prompt_cache_key: cache.key } : {}),
+            ...(cache.key && !capabilities.reasoning ? { prompt_cache_key: cache.key } : {}),
             ...(request.tools.length
               ? {
                   tools: request.tools.map((tool) => ({
@@ -178,6 +202,7 @@ export class OpenAIProvider implements Provider {
       throw new RunFailure('no-stream', 'Model endpoint did not return an SSE stream');
     }
     let text = '',
+      reasoning = '',
       reason: ModelResponse['finishReason'] | undefined,
       done = false,
       usage: ModelResponse['usage'] | undefined,
@@ -206,17 +231,23 @@ export class OpenAIProvider implements Provider {
         const promptDetails = value.prompt_tokens_details
           ? object(value.prompt_tokens_details)
           : {};
+        const inputTokens = tokens(value.prompt_tokens);
+        const reportedCache =
+          promptDetails.cached_tokens !== undefined
+            ? promptDetails.cached_tokens
+            : value.prompt_cache_hit_tokens;
+        const cachedTokens =
+          reportedCache !== undefined
+            ? tokens(reportedCache)
+            : value.prompt_cache_miss_tokens !== undefined
+              ? inputTokens - tokens(value.prompt_cache_miss_tokens)
+              : undefined;
+        if (cachedTokens !== undefined && (cachedTokens < 0 || cachedTokens > inputTokens))
+          throw new Error('Invalid model cache token usage');
         usage = {
-          inputTokens: tokens(value.prompt_tokens),
+          inputTokens,
           outputTokens: tokens(value.completion_tokens),
-          ...(value.prompt_tokens_details && promptDetails.cached_tokens !== undefined
-            ? {
-                cachedInputTokens: Math.min(
-                  tokens(value.prompt_tokens),
-                  tokens(promptDetails.cached_tokens),
-                ),
-              }
-            : {}),
+          ...(cachedTokens === undefined ? {} : { cachedInputTokens: cachedTokens }),
           // Reported by the newer usage shape; older responses simply omit it, which is not a zero.
           ...(promptDetails.cache_write_tokens !== undefined
             ? { cacheWriteInputTokens: tokens(promptDetails.cache_write_tokens) }
@@ -232,6 +263,7 @@ export class OpenAIProvider implements Provider {
           throw new Error('Model data arrived after finish reason');
         if (delta.reasoning_content !== undefined && delta.reasoning_content !== null) {
           const part = string(delta.reasoning_content);
+          reasoning += part;
           reasoningChars += part.length;
           // The text goes to its own channel. Progress keeps carrying counts only, so a status line can
           // never become a place where the model's scratch work leaks out.
@@ -349,6 +381,37 @@ export class OpenAIProvider implements Provider {
     return {
       text,
       toolCalls,
+      ...(capabilities.reasoning && reason !== 'length' && reason !== 'content-filter'
+        ? {
+            providerState: {
+              ...route,
+              messageHash: assistantHash({ content: text, toolCalls }),
+              systemToolsHash: prompt.toolsHash,
+              ...(prompt.snapshot ? { systemPrompt: prompt.snapshot } : {}),
+              output: [
+                {
+                  role: 'assistant',
+                  content: text || null,
+                  reasoning_content: reasoning,
+                  ...(toolCalls.length
+                    ? {
+                        tool_calls: toolCalls.map((call) => ({
+                          id: call.id,
+                          type: 'function',
+                          function: {
+                            name: call.name,
+                            arguments:
+                              [...calls.values()].find((native) => native.id === call.id)!.json ||
+                              '{}',
+                          },
+                        })),
+                      }
+                    : {}),
+                },
+              ],
+            },
+          }
+        : {}),
       finishReason: reason,
       usage,
       outputDiagnostics: {

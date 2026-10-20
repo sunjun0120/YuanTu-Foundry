@@ -44,6 +44,41 @@ test('the product default defers, and an explicit mode still wins', () => {
   assert.equal(toolMode({ YUANTU_TOOL_MODE: 'ptc' }), 'ptc');
 });
 
+test('tool request bytes do not depend on registration or schema property insertion order', () => {
+  const make = (reverse: boolean) => {
+    const registry = new ToolRegistry();
+    const definitions = ['a_tool', 'z_tool'];
+    for (const name of reverse ? definitions.toReversed() : definitions)
+      registry.register({
+        name,
+        description: name,
+        inputSchema: reverse
+          ? { properties: { z: { type: 'string' }, a: { type: 'number' } }, type: 'object' }
+          : { type: 'object', properties: { a: { type: 'number' }, z: { type: 'string' } } },
+        async execute() {
+          return { content: 'ok', isError: false };
+        },
+      });
+    return registry.specs();
+  };
+  assert.equal(JSON.stringify(make(false)), JSON.stringify(make(true)));
+});
+
+test('partial deferred loads keep the loader declaration stable without disclosing denied tools', async (t) => {
+  const { tools } = await registry(t);
+  tools.toolMode = 'deferred';
+  const before = tools.specs({ loaded: new Set() });
+  const after = tools.specs({ loaded: new Set(['lsp_hover']) });
+  assert.deepEqual(
+    after.find((tool) => tool.name === LOAD_TOOLS),
+    before.find((tool) => tool.name === LOAD_TOOLS),
+  );
+  assert.deepEqual(
+    before.map((tool) => tool.name),
+    before.map((tool) => tool.name).sort(),
+  );
+});
+
 test('a deferred catalog holds back the listed subsystems and names them in load_tools', async (t) => {
   const { tools } = await registry(t);
   tools.toolMode = 'deferred';

@@ -583,8 +583,10 @@ test('execution needs an approval whose hash still matches the plan', async (t) 
     sessionId: session.id,
     prompt: 'go',
     planId: plan.id,
-  })) as { status: string };
-  assert.equal(executed.status, 'completed');
+  })) as { status: string; completion?: { state: string; reason: string } };
+  // Approval permits execution; a fixture that supplies no checks must not claim verification.
+  assert.equal(executed.status, 'needs_review');
+  assert.equal(executed.completion?.reason, 'missing-verification');
   assert.match(system, /Approved plan/);
   assert.match(system, /Ship it/);
 });

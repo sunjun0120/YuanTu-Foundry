@@ -1,4 +1,4 @@
-﻿import { DeferredApprovalError } from '../../../packages/protocol/failure.ts';
+import { DeferredApprovalError } from '../../../packages/protocol/failure.ts';
 import {
   verifyTaskAcceptance,
   type TaskBaselines,
@@ -13,6 +13,7 @@ import { createVerifier } from '../approvals.ts';
 import { sessionPermissionPolicy } from '../session-policy.ts';
 import {
   acquireLocks,
+  acquireModelSlot,
   assertUnlocked,
   executionRoot,
   fileClaims,
@@ -208,9 +209,17 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     assertUnlocked(ctx, planning, 'Host is busy; wait before planning');
     const task = ctx.store.getTask(sessionId, required(params, 'taskId'));
     if (task.status === 'in_progress') throw new Error('Task is running');
-    const lease = acquireLocks(ctx, planning, 'Host is busy; wait before planning');
-    // Planning is a model request a person can wait on, so Stop for this session must reach it; it never occupied a
-    // run slot, and its own request timeout remains the shorter of the two bounds.
+    // Planning spends model capacity even though it is not a run; reserve one of the same slots first.
+    const releaseSlot = acquireModelSlot(ctx, sessionId);
+    let lease: ReturnType<typeof acquireLocks>;
+    try {
+      lease = acquireLocks(ctx, planning, 'Host is busy; wait before planning');
+    } catch (error) {
+      releaseSlot();
+      throw error;
+    }
+    // Planning is a model request a person can wait on, so Stop for this session must reach it; its own request
+    // timeout remains the shorter of the two bounds.
     const operation = manualOperation(ctx, sessionId, 120_000, 'Task planning');
     let runId: string | undefined;
     const statistics = emptyStatistics();
@@ -259,6 +268,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
           });
       } finally {
         finishManualOperation(ctx, operation);
+        releaseSlot();
         lease.release();
       }
     }

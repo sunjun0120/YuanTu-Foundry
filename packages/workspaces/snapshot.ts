@@ -611,6 +611,12 @@ function modeOf(info: { mode: number }): '100644' | '100755' {
   return (info.mode & 0o111) === 0 ? '100644' : '100755';
 }
 
+/** How far a tree walk has got: files handled, and how many the Git listing admitted. */
+export interface TreeWalkProgress {
+  processed: number;
+  total: number;
+}
+
 /**
  * One walk over the working tree, with the caller deciding what to keep.
  *
@@ -632,6 +638,11 @@ async function walkWorkingTree(
     has(relative: string, info: Stats): boolean;
     onKnown(file: { relative: string; info: Stats }): void;
   },
+  /**
+   * Told after every listed path, including the ones a refusal skipped, so a caller can say "N of M" while a large
+   * first export is still running. The total is known before the first read; the walk is where the time goes.
+   */
+  onProgress?: (progress: TreeWalkProgress) => void,
 ): Promise<void> {
   const budget = limits.maxTotalBytes ?? MAX_TOTAL_BYTES;
   const cwd = directory;
@@ -688,70 +699,76 @@ async function walkWorkingTree(
   };
   const refused: string[] = [];
   let totalBytes = 0;
+  let processed = 0;
   for (const relative of paths) {
-    if (isRuntimePath(relative)) continue;
-    if (looksLikeCredential(relative)) {
+    try {
+      if (isRuntimePath(relative)) continue;
+      if (looksLikeCredential(relative)) {
+        /**
+         * A credential file the repository tracks blocks the freeze; an untracked one is simply left behind.
+         *
+         * The refusal has to be about the *tracked* case, because that is the one where "we did not copy it" makes the
+         * baseline an inaccurate reproduction of the project. An untracked secret is not part of the project, and
+         * copying it would be the mistake.
+         */
+        if (tracked.has(relative)) refused.push(relative);
+        continue;
+      }
+      if (isUnsafeGitPath(relative)) continue;
+      // A missing ancestor means the path was deleted after the listing, which the second pass judges like a file.
+      if (!(await plainAncestors(relative))) continue;
+      const absolute = path.join(cwd, relative);
       /**
-       * A credential file the repository tracks blocks the freeze; an untracked one is simply left behind.
-       *
-       * The refusal has to be about the *tracked* case, because that is the one where "we did not copy it" makes the
-       * baseline an inaccurate reproduction of the project. An untracked secret is not part of the project, and
-       * copying it would be the mistake.
+       * `lstat`, never `stat`: the question is what the path itself *is*, and following a link first is exactly how a
+       * symbolic link would be copied as the file it points at — including one pointing outside the project.
        */
-      if (tracked.has(relative)) refused.push(relative);
-      continue;
+      const info = await lstat(absolute).catch(() => null);
+      // A path deleted between the listing and this read is simply not in the baseline; the second pass decides
+      // whether that was a concurrent change or a stale listing.
+      if (!info) continue;
+      if (info.isSymbolicLink())
+        throw new WorkspaceFailure(
+          'WORKSPACE_UNSUPPORTED_FILE_TYPE',
+          `Symbolic links are not supported by workspace isolation yet: ${relative}`,
+          { path: relative },
+        );
+      if (!info.isFile())
+        throw new WorkspaceFailure(
+          'WORKSPACE_UNSUPPORTED_FILE_TYPE',
+          `Only plain files can be frozen: ${relative}`,
+          { path: relative },
+        );
+      if (info.size > MAX_FILE_BYTES)
+        throw new WorkspaceFailure(
+          'WORKSPACE_UNSUPPORTED_FILE_TYPE',
+          `File is larger than the ${MAX_FILE_BYTES} byte limit: ${relative}`,
+          { path: relative },
+        );
+      // Checked before the read, so the file that crosses the line is not loaded first: the point of a budget is to
+      // stop before the allocation that would have failed anyway, and to say which tree it was.
+      if (totalBytes + info.size > budget)
+        throw new WorkspaceFailure(
+          'WORKSPACE_TOO_LARGE',
+          `The working tree is larger than the ${budget} byte budget this version freezes (${totalBytes + info.size}+ bytes at ${relative}); delegate with a smaller project or raise the budget`,
+          { bytes: totalBytes + info.size, budget, path: relative },
+        );
+      totalBytes += info.size;
+      if (known?.has(relative, info)) {
+        known.onKnown({ relative, info });
+        continue;
+      }
+      const bytes = await readFile(absolute);
+      if (bytes.length !== info.size)
+        throw new WorkspaceFailure(
+          'WORKSPACE_SOURCE_CHANGED',
+          `${relative} changed while it was being read; nothing was frozen`,
+          { path: relative },
+        );
+      await onFile({ relative, info, bytes });
+    } finally {
+      processed += 1;
+      onProgress?.({ processed, total: paths.length });
     }
-    if (isUnsafeGitPath(relative)) continue;
-    // A missing ancestor means the path was deleted after the listing, which the second pass judges like a file.
-    if (!(await plainAncestors(relative))) continue;
-    const absolute = path.join(cwd, relative);
-    /**
-     * `lstat`, never `stat`: the question is what the path itself *is*, and following a link first is exactly how a
-     * symbolic link would be copied as the file it points at — including one pointing outside the project.
-     */
-    const info = await lstat(absolute).catch(() => null);
-    // A path deleted between the listing and this read is simply not in the baseline; the second pass decides
-    // whether that was a concurrent change or a stale listing.
-    if (!info) continue;
-    if (info.isSymbolicLink())
-      throw new WorkspaceFailure(
-        'WORKSPACE_UNSUPPORTED_FILE_TYPE',
-        `Symbolic links are not supported by workspace isolation yet: ${relative}`,
-        { path: relative },
-      );
-    if (!info.isFile())
-      throw new WorkspaceFailure(
-        'WORKSPACE_UNSUPPORTED_FILE_TYPE',
-        `Only plain files can be frozen: ${relative}`,
-        { path: relative },
-      );
-    if (info.size > MAX_FILE_BYTES)
-      throw new WorkspaceFailure(
-        'WORKSPACE_UNSUPPORTED_FILE_TYPE',
-        `File is larger than the ${MAX_FILE_BYTES} byte limit: ${relative}`,
-        { path: relative },
-      );
-    // Checked before the read, so the file that crosses the line is not loaded first: the point of a budget is to
-    // stop before the allocation that would have failed anyway, and to say which tree it was.
-    if (totalBytes + info.size > budget)
-      throw new WorkspaceFailure(
-        'WORKSPACE_TOO_LARGE',
-        `The working tree is larger than the ${budget} byte budget this version freezes (${totalBytes + info.size}+ bytes at ${relative}); delegate with a smaller project or raise the budget`,
-        { bytes: totalBytes + info.size, budget, path: relative },
-      );
-    totalBytes += info.size;
-    if (known?.has(relative, info)) {
-      known.onKnown({ relative, info });
-      continue;
-    }
-    const bytes = await readFile(absolute);
-    if (bytes.length !== info.size)
-      throw new WorkspaceFailure(
-        'WORKSPACE_SOURCE_CHANGED',
-        `${relative} changed while it was being read; nothing was frozen`,
-        { path: relative },
-      );
-    await onFile({ relative, info, bytes });
   }
   if (refused.length)
     throw new WorkspaceFailure(
@@ -824,6 +841,7 @@ export async function collectTreeBlobs(
   signal?: AbortSignal,
   limits: { maxTotalBytes?: number } = {},
   cache?: TreeBlobCache,
+  onProgress?: (progress: TreeWalkProgress) => void,
 ): Promise<TreeEntry[]> {
   const files: { path: string; mode: '100644' | '100755'; blob?: string; key: StatKey }[] = [];
   const batch = openBlobBatch(repositoryRoot, signal);
@@ -847,6 +865,7 @@ export async function collectTreeBlobs(
             key: statKey(info),
           }),
       },
+      onProgress,
     );
   } catch (error) {
     batch.abort();

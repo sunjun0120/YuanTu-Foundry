@@ -143,6 +143,7 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 - **Responses 的硬前提**：恒为 `store: false` 且恒带 `include: ['reasoning.encrypted_content']`；端点未返回加密推理项即失败（`Responses endpoint omitted encrypted reasoning required for stateless continuation`）。连续性靠原样回放整段 `output`，且只在**同一端点 + 同一模型**时回放，跨端点自动降级为文本编码。
 - **流式**：统一的 SSE 解析器，单帧上限 16 MB；每个协议都要求看到终态事件与块闭合，否则按传输失败处理。Anthropic 的 `thinking` 预算 = 输出上限的 25%/50%/75%（low/medium/high），下限 1024 token 且必须小于输出上限。
 - **用量与缓存**：Anthropic 的缓存读取与写入分别计入 `cachedInputTokens` / `cacheWriteInputTokens`；供应商没报写入时该字段**未定义而不是 0**。提示缓存的粒度由 `YUANTU_PROMPT_CACHE` 决定，四种取值：`auto`（默认）按**路由声明的能力**选，`blocks` 打 `cache_control` 断点（系统提示、最后一个工具定义、最新消息末尾，这是 Anthropic 的扩展），`key-only` 只传 `prompt_cache_key`，`off` 两个字段都不发；旧的 `0` / `false` 等价于 `off`，`1` / `true` 等价于 `auto`。**不认识的协议名在 `auto` 下不发送任何缓存字段**（沉默不等于声明支持），要发就显式点名。键是「协议 + 模型 + 系统提示 + 工具定义」的 SHA-256 摘要，正文与凭据都不进键。
+- **DeepSeek 前缀复用**：已知官方路由自动保留原生思考历史，支持的模型还会在历史中追加系统提示词更新；兼容网关须通过 `YUANTU_DEEPSEEK_COMPAT=on` 显式声明支持。逐请求事件记录缓存用量及实际序列化前缀的变化，未知用量不补零。工具顺序与 schema 对象键采用确定顺序。详见[提示缓存与 DeepSeek 历史兼容](docs/prompt-cache.md)。
 - **重试**：适配器与传输层**不**重试。重试决策在步骤边界，只对 `rate-limit` / `server` / `timeout` / `transport` / `no-stream` 生效，且要求**尚未向用户显示任何内容**；退避 `min(30s, 250·2ⁿ⁻¹ + jitter)`，服务端 cooldown 不被缩短——要求等待超过 30 秒就直接放弃。计数从日志读回，因此进程崩溃不会重置额度。
 - **失败分类**：12 个失败码定义在 `packages/protocol/failure.ts`；其中 `context-window-exceeded` 与 `output-limit` 让运行以「任务太大」（`limited`）结束，其余归为「出问题」（`failed`）。上下文溢出只在供应商明确确认时触发压缩恢复。
 
@@ -491,7 +492,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 - **合入后可撤销**：导入写成一次分组 journal 记录，属于父会话自己的改动列表，`changes.undo` 按目标绑定的执行根恢复精确字节。
 - **崩溃可收敛**：`preparing` 记录按目录是否存在分类，导入中断按 journal 的 before/after 逐路径判断（第三种字节判 conflict），**不重放审批**，也不会把未验证当作已验证——结果里附带的是工具执行的持久证据，不是模型的自我报告。
 - **会话删除后的维护**：桌面「设置 → 保留的工作区」按当前项目列出孤立目录和已移除目录的恢复记录，可归档、确认清理及恢复，受阻目录也有独立恢复入口。Host 的 `workspaces.orphaned` 默认排除已移除目录，`includeRemoved: true` 可发现恢复目标；`workspace.archive/remove/restore` 支持 `bindingId`，存活会话仍用 `sessionId`。绑定请求可通过 `policySessionId` 使用同项目会话的实时权限，否则使用 Host 默认权限。维护写入要求 `workspace-write` 文件权限（host 与原生沙箱均可），只读策略返回 `WORKSPACE_POLICY_UNSUPPORTED`；不会隐式更改默认权限。目录移除前保存快照并复查身份，库存按需读取；相对基线没有任何改动的目录不另存快照，恢复记录直接指向基线。
-- **快照存储与回收**：快照内容只以 Git 对象形式存在仓库对象库里（格式 4），清单记下每个文件的 blob，不再在 `.yuantu/workspace-snapshots/<id>/files` 下另存整份拷贝；未改动的文件在所有快照之间天然共享。每个会话库用自己的 ref（`refs/yuantu/snapshot-owners/<快照 id>/<库标识>`，库标识由数据库文件路径派生）表示「我在用」，同一仓库的多个会话库因此能看到彼此的引用。Host 启动时释放本库不再引用的快照（绑定、结果与任何会话库的移除记录都不再指向它；任一移除记录无法读取则整库跳过），删除会话、归档或移除工作区后若本 Host 没有运行或手工操作，也会再释放一次；最后一个引用方释放后删除快照元数据，对象交给 Git 自身的维护回收；释放与委派不会并发（冻结与分配会等待这一步完成）。早于此格式、带 `refs/yuantu/snapshots/<id>` 的旧快照永不自动删除：`workspace-gc --db <file> --dry-run` 列出全部快照目录、大小、引用方与需要人工决定的旧快照，不加 `--dry-run` 时执行与 Host 启动相同的释放与 staging 清理。已移除的工作区默认永久可恢复；设置 `YUANTU_WORKSPACE_RETENTION_DAYS` 后，超过天数的在 Host 启动时彻底清除。数据库文件移动后旧引用会留下，只会多占空间，不会误删在用的快照。
+- **快照存储与回收**：快照内容只以 Git 对象形式存在仓库对象库里（格式 4），清单记下每个文件的 blob，不再在 `.yuantu/workspace-snapshots/<id>/files` 下另存整份拷贝；未改动的文件在所有快照之间天然共享。每个会话库用自己的 ref（`refs/yuantu/snapshot-owners/<快照 id>/<库标识>`，库标识由数据库文件路径派生）表示「我在用」，同一仓库的多个会话库因此能看到彼此的引用。Host 启动时释放本库不再引用的快照（绑定、结果与任何会话库的移除记录都不再指向它；任一移除记录无法读取则整库跳过），删除会话、归档或移除工作区后若本 Host 没有运行或手工操作，也会再释放一次；最后一个引用方释放后删除快照元数据，对象交给 Git 自身的维护回收；释放与委派不会并发（冻结与分配会等待这一步完成）。早于此格式、带 `refs/yuantu/snapshots/<id>` 的旧快照永不自动删除：`workspace-gc --db <file> --dry-run` 列出全部快照目录、大小、引用方与需要人工决定的旧快照，不加 `--dry-run` 时执行与 Host 启动相同的释放、staging 清理并运行一次 `git gc --auto`；Host 在 `.yuantu/hosts/` 为每个进程写一个标记，Host 启动与 `workspace-gc` 又通过 `maintenance.lock` 门互斥启动窗口；运行中的 Host 会让非 `--dry-run` 的 `workspace-gc` 直接拒绝，释放不会与委派并发。已移除的工作区默认永久可恢复；设置 `YUANTU_WORKSPACE_RETENTION_DAYS` 后，超过天数的在 Host 启动时彻底清除。数据库文件移动后旧引用会留下，只会多占空间，不会误删在用的快照。默认保留边界、`workspace-gc --dry-run` 该看什么、以及什么时候才该清的判断方式，见 [工作区保留与清理边界](docs/workspace-retention.md)。
 - **设置**：`YUANTU_SUBAGENT_WORKSPACE` / `--subagent-workspace` 取 `auto`（默认；写入型隔离、只读共享）、`shared`（保留旧共享写入行为，**不提供隔离**，界面必须如实标注）、`worktree`（连只读也隔离）。会话策略为只读时返回 `WORKSPACE_POLICY_UNSUPPORTED`，**不降级为 shared**。
 - **工作树位置与原生沙箱**：隔离工作树建在仓库之外的用户数据目录（Windows `%LOCALAPPDATA%\YuanTu\worktrees`、macOS `~/Library/Application Support/YuanTu/worktrees`、Linux `$XDG_DATA_HOME/yuantu/worktrees`，按仓库路径摘要分目录；`YUANTU_WORKTREE_DIR` 可改为其他绝对路径）。这条路径不含任何受保护片段，所以原生沙箱下的写入型子代理能写自己的工作树，委派者的沙箱也够不到它。Git 元数据（工作树登记、快照私有引用）由 Host 以固定参数直接执行，属于受控基础设施操作；子运行仍按自己的原生策略受限。早期版本建在 `<仓库>/.yuantu/worktrees/` 下的绑定仍可校验、归档、清理与恢复，但不再新建。
 - **边界**：worktree 是代码工作副本隔离，不是 OS 安全隔离；host shell 仍可能访问其他目录，不隔离网络、共享账户或外部数据库。首版不安装依赖，需要跑测试的子代理缺依赖时报 `WORKSPACE_DEPENDENCIES_MISSING`。
@@ -614,7 +615,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 75 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 76 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -626,6 +627,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_PROTOCOL` | `anthropic` / `openai` / `openai-responses` | 协议适配器 |
 | `YUANTU_CONNECTION_ID` | `string` | 设置文件中的连接名（仅标注） |
 | `YUANTU_SUPPORTS_VISION` | `0` / `1` | 该模型是否接受图片 |
+| `YUANTU_DEEPSEEK_COMPAT` | `auto` / `on` / `off` | DeepSeek 原生历史兼容：auto 仅识别官方端点的已知模型；on 显式声明网关支持思考回传与历史系统提示更新；off 禁用 |
 | `YUANTU_PROMPT_CACHE` | `auto` / `blocks` / `key-only` / `off` | 提示缓存的粒度：auto / blocks / key-only / off；auto 按路由声明的能力选，其余三种照字面执行，off 不发送缓存字段（旧值 0 / false 等价于 off，1 / true 等价于 auto） |
 | `YUANTU_STREAM_IDLE_TIMEOUT_MS` | `1000–3600000` | 流式空闲超时（毫秒） |
 | `YUANTU_MAX_RETRIES` | `0–5` | 每个 step 边界重发模型请求的次数上限（0 = 不重试） |
@@ -720,9 +722,9 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 工具（折叠为 `run_code`） | 1 个 / 10.4 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 51 / 47 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 271 个 | `tests/*.test.ts` |
+| 行为测试文件 | 279 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -785,6 +787,7 @@ npm.cmd run check:full      # 阶段验收；与 check 相同
 npm.cmd run check:release   # check 加真窗口桌面冒烟；打包另行执行
 npm.cmd run smoke:desktop   # 真窗口 Electron 冒烟（需要图形桌面）
 npm.cmd run bench:check     # 确定性基准门禁
+npm.cmd run bench:export -- 10000 1 3  # 子代理结果导出：文件数 / 每文件 KiB / 连续回合
 npm.cmd run docs:generate   # 重写 README 的生成事实块
 ```
 

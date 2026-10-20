@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import type { RunResult, Task, TaskAttempt } from '../../packages/protocol/index.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
+import { acquireHostLock } from '../../packages/platform/host-lock.ts';
 import { safeError } from '../shared/runtime.ts';
 import { createVerifier } from './approvals.ts';
 import { createBackgroundWake } from './background-wake.ts';
@@ -26,9 +27,25 @@ import { createHostState, fileClaims, lockConflict, runSlotFree, sessionCanRun }
 const approvedAcceptance = (task: Task | undefined): boolean =>
   task?.pendingApproval?.state === 'approved' && task.pendingApproval.phase === 'acceptance';
 
+type Launch = NonNullable<ReturnType<typeof resolveLaunch>>;
+
 async function main(): Promise<void> {
   const launch = resolveLaunch(process.argv.slice(2));
   if (!launch) return;
+  /**
+   * The workspace is owned for the whole process, not only while a run is active. Offline maintenance
+   * (`workspace-gc`) reads this marker; holding it through `serveHost` means it disappears only after every
+   * resource the Host owns is closed.
+   */
+  const hostLock = acquireHostLock(launch.workspace);
+  try {
+    await runHost(launch);
+  } finally {
+    hostLock.release();
+  }
+}
+
+async function runHost(launch: Launch): Promise<void> {
   const { options, workspace } = launch;
   const services = await openHostServices(options, workspace);
   const ctx = createHostState(launch, services);

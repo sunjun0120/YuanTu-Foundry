@@ -121,6 +121,7 @@ export function shortenMessages(
   policy: ShrinkPolicy,
   spill: (input: { message: Message; content: string }) => SpilledOutput | null,
   measure: MeasureText,
+  preserved?: ReadonlySet<Message>,
 ): ShrinkOutcome {
   let lastCall = -1;
   messages.forEach((message, index) => {
@@ -133,7 +134,11 @@ export function shortenMessages(
   for (let index = 0; index < messages.length; index++) {
     if (index >= protectedFrom) break;
     const message = messages[index]!;
-    if (message.role !== 'tool' || !worthShortening(message.content, policy.tokens, measure))
+    if (
+      message.role !== 'tool' ||
+      preserved?.has(message) ||
+      !worthShortening(message.content, policy.tokens, measure)
+    )
       continue;
     let spilled: SpilledOutput | null = null;
     try {

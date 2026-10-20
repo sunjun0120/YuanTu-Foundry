@@ -11,6 +11,7 @@ import type { Session, SessionStore } from '../storage/sqlite.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import type { WorkspaceBinding } from '../protocol/workspaces.ts';
 import type { WorkspaceResults } from '../workspaces/results.ts';
+import type { TreeWalkProgress } from '../workspaces/snapshot.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { ResidentChildInput } from './residency.ts';
 import type { ChildTurns } from './run-subagents.ts';
@@ -367,9 +368,29 @@ export function createChildTurns(options: ChildTurnOptions): ChildTurns {
          */
         if (binding?.kind === 'worktree' && options.workspaceResults) {
           try {
+            /**
+             * One frame per five hundred paths, plus the final one.
+             *
+             * A 50k-file first export spends its time in the walk, and a line that only appears when the export is
+             * over is indistinguishable from a hang. The throttle is by count rather than time because the walk
+             * itself is synchronous enough that a timer would only add frames between files that changed nothing.
+             */
+            let reportedProgress = 0;
+            const onProgress = (progress: TreeWalkProgress): void => {
+              if (progress.processed !== progress.total && progress.processed % 500 !== 0) return;
+              if (progress.processed <= reportedProgress) return;
+              reportedProgress = progress.processed;
+              emit('subagent.workspace.progress', {
+                id: task.id,
+                childSessionId: childSession.id,
+                processed: progress.processed,
+                total: progress.total,
+              });
+            };
             const result = await options.workspaceResults.export({
               childSessionId: childSession.id,
               signal: turnSignal,
+              onProgress,
             });
             /**
              * Where the child worked, and what it produced — published as one frame, after the export.

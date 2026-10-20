@@ -250,6 +250,13 @@
 .subagent-meta-duration {
   font-variant-numeric: tabular-nums;
 }
+/* A first export walks the child's whole tree; this is the one line that moves while it does. */
+.subagent-export-progress {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted, #777982);
+  font-variant-numeric: tabular-nums;
+}
 .subagent-report {
   margin: 8px 0;
 }
@@ -814,7 +821,8 @@ select.model-chip {
   font-size: 12px;
   text-overflow: ellipsis;
 }
-select.model-chip:disabled {
+/* Upgraded selects stay transparent; their visible trigger handles disabled styling. */
+select.model-chip:disabled:not(.select-native) {
   cursor: default;
   opacity: 0.55;
 }

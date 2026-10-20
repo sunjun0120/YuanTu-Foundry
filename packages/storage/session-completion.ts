@@ -51,6 +51,7 @@ export class SessionCompletion {
     let contractId: string | undefined;
     let definitionHash: string | undefined;
     let summary: CompletionSummary | undefined;
+    let evidence: CompletionRecord['evidence'];
     let steps: CompletionStep[] | undefined;
     let affectedPaths: string[] | undefined;
     let repairStartedAt: number | undefined;
@@ -73,12 +74,20 @@ export class SessionCompletion {
         // describe the contract honestly.
         continue;
       }
-      if (typeof data.contractId === 'string') contractId = data.contractId;
+      if (typeof data.contractId === 'string') {
+        if (contractId !== data.contractId) evidence = undefined;
+        contractId = data.contractId;
+      }
       if (typeof data.runId === 'string') {
         originRunId ??= data.runId;
         latestRunId = data.runId;
       }
-      if (data.source === 'task' || data.source === 'request' || data.source === 'approved-plan')
+      if (
+        data.source === 'task' ||
+        data.source === 'request' ||
+        data.source === 'approved-plan' ||
+        data.source === 'automatic'
+      )
         source = data.source;
       if (data.definition && typeof data.definition === 'object')
         definition = data.definition as CompletionSpec;
@@ -86,6 +95,8 @@ export class SessionCompletion {
         policy = data.policy as CompletionRepairPolicy;
       if (data.summary && typeof data.summary === 'object')
         summary = data.summary as CompletionSummary;
+      if (data.evidence && typeof data.evidence === 'object')
+        evidence = data.evidence as CompletionRecord['evidence'];
       if (Array.isArray(data.steps)) steps = data.steps as CompletionStep[];
       if (Array.isArray(data.affectedPaths)) affectedPaths = data.affectedPaths as string[];
       if (typeof data.repairStartedAt === 'number') repairStartedAt = data.repairStartedAt;
@@ -126,6 +137,7 @@ export class SessionCompletion {
       definition,
       definitionHash,
       summary,
+      ...(evidence === undefined ? {} : { evidence }),
       steps: steps ?? definition.steps,
       affectedPaths: affectedPaths ?? [],
       policy: policy ?? { maxRepairRounds: 0, maxRepeatedFailures: 0, repairTimeoutMs: 0 },

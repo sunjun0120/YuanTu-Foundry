@@ -5,6 +5,14 @@ import type {
   Provider,
   ToolCall,
 } from '../protocol/index.ts';
+import {
+  assistantHash,
+  deepseekCapabilities,
+  nativeState,
+  projectNativeSystem,
+} from './native-history.ts';
+import type { NativeRoute, NativeSystemProjection } from './native-history.ts';
+import { observedRequestBody } from './request-observation.ts';
 import type { ProviderConfig } from './config.ts';
 import { assertUsableCredential } from './credentials.ts';
 import { failureForStatus, failureFromResponse, fetchModel } from './http.ts';
@@ -30,12 +38,19 @@ function tokens(value: unknown): number {
 }
 function serialize(
   messages: Message[],
-): { role: 'user' | 'assistant'; content: Record<string, unknown>[] }[] {
-  const result: { role: 'user' | 'assistant'; content: Record<string, unknown>[] }[] = [];
-  for (const message of messages) {
+  route?: NativeRoute,
+  prompt?: NativeSystemProjection,
+): { role: 'user' | 'assistant' | 'system'; content: Record<string, unknown>[] }[] {
+  const result: { role: 'user' | 'assistant' | 'system'; content: Record<string, unknown>[] }[] =
+    [];
+  for (const [index, message] of messages.entries()) {
+    if (prompt?.updates.has(index))
+      result.push({ role: 'system', content: [{ type: 'text', text: prompt.updates.get(index) }] });
     const role = message.role === 'assistant' ? 'assistant' : 'user';
     const content: Record<string, unknown>[] = [];
-    if (message.role === 'tool') {
+    const replay = route ? nativeState(message, route) : undefined;
+    if (replay) content.push(...structuredClone(replay.output));
+    else if (message.role === 'tool') {
       /**
        * A tool result carries its pictures *inside* the result, which is the one shape Anthropic supports
        * natively: `tool_result.content` is a string or a list of blocks, and an image block is one of them.
@@ -73,6 +88,8 @@ function serialize(
     if (last?.role === role) last.content.push(...content);
     else result.push({ role, content });
   }
+  if (prompt?.pending !== undefined)
+    result.push({ role: 'system', content: [{ type: 'text', text: prompt.pending }] });
   return result;
 }
 export class AnthropicProvider implements Provider {
@@ -104,6 +121,10 @@ export class AnthropicProvider implements Provider {
      * name is passed explicitly because this adapter is what knows it speaks anthropic, whatever the config says.
      */
     const cache = cacheFields(this.config, request.cacheKey, 'anthropic');
+    const model = request.model ?? this.config.model;
+    const capabilities = deepseekCapabilities(this.config, this.endpoint, model);
+    const route = { protocol: 'anthropic' as const, model, endpoint: this.endpoint };
+    const prompt = projectNativeSystem(request, route, capabilities.systemUpdates);
     /**
      * Anthropic's extended thinking, sized by our own documented rule (see `effort.ts`).
      *
@@ -112,10 +133,15 @@ export class AnthropicProvider implements Provider {
      * caller gets that answer before anything is sent. Omitted entirely when no effort was asked for, which is
      * why every run that does not use the seam behaves exactly as before.
      */
-    const thinking = request.reasoningEffort
-      ? anthropicThinkingBudget(request.reasoningEffort, request.maxOutputTokens)
-      : undefined;
-    const messages = serialize(request.messages);
+    const thinking =
+      request.reasoningEffort && !capabilities.reasoning
+        ? anthropicThinkingBudget(request.reasoningEffort, request.maxOutputTokens)
+        : undefined;
+    const messages = serialize(
+      request.messages,
+      capabilities.reasoning ? route : undefined,
+      prompt,
+    );
     markLastContentBlock(messages, cache.blocks);
     let response: Response;
     try {
@@ -130,14 +156,22 @@ export class AnthropicProvider implements Provider {
             'x-api-key': this.config.apiKey,
             'anthropic-version': '2023-06-01',
           },
-          body: JSON.stringify({
+          body: observedRequestBody(request, route, {
             model: request.model ?? this.config.model,
             max_tokens: request.maxOutputTokens,
             stream: true,
             ...(thinking === undefined
               ? {}
               : { thinking: { type: 'enabled', budget_tokens: thinking } }),
-            system: anthropicSystem(request.system, cache.blocks),
+            ...(capabilities.reasoning &&
+            request.reasoningEffort &&
+            request.reasoningEffort !== 'none'
+              ? {
+                  thinking: { type: 'enabled' },
+                  output_config: { effort: request.reasoningEffort === 'low' ? 'low' : 'high' },
+                }
+              : {}),
+            system: anthropicSystem(prompt.system, cache.blocks),
             messages,
             ...(request.tools.length
               ? { tools: anthropicTools(request.tools, cache.blocks, cache.toolBreakpoint) }
@@ -181,6 +215,8 @@ export class AnthropicProvider implements Provider {
         json: string;
         input?: Record<string, unknown>;
         closed: boolean;
+        signature?: string;
+        data?: string;
       }
     >();
     let started = false,
@@ -247,14 +283,26 @@ export class AnthropicProvider implements Provider {
             throw new Error('Unsupported model content block; use standard text/tool mode');
           blocks.set(event.index, {
             kind,
-            text: kind === 'text' ? string(block.text) : '',
+            text:
+              kind === 'text'
+                ? string(block.text)
+                : kind === 'thinking'
+                  ? string(block.thinking ?? '')
+                  : '',
             json: '',
             closed: false,
+            ...(kind === 'thinking' && block.signature !== undefined
+              ? { signature: string(block.signature) }
+              : {}),
+            ...(kind === 'redacted_thinking' && block.data !== undefined
+              ? { data: string(block.data) }
+              : {}),
             ...(kind === 'tool_use'
               ? { id: string(block.id), name: string(block.name), input: object(block.input) }
               : {}),
           });
           if (kind === 'text' && block.text) request.onText(string(block.text));
+          if (kind === 'thinking' && block.thinking) request.onReasoning?.(string(block.thinking));
           break;
         }
         case 'content_block_delta': {
@@ -266,15 +314,14 @@ export class AnthropicProvider implements Provider {
             block.text += text;
             request.onText(text);
           } else if (delta.type === 'thinking_delta' && block.kind === 'thinking') {
-            // Reasoning travels on its own channel: it is shown folded and is never part of the next prompt, so
-            // it must not enter `text` (which becomes the answer). `signature_delta` is deliberately ignored —
-            // it is only useful for sending thinking back, which this runtime never does.
+            // Reasoning stays separate from the visible answer; capable routes retain the native block for replay.
             const text = string(delta.thinking);
             block.text += text;
             request.onReasoning?.(text);
           } else if (delta.type === 'input_json_delta' && block.kind === 'tool_use')
             block.json += string(delta.partial_json);
-          else if (delta.type === 'signature_delta' && block.kind === 'thinking') break;
+          else if (delta.type === 'signature_delta' && block.kind === 'thinking')
+            block.signature = (block.signature ?? '') + string(delta.signature);
           else throw new Error('Unsupported content delta');
           break;
         }
@@ -360,6 +407,36 @@ export class AnthropicProvider implements Provider {
     return {
       text,
       toolCalls,
+      ...(capabilities.reasoning && finishReason !== 'length' && finishReason !== 'content-filter'
+        ? {
+            providerState: {
+              ...route,
+              messageHash: assistantHash({ content: text, toolCalls }),
+              systemToolsHash: prompt.toolsHash,
+              ...(prompt.snapshot ? { systemPrompt: prompt.snapshot } : {}),
+              output: [...blocks.entries()]
+                .sort(([a], [b]) => a - b)
+                .map(([, block]) => {
+                  if (block.kind === 'thinking')
+                    return {
+                      type: 'thinking',
+                      thinking: block.text,
+                      ...(block.signature === undefined ? {} : { signature: block.signature }),
+                    };
+                  if (block.kind === 'redacted_thinking')
+                    return { type: 'redacted_thinking', data: block.data ?? '' };
+                  if (block.kind === 'tool_use')
+                    return {
+                      type: 'tool_use',
+                      id: block.id,
+                      name: block.name,
+                      input: toolCalls.find((call) => call.id === block.id)!.arguments,
+                    };
+                  return { type: 'text', text: block.text };
+                }),
+            },
+          }
+        : {}),
       finishReason,
       ...(truncation ? { truncation } : {}),
       usage: {

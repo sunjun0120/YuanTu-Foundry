@@ -107,6 +107,13 @@ export interface SubAgentDelta {
   runningSince?: number | null;
   /** The child's own cumulative usage, when it reported one. */
   usage?: Usage;
+  /**
+   * How far the child's result export has got, while it is exporting.
+   *
+   * The first export walks the whole working tree; this is the only number that moves until it is done. Absent
+   * once the export has settled, in either direction.
+   */
+  workspaceProgress?: { processed: number; total: number };
 }
 /**
  * Progress and cumulative usage, delivered without republishing the whole session.
@@ -174,6 +181,8 @@ export interface SubAgentView {
     /** The result this child produced, while it is still outstanding. */
     result?: { id: string; digest: string; status: string; paths: string[] };
   };
+  /** How far this child's result export has got, while it is exporting (see `SubAgentDelta`). */
+  workspaceProgress?: { processed: number; total: number };
 }
 export interface SessionSnapshot {
   statistics?: SessionStatistics;

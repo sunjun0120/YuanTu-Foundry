@@ -6,7 +6,14 @@ import { resolveRunLimits } from '../../../packages/protocol/settings.ts';
 import { createProvider, readConfig } from '../../../packages/providers/index.ts';
 import { modelInfoFor, resolveConnectionCapacities } from '../../shared/runtime.ts';
 import { ownedSession, required } from '../params.ts';
-import { assertUnlocked, executionRoot, hostClaim, sessionClaim, withLocks } from '../state.ts';
+import {
+  assertUnlocked,
+  acquireModelSlot,
+  executionRoot,
+  hostClaim,
+  sessionClaim,
+  withLocks,
+} from '../state.ts';
 import type { Handler } from '../dispatch.ts';
 
 /**
@@ -60,81 +67,86 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
           ? 'the last request envelope was recorded with a truncated prompt, so a summary request could not replay it byte for byte'
           : 'no request envelope is recorded for this session, so a summary request could not replay the round it compresses',
       };
-    return await withLocks(ctx, { claims, busy, operation: { sessionId } }, async (signal) => {
-      // The same defaults the kernel uses, from the same owner (see `packages/protocol/settings.ts`).
-      const limits = resolveRunLimits(ctx.options);
-      const config = readConfig();
-      /**
-       * The session's own correction, and the shortening the run would have applied.
-       *
-       * Manual compaction used to be measured and priced as if it were the first request of a fresh session: no
-       * calibration (so the batch was sized against a factor of one, however wrong this route's estimate had
-       * proved to be) and no shrink seam (so old tool results were replayed in full, which is exactly what makes
-       * a batch too large to summarise). Both are the run's own seams, built from the same values and the same
-       * store, so the compaction a person asks for is priced like the rounds around it.
-       */
-      const route = calibrationRoute(modelInfoFor(config));
-      const routeInfo = modelInfoFor(config);
-      const calibration = TokenCalibration.from(
-        ctx.store.newestPayload(sessionId, 'context.calibration'),
-        route,
-      );
-      const provider = createProvider(config);
-      const capacityFor = await resolveConnectionCapacities(ctx.options, config, signal);
-      const capacity = capacityFor(config.model);
-      await prepareContext({
-        store: ctx.store,
-        sessionId,
-        system: withoutSummarySection(replay.system!),
-        tools: replay.tools!,
-        provider,
-        // A manual compaction is a model answer like any other, so its record says which route produced it —
-        // the same two facts the run's own compactions record, taken from the same place.
-        protocol: routeInfo.protocol,
-        model: routeInfo.model,
-        limit: limits.maxContextChars,
-        signal: signal,
-        maxOutputTokens: capacity.maxOutputTokens ?? limits.maxOutputTokens,
-        maxContextTokens: capacity.contextWindow,
-        summaryTimeoutMs: limits.summaryTimeoutMs,
-        // The recorded key, but only for the request that was recorded. A key names a cache entry, so handing
-        // it to a prompt that is not the one behind it would ask the provider for somebody else's prefix — and
-        // the prompt can differ: the surface's summary is appended fresh, and a compaction since this envelope
-        // was written has moved it on. When it does differ, the honest answer is no key at all: the summary
-        // request then caches nothing rather than reading an entry that is not its own.
-        cacheKeyFor: (systemText) => (systemText === replay.system ? replay.cacheKey : undefined),
-        calibration,
-        // The run's own shortening and pruning seams, from the same factory: a copy here drifted once already.
-        // The spill target is the directory the session works in, so a shortened result a later round reads is
-        // reachable through the same workspace the tools resolve against.
-        ...contextSeams({
-          workspace: executionRoot(ctx, sessionId),
-          sessionId,
-          calibration,
-          ...limits,
-        }),
-        onUsage: () => {},
-        onCompaction: () => {},
-        forceCompact: true,
-      });
-      /**
-       * What the compaction's own request taught this route, recorded where the next run reads it.
-       *
-       * `prepareContext` folds the provider's reported usage into the calibration it was given; without this
-       * write the measurement would die with the call, and the next run would size its requests against the
-       * value that preceded it.
-       */
-      if (route !== undefined)
-        ctx.store.recordEvent(sessionId, 'context.calibration', {
+    const releaseSlot = acquireModelSlot(ctx, sessionId);
+    try {
+      return await withLocks(ctx, { claims, busy, operation: { sessionId } }, async (signal) => {
+        // The same defaults the kernel uses, from the same owner (see `packages/protocol/settings.ts`).
+        const limits = resolveRunLimits(ctx.options);
+        const config = readConfig();
+        /**
+         * The session's own correction, and the shortening the run would have applied.
+         *
+         * Manual compaction used to be measured and priced as if it were the first request of a fresh session: no
+         * calibration (so the batch was sized against a factor of one, however wrong this route's estimate had
+         * proved to be) and no shrink seam (so old tool results were replayed in full, which is exactly what makes
+         * a batch too large to summarise). Both are the run's own seams, built from the same values and the same
+         * store, so the compaction a person asks for is priced like the rounds around it.
+         */
+        const route = calibrationRoute(modelInfoFor(config));
+        const routeInfo = modelInfoFor(config);
+        const calibration = TokenCalibration.from(
+          ctx.store.newestPayload(sessionId, 'context.calibration'),
           route,
-          factor: calibration.factor,
-          samples: calibration.observed,
-          parts: calibration.parts,
+        );
+        const provider = createProvider(config);
+        const capacityFor = await resolveConnectionCapacities(ctx.options, config, signal);
+        const capacity = capacityFor(config.model);
+        await prepareContext({
+          store: ctx.store,
+          sessionId,
+          system: withoutSummarySection(replay.system!),
+          tools: replay.tools!,
+          provider,
+          // A manual compaction is a model answer like any other, so its record says which route produced it —
+          // the same two facts the run's own compactions record, taken from the same place.
+          protocol: routeInfo.protocol,
+          model: routeInfo.model,
+          limit: limits.maxContextChars,
+          signal: signal,
+          maxOutputTokens: capacity.maxOutputTokens ?? limits.maxOutputTokens,
+          maxContextTokens: capacity.contextWindow,
+          summaryTimeoutMs: limits.summaryTimeoutMs,
+          // The recorded key, but only for the request that was recorded. A key names a cache entry, so handing
+          // it to a prompt that is not the one behind it would ask the provider for somebody else's prefix — and
+          // the prompt can differ: the surface's summary is appended fresh, and a compaction since this envelope
+          // was written has moved it on. When it does differ, the honest answer is no key at all: the summary
+          // request then caches nothing rather than reading an entry that is not its own.
+          cacheKeyFor: (systemText) => (systemText === replay.system ? replay.cacheKey : undefined),
+          calibration,
+          // The run's own shortening and pruning seams, from the same factory: a copy here drifted once already.
+          // The spill target is the directory the session works in, so a shortened result a later round reads is
+          // reachable through the same workspace the tools resolve against.
+          ...contextSeams({
+            workspace: executionRoot(ctx, sessionId),
+            sessionId,
+            calibration,
+            ...limits,
+          }),
+          onUsage: () => {},
+          onCompaction: () => {},
+          forceCompact: true,
         });
-      return {
-        compacted: true,
-        coveredMessages: ctx.store.contextSurface(sessionId)!.coveredMessages,
-      };
-    });
+        /**
+         * What the compaction's own request taught this route, recorded where the next run reads it.
+         *
+         * `prepareContext` folds the provider's reported usage into the calibration it was given; without this
+         * write the measurement would die with the call, and the next run would size its requests against the
+         * value that preceded it.
+         */
+        if (route !== undefined)
+          ctx.store.recordEvent(sessionId, 'context.calibration', {
+            route,
+            factor: calibration.factor,
+            samples: calibration.observed,
+            parts: calibration.parts,
+          });
+        return {
+          compacted: true,
+          coveredMessages: ctx.store.contextSurface(sessionId)!.coveredMessages,
+        };
+      });
+    } finally {
+      releaseSlot();
+    }
   },
 };

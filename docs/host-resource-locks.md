@@ -132,7 +132,7 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 1. 引入 `resource-locks` 模块和它的单元测试，不接入任何处理函数。
 2. 修复 4.1：调度器在其他会话运行时不要走验收分支（或直接随第 4 步一起解决）。
 3. 迁移第一类（只动数据库行的 9 个操作）为 `session` 锁。风险最低，收益最直观。
-4. 迁移第二类（撤销、验收、导入），先确认 4.2 的结论再定锁哪个目录。
+4. 迁移第二类（撤销、验收、导入），按 4.2 的结论锁会话的执行目录。
 5. 迁移第三类（工作区绑定维护），同时把 `manualOperation` 换成按会话的映射。
 6. 让 `run.start`、调度器、后台唤醒都通过锁表判断，删除 `restoring`。
 7. 评估是否把"并发运行的会话默认使用 `worktree`"作为下一步，这样 `root` 独占锁几乎不会互相挡住。
@@ -160,11 +160,9 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 - `session.delete` 在子会话运行时被拒绝。
 - 关闭 Host 时，所有持锁的手动操作都被中止并释放锁。
 
-## 9. 待确认
+## 9. 仍需决定
 
-1. 4.2：验收和撤销该对项目目录还是会话执行目录生效。
-2. `context.compact` 与 `task.propose` 会调用模型，是否需要占用 `maxActiveRuns` 的一个槽位，以免绕过并发上限。
-3. 是否值得在锁冲突时提供"排队等待"选项，还是一直保持立即拒绝。
+1. 是否值得在锁冲突时提供“排队等待”选项，还是一直保持立即拒绝。
 
 ## 10. 实现记录
 
@@ -180,15 +178,15 @@ Host 曾经是全局串行的：任意时刻只有一个运行。正在进行的
 - 增加了 `host` 键（见 5.1）。孤立工作区的归档、恢复、删除没有所属会话可锁，仍然要求整个 Host 空闲，所以独占 `host`；其他操作都共享它。
 - 没有单独的 `canAcquire`。调度器、后台唤醒、`run.start` 都通过 `runSlotFree`、`sessionCanRun`、`admissionRefusal` 判断，它们内部改为基于锁表实现，签名不变。
 - 错误文本保持原样，没有附加冲突资源。唯一新增的是会话被手动操作占用时，`run.start` 返回 `This session already has an active run (an exclusive operation is in progress)`；目录或 Host 被占用时仍是 `This Host already has an active run (an exclusive operation is in progress)`。
-- `task.propose` 与 `context.compact` 只锁本会话，不占用运行槽位（9.2 暂按"不占用"处理）。
+- `task.propose` 与 `context.compact` 只锁本会话，但通过 `ctx.modelSlots` 占用同一个 `maxActiveRuns` 容量；`runSlotFree` / `admissionRefusal` 会把它们计入，`acquireModelSlot` 的释放函数与租约一起在 `finally` 执行。
 
 **第 4 节的处理**
 
-- 4.1 已修复：调度器的 `canRun` 现在会收到任务本身。已批准的验收会以 `task.verify` 恢复，这时检查的是验收需要的锁（本会话 + 项目目录独占），而不是运行槽位；拿不到就继续等待，不再计入失败退避。
-- 4.2 未改变行为：撤销、验收、人工确认仍然作用于项目目录（`ctx.workspace`），锁的也是项目目录。是否改为会话执行目录仍待确认。
+- 4.1 已修复：调度器的 `canRun` 现在会收到任务本身。已批准的验收会以 `task.verify` 恢复，这时检查的是验收需要的锁（本会话 + 执行目录独占），而不是运行槽位；拿不到就继续等待，不再计入失败退避。
+- 4.2 已修复：撤销、验收、人工确认均使用 `executionRoot(ctx, sessionId)`，锁的也是执行目录；与 baseline 采集一致。
 - 4.3 已处理：`manualOperation` 改为集合 `manualOperations`。
 
 **测试**
 
-- 新增 `tests/host-resource-locks.test.ts`：锁表的共享与独占规则和全有或全无；会话 A 运行时会话 B 仍可改名；同一目录的运行挡住验收，而在独立目录里的运行不会；会话或目录被手动操作占用时的准入文本；只有独占 `host` 才挡住所有运行。
+- 新增 `tests/host-resource-locks.test.ts`：锁表的共享与独占规则和全有或全无；会话 A 运行时会话 B 仍可改名；同一目录的运行挡住验收，而在独立目录里的运行不会；会话或目录被手动操作占用时的准入文本；只有独占 `host` 才挡住所有运行；`task.propose` / `context.compact` 的 model slot 计入 `maxActiveRuns`。
 - 已有测试中手工构造 `HostContext` 的地方改用 `locks` 与 `manualOperations`。

@@ -8,8 +8,33 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { artifactPath, waitFor } from './desktop-smoke-support.mjs';
+import { artifactPath, messageText, verificationNudge, waitFor } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
+
+/**
+ * Approve once through the page, not through Playwright's actionability check.
+ *
+ * The approval list is rebuilt whenever a run publishes new state, and a verification round keeps a run streaming
+ * while the next command waits for approval. Playwright can resolve the button, watch it get replaced, and fail
+ * the click; the listener is the same one a person's pointer reaches.
+ */
+async function approveOnce(page) {
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll('#approvals button')].some(
+        (button) => button.textContent?.trim() === '允许一次',
+      ),
+    undefined,
+    { timeout: 15000 },
+  );
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('#approvals button')].find(
+      (candidate) => candidate.textContent?.trim() === '允许一次',
+    );
+    if (!(button instanceof HTMLButtonElement)) throw new Error('approval button disappeared');
+    button.click();
+  });
+}
 
 // ---- merged from layout.smoke.mjs ----
 
@@ -47,8 +72,30 @@ test(
     const page = await app.firstWindow();
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+    assert.equal(
+      await page
+        .locator('#composer-verification, #plan-verification, .verification-editor')
+        .count(),
+      0,
+    );
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'system');
     const logo = async (theme) => {
+      const nativeModelOpacity = await page.locator('#model').evaluate((el) => {
+        const disabled = el.disabled;
+        try {
+          return [false, true].map((state) => {
+            el.disabled = state;
+            return getComputedStyle(el).opacity;
+          });
+        } finally {
+          el.disabled = disabled;
+        }
+      });
+      assert.deepEqual(
+        nativeModelOpacity,
+        ['0', '0'],
+        'native model select must stay transparent when enabled or disabled in ' + theme,
+      );
       assert.equal(
         await page.locator('#chat-page').evaluate((el) => getComputedStyle(el).backgroundColor),
         theme === 'dark' ? 'rgb(20, 20, 22)' : 'rgb(255, 255, 255)',
@@ -435,20 +482,34 @@ test(
       'console.log("BACKGROUND_READY");setInterval(()=>{},1000);',
     );
     await writeFile(path.join(root, 'quick.cjs'), 'console.log("BACKGROUND_DONE");');
-    let turns = 0;
-    const url = await httpFixture(t, (_body, res) => {
-      const turn = turns++;
+    const url = await httpFixture(t, (body, res) => {
+      // The verification nudge is not a third user request: answer it with the final text, or the fixture would
+      // start the second background command inside the first run and shift every later turn.
+      if (verificationNudge(body)) {
+        sendFrames(res, frames('The background command is running.'));
+        return;
+      }
+      const last = body.messages.at(-1);
+      const result = Array.isArray(last?.content)
+        ? last.content.find((block) => block.type === 'tool_result')
+        : undefined;
+      if (result) {
+        sendFrames(res, frames('The background command is running.'));
+        return;
+      }
+      const instruction = [...body.messages]
+        .reverse()
+        .find((message) => message.role === 'user' && messageText(message.content).trim());
+      const quick = messageText(instruction?.content).includes('Run a quick background command');
       sendFrames(
         res,
-        turn === 0 || turn === 2
-          ? frames('Starting background work.', [
-              {
-                id: `background-ui-${turn}`,
-                name: 'start_command',
-                input: { command: turn === 0 ? 'node wait.cjs' : 'node quick.cjs' },
-              },
-            ])
-          : frames('The background command is running.'),
+        frames('Starting background work.', [
+          {
+            id: quick ? 'background-ui-quick' : 'background-ui-wait',
+            name: 'start_command',
+            input: { command: quick ? 'node quick.cjs' : 'node wait.cjs' },
+          },
+        ]),
       );
     });
     const env = {
@@ -488,7 +549,7 @@ test(
         document.querySelector('#approvals button') !== null,
     );
     if (await page.getByRole('button', { name: '允许一次', exact: true }).isVisible())
-      await page.getByRole('button', { name: '允许一次', exact: true }).click();
+      await approveOnce(page);
     await page.locator('#open-background').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#background-policy, #background-popover-footer').count(), 0);
     assert.equal(await page.locator('#open-background').innerText(), '1 个后台任务运行中');
@@ -598,6 +659,13 @@ test(
     assert.equal(await page.locator('#open-background').innerText(), '1 个后台任务');
     await page.locator('#chat-title').hover();
     await page.locator('#background-popover').waitFor({ state: 'hidden' });
+    // Let the first run finish its verification round: a prompt sent into a live run is a steer, and the
+    // approval it asks for belongs to a run that ends underneath it.
+    await page.waitForFunction(
+      async () => !(await window.yuantu.invoke({ type: 'snapshot' })).state.session.running,
+      undefined,
+      { timeout: 15000 },
+    );
     await page.locator('#prompt').fill('Run a quick background command');
     await page.locator('#send').click();
     await page.waitForFunction(
@@ -606,7 +674,7 @@ test(
         document.querySelector('#approvals button') !== null,
     );
     if (await page.getByRole('button', { name: '允许一次', exact: true }).isVisible())
-      await page.getByRole('button', { name: '允许一次', exact: true }).click();
+      await approveOnce(page);
     await page.waitForFunction(
       () =>
         document.querySelectorAll('#background-list .background-card').length === 2 &&

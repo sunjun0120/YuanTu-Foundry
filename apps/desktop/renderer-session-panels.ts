@@ -39,6 +39,8 @@ export function setupSessionPanels(
   getState: () => CarrierSnapshot | null,
   /** Open a presented file in the workspace preview; absent in a harness that has no preview. */
   open?: (path: string) => void,
+  /** Open or reveal a presented file with the operating system; absent where the shell has no bridge. */
+  shell?: { open(path: string): void; reveal(path: string): void },
 ): {
   todos(todos: TodoItem[]): void;
   goal(goal: Goal | null): void;
@@ -201,6 +203,19 @@ export function setupSessionPanels(
           button.addEventListener('click', () => open(file.path));
           item.append(button);
         } else item.append(path);
+        if (shell) {
+          const actions = node('span', '', 'deliverable-actions');
+          for (const [label, action] of [
+            [t('ui.openWithDefaultApp'), shell.open],
+            [t('ui.revealInFolder'), shell.reveal],
+          ] as const) {
+            const button = node('button', label, 'deliverable-action');
+            button.type = 'button';
+            button.addEventListener('click', () => action(file.path));
+            actions.append(button);
+          }
+          item.append(actions);
+        }
         if (file.description)
           item.append(
             document.createTextNode(' — '),

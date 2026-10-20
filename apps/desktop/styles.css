@@ -216,6 +216,20 @@ body {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.markdown .markdown-local-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: #296044;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.markdown .markdown-local-link:hover,
+.markdown .markdown-local-link:focus-visible {
+  color: #163e2a;
+}
 .markdown :not(pre) > code {
   font-family: 'Cascadia Code', Consolas, monospace;
   font-size: 0.9em;
@@ -1052,6 +1066,19 @@ pre {
   background: #f6f2e7;
   color: #6c6049;
 }
+.approval .approval-why {
+  font-size: 13px;
+  color: #6c6049;
+}
+.approval .approval-subject {
+  padding: 8px 10px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.approval .approval-meta {
+  margin: 4px 0;
+}
 .approval-actions {
   display: flex;
   gap: 8px;
@@ -1132,59 +1159,21 @@ textarea::placeholder {
   color: #a7b0a9;
   margin-right: auto;
 }
-.verification-host:empty {
-  display: none;
-}
-.verification-editor {
-  margin-top: 8px;
-  border-top: 1px solid #edf0ed;
-  padding-top: 6px;
-}
-.verification-editor summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: #6c7a70;
-  user-select: none;
-}
-.verification-body {
-  display: grid;
-  gap: 8px;
-  padding: 8px 2px 2px;
-}
-.verification-field {
-  display: grid;
-  gap: 3px;
-  font-size: 11px;
-  color: #6c7a70;
-}
-.verification-field-label {
-  color: #8b978e;
-}
-.verification-input,
-.verification-commands {
-  width: 100%;
-  border: 1px solid #dce3dc;
-  border-radius: 6px;
-  padding: 6px 8px;
-  color: #34463a;
-  background: #fbfcfb;
-  font: inherit;
-  font-size: 12px;
-}
-.verification-commands {
-  min-height: 54px;
-  max-height: 160px;
-  resize: vertical;
-  line-height: 1.5;
-}
-.verification-hint {
-  margin: 0;
-  color: #8b978e;
-  font-size: 10px;
-  line-height: 1.5;
-}
 #send span {
   margin-left: 12px;
+}
+.completion-evidence {
+  margin-top: 8px;
+}
+.completion-evidence summary {
+  cursor: pointer;
+}
+.completion-evidence pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }
 .error-banner,
 .notice-banner,

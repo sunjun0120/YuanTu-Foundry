@@ -20,7 +20,7 @@ import {
   withRepositoryLock,
   writeTree,
 } from './git.ts';
-import { collectTreeBlobs, TreeBlobCache } from './snapshot.ts';
+import { collectTreeBlobs, TreeBlobCache, type TreeWalkProgress } from './snapshot.ts';
 import type { WorkspaceResultFile } from '../protocol/workspaces.ts';
 import {
   changeForResult,
@@ -80,7 +80,11 @@ export type { WorkspaceResultFile } from '../protocol/workspaces.ts';
  * the first cannot reach the second by accident.
  */
 export interface WorkspaceResults {
-  export(input: { childSessionId: string; signal: AbortSignal }): Promise<WorkspaceResult>;
+  export(input: {
+    childSessionId: string;
+    signal: AbortSignal;
+    onProgress?: (progress: TreeWalkProgress) => void;
+  }): Promise<WorkspaceResult>;
   /** The frozen description of one result, or null when its manifest is gone. */
   manifest(resultId: string): Promise<WorkspaceResultManifest | null>;
 }
@@ -185,8 +189,18 @@ export class WorkspaceResultsService implements WorkspaceResults, WorkspaceApply
    * the digest check on read — while doing it the other way round would leave the parent able to see a result whose
    * contents did not exist.
    */
-  async export(input: { childSessionId: string; signal: AbortSignal }): Promise<WorkspaceResult> {
-    const { childSessionId, signal } = input;
+  async export(input: {
+    childSessionId: string;
+    signal: AbortSignal;
+    /**
+     * Told how far the freeze's walk has got.
+     *
+     * The first export of a child reads the whole tree, and this is the only part of a turn that has nothing to
+     * report until it is completely done. A Host forwards this as a live event; a caller that does not care omits it.
+     */
+    onProgress?: (progress: TreeWalkProgress) => void;
+  }): Promise<WorkspaceResult> {
+    const { childSessionId, signal, onProgress } = input;
     signal.throwIfAborted();
     const binding = this.store.workspaceBinding(childSessionId);
     requireIsolated(binding);
@@ -227,6 +241,7 @@ export class WorkspaceResultsService implements WorkspaceResults, WorkspaceApply
         signal,
         {},
         cached ? blobs : undefined,
+        onProgress,
       );
       const currentTree = await writeTree(
         identity.repositoryRoot,

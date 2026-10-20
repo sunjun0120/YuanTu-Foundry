@@ -31,9 +31,43 @@ export function safeWebUrl(input: string): string | null {
     return null;
   }
 }
+/**
+ * Decode the percent escapes a Markdown destination may carry.
+ *
+ * A link to a workspace file is a URL, so a space arrives as `%20` and a literal `%` as `%25`. Decoding the
+ * whole string at once would reject a name that contains a bare `%` the author did not escape, so each run of
+ * escapes is decoded on its own and an invalid run is left as written.
+ */
+function decodeLocalPath(value: string): string {
+  return value.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run;
+    }
+  });
+}
+/** A relative link that may name a workspace file; absolute paths and other schemes are left as text. */
+export function safeLocalPath(input: string): string | null {
+  const text = input.trim();
+  if (!text || text.length > 4096) return null;
+  // A fragment names a place inside the target, not part of the file name. Splitting before decoding keeps an
+  // encoded `%23` — a literal `#` in the name — from being mistaken for a fragment.
+  const pathname = decodeLocalPath(text.split('#', 1)[0]!).trim();
+  if (!pathname || pathname.length > 4096) return null;
+  // Spaces in a file name are ordinary; control characters are not, and the main process refuses them too.
+  if (/[\x00-\x1f\x7f]/.test(pathname)) return null;
+  // An absolute/UNC path is not a workspace-relative file the bridge can resolve.
+  if (pathname.startsWith('/') || pathname.startsWith('\\')) return null;
+  // Any explicit scheme (`https:`, `mailto:`, `file:`) is not this channel's job.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(pathname)) return null;
+  return pathname;
+}
 export interface MarkdownActions {
   copy(text: string): Promise<void>;
   open(url: string): Promise<void>;
+  /** Open a workspace-relative path; absent in a harness without the desktop bridge. */
+  openLocal?(path: string): Promise<void>;
 }
 function element(tag: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -101,8 +135,23 @@ export function renderMarkdown(text: string, actions: MarkdownActions): HTMLElem
           else parent.append(document.createTextNode(decode(token.text)));
           break;
         case 'link': {
-          const url = safeWebUrl(decode(token.href));
+          const href = decode(token.href);
+          const url = safeWebUrl(href);
           if (!url) {
+            const local = safeLocalPath(href);
+            if (local && actions.openLocal) {
+              const button = children(element('button')) as HTMLButtonElement;
+              button.type = 'button';
+              button.className = 'markdown-local-link';
+              button.title = t('ui.openWorkspaceFile');
+              button.addEventListener('click', () => {
+                void actions.openLocal!(local).catch(() => {
+                  button.title = t('ui.openLinkFailed');
+                });
+              });
+              parent.append(button);
+              break;
+            }
             render(nested, parent, depth + 1);
             break;
           }

@@ -225,6 +225,25 @@ test('sub-agent progress becomes panel state without a snapshot per token', asyn
   assert.equal(session.snapshot.subagents[0]!.tool, undefined);
   assert.equal(session.snapshot.subagents[0]!.toolCalls, 1);
 
+  // Export progress is a delta, not a snapshot: the first export of a large tree reports hundreds of times and a
+  // full snapshot per file would copy the whole session for a line of text.
+  const beforeProgress = publishes;
+  client.emit({
+    type: 'subagent.workspace.progress',
+    sessionId: 's1',
+    runId: 'r1',
+    data: { id: 'sub-1', processed: 500, total: 10_000 },
+  });
+  assert.equal(publishes, beforeProgress);
+  assert.deepEqual(session.snapshot.subagents[0]!.workspaceProgress, {
+    processed: 500,
+    total: 10_000,
+  });
+  assert.deepEqual(deltas.at(-1), {
+    id: 'sub-1',
+    workspaceProgress: { processed: 500, total: 10_000 },
+  });
+
   client.emit({
     type: 'subagent.finished',
     sessionId: 's1',

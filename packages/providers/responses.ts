@@ -6,6 +6,7 @@ import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { cacheFields } from './cache.ts';
 import { validateImages } from '../protocol/images.ts';
 import { readSse } from './sse.ts';
+import { observedRequestBody } from './request-observation.ts';
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Invalid Responses object');
@@ -153,31 +154,35 @@ export class ResponsesProvider implements Provider {
             'content-type': 'application/json',
             authorization: 'Bearer ' + this.config.apiKey,
           },
-          body: JSON.stringify({
-            model: effectiveModel,
-            // Same level, nested under `reasoning`. `include: ['reasoning.encrypted_content']` above is already
-            // unconditional, which is what makes reasoning usable with `store: false`.
-            ...(request.reasoningEffort && request.reasoningEffort !== 'none'
-              ? { reasoning: { effort: request.reasoningEffort } }
-              : {}),
-            instructions: request.system,
-            input,
-            stream: true,
-            store: false,
-            include: ['reasoning.encrypted_content'],
-            ...(cache.key ? { prompt_cache_key: cache.key } : {}),
-            max_output_tokens: request.maxOutputTokens,
-            tools: request.tools.map((tool) => ({
-              type: 'function',
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.inputSchema,
-              strict: false,
-            })),
-            ...(request.tools.length && request.toolChoice === 'none'
-              ? { tool_choice: 'none' }
-              : {}),
-          }),
+          body: observedRequestBody(
+            request,
+            { protocol: 'openai-responses', model: effectiveModel, endpoint: this.endpoint },
+            {
+              model: effectiveModel,
+              // Same level, nested under `reasoning`. `include: ['reasoning.encrypted_content']` above is already
+              // unconditional, which is what makes reasoning usable with `store: false`.
+              ...(request.reasoningEffort && request.reasoningEffort !== 'none'
+                ? { reasoning: { effort: request.reasoningEffort } }
+                : {}),
+              instructions: request.system,
+              input,
+              stream: true,
+              store: false,
+              include: ['reasoning.encrypted_content'],
+              ...(cache.key ? { prompt_cache_key: cache.key } : {}),
+              max_output_tokens: request.maxOutputTokens,
+              tools: request.tools.map((tool) => ({
+                type: 'function',
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.inputSchema,
+                strict: false,
+              })),
+              ...(request.tools.length && request.toolChoice === 'none'
+                ? { tool_choice: 'none' }
+                : {}),
+            },
+          ),
         },
         this.config.streamIdleTimeoutMs ?? 300_000,
       );

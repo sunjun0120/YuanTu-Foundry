@@ -2,6 +2,8 @@ import { parseSetting, promptCacheMode } from '../protocol/settings.ts';
 import type { PromptCacheMode } from '../protocol/cache-modes.ts';
 import { credentialsPath, readCredentials } from './credentials.ts';
 export interface ProviderConfig {
+  /** Auto detects known DeepSeek models on the official endpoint; gateways require explicit opt-in. */
+  deepseekCompatibility?: 'auto' | 'on' | 'off';
   /** Operator-declared image input support; absence preserves the legacy default. */
   supportsVision?: boolean;
   /**
@@ -100,7 +102,12 @@ export function readConfig(
   const promptCache =
     promptCacheMode(parseSetting(env, 'YUANTU_PROMPT_CACHE') as string | undefined) ?? 'auto';
   const supportsVision = parseSetting(env, 'YUANTU_SUPPORTS_VISION') as boolean | undefined;
+  const deepseekCompatibility = parseSetting(
+    env,
+    'YUANTU_DEEPSEEK_COMPAT',
+  ) as ProviderConfig['deepseekCompatibility'];
   return {
+    ...(deepseekCompatibility === undefined ? {} : { deepseekCompatibility }),
     ...(supportsVision === undefined ? {} : { supportsVision }),
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
     // The connection declares its own capacity, from the one owner of those bounds (the settings table).

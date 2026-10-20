@@ -62,6 +62,10 @@ test('git command line pins the safe directory and disables external diff helper
   );
   assert.ok(command.includes('diff.external='));
   assert.ok(command.includes('core.fsmonitor=false'));
+  assert.ok(
+    command.includes('core.quotePath=false'),
+    'non-ASCII paths must read as themselves, not as octal escapes',
+  );
   assert.ok(command.includes('--no-pager'));
 });
 

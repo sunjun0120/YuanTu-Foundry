@@ -382,7 +382,8 @@ test('the Host publishes both halves of a decision and lets a client read them b
   assert.ok(approvalId, 'the Host must publish an id the client can answer');
   await client.request('approval.respond', { approvalId, allow: true });
   const result = await running;
-  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.status, 'needs_review', result.error);
+  assert.equal(result.completion?.reason, 'missing-verification');
 
   const first = await client.request('session.audit', { sessionId: session.id });
   assert.deepEqual(
@@ -453,7 +454,8 @@ test('the audit cursor reads forward a page at a time without repeating or skipp
     await client.request('approval.respond', { approvalId: wanted.shift()!, allow });
   }
   const result = await running;
-  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.status, 'needs_review', result.error);
+  assert.equal(result.completion?.reason, 'missing-verification');
 
   const whole = await client.request('session.audit', { sessionId: session.id });
   assert.equal(whole.entries.length, 4);

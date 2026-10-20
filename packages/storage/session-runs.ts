@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { redactSecrets } from '../platform/redact.ts';
 import { changeGoal, type Goal } from '../protocol/goals.ts';
-import type { Message, RunResult } from '../protocol/index.ts';
+import type { Message, RunResult, Task } from '../protocol/index.ts';
 import type { SessionLease } from '../protocol/session-lease.ts';
 import type { StepRecord } from '../protocol/steps.ts';
 import { foldSteps, inFlightStep as openStepOf } from '../protocol/steps.ts';
@@ -50,6 +50,19 @@ export interface SessionRecovery {
 
 /** Runs this process ended without managing to persist their end; see `forsakeRun`. */
 const FORSAKEN_RUNS = new Set<string>();
+
+/**
+ * The task row a run's finalization settled, and any correction the task's own rules imply for the run.
+ *
+ * A task that settles `needs_review` while the run still claims `completed` is the contradiction that used to
+ * survive finalization: the Task row said completed, so the Host announced `task.completed` and a dependent task
+ * could start for a run that never actually finished. Carrying the correction here lets `finishRun` apply it
+ * before it writes the completion record and the run row, so the two are never durable in disagreement.
+ */
+export interface RunTaskSettlement {
+  task: Task;
+  runDowngrade?: { status: 'needs_review'; error: string };
+}
 
 export class SessionRuns {
   private readonly port: SessionRunsPort;
@@ -483,8 +496,32 @@ export class SessionRuns {
     return Number(row?.n ?? 0);
   }
 
-  finishRun(result: RunResult, options: { completeGoalObjective?: string } = {}): void {
+  finishRun(
+    result: RunResult,
+    options: {
+      completeGoalObjective?: string;
+      /**
+       * Settle this run's task attempt inside the same transaction as the run's own final row.
+       *
+       * Called before any terminal write. Throwing aborts the whole commit, so an attempt can never be durable
+       * as completed while the run it belongs to failed to finalize; returning a `runDowngrade` applies the
+       * task's own correction before the completion record and run row are written.
+       */
+      settleTask?: () => RunTaskSettlement | undefined;
+    } = {},
+  ): void {
     this.port.transaction(() => {
+      const settlement = options.settleTask?.();
+      if (settlement?.runDowngrade && result.status === 'completed') {
+        result.status = settlement.runDowngrade.status;
+        result.error = result.error ?? settlement.runDowngrade.error;
+        if (result.completion?.state === 'verified')
+          result.completion = {
+            ...result.completion,
+            state: 'needs_review',
+            reason: 'finalization-failed',
+          };
+      }
       if (result.completion?.contractId)
         this.port.recordEvent(result.sessionId, 'completion.updated', {
           runId: result.runId,

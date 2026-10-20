@@ -1,6 +1,8 @@
 import type { FailureCode } from './failure.ts';
 import type { ToolOutputContract, ToolResultOutput } from './tool-result.ts';
 import type { CheckFailureReason, CompletionSummary } from './completion.ts';
+import type { PreparedRequestFingerprint } from './request-cache.ts';
+import type { ExecutionPolicy } from './execution.ts';
 export * from './tool-contract.ts';
 export * from './events.ts';
 export * from './tasks.ts';
@@ -54,10 +56,16 @@ export interface UserInput {
   images?: ImageAttachment[];
 }
 export interface ProviderState {
-  protocol: 'openai-responses';
+  protocol: 'openai-responses' | 'openai' | 'anthropic';
   model: string;
   endpoint: string;
   output: Record<string, unknown>[];
+  /** Native Chat/Messages replay is valid only while this assistant content and its calls are unchanged. */
+  messageHash?: string;
+  /** A complete system snapshot only at the start of a native series or when its effective text changes. */
+  systemPrompt?: { kind: 'initial' | 'update'; text: string };
+  /** Changed declarations start a new system series instead of applying stale historical instructions. */
+  systemToolsHash?: string;
 }
 export type Message =
   | {
@@ -75,11 +83,19 @@ export type Message =
       providerState?: ProviderState;
       interrupted?: boolean;
       /**
+       * An answer the runtime is about to replace with another one from the same turn.
+       *
+       * Automatic verification nudges a run that tries to finish without checks, and the model answers again
+       * after the nudge. The first answer is real model output and stays in the transcript the next request is
+       * built from, but showing both leaves the person with two final answers. A transcript renderer hides a
+       * provisional answer once a later answer exists; it still shows one when the run ends before that.
+       */
+      provisional?: boolean;
+      /**
        * What the model thought before it answered, kept so a reopened session can still show it.
        *
-       * Display-only, and deliberately not part of the conversation: no encoder sends it back (endpoints
-       * that produce `reasoning_content` reject it on the way in), it is excluded from the context estimate
-       * because it is not in the next prompt, and it is never the answer — `content` is.
+       * Display text is not replayed directly. Capable adapters retain route-scoped native reasoning in
+       * `providerState`, which participates in context sizing and is replayed only to its original route.
        */
       reasoning?: string;
     }
@@ -207,6 +223,8 @@ export type ReasoningEffort = 'low' | 'medium' | 'high' | 'none';
 export const BUILTIN_PROTOCOLS = ['anthropic', 'openai', 'openai-responses'] as const;
 export type BuiltinProtocol = (typeof BUILTIN_PROTOCOLS)[number];
 export interface ModelRequest {
+  /** Actual serialized input identity, reported immediately before dispatch by supported adapters. */
+  onRequestFingerprint?: (fingerprint: PreparedRequestFingerprint) => void;
   system: string;
   messages: Message[];
   tools: ToolSpec[];
@@ -218,8 +236,8 @@ export interface ModelRequest {
    *
    * A channel of its own rather than a flag on `onText`, because the two must never become
    * interchangeable: `onText` is the answer — it is stored as the answer, replayed as the answer and
-   * counted as the answer — while reasoning is shown folded, is never sent back to a provider, and is not
-   * part of the next prompt. A provider with nothing to report simply never calls this.
+   * counted as the answer. Capable adapters separately retain native reasoning for subsequent requests;
+   * this display channel alone never authorizes replay. A provider with nothing to report never calls this.
    */
   onReasoning?: (text: string) => void;
   onProgress?: (progress: ModelProgress) => void;
@@ -235,10 +253,8 @@ export interface ModelRequest {
   /** How much reasoning to buy for this request; omitted means the protocol's own default. */
   reasoningEffort?: ReasoningEffort;
   /**
-   * Stable identifier for the request's cacheable prefix. Supplying it asks the
-   * provider to cache the system prompt, tool definitions and conversation prefix;
-   * omitting it leaves the request uncached. It carries no workspace content of its
-   * own beyond a digest, and must never contain credentials.
+   * Stable identifier used by adapters that accept explicit cache hints. Providers such as DeepSeek can
+   * cache automatically without this field. It contains only a digest and must never contain credentials.
    */
   cacheKey?: string;
   /**
@@ -260,6 +276,11 @@ export interface Approval {
   change?: FileChange;
   /** Set when a sub-agent is asking, so the prompt names the child instead of looking like the parent. */
   subagent?: SubAgentTag;
+  /**
+   * For a command: what its backend will and will not stop, as data rather than the English sentence in
+   * `description`, so an interface can say it in the reader's language at the moment they decide.
+   */
+  boundary?: Pick<ExecutionPolicy, 'processFiles' | 'network'>;
 }
 export type ApprovalDecisionSource =
   'user' | 'policy' | 'launch-options' | 'task-approval' | 'unavailable';

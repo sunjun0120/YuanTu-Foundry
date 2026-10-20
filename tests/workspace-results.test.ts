@@ -351,10 +351,16 @@ test('a later export compares against what the parent accepted, not the baseline
   });
   h.store.attachWorkspaceBinding({ bindingId: binding.id, childSessionId: child.id });
   await writeFile(path.join(binding.executionRoot, 'first.txt'), 'one\n');
+  const progress: { processed: number; total: number }[] = [];
   const first = await h.results.export({
     childSessionId: child.id,
     signal: new AbortController().signal,
+    onProgress: (update) => progress.push(update),
   });
+  assert.ok(progress.length > 0, 'the first export reports its walk');
+  const finalProgress = progress.at(-1)!;
+  assert.ok(finalProgress.total > 0);
+  assert.equal(finalProgress.processed, finalProgress.total);
   // Standing in for an import the parent accepted: the comparison tree moves only here, and the assertion below is
   // that the *next* export measures from it rather than offering the same change again.
   h.store.setWorkspaceResultStatus({ resultId: first.id, expect: 'ready', to: 'applied' });

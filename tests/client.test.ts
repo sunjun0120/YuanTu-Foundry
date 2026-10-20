@@ -11,13 +11,31 @@ import { projectRoot } from './process-fixture.ts';
 import { largePng } from './image-fixture.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import type { SessionSnapshot, StatisticsDelta } from '../packages/client/session-controller.ts';
-import type { AgentEvent, Message, RunResult } from '../packages/protocol/index.ts';
+import type { AgentEvent, CompletionSpec, Message, RunResult } from '../packages/protocol/index.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createProvider } from '../packages/providers/index.ts';
 import type { HostTransport } from '../packages/client/host-transport.ts';
 import { tempRoot } from './temp-fixture.ts';
+
+// Transport fixtures supply checks so automatic verification does not add unrelated model turns.
+function fileCompletion(file: string, expected: string): CompletionSpec {
+  return {
+    version: 1,
+    objective: 'Produce the fixture file',
+    constraints: [],
+    steps: [],
+    inputs: [file],
+    acceptance: [
+      {
+        description: 'Fixture file has the expected content',
+        met: false,
+        check: { id: 'fixture-file', kind: 'file-contains', path: file, expected },
+      },
+    ],
+  };
+}
 
 /**
  * The user-role messages a person actually typed.
@@ -199,7 +217,9 @@ test('typed client handshakes, streams, approves a real write and reloads histor
         allow: true,
       });
   });
-  const result = await client.run(session.id, 'Create hello.txt');
+  const result = await client.run(session.id, 'Create hello.txt', {
+    completion: fileCompletion('hello.txt', 'hello'),
+  });
   assert.equal(result.status, 'completed');
   await approval;
   assert.deepEqual(texts, ['Creating', 'Created']);
@@ -649,7 +669,9 @@ test('controller projects separate assistant turns, handles approval and reconci
     if (state.approvals.length && !approve)
       approve = controller.approve(state.approvals[0]!.id, true);
   });
-  const result = await controller.send('Create file');
+  const result = await controller.send('Create file', undefined, undefined, {
+    completion: fileCompletion('a.txt', 'ok'),
+  });
   await approve;
   assert.equal(result.status, 'completed');
   assert.equal(await readFile(path.join(root, 'a.txt'), 'utf8'), 'ok');

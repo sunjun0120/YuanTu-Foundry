@@ -110,6 +110,7 @@ export function foldCompletion(
   const affectedPaths = data.affectedPaths;
   const contractId = String(data.contractId ?? previous?.contractId ?? '');
   if (!contractId) return undefined;
+  if (previous?.contractId !== contractId) previous = null;
   return {
     version: 1,
     contractId,
@@ -117,7 +118,10 @@ export function foldCompletion(
     originRunId: String(data.runId ?? previous?.originRunId ?? event.runId ?? ''),
     latestRunId: String(data.runId ?? event.runId ?? previous?.latestRunId ?? ''),
     source:
-      data.source === 'task' || data.source === 'request' || data.source === 'approved-plan'
+      data.source === 'task' ||
+      data.source === 'request' ||
+      data.source === 'approved-plan' ||
+      data.source === 'automatic'
         ? data.source
         : (previous?.source ?? 'request'),
     definition:
@@ -128,6 +132,11 @@ export function foldCompletion(
       (summary as { definitionHash?: unknown }).definitionHash ?? previous?.definitionHash ?? '',
     ),
     summary: structuredClone(summary as CompletionRecord['summary']),
+    ...(data.evidence && typeof data.evidence === 'object'
+      ? { evidence: structuredClone(data.evidence as CompletionRecord['evidence']) }
+      : previous?.evidence
+        ? { evidence: previous.evidence }
+        : {}),
     steps: Array.isArray(steps)
       ? structuredClone(steps as CompletionRecord['steps'])
       : (previous?.steps ?? []),
@@ -213,6 +222,14 @@ export function foldSubAgentProgress(view: SubAgentView, data: EventData): void 
   if (data.usage) view.usage = data.usage as Usage;
 }
 
+/** How far a child's result export has got, folded onto its card. */
+export function foldSubAgentWorkspaceProgress(view: SubAgentView, data: EventData): void {
+  const processed = Number(data.processed);
+  const total = Number(data.total);
+  if (!Number.isSafeInteger(processed) || !Number.isSafeInteger(total) || total < 0) return;
+  view.workspaceProgress = { processed: Math.min(Math.max(processed, 0), total), total };
+}
+
 /** Where a child worked and what it produced, as a `subagent.workspace` frame states it. */
 export function subAgentWorkspace(data: EventData): NonNullable<SubAgentView['workspace']> {
   return {
@@ -231,6 +248,7 @@ export function subAgentWorkspace(data: EventData): NonNullable<SubAgentView['wo
 /** A child's turn ending, folded onto its card. */
 export function foldSubAgentFinished(view: SubAgentView, data: EventData): void {
   view.status = data.status as SubAgentView['status'];
+  delete view.workspaceProgress;
   view.rounds = Number(data.rounds ?? view.rounds);
   view.toolCalls = Number(data.toolCalls ?? view.toolCalls);
   if (data.usage) view.usage = data.usage as Usage;

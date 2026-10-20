@@ -28,8 +28,8 @@ export const panelMessages: Record<string, [string, string]> = {
   ],
   'orphans.title': ['已删除会话留下的工作区', 'Workspaces left by deleted sessions'],
   'orphans.note': [
-    '子代理在隔离目录中工作、而其会话已被删除时，目录和恢复记录会留在这里。归档后可清理目录，已保存的源码可恢复。操作遵循当前会话选择的权限；没有当前会话时使用项目默认权限。',
-    'When a sub-agent worked in an isolated directory and its session was deleted, the directory and recovery records stay here. Archive before removing a directory; preserved source files can be restored. Operations follow the selected session permissions, or project defaults when no session is selected.',
+    '子代理在隔离目录中工作、而其会话已被删除时，目录和恢复记录会留在这里。归档后可清理目录，已保存的源码可恢复。默认不会自动删除；只有设置 YUANTU_WORKSPACE_RETENTION_DAYS 并重启 Host 后，超过天数的已移除记录才会被清除。操作遵循当前会话选择的权限；没有当前会话时使用项目默认权限。',
+    'When a sub-agent worked in an isolated directory and its session was deleted, the directory and recovery records stay here. Archive before removing a directory; preserved source files can be restored. Nothing is deleted automatically: only after YUANTU_WORKSPACE_RETENTION_DAYS is set and the Host restarts are removed records older than that period cleared. Operations follow the selected session permissions, or project defaults when no session is selected.',
   ],
   'orphans.refresh': ['刷新列表', 'Refresh list'],
   'orphans.loading': ['正在读取或处理工作区…', 'Loading or updating workspaces…'],

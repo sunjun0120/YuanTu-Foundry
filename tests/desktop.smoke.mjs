@@ -9,10 +9,96 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { artifactPath, waitFor } from './desktop-smoke-support.mjs';
+import { artifactPath, verificationNudge, waitFor } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
+
+test(
+  'desktop verifies a normal message and shows command evidence without an acceptance form',
+  { timeout: 60000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-auto-verification-ui-'));
+    await writeFile(path.join(root, 'out.txt'), 'fixed');
+    let requests = 0;
+    const endpoint = await httpFixture(t, (_body, response) =>
+      sendFrames(
+        response,
+        requests++ === 0
+          ? frames('', [
+              {
+                id: 'verify',
+                name: 'verify_work',
+                input: {
+                  commands: [
+                    {
+                      command: process.execPath,
+                      args: [
+                        '-e',
+                        "if(require('node:fs').readFileSync('out.txt','utf8')!=='fixed')process.exit(1);console.log('OUTPUT_CHECK_PASSED')",
+                      ],
+                      description: 'Check the output file',
+                    },
+                  ],
+                  inputs: ['out.txt'],
+                },
+              },
+            ])
+          : frames('Checked the output.'),
+      ),
+    );
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_BASE_URL: endpoint,
+      YUANTU_API_KEY: 'fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SANDBOX: 'host',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let app;
+    t.after(async () => {
+      await app?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(10000);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+    assert.equal(
+      await page
+        .locator('#composer-verification, #plan-verification, .verification-editor')
+        .count(),
+      0,
+    );
+    await page.locator('#prompt').fill('Verify the output file');
+    await page.locator('#send').click();
+    await page.getByRole('button', { name: '允许一次', exact: true }).click();
+    await page.waitForFunction(() =>
+      document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
+    );
+    await page.locator('.completion-evidence summary').click();
+    assert.match(await page.locator('.completion-evidence').innerText(), /退出码：0/);
+    assert.match(await page.locator('.completion-evidence pre').innerText(), /OUTPUT_CHECK_PASSED/);
+    await page.screenshot({ path: artifactPath('automatic-verification.png'), fullPage: true });
+    await page.reload();
+    await page.waitForFunction(() =>
+      document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
+    );
+    await page.locator('.completion-evidence summary').click();
+    assert.match(await page.locator('.completion-evidence pre').innerText(), /OUTPUT_CHECK_PASSED/);
+  },
+);
 
 test(
   'finished turns show separate file cards at their ends, with collapsed previews and live changes withheld',
@@ -79,8 +165,11 @@ test(
     store.close();
     let requests = 0,
       pending;
-    const endpoint = await httpFixture(t, (_body, response) => {
-      if (++requests === 1)
+    const endpoint = await httpFixture(t, (body, response) => {
+      // The requested answer is settled by the test; the verification nudge after it is answered here so the
+      // third turn can actually finish and its file card appear.
+      if (verificationNudge(body)) sendFrames(response, frames('THIRD_FINAL'));
+      else if (++requests === 1)
         sendFrames(
           response,
           frames('', [
@@ -185,11 +274,18 @@ test(
     assert.match(await page.locator('.turn-changes').nth(2).textContent(), /live.ts/);
     assert.equal(await firstCardNode.evaluate((card) => card.isConnected), true);
     assert.equal(await diffNode.evaluate((diff) => diff.isConnected && !diff.open), true);
+    // The completion verdict sits between the final answer and its file summary, so walk back to the answer
+    // rather than assuming the summary's immediate previous sibling is the message.
     assert.equal(
       await page
         .locator('.turn-changes')
         .nth(2)
-        .evaluate((card) => card.previousElementSibling.textContent.includes('THIRD_FINAL')),
+        .evaluate((card) => {
+          for (let node = card.previousElementSibling; node; node = node.previousElementSibling)
+            if (node.classList.contains('assistant'))
+              return node.textContent.includes('THIRD_FINAL');
+          return false;
+        }),
       true,
     );
   },
@@ -204,6 +300,12 @@ test(
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-live-permission-'));
     const results = [];
     const url = await httpFixture(t, (body, response) => {
+      // Answer the verification nudge with the final answer; treating it as a new instruction started a second
+      // background command and left the run in an error-shaped review state.
+      if (verificationNudge(body)) {
+        sendFrames(response, frames('LIVE_PERMISSION_DONE'));
+        return;
+      }
       const last = body.messages.at(-1);
       const result = Array.isArray(last?.content)
         ? last.content.find((block) => block.type === 'tool_result')

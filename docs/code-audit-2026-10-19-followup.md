@@ -2,7 +2,7 @@
 
 > 复核基线：`2f9127a`（`fix: 性能优化`）加当时未提交的工作区改动。
 > 复核时工作区仍在被修改（14:55 仍有新的回收测试与相关实现写入），行号与文件内容可能继续漂移。
-> 本轮未运行全量测试；只做了静态门禁、构建、基准和定向测试。
+> 复核当时未运行全量测试；后续修复后的全量结果见第 7 节。
 
 ## 1. 结论
 
@@ -186,43 +186,51 @@ LSP、浏览器、MCP 仍随每次 run 新建并在 run 结束关闭（[packages
 
 R1、R2 由工作区此前的改动修复；本轮复核确认：重试/续跑保持 `needs_review`，`.yuantu` junction 被 `ensureRuntimeDirectory` 拒绝。R3、R4、R5 的剩余项在本轮处理：
 
-| 项目                     | 处理                                                                                                                                                                                                           |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R3 隔离会话根目录        | `task.confirm` / `task.verify` / `changes.undo` / `run.start` 对账 / `context.compact` spill 统一使用 `executionRoot(ctx, sessionId)`，与 baseline 采集一致                                                    |
-| R4 发布门禁              | `docs:generate` 更新 README 事实块并补 `session.archive`；Prettier 覆盖全部改动文件；`docs:check`、`format:check` 通过                                                                                         |
-| R5 `task.propose` 可取消 | 注册为 manual operation，`Stop`/shutdown 可中止；模型请求同时受 120 秒请求超时约束                                                                                                                             |
-| R5 会话删除可取消        | `session.delete` 注册 operation，并在真正删除数据库前检查 abort；之前的资源关闭可被中断，不会留下半删除的会话                                                                                                  |
-| R5 快照回收              | 启动回收之外，删除会话/归档/移除工作区后若本 Host 没有运行或手工操作，会以 host 独占锁再释放一次；freeze/allocate 通过 `snapshotRelease` 与回收串行。`workspace-gc` 仍提供离线按需回收，`--dry-run` 可只看不删 |
-| R5 失败原因              | `forbidden-path/unchanged` 使用独立 `protected-path-changed`，不再误报“定义无效”；桌面有对应说明                                                                                                               |
-| R5 归档列表上限          | `session.list { archived: true, limit: 500 }`，页面注明“最近 500 个”                                                                                                                                           |
-| R5 小对象上限            | `InvariantRegistry.checked`（512）、`RunWatch.shown`（64）、`SnapshotMirror.waiting`（16 且清理过期 base）                                                                                                     |
-| P2-4 桌面验收入口        | composer 与计划面板的“验收（可选）”：逐行命令、可选监测路径；生成 command acceptance 并随 `send`/`planExecute` 提交；新增无 DOM 的转换测试                                                                     |
-| UX 交付物                | 交付物面板的路径改为按钮，直接在工作区预览中打开该文件（仍由工作区读取边界校验）                                                                                                                               |
+| 项目                     | 处理                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R3 隔离会话根目录        | `task.confirm` / `task.verify` / `changes.undo` / `run.start` 对账 / `context.compact` spill 统一使用 `executionRoot(ctx, sessionId)`，与 baseline 采集一致                                                                                                                                                                                                                                                                                         |
+| R4 发布门禁              | `docs:generate` 更新 README 事实块并补 `session.archive`；Prettier 覆盖全部改动文件；`docs:check`、`format:check` 通过                                                                                                                                                                                                                                                                                                                              |
+| R5 `task.propose` 可取消 | 注册为 manual operation，`Stop`/shutdown 可中止；模型请求同时受 120 秒请求超时约束                                                                                                                                                                                                                                                                                                                                                                  |
+| R5 会话删除可取消        | `session.delete` 注册 operation，并在真正删除数据库前检查 abort；之前的资源关闭可被中断，不会留下半删除的会话                                                                                                                                                                                                                                                                                                                                       |
+| R5 快照回收              | 启动回收之外，删除会话/归档/移除工作区后若本 Host 没有运行或手工操作，会以 host 独占锁再释放一次；发现 `.yuantu/hosts/` 还有其他活动 Host 时跳过，避免模型替换期间跨进程竞争。freeze/allocate 通过 `snapshotRelease` 与回收串行。`workspace-gc` 非 `--dry-run` 在 `.yuantu/hosts/maintenance.lock` 门内检查活动 Host、执行 `git gc --auto`；Host 启动也走同一道门，避免“检查通过后 Host 才开始”的竞态；owner ref 释放失败时把快照行写回，下一轮重试 |
+| R5 并发额度              | `task.propose` / `context.compact` 占用 `ctx.modelSlots`，与运行共用 `maxActiveRuns`；`runSlotFree` / `admissionRefusal` 计入，结束后释放                                                                                                                                                                                                                                                                                                           |
+| R5 失败原因              | `forbidden-path/unchanged` 使用独立 `protected-path-changed`，不再误报“定义无效”；桌面有对应说明                                                                                                                                                                                                                                                                                                                                                    |
+| R5 归档列表上限          | `session.list { archived: true, limit: 500 }`，页面注明“最近 500 个”                                                                                                                                                                                                                                                                                                                                                                                |
+| R5 小对象上限            | `InvariantRegistry.checked`（512）、`RunWatch.shown`（64）、`SnapshotMirror.waiting`（16 且清理过期 base）                                                                                                                                                                                                                                                                                                                                          |
+| P2-4 桌面验收入口        | 已移除 composer 与计划面板的手动验收表单；普通桌面请求和批准计划改由 Agent 选择检查，复用后台验证及有界修复，结果区展示真实检查证据；详见 [自动验证](automatic-verification.md)                                                                                                                                                                                                                                                                     |
+| UX 交付物/本地链接       | 交付物路径可预览、用默认应用打开、显示所在文件夹；Markdown 的工作区相对路径渲染为按钮，主进程 `realpath` + containment 校验后才调用 shell                                                                                                                                                                                                                                                                                                           |
+| UX Windows 沙箱租约      | 设置 → 通用移除沙箱遗留锁维护面板及专用 IPC；底层权限恢复、恢复日志和 `sandbox-recover` 维护命令保留，live/unreadable 仍拒绝恢复；本次未增加自动恢复逻辑                                                                                                                                                                                                                                                                                            |
 
 **验证（本轮实际执行）**：
 
-| 检查                   | 结果                                                                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `typecheck`            | 通过                                                                                                                                              |
-| `cycles:check`         | 通过                                                                                                                                              |
-| `layers:check`         | 通过                                                                                                                                              |
-| `references:check`     | 通过                                                                                                                                              |
-| `i18n:check`           | 通过                                                                                                                                              |
-| `test:isolation:check` | 通过                                                                                                                                              |
-| `docs:check`           | 通过                                                                                                                                              |
-| `format:check`         | 通过                                                                                                                                              |
-| `npm run build`        | 通过（Host bundle 5.94 MB，桌面构建完成）                                                                                                         |
-| `bench:check`          | 13/13 规则通过                                                                                                                                    |
-| `smoke:desktop`        | 7/7 通过；先执行了 `sandbox-recover` 清理测试机遗留的 Windows 租约                                                                                |
-| 定向测试               | 95 通过 + 1 环境跳过（acceptance、completion、completion-baselines、tasks、task-workflow 含 proposal 取消、host-workflows 含删除取消）            |
-| 定向测试               | 115 通过 + 14 环境跳过（desktop、lsp、mcp、run-notifications、desktop-i18n 等；缺少 LSP 可执行文件/MCP 管理范围关闭）                             |
-| 新增回归测试           | 28/28 通过（resource-pool、runtime-directory、environment-blocked、boundary-search、session-archive 含 500 条上限、workspace-reclaim 含空闲回收） |
-| 全量测试               | 未运行（按要求）                                                                                                                                  |
+| 检查                   | 结果                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `typecheck`            | 通过                                                                                                                                                                                                               |
+| `cycles:check`         | 通过                                                                                                                                                                                                               |
+| `layers:check`         | 通过                                                                                                                                                                                                               |
+| `references:check`     | 通过                                                                                                                                                                                                               |
+| `i18n:check`           | 通过                                                                                                                                                                                                               |
+| `test:isolation:check` | 通过                                                                                                                                                                                                               |
+| `docs:check`           | 通过                                                                                                                                                                                                               |
+| `format:check`         | 通过                                                                                                                                                                                                               |
+| `npm run build`        | 通过（Host bundle 5.96 MB，桌面构建完成；`dist/packages/tools/automation.ps1` 已存在）                                                                                                                             |
+| `bench:check`          | 13/13 规则通过（隔离运行；并发跑测试时曾因机器负载失败，非规则回归）                                                                                                                                               |
+| `smoke:desktop`        | 7/7 通过；含模型替换、Host 恢复、权限只读与审批流程                                                                                                                                                                |
+| 定向测试               | 95 通过 + 1 环境跳过（acceptance、completion、completion-baselines、tasks、task-workflow 含 proposal 取消、host-workflows 含删除取消）                                                                             |
+| 定向测试               | 115 通过 + 14 环境跳过（desktop、lsp、mcp、run-notifications、desktop-i18n 等；缺少 LSP 可执行文件/MCP 管理范围关闭）                                                                                              |
+| 新增/补充回归          | host-lock 4（含 maintenance gate）、workspace-file-path 2、markdown-links 3、workspace-reclaim 8（含 Host 拒绝、跨 Host 跳过、空闲回收）、session-archive 5（含 500 上限）、host-resource-locks 5（含 model slot） |
+| 全量测试               | 通过：parallel 2846（2822 通过、24 跳过），serial 60（56 通过、4 跳过），0 失败；`FOUNDRY_TEST_CONTINUE_ON_FAILURE=1 node scripts/run-tests.mjs`                                                                   |
 
 **仍保留的设计选择**：
 
-- `task.propose` / `context.compact` 不占用 `maxActiveRuns` 槽位，但前者现在可被 Stop 取消；这是“模型请求”和“run”分开的既有语义。
+- `task.propose` / `context.compact` 现在占用与运行相同的 `maxActiveRuns` 容量；锁冲突仍是立即拒绝，是否提供排队等待留作后续设计选择。
 - task 默认指纹仍是整个工作区、两次指纹（P2-5），大仓库可用任务的 acceptance `inputs` 缩小监测范围；没有把默认改成 Git 跟踪文件，避免改变已有任务语义。
-- 自动快照回收在启动时执行，并在空闲的删除/归档/移除后补一次；运行中的按需回收使用 `workspace-gc`。回收通过 `snapshotRelease` 让新的 freeze/allocate 等待，不再需要跨请求的批量租约。
+- 自动快照回收在启动时执行，并在空闲的删除/归档/移除后补一次；运行中的按需回收使用 `workspace-gc`，它先检查 `.yuantu/hosts/` 的 Host 标记、再执行 `git gc --auto`。回收通过 `snapshotRelease` 让新的 freeze/allocate 等待；owner ref 释放失败会把快照行写回以便下一轮重试。
 - 桌面默认不读审计记录（P3-5），smoke 通过 `FOUNDRY_TEST_DESKTOP_AUDIT=1` 显式打开，避免测试依赖生产不加载的数据。
 - UX 文档中的审批措辞、差异文件名转义、模型范围控制/token 用量属于产品与模型行为，未在本轮改动；Office 资源路径与 Windows 沙箱租约恢复已由工作区改动覆盖。
+
+## 8. 后续修复（2026-10-20）
+
+- **task / 自动验证的默认指纹范围**：`packages/core/completion-inputs.ts` 的隐式 `.` 范围在 Git 工作区内改为 Git 自己的视图——已跟踪文件加未忽略的未跟踪文件，`.gitignore` 排除的依赖树和构建产物不再读取；非 Git 目录回退到原文件系统遍历。派生目录排除、运行时数据库排除和显式 `inputs` 的语义不变。回归见 `tests/completion-inputs.test.ts` 的 Git 范围用例。
+- **子代理导出可观测性**：新增实时事件 `subagent.workspace.progress`，在首次导出扫描时按 500 个路径节流上报 `processed/total`，桌面子代理卡片显示导出进度；`benchmarks/worktree-export.ts`（`npm run bench:export -- [files] [fileKiB] [rounds]`）覆盖 10k/50k 文件连续 3 回合的首次与后续导出成本。
+- **保留策略边界**：新增 [工作区保留与清理边界](workspace-retention.md)，明确默认不自动删除、哪些动作会自动释放、`workspace-gc --dry-run` 该看哪几个字段，以及磁盘压力/升级/迁移前才判断清理的节奏。§4.3 的前两条（运行期释放、`git gc --auto`）已在第 7 节记录为完成；第三条以这份文档收口。

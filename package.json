@@ -54,6 +54,7 @@
     "tools:usage": "node scripts/deferred-tool-usage.mjs",
     "bench": "node benchmarks/run.mjs",
     "bench:check": "node benchmarks/run.mjs --check",
+    "bench:export": "node benchmarks/worktree-export.ts",
     "coverage": "node scripts/test-coverage.mjs",
     "docs:generate": "node scripts/docs-facts.mjs --write",
     "docs:check": "node scripts/docs-facts.mjs --check",

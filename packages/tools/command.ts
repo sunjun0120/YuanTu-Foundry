@@ -213,6 +213,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
             const shownStderr = stderr.slice(0, MAX_TOOL_OUTPUT);
             resolve({
               isError: timedOut || code !== 0,
+              commandExecuted: true,
               /**
                * `truncated` is the tool's own declaration that what it hands over is not the whole output.
                *

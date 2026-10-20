@@ -21,13 +21,19 @@ function strip(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(strip);
   if (!node || typeof node !== 'object') return node;
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
+  for (const [key, value] of Object.entries(node).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  )) {
     if (key === 'minLength' && value === 1) continue;
     if (key === 'maxLength' && typeof value === 'number' && value >= 200) continue;
     // `properties` maps names to schemas, so its keys are parameter names, never keywords to drop.
     out[key] =
       key === 'properties' && value && typeof value === 'object'
-        ? Object.fromEntries(Object.entries(value).map(([name, child]) => [name, strip(child)]))
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+              .map(([name, child]) => [name, strip(child)]),
+          )
         : strip(value);
   }
   return out;

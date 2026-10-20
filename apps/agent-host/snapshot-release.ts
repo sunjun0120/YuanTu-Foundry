@@ -11,10 +11,14 @@
  * `workspace-gc`) retries the pass. The returned count exists for tests and diagnostics.
  */
 import { WorkspaceManager } from '../../packages/workspaces/manager.ts';
+import { hostLockHolders } from '../../packages/platform/host-lock.ts';
 import { hostClaim, withLocks, type HostContext } from './state.ts';
 
 export async function releaseSnapshotsIfIdle(ctx: HostContext): Promise<number> {
   if (ctx.active.size || ctx.manualOperations.size) return 0;
+  // A model replacement deliberately overlaps two Hosts. The other process's freeze is not visible in `ctx.active`,
+  // so leave the release to a later idle moment rather than racing it across processes.
+  if (hostLockHolders(ctx.workspace).some((holder) => holder.pid !== process.pid)) return 0;
   if (!ctx.store.workspaceSnapshotIds().length) return 0;
   try {
     /**

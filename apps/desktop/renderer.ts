@@ -10,6 +10,7 @@ import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/con
 import type { Message } from '../../packages/protocol/index.ts';
 import { setupModelSettings } from './renderer-settings.ts';
 import { diffView } from './diff-view.ts';
+import { approvalSummary } from './approval-view.ts';
 import { setupAttachments } from './renderer-attachments.ts';
 import { setupBackgroundView } from './renderer-background.ts';
 import { setupCommandPalette } from './renderer-commands.ts';
@@ -101,6 +102,10 @@ const markdownActions = {
   },
   async open(url: string) {
     if (!(await invoke({ type: 'openLink', url }))) throw new Error('Open failed');
+  },
+  async openLocal(path: string) {
+    const reply = await window.yuantu.openWorkspacePath?.(path, 'open');
+    if (!reply?.ok) throw new Error(reply?.error ?? t('ui.openLinkFailed'));
   },
 };
 const messagesView = setupMessages({ markdownActions, mountMessageSlot });
@@ -416,13 +421,24 @@ function render(): void {
     carrierErrorText(state, locale()) ||
     session.error;
   /**
-   * A run the user stopped is not an error, and the kernel's marker for it is not shown as one.
+   * Two run outcomes are statuses rather than failures, and the kernel's marker for each is not shown as one.
    *
    * `agent.ts` sets `error = 'Run cancelled'` when the signal aborted, which the banner drew as a failure in
    * English across the top of a Chinese interface. What happened is that somebody pressed 停止: the conversation
    * says so at its end (`renderPaused`), and a red band is the wrong shape for a thing the user did on purpose.
+   *
+   * The second is `missing-verification`: a run that changed files but registered no checks ends
+   * `needs_review` and the completion line under the transcript already says so in the user's language. The
+   * error string is still carried in the run result for CLI and JSON consumers; it is not a failure banner.
+   * Only the run's own error is suppressed — a local or carrier error stays visible even beside a review.
    */
-  const error = stopError === RUN_CANCELLED ? '' : stopError;
+  const missingVerification =
+    session.completion?.summary.reason === 'missing-verification' &&
+    session.completion.summary.state === 'unverified';
+  const error =
+    stopError === RUN_CANCELLED || (missingVerification && stopError === session.error)
+      ? ''
+      : stopError;
   element('error').hidden = !error;
   element('error').textContent = error || '';
   // A recovery is reported, not hidden: the window came back by itself, and the reason the reply the user was
@@ -520,17 +536,22 @@ function render(): void {
     element('approvals').replaceChildren(
       ...session.approvals.map((item) => {
         const panel = node('section', '', 'approval');
+        const summary = approvalSummary(item.approval);
         panel.append(
-          node('div', '需要你的确认', 'approval-label'),
-          node(
-            'h2',
-            item.approval.kind === 'external'
-              ? '访问外部服务'
-              : item.approval.kind === 'command'
-                ? '执行命令'
-                : '修改文件',
-          ),
+          node('div', t('ui.approvalRequired'), 'approval-label'),
+          node('h2', summary.title),
+          node('p', summary.why, 'approval-why'),
         );
+        if (summary.subject) panel.append(node('pre', summary.subject, 'approval-subject'));
+        if (summary.directory)
+          panel.append(
+            node(
+              'p',
+              format(t('approval.directory'), { directory: summary.directory }),
+              'approval-meta',
+            ),
+          );
+        if (summary.boundary) panel.append(node('p', summary.boundary, 'approval-meta'));
         if (item.approval.subagent)
           panel.append(
             node(
@@ -543,9 +564,9 @@ function render(): void {
           );
         if (item.approval.change) panel.append(diffView(item.approval.change, true));
         const raw = node('details', '', 'approval-raw');
-        raw.open = !item.approval.change;
+        raw.open = !item.approval.change && !summary.subject;
         raw.append(
-          node('summary', '完整操作参数'),
+          node('summary', t('approval.raw')),
           node('p', item.approval.description),
           node('pre', JSON.stringify(item.approval.toolCall.arguments, null, 2)),
         );
@@ -554,7 +575,7 @@ function render(): void {
         for (const allow of [false, true]) {
           const button = node(
             'button',
-            allow ? '允许一次' : '拒绝',
+            t(allow ? 'approval.allow' : 'approval.deny'),
             allow ? 'primary' : 'secondary',
           );
           button.disabled = approvalBusy.has(item.id);
@@ -613,9 +634,30 @@ function updateJumpButton(): void {
 function childPageOpen(): boolean {
   return document.body.dataset.subagentPage === 'open';
 }
+function openWorkspaceFile(path: string, action: 'open' | 'reveal'): void {
+  const request = window.yuantu.openWorkspacePath?.(path, action);
+  if (!request) return;
+  void request
+    .then((reply) => {
+      if (!reply.ok) {
+        localError = reply.error;
+        render();
+      }
+    })
+    .catch((error: unknown) => {
+      localError = error instanceof Error ? error.message : String(error);
+      render();
+    });
+}
 const sessionPanels = setupSessionPanels(
   () => state,
   (path) => void workspaceView.open(path),
+  window.yuantu.openWorkspacePath
+    ? {
+        open: (path) => openWorkspaceFile(path, 'open'),
+        reveal: (path) => openWorkspaceFile(path, 'reveal'),
+      }
+    : undefined,
 );
 
 const questionsView = setupQuestions({

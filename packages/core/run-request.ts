@@ -62,6 +62,14 @@ export interface RunRequestOptions {
   beforeRequest(system: string): void;
   onVisibleText(delta: string): void;
   onAnswerText(text: string): void;
+  /**
+   * Mark a plain answer as one the caller expects to replace with another answer from the same turn.
+   *
+   * Only the successful no-tool-call path takes the mark: a tool-call turn is not an answer, and a partial or
+   * interrupted turn is shown as what it is. A callback can resolve pending command observations after a final
+   * provider response and before persistence, so unchanged diagnostic work never leaves a provisional answer.
+   */
+  provisionalAnswer?: boolean | (() => Promise<boolean>);
   commitStepTiming(response: ModelResponse): void;
   statistics: SessionStatistics;
   usage: Usage;
@@ -112,6 +120,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     beforeRequest,
     onVisibleText,
     onAnswerText,
+    provisionalAnswer = false,
     commitStepTiming,
     statistics,
     usage,
@@ -638,12 +647,23 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
   if (response.finishReason === 'stop' && response.toolCalls.length > 0)
     throw new Error('Provider stop reason conflicts with tool calls');
   onAnswerText((text = response.text));
+  let provisional = false;
+  if (response.toolCalls.length === 0) {
+    try {
+      provisional =
+        typeof provisionalAnswer === 'function' ? await provisionalAnswer() : provisionalAnswer;
+    } catch (error) {
+      // A completed provider response survives cancellation during the final workspace observation.
+      if (!signal.aborted) throw error;
+    }
+  }
   store.appendStreamMessage(sessionId, runId, messageId, {
     role: 'assistant',
     content: text,
     toolCalls: response.toolCalls,
     ...(response.providerState ? { providerState: response.providerState } : {}),
     ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
+    ...(provisional ? { provisional: true } : {}),
   });
   emit('message.finished', {
     messageId,
@@ -654,6 +674,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       content: text,
       toolCalls: response.toolCalls,
       ...(streamedReasoning ? { reasoning: streamedReasoning } : {}),
+      ...(provisional ? { provisional: true } : {}),
     },
     usage: response.usage,
   });

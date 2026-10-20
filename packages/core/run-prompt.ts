@@ -19,6 +19,7 @@ export interface RunPromptOptions {
   previousAttempt: TaskAttempt | undefined;
   instructions: string;
   planNotice(): string;
+  verificationNotice?(): string | undefined;
 }
 
 /** Read live capability and planning state when the prompt is assembled. */
@@ -87,6 +88,12 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
               steps: options.approvedPlan.steps.map((step) => step.description),
             })
           : undefined,
+    }),
+    definePromptSection({
+      name: 'automatic-verification',
+      stage: 'capability',
+      order: 45,
+      content: () => options.verificationNotice?.(),
     }),
     definePromptSection({
       name: 'project-guidance',

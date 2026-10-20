@@ -40,6 +40,7 @@ import {
   foldSubAgentFinished,
   foldSubAgentProgress,
   foldSubAgentTool,
+  foldSubAgentWorkspaceProgress,
   startedSubAgent,
   subAgentWorkspace,
   toolResultMessage,
@@ -1306,6 +1307,18 @@ export class SessionController {
         });
         return;
       }
+      case 'subagent.workspace.progress': {
+        const view = this.editSubAgent(
+          (entry) =>
+            entry.id === String(event.data.id) ||
+            entry.childSessionId === String(event.data.childSessionId),
+        );
+        if (!view) break;
+        foldSubAgentWorkspaceProgress(view, event.data);
+        if (view.workspaceProgress)
+          this.emitSubAgentDelta({ id: view.id, workspaceProgress: view.workspaceProgress });
+        return;
+      }
       case 'subagent.workspace': {
         /**
          * Where this child worked, and what it produced.
@@ -1324,6 +1337,7 @@ export class SessionController {
         );
         if (!view) break;
         view.workspace = subAgentWorkspace(event.data);
+        delete view.workspaceProgress;
         break;
       }
       case 'subagent.finished': {

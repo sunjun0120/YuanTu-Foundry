@@ -33,6 +33,8 @@ export const SESSION_EVENT_TYPES = [
   'run.finished',
   'session.title.generated',
   'context.compacted',
+  // Durable model-only tool result views; the original message events remain unchanged.
+  'context.tool-results.projected',
   /**
    * A delegation: this session created a child and what that child is.
    *

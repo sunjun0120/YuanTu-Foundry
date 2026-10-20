@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import type { AgentEvent, Message } from '../packages/protocol/index.ts';
+import type { AgentEvent, CompletionSpec, Message } from '../packages/protocol/index.ts';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { isSummaryBody } from './summary-request.ts';
 import { projectRoot } from './process-fixture.ts';
@@ -18,6 +18,24 @@ import { startRun } from '../apps/agent-host/run-start.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import { tempRoot } from './temp-fixture.ts';
+
+// These fixtures test transport/recovery, so use deterministic file checks without extra model rounds.
+function fileCompletion(file: string, expected: string): CompletionSpec {
+  return {
+    version: 1,
+    objective: 'Prepare the workflow fixture',
+    constraints: [],
+    steps: [],
+    inputs: [file],
+    acceptance: [
+      {
+        description: 'Fixture file has the expected content',
+        met: false,
+        check: { id: 'fixture-file', kind: 'file-contains', path: file, expected },
+      },
+    ],
+  };
+}
 
 // ---- merged from host-workflows.test.ts ----
 
@@ -247,6 +265,7 @@ test('Host workflow preserves summary constraints in repaired files and full his
   const result = await client.run(
     session.id,
     'Apply the theme constraint from our prior discussion.',
+    { completion: fileCompletion('theme.txt', 'blue\n') },
   );
   await Promise.all(approvals);
   assert.equal(result.status, 'completed', result.error);
@@ -682,7 +701,9 @@ test('Host model retry after a successful edit does not repeat the edit or its a
   });
   await client.start();
   const session = await client.request('session.create', {});
-  const result = await client.run(session.id, 'Change red to blue.');
+  const result = await client.run(session.id, 'Change red to blue.', {
+    completion: fileCompletion('theme.txt', 'blue\n'),
+  });
   await Promise.all(approvals);
   assert.equal(result.status, 'completed', result.error);
   // Four: the read round, the edit round, the round the 503 refuses and the retry that answers it. One
@@ -819,7 +840,9 @@ test('Host keeps background jobs across turns and stops them on session cancella
   });
   await client.start();
   const session = await client.request('session.create', {});
-  const first = await client.run(session.id, 'Start a managed command');
+  const first = await client.run(session.id, 'Start a managed command', {
+    completion: fileCompletion('managed.cjs', 'setInterval'),
+  });
   assert.equal(first.status, 'completed', first.error);
   let history = (await client.request('session.get', { sessionId: session.id })).messages;
   const tool = history.find(
@@ -1005,7 +1028,14 @@ test('Host deletes a session with managed commands after its background cleanup 
   });
   await client.start();
   const session = await client.request('session.create', {});
-  assert.equal((await client.run(session.id, 'start')).status, 'completed');
+  assert.equal(
+    (
+      await client.run(session.id, 'start', {
+        completion: fileCompletion('managed.cjs', 'setInterval'),
+      })
+    ).status,
+    'completed',
+  );
   const deleting = client.request('session.delete', { sessionId: session.id });
   assert.equal((await deleting).deleted, true);
   await assert.rejects(

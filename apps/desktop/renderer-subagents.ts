@@ -85,7 +85,10 @@ export function setupSubAgents(
     { row: HTMLElement; tokens: HTMLElement; duration: HTMLElement }
   >();
   /** The same two cells on each detail card, which tick with the catalog so the two never disagree. */
-  const cardCells = new Map<string, { tokens: HTMLElement; duration: HTMLElement }>();
+  const cardCells = new Map<
+    string,
+    { tokens: HTMLElement; duration: HTMLElement; progress: HTMLElement }
+  >();
   let ticker: ReturnType<typeof setInterval> | undefined;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
   /**
@@ -633,6 +636,18 @@ export function setupSubAgents(
         paint(delta.id);
         if (page?.id === delta.id) paintLive();
       }
+      if (delta.workspaceProgress) {
+        const view = views.find((entry) => entry.id === delta.id);
+        if (view) view.workspaceProgress = delta.workspaceProgress;
+        const cell = cardCells.get(delta.id)?.progress;
+        if (cell && delta.workspaceProgress) {
+          cell.hidden = false;
+          cell.textContent = format(t('subagent.workspace.exporting'), {
+            processed: delta.workspaceProgress.processed,
+            total: delta.workspaceProgress.total,
+          });
+        }
+      }
       if (delta.durationMs === undefined && delta.runningSince === undefined && !delta.usage)
         return;
       const view = views.find((entry) => entry.id === delta.id);
@@ -681,6 +696,9 @@ export function setupSubAgents(
             view.rounds,
             view.toolCalls,
             view.error ?? '',
+            view.workspaceProgress
+              ? `${String(view.workspaceProgress.processed)}/${String(view.workspaceProgress.total)}`
+              : '',
             view.report ?? null,
             // The full text only enters the key when it is the stored report rather than a live stream:
             // keying on streamed text would rebuild the card on every token.
@@ -787,7 +805,19 @@ export function setupSubAgents(
               const meta = element('div', '', 'subagent-meta');
               const tokens = element('span', '', 'subagent-meta-tokens');
               const duration = element('span', '', 'subagent-meta-duration');
-              cardCells.set(view.id, { tokens, duration });
+              /**
+               * The export line is its own element rather than part of the workspace label: the label is written
+               * once, when the directory is known, while this number moves for as long as the first export reads
+               * the tree. `delta` updates it in place, so progress never republishes the session.
+               */
+              const progress = element('div', '', 'subagent-export-progress');
+              progress.hidden = !view.workspaceProgress;
+              if (view.workspaceProgress)
+                progress.textContent = format(t('subagent.workspace.exporting'), {
+                  processed: view.workspaceProgress.processed,
+                  total: view.workspaceProgress.total,
+                });
+              cardCells.set(view.id, { tokens, duration, progress });
               meta.append(
                 element(
                   'span',
@@ -797,7 +827,7 @@ export function setupSubAgents(
                 tokens,
                 duration,
               );
-              card.append(meta);
+              card.append(meta, progress);
               if (view.childSessionId) {
                 const open = element('button', t('subagent.viewTranscript'), 'subagent-view');
                 open.disabled = busy;

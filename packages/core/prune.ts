@@ -106,6 +106,7 @@ export function pruneMessages(
   messages: readonly Message[],
   policy: PrunePolicy,
   keepRecent: number,
+  preserved?: ReadonlySet<Message>,
 ): PruneOutcome {
   const protectedFrom = protectedBoundary(messages, keepRecent);
   const outcome = messages.map((message) => message);
@@ -113,7 +114,7 @@ export function pruneMessages(
   let prunedChars = 0;
   for (let index = 0; index < protectedFrom; index++) {
     const message = messages[index]!;
-    if (message.role !== 'tool') continue;
+    if (message.role !== 'tool' || preserved?.has(message)) continue;
     const content = pruneContent(message.content, policy);
     if (content === null) continue;
     outcome[index] = { ...message, content };

@@ -19,6 +19,8 @@ const bridge: DesktopBridge = {
     : {}),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
   files: (command) => ipcRenderer.invoke('yuantu:files', command),
+  openWorkspacePath: (path, action) =>
+    ipcRenderer.invoke('yuantu:open-workspace-path', { path, action }),
   ...(PRODUCT_SCOPE.mcpManagement
     ? { mcp: (command) => ipcRenderer.invoke('yuantu:mcp', command) }
     : {}),

@@ -1,4 +1,6 @@
-import type { ModelProgress, ModelResponse, Provider } from '../protocol/index.ts';
+import type { ModelProgress, ModelResponse, Provider, Usage } from '../protocol/index.ts';
+import type { PreparedRequestFingerprint, RequestFingerprint } from '../protocol/request-cache.ts';
+import { compareRequestFingerprint, readRequestFingerprint } from './request-cache.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { addUsage, emptyRequestTiming } from '../protocol/statistics.ts';
@@ -41,6 +43,19 @@ export function createProviderMeasurement(
 ): (purpose: 'answer' | 'summary') => Provider {
   const { provider, store, sessionId, runId, statistics, emit } = options;
   let firstAnswer = true;
+  const baselines = (): Map<string, RequestFingerprint> => {
+    const previous = new Map<string, RequestFingerprint>();
+    const latest = store.newestPayload(sessionId, 'provider.request.finished');
+    const saved = latest?.cacheBaselines as Record<string, unknown> | undefined;
+    for (const purpose of ['answer', 'summary']) {
+      const restored = readRequestFingerprint(saved?.[purpose]);
+      if (restored) previous.set(purpose, restored);
+    }
+    const restored = readRequestFingerprint(latest?.fingerprint);
+    if (restored && (latest?.purpose === 'answer' || latest?.purpose === 'summary'))
+      previous.set(latest.purpose, restored);
+    return previous;
+  };
   return (purpose) => ({
     complete: async (request) => {
       const startedAt = Date.now();
@@ -59,6 +74,8 @@ export function createProviderMeasurement(
       const requestId = ++timing.requests;
       if (purpose === 'summary') timing.summaryRequests++;
       let finishReason: ModelResponse['finishReason'] | undefined;
+      let requestUsage: Usage | undefined;
+      let fingerprint: PreparedRequestFingerprint | undefined;
       let failed = false;
       let lastPhase = '';
       let lastProgressAt = 0;
@@ -81,6 +98,10 @@ export function createProviderMeasurement(
       try {
         const response = await provider.complete({
           ...request,
+          onRequestFingerprint: (prepared) => {
+            fingerprint = prepared;
+            request.onRequestFingerprint?.(prepared);
+          },
           onText: (delta) => {
             if (delta) {
               responseArrived();
@@ -118,6 +139,7 @@ export function createProviderMeasurement(
           },
         });
         finishReason = response.finishReason;
+        requestUsage = response.usage;
         if (finishReason === 'length') timing.lengthCount++;
         addUsage(statistics, response.usage);
         return response;
@@ -131,6 +153,20 @@ export function createProviderMeasurement(
         timing.providerMs += durationMs;
         if (purpose === 'summary') timing.summaryMs += durationMs;
         if (failed) timing.failedMs += durationMs;
+        // Answer and separate-summary wrappers share this durable, bounded owner. Reading it here avoids
+        // overwriting a newer baseline from another wrapper with a snapshot taken at run start.
+        const previous = baselines();
+        const cache = fingerprint
+          ? compareRequestFingerprint(fingerprint, previous.get(purpose))
+          : undefined;
+        if (cache) previous.set(purpose, cache.fingerprint);
+        const knownCache = requestUsage?.cachedInputTokens;
+        const validCache =
+          requestUsage !== undefined &&
+          knownCache !== undefined &&
+          Number.isSafeInteger(knownCache) &&
+          knownCache >= 0 &&
+          knownCache <= requestUsage.inputTokens;
         const measurement = {
           requestId,
           purpose,
@@ -142,6 +178,17 @@ export function createProviderMeasurement(
           ...(preparationMs === undefined ? {} : { preparationMs }),
           failed,
           ...(finishReason ? { finishReason } : {}),
+          ...(requestUsage ? { usage: { ...requestUsage } } : {}),
+          ...(validCache
+            ? {
+                cacheMissInputTokens: requestUsage!.inputTokens - knownCache!,
+                ...(requestUsage!.inputTokens > 0
+                  ? { cacheHitRatio: knownCache! / requestUsage!.inputTokens }
+                  : {}),
+              }
+            : {}),
+          ...cache,
+          ...(previous.size ? { cacheBaselines: Object.fromEntries(previous) } : {}),
         };
         store.recordEvent(sessionId, 'provider.request.finished', {
           runId,

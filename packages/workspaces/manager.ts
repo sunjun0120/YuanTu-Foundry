@@ -882,6 +882,16 @@ export class WorkspaceManager {
       try {
         if (await releaseSnapshotOwner(repository.root, snapshotId, owner, signal)) deleted++;
       } catch (error) {
+        /**
+         * The row was already dropped, so a failed ref release would otherwise leave an owner ref no later pass
+         * can find: the next release walks rows. Put the row back so the next pass retries both halves; if even
+         * that write fails, the external `workspace-gc` inventory still reports the orphan for a person.
+         */
+        try {
+          this.store.recordWorkspaceSnapshot(snapshot);
+        } catch {
+          // The diagnostic below is the only remaining report; the metadata is never deleted by a failed release.
+        }
         this.diagnostic(
           `snapshot ${snapshotId} release deferred: ${error instanceof Error ? error.message : String(error)}`,
         );

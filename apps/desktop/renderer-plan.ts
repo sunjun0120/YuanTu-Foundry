@@ -9,10 +9,9 @@
  * an unchanged panel. What the key holds is fixed by what it held before this module was extracted — the
  * window's own in-flight command — while what disables the buttons is the wider "the window is busy" question.
  */
-import type { CarrierCommand, PlanVerification } from '../../packages/carrier/contract.ts';
+import type { CarrierCommand } from '../../packages/carrier/contract.ts';
 import type { Plan } from '../../packages/protocol/index.ts';
 import { locale, t } from './i18n.ts';
-import { createVerificationEditor, type VerificationDraft } from './renderer-verification.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -39,20 +38,10 @@ export function setupPlanPanel(actions: {
   setError(message: string | null): void;
 }): { render(plan: Plan | null): void } {
   let planKey = '';
-  const verification = createVerificationEditor({
-    host: required('plan-verification'),
-    includeObjective: false,
-    defaultObjective: () => '',
-  });
   function render(plan: Plan | null): void {
     const panel = required('plan-panel');
     panel.hidden = !plan;
-    if (!plan) {
-      verification.setVisible(false);
-      return;
-    }
-    // A plan carries the approved steps; the only thing a person adds is the acceptance that decides its done.
-    verification.setVisible(plan.status === 'approved');
+    if (!plan) return;
     const key = JSON.stringify([
       plan.id,
       plan.status,
@@ -98,21 +87,10 @@ export function setupPlanPanel(actions: {
       const execute = node('button', t('plan.execute'), 'plan-execute');
       execute.disabled = busy;
       execute.addEventListener('click', () => {
-        let draft: VerificationDraft | undefined;
-        try {
-          draft = verification.value();
-        } catch (error) {
-          actions.setError(error instanceof Error ? error.message : String(error));
-          return;
-        }
-        const extra: PlanVerification | undefined = draft
-          ? { acceptance: draft.acceptance, inputs: draft.inputs }
-          : undefined;
         actions.setError(null);
         void actions.select({
           type: 'planExecute',
           planId: plan.id,
-          ...(extra ? { verification: extra } : {}),
         });
       });
       actionsElement.append(execute, node('span', t('plan.approvedHint'), 'plan-hint'));

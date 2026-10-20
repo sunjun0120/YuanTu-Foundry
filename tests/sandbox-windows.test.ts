@@ -199,7 +199,7 @@ test('another Host cannot lease a nested workspace concurrently', { skip: reason
     { timeout: 30000, env: { ...process.env, TEMP: alternateTemp, TMP: alternateTemp } },
   );
   assert.doesNotMatch(result.stdout, /UNSAFE_ALLOWED/);
-  assert.match(result.stdout, /another process|leased|recovery/i);
+  assert.match(result.stdout, /another.*process|leased|recovery/i);
 });
 
 test(

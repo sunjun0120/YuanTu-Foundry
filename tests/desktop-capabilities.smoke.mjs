@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
+import { waitFor } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 
 // ---- merged from capabilities.smoke.mjs ----
@@ -209,7 +210,19 @@ test(
     );
     assert.match(await page.locator('#messages').textContent(), /MCP_UI_OK/);
     const pid = Number(await readFile(path.join(root, 'mcp-pid.txt'), 'utf8'));
-    assert.throws(() => process.kill(pid, 0));
+    // MCP connections are session-scoped now (`packages/catalog/resource-pool.ts`): the stdio server stays
+    // alive for the next turn instead of dying with the run. Closing the window closes the Host that pooled it.
+    assert.doesNotThrow(() => process.kill(pid, 0));
+    await app.close();
+    app = undefined;
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 10_000);
   },
 );
 

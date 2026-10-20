@@ -139,6 +139,15 @@ export const AGENT_EVENT_TYPES = [
   'subagent.progress',
   'subagent.finished',
   /**
+   * How far an isolated child's result export has got.
+   *
+   * The first export of a child reads its whole working tree, and that read is the one part of a turn that has
+   * nothing to show until it is over. The total is known before the first file is read; live only, because the
+   * durable record is the result itself (`subagent.workspace`) or its failure. A client that ignores this event
+   * loses nothing but the progress line.
+   */
+  'subagent.workspace.progress',
+  /**
    * An isolated child's directory, and the result it produced.
    *
    * Its own frame rather than fields on `subagent.started` and `subagent.finished`, because the two facts it carries

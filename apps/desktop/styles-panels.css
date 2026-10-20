@@ -428,6 +428,25 @@
 .deliverables .deliverable-open:focus-visible {
   color: #244b35;
 }
+.deliverables .deliverable-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: 10px;
+}
+.deliverables .deliverable-action {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: #6f7568;
+  cursor: pointer;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.deliverables .deliverable-action:hover,
+.deliverables .deliverable-action:focus-visible {
+  color: #244b35;
+}
 .deliverables .deliverable-description {
   color: #6f7568;
 }

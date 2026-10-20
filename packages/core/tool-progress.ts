@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
 import { environmentBlockedCode } from '../tools/environment-blocked.ts';
+import { projectChangedPaths } from './work-evidence.ts';
 
 export interface ToolObservation {
   call: ToolCall;
@@ -9,7 +10,13 @@ export interface ToolObservation {
   kind?: 'program-output';
 }
 export type ToolProgress =
-  'continue' | 'warn' | 'repeat-failure' | 'environment-blocked' | 'conclude';
+  | 'continue'
+  | 'warn'
+  | 'repeat-failure'
+  | 'environment-blocked'
+  | 'conclude'
+  | 'investigation-warn'
+  | 'investigation-conclude';
 /**
  * How often one call may fail the same way before the run is told so, and before it is stopped.
  *
@@ -47,6 +54,16 @@ const digest = (value: unknown): string =>
 
 /** Per-run query evidence only. Effects, polling, and unknown tools invalidate the comparison. */
 export class ToolProgressGuard {
+  private investigationRounds = 0;
+  private investigationStarted: number;
+  private investigationWarned = false;
+  private options: { now?: () => number; investigate?: () => boolean; workspace?: string };
+  constructor(
+    options: { now?: () => number; investigate?: () => boolean; workspace?: string } = {},
+  ) {
+    this.options = options;
+    this.investigationStarted = (options.now ?? Date.now)();
+  }
   private seen = new Map<string, string>();
   private repeatedRounds = 0;
   /** Identical failures by call and output, across edits; cleared only when a person or policy intervenes. */
@@ -57,6 +74,9 @@ export class ToolProgressGuard {
     this.resetQueries();
     this.failures.clear();
     this.blocked.clear();
+    this.investigationRounds = 0;
+    this.investigationStarted = (this.options.now ?? Date.now)();
+    this.investigationWarned = false;
   }
   private resetQueries(): void {
     this.seen.clear();
@@ -68,9 +88,40 @@ export class ToolProgressGuard {
     const queries = this.observeQueries(observations);
     if (failing >= FAILURE_CONCLUDE || blocked >= BLOCKED_CONCLUDE || queries === 'conclude')
       return 'conclude';
+    const investigation = this.observeInvestigation(observations);
+    if (investigation) return investigation;
     if (blocked === BLOCKED_WARN) return 'environment-blocked';
     if (queries === 'warn') return 'warn';
     return failing === FAILURE_WARN ? 'repeat-failure' : 'continue';
+  }
+  private observeInvestigation(observations: readonly ToolObservation[]): ToolProgress | undefined {
+    if (
+      this.options.investigate?.() === false ||
+      observations.some(
+        ({ result }) =>
+          result.change && projectChangedPaths(result.change, this.options.workspace).length > 0,
+      )
+    ) {
+      this.investigationRounds = 0;
+      this.investigationStarted = (this.options.now ?? Date.now)();
+      this.investigationWarned = false;
+      return;
+    }
+    // Collecting an already-running job is not a new investigation round.
+    if (
+      !observations.length ||
+      observations.every(({ call }) =>
+        ['job_output', 'wait_job', 'collect_command'].includes(call.name),
+      )
+    )
+      return;
+    this.investigationRounds++;
+    const elapsed = (this.options.now ?? Date.now)() - this.investigationStarted;
+    if (this.investigationRounds >= 20 || elapsed >= 120_000) return 'investigation-conclude';
+    if (!this.investigationWarned && (this.investigationRounds >= 12 || elapsed >= 60_000)) {
+      this.investigationWarned = true;
+      return 'investigation-warn';
+    }
   }
   /** The highest count any identical failure in this round has reached. */
   private observeFailures(observations: readonly ToolObservation[]): number {
@@ -143,13 +194,17 @@ export class ToolProgressGuard {
 export function toolProgressNotice(action: Exclude<ToolProgress, 'continue'>): string {
   return (
     '<runtime-context source="tool-progress">\n' +
-    (action === 'warn'
-      ? 'Repeated queries with identical arguments returned unchanged results. Do not repeat those queries. Answer the question from the evidence already collected, or make one materially different, narrowly scoped check if a specific missing fact requires it.'
-      : action === 'repeat-failure'
-        ? 'The same call has now failed with identical output several times, including after changes in between. Repeating the same approach is not converging. Step back: re-read the failure, question the assumption behind the last changes, and try a materially different approach — or stop and report what blocks you.'
-        : action === 'environment-blocked'
-          ? 'The same environment blocker has now refused more than one call (the "Environment blocked" results above). No call that needs it can succeed until a person changes the environment, so do not call such tools again in this run. Finish only what does not need it, then tell the user what is blocked, the remedy the result names, and what remains unverified.'
-          : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
+    (action === 'investigation-warn'
+      ? 'This investigation has used its initial time or tool-round allowance. Stop widening the search. Answer from the evidence already collected, or make only the essential remaining check. State uncertainty instead of auditing unrelated subsystems. Diagnostic scratch scripts do not require project verification checks.'
+      : action === 'investigation-conclude'
+        ? 'The investigation reached its time or tool-round allowance. This next request is for a conclusion only; no tools are available. Answer the user now using the collected evidence, name any uncertainty, and do not claim an unfinished investigation is complete.'
+        : action === 'warn'
+          ? 'Repeated queries with identical arguments returned unchanged results. Do not repeat those queries. Answer the question from the evidence already collected, or make one materially different, narrowly scoped check if a specific missing fact requires it.'
+          : action === 'repeat-failure'
+            ? 'The same call has now failed with identical output several times, including after changes in between. Repeating the same approach is not converging. Step back: re-read the failure, question the assumption behind the last changes, and try a materially different approach — or stop and report what blocks you.'
+            : action === 'environment-blocked'
+              ? 'The same environment blocker has now refused more than one call (the "Environment blocked" results above). No call that needs it can succeed until a person changes the environment, so do not call such tools again in this run. Finish only what does not need it, then tell the user what is blocked, the remedy the result names, and what remains unverified.'
+              : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
     '\n</runtime-context>'
   );
 }

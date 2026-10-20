@@ -5,7 +5,7 @@ import path from 'node:path';
 import { open, lstat, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import type { Tool, ToolContext, ToolResult } from '../protocol/index.ts';
-import { bounded, MAX_TOOL_OUTPUT } from './registry.ts';
+import { bounded, failure, MAX_TOOL_OUTPUT } from './registry.ts';
 import { killTree } from './process.ts';
 import { toolEnvironment } from './environment.ts';
 
@@ -240,6 +240,19 @@ function validationContent(evidence: Record<string, unknown> & { output: string 
   if (!fitting) throw new Error('Validation metadata exceeds tool output limit');
   return fitting;
 }
+/** Evidence formatting can fail after a command ran; that failure must retain the execution fact. */
+function validationResult(
+  isError: boolean,
+  evidence: Record<string, unknown> & { output: string },
+  commandExecuted: boolean,
+): ToolResult {
+  const executed = commandExecuted ? { commandExecuted: true as const } : {};
+  try {
+    return { isError, content: validationContent(evidence), ...executed };
+  } catch (error) {
+    return { ...failure(error), ...executed };
+  }
+}
 function display(validation: Validation): string {
   return [validation.command, ...validation.args]
     .map((part) => (/[\s"]/u.test(part) ? JSON.stringify(part) : part))
@@ -276,9 +289,9 @@ async function execute(validation: Validation, ctx: ToolContext): Promise<ToolRe
       timedOut: boolean;
       output: string;
     };
-    return {
-      isError: result.isError,
-      content: validationContent({
+    return validationResult(
+      result.isError,
+      {
         command: bounded(display(validation), 4000),
         exitCode: executed.exitCode,
         signal: executed.signal,
@@ -286,8 +299,9 @@ async function execute(validation: Validation, ctx: ToolContext): Promise<ToolRe
         output: executed.output,
         outputTruncated: executed.output.endsWith('\n[output truncated]'),
         ...tapEvidence(executed.output),
-      }),
-    };
+      },
+      result.commandExecuted === true,
+    );
   }
   ctx.signal.throwIfAborted();
   return new Promise((resolve, reject) => {
@@ -351,18 +365,21 @@ async function execute(validation: Validation, ctx: ToolContext): Promise<ToolRe
       void (async () => {
         if (killing) await killing;
         if (ctx.signal.aborted) return reject(ctx.signal.reason);
-        resolve({
-          isError: timedOut || code !== 0,
-          content: validationContent({
-            command: bounded(display(validation), 4000),
-            exitCode: code,
-            signal,
-            timedOut,
-            output,
-            outputTruncated,
-            ...(validation.targeted ? tapEvidence(output) : {}),
-          }),
-        });
+        resolve(
+          validationResult(
+            timedOut || code !== 0,
+            {
+              command: bounded(display(validation), 4000),
+              exitCode: code,
+              signal,
+              timedOut,
+              output,
+              outputTruncated,
+              ...(validation.targeted ? tapEvidence(output) : {}),
+            },
+            true,
+          ),
+        );
       })().catch(reject);
     });
   });
