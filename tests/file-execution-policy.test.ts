@@ -85,7 +85,7 @@ test('the policy factory refuses values a backend would otherwise reinterpret', 
   // `host` and `windows` declare fixed capabilities and never read `files`, so without this check an unknown
   // value would travel into the policy the tools then run under. For the backends that do read it the
   // declaration check would reject it, but with a different message — the refusal has to be this one.
-  for (const mode of ['host', 'windows', 'seatbelt', 'native'] as const)
+  for (const mode of ['host', 'windows', 'windows-account', 'seatbelt', 'native'] as const)
     for (const files of ['bogus', 'read-write'] as unknown as FileEffect[])
       assert.throws(() => executionPolicy(mode, { files }), /invalid file policy/i);
   // The image arrives from configuration and is interpolated into what the sandbox runtime is asked to run,

@@ -118,10 +118,10 @@ async function withProvider(
   }
 }
 
-test('the four backends ship registered, each with something to say about itself', () => {
+test('the five backends ship registered, each with something to say about itself', () => {
   assert.deepEqual(
     sandboxProviders().map((provider) => provider.mode),
-    ['host', 'windows', 'seatbelt', 'native'],
+    ['host', 'windows', 'windows-account', 'seatbelt', 'native'],
   );
   for (const provider of sandboxProviders()) {
     assert.ok(provider.description.length > 20, `${provider.mode} needs a description`);

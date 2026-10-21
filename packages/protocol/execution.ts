@@ -1,5 +1,5 @@
 /** Permissions describe file-tool effects separately from operating-system process restrictions. */
-export type ExecutionMode = 'host' | 'native' | 'windows' | 'seatbelt';
+export type ExecutionMode = 'host' | 'native' | 'windows' | 'windows-account' | 'seatbelt';
 export type FileEffect = 'read-only' | 'workspace-write';
 export type ProcessFileEffect = FileEffect | 'workspace-write-partial' | 'unrestricted';
 export type NetworkEffect = 'denied' | 'unrestricted';

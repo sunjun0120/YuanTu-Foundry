@@ -654,8 +654,8 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_TOOL_TIMEOUT_MS` | `0–3600000` | 单次工具调用的墙钟上限（毫秒，0 = 不设上限） |
 | `YUANTU_INVARIANT_TIMEOUT_MS` | `100–600000` | 单条运行时不变量检查的超时（毫秒） |
 | `YUANTU_WORKSPACE` | `string` | 工作区目录 |
-| `YUANTU_SANDBOX` | `host` / `native` / `windows` / `seatbelt` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值） |
-| `YUANTU_SANDBOX_HOOK` | `host` / `native` / `windows` / `seatbelt` | 钩子用的沙箱后端（默认继承当前调用的执行策略） |
+| `YUANTU_SANDBOX` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值） |
+| `YUANTU_SANDBOX_HOOK` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 钩子用的沙箱后端（默认继承当前调用的执行策略） |
 | `YUANTU_SANDBOX_FILES` | `read-only` / `workspace-write` | 工作区文件权限 |
 | `YUANTU_SANDBOX_NETWORK` | `denied` / `unrestricted` | 命令网络权限；不支持所需隔离时拒绝执行 |
 | `YUANTU_SANDBOX_SPEC` | `string` | （内部）沙箱启动器的单次命令载荷 |
@@ -737,7 +737,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 284 个 | `tests/*.test.ts` |
+| 行为测试文件 | 285 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

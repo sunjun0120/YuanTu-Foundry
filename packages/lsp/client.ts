@@ -162,7 +162,7 @@ export class LspClient {
     if (this.child)
       throw new Error(`Language server is not running: ${this.lastError ?? 'stopped'}`);
     signal.throwIfAborted();
-    if (!['host', 'native', 'windows', 'seatbelt'].includes(this.policy.mode))
+    if (!['host', 'native', 'windows', 'windows-account', 'seatbelt'].includes(this.policy.mode))
       throw new Error('Language server backend unsupported; disabled outside host or Windows mode');
     const environment = await localExecutionEnvironment(this.root, this.policy);
     signal.throwIfAborted();

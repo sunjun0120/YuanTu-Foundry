@@ -33,6 +33,19 @@ export function seatbeltCapabilities(config: Configuration): ExecutionCapabiliti
     links: 'refused',
   });
 }
+/**
+ * The sandbox account backend enforces both file policies and both network policies for real: read-only drops
+ * the workspace capability from the token, and a denied network runs the command as the offline account that
+ * WFP blocks. Network stays open by default, as `native` on Windows always was.
+ */
+export function windowsAccountCapabilities(config: Configuration): ExecutionCapabilities {
+  return Object.freeze({
+    processFiles: config.files ?? 'workspace-write',
+    network: config.network ?? 'unrestricted',
+    pathKind: 'local',
+    links: 'refused',
+  });
+}
 type Declaration = (config: Configuration) => ExecutionCapabilities;
 // Standalone file policies can be constructed before process providers are loaded. The built-ins use the
 // same declarations; registering a replacement always replaces its declaration, even when it has none.
@@ -40,6 +53,7 @@ const declarations = new Map<ExecutionMode, Declaration>([
   ['host', () => HOST_CAPABILITIES],
   ['seatbelt', seatbeltCapabilities],
   ['windows', () => WINDOWS_CAPABILITIES],
+  ['windows-account', windowsAccountCapabilities],
   [
     'native',
     (config) => declaredExecutionCapabilities({ ...config, mode: nativeSandboxBackend() }),
