@@ -458,7 +458,7 @@ pub(crate) type SecurityQuery = unsafe extern "system" fn(
     *mut *mut ACL,
     *mut PSECURITY_DESCRIPTOR,
 ) -> u32;
-fn security_text(descriptor: PSECURITY_DESCRIPTOR) -> Result<String> {
+pub(crate) fn security_text(descriptor: PSECURITY_DESCRIPTOR) -> Result<String> {
     let mut text = null_mut();
     unsafe {
         win(
@@ -507,8 +507,11 @@ pub(crate) fn verify_security(engine: &Engine, key: &GUID, query: SecurityQuery)
     }
     let sd = WfpMemory(sd);
     let expected = descriptor()?;
-    if security_text(sd.0)? != security_text(expected.0)? {
-        return Err("Network policy ownership/permissions changed; execution refused".into());
+    let (actual, expected) = (security_text(sd.0)?, security_text(expected.0)?);
+    if actual != expected {
+        return Err(format!(
+            "Network policy ownership/permissions changed; execution refused (found {actual}, expected {expected})"
+        ));
     }
     Ok(())
 }

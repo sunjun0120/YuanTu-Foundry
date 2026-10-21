@@ -18,6 +18,8 @@ pub struct Status {
     pub development: bool,
     /// Stable codes; the host maps them to messages.
     pub problems: Vec<&'static str>,
+    /// Diagnostic text for the problems above; not stable, for logs only.
+    pub details: Vec<String>,
     pub accounts: Vec<AccountStatus>,
 }
 
@@ -98,9 +100,14 @@ pub fn status() -> Status {
         }
     }
     let offline = accounts[0].sid.clone();
-    match offline.map(|sid| firewall::filters_installed(&sid)) {
-        Some(Ok(true)) => {}
-        _ => push("firewall-missing", &mut problems),
+    let mut details = Vec::new();
+    match offline.map(|sid| firewall::filter_problem(&sid)) {
+        Some(Ok(None)) => {}
+        Some(Ok(Some(problem))) | Some(Err(problem)) => {
+            details.push(format!("firewall: {problem}"));
+            push("firewall-missing", &mut problems);
+        }
+        None => push("firewall-missing", &mut problems),
     }
     match users::seclogon_start_type(SERVICE_QUERY_CONFIG) {
         Ok((start, _)) if start != SERVICE_DISABLED => {}
@@ -111,6 +118,7 @@ pub fn status() -> Status {
         ready: problems.is_empty(),
         development: cfg!(debug_assertions),
         problems,
+        details,
         accounts,
     }
 }

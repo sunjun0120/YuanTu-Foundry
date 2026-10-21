@@ -187,23 +187,33 @@ pub fn remove_filters() -> Result<()> {
 /// Whether every filter exists, belongs to our provider, blocks, and matches exactly `offline_sid`, with the
 /// administrator-only security the installer set. Readable without elevation.
 pub fn filters_installed(offline_sid: &str) -> Result<bool> {
-    let engine = engine()?;
-    if verify_security(&engine, &PROVIDER, FwpmProviderGetSecurityInfoByKey0).is_err()
-        || verify_security(&engine, &SUBLAYER, FwpmSubLayerGetSecurityInfoByKey0).is_err()
-    {
-        return Ok(false);
+    Ok(filter_problem(offline_sid)?.is_none())
+}
+
+/// The first way the installed filters differ from what `install_offline_filter` writes, if any.
+pub fn filter_problem(offline_sid: &str) -> Result<Option<String>> {
+    match check(offline_sid) {
+        Ok(()) => Ok(None),
+        Err(problem) => Ok(Some(problem)),
     }
+}
+
+fn check(offline_sid: &str) -> std::result::Result<(), String> {
+    let engine = engine()?;
+    verify_security(&engine, &PROVIDER, FwpmProviderGetSecurityInfoByKey0)
+        .map_err(|e| format!("provider: {e}"))?;
+    verify_security(&engine, &SUBLAYER, FwpmSubLayerGetSecurityInfoByKey0)
+        .map_err(|e| format!("sublayer: {e}"))?;
     let expected = user_condition(offline_sid)?;
     let expected_length = unsafe { GetSecurityDescriptorLength(expected.0) } as usize;
     let expected_bytes =
         unsafe { std::slice::from_raw_parts(expected.0 as *const u8, expected_length) };
     for (index, layer) in LAYERS.iter().enumerate() {
-        if verify_security(&engine, &key(index), FwpmFilterGetSecurityInfoByKey0).is_err() {
-            return Ok(false);
-        }
+        verify_security(&engine, &key(index), FwpmFilterGetSecurityInfoByKey0)
+            .map_err(|e| format!("filter {index}: {e}"))?;
         let mut filter = null_mut();
         if unsafe { FwpmFilterGetByKey0(engine.0, &key(index), &mut filter) } != 0 {
-            return Ok(false);
+            return Err("filter missing".to_string());
         }
         let filter = WfpMemory(filter);
         let f = unsafe { &*filter.0 };
@@ -217,22 +227,27 @@ pub fn filters_installed(offline_sid: &str) -> Result<bool> {
             || f.action.r#type != FWP_ACTION_BLOCK
             || f.numFilterConditions != 1
         {
-            return Ok(false);
+            return Err(
+                "filter provider/layer/sublayer/action/condition count differs".to_string(),
+            );
         }
         let condition = unsafe { &*f.filterCondition };
         if !same(&condition.fieldKey, &FWPM_CONDITION_ALE_USER_ID)
             || condition.matchType != FWP_MATCH_EQUAL
             || condition.conditionValue.r#type != FWP_SECURITY_DESCRIPTOR_TYPE
         {
-            return Ok(false);
+            return Err("condition field/match/type differs".to_string());
         }
         let blob = unsafe { &*condition.conditionValue.Anonymous.sd };
         let actual = unsafe { std::slice::from_raw_parts(blob.data, blob.size as usize) };
         if actual != expected_bytes {
-            return Ok(false);
+            return Err(format!(
+                "condition descriptor differs: {}",
+                crate::network::security_text(blob.data as _).unwrap_or_default()
+            ));
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]
