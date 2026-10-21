@@ -5,7 +5,11 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createIsolation } from './test-isolation/environment.mjs';
-import { readIsolationViolations, settleProcesses } from './test-isolation/processes.mjs';
+import {
+  readIsolationViolations,
+  settleProcesses,
+  windowsSandboxStateDirectory,
+} from './test-isolation/processes.mjs';
 import { readFileReport } from './test-report-merge.mjs';
 import { acquireResourceLease } from './test-resource-lease.mjs';
 
@@ -235,7 +239,20 @@ export async function runSchedule({
             console.error(`Process cleanup failed for ${file}: ${JSON.stringify(result.cleanup)}`);
             result.exitCode = 1;
           }
-          if (settled.remaining.length) {
+          // Once every process has settled, a lease or recovery journal left here is a grant nobody restored.
+          const sandboxState = windowsSandboxStateDirectory(isolation.root);
+          const leftovers = (await readdir(sandboxState).catch(() => [])).filter((name) =>
+            /\.(?:lock|json|json\.next)$/.test(name),
+          );
+          if (leftovers.length) {
+            const message = `${file} left Windows sandbox leases or ACL recovery journals in ${sandboxState}: ${leftovers.join(', ')}`;
+            console.error(message);
+            result.report.problem = result.report.problem
+              ? `${result.report.problem} (${message})`
+              : message;
+            result.exitCode = 1;
+            result.cleanup.directoryRetained = isolation.root;
+          } else if (settled.remaining.length) {
             // Preserve an unsafe-to-delete active process directory as diagnostic evidence.
             result.cleanup.directoryRetained = isolation.root;
           } else {

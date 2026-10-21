@@ -2,11 +2,23 @@ import fs from 'node:fs';
 import childProcess from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { isMainThread } from 'node:worker_threads';
 import { inside, resolvedTarget } from './paths.mjs';
 import { record as appendRecord } from './records.mjs';
 const spawnSyncOriginal = childProcess.spawnSync;
 const readOriginal = fs.readFileSync;
+/**
+ * Where the restricted-token Windows sandbox keeps its leases and ACL recovery journals for one test file.
+ *
+ * The product keeps them in the account profile on purpose, so nothing a guest controls can move them. In a test run
+ * that shared directory made one file's retained journal block every later file with `windows-sandbox-needs-restore`,
+ * and let a failing test block the developer's own YuanTu. Each file gets its own; the scheduler fails a file that
+ * leaves anything in it.
+ */
+export function windowsSandboxStateDirectory(root) {
+  return path.join(root, 'windows-sandbox-state');
+}
 
 function processIdentity(pid) {
   if (process.platform === 'linux') {
@@ -43,6 +55,7 @@ export function installProcessProbe(config, violate) {
       record({ event: 'owner-exit', pid: process.pid, registration, at: Date.now() }),
     );
   globalThis[Symbol.for('yuantu.test-lifecycle')] = {
+    windowsSandboxState: windowsSandboxStateDirectory(config.root),
     require(resource) {
       if (!config.resources.includes(resource))
         violate('resource', `native operation requires @test-serial ${resource}`);

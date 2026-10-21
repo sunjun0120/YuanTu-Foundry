@@ -36,7 +36,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
-import { testResource } from '../platform/test-lifecycle.ts';
+import { testResource, testWindowsSandboxStateDirectory } from '../platform/test-lifecycle.ts';
 import { createOwnedFileLease } from './owned-file-lease.ts';
 import { EnvironmentBlockedError } from './environment-blocked.ts';
 import {
@@ -700,9 +700,15 @@ async function acquireProcessLease(state: string): Promise<() => Promise<void>> 
     await lease.closing;
   };
 }
-/** Account-derived, so it stays independent of TEMP/USERPROFILE and MSIX AppData virtualization. */
+/**
+ * Account-derived, so it stays independent of TEMP/USERPROFILE and MSIX AppData virtualization. Only the in-process
+ * test preload can substitute a per-file directory; no environment variable or workspace file reaches this.
+ */
 export function windowsSandboxStateDirectory(): string {
-  return path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
+  return (
+    testWindowsSandboxStateDirectory() ??
+    path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows')
+  );
 }
 const OWNER_LOCK = 'workspace-owner.lock';
 /**
