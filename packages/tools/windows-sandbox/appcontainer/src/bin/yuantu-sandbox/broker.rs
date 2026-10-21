@@ -176,8 +176,8 @@ fn start_runner(
         // CreateProcessWithLogonW also grants the new logon access to this window station and desktop.
         Some((account, secret)) => {
             let directory = wide(&format!(
-                r"{}System32",
-                std::env::var("SystemRoot").unwrap_or_else(|_| r"C:Windows".into())
+                r"{}\System32",
+                std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())
             ))?;
             unsafe {
                 CreateProcessWithLogonW(
