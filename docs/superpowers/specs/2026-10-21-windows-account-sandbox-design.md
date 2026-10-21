@@ -72,18 +72,20 @@ agent-host (桌面用户, Medium)
 - 启动后把自身进程对象 DACL 设为只允许 SYSTEM 和桌面用户（经 broker 传入的 SID），使沙箱子进程无法打开 runner 读内存或注入。
 - 私有桌面：broker 创建 `CreateDesktopW("yuantu-sbx-<account>")`，DACL 授予该账户 logon SID；runner 和子进程都在其中，看不到也操作不了用户桌面窗口。
 - 每条命令：
-  1. 以 runner 自身令牌 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)`，**不加任何限制 SID，不降 Low 完整性级别**（spike 结论，见下）。写边界完全由沙箱账户 SID 上的 ACL 决定。
+  1. 以 runner 自身令牌 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED)`，**不降 Low 完整性级别**。限制 SID（顺序同 Codex `token.rs`）= {工作区能力 SID（仅读写模式）, 本命令 scratch 能力 SID, **令牌用户 SID（沙箱账户）**, logon SID, Everyone}。默认 DACL 替换为 `D:(A;;GA;;;<logon SID>)(A;;RC;;;OW)`（Codex 做法：同一账户的不同 runner/命令之间互不能打开对方的进程、线程与 IPC），并启用 `SeChangeNotifyPrivilege`。
   2. `CreateJobObjectW`（kill-on-close、禁止 breakaway），通过 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在 Job 内创建；`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 只继承三个 std 句柄。
   3. `CreateProcessAsUserW`（受限的自身令牌无需特权）。
   4. 子进程退出后终止 Job 内剩余后代，等活动进程数归零，再把退出码回复给 broker。
 - 取消：broker 转发 `cancel{id}` → runner `TerminateJobObject`。
 
-> **Spike 结论（2026-10-21，见 `docs/superpowers/plans/2026-10-21-windows-account-sandbox-phase1-spike.md`）**：`WRITE_RESTRICTED` 本身导致 `spawn EPERM`，与是否降 Low 无关；给默认 DACL 补 Everyone/logon SID 也无效。去掉限制 SID 后（无论是否降 Low）fork 与 `node --test` 均正常。因此采用**退路方案**：
+> **Spike 结论（2026-10-21，见 `docs/superpowers/plans/2026-10-21-windows-account-sandbox-phase1-spike.md`）**：`spawn EPERM` 的根因是 libuv 为子进程 stdio 创建命名管道时请求 `WRITE_DAC`，该所有者隐式权限在 `WRITE_RESTRICTED` 下也要过限制 SID 检查，而所有者（令牌用户 SID）不在限制列表中。把令牌用户 SID 加入限制列表后，fork、`stdio: 'pipe'`、`node --test` 全部正常。这在桌面用户令牌上等于取消写隔离，但在专用沙箱账户上是安全的——前提是**任何 ACE 都不直接授予沙箱账户 SID**（账户自己的 profile 除外），见 §5.1。
 >
-> - 不使用受限令牌做写隔离；工作区写权限直接授予沙箱账户 SID（§5.1）。
-> - **账户租约**：同一账户的写授权同一时刻只属于一个工作区。工作区 A 的授权在其命令之间保留（不每条命令重做 ACL）；工作区 B 需要该账户时，若 A 没有正在运行的命令，则撤销 A 的授权、授予 B；若 A 有命令在跑，B 的命令排队等待（受命令超时约束），等待时在工具卡片显示“等待沙箱账户（另一个工作区正在使用）”。
-> - 只读模式：该命令不持有写授权，工作区授权中的写 ACE 暂时不授予（若当前已授予给同一工作区的写，则只读命令排队到无写命令运行时，或改为撤销写 ACE 后执行）。v1 采用简单规则：只读命令同样获取租约，并在获取时把工作区 ACE 切换为只读。
-> - 后续如需并发多工作区，再引入账户池（`YuanTuSandboxOffline1..N`），不在本次范围。
+> 写隔离模型（同 Codex）：
+>
+> - 常规访问检查：沙箱账户都属于本地组 `YuanTuSandboxUsers`，工作区写 ACE 授予该组。
+> - 限制 SID 检查：每个工作区一个能力 SID（`S-1-5-21-<4 个随机 u32>`，按规范化工作区路径持久化在 `.yuantu/sandbox-state/windows-account/cap-sids.json`），工作区再授予该能力 SID 写 ACE。
+> - 工作区 A 的令牌只含 A 的能力 SID；工作区 B 的 ACE 只有组和 B 的能力 SID → A 写不了 B。**多个工作区可以并发**，无需租约或 ACL 切换；工作区授权在多条命令间保留，按现有日志机制在会话/工作区释放时恢复。
+> - 只读模式：令牌不含工作区能力 SID，因此工作区不可写。
 
 ### 3.4 exec
 
@@ -107,7 +109,7 @@ agent-host (桌面用户, Medium)
 
 只接受交接管道传入的两个密码，不接受路径、命令或 SID 参数。全部操作写入事务日志（`HKLM` 下受保护的位置或 Program Files 安装目录旁的 SYSTEM 日志文件），失败时回滚本次创建的对象。
 
-1. 创建或重设本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`：随机 32 字节密码、密码永不过期、用户不能改密码；只属于 `Users` 组。
+1. 创建或重设本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`：随机 32 字节密码、密码永不过期、用户不能改密码；属于 `Users` 组和新建的本地组 `YuanTuSandboxUsers`（不存在则创建；组内只允许这两个账户）。
 2. 登录权限：授予本地交互登录所需的权限（`CreateProcessWithLogonW` 使用交互登录类型）；`SeDenyRemoteInteractiveLogonRight`、`SeDenyNetworkLogonRight` 拒绝；在 `HKLM\...\Winlogon\SpecialAccounts\UserList` 中隐藏，不出现在登录界面。
 3. WFP：复用 `network.rs` 的 provider/sublayer/事务与安全描述符校验；过滤条件从 AppContainer 包 SID 改为 `FWPM_CONDITION_ALE_USER_ID`（离线账户 SID），覆盖 IPv4/IPv6 的 ALE connect、recv/accept、resource assignment（listen），包括回环。联网账户不加过滤。
 4. Secondary Logon（seclogon）服务：若被禁用则设为手动启动。
@@ -128,16 +130,17 @@ agent-host (桌面用户, Medium)
 
 ### 5.1 写
 
-- 沿用现有 `acl.ps1` 的日志化授权、恢复（`sandbox-recover`）机制，授权对象为沙箱账户 SID（读 + 写，或只读）。按 §3.3 的账户租约切换；离线与联网是两个独立账户、各自一份租约。
-- scratch：每条命令一个目录，授予该命令所用账户（读写），命令结束删除。
-- 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）保持现有保护，并对两个账户 SID 加显式拒绝写入 ACE。
-- 只读模式：工作区 ACE 为只读；scratch 可写。
+- 沿用现有 `acl.ps1` 的日志化授权、引用计数租约（同一工作区多会话共享）、恢复（`sandbox-recover`）机制。工作区根授予两个 ACE：`YuanTuSandboxUsers` 组（读 + 写，可继承）、该工作区能力 SID（写，可继承）。离线与联网账户同属该组，共用同一份授权。
+- **不变量：除沙箱账户自己的 profile 外，任何路径都不出现直接授予沙箱账户 SID 的 ACE。** `account-status` 检查工作区与读白名单中没有违反该不变量的 ACE。
+- scratch：每条命令一个目录，授予组（读写）+ 本命令 scratch 能力 SID（写），命令结束删除。
+- 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）保持现有保护，并对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE。
+- 已知弱点（同 Codex）：限制列表含 Everyone，所以“Everyone 可写”的目录仍然可写。初始化与 `account-status` 扫描工作区祖先、读白名单、`PATH` 目录中 Everyone 可写的位置并给出警告（对应 Codex `audit_everyone_writable`）。
 
 ### 5.2 读白名单
 
 - 默认条目：工作区（随租约授予）；桌面用户 `PATH` 中位于用户目录下的目录（如 `%APPDATA%\npm`、`%LOCALAPPDATA%\Programs\...`、nvm 当前版本目录）；`%USERPROFILE%\.gitconfig`（只读文件）。
 - 用户可在设置中追加路径；拒绝列表永远优先：`.ssh`、`.aws`、`.gnupg`、`.azure`、`.kube`、`.docker`、浏览器 profile 目录、`AppData\Roaming\Microsoft\Credentials`、`AppData\Local\Microsoft\Credentials`、DPAPI 目录、本产品的凭据目录。
-- 授予方式：对目录加可继承的只读 ACE（两账户 SID），日志记录原 DACL，卸载或移除条目时恢复；拒绝 reparse point、硬链接，单次上限沿用 100,000 对象。
+- 授予方式：对目录加可继承的只读 ACE（`YuanTuSandboxUsers` 组），日志记录原 DACL，卸载或移除条目时恢复；拒绝 reparse point、硬链接，单次上限沿用 100,000 对象。
 - 包缓存：沙箱账户使用自己 profile 下的缓存（npm/pnpm/pip/cargo 默认路径即落在沙箱账户 profile），环境变量中不传递指向桌面用户目录的缓存变量（`toolEnvironment` 增加过滤）。
 
 ## 6. TS 侧接入
