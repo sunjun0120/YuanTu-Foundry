@@ -2,6 +2,8 @@
 //! and `runner` (per broker, sandbox account). See docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md.
 mod frame;
 mod protocol;
+mod spawn;
+mod token;
 mod win;
 
 use win::Result;

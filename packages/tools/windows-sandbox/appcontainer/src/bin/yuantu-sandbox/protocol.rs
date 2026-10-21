@@ -17,6 +17,10 @@ pub struct Request {
     pub cwd: String,
     pub env: BTreeMap<String, String>,
     pub capabilities: Vec<String>,
+    /// Same meaning as Node's `windowsVerbatimArguments`: arguments after the image are joined unquoted,
+    /// which `cmd.exe /d /s /c "..."` needs because cmd does not recognise quoted built-ins.
+    #[serde(default)]
+    pub verbatim: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -134,6 +138,7 @@ mod tests {
             cwd: r"C:\Windows".into(),
             env: BTreeMap::from([("PATH".into(), r"C:\Windows".into())]),
             capabilities: vec!["S-1-5-21-1-2-3-4".into()],
+            verbatim: false,
         }
     }
 
