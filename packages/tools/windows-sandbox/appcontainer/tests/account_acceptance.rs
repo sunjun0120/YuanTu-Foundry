@@ -97,7 +97,10 @@ fn grant_capability(path: &Path, sid: &str) {
          'ContainerInherit,ObjectInherit', 'None', 'Allow'); \
          $acl.AddAccessRule($rule); Set-Acl -LiteralPath '{target}' -AclObject $acl"
     );
+    // Started from PowerShell 7 (GitHub's default shell), PSModulePath lists PS7 modules that Windows
+    // PowerShell 5.1 cannot load, and Get-Acl/Set-Acl fail to autoload. Let 5.1 use its own default.
     let output = Command::new("powershell.exe")
+        .env_remove("PSModulePath")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .unwrap();
