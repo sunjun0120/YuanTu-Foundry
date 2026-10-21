@@ -135,6 +135,15 @@ pub fn group_members() -> Result<Option<Vec<String>>> {
         return Ok(None);
     }
     net(status, "Read sandbox group members")?;
+    // An empty group comes back as a null buffer, which `from_raw_parts` must never see.
+    if buffer.is_null() || read == 0 {
+        if !buffer.is_null() {
+            unsafe {
+                NetApiBufferFree(buffer as *const c_void);
+            }
+        }
+        return Ok(Some(Vec::new()));
+    }
     let entries = unsafe {
         std::slice::from_raw_parts(buffer as *const LOCALGROUP_MEMBERS_INFO_0, read as usize)
     };
