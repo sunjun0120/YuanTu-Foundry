@@ -1,4 +1,4 @@
-# TEMPORARY diagnostic branch: distribution of the append.perRound ratio on the Linux runner.
+# TEMPORARY diagnostic branch.
 name: CI
 on:
   push:
@@ -16,5 +16,11 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: for i in 1 2 3; do node benchmarks/diag-append.mjs; done
-      - run: for i in $(seq 1 12); do node benchmarks/run.mjs | grep -E '^append\.perRound'; done
+      - run: |
+          for i in 1 2 3; do
+            node benchmarks/diag-append.mjs
+            PRE=1 node benchmarks/diag-append.mjs
+            READER=1 node benchmarks/diag-append.mjs
+            PRE=1 READER=1 node benchmarks/diag-append.mjs
+            TOOLS=1 node benchmarks/diag-append.mjs
+          done

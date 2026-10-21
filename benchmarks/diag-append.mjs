@@ -15,6 +15,12 @@ const root = await mkdtemp(path.join(tmpdir(), 'yuantu-diag-'));
 const store = new SessionStore(path.join(root, 's.sqlite'));
 const text = 'w'.repeat(200);
 const rounds = 200;
+if (process.env.PRE) {
+  const s0 = store.create(root);
+  for (let r = 0; r < 4; r++) for (let i = 0; i < 500; i++) { store.append(s0.id, { role: 'user', content: i + ': ' + text }); store.flush(s0.id); }
+}
+if (process.env.READER) { const rd = new DatabaseSync(path.join(root, 's.sqlite')); rd.prepare('SELECT COUNT(*) AS n FROM messages').get(); rd.close(); }
+if (process.env.TOOLS) { const { createTools } = await import('../packages/catalog/index.ts'); createTools(root).specs(); }
 const pass = (every) => {
   const s = store.create(root);
   const c0 = commits;
@@ -49,7 +55,7 @@ t = performance.now();
 raw.exec('BEGIN IMMEDIATE'); for (let i = 0; i < 2000; i++) ins.run(i); raw.exec('COMMIT');
 const rowMs = (performance.now() - t) / 2000;
 console.log(JSON.stringify({
-  platform: process.platform, node: process.version,
+  variant: [process.env.PRE&&'pre',process.env.READER&&'reader',process.env.TOOLS&&'tools'].filter(Boolean).join('+')||'plain', platform: process.platform, node: process.version,
   commitsPerRound: { unbatched: cu, batched: cb },
   unbatchedMs: med(U).toFixed(3), batchedMs: med(B).toFixed(3),
   ratioMedian: med(R).toFixed(2), ratioMin: Math.min(...R).toFixed(2), ratioMax: Math.max(...R).toFixed(2),
