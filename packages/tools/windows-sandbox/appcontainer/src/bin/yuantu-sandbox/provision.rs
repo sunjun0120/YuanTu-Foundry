@@ -119,10 +119,10 @@ fn remove_everything() -> Result<()> {
 fn remove_user_grants() -> Result<()> {
     // This journal belongs to the desktop user. Never interpret user-selected ACL paths in the UAC half,
     // which may be running as a different administrator with a different profile.
-    grants::reads::revoke_all()?;
     if let Some(group) = users::lookup_sid(yuantu_appcontainer::account::GROUP)? {
         grants::ungrant_all(&group)?;
     }
+    grants::reads::revoke_all()?;
     Ok(())
 }
 
@@ -352,6 +352,7 @@ pub fn grant(root: &str, capability: &str) -> Result<u32> {
         return Err("Invalid capability SID".into());
     }
     let grant = grants::grant(root, &group_sid()?, capability)?;
+    grants::reads::grant_metadata(std::path::Path::new(&grant.root), &group_sid()?)?;
     println!(
         "{}",
         serde_json::json!({"version": 1, "root": grant.root, "capability": grant.capability})

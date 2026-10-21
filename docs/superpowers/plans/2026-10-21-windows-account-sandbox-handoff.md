@@ -62,3 +62,4 @@
 - 发布链已接入两份 helper 的独立签名哈希、时间戳校验和打包后验证；本轮没有执行真实签名、安装或本机账户初始化。受保护安装生命周期仍保持原有验收门槛，私有 desktop 仍为可选后续项。
 - 本地验证：Rust 普通全回归、相关 TS 回归、真实 Electron smoke、typecheck、format、i18n 和隔离检查通过。一次本地 `npm test` 因 `host-carrier-auth.test.ts` 进程清理检查中断，18/287 文件结算，327 用例通过，**不是全量通过**；原始日志保留于 `.scratch/account-full-test.log`。
 - 最新分支改动仍需推送后的 Actions 账户验收及通用 `check` 确认；后续结果追加本节。不要在本机设定账户验收或建户开关。
+- `9577f2b` 已修复 TS 验收被跳过和 Electron 准备问题。真实运行 TS provider 后进一步复现：profile 下工作区的祖先目录缺少读取属性权限，Node 在 `AppData` 的 lstat 上 EPERM。本轮补充了仅遍历/属性的不可继承祖先授权，独立记录、按文件身份撤销；它不会授予目录枚举或文件内容读取。原生回归先复现缺失接口再通过，真实行为仍由后续 Actions 验证。

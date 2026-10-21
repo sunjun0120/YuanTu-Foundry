@@ -18,6 +18,7 @@ use windows_sys::Win32::{
 };
 
 pub const READ_EXECUTE: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+const TRAVERSE_METADATA: u32 = FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
 const MAX_OBJECTS: usize = 100_000;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
@@ -102,6 +103,9 @@ fn open(path: &Path, profile: &Path) -> Result<Object> {
             return Err("Read allowlist refuses reparse points".into());
         }
     }
+    open_object(path)
+}
+fn open_object(path: &Path) -> Result<Object> {
     let name = wide(path.to_str().ok_or("Invalid allowlist path")?)?;
     let raw = unsafe {
         CreateFileW(
@@ -250,11 +254,11 @@ fn group_aces(acl: *mut ACL, group: &Sid) -> Result<Vec<u32>> {
     }
     Ok(rights)
 }
-fn change(object: &Object, group: &Sid, revoke: bool) -> Result<()> {
+fn change(object: &Object, group: &Sid, revoke: bool, rights: u32) -> Result<()> {
     let original = descriptor(object)?;
     let acl = original.dacl()?;
     let entry = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: if revoke { 0 } else { READ_EXECUTE },
+        grfAccessPermissions: if revoke { 0 } else { rights },
         grfAccessMode: if revoke { REVOKE_ACCESS } else { GRANT_ACCESS },
         // Snapshot RX: inherited RX would expose a future credential subtree before revalidation.
         grfInheritance: 0,
@@ -550,7 +554,7 @@ pub(crate) fn grant_at(
     save(journal_path, &journal)?; // durable intent BEFORE the first ACL change, including partial failures
     for object in &objects {
         if group_aces(descriptor(object)?.dacl()?, &group_sid)?.is_empty() {
-            change(object, &group_sid, false)?;
+            change(object, &group_sid, false, READ_EXECUTE)?;
         }
     }
     Ok(())
@@ -563,9 +567,15 @@ pub(crate) fn revoke_at(
     journal_path: &Path,
 ) -> Result<()> {
     let _lock = journal_lock(journal_path)?;
-    revoke_locked(root, profile, group, journal_path)
+    revoke_locked(root, profile, group, journal_path, READ_EXECUTE)
 }
-fn revoke_locked(root: &Path, _profile: &Path, group: &str, journal_path: &Path) -> Result<()> {
+fn revoke_locked(
+    root: &Path,
+    _profile: &Path,
+    group: &str,
+    journal_path: &Path,
+    rights: u32,
+) -> Result<()> {
     let mut journal = load(journal_path)?;
     let Some(index) = journal
         .grants
@@ -589,13 +599,13 @@ fn revoke_locked(root: &Path, _profile: &Path, group: &str, journal_path: &Path)
         for object in &objects {
             if group_aces(descriptor(object)?.dacl()?, &group_sid)?
                 .iter()
-                .any(|mask| *mask != READ_EXECUTE)
+                .any(|mask| *mask != rights)
             {
                 return Err("Read allowlist permissions changed; recovery requires review".into());
             }
         }
         for object in &objects {
-            change(object, &group_sid, true)?;
+            change(object, &group_sid, true, rights)?;
         }
     }
     journal.grants.remove(index);
@@ -611,7 +621,8 @@ pub fn grant(root: &Path, group: &str) -> Result<()> {
         &super::super::credentials::profile_directory()?,
         group,
         &journal_path()?,
-    )
+    )?;
+    grant_metadata(root, group)
 }
 pub fn revoke(root: &Path, group: &str) -> Result<()> {
     revoke_at(
@@ -630,9 +641,113 @@ pub fn revoke_all() -> Result<()> {
             &super::super::credentials::profile_directory()?,
             &grant.group,
             &path,
+            READ_EXECUTE,
         )?;
     }
+    let metadata = metadata_path()?;
+    for grant in load(&metadata)?.grants {
+        revoke_metadata_at(&grant.root, &grant.group, &metadata)?;
+    }
     Ok(())
+}
+
+fn metadata_path() -> Result<PathBuf> {
+    Ok(super::super::credentials::state_directory()?.join("traverse-grants.json"))
+}
+pub fn grant_metadata(root: &Path, group: &str) -> Result<()> {
+    grant_metadata_at(
+        root,
+        &super::super::credentials::profile_directory()?,
+        group,
+        &metadata_path()?,
+    )
+}
+pub(crate) fn grant_metadata_at(
+    root: &Path,
+    profile: &Path,
+    group: &str,
+    journal_path: &Path,
+) -> Result<()> {
+    if !under(&key(root), &key(profile)) || key(root) == key(profile) {
+        return Ok(());
+    }
+    let _lock = journal_lock(journal_path)?;
+    let mut journal = load(journal_path)?;
+    let existing = journal
+        .grants
+        .iter()
+        .position(|grant| key(&grant.root) == key(profile) && grant.group == group);
+    let mut recorded_ids: BTreeSet<(u32, u64, u64)> = existing
+        .map(|index| {
+            journal.grants[index]
+                .entries
+                .iter()
+                .map(|entry| (entry.volume, entry.id, entry.created))
+                .collect()
+        })
+        .unwrap_or_default();
+    let group_sid = sid(group)?;
+    let mut additions = Vec::new();
+    let mut objects = Vec::new();
+    for ancestor in root.parent().ok_or("Invalid metadata root")?.ancestors() {
+        if !under(&key(ancestor), &key(profile)) {
+            break;
+        }
+        let canonical = std::fs::canonicalize(ancestor).map_err(|_| "Resolve metadata ancestor")?;
+        if key(&canonical) != key(ancestor) {
+            return Err("Metadata ancestors must not be aliases".into());
+        }
+        let object = open_object(ancestor)?;
+        if !object.directory {
+            return Err("Metadata ancestor must be a directory".into());
+        }
+        let descriptor = descriptor(&object)?;
+        let rights = group_aces(descriptor.dacl()?, &group_sid)?;
+        if rights
+            .iter()
+            .any(|mask| *mask & TRAVERSE_METADATA == TRAVERSE_METADATA)
+        {
+            continue;
+        }
+        if !rights.is_empty() {
+            return Err("Conflicting metadata ancestor permissions".into());
+        }
+        let entry = Entry {
+            path: object.path.clone(),
+            before: sddl(&descriptor)?,
+            volume: object.volume,
+            id: object.id,
+            created: object.created,
+        };
+        if recorded(&entry)?.is_none() {
+            return Err("Metadata ancestor cannot be recovered by identity".into());
+        }
+        if recorded_ids.insert((entry.volume, entry.id, entry.created)) {
+            additions.push(entry);
+        }
+        objects.push(object);
+    }
+    if objects.is_empty() {
+        return Ok(());
+    }
+    if let Some(index) = existing {
+        journal.grants[index].entries.extend(additions);
+    } else {
+        journal.grants.push(ReadGrant {
+            root: profile.to_path_buf(),
+            group: group.into(),
+            entries: additions,
+        });
+    }
+    save(journal_path, &journal)?;
+    for object in &objects {
+        change(object, &group_sid, false, TRAVERSE_METADATA)?;
+    }
+    Ok(())
+}
+pub(crate) fn revoke_metadata_at(profile: &Path, group: &str, path: &Path) -> Result<()> {
+    let _lock = journal_lock(path)?;
+    revoke_locked(profile, profile, group, path, TRAVERSE_METADATA)
 }
 pub fn grant_defaults(group: &str) -> Result<()> {
     let profile = super::super::credentials::profile_directory()?;

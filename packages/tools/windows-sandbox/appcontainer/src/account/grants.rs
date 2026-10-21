@@ -479,6 +479,38 @@ mod tests {
     }
 
     #[test]
+    fn profile_ancestors_get_only_noninheritable_metadata_access_and_are_recoverable() {
+        let base = scratch("metadata");
+        let profile = base.join("profile");
+        let root = profile.join("AppData/Local/Temp/workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let secret = profile.join("secret");
+        std::fs::write(&secret, "private").unwrap();
+        let group = "S-1-5-21-1-2-3-9205";
+        let journal = base.join("metadata.json");
+        reads::grant_metadata_at(&root, &profile, group, &journal).unwrap();
+        for parent in root
+            .parent()
+            .unwrap()
+            .ancestors()
+            .take_while(|parent| parent.starts_with(&profile))
+        {
+            assert!(aces(parent).iter().any(|(_, flags, mask, sid)| sid == group
+                && *flags as u32 & INHERIT == 0
+                && *mask == FILE_TRAVERSE | FILE_READ_ATTRIBUTES));
+            assert!(
+                !aces(parent)
+                    .iter()
+                    .any(|(_, _, mask, sid)| sid == group && *mask & FILE_LIST_DIRECTORY != 0)
+            );
+        }
+        assert!(!aces(&secret).iter().any(|(_, _, _, sid)| sid == group));
+        reads::revoke_metadata_at(&profile, group, &journal).unwrap();
+        assert!(!aces(&profile).iter().any(|(_, _, _, sid)| sid == group));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn read_grants_refuse_hardlinks_and_nested_secret_directories_before_any_acl_change() {
         let base = scratch("read-refuse");
         let root = base.join("tool");

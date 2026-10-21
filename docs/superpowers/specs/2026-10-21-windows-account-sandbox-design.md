@@ -142,6 +142,7 @@ agent-host (桌面用户, Medium)
 - 用户可在设置中追加路径；拒绝列表永远优先：`.ssh`、`.aws`、`.gnupg`、`.azure`、`.kube`、`.docker`、浏览器 profile 目录、`AppData\Roaming\Microsoft\Credentials`、`AppData\Local\Microsoft\Credentials`、DPAPI 目录、本产品的凭据目录。
 - 授予方式（2d 安全审查修订）：验证并锁定整棵现有对象树，为每个对象增加不可继承的组 RX ACE，形成读取快照；新增工具文件需要重新授权。不能给可变目录持续继承 RX，否则后来新建的 `.ssh` 等敏感目录会自动变为可读，与“拒绝列表永远优先”冲突。日志在修改前保存原 DACL、卷序列号、文件 ID 和创建时间；卸载或移除时按对象身份撤销，包含同卷移出和重命名对象，保留其他主体的权限。无法核实原对象或权限冲突时保留记录并报错。授予拒绝 reparse point、硬链接，单次上限沿用 100,000 对象；撤销只处理已记录身份，不跟随后来新增的危险对象。
 - 包缓存：沙箱账户使用自己 profile 下的缓存（npm/pnpm/pip/cargo 默认路径即落在沙箱账户 profile），环境变量中不传递指向桌面用户目录的缓存变量（`toolEnvironment` 增加过滤）。
+- 位于桌面 profile 下的工作区/工具链，其祖先目录仅增加不可继承的 `FILE_TRAVERSE | FILE_READ_ATTRIBUTES`，使 Node 的 realpath/lstat 能解析完整路径；不授予列目录或读取文件内容。`traverse-grants.json` 独立记录这些授权及对象身份，卸载在撤销工作区/读取授权之后收回。
 
 ## 6. TS 侧接入
 
