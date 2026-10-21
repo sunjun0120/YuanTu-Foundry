@@ -64,7 +64,7 @@ agent-host (桌面用户, Medium)
   4. 创建 exec 服务管道 `\\.\pipe\yuantu-sbx-broker-<桌面用户SID哈希>-<agent-host PID>-<account>`，`FIRST_PIPE_INSTANCE`，DACL 只允许桌面用户 SID。管道名通过 stdout 一行 JSON 报告给 agent-host，agent-host 再经 SandboxPlan 参数传给 exec。
 - 校验 exec：客户端令牌用户 SID == 桌面用户 SID，非受限令牌、完整性 ≥ Medium（沙箱子进程是沙箱账户且是受限令牌，连不上也冒充不了）。
 - 句柄交接：broker `OpenProcess(PROCESS_DUP_HANDLE)` 打开 exec（同用户），把 exec 报告的三个 std 句柄复制进 broker，再用 runner 的进程句柄复制进 runner，把 runner 端句柄值随请求一起发给 runner。
-- runner 退出（崩溃）时：所有进行中的 exec 收到 `runner-lost` 错误；下一条命令重新拉起 runner。
+- runner 退出（崩溃）时：所有进行中的 exec 收到 `runner-lost` 错误，broker 随后以退出码 3 退出；宿主（2c 的 broker 管理）在下一条命令时重新启动 broker 与 runner。
 - 宿主退出（stdin EOF）：`TerminateProcess(runner)`，runner 的 Job（kill-on-close）带走全部后代。
 
 ### 3.3 runner

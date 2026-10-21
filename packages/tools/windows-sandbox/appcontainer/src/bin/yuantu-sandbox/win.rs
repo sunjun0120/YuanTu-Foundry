@@ -91,9 +91,10 @@ pub fn token_information(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> Resul
         GetTokenInformation(token, class, null_mut(), 0, &mut length);
     }
     if length == 0 {
-        return Err(format!("Token information {class} size: Windows error {}", unsafe {
-            GetLastError()
-        }));
+        return Err(format!(
+            "Token information {class} size: Windows error {}",
+            unsafe { GetLastError() }
+        ));
     }
     let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
     win(

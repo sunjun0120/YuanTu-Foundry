@@ -29,7 +29,12 @@ pub fn server(name: &str, sddl: &str, access: u32, first: bool, instances: u32) 
     let handle = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
-            access | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 },
+            access
+                | if first {
+                    FILE_FLAG_FIRST_PIPE_INSTANCE
+                } else {
+                    0
+                },
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             instances,
             BUFFER,
@@ -107,7 +112,17 @@ pub fn server_pid(pipe: &Handle) -> Result<u32> {
 /// Whether the other end has gone. Only for a pipe no other thread is reading.
 pub fn peer_disconnected(pipe: &Handle) -> bool {
     let mut available = 0;
-    if unsafe { PeekNamedPipe(pipe.0, null_mut(), 0, null_mut(), &mut available, null_mut()) } != 0 {
+    if unsafe {
+        PeekNamedPipe(
+            pipe.0,
+            null_mut(),
+            0,
+            null_mut(),
+            &mut available,
+            null_mut(),
+        )
+    } != 0
+    {
         return false;
     }
     matches!(
@@ -153,7 +168,9 @@ impl io::Write for PipeIo<'_> {
             )
         };
         if ok == 0 {
-            return Err(io::Error::from_raw_os_error(unsafe { GetLastError() } as i32));
+            return Err(io::Error::from_raw_os_error(
+                unsafe { GetLastError() } as i32
+            ));
         }
         Ok(written as usize)
     }

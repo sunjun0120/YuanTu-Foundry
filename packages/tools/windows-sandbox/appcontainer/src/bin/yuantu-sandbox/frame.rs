@@ -7,7 +7,10 @@ pub const MAX_FRAME: usize = 1 << 20;
 pub fn write_frame<W: Write, T: Serialize>(writer: &mut W, value: &T) -> io::Result<()> {
     let bytes = serde_json::to_vec(value).map_err(|_| io::Error::other("Serialize frame"))?;
     if bytes.len() > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Frame exceeds 1 MiB"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Frame exceeds 1 MiB",
+        ));
     }
     let mut frame = Vec::with_capacity(4 + bytes.len());
     frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
@@ -22,7 +25,10 @@ pub fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> io::Result<T>
     reader.read_exact(&mut header)?;
     let length = u32::from_le_bytes(header) as usize;
     if length > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Frame exceeds 1 MiB"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Frame exceeds 1 MiB",
+        ));
     }
     let mut bytes = vec![0u8; length];
     reader.read_exact(&mut bytes)?;

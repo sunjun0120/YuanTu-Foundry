@@ -6,7 +6,9 @@
 //! EPERM. That is only safe because the user is the dedicated sandbox account and no ACE anywhere outside its
 //! own profile names that account directly: workspace writes are granted to the sandbox group (first check)
 //! and to the workspace's capability SID (second check).
-use crate::win::{Descriptor, Handle, LocalSid, Result, current_token, token_logon_sid, token_user, win};
+use crate::win::{
+    Descriptor, Handle, LocalSid, Result, current_token, token_logon_sid, token_user, win,
+};
 use std::{ffi::c_void, mem::size_of, ptr::null};
 use windows_sys::Win32::{Foundation::*, Security::*};
 

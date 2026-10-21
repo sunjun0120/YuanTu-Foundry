@@ -1,0 +1,111 @@
+//! The runner: started by its broker as the sandbox account, it creates each command under the restricted
+//! token. Commands run concurrently; the broker multiplexes them by id.
+use crate::{
+    frame::{read_frame, write_frame},
+    pipe::{PipeIo, connect},
+    protocol::{ErrorKind, FromRunner, ToRunner, validate},
+    spawn::{Running, start},
+    token::restricted_token,
+    win::{Handle, Result, open_process, set_object_dacl},
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+use windows_sys::Win32::{
+    Foundation::*,
+    Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC},
+    System::Threading::*,
+};
+
+type Writer = Arc<Mutex<Handle>>;
+
+fn send(writer: &Writer, message: &FromRunner) {
+    let pipe = writer.lock().unwrap();
+    // A failed write means the broker is gone; the reader sees EOF and ends the runner.
+    let _ = write_frame(&mut PipeIo(&pipe), message);
+}
+
+/// Only SYSTEM and the desktop user may open the runner: a command runs as the same account and must not be
+/// able to read the runner's memory or inject into it.
+fn protect_self(owner: &str) -> Result<()> {
+    let process = open_process(std::process::id(), WRITE_DAC | READ_CONTROL)?;
+    set_object_dacl(process.0, &format!("D:P(A;;GA;;;SY)(A;;GA;;;{owner})"))
+}
+
+pub fn run(control: &str, owner: &str) -> Result<u32> {
+    protect_self(owner)?;
+    let down = connect(
+        &format!(r"\\.\pipe\yuantu-sbx-{control}-down"),
+        FILE_GENERIC_READ,
+    )?;
+    let up = connect(
+        &format!(r"\\.\pipe\yuantu-sbx-{control}-up"),
+        FILE_GENERIC_WRITE,
+    )?;
+    let writer: Writer = Arc::new(Mutex::new(up));
+    let running: Arc<Mutex<HashMap<u64, Arc<Running>>>> = Arc::default();
+    loop {
+        let message: ToRunner = match read_frame(&mut PipeIo(&down)) {
+            Ok(message) => message,
+            Err(_) => break,
+        };
+        match message {
+            ToRunner::Spawn {
+                id,
+                request,
+                stdin,
+                stdout,
+                stderr,
+            } => {
+                // The broker duplicated these into this process; they are ours to close whatever happens.
+                let stdio = [stdin, stdout, stderr].map(|value| Handle(value as usize as HANDLE));
+                let failure = move |kind, message: String| FromRunner::Error { id, kind, message };
+                if let Err(message) = validate(&request) {
+                    send(&writer, &failure(ErrorKind::InvalidRequest, message));
+                    continue;
+                }
+                let started = restricted_token(&request.capabilities)
+                    .and_then(|token| start(&token, &request, stdio.each_ref().map(|h| h.0)));
+                drop(stdio);
+                let command = match started {
+                    Ok(command) => Arc::new(command),
+                    Err(message) => {
+                        send(&writer, &failure(ErrorKind::LaunchFailed, message));
+                        continue;
+                    }
+                };
+                running.lock().unwrap().insert(id, command.clone());
+                send(
+                    &writer,
+                    &FromRunner::Started {
+                        id,
+                        pid: command.pid,
+                    },
+                );
+                let writer = writer.clone();
+                let running = running.clone();
+                std::thread::spawn(move || {
+                    let message = match command.wait() {
+                        Ok(code) => FromRunner::Exit { id, code },
+                        Err(message) => failure(ErrorKind::LaunchFailed, message),
+                    };
+                    running.lock().unwrap().remove(&id);
+                    send(&writer, &message);
+                });
+            }
+            ToRunner::Cancel { id } => {
+                if let Some(command) = running.lock().unwrap().get(&id) {
+                    command.cancel();
+                }
+            }
+        }
+    }
+    // The broker is gone: nobody can receive these commands' output or exit codes.
+    for command in running.lock().unwrap().values() {
+        command.cancel();
+    }
+    unsafe {
+        ExitProcess(0);
+    }
+}

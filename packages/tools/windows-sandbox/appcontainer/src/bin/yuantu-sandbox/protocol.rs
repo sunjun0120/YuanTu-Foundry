@@ -51,9 +51,19 @@ pub enum ToRunner {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum FromRunner {
-    Started { id: u64, pid: u32 },
-    Exit { id: u64, code: u32 },
-    Error { id: u64, kind: ErrorKind, message: String },
+    Started {
+        id: u64,
+        pid: u32,
+    },
+    Exit {
+        id: u64,
+        code: u32,
+    },
+    Error {
+        id: u64,
+        kind: ErrorKind,
+        message: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -121,7 +131,11 @@ pub fn validate(request: &Request) -> Result<()> {
     if request.capabilities.len() > MAX_CAPABILITIES {
         return Err("Too many capabilities".into());
     }
-    if !request.capabilities.iter().all(|sid| is_capability_sid(sid)) {
+    if !request
+        .capabilities
+        .iter()
+        .all(|sid| is_capability_sid(sid))
+    {
         return Err("Invalid capability SID".into());
     }
     Ok(())
@@ -134,7 +148,11 @@ mod tests {
     fn request() -> Request {
         Request {
             version: VERSION,
-            argv: vec![r"C:\Windows\System32\cmd.exe".into(), "/c".into(), "exit".into()],
+            argv: vec![
+                r"C:\Windows\System32\cmd.exe".into(),
+                "/c".into(),
+                "exit".into(),
+            ],
             cwd: r"C:\Windows".into(),
             env: BTreeMap::from([("PATH".into(), r"C:\Windows".into())]),
             capabilities: vec!["S-1-5-21-1-2-3-4".into()],
@@ -149,7 +167,8 @@ mod tests {
 
     #[test]
     fn refuses_unknown_fields() {
-        let text = r#"{"version":1,"argv":[],"cwd":"C:\\","env":{},"capabilities":[],"network":true}"#;
+        let text =
+            r#"{"version":1,"argv":[],"cwd":"C:\\","env":{},"capabilities":[],"network":true}"#;
         assert!(serde_json::from_str::<Request>(text).is_err());
         assert!(serde_json::from_str::<ToRunner>(r#"{"type":"cancel","id":1,"x":0}"#).is_err());
     }

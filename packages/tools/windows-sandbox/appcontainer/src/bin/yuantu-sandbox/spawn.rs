@@ -27,7 +27,11 @@ fn quote(argument: &str) -> String {
         }
         output.extend(std::iter::repeat_n(
             '\\',
-            if character == '"' { slash * 2 + 1 } else { slash },
+            if character == '"' {
+                slash * 2 + 1
+            } else {
+                slash
+            },
         ));
         output.push(character);
         slash = 0;
@@ -294,7 +298,10 @@ mod tests {
 
     #[test]
     fn quoting_preserves_trailing_slashes_and_quotes() {
-        assert_eq!(command_line(&[r"C:\a b\".into(), "x\"y".into()], false), r#""C:\a b\\" "x\"y""#);
+        assert_eq!(
+            command_line(&[r"C:\a b\".into(), "x\"y".into()], false),
+            r#""C:\a b\\" "x\"y""#
+        );
         assert_eq!(
             command_line(&[r"C:\cmd.exe".into(), r#"/d /s /c "exit 7""#.into()], true),
             r#""C:\cmd.exe" /d /s /c "exit 7""#
@@ -311,7 +318,9 @@ mod tests {
 
     fn system_env() -> BTreeMap<String, String> {
         std::env::vars()
-            .filter(|(key, _)| ["SYSTEMROOT", "PATH", "COMSPEC"].contains(&key.to_uppercase().as_str()))
+            .filter(|(key, _)| {
+                ["SYSTEMROOT", "PATH", "COMSPEC"].contains(&key.to_uppercase().as_str())
+            })
             .collect()
     }
 
@@ -339,7 +348,12 @@ mod tests {
     fn reports_the_exit_code() {
         let token = restricted_token(&["S-1-5-21-11-22-33-44".into()]).unwrap();
         let (_, out) = pipe();
-        let running = start(&token, &cmd(&["/c", "exit", "7"]), [null_mut(), out.0, out.0]).unwrap();
+        let running = start(
+            &token,
+            &cmd(&["/c", "exit", "7"]),
+            [null_mut(), out.0, out.0],
+        )
+        .unwrap();
         assert_eq!(running.wait().unwrap(), 7);
     }
 
