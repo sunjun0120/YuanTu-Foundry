@@ -151,7 +151,7 @@ test(
     // Resolve it while the command's scratch still exists, and verify the actual token identity too.
     const temp = await command(
       a,
-      `"${process.execPath}" -e "const fs=require('fs');fs.writeFileSync(require('path').join(process.env.TEMP,'probe.txt'),'ok');console.log(JSON.stringify({temp:fs.realpathSync(process.env.TEMP),profile:fs.realpathSync(process.env.USERPROFILE),user:require('os').userInfo().username}))" > temp.json`,
+      `"${process.execPath}" -e "const fs=require('fs');fs.writeFileSync(require('path').join(process.env.TEMP,'probe.txt'),'ok');console.log(JSON.stringify({temp:fs.realpathSync.native(process.env.TEMP),profile:fs.realpathSync.native(process.env.USERPROFILE),user:require('os').userInfo().username}))" > temp.json`,
     );
     assert.equal(temp.code, 0, temp.output);
     const scratch = JSON.parse(await readFile(path.join(a, 'temp.json'), 'utf8'));
