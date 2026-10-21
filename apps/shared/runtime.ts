@@ -71,7 +71,7 @@ export function executionEnvironment(): string {
         : mode;
     return (
       (backend === 'windows'
-        ? 'Command environment: Windows native restricted-token sandbox, real workspace and private scratch. Filesystem enforcement is partial; reads and network are unconfined. Required unsupported policies fail closed.'
+        ? 'Command environment: Windows native restricted-token sandbox, real workspace and private scratch. Filesystem enforcement is partial; reads and network are unconfined. Required unsupported policies fail closed. A process started in this sandbox cannot start its own child processes that need inherited pipes (Node `child_process` reports `spawn EPERM`), so test runners such as `node --test`, vitest and jest fail here while the same command works outside the sandbox; run a test file directly when it does not fork, and say so plainly when a task needs child processes instead of retrying the same command.'
         : backend === 'seatbelt'
           ? 'Command environment: macOS native Seatbelt sandbox, /bin/sh, real workspace and private scratch. File and network access follow the selected policy. Unsupported policies fail closed.'
           : 'Command environment: native sandbox unavailable on this platform; command execution must fail closed.') +
@@ -413,6 +413,8 @@ export async function createAgent(
     requestTimeoutMs: options.requestTimeoutMs,
     maxModelRetries: options.maxModelRetries,
     maxParallelToolCalls: options.maxParallelToolCalls,
+    // Opt-in: reads overlap the rest of the model's turn (see `AgentOptions.earlyToolStarts`).
+    earlyToolStarts: parseSetting(process.env, 'YUANTU_EARLY_TOOL_START') === true,
     toolResultKeepRecent: options.toolResultKeepRecent,
     toolResultShrinkTokens: options.toolResultShrinkTokens,
     toolResultPruneThresholdChars: options.toolResultPruneThresholdChars,

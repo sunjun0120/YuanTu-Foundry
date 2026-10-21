@@ -35,6 +35,15 @@ export interface ToolContext {
   programJournal?: {
     record(call: ToolCall, state: 'known' | 'unknown', result?: ToolResult): void;
   };
+  /**
+   * Holds back run-owned bookkeeping until this call's result reaches the model.
+   *
+   * Present only for a call started early (see `Tool.earlyStart`): the result may yet be discarded, and a
+   * record that says "the model has seen this" must not survive a result the model never saw. The effect runs
+   * when the result is adopted and is dropped otherwise. Absent, the effect is applied immediately — use
+   * `afterDelivery` rather than testing for it.
+   */
+  deferEffect?(effect: () => void): void;
   approve: Approver;
   ask?: Questioner;
   /** The call this context belongs to, so an interactive seam can be correlated with its result. */
@@ -238,6 +247,17 @@ export interface Tool extends ToolSpec {
    * "safe only when the sibling differs" — a call whose safety depends on a sibling stays exclusive.
    */
   isConcurrencySafe?(args: Record<string, unknown>): boolean;
+  /**
+   * Whether a call may start while the model is still streaming the rest of its turn.
+   *
+   * Only meaningful together with `isConcurrencySafe` returning `true` for the call, and stronger than it: an
+   * early start can be *thrown away* — the stream breaks and the round is re-sent, the turn is truncated, the
+   * final call differs from the one that started — so executing the call and discarding its result must leave
+   * nothing behind that the model could notice. Run-owned bookkeeping a result implies (a file recorded as read,
+   * scoped instructions recorded as shown) goes through `ToolContext.deferEffect`, which applies it only once
+   * the result is delivered. A tool that cannot promise that leaves this unset and simply starts with its batch.
+   */
+  earlyStart?: true;
   prepare?(args: Record<string, unknown>, context: ToolContext): Promise<PreparedTool>;
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }

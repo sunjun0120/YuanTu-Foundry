@@ -25,6 +25,7 @@ import {
 import {
   quoteWindowsArgument,
   windowsCommandLine,
+  windowsProgramNeedsShell,
   WINDOWS_SANDBOX_SID,
   workspaceSandboxSid,
 } from '../packages/tools/sandbox-windows.ts';
@@ -653,10 +654,47 @@ test('the quoting rule is the one Windows de-parses', () => {
   );
   // The argv form leads with the image: `CreateProcess` takes the first token as the program, so leaving it out
   // produced a command line starting with `-e` (nothing to run) while every other assertion here still held.
-  assert.equal(windowsCommandLine({ command: 'prog', argv: ['a b', 'c'] }), 'prog "a b" c');
+  assert.equal(windowsCommandLine({ command: 'prog.exe', argv: ['a b', 'c'] }), 'prog.exe "a b" c');
   assert.equal(
     windowsCommandLine({ command: 'C:\\Program Files\\node.exe', argv: ['-e', 'x'] }),
     '"C:\\Program Files\\node.exe" -e x',
+  );
+  // A bare name that is only a shell shim (`npm`, `pnpm`, `yarn`, `tsc`) has to be resolved by cmd's PATHEXT
+  // search. Handing it to `CreateProcessAsUser` directly failed as ERROR_FILE_NOT_FOUND — an acceptance check
+  // written as `npm test` never started, and the verifier read the launcher's exit code 1 as a failed assertion.
+  assert.equal(
+    windowsCommandLine({ command: 'npm', argv: ['test'] }),
+    `${process.env.ComSpec ?? 'cmd.exe'} /d /s /c "npm test"`,
+  );
+});
+test('a program is routed through the shell exactly when CreateProcess cannot start it', async (t) => {
+  const empty = await mkdtemp(path.join(os.tmpdir(), 'yuantu-shim-empty-'));
+  const images = await mkdtemp(path.join(os.tmpdir(), 'yuantu-shim-images-'));
+  t.after(async () => {
+    await rm(empty, { recursive: true, force: true });
+    await rm(images, { recursive: true, force: true });
+  });
+  const withPath = (directories: string): NodeJS.ProcessEnv => ({ Path: directories });
+  // No image anywhere: `npm` resolves to npm.cmd, which only the shell can start.
+  for (const program of ['npm', 'pnpm', 'yarn', 'tsc'])
+    assert.equal(windowsProgramNeedsShell(program, withPath(empty)), true, program);
+  // An explicit script extension is never an image.
+  for (const program of ['npm.cmd', 'build.bat', 'tool.ps1'])
+    assert.equal(windowsProgramNeedsShell(program, withPath(images)), true, program);
+  // An existing image is started directly, with the exact argument boundary.
+  await writeFile(path.join(images, 'tool.exe'), '');
+  await writeFile(path.join(images, 'plain.com'), '');
+  assert.equal(windowsProgramNeedsShell('tool', withPath(images)), false);
+  assert.equal(windowsProgramNeedsShell('plain', withPath(images)), false);
+  assert.equal(windowsProgramNeedsShell('tool.exe', withPath(empty)), false);
+  // A PATH with several entries: one hit is enough, and an empty entry is skipped rather than searched as cwd.
+  assert.equal(
+    windowsProgramNeedsShell('tool', withPath([empty, images].join(path.delimiter))),
+    false,
+  );
+  assert.equal(
+    windowsProgramNeedsShell('missing', withPath([empty, images].join(path.delimiter))),
+    true,
   );
 });
 test('an unavailable backend reports itself rather than falling back to the host', async () => {

@@ -7,6 +7,22 @@ import { locale, onLocaleChange, t } from './i18n.ts';
 import { showSettingsPanel } from './renderer-panels.ts';
 import { modelLimitRange } from '../../packages/protocol/settings.ts';
 
+/**
+ * What the composer's model picker shows when no saved connection exists.
+ *
+ * The launch environment can carry the model (`YUANTU_MODEL` and friends, documented in the README). In that
+ * case the window is working while `connections` is empty, and the picker said `尚无模型` next to a live request —
+ * a contradiction a person reads as "nothing is configured". A boolean rather than `locale()` keeps this
+ * testable without the renderer's language state.
+ */
+export function environmentModelLabel(
+  view: Pick<ModelSettingsView, 'source' | 'model'>,
+  english: boolean,
+): string | null {
+  if (view.source !== 'environment' || !view.model) return null;
+  return english ? `${view.model} (environment)` : `${view.model}（环境变量）`;
+}
+
 export function setupModelSettings(
   isBusy: () => boolean,
   onBusy: (busy: boolean) => void,
@@ -60,7 +76,11 @@ export function setupModelSettings(
   }
   function updatePicker(next: ModelSettingsView): void {
     picker.replaceChildren();
-    if (!next.connections.length) picker.add(new Option(t('settings.noModel'), ''));
+    if (!next.connections.length) {
+      const fromEnvironment = environmentModelLabel(next, locale() === 'en-US');
+      // The option is read-only (value ''): only saved settings can be switched from this picker.
+      picker.add(new Option(fromEnvironment ?? t('settings.noModel'), ''));
+    }
     for (const entry of next.connections) picker.add(new Option(entry.model, entry.connectionId));
     picker.add(
       new Option(

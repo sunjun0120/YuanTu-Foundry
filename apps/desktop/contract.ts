@@ -25,6 +25,7 @@ import type {
 import type { SettingsCommand, SettingsReply } from './settings-contract.ts';
 import type { UiSettingsCommand, UiSettingsReply } from './ui-settings.ts';
 import type { SandboxSetupCommand, SandboxSetupReply } from './sandbox-setup.ts';
+import type { SandboxRecoveryCommand, SandboxRecoveryReply } from './sandbox-recovery.ts';
 import type {
   PermissionPresetCommand,
   PermissionPresetReply,
@@ -101,6 +102,14 @@ export interface DesktopBridge {
   uiSettings(command: UiSettingsCommand): Promise<UiSettingsReply>;
   /** Native Windows maintenance is absent in the browser bridge. */
   sandboxSetup?(command: SandboxSetupCommand): Promise<SandboxSetupReply>;
+  /**
+   * Put back workspace permissions a dead sandbox owner left behind.
+   *
+   * The remedy used to exist only as `yuantu-agent sandbox-recover` in a CLI that the desktop installer does not
+   * contain, so a person running only the desktop could not clear a state the product itself created. See
+   * `sandbox-recovery.ts`.
+   */
+  sandboxRecovery?(command: SandboxRecoveryCommand): Promise<SandboxRecoveryReply>;
   settings(command: SettingsCommand): Promise<SettingsReply>;
   /**
    * The shell's carrier-command channel. The renderer sends the same validated vocabulary it always did; the

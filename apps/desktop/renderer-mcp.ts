@@ -30,7 +30,7 @@ export function setupMcpSettings(
   panel.hidden = true;
   panel.id = 'mcp-panel';
   panel.setAttribute('aria-labelledby', 'mcp-title');
-  panel.innerHTML = `<div class="settings-page-header"><div class="eyebrow">PREFERENCES / MCP</div><h2 id="mcp-title">MCP 服务</h2><p>连接外部工具，扩展当前工作区的能力。</p></div>
+  panel.innerHTML = `<div class="settings-page-header"><div class="eyebrow">偏好设置 / MCP</div><h2 id="mcp-title">MCP 服务</h2><p>连接外部工具，扩展当前工作区的能力。</p></div>
  <div class="mcp-workspace" id="mcp-workspace"></div>
  <div class="mcp-service-picker"><label for="mcp-list">已配置的服务</label><select id="mcp-list"></select><div class="settings-actions"><button id="mcp-new" type="button" class="secondary">添加服务</button><button id="mcp-reload" type="button" class="secondary">重新加载</button></div></div>
  <form id="mcp-form"><label for="mcp-id">服务名称</label><input id="mcp-id" pattern="[a-z][a-z0-9_]{0,31}" maxlength="32" required placeholder="例如：project_tools" /><small id="mcp-name-note">使用小写字母、数字和下划线，名称以字母开头。</small>

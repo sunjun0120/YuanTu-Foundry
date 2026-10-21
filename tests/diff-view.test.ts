@@ -117,6 +117,24 @@ test('a line is classified by its marker, not by its content', () => {
   assert.equal(classifyDiffLine('@@ -1 +1 @@', true), 'diff-hunk');
 });
 
+test('a non-ASCII file name is shown as the name, not as octal escapes', async (t) => {
+  const restore = installDocument();
+  t.after(restore);
+  // What the `diff` dependency writes for a Chinese name, quoted so the patch stays ASCII.
+  const patch = [
+    '===================================================================',
+    '--- /dev/null',
+    '+++ "\\346\\224\\266\\345\\205\\245\\346\\212\\245\\345\\221\\212.docx"',
+    '@@ -0,0 +1,1 @@',
+    '+hello',
+  ].join('\n');
+  const rendered = diffView(change({ path: '收入报告.docx', kind: 'create', patch }));
+  const lines = rows(rendered).map((row) => row.textContent);
+  assert.ok(lines.includes('+++ 收入报告.docx\n'), 'the header carries the readable name');
+  assert.ok(!lines.some((line) => line.includes('\\346')), 'no octal escape survives in the view');
+  assert.ok(lines.includes('+hello\n'), 'content lines are untouched');
+});
+
 test('the approval card draws through the same view', async () => {
   const renderer = await readFile('apps/desktop/renderer.ts', 'utf8');
   assert.match(renderer, /import \{ diffView \} from '\.\/diff-view\.ts';/);

@@ -4,14 +4,28 @@ import { extensionTools } from '../../../packages/resources/extensions.ts';
 import { loadInstructions } from '../../../packages/tools/instructions.ts';
 import { discoverSkills } from '../../../packages/resources/skills.ts';
 import { sniffImageType, MAX_IMAGE_BYTES } from '../../../packages/protocol/images.ts';
-import { FILE_PREVIEW_BYTES, FILE_TREE_ENTRY_LIMIT } from '../../../packages/protocol/rpc.ts';
+import {
+  FILE_PREVIEW_BYTES,
+  FILE_TREE_ENTRY_LIMIT,
+  OFFICE_PREVIEW_BYTES,
+} from '../../../packages/protocol/rpc.ts';
 import type { WorkspaceEntry } from '../../../packages/protocol/rpc.ts';
+import { officePreviewHtml } from '../../../packages/office/render.ts';
+import type { OfficeFormat } from '../../../packages/office/automation.ts';
 // The class that owns the workspace's path rules. `files.list`/`files.read` reuse it rather than restating
 // its containment and ignore rules, so a client's file tree and the model's own tools cannot disagree about
 // which paths exist.
 import { Workspace } from '../../../packages/tools/files.ts';
 import { required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
+
+/** The Office formats the preview panel can render, by the file's own extension. */
+function officeFormatOf(relative: string): OfficeFormat | undefined {
+  const extension = path.extname(relative).toLowerCase();
+  return extension === '.docx' || extension === '.xlsx' || extension === '.pptx'
+    ? (extension.slice(1) as OfficeFormat)
+    : undefined;
+}
 
 /**
  * What is in the workspace, and what one file in it holds.
@@ -116,8 +130,30 @@ export const fileHandlers: Readonly<Record<string, Handler>> = {
       // would produce replacement characters that look like the file's content. Taken from the bytes
       // already in hand rather than by reading the file a second time, which is how the two would come to
       // disagree about what the file holds.
-      if (head.includes(0))
+      if (head.includes(0)) {
+        /*
+         * A binary file is not automatically unshowable: an Office package is binary and the repository already
+         * knows how to render it as a self-contained page. The panel used to answer a .docx with 二进制文件，无法
+         * 以文本预览, which sent the reader looking for the file in another program while this Host could have
+         * drawn it. `formatOfName` is the only reader of the extension, and it only chooses a renderer — the
+         * bytes still decide what is displayed, and a renderer that fails leaves the honest "cannot preview".
+         */
+        const office = officeFormatOf(relative);
+        if (office && info.size <= OFFICE_PREVIEW_BYTES) {
+          try {
+            const language =
+              typeof params.locale === 'string' && params.locale.toLowerCase().startsWith('en')
+                ? 'en'
+                : 'zh';
+            const html = await officePreviewHtml(office, file, language);
+            if (Buffer.byteLength(html) <= OFFICE_PREVIEW_BYTES)
+              return { path: relative, bytes: info.size, kind: 'html', html };
+          } catch {
+            // Fall through to the binary refusal: a document this renderer cannot read is still not text.
+          }
+        }
         return { path: relative, bytes: info.size, kind: 'unsupported', reason: 'binary' };
+      }
       return {
         path: relative,
         bytes: info.size,

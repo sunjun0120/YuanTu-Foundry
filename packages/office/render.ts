@@ -4,7 +4,8 @@ import { OfficeUnavailableError, runOfficeAutomation, type OfficeFormat } from '
 import { environmentBlockedMessage } from '../tools/environment-blocked.ts';
 import type { OfficePreview } from './preview.ts';
 import { readPptxSlides } from './read.ts';
-import { runSpreadsheetOperation } from './spreadsheet.ts';
+import { runSpreadsheetOperation, spreadsheetPreviewHtml } from './spreadsheet.ts';
+import { previewStyleLink, previewText, type PreviewLanguage } from './preview-page.ts';
 import { assertExpansionWithinBudget } from './zip-entry.ts';
 import JSZip from 'jszip';
 
@@ -25,19 +26,22 @@ const escape = (value: string): string =>
  * The content comes from a document the user may have received from anyone, so the page forbids every script,
  * frame and network fetch: images can only be the `data:` URIs mammoth inlines, and links are inert text.
  */
-function page(title: string, note: string, body: string): string {
-  return (
-    '<!doctype html><html><head><meta charset="utf-8">' +
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">` +
-    `<title>${escape(title)}</title>` +
-    '<style>body{font:15px/1.6 system-ui,sans-serif;max-width:860px;margin:32px auto;padding:0 16px;color:#222}' +
+function page(title: string, note: string, body: string, language: PreviewLanguage = 'zh'): string {
+  const css =
+    'body{font:15px/1.6 system-ui,sans-serif;max-width:860px;margin:32px auto;padding:0 16px;color:#222}' +
     'table{border-collapse:collapse;margin:12px 0}td,th{border:1px solid #bbb;padding:4px 8px}img{max-width:100%}' +
-    'section{border:1px solid #ddd;border-radius:8px;padding:16px 20px;margin:16px 0}.note{color:#666;font-size:13px}</style>' +
+    'section{border:1px solid #ddd;border-radius:8px;padding:16px 20px;margin:16px 0}.note{color:#666;font-size:13px}' +
+    '.formula{color:#7a4b00;background:#fff8e6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}';
+  return (
+    `<!doctype html><html lang="${language === 'en' ? 'en' : 'zh-CN'}"><head><meta charset="utf-8">` +
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' data:">` +
+    `<title>${escape(title)}</title>` +
+    previewStyleLink(css) +
     `</head><body><p class="note">${escape(note)}</p>${body}</body></html>`
   );
 }
 
-async function documentHtml(sourcePath: string): Promise<string> {
+async function documentHtml(sourcePath: string, language: PreviewLanguage = 'zh'): Promise<string> {
   const bytes = await readFile(sourcePath);
   await assertExpansionWithinBudget(
     await JSZip.loadAsync(bytes),
@@ -49,23 +53,36 @@ async function documentHtml(sourcePath: string): Promise<string> {
   // the markup that can take the reader somewhere the document chose.
   const inert = value.replace(/<a\b[^>]*>/gi, '<span>').replace(/<\/a>/gi, '</span>');
   return page(
-    'Word preview',
-    'Built-in preview: text, headings, lists, tables and images; page layout and fonts are approximate.',
+    previewText(language, 'Word 预览', 'Word preview'),
+    previewText(
+      language,
+      '内置预览：文本、标题、列表、表格和图片；版式和字体会与原文有差异。',
+      'Built-in preview: text, headings, lists, tables and images; page layout and fonts are approximate.',
+    ),
     inert,
+    language,
   );
 }
 
-async function presentationHtml(sourcePath: string): Promise<string> {
+async function presentationHtml(
+  sourcePath: string,
+  language: PreviewLanguage = 'zh',
+): Promise<string> {
   const slides = await readPptxSlides(await readFile(sourcePath));
   return page(
-    'PowerPoint preview',
-    'Built-in preview: slide text in order; layout, images and styling are not reproduced.',
+    previewText(language, 'PowerPoint 预览', 'PowerPoint preview'),
+    previewText(
+      language,
+      '内置预览：按顺序显示幻灯片文本；版式、图片和样式不还原。',
+      'Built-in preview: slide text in order; layout, images and styling are not reproduced.',
+    ),
     slides
       .map(
         (text, index) =>
-          `<section><h2>Slide ${index + 1}</h2><p>${escape(text) || '<em>(no text)</em>'}</p></section>`,
+          `<section><h2>${previewText(language, '第 ', 'Slide ')}${index + 1}${previewText(language, ' 页', '')}</h2><p>${escape(text) || `<em>${previewText(language, '（无文本）', '(no text)')}</em>`}</p></section>`,
       )
       .join(''),
+    language,
   );
 }
 
@@ -92,6 +109,26 @@ async function renderHtml(
  * its script refused, LibreOffice not found. A conversion that ran and failed is reported as it is, because
  * retrying it in another engine would hide a broken document behind a different-looking PDF.
  */
+/**
+ * One Office document as a self-contained HTML page, without writing it anywhere.
+ *
+ * `office_preview` writes a file the user then opens in a browser; the workspace panel has no such file to
+ * point at, so this is the same renderers returning the page itself. The page is still the safe one built by
+ * `page()`: no script, no network, images only from `data:`.
+ */
+export async function officePreviewHtml(
+  format: OfficeFormat,
+  sourcePath: string,
+  language: PreviewLanguage = 'zh',
+): Promise<string> {
+  if (format === 'xlsx') return await spreadsheetPreviewHtml(sourcePath, language);
+  const html =
+    format === 'docx'
+      ? await documentHtml(sourcePath, language)
+      : await presentationHtml(sourcePath, language);
+  if (Buffer.byteLength(html) > HTML_BYTES) throw new Error('Office preview HTML exceeds 16 MB');
+  return html;
+}
 export async function renderPreview(
   input: { format: OfficeFormat; sourcePath: string; outputPath: string; backend: PreviewBackend },
   renderer: OfficePreview,

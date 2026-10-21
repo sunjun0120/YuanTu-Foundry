@@ -19,6 +19,7 @@ import { failureForStatus, failureFromResponse, fetchModel } from './http.ts';
 import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { anthropicSystem, anthropicTools, cacheFields, markLastContentBlock } from './cache.ts';
 import { readSse } from './sse.ts';
+import { completeArguments } from './early-tool-call.ts';
 import { anthropicThinkingBudget } from './effort.ts';
 import { validateImages } from '../protocol/images.ts';
 
@@ -329,6 +330,11 @@ export class AnthropicProvider implements Provider {
           const block = blocks.get(Number(event.index));
           if (!block || block.closed) throw new Error('Unexpected content block end');
           block.closed = true;
+          // A closed `tool_use` block is a complete call; the run may start it before the turn ends.
+          if (block.kind === 'tool_use' && request.onToolCall) {
+            const args = completeArguments(block.json, block.input);
+            if (args) request.onToolCall({ id: block.id!, name: block.name!, arguments: args });
+          }
           break;
         }
         case 'message_delta': {

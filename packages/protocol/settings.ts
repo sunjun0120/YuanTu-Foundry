@@ -305,6 +305,11 @@ export const ENVIRONMENT = {
     description:
       '一条助手消息里可同时运行的工具调用上限（1 = 严格串行；只对声明了并行安全的工具生效）',
   },
+  YUANTU_EARLY_TOOL_START: {
+    kind: 'boolean',
+    description:
+      '模型仍在输出时，提前执行参数已完整的只读工具调用（默认关闭；只对声明了 earlyStart 的纯读取工具生效，结果仍按模型顺序落盘）',
+  },
   YUANTU_QUESTION_TIMEOUT_MS: {
     kind: 'number',
     range: [1_000, 3_600_000],

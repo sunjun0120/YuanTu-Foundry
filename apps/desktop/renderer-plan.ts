@@ -50,6 +50,8 @@ export function setupPlanPanel(actions: {
       plan.steps,
       plan.reason ?? '',
       actions.isOperating(),
+      // The gate is drawn disabled while the session runs; the status line also changes once that run ends.
+      actions.isBusy(),
       // The locale is part of the key: without it a language change left the panel in the old language,
       // because the guard treated an unchanged plan as an unchanged panel.
       locale(),
@@ -57,7 +59,11 @@ export function setupPlanPanel(actions: {
     if (key === planKey) return;
     planKey = key;
     required('plan-title').textContent = plan.title || t('plan.title');
-    required('plan-status').textContent = t(`plan.status.${plan.status}`);
+    required('plan-status').textContent = t(
+      plan.status === 'planning' && !actions.isBusy()
+        ? 'plan.status.planningIdle'
+        : `plan.status.${plan.status}`,
+    );
     required('plan-summary').textContent = plan.summary;
     required('plan-summary').hidden = !plan.summary;
     required('plan-steps').replaceChildren(
@@ -109,13 +115,18 @@ export function setupPlanPanel(actions: {
        * pinned to a read-only session with nothing to click. Discarding is a rejection with a different label: the
        * row never carried a body to approve, so there is nothing to keep.
        */
-      const discard = node('button', t('plan.discard'), 'plan-discard');
+      // Idle, the row is not "being written" any more: the run ended without a plan. The same discard leaves
+      // plan mode, and it is named for that so the person is not asked to throw away a plan that never existed.
+      const discard = node('button', t(busy ? 'plan.discard' : 'plan.exitMode'), 'plan-discard');
       discard.disabled = busy;
       discard.addEventListener(
         'click',
         () => void actions.select({ type: 'planReject', planId: plan.id }),
       );
-      actionsElement.append(discard, node('span', t('plan.discardHint'), 'plan-hint'));
+      actionsElement.append(
+        discard,
+        node('span', t(busy ? 'plan.discardHint' : 'plan.idleHint'), 'plan-hint'),
+      );
     }
   }
   return { render };

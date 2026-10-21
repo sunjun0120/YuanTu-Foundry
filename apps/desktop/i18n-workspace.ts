@@ -113,6 +113,8 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.verificationDetails': ['检查详情（{count}）', 'Check details ({count})'],
   'ui.verificationCheckPassed': ['通过', 'Passed'],
   'ui.verificationCheckFailed': ['未通过', 'Failed'],
+  'ui.verificationCommand': ['执行：{command}', 'Ran: {command}'],
+  'ui.verificationSubstitute': ['替代验证', 'Substitute check'],
   'ui.verificationExitCode': ['退出码：{code}', 'Exit code: {code}'],
   'ui.completionReason.missing-verification': [
     '尚未提供可执行的检查，结果未经验证。',
@@ -147,6 +149,16 @@ export const workspaceMessages: Record<string, [string, string]> = {
     '验收条件在运行中被修改，需要重新确认',
     'The acceptance criteria changed during the run and need to be confirmed again',
   ],
+  'ui.completionReason.environment-error': [
+    '检查命令在当前环境里没能运行，这是环境限制，不是代码失败；自动修复已停止。',
+    'The check could not run in this environment. That is an environment limit, not a code failure; automatic repair stopped.',
+  ],
+  'ui.completionReason.sandboxSpawn': [
+    '原因：Windows 沙箱不允许命令再启动子进程（spawn EPERM），npm test、vitest、jest 这类会派生子进程的测试都会这样。可以在“完全访问权限”下重跑这条检查。',
+    'Cause: the Windows sandbox does not let a command start child processes (spawn EPERM), which test runners such as npm test, vitest and jest need. You can rerun the check under Full access.',
+  ],
+  'ui.completionFullAccess': ['切换到完全访问权限…', 'Switch to Full access…'],
+  'ui.completionState.environment': ['未能验证（环境限制）', 'Not verified (environment limit)'],
   'ui.completionReason.repeated-failure': [
     '同一检查反复失败，自动修复已停止',
     'The same check kept failing, so automatic repair stopped',
@@ -185,6 +197,11 @@ export const workspaceMessages: Record<string, [string, string]> = {
     '密钥将使用系统加密存储保存在本机。',
     'The key is stored with system encryption on this device.',
   ],
+  /** Eyebrows were English-only brand lines; the Chinese interface now reads Chinese and English keeps them. */
+  'ui.welcomeEyebrow': ['聚焦你的项目', 'YOUR PROJECT, IN FOCUS'],
+  'ui.settingsEyebrowGeneral': ['偏好设置 / 通用', 'PREFERENCES / GENERAL'],
+  'ui.settingsEyebrowModels': ['偏好设置 / 模型', 'PREFERENCES / MODELS'],
+  'ui.settingsEyebrowMcp': ['偏好设置 / MCP', 'PREFERENCES / MCP'],
   'ui.welcomeStart': ['从一个任务开始。', 'Start with a task.'],
   'ui.welcomeSubtitle': [
     '读懂项目，梳理思路，让改动逐步落地。',
@@ -206,15 +223,25 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.runStatus.running': ['正在处理', 'Working'],
   'ui.runStatus.preparing': ['正在准备请求…', 'Preparing the request…'],
   'ui.runStatus.waitingModel': ['正在等待模型响应…', 'Waiting for the model…'],
+  'ui.runStatus.waitingModelLong': [
+    '仍在等待模型响应（已等待 {seconds} 秒）…',
+    'Still waiting for the model ({seconds}s so far)…',
+  ],
   'ui.runStatus.responding': ['正在生成回复…', 'Writing the response…'],
   'ui.runStatus.tools': ['正在执行工具…', 'Running tools…'],
   'ui.runStatus.completed': ['本轮已结束', 'This turn is finished'],
   'ui.runStatus.needsReview': ['验收未通过，需检查', 'Acceptance failed; review needed'],
+  'ui.openModelSettings': ['打开模型设置', 'Open model settings'],
+  'ui.runStatus.environmentLimited': [
+    '未能验证：检查在当前环境里无法运行',
+    'Not verified: the check could not run in this environment',
+  ],
   'ui.runStatus.cancelled': ['已停止', 'Stopped'],
   'ui.runStatus.limited': ['已达到运行限制', 'The run limit was reached'],
   'ui.runStatus.failed': ['运行失败', 'The run failed'],
   'ui.runStatus.compacting': ['正在整理上下文…', 'Tidying up the context…'],
   'ui.runStatus.awaitingApproval': ['等待你的确认', 'Waiting for your confirmation'],
+  'ui.runStatus.awaitingAnswer': ['等待你的回答', 'Waiting for your answer'],
   'ui.runStatus.connecting': ['连接未就绪', 'The connection is not ready'],
   'ui.runStatus.loadingSession': ['正在加载会话…', 'Loading the session…'],
   /**

@@ -40,6 +40,16 @@ export function setupTranscript(options: {
   /** The hub's message renderer: one message, once per transcript rebuild. */
   messageView(message: Message): HTMLElement;
   turnChanges?(): Map<number, HTMLElement>;
+  /**
+   * Sent when the person presses 继续 after a stopped run.
+   *
+   * A stop leaves the work half done and the conversation open; without this the only way on was to retype the
+   * request. The button sends one message, so what the model receives is visible in the transcript like any
+   * other turn — nothing resumes invisibly.
+   */
+  onContinue?(): void;
+  /** Opens the full-access confirmation, offered when a check could not run because the sandbox refused a fork. */
+  onRequestFullAccess?(): void;
 }): {
   render(messages: Message[], startIndex: number, runPaused: boolean): void;
   updateRunning(): void;
@@ -47,7 +57,7 @@ export function setupTranscript(options: {
   saveScroll(): void;
   restoreScroll(): void;
 } {
-  const { messageView } = options;
+  const { messageView, onContinue, onRequestFullAccess } = options;
   let processSession: string | null = null;
   let processMessageCount = 0;
   let processTail: HTMLDetailsElement | undefined;
@@ -302,16 +312,36 @@ export function setupTranscript(options: {
     'protected-path-changed',
     'missing-verification',
     'superseded',
+    'environment-error',
   ]);
   function completionNotice(): HTMLElement | null {
     const completion = options.getState()?.session.completion ?? null;
     if (!completion) return null;
     const summary = completion.summary;
-    const element = node('div', '', `completion-notice completion-${summary.state}`);
+    // A check the environment could not run is not a failed check: the card says "not verified" in amber and
+    // names the limit, instead of "needs review" over a repair counter for code that was never at fault.
+    const environmentLimited =
+      summary.state === 'needs_review' &&
+      summary.reason.split(':')[0]!.trim() === 'environment-error';
+    const sandboxSpawn =
+      environmentLimited &&
+      (completion.evidence?.checks ?? []).some(
+        (check) => !check.passed && /spawn EPERM|EPERM \(-4048\)/u.test(check.detail),
+      );
+    const element = node(
+      'div',
+      '',
+      `completion-notice completion-${environmentLimited ? 'unverified' : summary.state}`,
+    );
+    const stateKey = environmentLimited
+      ? 'ui.completionState.environment'
+      : completion.source === 'automatic' && summary.state === 'verified'
+        ? 'ui.verificationChecksPassed'
+        : `ui.completionState.${summary.state}`;
     element.append(
       node(
         'strong',
-        `${t(completion.source === 'automatic' ? 'ui.automaticVerificationTitle' : 'ui.completionTitle')} · ${t(completion.source === 'automatic' && summary.state === 'verified' ? 'ui.verificationChecksPassed' : `ui.completionState.${summary.state}`)}`,
+        `${t(completion.source === 'automatic' ? 'ui.automaticVerificationTitle' : 'ui.completionTitle')} · ${t(stateKey)}`,
       ),
     );
     // Why it is waiting, for the two states that wait on a person. Known reasons get their own sentence; any
@@ -325,6 +355,19 @@ export function setupTranscript(options: {
       const code = summary.reason.split(':')[0]!.trim();
       const known = COMPLETION_REASONS.has(code) ? code : 'other';
       element.append(node('p', t(`ui.completionReason.${known}`), 'completion-reason'));
+      if (sandboxSpawn) {
+        element.append(node('p', t('ui.completionReason.sandboxSpawn'), 'completion-reason'));
+        if (onRequestFullAccess) {
+          const button = node(
+            'button',
+            t('ui.completionFullAccess'),
+            'secondary completion-full-access',
+          );
+          button.type = 'button';
+          button.addEventListener('click', () => onRequestFullAccess());
+          element.append(button);
+        }
+      }
     }
     if (completion.definition.objective)
       element.append(
@@ -342,13 +385,18 @@ export function setupTranscript(options: {
       element.append(
         node('p', t('ui.completionUnfinished', { steps: summary.unfinishedStepIds.join(', ') })),
       );
-    if (summary.failedCheckIds.length)
-      element.append(
-        node('p', t('ui.completionFailedChecks', { checks: summary.failedCheckIds.join(', ') })),
+    if (summary.failedCheckIds.length) {
+      const descriptions = summary.failedCheckIds.map(
+        (id) =>
+          completion.definition.acceptance.find((item) => item.check?.id === id)?.description ?? id,
       );
+      element.append(
+        node('p', t('ui.completionFailedChecks', { checks: descriptions.join(', ') })),
+      );
+    }
     // A budget is only worth showing once it is being spent: a verified contract with no repairs does not need to
     // tell the reader how many attempts it was allowed.
-    if (completion.policy.maxRepairRounds > 0 && summary.repairRounds > 0)
+    if (!environmentLimited && completion.policy.maxRepairRounds > 0 && summary.repairRounds > 0)
       element.append(
         node(
           'p',
@@ -358,6 +406,47 @@ export function setupTranscript(options: {
           }),
         ),
       );
+    /**
+     * What the checks actually ran is part of the verdict, not a detail a reader has to open.
+     *
+     * `auto-1` and a green "checks passed" said nothing about the command; a model can register a narrower
+     * check than the user asked for (`node tests/x.mjs` after `npm test` hit the sandbox), and the person is
+     * entitled to see that before trusting the green line. The full command stays in the details; this line is
+     * the command shortened only for width.
+     */
+    for (const check of completion.evidence?.checks ?? []) {
+      const criterion = completion.definition.acceptance.find(
+        (item) => item.check?.id === check.id,
+      );
+      const spec = criterion?.check;
+      const command =
+        spec?.kind === 'command' ? [spec.command, ...(spec.args ?? [])].join(' ') : undefined;
+      const shown = command && command.length > 160 ? `${command.slice(0, 157)}…` : command;
+      const description = criterion?.description ?? check.id;
+      const line = node('p', '', `completion-check ${check.passed ? 'passed' : 'failed'}`);
+      line.append(
+        node(
+          'strong',
+          t(check.passed ? 'ui.verificationCheckPassed' : 'ui.verificationCheckFailed'),
+        ),
+        ' ',
+        node('span', description),
+      );
+      if (shown)
+        line.append(
+          ' · ',
+          node('span', t('ui.verificationCommand', { command: shown }), 'completion-command'),
+        );
+      // The check description naming `npm test` while the command is a directly-run file is the substitution
+      // this round produced; naming it is more honest than letting a green tick speak for a command nobody ran.
+      const substitute =
+        spec?.kind === 'command' &&
+        /npm\s+(?:run\s+)?test/i.test(description) &&
+        !/^npm(?:\.cmd)?\s+(?:run\s+)?test/i.test(command ?? '');
+      if (substitute)
+        line.append(' ', node('span', t('ui.verificationSubstitute'), 'completion-substitute'));
+      element.append(line);
+    }
     if (completion.evidence?.checks.length) {
       const details = node('details', '', 'completion-evidence');
       details.append(
@@ -391,6 +480,17 @@ export function setupTranscript(options: {
     }
     return element;
   }
+  /** The "stopped here" line, with the one action that continues from it. */
+  function pausedNotice(): HTMLElement {
+    const paragraph = node('p', t('ui.runPaused'), 'run-paused');
+    if (onContinue) {
+      const button = node('button', t('ui.continueRun'), 'secondary');
+      button.type = 'button';
+      button.addEventListener('click', () => onContinue());
+      paragraph.append(' ', button);
+    }
+    return paragraph;
+  }
   function render(messages: Message[], startIndex: number, runPaused: boolean): void {
     const views = transcriptViews(messages, startIndex);
     const last = views.at(-1);
@@ -402,9 +502,10 @@ export function setupTranscript(options: {
       ...views,
       /**
        * Where the run stopped, not at the top of the window: a stop is the end of what happened, so it belongs
-       * after the last thing that happened. `renderPaused` is the only place this sentence is written.
+       * after the last thing that happened. `renderPaused` is the only place this sentence is written, and the
+       * button beside it is the only way to carry on from there without retyping the request.
        */
-      ...(runPaused ? [node('p', t('ui.runPaused'), 'run-paused')] : []),
+      ...(runPaused ? [pausedNotice()] : []),
       // Keep the completion verdict with the final response, before that turn's file summary.
       ...(completionNotice() ? [completionNotice()!] : []),
       ...(footer ? [footer] : []),

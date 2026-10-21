@@ -6,6 +6,7 @@ import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { cacheFields } from './cache.ts';
 import { validateImages } from '../protocol/images.ts';
 import { readSse } from './sse.ts';
+import { completeArguments } from './early-tool-call.ts';
 import { observedRequestBody } from './request-observation.ts';
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -228,6 +229,24 @@ export class ResponsesProvider implements Provider {
         const delta = string(event.delta);
         streamed += delta;
         request.onText(delta);
+      }
+      // A finished `function_call` item is a complete call; the run may start it before the turn ends. The
+      // terminal event's `output` is still what the response is built from.
+      if (event.type === 'response.output_item.done' && request.onToolCall && event.item) {
+        const item = object(event.item);
+        if (
+          item.type === 'function_call' &&
+          (item.status === undefined || item.status === 'completed') &&
+          typeof item.call_id === 'string' &&
+          item.call_id &&
+          typeof item.name === 'string' &&
+          item.name &&
+          typeof item.arguments === 'string' &&
+          item.arguments !== ''
+        ) {
+          const args = completeArguments(item.arguments);
+          if (args) request.onToolCall({ id: item.call_id, name: item.name, arguments: args });
+        }
       }
       if (event.type === 'response.completed' || event.type === 'response.incomplete') {
         terminal = object(event.response);

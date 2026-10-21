@@ -371,7 +371,10 @@ export class CarrierService {
   ): Promise<HostMethods['files.list']['result']> {
     return this.client.request('files.list', input);
   }
-  async readWorkspaceFile(input: { path: string }): Promise<HostMethods['files.read']['result']> {
+  async readWorkspaceFile(input: {
+    path: string;
+    locale?: string;
+  }): Promise<HostMethods['files.read']['result']> {
     return this.client.request('files.read', input);
   }
   /** On demand: inventories and preserved results must not inflate every streaming snapshot. */
@@ -1105,7 +1108,7 @@ export class CarrierService {
           await this.controller.refreshPlan();
           break;
         case 'approve':
-          await this.controller.approve(command.id, command.allow);
+          await this.controller.approve(command.id, command.allow, command.remember === true);
           break;
         case 'questionAnswer':
           // Answering happens *during* a run, so unlike the `manages` commands above it must not wait for

@@ -127,6 +127,8 @@ export interface SubAgentDelta {
 export interface StatisticsDelta {
   sessionId: string | null;
   statistics?: SessionStatistics;
+  /** The current (or last) run's own share of `statistics`. */
+  runStatistics?: SessionStatistics | null;
   activity: SessionSnapshot['statisticsActivity'];
 }
 /** A delegated child run as the UI shows it: one card per task, live while the parent run lasts. */
@@ -186,6 +188,13 @@ export interface SubAgentView {
 }
 export interface SessionSnapshot {
   statistics?: SessionStatistics;
+  /**
+   * What the current run — or the last one this window saw — spent on its own.
+   *
+   * `statistics` is the whole session, and a person who ran `node -v` in a long session read "521K tok" as the
+   * price of that one command. The pill shows both readings; `null` until a run has reported.
+   */
+  runStatistics?: SessionStatistics | null;
   /**
    * The last request's own context prediction, while this window has heard one.
    *

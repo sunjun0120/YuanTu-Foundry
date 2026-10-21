@@ -240,6 +240,16 @@ export interface ModelRequest {
    * this display channel alone never authorizes replay. A provider with nothing to report never calls this.
    */
   onReasoning?: (text: string) => void;
+  /**
+   * One tool call whose arguments are complete, while the rest of the turn is still streaming.
+   *
+   * Advisory and early by design: it lets the run start a call that is safe to start before the turn ends, and
+   * nothing else. The returned `ModelResponse.toolCalls` stays the authority — a turn can still be truncated,
+   * filtered or broken off, and a call reported here may then not be in it, or may differ from it. Adapters
+   * report calls in the order the model wrote them, each at most once, and only once its arguments parse as a
+   * JSON object; an adapter that cannot tell when a call is complete simply never calls this.
+   */
+  onToolCall?: (call: ToolCall) => void;
   onProgress?: (progress: ModelProgress) => void;
   /**
    * The model to serve *this* request, when it is not the provider's configured one.
@@ -287,6 +297,13 @@ export type ApprovalDecisionSource =
 export type Approver = ((approval: Approval, signal: AbortSignal) => Promise<boolean>) & {
   /** The decision just made for this call. Omitted by legacy human approvers. */
   decisionSource?: (approval: Approval) => ApprovalDecisionSource | undefined;
+  /**
+   * Why a refusal was made, when the refusal is policy rather than a person.
+   *
+   * `false` alone is read by the registry as "the user said no"; a planning/read-only run refuses without asking
+   * anyone, and the model must hear that distinction so it proposes a plan instead of asking for authorization.
+   */
+  decisionReason?: (approval: Approval) => string | undefined;
 };
 /**
  * One choice a question offers.

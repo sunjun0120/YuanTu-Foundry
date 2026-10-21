@@ -124,7 +124,19 @@ export type CarrierCommand =
   | { type: 'openLink'; url: string }
   | { type: 'send'; prompt: string; images?: ImageAttachment[]; verification?: RunVerification }
   | { type: 'enqueue'; prompt: string; images?: ImageAttachment[]; mode: 'steer' | 'follow-up' }
-  | { type: 'approve'; id: string; allow: boolean }
+  | {
+      type: 'approve';
+      id: string;
+      allow: boolean;
+      /**
+       * Allow this exact request for the rest of the session.
+       *
+       * The approval list offers it for command approvals: a test command an agent retries five times used to
+       * cost five identical clicks. "Exact" is the tool call's name and arguments, compared byte for byte, so a
+       * different command is still a new decision.
+       */
+      remember?: boolean;
+    }
   | { type: 'questionAnswer'; id: string; answers?: QuestionAnswer[]; cancelled?: boolean }
   | { type: 'subagentTranscript'; subagentId: string; childSessionId: string }
   | {
@@ -333,7 +345,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     undo: ['type', 'id'],
     send: ['type', 'prompt', 'images', 'verification'],
     enqueue: ['type', 'prompt', 'images', 'mode'],
-    approve: ['type', 'id', 'allow'],
+    approve: ['type', 'id', 'allow', 'remember'],
     questionAnswer: ['type', 'id', 'answers', 'cancelled'],
     subagentTranscript: ['type', 'subagentId', 'childSessionId'],
     subagentWorkspace: ['type', 'subagentId', 'childSessionId', 'action'],
@@ -576,6 +588,12 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
   if (
     (value.type === 'approve' || value.type === 'taskApproval') &&
     typeof value.allow !== 'boolean'
+  )
+    return invalid();
+  if (
+    value.type === 'approve' &&
+    value.remember !== undefined &&
+    typeof value.remember !== 'boolean'
   )
     return invalid();
   if (

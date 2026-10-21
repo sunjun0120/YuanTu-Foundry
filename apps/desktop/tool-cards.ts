@@ -184,5 +184,7 @@ export function toolCardView(model: ToolCardModel): HTMLElement {
     );
   if (!model.stdout && !model.stderr)
     card.append(node('p', t('ui.toolCardNoOutput'), 'tool-card-note'));
+  if (model.sandboxNote)
+    card.append(node('p', t('ui.toolCardSandboxFork'), 'tool-card-note tool-card-sandbox-note'));
   return card;
 }

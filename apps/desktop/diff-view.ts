@@ -1,4 +1,5 @@
 import type { FileChange } from '../../packages/protocol/index.ts';
+import { readablePatchPaths } from '../../packages/protocol/patch-display.ts';
 import { t } from './i18n.ts';
 const labels: Record<FileChange['kind'], string> = {
   create: 'diff.create',
@@ -47,8 +48,9 @@ export function diffView(change: FileChange, expanded = false): HTMLElement {
   }
   const pre = document.createElement('pre');
   // The file header only precedes the first hunk; after that, a `-`/`+` line is content whatever it spells.
+  // Header names are decoded for display: the patch keeps its ASCII-safe quoting, this is what a person reads.
   let inHunk = false;
-  for (const line of change.patch.split('\n')) {
+  for (const line of readablePatchPaths(change.patch).split('\n')) {
     const row = document.createElement('span');
     const lineClass = classifyDiffLine(line, inHunk);
     if (lineClass === 'diff-hunk') inHunk = true;

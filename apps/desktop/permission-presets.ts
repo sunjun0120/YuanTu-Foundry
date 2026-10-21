@@ -14,10 +14,11 @@ import {
  * the honest unit: one choice that writes both, so a combination that is not one of these is visibly
  * *custom* rather than silently normal.
  *
- * Observe restricts tools to reading; guarded uses native isolation and asks before effects;
+ * Observe restricts tools to reading; guarded uses native isolation and asks before effects; auto keeps the
+ * same isolation but only asks for the risky effects (`RISKY_COMMAND_PATTERNS`, external access);
  * unconfined explicitly selects host execution with full access. Backend capability checks still apply.
  */
-export type PermissionPresetId = 'observe' | 'guarded' | 'unconfined';
+export type PermissionPresetId = 'observe' | 'guarded' | 'auto' | 'unconfined';
 export interface PermissionPreset {
   id: PermissionPresetId;
   sandbox: SandboxMode;
@@ -26,10 +27,17 @@ export interface PermissionPreset {
 export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
   { id: 'observe', sandbox: 'native', permission: 'read-only' },
   { id: 'guarded', sandbox: 'native', permission: 'ask' },
+  { id: 'auto', sandbox: 'native', permission: 'auto' },
   { id: 'unconfined', sandbox: 'host', permission: 'full-access' },
 ];
-/** What a new session starts in. Kept here rather than in the desktop so the default and the table agree. */
-export const DEFAULT_PRESET: PermissionPresetId = 'guarded';
+/**
+ * What a new session starts in. Kept here rather than in the desktop so the default and the table agree.
+ *
+ * `auto` rather than `guarded`: starting every conversation on "ask for everything" made people click through
+ * the same approval cards for ordinary edits and test runs each time. `auto` keeps the sandbox and still stops
+ * for the risky commands, so the default stays confined while only the risk needs a decision.
+ */
+export const DEFAULT_PRESET: PermissionPresetId = 'auto';
 /** What the desktop shows for a pair no preset declares. Not an id: it cannot be applied. */
 export const CUSTOM_PRESET = 'custom';
 export function isPermissionPresetId(value: unknown): value is PermissionPresetId {

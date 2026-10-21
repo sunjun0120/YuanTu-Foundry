@@ -8,6 +8,7 @@ import { Workspace } from './files.ts';
 import { localExecutionEnvironment, executionPolicy } from './execution-environment.ts';
 import { resolveSandboxConfig } from './sandbox.ts';
 import { createOutputDecoder } from './output-decoder.ts';
+import { SANDBOX_CHILD_SPAWN_NOTE, sandboxChildSpawnBlocked } from './sandbox-launch-failure.ts';
 
 /**
  * How much command output is held in memory before collection stops. Well above the tool-result limit, so
@@ -44,6 +45,10 @@ const RUN_COMMAND_OUTPUT: ToolOutputContract = {
       truncated: {
         type: 'boolean',
         description: 'True when the streams are not the whole output.',
+      },
+      sandboxNote: {
+        type: 'string',
+        description: 'Why the Windows sandbox could not start this command’s child process.',
       },
     },
     required: [
@@ -211,6 +216,18 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
             }
             const shownStdout = stdout.slice(0, MAX_TOOL_OUTPUT);
             const shownStderr = stderr.slice(0, MAX_TOOL_OUTPUT);
+            /**
+             * A Windows-sandboxed command that could not fork says so in words.
+             *
+             * The raw `spawn EPERM` stack is the only evidence today, and it reads as "the test runner is broken".
+             * The note names the environment and the way on; it is added only when the backend that ran this
+             * command is the Windows one and the output carries the signature.
+             */
+            const childSpawnBlocked =
+              plan.backend === 'windows' &&
+              !timedOut &&
+              code !== 0 &&
+              sandboxChildSpawnBlocked(`${stdout}\n${stderr}`);
             resolve({
               isError: timedOut || code !== 0,
               commandExecuted: true,
@@ -234,6 +251,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
                 output: truncated
                   ? `${output}\n[command output exceeded ${COMMAND_OUTPUT_LIMIT} characters]`
                   : output,
+                ...(childSpawnBlocked ? { sandboxNote: SANDBOX_CHILD_SPAWN_NOTE } : {}),
               }),
               // A non-zero exit is still a result with a shape, so it carries one: a card shows the exit code
               // and the streams for a failed command, which is exactly when somebody wants to read them. Only a
@@ -250,6 +268,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
                   truncated ||
                   shownStdout.length < stdout.length ||
                   shownStderr.length < stderr.length,
+                ...(childSpawnBlocked ? { sandboxNote: SANDBOX_CHILD_SPAWN_NOTE } : {}),
               }),
             });
           })().catch(reject);

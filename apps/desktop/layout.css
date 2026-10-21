@@ -190,23 +190,52 @@ body {
 #chat-sidebar #sessions {
   padding-bottom: 16px;
 }
+/* The list's scrollbar is a thin thumb that appears only while the pointer is over it: no track, no arrows. */
+#chat-sidebar #sessions::-webkit-scrollbar {
+  width: 6px;
+}
+#chat-sidebar #sessions::-webkit-scrollbar-track,
+#chat-sidebar #sessions::-webkit-scrollbar-corner {
+  background: transparent;
+}
+#chat-sidebar #sessions::-webkit-scrollbar-button {
+  display: none;
+}
+#chat-sidebar #sessions::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+#chat-sidebar #sessions:hover::-webkit-scrollbar-thumb {
+  background: var(--line);
+}
+#chat-sidebar #sessions::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
 #chat-sidebar .session-row {
   margin-bottom: 3px;
 }
+/* Title and age share one line: the title takes the room and ellipsizes, the age sits at the right. */
 #chat-sidebar .session-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   padding: 9px 30px 9px 12px;
   color: var(--ink);
   border-radius: 7px;
 }
 #chat-sidebar .session-item strong {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: inherit;
   font-weight: 500;
 }
 #chat-sidebar .session-item small {
-  font-size: 10px;
-  margin-top: 4px;
+  flex-shrink: 0;
+  font-size: 11px;
+  margin-top: 0;
   color: var(--muted);
+  white-space: nowrap;
 }
 #chat-sidebar .session-item.selected,
 #chat-sidebar .session-item:hover:enabled {
@@ -222,6 +251,18 @@ body {
 }
 #chat-sidebar .session-load-more:hover:enabled {
   background: var(--raised);
+  color: var(--ink);
+}
+/* "Show more" / "Show less" reads as one more line of the list: muted text, aligned with the titles, no fill. */
+#chat-sidebar .session-toggle {
+  display: block;
+  padding: 9px 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+#chat-sidebar .session-toggle:hover:enabled {
+  background: transparent;
   color: var(--ink);
 }
 #chat-sidebar .session-more {

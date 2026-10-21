@@ -251,6 +251,10 @@ export const panelMessages: Record<string, [string, string]> = {
     '初始化未完成或状态检查失败。请确认管理员提示并重新检查状态。',
     'Initialization did not complete or its status could not be verified. Check the administrator prompt and refresh the status.',
   ],
+  'sandboxSetup.recoveryFailed': [
+    '修复未完成：沙箱仍被另一个 YuanTu 进程占用，或锁文件无法识别。请关闭其他窗口后重试。',
+    'The repair did not finish: the sandbox is still in use by another YuanTu process, or a lock cannot be identified. Close other windows and try again.',
+  ],
   'settings.contextTokens': ['上下文窗口 Token', 'Context window tokens'],
   'settings.outputTokens': ['单次输出上限 Token', 'Maximum output tokens per request'],
   'settings.automaticBudget': ['自动（可手动指定）', 'Automatic (optional override)'],

@@ -23,7 +23,7 @@ import { setupSessionPanels } from './renderer-session-panels.ts';
 import { setupSessionList, type SessionActivity } from './renderer-session-list.ts';
 import { setupTranscript } from './renderer-transcript.ts';
 import { setupTurnChanges } from './renderer-changes.ts';
-import { runStatusText } from './renderer-status.ts';
+import { RUN_CANCELLED, runStatusText, visibleRunError } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
@@ -31,6 +31,9 @@ import { setupArchivedSessions } from './renderer-archived-sessions.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
 import { setupSelectMenus } from './renderer-select-menu.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
+import { environmentBlockedCode } from '../../packages/tools/environment-blocked.ts';
+import { approvalKey as identicalApprovalKey } from '../../packages/client/approval-key.ts';
+import { localizedRunError, runErrorWantsModelSettings } from './renderer-error-text.ts';
 import { SlotRegistry, mountSlot, type SlotMount } from './slots.ts';
 declare global {
   interface Window {
@@ -46,11 +49,10 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 /**
  * What the kernel writes into `error` when the signal it was given aborted.
  *
- * The string is the kernel's, so it is matched here rather than re-worded there: `agent.ts` uses it as the
- * reason on the run result, the CLI prints it, and a second spelling of "the user stopped this" is a second
- * thing to keep in step.
+ * The string is the kernel's, so it is matched rather than re-worded: `agent.ts` uses it as the reason on the
+ * run result, the CLI prints it, and a second spelling of "the user stopped this" is a second thing to keep in
+ * step. Defined beside `visibleRunError`, which is the other reader of the same marker.
  */
-const RUN_CANCELLED = 'Run cancelled';
 function node<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   text = '',
@@ -272,6 +274,16 @@ function sessionActivity(snapshot: CarrierSnapshot): Map<string, SessionActivity
   }
   return activity;
 }
+/**
+ * Carry on after 停止: one ordinary message, so the transcript shows exactly what the model was told.
+ *
+ * It is not a resume of the interrupted tool call - the kernel has no such notion, and pretending otherwise
+ * would promise a continuation it cannot guarantee. What it removes is the retyping.
+ */
+function continuePausedRun(): void {
+  if (!state || state.session.running || state.session.loading) return;
+  void select({ type: 'send', prompt: t('ui.continuePrompt') });
+}
 async function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
   // Opening or creating a session leaves a running one going in the Host; anything else here waits for it.
   const switching = command.type === 'load' || command.type === 'create';
@@ -319,6 +331,8 @@ const transcriptView = setupTranscript({
   getState: () => state,
   messageView: messagesView.messageView,
   turnChanges: () => turnChangesView.cards(),
+  onContinue: () => continuePausedRun(),
+  onRequestFullAccess: () => permissionSettings?.requestFullAccess(),
 });
 
 const liveView = setupLiveMessage({
@@ -379,6 +393,100 @@ function renderComposerState(): void {
   element('attach-image').title = t('ui.addAttachment');
   element('attach-image').setAttribute('aria-label', t('ui.addAttachment'));
 }
+/**
+ * Whether the error banner is talking about a dead Windows sandbox lease.
+ *
+ * That blocker is the one failure in this window whose fix belongs to the window: the kernel's sentence ends by
+ * naming `yuantu-agent sandbox-recover`, a CLI the desktop installer does not contain, so without this the person
+ * is told to run something they cannot run. The banner shows the actionable sentence and one button instead, and
+ * keeps the kernel's own text as the tooltip for whoever wants the details.
+ */
+function sandboxLeaseBlocked(error: string): boolean {
+  return (environmentBlockedCode(error) ?? '').startsWith('windows-sandbox-');
+}
+/** The status line, from the window's current state; also re-run on a timer while a model is silent. */
+function renderRunStatus(): void {
+  if (!state) return;
+  const session = state.session;
+  element('run-status').textContent = runStatusText({
+    status: session.status,
+    compacting: session.compacting,
+    approvals: session.approvals.length,
+    questions: session.questions.length,
+    ready: state.ready,
+    loading: session.loading,
+    activity: session.statisticsActivity,
+    tools: session.tools.length,
+    now: Date.now(),
+    ...(session.completion ? { completionReason: session.completion.summary.reason } : {}),
+  });
+}
+// Only the "waiting for the model" reading changes with time; the timer is cheap and skips every other state.
+window.setInterval(() => {
+  const activity = state?.session.statisticsActivity;
+  if (state?.session.status === 'running' && activity?.kind === 'model' && !activity.phase)
+    renderRunStatus();
+}, 1_000);
+let sandboxRecoveryNote = '';
+let sandboxRecoveryBusy = false;
+let sandboxRecovered = false;
+let bannerError = '';
+function renderErrorBanner(error: string): void {
+  bannerError = error;
+  const blocked = sandboxLeaseBlocked(error);
+  // A failure with a known shape gets a sentence that says what to do; the kernel's own text becomes the
+  // tooltip so the detail (a request id, the provider's wording) is still one hover away.
+  const translated = error ? localizedRunError(error, locale() === 'en-US') : null;
+  element('error').hidden = !error;
+  element('error').title = blocked || translated ? error : '';
+  element('error-text').textContent = blocked ? t('ui.sandboxBlocked') : (translated ?? error);
+  const action = element<HTMLButtonElement>('error-action');
+  const settings = !blocked && Boolean(error) && runErrorWantsModelSettings(error);
+  action.hidden = settings ? false : !blocked || sandboxRecovered;
+  action.disabled = !settings && sandboxRecoveryBusy;
+  action.dataset.action = settings ? 'model-settings' : 'sandbox-recovery';
+  if (settings) action.textContent = t('ui.openModelSettings');
+  else if (blocked)
+    action.textContent = sandboxRecoveryBusy
+      ? t('ui.sandboxRecovering')
+      : t('ui.sandboxRecoveryAction');
+  element('error-note').textContent = blocked ? sandboxRecoveryNote : '';
+}
+/** Put back the workspace permissions a dead sandbox owner left, then say what happened. */
+async function recoverSandboxWorkspace(): Promise<void> {
+  if (sandboxRecoveryBusy) return;
+  sandboxRecoveryBusy = true;
+  sandboxRecoveryNote = t('ui.sandboxRecovering');
+  renderCurrentError();
+  try {
+    const reply = await window.yuantu.sandboxRecovery?.({ type: 'recover' });
+    if (!reply)
+      sandboxRecoveryNote = format(t('ui.sandboxRecoveryFailed'), {
+        message: t('ui.operationFailed'),
+      });
+    else if (!reply.ok)
+      sandboxRecoveryNote = format(t('ui.sandboxRecoveryFailed'), {
+        message: reply.detail ?? reply.error,
+      });
+    else if (reply.view.restored.length) {
+      sandboxRecovered = true;
+      sandboxRecoveryNote = format(t('ui.sandboxRecovered'), {
+        count: String(reply.view.restored.length),
+      });
+    } else sandboxRecoveryNote = t('ui.sandboxRecoveryNothing');
+  } catch (cause) {
+    sandboxRecoveryNote = format(t('ui.sandboxRecoveryFailed'), {
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+  } finally {
+    sandboxRecoveryBusy = false;
+    renderCurrentError();
+  }
+}
+/** Re-draw the banner from the error it already holds, without waiting for the next snapshot. */
+function renderCurrentError(): void {
+  renderErrorBanner(bannerError);
+}
 function render(): void {
   if (!state) return;
   // A full paint draws whatever pushes were waiting for the next frame.
@@ -420,27 +528,15 @@ function render(): void {
       : localError && carrierErrorText(localError, locale())) ||
     carrierErrorText(state, locale()) ||
     session.error;
-  /**
-   * Two run outcomes are statuses rather than failures, and the kernel's marker for each is not shown as one.
-   *
-   * `agent.ts` sets `error = 'Run cancelled'` when the signal aborted, which the banner drew as a failure in
-   * English across the top of a Chinese interface. What happened is that somebody pressed 停止: the conversation
-   * says so at its end (`renderPaused`), and a red band is the wrong shape for a thing the user did on purpose.
-   *
-   * The second is `missing-verification`: a run that changed files but registered no checks ends
-   * `needs_review` and the completion line under the transcript already says so in the user's language. The
-   * error string is still carried in the run result for CLI and JSON consumers; it is not a failure banner.
-   * Only the run's own error is suppressed — a local or carrier error stays visible even beside a review.
-   */
-  const missingVerification =
-    session.completion?.summary.reason === 'missing-verification' &&
-    session.completion.summary.state === 'unverified';
-  const error =
-    stopError === RUN_CANCELLED || (missingVerification && stopError === session.error)
-      ? ''
-      : stopError;
-  element('error').hidden = !error;
-  element('error').textContent = error || '';
+  // A cancelled run and every `needs_review` verdict are statuses, not failures: the conversation and the
+  // completion block already say what happened, in the user's language. See `visibleRunError` for the rule and
+  // why only the run's own error is suppressed.
+  const error = visibleRunError({
+    error: stopError,
+    sessionError: session.error,
+    completion: session.completion?.summary ?? null,
+  });
+  renderErrorBanner(error);
   // A recovery is reported, not hidden: the window came back by itself, and the reason the reply the user was
   // waiting for never arrived is exactly what they need to be told.
   const notice = state.recovery
@@ -477,15 +573,7 @@ function render(): void {
     .join('\n');
   element('clear-queue').hidden = !session.queue.length;
   element<HTMLButtonElement>('clear-queue').disabled = composerView.isQueueBusy();
-  element('run-status').textContent = runStatusText({
-    status: session.status,
-    compacting: session.compacting,
-    approvals: session.approvals.length,
-    ready: state.ready,
-    loading: session.loading,
-    activity: session.statisticsActivity,
-    tools: session.tools.length,
-  });
+  renderRunStatus();
   element('session-short').textContent = session.sessionId
     ? t('ui.sessionShort', { id: session.sessionId.slice(0, 8) })
     : '';
@@ -501,6 +589,7 @@ function render(): void {
     !state.ready,
     state.sessionsHasMore === true,
     sessionActivity(state),
+    Boolean(state.sessionQuery?.trim()),
   );
   // Message timestamps are locale-formatted, so they follow the language too.
   const paused = session.error === RUN_CANCELLED;
@@ -533,15 +622,37 @@ function render(): void {
   ]);
   if (nextApprovalKey !== approvalKey) {
     approvalKey = nextApprovalKey;
+    // Identical requests waiting together are one card: the controller answers every copy with one click.
+    const copies = new Map<string, number>();
+    for (const item of session.approvals) {
+      const key = identicalApprovalKey(item.approval);
+      copies.set(key, (copies.get(key) ?? 0) + 1);
+    }
+    const drawn = new Set<string>();
+    const shown = session.approvals.filter((item) => {
+      const key = identicalApprovalKey(item.approval);
+      if (drawn.has(key)) return false;
+      drawn.add(key);
+      return true;
+    });
     element('approvals').replaceChildren(
-      ...session.approvals.map((item) => {
+      ...shown.map((item) => {
         const panel = node('section', '', 'approval');
         const summary = approvalSummary(item.approval);
+        const count = copies.get(identicalApprovalKey(item.approval)) ?? 1;
         panel.append(
           node('div', t('ui.approvalRequired'), 'approval-label'),
           node('h2', summary.title),
           node('p', summary.why, 'approval-why'),
         );
+        if (count > 1)
+          panel.append(
+            node(
+              'p',
+              format(t('approval.identicalCount'), { count: String(count) }),
+              'approval-meta',
+            ),
+          );
         if (summary.subject) panel.append(node('pre', summary.subject, 'approval-subject'));
         if (summary.directory)
           panel.append(
@@ -552,6 +663,8 @@ function render(): void {
             ),
           );
         if (summary.boundary) panel.append(node('p', summary.boundary, 'approval-meta'));
+        if (summary.projectConfig)
+          panel.append(node('p', summary.projectConfig, 'approval-meta approval-config'));
         if (item.approval.subagent)
           panel.append(
             node(
@@ -572,18 +685,45 @@ function render(): void {
         );
         panel.append(raw);
         const actions = node('div', '', 'approval-actions');
-        for (const allow of [false, true]) {
+        /*
+         * A command approval offers a third answer: allow this exact call for the rest of the session.
+         *
+         * It is not offered for file changes (a diff is read once and approved once) or external services.
+         * The command case is the one where the same call repeats — a test command retried five times used to
+         * cost five identical clicks.
+         */
+        const decisions = [
+          { allow: false, remember: false },
+          { allow: true, remember: false },
+          ...(item.approval.kind === 'command' ? [{ allow: true, remember: true }] : []),
+        ];
+        for (const decision of decisions) {
           const button = node(
             'button',
-            t(allow ? 'approval.allow' : 'approval.deny'),
-            allow ? 'primary' : 'secondary',
+            t(
+              decision.remember
+                ? 'approval.allowSession'
+                : decision.allow
+                  ? 'approval.allow'
+                  : 'approval.deny',
+            ),
+            decision.remember || !decision.allow ? 'secondary' : 'primary',
           );
+          if (decision.remember) {
+            button.title = t('approval.allowSessionNote');
+            button.setAttribute('aria-label', t('approval.allowSessionNote'));
+          }
           button.disabled = approvalBusy.has(item.id);
           button.addEventListener('click', () => {
             approvalBusy.add(item.id);
             localError = null;
             render();
-            void invoke({ type: 'approve', id: item.id, allow }).finally(() => {
+            void invoke({
+              type: 'approve',
+              id: item.id,
+              allow: decision.allow,
+              ...(decision.remember ? { remember: true } : {}),
+            }).finally(() => {
               approvalBusy.delete(item.id);
               render();
             });
@@ -691,6 +831,17 @@ window.addEventListener('yuantu-settings-close', () => {
   backgroundView.close();
   transcriptView.restoreScroll();
 });
+// The one failure in this window whose remedy belongs to the window: put back the workspace permissions a dead
+// sandbox owner left, instead of telling the person to run a CLI the desktop does not ship.
+element('error-action').addEventListener('click', () => {
+  if (element('error-action').dataset.action === 'model-settings') {
+    // The same two clicks the command palette's 模型设置 entry makes: open settings, then the model page.
+    element('open-settings').dispatchEvent(new Event('click'));
+    document.getElementById('model-settings')?.dispatchEvent(new Event('click'));
+    return;
+  }
+  void recoverSandboxWorkspace();
+});
 
 element('load-older-history').addEventListener('click', () => {
   if (operation || composerView.isSending() || state?.session.running || state?.session.loading)
@@ -753,7 +904,12 @@ window.yuantu.subscribeOpenSession?.((sessionId) => {
 });
 window.yuantu.subscribe((next, changed) => {
   const first = !state;
+  const wasRunning = state?.session.running === true;
   state = next;
+  // The workspace tree is a snapshot from the Host, not a filesystem watcher. A run that just ended is exactly
+  // when the files it wrote are most likely to be looked for, so re-read it once instead of making the person
+  // notice the refresh button.
+  if (!first && wasRunning && !next.session.running) workspaceView.refresh();
   // A recovery notice supersedes the error that caused it: both describe the same crash, and "the app came
   // back and rebuilt the session" is the more useful of the two to leave on screen. Without this the window
   // recovered silently and kept an error banner from the request that died with the Host.
@@ -792,16 +948,7 @@ window.yuantu.subscribeStatisticsDelta((delta) => {
     ...state,
     session: { ...state.session, statistics: delta.statistics, statisticsActivity: delta.activity },
   };
-  const session = state.session;
-  element('run-status').textContent = runStatusText({
-    status: session.status,
-    compacting: session.compacting,
-    approvals: session.approvals.length,
-    ready: state.ready,
-    loading: session.loading,
-    activity: delta.activity,
-    tools: session.tools.length,
-  });
+  renderRunStatus();
 });
 // Every other renderer re-renders on a language change; without this the chat
 // surface kept its old locale-formatted timestamps and labels.

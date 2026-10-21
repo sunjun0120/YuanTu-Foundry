@@ -1,5 +1,11 @@
 import { SandboxEnvironment } from './sandbox-environment.ts';
 import {
+  inspectSandboxRecovery,
+  parseSandboxRecoveryCommand,
+  recoverSandboxLease,
+  type SandboxRecoveryReply,
+} from './sandbox-recovery.ts';
+import {
   WindowsSandboxSetup,
   parseSandboxSetupCommand,
   waitForSandboxInitialization,
@@ -518,7 +524,13 @@ void app
                 command.path === undefined || !command.path ? {} : { path: command.path },
               ),
             }
-          : { ok: true, preview: await service.readWorkspaceFile({ path: command.path }) };
+          : {
+              ok: true,
+              preview: await service.readWorkspaceFile({
+                path: command.path,
+                ...(command.locale ? { locale: command.locale } : {}),
+              }),
+            };
       } catch (error) {
         return { ok: false, error: safeError(error) };
       }
@@ -652,6 +664,32 @@ void app
         } catch (error) {
           console.error('desktop: sandbox initialization request failed', safeError(error));
           return { ok: false, error: mainText('sandboxSetup.failed') };
+        }
+      },
+    );
+    ipcMain.handle(
+      'yuantu:sandbox-recovery',
+      async (event, input: unknown): Promise<SandboxRecoveryReply> => {
+        try {
+          assertSender(event);
+          const command = parseSandboxRecoveryCommand(input);
+          if (quitting) throw new Error(mainText('desktop.quitting'));
+          return {
+            ok: true,
+            view:
+              command.type === 'status'
+                ? await inspectSandboxRecovery()
+                : await recoverSandboxLease(),
+          };
+        } catch (error) {
+          // The refusal (a live owner, an unreadable lock) is the reason the person needs; the generic sentence
+          // alone would leave them pressing a button that keeps failing.
+          console.error('desktop: sandbox recovery request failed', safeError(error));
+          return {
+            ok: false,
+            error: mainText('sandboxSetup.recoveryFailed'),
+            detail: safeError(error),
+          };
         }
       },
     );

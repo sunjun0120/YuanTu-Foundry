@@ -478,16 +478,18 @@ test(
     await page.locator('#statistics-session').click();
     assert.equal(await page.locator('#statistics-session-panel').isVisible(), true);
     // The counts are the session's own boundaries, and the figures are the ones the step measured: a session
-    // that called no tool has no tool row to show.
+    // that called no tool has no tool row to show, and this fixture's decode span was not timed, so there is no
+    // throughput row either — a figure nobody measured is absent, not printed as 未知.
     assert.deepEqual(await page.locator('#statistics-session-panel dt').allTextContents(), [
       '模型用时',
       '首 token 平均（TTFT）',
-      '输出速度（TPS）',
     ]);
     const sessionRows = await page.locator('#statistics-session-panel dd').allTextContents();
-    assert.equal(sessionRows.length, 3);
-    assert.equal(sessionRows[2], '未知');
-    assert.equal((await page.locator('#statistics-session').innerText()).trim(), '1 轮 1 步');
+    assert.equal(sessionRows.length, 2);
+    assert.equal(
+      (await page.locator('#statistics-session').innerText()).trim(),
+      '本会话累计 1 轮 1 步',
+    );
     await page.screenshot({ path: artifactPath('statistics/session-dark.png') });
     await page.locator('#prompt').click({ position: { x: 8, y: 8 } });
     assert.equal(await page.locator('#statistics-session-panel').isVisible(), false);
@@ -518,9 +520,13 @@ test(
     // A run cut off mid-stream still closed its step, so the counts move and the usage does not: the provider
     // never finished the request, which means it never billed for it.
     await page.waitForFunction(() =>
-      document.querySelector('#statistics-session').textContent.startsWith('2 轮 2 步'),
+      document.querySelector('#statistics-session').textContent.startsWith('本会话累计 2 轮 2 步'),
     );
-    assert.match(await page.locator('#statistics-tokens').innerText(), /110 tok · 缓存命中 80%/);
+    assert.match(
+      await page.locator('#statistics-tokens').innerText(),
+      // The interrupted run billed nothing, so there is no 本次 share; the session figure says what it counts.
+      /本会话累计 110 tok（含缓存读取） · 缓存命中 80%/,
+    );
     await page.locator('#statistics-tokens').click();
     assert.deepEqual(await page.locator('#statistics-tokens-panel dd').allTextContents(), [
       '80%',

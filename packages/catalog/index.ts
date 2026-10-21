@@ -13,7 +13,7 @@ import { commandTool } from '../tools/command.ts';
 import { mcpTools } from '../mcp/tools.ts';
 import { BackgroundCommands } from '../tools/background.ts';
 import { TerminalSessions } from '../tools/terminal.ts';
-import { gitTools } from '../tools/git.ts';
+import { gitTools, workspaceInsideOuterRepository } from '../tools/git.ts';
 import { validationTools } from '../tools/validation.ts';
 import { webTools } from '../tools/web.ts';
 import { browserTools } from '../tools/browser.ts';
@@ -200,7 +200,8 @@ export function createTools(
       annotate && MUTATION_TOOLS.has(tool.name) ? attachDiagnostics(tool, lsp, root) : tool,
     );
   for (const tool of [
-    ...gitTools(root),
+    // A subdirectory of a repository cannot use any Git tool (see `workspaceInsideOuterRepository`).
+    ...(workspaceInsideOuterRepository(root) ? [] : gitTools(root)),
     ...validationTools(root),
     ...webTools(root),
     commandTool(root),

@@ -25,6 +25,28 @@ function node<K extends keyof HTMLElementTagNameMap>(
   return value;
 }
 
+/**
+ * One line for a refusal the kernel writes in English, when the refusal has a known shape.
+ *
+ * Tool-result text is evidence: the model read exactly these words, and a view that reworded them would be a
+ * second account nobody could check. So the raw text stays where it is and this note is added above it — the
+ * reader gets a sentence in their language, the evidence stays byte-for-byte what the model saw.
+ */
+export function toolFailureNote(message: {
+  role: Message['role'];
+  isError?: boolean;
+  content: string;
+}): string | null {
+  if (message.role !== 'tool' || message.isError !== true) return null;
+  const content = message.content;
+  if (content.startsWith('Invalid arguments:')) return t('ui.toolArgumentsInvalid');
+  if (content.startsWith('Verification checks are already registered'))
+    return t('ui.toolCheckLocked');
+  if (content.startsWith('Git tools need the repository root'))
+    return t('ui.toolGitOutsideWorkspace');
+  return null;
+}
+
 export function setupMessages(options: {
   /** The hub's bridge-backed actions: markdown may only reach the outside world through these. */
   markdownActions: MarkdownActions;
@@ -84,10 +106,24 @@ export function setupMessages(options: {
     }
     return time;
   }
+  /**
+   * What a user-role message says to this reader.
+   *
+   * The completion repair prompt is written for the model, in English, and is stored as a user message so the
+   * next request carries it. The transcript shows a one-line Chinese summary in its place; the completion panel
+   * below carries the failed checks and their output.
+   */
+  const COMPLETION_REPAIR_PREFIX = 'Automated acceptance checks did not pass';
+  function userText(message: Message): string {
+    if (message.role !== 'user') return message.content;
+    const shown = message.displayContent ?? message.content;
+    return !message.displayContent && shown.startsWith(COMPLETION_REPAIR_PREFIX)
+      ? t('ui.completionRepairSummary')
+      : shown;
+  }
   /** The copy button and its feedback, as the `message.actions` slot draws them. */
   function messageCopyView(message: Message): HTMLElement {
-    const content =
-      message.role === 'user' ? (message.displayContent ?? message.content) : message.content;
+    const content = message.role === 'user' ? userText(message) : message.content;
     const copy = node('button', '', 'copy-user-message');
     copy.type = 'button';
     const label = () => t('ui.copyMessage');
@@ -147,6 +183,19 @@ export function setupMessages(options: {
             ? t('ui.search')
             : t(message.isError ? 'ui.operationFailed' : 'ui.toolResult');
       const summary = node('summary', '', `process-summary process-${outputKind ?? 'tool'}`);
+      /*
+       * What the line says after the label. A result the panel can describe (a path, a query, a command) says
+       * that; it never falls back to the call id, which is an internal handle a person cannot use — an
+       * interrupted tool used to read `操作未完成 · call_01_K3UyNHn…` and nothing else.
+       */
+      const preview =
+        card?.kind === 'file-read'
+          ? card.path
+          : card?.kind === 'search-results'
+            ? card.query
+            : card?.kind === 'command-output'
+              ? card.command
+              : '';
       summary.append(
         processIcon(
           message.isError
@@ -158,11 +207,7 @@ export function setupMessages(options: {
                 : 'result',
         ),
         node('span', label, 'process-label'),
-        node(
-          'span',
-          `· ${card?.kind === 'file-read' ? card.path : card?.kind === 'search-results' ? card.query : card?.kind === 'command-output' ? card.command : message.toolCallId}`,
-          'process-preview',
-        ),
+        ...(preview ? [node('span', `· ${preview}`, 'process-preview')] : []),
       );
       details.append(summary);
       // A card is drawn *beside* the text, never instead of it: the text is what the model was shown, and a view
@@ -174,6 +219,10 @@ export function setupMessages(options: {
         raw.append(node('summary', t('ui.toolCardRaw')), node('pre', message.content));
         details.append(raw);
       } else {
+        // A refusal the kernel writes in English gets one line saying what happened, with the raw text kept
+        // underneath: the model's evidence is unchanged, the reader is not left with only the English.
+        const note = toolFailureNote(message);
+        if (note) details.append(node('p', note, 'tool-error-note'));
         details.append(node('pre', message.content));
       }
       if (message.images?.length || (message.change && !message.isError))
@@ -191,8 +240,7 @@ export function setupMessages(options: {
     // closed is also what keeps a reopened session's reasoning out of the way until it is asked for.
     if (message.role === 'assistant' && message.reasoning)
       body.append(reasoningView(message.reasoning));
-    const content =
-      message.role === 'user' ? (message.displayContent ?? message.content) : message.content;
+    const content = message.role === 'user' ? userText(message) : message.content;
     const display =
       message.role === 'user' ? splitAttachmentPrompt(content) : { prompt: content, files: [] };
     if (display.prompt)

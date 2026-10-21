@@ -735,6 +735,27 @@ textarea {
   gap: 3px;
   font-size: 13px;
 }
+.permission-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+/* The rung that gives up isolation reads as a warning, like Codex's full-access row. */
+#permission-menu button[data-preset='unconfined'],
+#permission-menu button[data-preset='unconfined'] .permission-copy small {
+  color: #d9773f;
+}
+#permission-menu button {
+  align-items: flex-start;
+}
+#permission-menu button svg {
+  margin-top: 1px;
+}
+.permission-heading {
+  margin: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
 .permission-check {
   flex: 0 0 16px;
 }
@@ -907,6 +928,22 @@ textarea {
   padding: 6px 10px;
   color: var(--muted);
   font-size: 11px;
+}
+.tool-card-sandbox-note {
+  color: #7a4b00;
+  background: #fff8e6;
+  border-top: 1px solid #f0dfb8;
+}
+/* One sentence for a refusal the kernel writes in English; the raw diagnostic stays below it. */
+.tool-error-note {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-left: 3px solid #d9b7b1;
+  border-radius: 0 4px 4px 0;
+  background: #fdf6f4;
+  color: #7a4a42;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .tool-result-raw {
   margin-top: 6px;

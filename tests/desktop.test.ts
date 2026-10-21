@@ -350,8 +350,8 @@ test('a preset pairs a sandbox with an approval floor, and only the full-access 
   assert.equal(new Set(pairs).size, pairs.length, 'no two presets describe the same pair');
   assert.deepEqual(
     PERMISSION_PRESETS.map((preset) => preset.id),
-    ['observe', 'guarded', 'unconfined'],
-    'three rungs, in the order the chip reads them',
+    ['observe', 'guarded', 'auto', 'unconfined'],
+    'four rungs, in the order the chip reads them',
   );
   assert.equal(
     PERMISSION_PRESETS.find((preset) => preset.id === DEFAULT_PRESET)?.sandbox,
@@ -360,8 +360,8 @@ test('a preset pairs a sandbox with an approval floor, and only the full-access 
   );
   assert.equal(
     permissionPreset(DEFAULT_PRESET).permission,
-    'ask',
-    'and it starts by asking: a default that auto-approved writes would be promising something else',
+    'auto',
+    'and it starts on 帮我批准: ordinary work goes through, risky commands still ask',
   );
   assert.equal(
     PERMISSION_PRESETS.find((preset) => preset.sandbox === 'host')?.permission,

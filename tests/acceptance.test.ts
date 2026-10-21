@@ -6,6 +6,10 @@ import path from 'node:path';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
 import { EnvironmentBlockedError } from '../packages/tools/environment-blocked.ts';
+import {
+  SANDBOX_LAUNCH_FAILED_EXIT,
+  SANDBOX_LAUNCH_FAILED_PREFIX,
+} from '../packages/tools/sandbox-launch-failure.ts';
 import { verifyCompletionAcceptance } from '../packages/core/task-acceptance.ts';
 import {
   registerSandboxProvider,
@@ -87,6 +91,122 @@ test('a command-specific preparation failure does not suppress independent comma
   );
   assert.equal(result.checks[0]?.passed, false);
   assert.equal(result.checks[1]?.passed, true);
+});
+
+test('a launcher that cannot start the image is an environment blocker, not a failed assertion', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-launch-'));
+  const original = sandboxProvider('host');
+  registerSandboxProvider({
+    ...original,
+    prepare: async (request) => {
+      const plan = await original.prepare(request);
+      // What the Windows launcher now does when `CreateProcessAsUser` cannot start the image at all.
+      plan.executable = process.execPath;
+      plan.args = [
+        '-e',
+        `console.error(${JSON.stringify(SANDBOX_LAUNCH_FAILED_PREFIX + 'CreateProcessAsUser 系统找不到指定的文件')});process.exit(${SANDBOX_LAUNCH_FAILED_EXIT})`,
+      ];
+      return plan;
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const spec = [{ id: 'launch', kind: 'command' as const, command: 'npm', args: ['test'] }];
+  const result = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, spec),
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0]?.failureReason, 'environment-error');
+  assert.match(result.checks[0]!.detail, /could not start the command/);
+  assert.match(result.checks[0]!.detail, /CreateProcessAsUser/);
+  // The classification is what stops the repair loop: `decideCompletion` only hands `assertion-failed` back to
+  // the model, and the verdict says so in words the person reading the result can act on.
+  const verdict = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyCompletionAcceptance(
+      root,
+      [{ description: 'tests run', met: false, check: spec[0]! }],
+      [],
+      {},
+    ),
+  );
+  assert.equal(verdict.passed, false);
+  assert.match(verdict.error!, /blocked by the execution environment/);
+});
+
+test('a Windows-sandboxed command that cannot fork is an environment blocker, not a failed assertion', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-fork-'));
+  const original = sandboxProvider('host');
+  registerSandboxProvider({
+    ...original,
+    prepare: async (request) => {
+      const plan = await original.prepare(request);
+      // What `node --test` reports after the restricted token refuses its per-file child process.
+      plan.backend = 'windows';
+      plan.executable = process.execPath;
+      plan.args = ['-e', "console.error('Error: spawn EPERM');process.exit(1)"];
+      return plan;
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const result = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, [{ id: 'fork', kind: 'command', command: 'npm', args: ['test'] }]),
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0]?.failureReason, 'environment-error');
+  assert.match(result.checks[0]!.detail, /could not create a child process/);
+  assert.match(result.checks[0]!.detail, /not a failing test/);
+});
+
+test('a host command that reports spawn EPERM keeps its own assertion failure', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-fork-host-'));
+  const original = sandboxProvider('host');
+  registerSandboxProvider({
+    ...original,
+    prepare: async (request) => {
+      const plan = await original.prepare(request);
+      plan.backend = 'host';
+      plan.executable = process.execPath;
+      plan.args = ['-e', "console.error('Error: spawn EPERM');process.exit(1)"];
+      return plan;
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const result = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, [{ id: 'fork', kind: 'command', command: 'npm', args: ['test'] }]),
+  );
+  assert.equal(result.checks[0]?.failureReason, 'assertion-failed');
+});
+
+test('an ordinary exit code 125 without the launcher marker stays an assertion failure', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-125-'));
+  const original = sandboxProvider('host');
+  registerSandboxProvider({
+    ...original,
+    prepare: async (request) => {
+      const plan = await original.prepare(request);
+      // Same code, no marker: a command is free to choose 125 as its own failure code.
+      plan.executable = process.execPath;
+      plan.args = ['-e', 'console.error("suite exploded");process.exit(125)'];
+      return plan;
+    },
+  });
+  t.after(async () => {
+    registerSandboxProvider(original);
+    await rm(root, { recursive: true, force: true });
+  });
+  const result = await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, [{ id: 'code', kind: 'command', command: 'npm', args: ['test'] }]),
+  );
+  assert.equal(result.checks[0]?.passed, false);
+  assert.equal(result.checks[0]?.failureReason, 'assertion-failed');
 });
 
 for (const scenario of [

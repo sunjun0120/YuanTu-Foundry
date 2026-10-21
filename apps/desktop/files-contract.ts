@@ -16,7 +16,7 @@ export type FilesCommand =
   /** The children of one directory; the workspace root when no path is given. */
   | { type: 'list'; path?: string }
   /** One file, as text, as an image, or as an honest "unsupported". */
-  | { type: 'read'; path: string };
+  | { type: 'read'; path: string; locale?: string };
 
 export type FilesReply =
   | { ok: true; listing: WorkspaceListing }
@@ -38,11 +38,20 @@ export function parseFilesCommand(input: unknown): FilesCommand {
   };
   if (!input || typeof input !== 'object' || Array.isArray(input)) return fail();
   const value = input as Record<string, unknown>;
-  const fields: Record<string, string[]> = { list: ['type', 'path'], read: ['type', 'path'] };
+  const fields: Record<string, string[]> = {
+    list: ['type', 'path'],
+    read: ['type', 'path', 'locale'],
+  };
   if (
     typeof value.type !== 'string' ||
     !Object.hasOwn(fields, value.type) ||
     Object.keys(value).some((key) => !fields[value.type as string]!.includes(key))
+  )
+    return fail();
+  const locale = value.locale;
+  if (
+    locale !== undefined &&
+    (typeof locale !== 'string' || locale.length > 32 || locale.includes('\0'))
   )
     return fail();
   const path = value.path;
@@ -54,7 +63,11 @@ export function parseFilesCommand(input: unknown): FilesCommand {
       (value.type === 'read' && !path.trim())
     )
       return fail();
-    return { type: value.type as 'list' | 'read', path };
+    return {
+      type: value.type as 'list' | 'read',
+      path,
+      ...(value.type === 'read' && locale ? { locale: locale as string } : {}),
+    };
   }
   if (value.type === 'read') return fail();
   return { type: 'list' };

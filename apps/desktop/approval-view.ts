@@ -16,6 +16,8 @@ export interface ApprovalSummary {
   directory?: string;
   /** The isolation sentence, for a command. */
   boundary?: string;
+  /** What is special about a project configuration file, when this edit touches one. */
+  projectConfig?: string;
 }
 
 function text(value: unknown): string | undefined {
@@ -40,15 +42,39 @@ export function boundaryText(boundary: NonNullable<Approval['boundary']>): strin
     network: t(`approval.network.${boundary.network}`),
   });
 }
+/**
+ * Whether a path is a project-level configuration file.
+ *
+ * These are ordinary-looking edits with a different consequence: changing `package.json`'s scripts changes what
+ * `npm test` means, and a CI file changes what runs on every push. In a real run the agent edited the test script
+ * of the project just to make its own check pass, and the approval card showed it as "修改文件". The card now
+ * says what is special about the file; the decision is still the person's.
+ */
+export function projectConfigKind(path: string | undefined): 'commands' | 'build' | null {
+  if (!path) return null;
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  const name = normalized.split('/').pop() ?? '';
+  if (name === 'package.json') return 'commands';
+  if (/^(tsconfig|jsconfig)[^/]*\.json$/.test(name)) return 'build';
+  if (/^(vite|vitest|jest|playwright|rollup|webpack|esbuild)\.config\.[cm]?[jt]s$/.test(name))
+    return 'build';
+  if (normalized.startsWith('.github/workflows/')) return 'build';
+  if (name === 'dockerfile' || name === 'makefile') return 'build';
+  return null;
+}
 export function approvalSummary(approval: Approval): ApprovalSummary {
   const args = approval.toolCall.arguments ?? {};
   const tool = approval.toolCall.name;
   const directory = text(args.cwd);
+  const config = projectConfigKind(
+    approval.change?.path ?? text(args.path) ?? text(args.output_path),
+  );
   return {
     title: t(`approval.title.${approval.kind}`),
     why: format(t(`approval.why.${approval.kind}`), { tool }),
     ...(approval.change ? {} : { subject: subjectOf(args) }),
     ...(directory ? { directory } : {}),
     ...(approval.boundary ? { boundary: boundaryText(approval.boundary) } : {}),
+    ...(config ? { projectConfig: t(`approval.projectConfig.${config}`) } : {}),
   };
 }

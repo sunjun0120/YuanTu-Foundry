@@ -1079,6 +1079,14 @@ pre {
 .approval .approval-meta {
   margin: 4px 0;
 }
+/* A project configuration edit is ordinary-looking and changes what future commands mean; the card says so. */
+.approval .approval-config {
+  padding: 6px 10px;
+  border-left: 3px solid #d9b7b1;
+  border-radius: 0 4px 4px 0;
+  background: #fdf6f4;
+  color: #7a4a42;
+}
 .approval-actions {
   display: flex;
   gap: 8px;
@@ -1165,6 +1173,23 @@ textarea::placeholder {
 .completion-evidence {
   margin-top: 8px;
 }
+.completion-check {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.completion-check .completion-command {
+  color: #66756b;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+.completion-substitute {
+  color: #8a5a00;
+  background: #fff4d6;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
 .completion-evidence summary {
   cursor: pointer;
 }
@@ -1190,6 +1215,28 @@ textarea::placeholder {
   background: #fff0ee;
   color: #a45e54;
   border-bottom: 1px solid #efd8d4;
+}
+/*
+ * A failure the window can repair itself. The sentence says what happened, one button repairs it, and the note
+ * reports the result — inline, because this is one action, not a page.
+ */
+.error-banner #error-action {
+  margin: 0 8px;
+  padding: 0 8px;
+  color: #8a4b42;
+  border: 1px solid #d9b7b1;
+  border-radius: 4px;
+  background: #fffaf9;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.error-banner #error-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.error-banner #error-note {
+  color: #7a5a54;
 }
 /*
  * A recovery notice, not a failure: it reports that something happened and was handled, so it is muted rather

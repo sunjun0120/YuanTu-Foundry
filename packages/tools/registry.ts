@@ -311,6 +311,21 @@ export class ToolRegistry {
    * The classifier is the tool's own statement about *this* call, which is why it takes the arguments: a tool
    * may read safely for one path and not for another, and only the tool knows which is which.
    */
+  /**
+   * Whether this call may start before the model has finished its turn.
+   *
+   * Narrower than `executionMode`, on purpose: an early start overlaps whatever the model has not written yet, so
+   * the call must be one that may overlap anything (`parallel`) *and* one whose discarded execution leaves no trace
+   * (`Tool.earlyStart`). A name this run does not offer is never started early either — it would only be refused.
+   */
+  startsEarly(call: ToolCall): boolean {
+    const entry = this.entries.get(call.name);
+    return (
+      entry?.tool.earlyStart === true &&
+      this.offers(call.name) &&
+      this.executionMode(call) === 'parallel'
+    );
+  }
   executionMode(call: ToolCall): 'parallel' | 'exclusive' {
     const entry = this.entries.get(call.name);
     if (!entry || entry.tool.permission) return 'exclusive';
@@ -613,7 +628,15 @@ export class ToolRegistry {
           this.deadlines?.approvalMs,
         );
         context.signal.throwIfAborted();
-        if (!decision.allowed)
+        if (!decision.allowed) {
+          const reason = approval ? context.approve?.decisionReason?.(approval) : undefined;
+          if (reason === 'read-only')
+            return materialize(
+              errorResult(
+                `Tool "${call.name}" is not available in this read-only run: it declares a permission and no effect was executed. ` +
+                  'If this is a planning run, do not ask the user to authorize it; call exit_plan_mode with the plan instead.',
+              ),
+            );
           return materialize(
             errorResult(
               decision.timedOut
@@ -621,11 +644,15 @@ export class ToolRegistry {
                 : 'Permission denied by user. Do not retry the operation without new authorization.',
             ),
           );
-        if (context.readOnly)
-          return materialize(
-            errorResult('Operation refused by the read-only run policy; no effect was executed'),
-          );
+        }
       }
+      if (context.readOnly && entry.tool.permission)
+        return materialize(
+          errorResult(
+            `Tool "${call.name}" is not available in this read-only run: it declares a permission and no effect was executed. ` +
+              'If this is a planning run, do not ask the user to authorize it; call exit_plan_mode with the plan instead.',
+          ),
+        );
 
       let dispatchPolicy = context.executionPolicy!;
       const refreshDispatch = async (dispatchSignal: AbortSignal) => {

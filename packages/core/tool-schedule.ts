@@ -57,13 +57,14 @@ export type BoundedOutcome<T> =
  *
  * `start` is invoked synchronously in start order, which is what makes the first `limit` items begin in model
  * order; `shouldStop` is consulted immediately before every start, never after, so a stop is never reported
- * for a call that did begin.
+ * for a call that did begin. It is told the index it is about to start, so a caller can let an item through that
+ * is already under way elsewhere (an early start being adopted) while refusing the rest.
  */
 export async function runBounded<T, R>(
   items: readonly T[],
   limit: number,
   start: (item: T, index: number) => Promise<R>,
-  shouldStop?: () => boolean,
+  shouldStop?: (index: number) => boolean,
 ): Promise<BoundedOutcome<R>[]> {
   const outcomes: BoundedOutcome<R>[] = new Array(items.length);
   const inFlight = new Map<number, Promise<number>>();
@@ -84,7 +85,7 @@ export async function runBounded<T, R>(
   };
   while (next < items.length || inFlight.size) {
     while (next < items.length && inFlight.size < Math.max(1, limit)) {
-      if (!stopped && shouldStop?.()) stopped = true;
+      if (!stopped && shouldStop?.(next)) stopped = true;
       if (stopped) break;
       launch(next++);
     }

@@ -106,12 +106,24 @@ export class FileObservations implements FileObservationLog {
   }
   /** Records a read the model asked for and got. */
   async record(input: string): Promise<void> {
-    if (!this.enabled) return;
+    (await this.observe(input))();
+  }
+  /**
+   * Takes the observation now and returns the step that records it.
+   *
+   * Split from `record` for a read that may still be discarded (`ToolContext.deferEffect`): the size and time
+   * have to be the ones the read saw, while the record itself must wait until the model has the content.
+   */
+  async observe(input: string): Promise<() => void> {
+    if (!this.enabled) return () => {};
     try {
-      await this.remember(await this.workspace.resolve(input, false, true));
+      const file = await this.workspace.resolve(input, false, true);
+      const observed = await statFile(file);
+      return () => this.seen.set(file, observed);
     } catch {
       // A path that cannot be resolved or stat'ed now was not observed; the read itself already succeeded and
       // reported what it saw, and this gate is about later changes, not about that one.
+      return () => {};
     }
   }
   async assertRead(input: string): Promise<void> {

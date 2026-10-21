@@ -22,6 +22,33 @@ test('the boundary sentence says what each backend declares, and no more', () =>
   );
 });
 
+test('a read-only refusal is reported as policy, not as a user denial', async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: 'fake_write',
+    description: 'A write-permission tool.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    permission: 'write',
+    execute: async () => ({ content: 'wrote', isError: false }),
+  });
+  const approve = Object.assign(async () => false, {
+    decisionReason: () => 'read-only',
+  });
+  const result = await registry.execute(
+    { id: '1', name: 'fake_write', arguments: {} },
+    {
+      signal: new AbortController().signal,
+      readOnly: true,
+      approve,
+      executionPolicy: executionPolicy('host'),
+    },
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content, /not available in this read-only run/);
+  assert.match(result.content, /exit_plan_mode/);
+  assert.doesNotMatch(result.content, /Permission denied by user/);
+});
+
 test('a command approval carries the boundary of the backend it will run on; other kinds do not', async () => {
   const registry = new ToolRegistry();
   const parameters = { type: 'object', properties: {}, additionalProperties: false };

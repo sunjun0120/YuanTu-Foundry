@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' data:; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src blob:"
     />
     <title>YuanTu Agent</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -143,14 +143,18 @@
         </div>
       </header>
       <div class="conversation-heading"><span>对话</span></div>
-      <div id="error" class="error-banner" role="alert" hidden></div>
+      <div id="error" class="error-banner" role="alert" hidden>
+        <span id="error-text"></span>
+        <button id="error-action" type="button" class="text-button" hidden></button>
+        <span id="error-note" role="status"></span>
+      </div>
       <div id="notice" class="notice-banner" role="status" hidden></div>
       <div id="configuration" class="configuration" hidden>
         尚未配置模型。点击左下角“设置”，进入“模型设置”，填写接口和密钥即可开始聊天。已有会话仍可查看。
       </div>
       <section id="conversation" aria-label="对话内容" tabindex="0">
         <div id="welcome" class="welcome">
-          <div class="eyebrow">YOUR PROJECT, IN FOCUS</div>
+          <div class="eyebrow">聚焦你的项目</div>
           <h1>从一个任务开始。</h1>
           <p>读懂项目，梳理思路，让改动逐步落地。</p>
           <div class="suggestions">
@@ -300,8 +304,9 @@
             -->
             <select id="permission-mode" aria-label="权限与隔离" data-native hidden disabled>
               <option value="observe">仅可查看</option>
-              <option value="guarded" selected>工作区内修改</option>
-              <option value="unconfined">完全权限</option>
+              <option value="guarded" selected>请求批准</option>
+              <option value="auto">帮我批准</option>
+              <option value="unconfined">完全访问权限</option>
               <option value="custom">自定义</option>
             </select>
             <div class="chat-model">
@@ -403,7 +408,7 @@
     <dialog id="full-access-dialog" aria-labelledby="full-access-title">
       <form id="full-access-form">
         <header class="risk-dialog-head">
-          <h2 id="full-access-title">确认启用完全权限？</h2>
+          <h2 id="full-access-title">确认启用完全访问权限？</h2>
           <button id="full-access-close" type="button" aria-label="关闭">✕</button>
         </header>
         <div class="risk-dialog-body">
@@ -415,7 +420,7 @@
             </svg>
           </span>
           <p id="full-access-description">
-            启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。
+            启用完全访问权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。
           </p>
         </div>
         <label class="risk-confirmation">
@@ -425,7 +430,7 @@
         <div class="session-dialog-actions">
           <button id="full-access-cancel" type="button">取消</button>
           <button id="full-access-enable" type="submit" class="primary" disabled>
-            启用完全权限
+            启用完全访问权限
           </button>
         </div>
       </form>
@@ -521,7 +526,7 @@
         hidden
       >
         <div class="settings-page-header">
-          <div class="eyebrow">PREFERENCES / GENERAL</div>
+          <div class="eyebrow">偏好设置 / 通用</div>
           <h2 id="general-settings-title">通用设置</h2>
           <p>调整界面语言、外观和阅读字号。</p>
         </div>
@@ -568,7 +573,7 @@
         aria-labelledby="settings-title"
       >
         <div class="settings-page-header">
-          <div class="eyebrow">PREFERENCES / MODELS</div>
+          <div class="eyebrow">偏好设置 / 模型</div>
           <h2 id="settings-title">模型设置</h2>
           <p>管理模型连接，为每次对话选择合适的模型。</p>
         </div>

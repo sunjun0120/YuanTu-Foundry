@@ -12,12 +12,13 @@ export const BUILTIN_SKILL_PREFIX = 'builtin:';
 
 const OFFICE_DOCUMENTS = `---
 name: office-documents
-description: Plan, write and check Word reports and PowerPoint decks with office_create, office_edit and office_preview.
+description: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.
 ---
 
 # Writing Office documents
 
-Use this when the user wants a report, proposal, letter, handout or slide deck as a .docx or .pptx file.
+Use this when the user wants a report, proposal, letter, handout, workbook or slide deck as a .docx, .xlsx or
+.pptx file.
 
 ## Before writing
 
@@ -44,6 +45,20 @@ Use this when the user wants a report, proposal, letter, handout or slide deck a
   title-only slides as section dividers in decks longer than about 10 slides.
 - Put numbers in a \`table\` slide rather than in bullets; keep tables to about 6 rows and 5 columns.
 
+## Excel (office_create, format xlsx)
+
+- Pass \`sheets\`: one entry per sheet with a \`name\` and a two-dimensional \`rows\` array. The first row is the
+  header; keep columns to what the reader needs.
+- A cell whose text starts with \`=\` becomes a real formula, not a string: \`=SUM(C2:C3)\` is written as the
+  formula \`SUM(C2:C3)\`. Reference explicit ranges (\`=SUM(B2:B3)\`) rather than whole columns, which change
+  meaning when rows are inserted.
+- There is no calculation engine here, so a formula is stored without a cached result and Excel, WPS or
+  LibreOffice computes it when the file opens. Do not add a Python/openpyxl step just to compute a value.
+- To change an existing workbook, use office_edit with \`cells\` (\`{ sheet, cell, value }\`) instead of rebuilding
+  it, and read it with office_inspect first to learn the real sheet and cell names.
+- After creating a workbook, read it back with office_inspect: a formula cell is shown as \`=SUM(...)\`, and the
+  sheet's \`range\` and \`rows\` tell you whether the table landed where you meant.
+
 ## Editing a template (office_edit)
 
 - Read the template with office_inspect first and copy the exact text to replace, including punctuation.
@@ -55,8 +70,11 @@ Use this when the user wants a report, proposal, letter, handout or slide deck a
 
 - After creating or editing, read the output back with office_inspect and confirm the content, order and
   that no placeholder is left unfilled by mistake.
-- For a visual check, office_preview with an .html output works everywhere. A .pdf output needs Microsoft
-  Office or LibreOffice on this machine; if neither is available, say so and offer the HTML preview.
+- Do not create a preview file only to check your own work: office_inspect already shows the content, needs no
+  approval and leaves nothing behind, and the user can open the file in the app's built-in preview. Every
+  office_preview writes a file the user must approve and that you would then have to delete.
+- Use office_preview when the user asks for a preview file. An .html output works everywhere; a .pdf output
+  needs Microsoft Office or LibreOffice on this machine; if neither is available, say so and offer HTML.
 - Hand the file to the user with present, and tell them what is in it and anything left for them to fill in.
 `;
 

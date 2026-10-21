@@ -150,6 +150,73 @@ test('frozen snapshots share every message an earlier one handed out', async (t)
   assert.deepEqual(second, controller.snapshot);
 });
 
+test('an approval allowed for the session answers the next identical request itself', async (t) => {
+  let emit: (event: AgentEvent) => void = () => {};
+  const responses: { approvalId: string; allow: boolean }[] = [];
+  const client = {
+    status: 'ready',
+    subscribe: (listener: (event: AgentEvent) => void) => {
+      emit = listener;
+      return () => {};
+    },
+    subscribeStatus: () => () => {},
+    async request(method: string, params: Record<string, unknown>) {
+      if (method === 'session.get') return { messages: [] };
+      if (method === 'plan.get') return null;
+      if (method === 'subagents.list') return [];
+      if (method === 'approval.respond') {
+        responses.push(params as { approvalId: string; allow: boolean });
+        return {};
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    },
+  };
+  const controller = new SessionController(client as unknown as AgentHostClient);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  emit({ type: 'run.started', sessionId: 'session-1', runId: 'run-1', data: {} } as AgentEvent);
+  const approval = (id: string, command: string) => ({
+    kind: 'command',
+    description: 'run it',
+    toolCall: { id, name: 'run_command', arguments: { command } },
+  });
+  const required = (approvalId: string, command: string) =>
+    emit({
+      type: 'approval.required',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      data: { approvalId, approval: approval(approvalId, command) },
+    } as unknown as AgentEvent);
+  required('a1', 'npm test');
+  assert.equal(controller.snapshot.approvals.length, 1);
+  await controller.approve('a1', true, true);
+  assert.deepEqual(responses, [{ approvalId: 'a1', allow: true }]);
+  assert.equal(controller.snapshot.approvals.length, 0);
+  // The same command asked again is the decision the person already made, not a new one.
+  required('a2', 'npm test');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(controller.snapshot.approvals.length, 0);
+  assert.deepEqual(responses.at(-1), { approvalId: 'a2', allow: true });
+  // A different command is still a new decision: remembering `npm test` must not allow `npm publish`.
+  required('a3', 'npm publish');
+  assert.equal(controller.snapshot.approvals.length, 1);
+  assert.equal(controller.snapshot.approvals[0]?.id, 'a3');
+  // Identical requests already waiting are one decision, even when it is only "allow once": the window draws them
+  // as one card, and the answer reaches every copy — but never a different call.
+  required('a4', 'node -v');
+  required('a5', 'node -v');
+  assert.equal(controller.snapshot.approvals.length, 3);
+  await controller.approve('a4', true);
+  assert.deepEqual(responses.slice(-2), [
+    { approvalId: 'a4', allow: true },
+    { approvalId: 'a5', allow: true },
+  ]);
+  assert.deepEqual(
+    controller.snapshot.approvals.map((item) => item.id),
+    ['a3'],
+  );
+});
+
 // ---- merged from client.test.ts ----
 
 async function setup(t: test.TestContext, env: NodeJS.ProcessEnv = {}, extra = {}) {

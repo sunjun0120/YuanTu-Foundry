@@ -161,6 +161,10 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.toolCardTimeout': ['超时', 'timed out'],
   'ui.toolCardStderr': ['标准错误', 'stderr'],
   'ui.toolCardNoOutput': ['没有输出', 'no output'],
+  'ui.toolCardSandboxFork': [
+    '沙箱无法创建子进程（spawn EPERM），这是环境限制，不是命令或代码错误。可改用直接运行测试文件，或在“完全访问权限”下重试。',
+    'The sandbox could not create a child process (spawn EPERM). This is an environment limit, not a failing command or test. Run the test file directly, or retry with “Full access”.',
+  ],
   'ui.toolCardRaw': ['工具结果原文', 'Raw tool result'],
   'ui.model': ['模型', 'Model'],
   'ui.switchModel': ['切换模型', 'Switch model'],
@@ -221,6 +225,35 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.sendTimeUnavailable': ['这条消息未记录发送时间', 'Send time unavailable for this message'],
   'ui.copyMessage': ['复制问题', 'Copy message'],
   'ui.operationFailed': ['操作未完成', 'Operation failed'],
+  'ui.toolArgumentsInvalid': [
+    '工具参数不符合它自己的定义（多传或漏传了字段），这次调用没有执行。下面是原始诊断。',
+    'The tool arguments did not match the tool definition (a field was missing or extra), so the call did not run. The raw diagnostic follows.',
+  ],
+  'ui.toolCheckLocked': [
+    '验收检查已经登记，不能替换成更容易通过的检查；要让它通过，需要修复工作本身。',
+    'The acceptance checks are registered and cannot be replaced by easier ones; passing them means fixing the work.',
+  ],
+  'ui.toolGitOutsideWorkspace': [
+    'Git 工具要求仓库根目录在工作区内；当前工作区是某个仓库的子目录。',
+    'Git tools need the repository root inside the workspace; this workspace is a subdirectory of one.',
+  ],
+  /**
+   * A dead Windows sandbox lease: every command is refused until the workspace permissions it left are put back.
+   * The kernel's own sentence ends by naming a CLI the desktop does not install, so the window replaces it with
+   * what a person can act on — one button, and what happened after pressing it.
+   */
+  'ui.sandboxBlocked': [
+    'Windows 沙箱留下了未清理的工作区权限记录，命令已暂停。修复后即可继续，不需要打开终端或安装其他工具。',
+    'The Windows sandbox left workspace permissions behind, so commands are paused. Repairing them is enough to continue — no terminal or extra install needed.',
+  ],
+  'ui.sandboxRecoveryAction': ['修复工作区权限', 'Fix workspace permissions'],
+  'ui.sandboxRecovering': ['正在修复…', 'Repairing…'],
+  'ui.sandboxRecovered': [
+    '已恢复 {count} 个工作区的权限，可以重新运行命令。',
+    'Restored permissions for {count} workspace(s); commands can run again.',
+  ],
+  'ui.sandboxRecoveryNothing': ['没有需要恢复的权限记录。', 'There was nothing to restore.'],
+  'ui.sandboxRecoveryFailed': ['修复失败：{message}', 'Repair failed: {message}'],
   'ui.toolResult': ['工具结果', 'Tool result'],
   'ui.runningTool': ['正在执行 {name}', 'Running {name}'],
   'ui.sessionChanges': [
@@ -257,6 +290,10 @@ export const conversationMessages: Record<string, [string, string]> = {
     'The agent wants to use an external service through {tool}; the request may send data off this machine.',
   ],
   'approval.directory': ['运行目录：{directory}', 'Directory: {directory}'],
+  'approval.identicalCount': [
+    '同一操作有 {count} 个请求在等待，这次选择会一并应用。',
+    '{count} identical requests are waiting; this answer applies to all of them.',
+  ],
   'approval.boundary': ['隔离：{files}；{network}。', 'Isolation: {files}; {network}.'],
   'approval.files.unrestricted': [
     '直接在本机运行，没有系统隔离，可读写当前账户能访问的任何文件',
@@ -275,6 +312,19 @@ export const conversationMessages: Record<string, [string, string]> = {
   'approval.network.unrestricted': ['可以访问网络', 'it can reach the network'],
   'approval.raw': ['完整操作参数', 'Full operation details'],
   'approval.allow': ['允许一次', 'Allow once'],
+  'approval.projectConfig.commands': [
+    '这是项目的命令入口配置：改这里的脚本会改变以后运行测试、构建或安装的方式。',
+    'This is the project command entry point: editing its scripts changes how tests, builds or installs run from now on.',
+  ],
+  'approval.projectConfig.build': [
+    '这是项目的构建/CI 配置：改动会影响以后每次构建或推送。',
+    'This is project build/CI configuration: the change affects every later build or push.',
+  ],
+  'approval.allowSession': ['本会话允许此类操作', 'Allow this for the session'],
+  'approval.allowSessionNote': [
+    '完全相同的命令在本会话内不再询问；参数不同的命令仍会询问。',
+    'The same command will not ask again in this session; a command with different arguments still will.',
+  ],
   'approval.deny': ['拒绝', 'Deny'],
   'ui.externalService': ['访问外部服务', 'Access external service'],
   'ui.runCommand': ['执行命令', 'Run command'],
@@ -285,6 +335,7 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.undoChange': ['撤销此修改', 'Undo this change'],
   'plan.title': ['计划', 'Plan'],
   'plan.status.planning': ['正在制定计划', 'Planning in progress'],
+  'plan.status.planningIdle': ['计划模式 · 等待下一步', 'Plan mode · waiting'],
   'plan.status.proposed': ['等待批准', 'Awaiting approval'],
   'plan.status.approved': ['已批准', 'Approved'],
   'plan.status.rejected': ['已拒绝', 'Rejected'],
@@ -309,6 +360,15 @@ export const conversationMessages: Record<string, [string, string]> = {
     '这次会话仍在计划模式：继续提问会继续制定计划。若不想再计划，先放弃这份计划。',
     'This session is still planning: your next message continues the plan. Discard the plan to leave plan mode.',
   ],
+  /**
+   * A planning row whose run has ended without proposing anything — usually a question back to the person, or a
+   * write the planning run was not allowed to make. "正在制定计划" there promised work nobody was doing.
+   */
+  'plan.idleHint': [
+    '这次运行没有产出计划。可以直接回复补充信息，让它继续制定；不想再计划就退出计划模式。',
+    'This run did not produce a plan. Reply with more detail to keep planning, or leave plan mode.',
+  ],
+  'plan.exitMode': ['退出计划模式', 'Leave plan mode'],
   'plan.abandonedHint': [
     '制定这份计划的运行已中断，这份计划不会再完成；可以重新发起一次计划。',
     'The run that was preparing this plan was interrupted, so it will not finish. You can plan again.',
@@ -465,7 +525,17 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Generated {count} characters. Showing the latest part until the full reply is ready.',
   ],
   'ui.interruptedReply': ['回复中断，已保留部分内容', 'Reply interrupted; partial content saved'],
+  'ui.completionRepairSummary': [
+    '自动验收未通过，已把失败原因发回给模型继续修复。详细检查结果见本轮“验收状态”。',
+    'Automated checks did not pass; the model is being asked to repair the work. See the verification panel for the failed checks.',
+  ],
   'ui.runPaused': ['提问已暂停', 'Paused'],
+  /** The one action offered beside a stopped run: send one message that asks to carry on. */
+  'ui.continueRun': ['继续', 'Continue'],
+  'ui.continuePrompt': [
+    '继续完成刚才中断的任务，从中断处接着做。',
+    'Continue the interrupted task from where it stopped.',
+  ],
   /**
    * Shown after the app restarted a Host that died on its own. It has to say two things and no more: that the
    * window is usable again, and that the run which was in flight did not continue — the second is the part a
@@ -478,6 +548,8 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.stopping': ['正在停止…', 'Stopping...'],
   'ui.sessionShort': ['会话 {id}', 'Session {id}'],
   'ui.loadMoreSessions': ['加载更早的会话', 'Show older sessions'],
+  'ui.showMoreSessions': ['显示更多', 'Show more'],
+  'ui.showFewerSessions': ['收起', 'Show less'],
   'ui.sessionRunning': ['运行中', 'Running'],
   'ui.sessionWaitingLabel': [
     '该会话有 {count} 项审批或提问等待处理，打开会话后处理',

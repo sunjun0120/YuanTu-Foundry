@@ -14,7 +14,12 @@ import {
 import { verifyFileDelivery, deliveryFormats } from '../packages/tools/file-delivery.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { officeTools } from '../packages/office/tools.ts';
-import { MAX_CREATED_SHEETS, runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
+import {
+  MAX_CREATED_SHEETS,
+  runSpreadsheetOperation,
+  spreadsheetPreviewHtml,
+} from '../packages/office/spreadsheet.ts';
+import { officePreviewHtml } from '../packages/office/render.ts';
 import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS } from '../packages/office/document.ts';
 import { MAX_SLIDE_TABLE_ROWS } from '../packages/office/presentation.ts';
 import { deliveryTool } from '../packages/tools/delivery.ts';
@@ -251,6 +256,56 @@ test('XLSX inspection exposes full dimensions independently of the bounded sampl
   assert.equal(sheet.columns, 4);
   assert.equal(sheet.sample.length, 30);
   assert.equal(sheet.sampleTruncated, true);
+});
+
+test('Excel creation writes real formulas and inspection shows them', async (t) => {
+  const root = await tempRoot(t, 'yuantu-excel-formula-');
+  const file = path.join(root, 'totals.xlsx');
+  await runSpreadsheetOperation({
+    operation: 'create',
+    format: 'xlsx',
+    outputPath: file,
+    sheets: [
+      {
+        name: 'Summary',
+        rows: [
+          ['customer', 'orders', 'revenue'],
+          ['A', 2, 1800],
+          ['B', 1, 900],
+          ['total', '=SUM(B2:B3)', '=SUM(C2:C3)'],
+        ],
+      },
+    ],
+  });
+  const zip = await JSZip.loadAsync(await readFile(file));
+  const sheetXml = (await zip.file('xl/worksheets/sheet1.xml')!.async('string')).replace(
+    /\s+/g,
+    ' ',
+  );
+  // A cell that starts with `=` is a formula, not literal text, and not an error cell (`t="e"`): writing
+  // `{ t: 'n', f }` with this writer produced `t="e"` for every formula, which readers show as an error.
+  assert.match(sheetXml, /<c r="B4"><f>SUM\(B2:B3\)<\/f><\/c>/);
+  assert.match(sheetXml, /<c r="C4"><f>SUM\(C2:C3\)<\/f><\/c>/);
+  assert.doesNotMatch(sheetXml, /<c r="B4" t="e"/);
+  // `office_inspect` must report the formula rather than a missing row: the default reader drops a cell that
+  // holds only a formula, which made a correctly built workbook look like it had lost its total row.
+  const tool = officeTools(root).find((item) => item.name === 'office_inspect')!;
+  const result = await tool.execute(
+    { path: 'totals.xlsx' },
+    { signal: new AbortController().signal, approve: async () => false },
+  );
+  assert.equal(result.isError, false);
+  const inspected = JSON.parse(result.content).sheets[0];
+  assert.deepEqual(inspected.sample.at(-1), ['total', '=SUM(B2:B3)', '=SUM(C2:C3)']);
+  // The in-app preview used to drop a formula-only cell and render the totals row blank. It also carried an
+  // inline <style> block that the window's `style-src 'self'` policy refused, so the page had no borders.
+  const html = await spreadsheetPreviewHtml(file, 'zh');
+  assert.match(html, /Excel 数据预览/);
+  assert.match(html, /=SUM\(B2:B3\)/);
+  assert.match(html, /class="formula"/);
+  assert.match(html, /<link rel="stylesheet" href="data:text\/css/);
+  assert.doesNotMatch(html, /<style>/);
+  assert.match(await spreadsheetPreviewHtml(file, 'en'), /Excel data preview/);
 });
 
 test('Office tools create, inspect, edit and preview XLSX behind write approval', async (t) => {
@@ -1119,12 +1174,18 @@ test('an .html preview of Word and PowerPoint needs nothing installed and runs n
   });
   const report = await readFile(path.join(root, 'report.html'), 'utf8');
   assert.match(report, /default-src 'none'/);
+  assert.match(report, /Word 预览/);
+  assert.match(report, /data:text\/css/);
   assert.match(report, /<table>/);
   assert.match(report, /Revenue/);
   assert.doesNotMatch(report, /<script>/);
   const deck = await readFile(path.join(root, 'deck.html'), 'utf8');
-  assert.match(deck, /Slide 1/);
+  assert.match(deck, /PowerPoint 预览/);
+  assert.match(deck, /第 1 页/);
   assert.match(deck, /Revenue up/);
+  const english = await officePreviewHtml('docx', path.join(root, 'report.docx'), 'en');
+  assert.match(english, /Word preview/);
+  assert.match(english, /Built-in preview/);
   assert.equal(rendered, false);
 });
 

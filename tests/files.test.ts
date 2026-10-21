@@ -21,7 +21,42 @@ import { Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
 import { fileHandlers } from '../apps/agent-host/handlers/files.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
+import { runSpreadsheetOperation } from '../packages/office/spreadsheet.ts';
 import { tempRoot } from './temp-fixture.ts';
+
+test('an Office document is previewed as a page instead of "binary"', async (t) => {
+  const root = await tempRoot(t, 'yuantu-preview-office-');
+  await runSpreadsheetOperation({
+    operation: 'create',
+    format: 'xlsx',
+    outputPath: path.join(root, 'book.xlsx'),
+    sheets: [
+      {
+        name: 'Summary',
+        rows: [
+          ['Metric', 'Value'],
+          ['Revenue', 947],
+        ],
+      },
+    ],
+  });
+  const preview = (await fileHandlers['files.read']!({ workspace: root } as HostContext, {
+    path: 'book.xlsx',
+  })) as { kind: string; html?: string; reason?: string };
+  // A workbook is binary, but "binary" is not the same as "unshowable": the panel used to answer a .xlsx with
+  // 二进制文件，无法以文本预览 although the Host knows how to render it as a page.
+  assert.equal(preview.kind, 'html');
+  assert.match(preview.html ?? '', /<table>/);
+  assert.match(preview.html ?? '', /<td>Revenue<\/td>/);
+  assert.match(preview.html ?? '', /<td>947<\/td>/);
+  // A binary file that is not an Office package keeps the honest refusal.
+  await writeFile(path.join(root, 'blob.bin'), Buffer.from([0, 1, 2, 3]));
+  const refused = (await fileHandlers['files.read']!({ workspace: root } as HostContext, {
+    path: 'blob.bin',
+  })) as { kind: string; reason?: string };
+  assert.equal(refused.kind, 'unsupported');
+  assert.equal(refused.reason, 'binary');
+});
 
 test('image previews complete short reads without inventing zero-filled bytes', async (t) => {
   const root = await tempRoot(t, 'yuantu-preview-short-read-');

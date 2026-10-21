@@ -15,6 +15,7 @@ export function deliveryTool(root: string): Tool {
   return {
     name: 'verify_file_delivery',
     isConcurrencySafe: parallelRead,
+    earlyStart: true,
     description:
       'Independently verify a file before claiming delivery. Checks a workspace file exists, is regular and nonempty, records size and SHA-256, and validates basic structure for the declared or detected format. For visual layout or full document semantics, use a suitable renderer/parser as well. This is read-only.',
     inputSchema: {

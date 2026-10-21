@@ -78,6 +78,8 @@ export type ToolCardModel =
       stdout: string;
       stderr: string;
       truncated: boolean;
+      /** Present when the Windows sandbox refused the command's own child process. */
+      sandboxNote?: string;
     };
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -264,6 +266,8 @@ export function toolCardModel(output: ToolResultOutput | undefined): ToolCardMod
     const stdout = text(value.stdout);
     const stderr = text(value.stderr);
     const truncated = flag(value.truncated);
+    const sandboxNote = value.sandboxNote === undefined ? undefined : text(value.sandboxNote);
+    if (value.sandboxNote !== undefined && sandboxNote === null) return null;
     if (
       !command ||
       timedOut === null ||
@@ -283,6 +287,7 @@ export function toolCardModel(output: ToolResultOutput | undefined): ToolCardMod
       stdout,
       stderr,
       truncated,
+      ...(sandboxNote ? { sandboxNote } : {}),
     };
   }
   return null;

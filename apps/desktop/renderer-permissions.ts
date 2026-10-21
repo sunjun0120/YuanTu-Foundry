@@ -40,6 +40,11 @@ export function setupPermissionSettings(
 ): {
   updateBusy(): void;
   refresh(): void;
+  /**
+   * Open the full-access confirmation from outside the chip — the completion card's way out when a check could
+   * not run inside the sandbox. It is the same dialog with the same acknowledgement; nothing is switched silently.
+   */
+  requestFullAccess(): void;
 } {
   const byId = <T extends HTMLElement = HTMLElement>(id: string): T => {
     const value = document.getElementById(id);
@@ -86,31 +91,56 @@ export function setupPermissionSettings(
     );
   };
   /**
-   * The three rungs, named the way the interface says them.
+   * The four rungs, named the way the interface says them, each with one short line saying what it asks for.
    *
-   * A rung is one line and one icon, with no sentence under it: the names are the promise ("仅可查看" is what it
-   * says, and the pair behind it is what makes it true), and three explanations under three options is a menu
-   * somebody reads instead of a choice somebody makes. What each name stands for is in
+   * The names follow Codex's approval menu ("请求批准 / 帮我批准 / 完全访问权限"), which people already know; the
+   * line under each is the promise in a sentence. What each name stands for is in
    * `apps/desktop/permission-presets.ts`, where it is enforced rather than described.
    */
   const label = (id: PermissionPresetId | typeof CUSTOM_PRESET): string =>
     id === 'observe'
       ? text('仅可查看', 'Read only')
       : id === 'guarded'
-        ? text('工作区内修改', 'Write in the workspace')
-        : id === 'unconfined'
-          ? text('完全权限', 'Full access')
-          : text('自定义', 'Custom');
+        ? text('请求批准', 'Ask for approval')
+        : id === 'auto'
+          ? text('帮我批准', 'Approve for me')
+          : id === 'unconfined'
+            ? text('完全访问权限', 'Full access')
+            : text('自定义', 'Custom');
+  const summary = (id: PermissionPresetId): string =>
+    id === 'observe'
+      ? text('只读取和搜索，不修改文件、不运行命令', 'Read and search only; no edits, no commands')
+      : id === 'guarded'
+        ? text(
+            '修改文件和运行命令时始终询问',
+            'Always ask before editing files or running commands',
+          )
+        : id === 'auto'
+          ? text('仅对检测到的风险操作请求批准', 'Only ask for operations detected as risky')
+          : text(
+              '可不受限制地访问互联网和你电脑上的任何文件',
+              'Unrestricted access to the internet and any file on this computer',
+            );
   /**
    * What the rung's sandbox does and does not stop, as the rung's tooltip.
    *
-   * The names stay one line (see `label`), but "工作区内修改" on Windows is a partial write boundary that leaves
+   * The names stay short (see `label`), but "请求批准" on Windows is a partial write boundary that leaves
    * reads and the network open, and a person choosing it should be able to learn that without opening the README.
    * A tooltip is the place that keeps the menu a choice while not letting the name promise more than the backend
    * does. The platform is the renderer's own: the `native` mode resolves to the token backend on Windows and to
    * Seatbelt on macOS.
    */
   const windowsHost = /Windows/i.test(navigator.userAgent);
+  const sandboxNote = (): string =>
+    windowsHost
+      ? text(
+          '命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。',
+          'Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network.',
+        )
+      : text(
+          '命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
+          'Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
+        );
   const boundary = (id: PermissionPresetId): string =>
     id === 'observe'
       ? text(
@@ -118,19 +148,17 @@ export function setupPermissionSettings(
           'Read only: no file changes and no commands; reading and searching the workspace need no confirmation.',
         )
       : id === 'guarded'
-        ? windowsHost
+        ? text('写入与命令逐项确认。', 'Writes and commands are confirmed one by one. ') +
+          sandboxNote()
+        : id === 'auto'
           ? text(
-              '写入与命令逐项确认。命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。',
-              'Writes and commands are confirmed one by one. Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network.',
-            )
+              '工作区写入和普通命令自动批准；删除、推送、提权、下载执行等风险命令及联网工具仍会询问。',
+              'Workspace writes and ordinary commands are approved automatically; risky commands (deleting, pushing, raising privileges, downloading and running code) and network tools still ask. ',
+            ) + sandboxNote()
           : text(
-              '写入与命令逐项确认。命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
-              'Writes and commands are confirmed one by one. Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
-            )
-        : text(
-            '不再逐项确认；命令直接在本机运行，没有任何系统隔离。',
-            'No confirmations; commands run directly on this machine with no operating-system isolation.',
-          );
+              '不再逐项确认；命令直接在本机运行，没有任何系统隔离。',
+              'No confirmations; commands run directly on this machine with no operating-system isolation.',
+            );
   /**
    * One shield per rung, saying what the rung lets through: a check (nothing is written), a pencil (writing is
    * the point), an exclamation (the sandbox is gone). The same shield for all three, so the rows read as one
@@ -146,7 +174,9 @@ export function setupPermissionSettings(
         ? `<path d="${SHIELD}"/><path d="m9.2 12.1 1.9 1.9 3.7-3.7"/>`
         : id === 'guarded'
           ? `<path d="${SHIELD}"/><path d="m15.1 9.6 1.3 1.3-4.4 4.4-1.9.6.6-1.9z"/>`
-          : `<path d="${SHIELD}"/><path d="M12 10.2v3.6"/><path d="M12 16.4h.01"/>`;
+          : id === 'auto'
+            ? `<path d="${SHIELD}"/><path d="m9 10.2 2 1.8-2 1.8"/><path d="M12.6 14.4h2.6"/>`
+            : `<path d="${SHIELD}"/><path d="M12 10.2v3.6"/><path d="M12 16.4h.01"/>`;
     return svg;
   };
   const closeMenu = () => {
@@ -205,7 +235,12 @@ export function setupPermissionSettings(
         return option;
       })(),
     );
+    const heading = document.createElement('p');
+    heading.className = 'permission-heading';
+    heading.setAttribute('role', 'presentation');
+    heading.textContent = text('应如何批准操作？', 'How should actions be approved?');
     menu.replaceChildren(
+      heading,
       ...PERMISSION_PRESETS.map((preset) => {
         const button = document.createElement('button');
         button.type = 'button';
@@ -214,7 +249,11 @@ export function setupPermissionSettings(
         button.title = boundary(preset.id);
         const copy = document.createElement('span');
         copy.className = 'permission-copy';
-        copy.textContent = label(preset.id);
+        const name = document.createElement('span');
+        name.textContent = label(preset.id);
+        const line = document.createElement('small');
+        line.textContent = summary(preset.id);
+        copy.append(name, line);
         const check = document.createElement('span');
         check.className = 'permission-check';
         button.append(icon(preset.id), copy, check);
@@ -249,9 +288,9 @@ export function setupPermissionSettings(
      * it. The paragraph is the whole reason this dialog exists — the checkbox is what makes it an acknowledgement
      * rather than a notification.
      */
-    byId('full-access-title').textContent = text('确认启用完全权限？', 'Enable full access?');
+    byId('full-access-title').textContent = text('确认启用完全访问权限？', 'Enable full access?');
     byId('full-access-description').textContent = text(
-      '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
+      '启用完全访问权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
       'With full access the agent skips most confirmation steps and can act directly — sensitive operations, file changes, external commands. Use it only when you trust the current task.',
     );
     byId('full-access-acknowledge-label').textContent = text(
@@ -260,7 +299,7 @@ export function setupPermissionSettings(
     );
     byId('full-access-close').setAttribute('aria-label', text('关闭', 'Close'));
     byId('full-access-cancel').textContent = text('取消', 'Cancel');
-    enable.textContent = text('启用完全权限', 'Enable full access');
+    enable.textContent = text('启用完全访问权限', 'Enable full access');
     render();
   }
   /**
@@ -442,5 +481,5 @@ export function setupPermissionSettings(
   });
   onLocaleChange(translate);
   translate();
-  return { updateBusy, refresh };
+  return { updateBusy, refresh, requestFullAccess: () => choose('unconfined') };
 }

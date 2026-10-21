@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The question panel: one card per pending request, one question at a time inside it.
  *
  * An approval's answer is a boolean; a question's is a shape — options, possibly several of them, plus optional
@@ -10,6 +10,7 @@
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import type { PendingQuestion } from '../../packages/client/session-controller.ts';
 import { format, locale, t } from './i18n.ts';
+import { localizedQuestion } from './renderer-question-copy.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -76,13 +77,20 @@ export function setupQuestions(actions: {
         const total = item.request.questions.length;
         const page = Math.min(questionPages.get(item.id) ?? 0, total - 1);
         const question = item.request.questions[page]!;
+        // The product's own question (plan approval) is translated for display; the value sent back stays the
+        // kernel's label. A question the model wrote is shown exactly as it wrote it.
+        const copy = localizedQuestion(
+          question.header || t('ui.questionLabel'),
+          question.question,
+          locale() === 'en-US',
+        );
         const collapsed = questionCollapsed.has(item.id);
         const card = node('section', '', 'question-card');
         const head = node('div', '', 'question-head');
         const headings = node('div', '', 'question-headings');
         headings.append(
-          node('span', question.header || t('ui.questionLabel'), 'question-eyebrow'),
-          node('h2', question.question, 'question-title'),
+          node('span', copy.header, 'question-eyebrow'),
+          node('h2', copy.question, 'question-title'),
         );
         const chrome = node('div', '', 'question-chrome');
         const collapse = node('button', collapsed ? '⌄' : '⌃', 'question-collapse');
@@ -130,12 +138,14 @@ export function setupQuestions(actions: {
             if (selected) button.classList.add('selected');
             const text = node('span', '', 'question-option-text');
             const label = node('span', '', 'question-option-head');
-            label.append(node('span', option.label, 'question-option-label'));
+            label.append(node('span', copy.label(option.label), 'question-option-label'));
             if (option.recommended)
               label.append(node('span', t('ui.questionRecommended'), 'question-recommended'));
             text.append(label);
             if (option.description)
-              text.append(node('span', option.description, 'question-option-description'));
+              text.append(
+                node('span', copy.description(option.description), 'question-option-description'),
+              );
             button.append(node('span', String(index + 1), 'question-index'), text);
             button.addEventListener('click', () => {
               const current = draft.selected.get(question.id) ?? [];

@@ -40,6 +40,8 @@ export async function settleAnswerRound(options: {
     completion.state.repeatedFailures = decision.summary.repeatedFailures;
     completion.state.previousFailureFingerprint = completion.state.lastFailureFingerprint;
     completion.state.repairStartedAt ??= Date.now();
+    // The feedback is model-facing English: the desktop recognizes its opening sentence and shows the reader a
+    // one-line Chinese summary instead. Keeping the kernel's text in one language is what the i18n gate checks.
     store.append(sessionId, { role: 'user', content: decision.feedback });
     // Announced as well as appended: a client watching the run sees that a repair round began rather than reading a
     // silently longer transcript.

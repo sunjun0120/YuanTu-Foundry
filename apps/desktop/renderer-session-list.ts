@@ -25,9 +25,27 @@ export interface SessionActivity {
 import { locale, t } from './i18n.ts';
 import { memo } from './renderer-memo.ts';
 
+/** How many rows the list shows before the person asks for the rest; a search always shows every match. */
+const COLLAPSED_ROWS = 4;
+
 /** A speech bubble with a question mark: the session is waiting on the user. */
 const WAITING_ICON =
   '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5c3.6 0 6.5 2.5 6.5 5.6S11.6 12.7 8 12.7c-.7 0-1.4-.1-2-.3L2.6 14l.9-2.8C2.2 10.2 1.5 8.7 1.5 7.1 1.5 4 4.4 1.5 8 1.5Z" fill="currentColor"/><path d="M6.4 5.6c.1-.9.8-1.5 1.7-1.5.9 0 1.6.6 1.6 1.4 0 .6-.3 1-.9 1.3-.5.3-.7.5-.7 1v.2" fill="none" stroke="var(--status-icon-ink, #fff)" stroke-width="1.2" stroke-linecap="round"/><circle cx="8.1" cy="9.6" r=".75" fill="var(--status-icon-ink, #fff)"/></svg>';
+
+/**
+ * How long ago a session started, in the row's compact form ("10小时", "3d"): the largest whole unit, with the
+ * date itself once it is over a month old. The exact time is the row's tooltip.
+ */
+function sessionAge(createdAt: string | number): string {
+  const then = new Date(createdAt);
+  const minutes = Math.max(0, Math.floor((Date.now() - then.getTime()) / 60_000));
+  const unit = (value: number, name: 'minute' | 'hour' | 'day'): string =>
+    new Intl.NumberFormat(locale(), { style: 'unit', unit: name, unitDisplay: 'narrow' }).format(value);
+  if (minutes < 60) return unit(Math.max(1, minutes), 'minute');
+  if (minutes < 24 * 60) return unit(Math.floor(minutes / 60), 'hour');
+  if (minutes < 30 * 24 * 60) return unit(Math.floor(minutes / (24 * 60)), 'day');
+  return then.toLocaleDateString(locale(), { month: 'short', day: 'numeric' });
+}
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -56,25 +74,44 @@ export function setupSessionList(options: {
     blocked: boolean,
     hasMore?: boolean,
     activity?: ReadonlyMap<string, SessionActivity>,
+    searching?: boolean,
   ): void;
 } {
   const count = required('session-count');
   const list = required('sessions');
   let sessionKey = '';
   const rowsKey = memo<string>();
+  /** Whether the person opened the full list; kept across renders so a run's progress does not fold it back. */
+  let expanded = false;
+  let last: Parameters<typeof render> | null = null;
   function render(
     sessions: SessionInfo[],
     currentId: string | null,
     blocked: boolean,
     hasMore = false,
     activity: ReadonlyMap<string, SessionActivity> = new Map(),
+    searching = false,
   ): void {
+    last = [sessions, currentId, blocked, hasMore, activity, searching];
     // locale() belongs in the key: these rows carry a formatted date and a
     // translated aria-label, so a language switch has to rebuild them.
     const activityKey = JSON.stringify([...activity]);
+    // The rows show each session's age, so a render in a later minute rebuilds them with the new one.
+    const minute = Math.floor(Date.now() / 60_000);
     const nextSessionKey = rowsKey(
-      [sessions, currentId, blocked, hasMore, activityKey, locale()],
-      () => JSON.stringify([sessions, currentId, blocked, hasMore, activityKey, locale()]),
+      [sessions, currentId, blocked, hasMore, activityKey, locale(), expanded, searching, minute],
+      () =>
+        JSON.stringify([
+          sessions,
+          currentId,
+          blocked,
+          hasMore,
+          activityKey,
+          locale(),
+          expanded,
+          searching,
+          minute,
+        ]),
     );
     if (nextSessionKey === sessionKey) return;
     sessionKey = nextSessionKey;
@@ -85,8 +122,24 @@ export function setupSessionList(options: {
     more.type = 'button';
     more.disabled = blocked;
     more.addEventListener('click', () => void options.select({ type: 'loadMoreSessions' }));
+    const showAll = expanded || searching;
+    const visible = showAll ? sessions : sessions.slice(0, COLLAPSED_ROWS);
+    const foldable = !searching && (sessions.length > COLLAPSED_ROWS || hasMore);
+    const toggle = node(
+      'button',
+      expanded ? t('ui.showFewerSessions') : t('ui.showMoreSessions'),
+      'session-load-more session-toggle',
+    );
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.addEventListener('click', () => {
+      expanded = !expanded;
+      if (!expanded) list.scrollTop = 0;
+      if (last) render(...last);
+    });
+    list.classList.toggle('expanded', showAll);
     list.replaceChildren(
-      ...sessions.map((item) => {
+      ...visible.map((item) => {
         const button = node(
           'button',
           '',
@@ -100,18 +153,15 @@ export function setupSessionList(options: {
           item.title || t('ui.sessionShort', { id: item.id.slice(0, 8) }),
         );
         title.translate = false;
-        button.append(
-          title,
-          node(
-            'small',
-            new Date(item.createdAt).toLocaleString(locale(), {
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-          ),
-        );
+        const time = node('small', sessionAge(item.createdAt));
+        time.title = new Date(item.createdAt).toLocaleString(locale(), {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        button.append(title, time);
         /**
          * The row's state is one icon in the place the `⋯` takes on hover: a spinner while the session runs, and
          * a waiting mark when an approval or question needs the user — that one wins, because it is the one asking
@@ -136,7 +186,8 @@ export function setupSessionList(options: {
         row.append(button, options.createMenuButton(item, blocked));
         return row;
       }),
-      ...(hasMore ? [more] : []),
+      ...(showAll && hasMore ? [more] : []),
+      ...(foldable ? [toggle] : []),
     );
   }
   required('new-session').addEventListener('click', () => void options.select({ type: 'create' }));

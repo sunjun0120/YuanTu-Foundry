@@ -38,6 +38,7 @@ const bridge: DesktopBridge = {
   },
   uiSettings: (command) => ipcRenderer.invoke('yuantu:ui-settings', command),
   sandboxSetup: (command) => ipcRenderer.invoke('yuantu:sandbox-setup', command),
+  sandboxRecovery: (command) => ipcRenderer.invoke('yuantu:sandbox-recovery', command),
   settings: (command) => ipcRenderer.invoke('yuantu:settings', command),
   async invoke(command) {
     const reply = (await ipcRenderer.invoke('yuantu:command', command)) as DesktopWireReply;

@@ -873,9 +873,9 @@ test(
       'and so is its heading',
     );
     await page.locator('#settings-back').click();
-    // One choice, two knobs: the shipped default is the middle rung, and nothing has been written anywhere.
-    assert.equal((await pair(page)).view.current, 'guarded');
-    assert.equal((await pair(page)).view.permission, 'ask');
+    // One choice, two knobs: the shipped default is 帮我批准, and nothing has been written anywhere.
+    assert.equal((await pair(page)).view.current, 'auto');
+    assert.equal((await pair(page)).view.permission, 'auto');
     /**
      * The session has to exist before anything can be said about it: a fresh window answers with an empty id
      * until the carrier has started its first session.
@@ -895,11 +895,7 @@ test(
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), true);
     assert.equal(await page.locator('#full-access-enable').isDisabled(), true);
-    assert.equal(
-      (await pair(page)).view.current,
-      'guarded',
-      'nothing moved before the confirmation',
-    );
+    assert.equal((await pair(page)).view.current, 'auto', 'nothing moved before the confirmation');
     await page.locator('#full-access-cancel').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), false);
     await page.locator('#permission-trigger').click();
@@ -929,30 +925,30 @@ test(
       'and it does not disturb the conversation it was made in',
     );
     /**
-     * The menu is the three rungs and nothing else: no sentence under each option, and no environment line while
-     * the backend behind the current rung is usable. That line appears only when a backend answered that it
-     * cannot run — the one fact that changes what the choice will do.
+     * The menu is the four rungs, each with its one-line summary, and no environment line while the backend
+     * behind the current rung is usable. That line appears only when a backend answered that it cannot run — the
+     * one fact that changes what the choice will do.
      */
     await page.locator('#permission-trigger').click();
     assert.equal(await page.locator('#permission-environment').isVisible(), false);
     assert.deepEqual(
       await page
-        .locator('#permission-menu [data-preset] .permission-copy')
+        .locator('#permission-menu [data-preset] .permission-copy > span')
         .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim())),
-      ['仅可查看', '工作区内修改', '完全权限'],
+      ['仅可查看', '请求批准', '帮我批准', '完全访问权限'],
     );
     await page.keyboard.press('Escape');
     /**
-     * A new session starts at the default — which is the whole of "每次新会话都会重置": the choice is kept per
-     * session id, so there is nothing to clear when a fresh one arrives.
+     * A new session starts at the default, 帮我批准 — the choice is kept per session id, so there is nothing to
+     * clear when a fresh one arrives, and full access never carries over into a conversation that did not ask.
      */
     await page.evaluate(() => window.yuantu.invoke({ type: 'create' }));
     await page.waitForFunction(
-      () => document.querySelector('#permission-mode').value === 'guarded',
+      () => document.querySelector('#permission-mode').value === 'auto',
       undefined,
       { timeout: 15000 },
     );
-    assert.equal((await pair(page)).view.current, 'guarded');
+    assert.equal((await pair(page)).view.current, 'auto');
     const created = await sessionId();
     assert.notEqual(created, initial);
     // Going back to the session that chose full access gives it back: the choice follows the session.
@@ -965,7 +961,7 @@ test(
     /**
      * The launch environment names where a new session *starts*, and nothing more.
      *
-     * With `YUANTU_SANDBOX=host` the default pair is host + ask, which no preset declares — so the chip reports
+     * With `YUANTU_SANDBOX=host` the default pair is host + auto, which no preset declares — so the chip reports
      * custom — and the rungs are still selectable, which is the difference between a deployment stating a
      * starting point and a deployment forbidding the alternatives.
      */

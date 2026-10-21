@@ -55,7 +55,33 @@ export interface RunInteraction {
 
 export function createRunInteraction(options: RunInteractionOptions): RunInteraction {
   const { store, sessionId, queue, emit } = options;
+  /**
+   * Commands a person already allowed in this run, keyed by command and cwd.
+   *
+   * Automatic verification re-runs the command the model just used; asking for the same approval twice makes one
+   * fix cost two clicks. The reuse is narrow: only a `run_command` this run's approval produced, and only for the
+   * `acceptance:` request that repeats the same command in the same cwd. A different command still asks.
+   */
+  const approvedCommands = new Set<string>();
+  /** Approvals this run refused without asking a person, so the registry can report policy rather than "user no". */
+  const readOnlyRefusals = new WeakSet<Approval>();
+  const commandKey = (approval: Approval): string | undefined => {
+    if (approval.toolCall.name !== 'run_command') return undefined;
+    const args = approval.toolCall.arguments as { command?: unknown; cwd?: unknown } | undefined;
+    if (typeof args?.command !== 'string') return undefined;
+    return `${args.command}\u0000${typeof args.cwd === 'string' ? args.cwd : '.'}`;
+  };
   const approve: Approver = async (approval: Approval, approvalSignal) => {
+    const command = commandKey(approval);
+    const verification = approval.toolCall.id.startsWith('acceptance:');
+    if (verification && command && approvedCommands.has(command)) {
+      store.recordEvent(sessionId, 'approval.decided', {
+        approval,
+        allow: true,
+        reason: 'reused',
+      });
+      return true;
+    }
     /**
      * The planning phase is read-only, and that is enforced here rather than only by hiding tools:
      * every workspace mutation in the registry declares a permission, so refusing the approval
@@ -65,6 +91,7 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
     if (options.isReadOnly()) {
       // A planning run refuses every mutation, and that refusal is an answer: it is recorded as one so that
       // "asked but never answered" keeps exactly one meaning — the run was interrupted while waiting.
+      readOnlyRefusals.add(approval);
       store.recordEvent(sessionId, 'approval.required', { approval });
       store.recordEvent(sessionId, 'approval.decided', {
         approval,
@@ -106,6 +133,7 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
         allow: allowed === true && !steering.aborted,
         reason,
       } as const;
+      if (decision.allow && command) approvedCommands.add(command);
       // The decision is durable, not just live: after a reload the transcript shows a file that was written,
       // and this is the only record that says a person allowed it.
       store.recordEvent(sessionId, 'approval.decided', decision);
@@ -150,5 +178,6 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
       throw error;
     }
   };
+  approve.decisionReason = (approval) => (readOnlyRefusals.has(approval) ? 'read-only' : undefined);
   return { approve, ask };
 }

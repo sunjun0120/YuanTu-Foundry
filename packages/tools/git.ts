@@ -1,6 +1,7 @@
 import { resolveSandboxConfig } from './sandbox.ts';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import type { PreparedTool, Tool, ToolContext, ToolResult } from '../protocol/index.ts';
 import { bounded, MAX_TOOL_OUTPUT } from './registry.ts';
@@ -309,10 +310,24 @@ async function repositoryRoot(root: string, signal: AbortSignal): Promise<string
   ).trim();
   const repository = await realpath(top);
   const metadata = await realpath(gitDirectory);
+  /*
+   * A workspace that is a *subdirectory* of a repository is ordinary (a monorepo package, `projects/<name>`),
+   * and refusing it silently made `git_diff` an English dead end: "must be contained in the workspace" says
+   * neither why nor what to do. The refusal itself stays — the repository's metadata is outside the workspace,
+   * and trusting a `.git` the workspace does not contain is exactly the escape this proof exists to stop — but
+   * the message now names the situation and the two ways forward.
+   */
+  const outsideWorkspace = `this workspace is inside the repository at ${repository}, and Git metadata (${metadata}) is outside the workspace`;
+  const remedy =
+    'Use the repository root as the workspace to read Git state, or read the files directly without the Git tools.';
   if (!contained(workspace, repository))
-    throw new Error('Git repository and metadata must be contained in the workspace');
+    throw new Error(
+      `Git tools need the repository root inside the workspace: ${outsideWorkspace}. ${remedy}`,
+    );
   if (!contained(workspace, metadata) && !(await managedWorktreeMetadata(repository, metadata)))
-    throw new Error('Git repository and metadata must be contained in the workspace');
+    throw new Error(
+      `Git tools need the repository metadata inside the workspace: ${outsideWorkspace}. ${remedy}`,
+    );
   return repository;
 }
 
@@ -537,6 +552,26 @@ async function prepareWorktreeCreate(
   });
 }
 
+/**
+ * Whether the workspace sits *inside* a repository whose root is above it (a monorepo package, `projects/x`).
+ *
+ * Every Git tool refuses that layout — the repository metadata is outside the workspace, and trusting it is the
+ * escape `repositoryRoot` exists to stop — so offering the tools only taught the model to call `git_diff` and
+ * relay an English refusal. The check is the cheap synchronous shape of that refusal: no `.git` at the workspace
+ * root, one in an ancestor. A workspace outside any repository keeps the tools (they report "not a repository",
+ * and `git init` may make one), as does a repository or managed-worktree root.
+ */
+export function workspaceInsideOuterRepository(root: string): boolean {
+  const workspace = path.resolve(root);
+  if (existsSync(path.join(workspace, '.git'))) return false;
+  for (let directory = path.dirname(workspace); ;) {
+    if (existsSync(path.join(directory, '.git'))) return true;
+    const parent = path.dirname(directory);
+    if (parent === directory) return false;
+    directory = parent;
+  }
+}
+
 export function gitTools(root: string): Tool[] {
   const pathFilter = {
     type: 'array',
@@ -548,6 +583,7 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_branches',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description: 'List local branches and mark the branch checked out in this workspace.',
       inputSchema: schema({}),
       async execute(_args, context) {
@@ -563,6 +599,7 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_worktrees',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description: 'List local Git worktrees and their checked-out branches without changing them.',
       inputSchema: schema({}),
       async execute(_args, context) {
@@ -592,6 +629,7 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_status',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description:
         'Read bounded Git porcelain v2 status for a repository contained in the workspace. Uses fixed arguments, isolated configuration, no prompts, and no repository mutation.',
       inputSchema: schema({}),
@@ -608,6 +646,7 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_diff',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description:
         'Read a bounded Git diff for working-tree, staged, or HEAD state, optionally restricted to repository-relative paths. External diff and textconv execution are disabled.',
       inputSchema: schema({
@@ -629,6 +668,7 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_log',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description:
         'Read bounded recent commit history for a repository contained in the workspace, optionally restricted to repository-relative paths. Read-only; use it to match the repository commit message conventions before committing.',
       inputSchema: schema({

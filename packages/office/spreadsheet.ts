@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import type { OfficeOperation } from './automation.ts';
 import { MAX_CREATED_SHEETS } from './limits.ts';
+import { previewStyleLink, previewText, type PreviewLanguage } from './preview-page.ts';
 import { readEntry } from './zip-entry.ts';
 
 /**
@@ -115,6 +116,10 @@ async function editWorkbook(
  * from this constant rather than repeating it, which is the same rule `RUN_DEFAULTS` and `ENVIRONMENT` follow.
  */
 export { MAX_CREATED_SHEETS };
+/** A created cell that starts with `=` is a formula, not text — the shape a spreadsheet author expects. */
+function isFormula(value: string | number | boolean | null): value is string {
+  return typeof value === 'string' && value.length > 1 && value.startsWith('=');
+}
 export async function runSpreadsheetOperation(
   operation: OfficeOperation & { format: 'xlsx' },
 ): Promise<void> {
@@ -126,7 +131,26 @@ export async function runSpreadsheetOperation(
     for (const sheet of sheets) {
       if (!sheet.name || sheet.name.length > 31 || !sheet.rows.length || sheet.rows.length > 1000)
         throw new Error('Invalid Excel sheet');
-      XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(sheet.rows), sheet.name);
+      const table = XLSX.utils.aoa_to_sheet(
+        sheet.rows.map((row) => row.map((value) => (isFormula(value) ? null : value))),
+      );
+      sheet.rows.forEach((row, r) =>
+        row.forEach((value, c) => {
+          if (!isFormula(value)) return;
+          const address = XLSX.utils.encode_cell({ r, c });
+          /*
+           * A formula cell carries no cached value, because no calculation engine is bundled: Excel, WPS and
+           * LibreOffice compute it when the workbook opens. Before this, `office_create` wrote `=SUM(B2:B3)` as
+           * literal text, and a model asked for "a total column" had to leave the tool and patch the file with
+           * Python/openpyxl — what turned a one-sheet summary into 30+ steps and 700K tokens in a real run.
+           *
+           * The cell is an object without `t`: writing `{ t: 'n', f }` made this writer emit `t="e"` (an error
+           * cell) for every formula, which is worse than the text it replaced.
+           */
+          table[address] = { f: value.slice(1) } as XLSX.CellObject;
+        }),
+      );
+      XLSX.utils.book_append_sheet(book, table, sheet.name);
     }
     await writeFile(
       operation.outputPath,
@@ -137,50 +161,117 @@ export async function runSpreadsheetOperation(
       throw new Error('Provide 1 to 100 Excel cell edits');
     await editWorkbook(operation.sourcePath, operation.outputPath, operation.cells);
   } else {
-    const bytes = await readFile(operation.sourcePath);
-    if (bytes.length > 20_000_000) throw new Error('Excel preview source exceeds 20 MB');
-    const book = XLSX.read(bytes, { type: 'buffer', sheetRows: 100, cellHTML: false });
-    const sheets = book.SheetNames.slice(0, 20).map((name) => ({
-      name,
-      rows: (
-        XLSX.utils.sheet_to_json(book.Sheets[name]!, {
-          header: 1,
-          raw: false,
-          defval: '',
-        }) as unknown[][]
-      )
-        .slice(0, 100)
-        .map((row) => row.slice(0, 20).map(String)),
-    }));
-    const escaped = (value: string) =>
-      value.replace(
-        /[&<>"']/g,
-        (character) =>
-          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!,
-      );
-    const body = sheets
-      .map(
-        (sheet) =>
-          '<section><h2>' +
-          escaped(sheet.name) +
-          '</h2><table>' +
-          sheet.rows
-            .map(
-              (row) =>
-                '<tr>' + row.map((cell) => '<td>' + escaped(cell) + '</td>').join('') + '</tr>',
-            )
-            .join('') +
-          '</table></section>',
-      )
-      .join('');
     await writeFile(
       operation.outputPath,
-      '<!doctype html><html lang="en"><meta charset="utf-8"><title>Excel data preview</title>' +
-        '<style>body{font:14px system-ui;margin:32px;color:#222}table{border-collapse:collapse;max-width:100%;margin-bottom:24px}td{border:1px solid #bbb;padding:6px 10px;white-space:pre-wrap}h2{margin-top:28px}</style>' +
-        '<h1>Excel data preview</h1><p>Cell values only; source workbook formatting is not reproduced.</p>' +
-        body +
-        '</html>',
+      await spreadsheetPreviewHtml(operation.sourcePath),
       'utf8',
     );
   }
+}
+/**
+ * The workbook as a self-contained HTML page.
+ *
+ * Extracted from the preview operation so the workspace panel can show a workbook without writing a file next
+ * to it: the page is escaped here, carries no script, and is drawn in a sandboxed frame by the window. Cells are
+ * read one by one rather than through `sheet_to_json`: that reader trims a row at its last value and drops a
+ * formula-only cell, which turned a totals row into an empty row in the in-app preview.
+ */
+export async function spreadsheetPreviewHtml(
+  sourcePath: string,
+  language: PreviewLanguage = 'zh',
+): Promise<string> {
+  const bytes = await readFile(sourcePath);
+  if (bytes.length > 20_000_000) throw new Error('Excel preview source exceeds 20 MB');
+  const book = XLSX.read(bytes, {
+    type: 'buffer',
+    sheetRows: 100,
+    cellHTML: false,
+    // Keep a cell that has only a formula; without this SheetJS drops the cell before the page can show it.
+    sheetStubs: true,
+  });
+  const sheets = book.SheetNames.slice(0, 20).map((name) => {
+    const sheet = book.Sheets[name]!;
+    const range = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : undefined;
+    const rows: { text: string; formula: boolean }[][] = [];
+    if (range) {
+      const lastRow = Math.min(range.e.r, range.s.r + 99);
+      const lastColumn = Math.min(range.e.c, range.s.c + 19);
+      for (let row = range.s.r; row <= lastRow; row++) {
+        const cells: { text: string; formula: boolean }[] = [];
+        for (let column = range.s.c; column <= lastColumn; column++) {
+          const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+          const formula = typeof cell?.f === 'string' ? cell.f : undefined;
+          cells.push({
+            // Showing the formula is the honest reading when no calculation engine has produced a cached value;
+            // the page says so, rather than drawing an empty cell that looks like a missing total.
+            text: formula ? `=${formula}` : String(cell?.w ?? cell?.v ?? ''),
+            formula: formula !== undefined,
+          });
+        }
+        rows.push(cells);
+      }
+    }
+    return { name, rows };
+  });
+  const escaped = (value: string) =>
+    value.replace(
+      /[&<>"']/g,
+      (character) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!,
+    );
+  const hasFormula = sheets.some((sheet) =>
+    sheet.rows.some((row) => row.some((cell) => cell.formula)),
+  );
+  const body = sheets
+    .map(
+      (sheet) =>
+        '<section><h2>' +
+        escaped(sheet.name) +
+        '</h2><table>' +
+        sheet.rows
+          .map(
+            (row) =>
+              '<tr>' +
+              row
+                .map(
+                  (cell) =>
+                    `<td${cell.formula ? ' class="formula"' : ''}>` + escaped(cell.text) + '</td>',
+                )
+                .join('') +
+              '</tr>',
+          )
+          .join('') +
+        '</table></section>',
+    )
+    .join('');
+  const css =
+    'body{font:14px/1.6 system-ui,sans-serif;margin:32px;color:#222}' +
+    'table{border-collapse:collapse;max-width:100%;margin:0 0 24px}' +
+    'td{border:1px solid #bbb;padding:6px 10px;white-space:pre-wrap;vertical-align:top}' +
+    'td.formula{color:#7a4b00;background:#fff8e6;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}' +
+    'h2{margin:28px 0 8px}.note{color:#666;font-size:13px;margin:0 0 20px}';
+  const title = previewText(language, 'Excel 数据预览', 'Excel data preview');
+  const note = previewText(
+    language,
+    '仅显示单元格值；不还原源文件格式。',
+    'Cell values only; source workbook formatting is not reproduced.',
+  );
+  const formulaNote = hasFormula
+    ? '<p class="note">' +
+      previewText(
+        language,
+        '含公式的单元格显示为公式文本，数值需在 Excel 中计算。',
+        'Formula cells are shown as formulas; values are calculated when the workbook is opened in Excel.',
+      ) +
+      '</p>'
+    : '';
+  return (
+    `<!doctype html><html lang="${language === 'en' ? 'en' : 'zh-CN'}"><meta charset="utf-8">` +
+    `<title>${escaped(title)}</title>` +
+    previewStyleLink(css) +
+    `<h1>${escaped(title)}</h1><p class="note">${escaped(note)}</p>` +
+    formulaNote +
+    body +
+    '</html>'
+  );
 }

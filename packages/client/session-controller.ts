@@ -12,6 +12,7 @@ import type {
 import type { AgentHostClient } from './host-client.ts';
 import { readDisplayHistory } from './display-history.ts';
 import { deepFreeze } from './freeze.ts';
+import { approvalKey } from './approval-key.ts';
 import type { InputMode, QueuedInput } from '../core/run-queue.ts';
 import { validateUserInput } from '../protocol/images.ts';
 import type {
@@ -608,6 +609,7 @@ export class SessionController {
       historyStart: transcript.historyStart,
       messageRevision: this.state.messageRevision + 1,
       statistics: transcript.statistics,
+      runStatistics: null,
       statisticsActivity: null,
       liveMessage: null,
       subagents,
@@ -925,13 +927,48 @@ export class SessionController {
       }
     }
   }
-  async approve(id: string, allow: boolean): Promise<void> {
+  async approve(id: string, allow: boolean, remember = false): Promise<void> {
     this.assertActive();
-    if (!this.state.approvals.some((item) => item.id === id))
-      throw new Error('Approval is no longer pending');
-    await this.client.request('approval.respond', { approvalId: id, allow });
-    this.state.approvals = this.state.approvals.filter((item) => item.id !== id);
+    const pending = this.state.approvals.find((item) => item.id === id);
+    if (!pending) throw new Error('Approval is no longer pending');
+    // Remembered before responding: a later identical request may arrive while this answer is in flight.
+    if (allow && remember) this.rememberApproval(pending.approval);
+    /*
+     * Identical requests already waiting are one decision. Parallel calls (the same test command in two
+     * branches, a verification check behind a manual run) used to stack as separate cards that a person had to
+     * answer one by one with the same click; the window draws them as one card with a count, and the answer
+     * given to it is the answer to every copy. Only exact matches are folded (`approvalKey`).
+     */
+    const key = approvalKey(pending.approval);
+    const answered = [
+      pending,
+      ...this.state.approvals.filter(
+        (item) => item.id !== id && approvalKey(item.approval) === key,
+      ),
+    ];
+    for (const item of answered)
+      await this.client.request('approval.respond', { approvalId: item.id, allow });
+    const settled = new Set(answered.map((item) => item.id));
+    this.state.approvals = this.state.approvals.filter((item) => !settled.has(item.id));
     this.publish();
+  }
+  /**
+   * The approvals a person allowed for the rest of this session, per session, by exact tool call.
+   *
+   * Keyed by the call's name and arguments rather than by its tool or command family: a remembered `npm test`
+   * must not also allow `npm publish`, and byte-for-byte comparison is the only rule that keeps that promise
+   * without a second parser for command lines.
+   */
+  private remembered = new Map<string, Set<string>>();
+  private rememberApproval(approval: Approval): void {
+    const key = approvalKey(approval);
+    const session = this.state.sessionId ?? '';
+    const remembered = this.remembered.get(session) ?? new Set<string>();
+    remembered.add(key);
+    this.remembered.set(session, remembered);
+  }
+  private isRemembered(approval: Approval): boolean {
+    return this.remembered.get(this.state.sessionId ?? '')?.has(approvalKey(approval)) === true;
   }
   /** Answers a pending question; the run resumes as soon as the Host settles the wait. */
   async answerQuestion(id: string, answers: QuestionAnswer[]): Promise<void> {
@@ -1131,6 +1168,7 @@ export class SessionController {
         this.statisticsBase,
         event.data.statistics as SessionStatistics,
       );
+      this.state.runStatistics = event.data.statistics as SessionStatistics;
       this.state.statisticsActivity = event.data.activity as SessionSnapshot['statisticsActivity'];
     }
     switch (event.type) {
@@ -1145,6 +1183,7 @@ export class SessionController {
         this.emitStatisticsDelta({
           sessionId: this.state.sessionId,
           statistics: this.state.statistics,
+          runStatistics: this.state.runStatistics ?? null,
           activity: this.state.statisticsActivity,
         });
         return;
@@ -1222,12 +1261,26 @@ export class SessionController {
         this.state.messages.push(toolResultMessage(event.data));
         this.state.messageRevision++;
         break;
-      case 'approval.required':
-        this.state.approvals.push({
-          id: String(event.data.approvalId),
-          approval: structuredClone(event.data.approval as Approval),
-        });
+      case 'approval.required': {
+        const approval = structuredClone(event.data.approval as Approval);
+        const approvalId = String(event.data.approvalId);
+        /*
+         * A request the person already allowed for this session is answered here, without a second card.
+         *
+         * This is the same decision they made, not a new one: the key is the exact tool call, so a different
+         * command still asks. If the answer cannot be delivered the card comes back rather than the request
+         * disappearing — a silent drop would leave the run waiting on an approval nobody can see.
+         */
+        if (this.isRemembered(approval)) {
+          void this.client.request('approval.respond', { approvalId, allow: true }).catch(() => {
+            this.state.approvals.push({ id: approvalId, approval });
+            this.publish();
+          });
+          break;
+        }
+        this.state.approvals.push({ id: approvalId, approval });
         break;
+      }
       case 'question.required':
         this.state.questions.push({
           id: String(event.data.questionId),
@@ -1348,8 +1401,10 @@ export class SessionController {
       }
       case 'run.finished': {
         const result = event.data.result as RunResult;
-        if (result.statistics)
+        if (result.statistics) {
           this.state.statistics = addStatistics(this.statisticsBase, result.statistics);
+          this.state.runStatistics = result.statistics;
+        }
         this.state.status = result.status;
         this.state.error = result.error ?? null;
         this.clearLive();

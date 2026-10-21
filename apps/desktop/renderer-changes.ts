@@ -8,6 +8,19 @@ import { memo } from './renderer-memo.ts';
 /** Rows a collapsed card previews before the whole-list toggle appears. */
 const COLLAPSED_ROWS = 3;
 
+/**
+ * A preview file the agent created only to look at the document.
+ *
+ * `office_preview` writes `收入报告.preview.html` next to the deliverable, and the task then deletes it. Counting
+ * that create/delete pair as "2 files edited" makes the summary say the agent changed something it did not keep.
+ */
+function transientPreview(path: string): boolean {
+  return /\.preview\.[a-z0-9]+$/iu.test(path);
+}
+function visibleFiles(turn: TurnChanges): TurnChangedFile[] {
+  return turn.files.filter((file) => !transientPreview(file.path));
+}
+
 function node<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   text = '',
@@ -93,6 +106,7 @@ export function setupTurnChanges(options: {
 
   function card(turn: TurnChanges): HTMLElement {
     const root = node('section', '', 'turn-changes');
+    const files = visibleFiles(turn);
     root.dataset.turnKey = turn.key;
     const open = (file: TurnChangedFile) => {
       const view = previewView(file);
@@ -112,16 +126,12 @@ export function setupTurnChanges(options: {
       '<svg viewBox="0 0 32 36"><path fill="currentColor" d="M6 1h15l9 9v21a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V5a4 4 0 0 1 4-4Z"/><path fill="#b9d0ff" d="M21 1v9h9Z"/><path fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="m11 17-4 4 4 4m10-8 4 4-4 4m-4-9-2 10"/></svg>';
     const labels = node('span', '', 'turn-changes-labels');
     labels.append(
-      node(
-        'strong',
-        t('ui.editedFiles', { count: String(turn.files.length) }),
-        'turn-changes-title',
-      ),
+      node('strong', t('ui.editedFiles', { count: String(files.length) }), 'turn-changes-title'),
       node('span', t('ui.previewChanges'), 'turn-changes-hint'),
     );
     heading.append(icon, labels);
     heading.addEventListener('click', () => {
-      if (turn.files[0]) open(turn.files[0]);
+      if (files[0]) open(files[0]);
     });
     const list = node('div', '', 'turn-changes-list');
     const toggle = node('button', '', 'turn-changes-toggle');
@@ -129,7 +139,7 @@ export function setupTurnChanges(options: {
     const paint = () => {
       const all = expanded.has(turn.key);
       list.replaceChildren(
-        ...(all ? turn.files : turn.files.slice(0, COLLAPSED_ROWS)).map((file) => {
+        ...(all ? files : files.slice(0, COLLAPSED_ROWS)).map((file) => {
           const row = node('button', '', 'turn-change-row');
           row.type = 'button';
           row.title = file.path;
@@ -190,7 +200,9 @@ export function setupTurnChanges(options: {
       state.session.messages,
       state.session.historyStart ?? 0,
       state.session.running,
-    );
+    )
+      .map((turn) => ({ ...turn, files: visibleFiles(turn) }))
+      .filter((turn) => turn.files.length > 0);
     cards = new Map();
     for (const turn of turns) {
       const contentKey = JSON.stringify([turn.files, locale()]);

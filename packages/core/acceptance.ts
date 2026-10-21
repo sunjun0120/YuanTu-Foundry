@@ -16,6 +16,7 @@ import type { CheckFailureReason } from '../protocol/index.ts';
 import type { Approver } from '../protocol/index.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { environmentBlockedCode } from '../tools/environment-blocked.ts';
+import { sandboxLaunchFailure, sandboxChildSpawnBlocked } from '../tools/sandbox-launch-failure.ts';
 import {
   VerificationAssertionError,
   VerificationDefinitionError,
@@ -110,6 +111,8 @@ interface CommandExecutionResult {
   stdout: string;
   stderr: string;
   outputTruncated: boolean;
+  /** The backend that actually ran it; the child-fork failure is specific to the Windows backend. */
+  backend?: SandboxPlan['backend'];
 }
 
 export interface AcceptanceCheckResult {
@@ -448,6 +451,7 @@ async function runCommand(
           stdout: Buffer.concat(stdout).toString('utf8'),
           stderr: Buffer.concat(stderr).toString('utf8'),
           outputTruncated: output.truncated,
+          ...(plan.backend ? { backend: plan.backend } : {}),
         });
       })().catch(reject);
     });
@@ -531,6 +535,49 @@ async function verifyOne(
           };
       }
       const command = (await runCommand(root, spec, signal, maxOutputBytes))!;
+      /**
+       * The launcher's inability to start the image is not a statement about the work.
+       *
+       * It used to arrive as an ordinary exit code 1 — the same shape as a failing test suite — so the repair loop
+       * spent its rounds asking the model to fix code that had never executed, and only the exit code text hinted
+       * otherwise. The launcher now marks it, and this is where the mark becomes the classification the decision
+       * maker already understands: `environment-error` stops the loop instead of repairing.
+       */
+      const launchFailure = sandboxLaunchFailure(command.stderr, command.exitCode);
+      if (launchFailure)
+        return {
+          id: spec.id,
+          kind: spec.kind,
+          passed: false,
+          detail: `The sandbox could not start the command: ${launchFailure}`,
+          durationMs: Date.now() - started,
+          failureReason: 'environment-error',
+          command,
+        };
+      /**
+       * A command that started but could not fork is an environment failure, not a failing suite.
+       *
+       * `npm test`, `vitest` and `jest` all spawn a child per file; the Windows restricted-token backend
+       * refuses that with `spawn EPERM`. Treating it as an assertion failure sends the repair loop after code
+       * that never executed. The signature is deliberately narrow and only applies to the Windows backends
+       * that carry the restricted token; a host command that merely reports EPERM keeps its own meaning.
+       */
+      const childSpawnBlocked =
+        command.backend === 'windows' &&
+        command.exitCode !== 0 &&
+        sandboxChildSpawnBlocked(`${command.stdout}\n${command.stderr}`);
+      if (childSpawnBlocked)
+        return {
+          id: spec.id,
+          kind: spec.kind,
+          passed: false,
+          detail:
+            'The command started but could not create a child process (sandbox spawn EPERM). ' +
+            'This is an execution-environment limitation, not a failing test.',
+          durationMs: Date.now() - started,
+          failureReason: 'environment-error',
+          command,
+        };
       const expected = spec.expectedExitCode ?? 0;
       const passed = !command.timedOut && command.exitCode === expected;
       // A command that ran out of time, or that a signal ended, is not a statement about the work: the check

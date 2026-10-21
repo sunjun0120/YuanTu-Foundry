@@ -17,6 +17,28 @@ import { formatExactTokens, formatTokens } from './token-format.ts';
  * divided) lives in `packages/protocol/statistics.ts` and the run that fills it in, not here: this module only
  * formats.
  */
+/**
+ * The throughput reading, or `null` when this session never measured a decode span.
+ *
+ * The panel used to print `输出速度（TPS）未知` for a completed session: `decodeMs` was positive but the timing
+ * was not trustworthy (`decodeKnown` false), so the row existed and said it knew nothing. A measurement the
+ * product does not have is not a reading — the row is absent instead, the same rule every other optional figure
+ * in these panels already follows.
+ */
+/**
+ * The smallest decode sample a rate is printed for. A 24-token answer timed over 0.1 s read as "231 tok/s" —
+ * arithmetic, not a measurement — so below a second of decoding or fifty tokens the row is left out.
+ */
+const MIN_DECODE_MS = 1_000;
+/** A request this large is paid again on every later turn; past it the pill suggests a new session. */
+const LONG_CONTEXT_TOKENS = 400_000;
+const MIN_DECODE_TOKENS = 50;
+export function throughputReading(stats: SessionStatistics): string | null {
+  if (!(stats.decodeMs > 0) || stats.decodeKnown !== true) return null;
+  if (stats.decodeMs < MIN_DECODE_MS || stats.decodeTokens < MIN_DECODE_TOKENS) return null;
+  const tps = stats.decodeTokens / (stats.decodeMs / 1_000);
+  return (tps >= 10 ? String(Math.round(tps)) : String(Math.round(tps * 10) / 10)) + ' tok/s';
+}
 export function setupStatistics() {
   const host = document.getElementById('composer-statistics')!;
   const text = (zh: string, en: string) => (locale() === 'en-US' ? en : zh);
@@ -28,7 +50,7 @@ export function setupStatistics() {
   const labels = [
     [
       ['模型用时', 'LLM time'],
-      ['工具调用用时', 'Tool time'],
+      ['工具与确认用时', 'Tools + approvals'],
       ['首 token 平均（TTFT）', 'Avg time to first token (TTFT)'],
       ['输出速度（TPS）', 'Tokens per second (TPS)'],
     ],
@@ -168,10 +190,6 @@ export function setupStatistics() {
     );
   }
   /** Whole tokens from ten up, one decimal below: `180 tok/s`, `4.2 tok/s`. */
-  function formatTokensPerSecond(tps: number): string {
-    const clamped = Math.max(0, tps);
-    return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10);
-  }
   /**
    * The prompt-side total the cache hit is a share of: every billing bucket, not just the uncached part.
    *
@@ -234,17 +252,44 @@ export function setupStatistics() {
     // relationship between them can be impossible, and "-1200 uncached" is not a count of anything.
     return Math.max(0, stats.inputTokens - stats.cachedInputTokens - stats.cacheWriteInputTokens);
   }
+  /**
+   * The usage pill: this run first, then the session, and what the session number includes.
+   *
+   * A person who ran `node -v` in a long session read "本会话 521K tok" as the price of that command. The run's
+   * own share comes first when it differs from the session's, the session figure says it is cumulative and
+   * counts cache reads, and a context large enough to make every later turn expensive says so.
+   */
+  function usagePill(total: number, cacheHit: string | null): string {
+    const run = current?.runStatistics;
+    const runTotal = run ? billedInputTokens(run) + run.outputTokens : 0;
+    const parts: string[] = [];
+    if (run && runTotal > 0 && runTotal < total)
+      parts.push(text(`本次 ${formatTokens(runTotal)}`, `This run ${formatTokens(runTotal)}`));
+    parts.push(
+      text(
+        `本会话累计 ${formatTokens(total)} tok（含缓存读取）`,
+        `Session total ${formatTokens(total)} tok (incl. cache reads)`,
+      ),
+    );
+    if (cacheHit !== null) parts.push(text(`缓存命中 ${cacheHit}%`, `Cache hit ${cacheHit}%`));
+    const context = current?.budget?.inputTokens ?? 0;
+    if (context >= LONG_CONTEXT_TOKENS)
+      parts.push(
+        text(
+          '上下文已较长，新建会话可降低后续开销',
+          'Long context: a new session lowers the cost of later turns',
+        ),
+      );
+    return parts.join(' · ');
+  }
   function render() {
     const stats = current?.statistics ?? emptyStatistics();
     const total = billedInputTokens(stats) + stats.outputTokens;
     const cacheHit = cacheHitPercent(stats);
-    const tps =
-      stats.decodeMs > 0 && stats.decodeKnown === true
-        ? formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1_000)) + ' tok/s'
-        : null;
+    const tps = throughputReading(stats);
     const counts = text(
-      `${stats.turns} 轮 ${stats.steps} 步`,
-      `${stats.turns} turns ${stats.steps} steps`,
+      `本会话累计 ${stats.turns} 轮 ${stats.steps} 步`,
+      `This session: ${stats.turns} turns ${stats.steps} steps`,
     );
     // Every figure a panel prints is optional. A session with no step and no token has no reading at all, so
     // neither pill is on screen; a session with steps but no timed figure keeps its counts as a plain reading
@@ -257,10 +302,7 @@ export function setupStatistics() {
     items[1]!.openable = true;
     items[0]!.summary.textContent = counts + (tps === null ? '' : ' · ' + tps);
     items[0]!.button.setAttribute('aria-label', items[0]!.summary.textContent);
-    items[1]!.summary.textContent =
-      formatTokens(total) +
-      ' tok' +
-      (cacheHit === null ? '' : ' · ' + text(`缓存命中 ${cacheHit}%`, `Cache hit ${cacheHit}%`));
+    items[1]!.summary.textContent = usagePill(total, cacheHit);
     items[1]!.button.setAttribute('aria-label', items[1]!.summary.textContent);
     items.forEach((item, index) => {
       const title = text(...(titles[index]! as [string, string]));
@@ -275,7 +317,7 @@ export function setupStatistics() {
         stats.modelMs > 0 ? duration(stats.modelMs) : '',
         stats.toolMs > 0 ? duration(stats.toolMs) : '',
         stats.firstTokenCount > 0 ? duration(stats.firstTokenMs / stats.firstTokenCount) : '',
-        stats.decodeMs > 0 ? (tps ?? text('未知', 'Unknown')) : '',
+        stats.decodeMs > 0 ? (tps ?? '') : '',
       ],
       [
         cacheHit === null ? '' : cacheHit + '%',
@@ -320,7 +362,12 @@ export function setupStatistics() {
      */
     delta(delta: StatisticsDelta) {
       if (!current || current.sessionId !== delta.sessionId) return;
-      current = { ...current, statistics: delta.statistics, statisticsActivity: delta.activity };
+      current = {
+        ...current,
+        statistics: delta.statistics,
+        ...(delta.runStatistics !== undefined ? { runStatistics: delta.runStatistics } : {}),
+        statisticsActivity: delta.activity,
+      };
       render();
     },
   };

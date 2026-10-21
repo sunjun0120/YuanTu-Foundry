@@ -5,7 +5,7 @@ import type {
 } from '../../packages/protocol/rpc.ts';
 import { FILE_PREVIEW_BYTES } from '../../packages/protocol/rpc.ts';
 import { MAX_IMAGE_BYTES } from '../../packages/protocol/images.ts';
-import { onLocaleChange, t } from './i18n.ts';
+import { locale, onLocaleChange, t } from './i18n.ts';
 import { renderMarkdown } from './markdown.ts';
 import { workspaceIcon } from './workspace-icons.ts';
 
@@ -86,6 +86,8 @@ export function setupWorkspace() {
     scrollTop: number;
     changePreview?: HTMLElement;
     changeKey?: string;
+    /** The blob URL a generated Office page is drawn from; revoked when the tab is closed or reloaded. */
+    documentUrl?: string;
   }
   const files = new Map<string, FileTab>();
   let width = Math.min(560, window.innerWidth * 0.42);
@@ -378,6 +380,8 @@ export function setupWorkspace() {
     const index = paths.indexOf(path);
     const wasActive = selected === path;
     savePosition();
+    const closing = files.get(path);
+    if (closing?.documentUrl) URL.revokeObjectURL(closing.documentUrl);
     files.delete(path);
     if (wasActive) {
       activate(paths[index + 1] ?? paths[index - 1] ?? null, true);
@@ -449,6 +453,26 @@ export function setupWorkspace() {
       image.src = `data:${file.mimeType};base64,${file.data}`;
       image.alt = t('workspace.imageAlt');
       showContent(image);
+      return;
+    }
+    if (file.kind === 'html' && file.html) {
+      /*
+       * A generated Office page is drawn in a frame, never inserted into this document.
+       *
+       * `sandbox` with no tokens is the whole containment: no scripts, no same-origin access, no forms, no
+       * popups, no downloads. The page itself is built by the Host with a CSP that forbids scripts and
+       * network, so this is the second of two layers rather than the only one. `srcdoc` is not used because
+       * the page's CSP forbids frames; a blob URL is an explicit, revocable document.
+       */
+      const tabForFile = files.get(selected ?? '');
+      if (!tabForFile?.documentUrl)
+        tabForFile!.documentUrl = URL.createObjectURL(new Blob([file.html], { type: 'text/html' }));
+      const frame = element('iframe', '', 'workspace-preview-document');
+      frame.setAttribute('sandbox', '');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.setAttribute('title', fileName(selected ?? ''));
+      frame.src = tabForFile!.documentUrl;
+      showContent(frame);
       return;
     }
     if (file.kind === 'text') {
@@ -559,9 +583,16 @@ export function setupWorkspace() {
     // Retain the current document during refresh, including scroll position.
     if (selected === file.path && !file.shown) paintPreview();
     try {
-      const reply = await window.yuantu.files({ type: 'read', path: file.path });
+      const reply = await window.yuantu.files({
+        type: 'read',
+        path: file.path,
+        locale: locale(),
+      });
       // Identity matters: closing and reopening the same path creates a different tab.
       if (at !== generation || files.get(file.path) !== file || token !== file.token) return;
+      // A re-read replaces the page it drew; the old blob URL is released with the bytes it held.
+      if (file.documentUrl) URL.revokeObjectURL(file.documentUrl);
+      file.documentUrl = undefined;
       file.shown = reply.ok && 'preview' in reply ? reply.preview : null;
       file.error = reply.ok ? null : reply.error;
     } catch (error) {
@@ -621,6 +652,49 @@ export function setupWorkspace() {
     toggle.focus();
   });
   refreshButton.addEventListener('click', refresh);
+  /**
+   * A window that comes back to the front is the moment a person looks for what changed.
+   *
+   * The tree is a read-only mirror of the Host's workspace, not a filesystem watcher: a file another program
+   * wrote while the window was in the background still needs a read. Refreshing on focus makes that read happen
+   * without the person first noticing the refresh button.
+   */
+  window.addEventListener('focus', () => {
+    if (open) refresh();
+  });
+  /**
+   * The tree also polls the directories it is showing, because a file can change while the window is focused.
+   *
+   * This is deliberately a comparison of a cheap listing, not a refresh on a timer: a poll that found no change
+   * draws nothing and leaves scroll and open tabs alone. The interval is slow enough not to be a filesystem
+   * watcher and fast enough to show a file an external editor just wrote.
+   */
+  let pollingTree = false;
+  const pollTree = async (): Promise<void> => {
+    if (!open || document.hidden || pollingTree) return;
+    pollingTree = true;
+    try {
+      let changed = false;
+      for (const path of ['', ...expanded]) {
+        const reply = await window.yuantu.files(path ? { type: 'list', path } : { type: 'list' });
+        if (!reply.ok || !('listing' in reply)) continue;
+        const previous = listings.get(path);
+        if (
+          previous &&
+          JSON.stringify(previous.entries) !== JSON.stringify(reply.listing.entries)
+        ) {
+          changed = true;
+          break;
+        }
+      }
+      if (changed) refresh();
+    } catch {
+      /* A transient Host restart is reported by the next explicit refresh; polling stays quiet. */
+    } finally {
+      pollingTree = false;
+    }
+  };
+  if (typeof window.setInterval === 'function') window.setInterval(() => void pollTree(), 4_000);
   fullscreenButton.addEventListener('click', () => setFullscreen(!fullscreen));
   tabs.addEventListener('keydown', (event) => {
     if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'tab')
@@ -740,6 +814,9 @@ export function setupWorkspace() {
     savePosition();
     paintStatic();
     paintTree();
+    // A generated Office page carries its own copy of the language; repainting the old HTML would leave a
+    // Chinese window showing the English page (or the reverse) until the next refresh.
+    for (const file of files.values()) if (file.shown?.kind === 'html') void readFileTab(file);
     paintPreview();
     if (selected !== null) previewBody.scrollTop = files.get(selected)?.scrollTop ?? 0;
   });
@@ -747,6 +824,10 @@ export function setupWorkspace() {
   paintTree();
   paintPreview();
   return {
+    /** Re-read the tree and the open preview; called when a run ends or the window regains focus. */
+    refresh(): void {
+      refresh();
+    },
     /** Show one file in the panel, opening the panel if it is closed; the deliverable path's affordance. */
     async open(path: string): Promise<void> {
       setOpen(true);

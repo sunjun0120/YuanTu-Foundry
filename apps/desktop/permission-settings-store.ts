@@ -13,7 +13,7 @@ function modeFromPolicy(input: unknown): PermissionMode | undefined {
   } catch {
     return undefined;
   }
-  const mode = (['read-only', 'ask', 'approve', 'full-access'] as const).find((mode) =>
+  const mode = (['read-only', 'ask', 'approve', 'auto', 'full-access'] as const).find((mode) =>
     isDeepStrictEqual(input, permissionPolicyForMode(mode)),
   );
   if (mode) return mode;

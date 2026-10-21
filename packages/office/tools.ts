@@ -91,14 +91,33 @@ async function inspect(file: string, format: OfficeFormat): Promise<string> {
   }
   if (format === 'xlsx') {
     const XLSX = await import('xlsx');
-    const book = XLSX.read(bytes, { type: 'buffer', sheetRows: 31 });
+    // `sheetStubs` keeps a cell that holds only a formula: without it the reader drops `=SUM(B2:B3)` entirely
+    // and the inspection reports a total row that does not exist. The cached `v` of such a cell is 0, so the
+    // sample below prints the formula itself rather than that fabricated zero.
+    const book = XLSX.read(bytes, { type: 'buffer', sheetRows: 31, sheetStubs: true });
     return JSON.stringify({
       format,
       sheets: book.SheetNames.map((name) => {
         const sheet = book.Sheets[name]!;
         const range = sheet['!fullref'] ?? sheet['!ref'];
         const bounds = range ? XLSX.utils.decode_range(range) : undefined;
-        const sample = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }).slice(0, 30);
+        // Built cell by cell rather than through `sheet_to_json`: that reader trims a row at its last value,
+        // and a row whose tail is formulas (a totals row) would lose exactly the cells a reader wants to see.
+        const sample: unknown[][] = [];
+        if (bounds) {
+          const lastRow = Math.min(bounds.e.r, bounds.s.r + 29);
+          for (let row = bounds.s.r; row <= lastRow; row++) {
+            const values: unknown[] = [];
+            for (let column = bounds.s.c; column <= bounds.e.c; column++) {
+              const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+              // A formula has no cached result here, so its fabricated stub value (0) is never shown.
+              values.push(
+                typeof cell?.f === 'string' ? '=' + cell.f : (cell?.w ?? cell?.v ?? null),
+              );
+            }
+            sample.push(values);
+          }
+        }
         const rows = bounds ? bounds.e.r - bounds.s.r + 1 : 0;
         return {
           name,
@@ -515,7 +534,7 @@ export function officeTools(root: string, renderer: OfficePreview = libreOfficeP
     ),
     writable(
       'office_preview',
-      'Create a preview without changing the source. The output extension picks the kind: .html is a built-in preview that needs nothing installed (Word text and tables, slide text, Excel cell values); .pdf uses local Microsoft Office for Word/PowerPoint and falls back to LibreOffice. backend forces one engine (html, office, libreoffice). Visual fidelity and formula calculation need separate verification.',
+      'Create a preview file without changing the source; it writes to the workspace and needs approval, so use office_inspect to check your own output and call this only when a preview file is wanted. The output extension picks the kind: .html is a built-in preview that needs nothing installed (Word text and tables, slide text, Excel cell values); .pdf uses local Microsoft Office for Word/PowerPoint and falls back to LibreOffice. backend forces one engine (html, office, libreoffice). Visual fidelity and formula calculation need separate verification.',
       {
         source_path: pathSchema,
         output_path: pathSchema,

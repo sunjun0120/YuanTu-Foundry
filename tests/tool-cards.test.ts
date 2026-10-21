@@ -227,6 +227,25 @@ test('a command becomes a card that carries its own exit code and streams', asyn
   assert.equal(passed.stderr, '');
 });
 
+test('a command card keeps the sandbox child-fork note', () => {
+  const model = toolCardModel({
+    render: 'command-output',
+    value: {
+      command: 'npm test',
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      durationMs: 12,
+      stdout: '',
+      stderr: 'Error: spawn EPERM',
+      truncated: false,
+      sandboxNote: 'The command ran but could not start its own child process.',
+    },
+  });
+  assert.ok(model?.kind === 'command-output');
+  assert.match(model.sandboxNote ?? '', /child process/);
+});
+
 test('every renderer the protocol names has a card, and nothing else does', async (t) => {
   // The list is read from the protocol rather than repeated here: a fourth renderer added there must fail this
   // test until a card exists for it, which is the two-sided change the closed set was meant to force.

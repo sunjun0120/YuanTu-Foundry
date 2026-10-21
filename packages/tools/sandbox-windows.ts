@@ -19,7 +19,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -39,6 +39,10 @@ import { toolEnvironment } from './environment.ts';
 import { testResource } from '../platform/test-lifecycle.ts';
 import { createOwnedFileLease } from './owned-file-lease.ts';
 import { EnvironmentBlockedError } from './environment-blocked.ts';
+import {
+  SANDBOX_LAUNCH_FAILED_EXIT,
+  SANDBOX_LAUNCH_FAILED_PREFIX,
+} from './sandbox-launch-failure.ts';
 import { WINDOWS_CAPABILITIES } from './execution-capabilities.ts';
 import {
   insideWorkspace,
@@ -442,7 +446,15 @@ function bootstrap(dll: string, source: string): string {
     '}',
     '[void][Reflection.Assembly]::LoadFrom($dll)',
     `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
-    `exit [YuantuSandbox]::Run([string]$spec.command, [string]$spec.cwd, [string[]]$spec.env, [string[]]$spec.sids, ${LAUNCHER_FLAGS})`,
+    // A start failure is not the command's exit code: report it with a marker and a code the verifier recognises,
+    // so a machine that cannot start the image is not read as "the code under test failed". `GetBaseException`
+    // unwraps the PowerShell method-call wrapper to the Win32 message the launcher threw.
+    'try {',
+    `  exit [YuantuSandbox]::Run([string]$spec.command, [string]$spec.cwd, [string[]]$spec.env, [string[]]$spec.sids, ${LAUNCHER_FLAGS})`,
+    '} catch {',
+    `  [Console]::Error.WriteLine(${powerShellLiteral(SANDBOX_LAUNCH_FAILED_PREFIX)} + $_.Exception.GetBaseException().Message)`,
+    `  exit ${SANDBOX_LAUNCH_FAILED_EXIT}`,
+    '}',
   ].join('\n');
 }
 /** What one command needs: where to run, what to run, and the environment the child is started with. */
@@ -505,13 +517,46 @@ export function quoteWindowsArgument(argument: string): string {
   }
   return quoted + '\\'.repeat(backslashes * 2) + '"';
 }
+/** Extensions `CreateProcess` can start as an image without `cmd.exe`'s PATHEXT lookup. */
+const NATIVE_IMAGE_EXTENSIONS = ['.exe', '.com'] as const;
+/**
+ * Whether a program has to be started through `cmd.exe` before `CreateProcess` sees it.
+ *
+ * The argv path used to hand the program straight to `CreateProcessAsUser`, which resolves the first command-line
+ * token as a PE image and appends `.exe` to a bare name. That is correct for `node.exe` and wrong for every
+ * package manager shim on Windows: `npm`, `pnpm`, `yarn` and `tsc` are `.cmd` files that only the shell's PATHEXT
+ * search resolves, so an acceptance check written as `npm test` never started at all and reported
+ * `CreateProcessAsUser 系统找不到指定的文件` — which the verifier then read as a failed assertion.
+ *
+ * A bare name is direct only when the `.exe`/`.com` image exists on `PATH`; anything else is shell text.
+ */
+export function windowsProgramNeedsShell(
+  program: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const extension = path.extname(program).toLowerCase();
+  if ((NATIVE_IMAGE_EXTENSIONS as readonly string[]).includes(extension)) return false;
+  if (extension) return true;
+  const pathValue = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? '';
+  return !pathValue.split(path.delimiter).some((directory) => {
+    if (!directory) return false;
+    return NATIVE_IMAGE_EXTENSIONS.some((candidate) =>
+      existsSync(path.join(directory, program + candidate)),
+    );
+  });
+}
 /** The command line for a request: the same shell shape the host backend uses, quoted for `CreateProcess`. */
 export function windowsCommandLine(request: Pick<SandboxRequest, 'command' | 'argv'>): string {
   // With an argv the request is program-plus-arguments (`acceptance` checks and the hook bridge pass it that
   // way), so the program has to lead the command line: `CreateProcess` resolves the *first* token as the image
   // and the first version of this line left it out, which turned `node -e …` into a command line starting with
   // `-e` and failed as `ERROR_FILE_NOT_FOUND` — the argv path never ran at all.
-  if (request.argv) return [request.command, ...request.argv].map(quoteWindowsArgument).join(' ');
+  if (request.argv) {
+    const line = [request.command, ...request.argv].map(quoteWindowsArgument).join(' ');
+    if (!windowsProgramNeedsShell(request.command)) return line;
+    const comspec = process.env.ComSpec ?? 'cmd.exe';
+    return `${quoteWindowsArgument(comspec)} /d /s /c "${line}"`;
+  }
   // `/d` skips AutoRun commands and `/s` makes the quoting below the documented "everything inside the outer
   // quotes" form, which is what the host backend does too. The command is deliberately *not* run through
   // `quoteWindowsArgument`: cmd's parser is not the C runtime's, and escaping the outer quotes as `\"` hands it

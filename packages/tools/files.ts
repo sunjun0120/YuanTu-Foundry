@@ -15,6 +15,7 @@ import {
 } from './file-mutation.ts';
 import { loadInstructions } from './instructions.ts';
 import { FileObservations, type MutationGates } from './fs-observation.ts';
+import { afterDelivery } from './after-delivery.ts';
 import { isCredentialFileName } from '../platform/credential-paths.ts';
 import {
   LEGACY_MAX_ENTRIES,
@@ -270,26 +271,41 @@ export function fileTools(
   const gates: MutationGates = { instructions: guidance, observations };
   const known = new Set<string>([loadInstructions(root).text]);
   async function guidance(input: string): Promise<string> {
+    const { text, shown } = await pendingGuidance(input);
+    shown();
+    return text;
+  }
+  /**
+   * The scoped instructions a call would hand over, and the step that records them as handed over.
+   *
+   * Separate steps because a read started early may be discarded (`ToolContext.deferEffect`): recording
+   * instructions as shown for a result the model never read would keep them from it for the rest of the run.
+   */
+  async function pendingGuidance(input: string): Promise<{ text: string; shown: () => void }> {
     // Spilled output is read like any other file, and the scoped-instruction lookup must not refuse the
     // path the read itself was allowed to open.
     const file = await workspace.resolve(input, true, true);
     const loaded = loadInstructions(root, path.dirname(file));
-    if (known.has(loaded.text)) return '';
+    if (known.has(loaded.text)) return { text: '', shown: () => {} };
     // Record the full text before returning anything. Recording only on the success path meant an
     // over-budget directory threw on every later call (the set was never updated), so the whole
     // subtree became unreachable for read_file and every mutation tool — including the instruction
     // file that needed shortening, because reading it resolves to the same directory.
-    known.add(loaded.text);
-    if (loaded.text.length <= MAX_GUIDANCE_CHARS) return loaded.text;
+    const shown = () => known.add(loaded.text);
+    return { text: truncatedGuidance(loaded.text), shown };
+  }
+  function truncatedGuidance(text: string): string {
+    if (text.length <= MAX_GUIDANCE_CHARS) return text;
     const notice =
       '\n\n[Scoped instructions truncated to fit the tool output budget. ' +
       'Read the instruction files listed above directly to see the remainder.]';
-    return loaded.text.slice(0, MAX_GUIDANCE_CHARS - notice.length) + notice;
+    return text.slice(0, MAX_GUIDANCE_CHARS - notice.length) + notice;
   }
   const tools: Tool[] = [
     {
       name: 'list_files',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description:
         'List files recursively relative to workspace; skips links, credentials and dependency directories. Up to 1000 per page; pass limit, and the nextCursor of a previous result to reach the rest. The list ends with a retrieval-metadata line saying whether it is the whole scope or was cut short.',
       inputSchema: schema({
@@ -343,6 +359,7 @@ export function fileTools(
     {
       name: 'read_file',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       output: READ_FILE_OUTPUT,
       description:
         'Read a UTF-8 file. Returns numbered lines; use start_line and end_line for slices. The whole file is searchable, so a slice may start anywhere in it, and totalLines is the file’s real length. Output a tool could not return is stored under .yuantu/spill and is readable here.',
@@ -367,8 +384,9 @@ export function fileTools(
          * total of 128002 for a file that has 130001 lines. The range read either knows the count or fails.
          */
         const range = await readRange(access, input, start, end, ctx.signal, true);
-        // The model has now seen this file's bytes, which is what a later change to it will be checked against.
-        await observations.record(input);
+        // The model sees this file's bytes once the result is delivered, which is what a later change to it will
+        // be checked against.
+        afterDelivery(ctx, await observations.observe(input));
         /**
          * The path in the payload is the resolved one, not the argument as written.
          *
@@ -380,9 +398,11 @@ export function fileTools(
         // Scoped instructions live in the workspace, not in the internal directory a spill lives in — and the
         // question is which file this read opened, so it is answered from the resolved path rather than from the
         // spelling of the argument (see `isSpillIdentity`). Resolving first is what makes that possible.
-        const instructions = isSpillIdentity(await canonicalRelative(workspace, file))
-          ? ''
-          : await guidance(input);
+        const pending = isSpillIdentity(await canonicalRelative(workspace, file))
+          ? undefined
+          : await pendingGuidance(input);
+        if (pending) afterDelivery(ctx, pending.shown);
+        const instructions = pending?.text ?? '';
         /**
          * The numbered text keeps the convention it has always had, and the payload keeps the count.
          *
@@ -421,6 +441,7 @@ export function fileTools(
     {
       name: 'read_image',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       description:
         'Read an image file in the workspace (PNG, JPEG, GIF or WebP, up to 5MB) and return it as a picture you can actually look at. Use it on a screenshot or diagram instead of asking what is in it; read_file refuses binary files, and a path alone tells you nothing about the picture.',
       inputSchema: schema({ path: str }, ['path']),
@@ -473,6 +494,7 @@ export function fileTools(
     {
       name: 'search_files',
       isConcurrencySafe: parallelRead,
+      earlyStart: true,
       output: SEARCH_FILES_OUTPUT,
       description:
         'Search workspace text. Defaults remain literal, case-sensitive, and 100 results; supports regex, case modes, include/exclude globs and a bounded result limit. Files are read to EOF, and the result says whether the scan was complete — an incomplete scan never reports that the workspace has no such text.',
