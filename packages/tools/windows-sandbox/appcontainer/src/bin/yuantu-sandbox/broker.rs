@@ -29,6 +29,7 @@ use windows_sys::Win32::{
     Storage::FileSystem::{PIPE_ACCESS_DUPLEX, PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND},
     System::{JobObjects::*, Pipes::*, Threading::*},
 };
+use yuantu_appcontainer::account::{Account, credentials, password::Secret};
 
 /// Exit code when the runner was lost; the host restarts the broker on demand.
 const RUNNER_LOST_EXIT: u32 = 3;
@@ -41,19 +42,25 @@ struct Runner {
     next: AtomicU64,
 }
 
-/// How the runner is started. Only `Dev` exists until the account backend is initialized (plan 2b).
+/// How the runner is started.
 pub enum Launch {
     /// The runner runs as the current user. Debug builds only: the token user is then the desktop user, so
     /// confinement of writes does not hold; this exists to test the execution path without an account.
     #[cfg(debug_assertions)]
     Dev,
+    /// The runner runs as a sandbox account, logged on with its stored password.
+    Account(Account),
 }
 
 pub fn run(launch: Launch) -> Result<u32> {
     let me = current_user()?;
-    let runner_sid = match launch {
+    let (runner_sid, logon) = match launch {
         #[cfg(debug_assertions)]
-        Launch::Dev => me.clone(),
+        Launch::Dev => (me.clone(), None),
+        Launch::Account(account) => {
+            let (sid, secret) = credentials::load(account)?;
+            (sid, Some((account, secret)))
+        }
     };
     let control = random_suffix()?;
     let control_sddl = format!("D:P(A;;GA;;;{runner_sid})(A;;GA;;;{me})");
@@ -71,7 +78,7 @@ pub fn run(launch: Launch) -> Result<u32> {
         true,
         1,
     )?;
-    let (process, job) = start_runner(&control, &me)?;
+    let (process, job) = start_runner(&control, &me, logon)?;
     let pid = unsafe { GetProcessId(process.0) };
     accept(&down)?;
     accept(&up)?;
@@ -134,7 +141,11 @@ pub fn run(launch: Launch) -> Result<u32> {
     }
 }
 
-fn start_runner(control: &str, owner: &str) -> Result<(Handle, Handle)> {
+fn start_runner(
+    control: &str,
+    owner: &str,
+    logon: Option<(Account, Secret)>,
+) -> Result<(Handle, Handle)> {
     let job = Handle(unsafe { CreateJobObjectW(null(), null()) });
     if job.0.is_null() {
         return Err("Create runner Job failed".into());
@@ -161,8 +172,30 @@ fn start_runner(control: &str, owner: &str) -> Result<(Handle, Handle)> {
     let mut startup: STARTUPINFOW = unsafe { zeroed() };
     startup.cb = size_of::<STARTUPINFOW>() as u32;
     let mut info: PROCESS_INFORMATION = unsafe { zeroed() };
-    win(
-        unsafe {
+    let started = match &logon {
+        // CreateProcessWithLogonW also grants the new logon access to this window station and desktop.
+        Some((account, secret)) => {
+            let directory = wide(&format!(
+                r"{}System32",
+                std::env::var("SystemRoot").unwrap_or_else(|_| r"C:Windows".into())
+            ))?;
+            unsafe {
+                CreateProcessWithLogonW(
+                    wide(account.name())?.as_ptr(),
+                    wide(".")?.as_ptr(),
+                    wide(secret.expose())?.as_ptr(),
+                    LOGON_WITH_PROFILE,
+                    image.as_ptr(),
+                    command.as_mut_ptr(),
+                    CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                    null(),
+                    directory.as_ptr(),
+                    &startup,
+                    &mut info,
+                )
+            }
+        }
+        None => unsafe {
             CreateProcessW(
                 image.as_ptr(),
                 command.as_mut_ptr(),
@@ -176,8 +209,9 @@ fn start_runner(control: &str, owner: &str) -> Result<(Handle, Handle)> {
                 &mut info,
             )
         },
-        "Start runner",
-    )?;
+    };
+    drop(logon);
+    win(started, "Start runner")?;
     let process = Handle(info.hProcess);
     let thread = Handle(info.hThread);
     if unsafe { AssignProcessToJobObject(job.0, process.0) } == 0 {
