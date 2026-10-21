@@ -6,9 +6,16 @@ on:
 jobs:
   diag:
     runs-on: macos-latest
+    env:
+      FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node scripts/diag-seatbelt.mts
+          cache: npm
+      - run: npm ci
+      - run: node scripts/check-macos-sandbox.mjs
+      - run: node scripts/run-tests.mjs tests/sandbox-seatbelt.test.ts tests/native-sandbox-migration.test.ts tests/native-background-cleanup.test.ts tests/native-sandbox-lifecycle.test.ts tests/sandbox-providers.test.ts tests/restricted-consumers.test.ts tests/restricted-consumers-native.test.ts tests/macos-packaging.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
+      - if: always()
+        run: node scripts/diag-seatbelt.mts

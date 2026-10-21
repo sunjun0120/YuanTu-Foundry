@@ -58,6 +58,8 @@ const PLATFORM_FILES = [
   '/dev/random',
   '/private/etc/localtime',
   '/private/var/db/xcode_select_link',
+  // macOS 26 xcode-select reads its developer-directory link here instead.
+  '/private/var/select/developer_dir',
 ];
 const ownedPlans = new SeatbeltScratchRegistry();
 const verified = new Map<string, Promise<void>>();
@@ -99,6 +101,11 @@ export function seatbeltProfile(input: ProfileInput): string {
     '(allow signal (target same-sandbox))',
     '(allow process-info* (target same-sandbox))',
     '(allow sysctl-read)',
+    // macOS 26 process startup reads the root directory listing (names only) and aborts
+    // with SIGABRT when denied, before the target program runs.
+    '(allow file-read-data (literal "/"))',
+    // /var is a root symlink to /private/var; resolving PLATFORM_FILES through it needs its metadata.
+    '(allow file-read-metadata (literal "/var"))',
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     `(allow file-read* file-map-executable (subpath ${root}) (subpath ${scratch}))`,
     `(allow file-read-metadata (path-ancestors ${root}) (path-ancestors ${scratch}))`,
@@ -261,7 +268,7 @@ function run(
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(EXECUTABLE, ['-p', profile, command, ...args], {
       cwd,
@@ -299,13 +306,13 @@ function run(
       clearTimeout(timer);
       reject(error);
     });
-    child.once('close', (code) => {
+    child.once('close', (code, signal) => {
       clearTimeout(timer);
       kill();
       if (killError)
         reject(new Error(`Seatbelt probe process group termination failed: ${String(killError)}`));
       else if (expired) reject(new Error('Seatbelt functional probe timed out'));
-      else resolve({ code, stdout, stderr });
+      else resolve({ code, signal, stdout, stderr });
     });
   });
 }
@@ -335,7 +342,9 @@ async function probe(input: ProfileInput, env: NodeJS.ProcessEnv): Promise<void>
     const script = `const fs=require('node:fs'),net=require('node:net'),cp=require('node:child_process');const s=${JSON.stringify(spec)};const r={};function check(name,fn){try{fn();r[name]='allowed'}catch(e){r[name]=e.code}}r.read=fs.readFileSync(s.fixture+'/read','utf8');check('workspace',()=>fs.writeFileSync(s.fixture+'/write','allowed'));check('workspaceDelete',()=>fs.unlinkSync(s.fixture+'/read'));check('scratch',()=>fs.writeFileSync(s.scratch+'/probe','allowed'));check('outsideWrite',()=>fs.writeFileSync(s.external+'/write','escape'));check('outsideRead',()=>fs.readFileSync(s.sentinel));check('outsideDelete',()=>fs.unlinkSync(s.sentinel));check('outsideMode',()=>fs.chmodSync(s.sentinel,0o777));check('outsideAlias',()=>fs.readFileSync(s.fixture+'/outside-alias'));check('hardlink',()=>fs.linkSync(s.sentinel,s.fixture+'/hardlink'));check('protected',()=>fs.mkdirSync(s.fixture+'/.agents'));check('protectedMixed',()=>fs.mkdirSync(s.fixture+'/.AgEnTs'));check('scratchProtectedMixed',()=>fs.mkdirSync(s.scratch+'/.CoDeX'));check('metadataAlias',()=>fs.writeFileSync(s.fixture+'/metadata-alias/seed','escape'));const child=cp.spawnSync(process.execPath,['-e', 'try{require("node:fs").writeFileSync('+JSON.stringify(s.external+'/child')+',"escape");process.exit(1)}catch(e){process.exit(["EPERM","EACCES"].includes(e.code)?0:2)}'],{timeout:2000});r.child=child.status;const socket=net.connect({host:'127.0.0.1',port:s.port});const timer=setTimeout(()=>{r.network='timeout';socket.destroy();console.log(JSON.stringify(r))},1500);socket.once('connect',()=>{clearTimeout(timer);r.network='allowed';socket.destroy();console.log(JSON.stringify(r))});socket.once('error',e=>{clearTimeout(timer);r.network=e.code;console.log(JSON.stringify(r))});`;
     const result = await run(compile(input), process.execPath, ['-e', script], fixture, env);
     if (result.code !== 0)
-      throw new Error(`Seatbelt probe could not execute: ${result.stderr.trim() || result.code}`);
+      throw new Error(
+        `Seatbelt probe could not execute: ${result.stderr.trim() || result.signal || result.code}`,
+      );
     let report: Record<string, unknown>;
     try {
       report = JSON.parse(result.stdout);
