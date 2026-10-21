@@ -106,6 +106,13 @@ jobs:
           npm run build:windows-sandbox
           cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml
           node scripts/run-tests.mjs tests/sandbox-appcontainer.test.ts tests/sandbox-appcontainer-native.test.ts tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts tests/native-git-native.test.ts
+      # The runner is a disposable elevated machine: this creates the sandbox accounts, group, logon rights and
+      # WFP filters, checks write/read/network confinement through them, and removes everything again.
+      - name: Windows sandbox account real acceptance
+        env:
+          YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
+          YUANTU_SANDBOX_DEV_PROVISION: '1'
+        run: cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml --test account_acceptance -- --nocapture
       - run: npm run build
       - name: Windows desktop basic sandbox real acceptance without skips
         run: node scripts/check-windows-sandbox.mjs --desktop
