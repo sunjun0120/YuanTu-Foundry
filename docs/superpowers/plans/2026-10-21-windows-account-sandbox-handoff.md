@@ -11,13 +11,13 @@
 
 把 Windows 原生沙箱从“从桌面用户令牌派生受限令牌”换成 Codex elevated 式：专用低权限本地账户（`YuanTuSandboxOffline`/`YuanTuSandboxOnline`，组 `YuanTuSandboxUsers`）+ 一次性管理员初始化 + 常驻执行器（broker 以桌面用户运行，runner 以沙箱账户运行）。根因结论：旧后端 `spawn EPERM` 是因为 `WRITE_RESTRICTED` 令牌的限制 SID 里没有令牌用户 SID（libuv 建 stdio 管道要 `WRITE_DAC`）；新令牌配方 = 能力 SID… + 用户 SID + logon + Everyone，不降 Low。
 
-| 阶段                                                                                                     | 状态                                                                                 |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| 1 spike                                                                                                  | 完成                                                                                 |
-| 2a 原生执行链路（exec/broker/runner、IPC、Job）                                                          | 完成，CI 通过                                                                        |
-| 2b 初始化/卸载/状态、DPAPI 凭据、WFP 按用户 SID 断网                                                     | 完成，**真实机器验收通过**（workflow `Windows sandbox accounts`，run 39561590575）   |
-| 2c TS 接入（`windows-account` 模式、provider、broker 管理、`native` 自动选择、常驻 grant、构建产出 exe） | 代码已提交（`27c892b`、`4ae8c11`、`61f1a20`）；**commit 61f1a20 的 CI 结果尚未确认** |
-| 2d                                                                                                       | 未开始，见下                                                                         |
+| 阶段                                                                                                     | 状态                                                                               |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1 spike                                                                                                  | 完成                                                                               |
+| 2a 原生执行链路（exec/broker/runner、IPC、Job）                                                          | 完成，CI 通过                                                                      |
+| 2b 初始化/卸载/状态、DPAPI 凭据、WFP 按用户 SID 断网                                                     | 完成，**真实机器验收通过**（workflow `Windows sandbox accounts`，run 39561590575） |
+| 2c TS 接入（`windows-account` 模式、provider、broker 管理、`native` 自动选择、常驻 grant、构建产出 exe） | 完成，`8e39c07` 的真实账户 TS 验收 1 pass / 0 skip（run `39604595930`）            |
+| 2d 桌面、读取白名单与发布校验                                                                            | 已实现，账户设置 Electron smoke 通过；真实签名和受保护安装生命周期尚未验收         |
 
 ## 代码地图
 
@@ -33,13 +33,13 @@
 
 `account-status`｜`account-setup`/`account-uninstall`（release：签名+受保护安装，UAC 固定操作）｜`account-initialize --handoff PIPE`、`account-remove --elevated`（提权半边）｜debug 专用：`account-initialize --dev-direct`、`account-remove --dev-direct`（需已提权 + `YUANTU_SANDBOX_DEV_PROVISION=1`）、`broker --dev`｜`broker --account offline|online`｜`grant --root R --capability S`、`ungrant --root R`｜`exec --broker PIPE --request FILE`｜`runner --control ID --owner SID`
 
-## 剩余工作
+## 交接后执行结果与剩余验收
 
-1. **确认 2c 在 CI 上通过**：`Windows sandbox accounts` workflow 对 commit `61f1a20` 的两步验收（cargo `account_acceptance` 与 `node scripts/run-tests.mjs tests/sandbox-account-native.test.ts`），以及 `CI` workflow 的 `check`。失败就修。
-2. **2d 桌面端**：`apps/desktop/sandbox-setup.ts` 增加账户后端的 status/initialize/uninstall（结构同现有 `WindowsSandboxSetup`，调用 `account-status`/`account-setup`/`account-uninstall`），设置面板显示 未初始化/就绪/损坏（原因来自 status 的 `problems`），初始化/卸载后调用 `refreshAccountReadiness()`；`windows` 回退时 EPERM 提示（`packages/tools/sandbox-launch-failure.ts` 的 `SANDBOX_CHILD_SPAWN_NOTE`）改为引导“初始化沙箱账户”。界面文案走现有 i18n（`npm run i18n:check`）。
-3. **读取白名单（spec §5.2）**：沙箱账户读不到桌面用户 profile，nvm/`%APPDATA%\npm` 等工具链不可用。在 `grants.rs` 增加只读授权（组 RX、可继承），默认条目为桌面用户 PATH 中位于其 profile 下的目录与 `.gitconfig`，拒绝列表永远优先（`.ssh`、`.aws`、`.gnupg`、`.azure`、`.kube`、`.docker`、浏览器 profile、Credentials、DPAPI、本产品凭据目录）；记录并在卸载时撤销。
-4. **发布**：`yuantu-sandbox.exe` 纳入签名清单与受保护安装（参照 `scripts/copy-sandbox-assets.mjs`、`scripts/check-windows-package.mjs`、`electron-builder.protected.config.cjs` 对 `yuantu-appcontainer.exe` 的处理）。
-5. 可选：私有桌面（runner 与命令在独立 desktop，spec §3.3）；终端（ConPTY）不在范围。
+1. **2c 真实账户验收已通过**：`8e39c07` 的 `Windows sandbox accounts` workflow（run `39604595930`）包含 Rust 与 TS 两层真实验收，TS 明确 1 pass / 0 skip。修复过程与通用 CI 证据见下文。
+2. **2d 桌面端已实现并验证**：`WindowsAccountSandboxSetup` 提供状态、初始化/修复/卸载、读取路径维护；设置页使用中英 i18n，维护后刷新运行中 Host 的就绪状态。真实 Electron smoke 通过；开发版禁止账户维护。受保护发行版的真实 UAC 生命周期仍须在一次性 GitHub Actions runner 验收。
+3. **读取白名单已实现并真实验证**：默认 profile 内 PATH 与 `.gitconfig`，可自定义增删，拒绝敏感目录及其父路径，按对象身份记录与撤销。安全审查后采用不可继承的逐对象 RX 快照（见 spec §5.2），新工具文件需要重新授权。Rust 真实账户用例覆盖可读不可写、新建敏感目录不可读、撤销和卸载。
+4. **发布链校验已接入，实际发行验收待完成**：两份 helper 独立签名哈希、时间戳与打包后校验已实现，静态链接 release 构建通过。尚无真实签名证书及受保护安装生命周期验收结果；不得将开发版账户验收当作生产发行验收，也不得在本机补做账户初始化。
+5. 可选：私有桌面（runner 与命令在独立 desktop，spec §3.3）尚未实现；终端（ConPTY）不在范围。
 
 ## 约定与坑
 
@@ -61,7 +61,9 @@
 - 安全审查修订 spec §5.2：读取授权采用**不可继承的逐对象 RX 快照**。原定继承 RX 会让后来新建的 `.ssh` 自动可读，因此选择拒绝规则优先；新增工具文件须重新授权。撤销不遍历后来新增的敏感目录或链接，权限/身份冲突保留恢复记录。
 - 发布链已接入两份 helper 的独立签名哈希、时间戳校验和打包后验证；本轮没有执行真实签名、安装或本机账户初始化。受保护安装生命周期仍保持原有验收门槛，私有 desktop 仍为可选后续项。
 - 本地验证：Rust 普通全回归、相关 TS 回归、真实 Electron smoke、typecheck、format、i18n 和隔离检查通过。一次本地 `npm test` 因 `host-carrier-auth.test.ts` 进程清理检查中断，18/287 文件结算，327 用例通过，**不是全量通过**；原始日志保留于 `.scratch/account-full-test.log`。
-- 最新分支改动仍需推送后的 Actions 账户验收及通用 `check` 确认；后续结果追加本节。不要在本机设定账户验收或建户开关。
+- 账户验收及通用 `check` 的最终证据见本节末尾。不要在本机设定账户验收或建户开关。
 - `9577f2b` 已修复 TS 验收被跳过和 Electron 准备问题。真实运行 TS provider 后进一步复现：profile 下工作区的祖先目录缺少读取属性权限，Node 在 `AppData` 的 lstat 上 EPERM。本轮补充了仅遍历/属性的不可继承祖先授权，独立记录、按文件身份撤销；它不会授予目录枚举或文件内容读取。原生回归先复现缺失接口再通过，真实行为仍由后续 Actions 验证。
 - `444a2af` 的通用 `check` 已通过。账户 TS 验收发现并发工作区准备会争用祖先授权日志锁，已改为最长 5 秒的有界等待；工作区授权日志也复用该锁串行提交，验收新增同时保留两条恢复记录的断言。后续需确认该并发修复的账户 workflow 全部通过。
 - `ab52137` 的通用 `check`、coverage、bench 已通过（run `39575625311`）；native-macos 与旧 Windows desktop-smoke 仍失败，遵循分工未修改。账户 run `39575625096` 已通过并发授权及 Node fork 检查，随后被临时目录的 Windows 8.3 短路径误判阻断；验收改为命令执行期间解析真实路径，同时核对账户身份、profile 归属与临时目录可写性，后续 Actions 确认。
+- `8e39c07` 的账户 workflow `39604595930` 全部通过：Rust 真实账户验收 1 passed（46.06s），TS provider 1 pass / 0 skip（35.84s），构建与 Electron 账户设置 smoke 1 pass / 0 skip。短路径检查最终使用 `fs.realpathSync.native`，普通 `fs.realpathSync` 在 Windows 上仍保留 8.3 名称；已先用本机普通目录验证差异，没有初始化本机账户。
+- `8e39c07` 的通用 CI run `39604595914`：`check`（job `119237435047`）与 audit 通过，主测试 3011 个用例中 2906 pass / 0 fail / 105 skip，另有客户端 smoke 3 pass。`bench` 当前失败于 `append.perRound = 0.286`，`native-macos` 失败于 process/scratch 验收；按既定分工没有修改这些区域。不得将 `check` 通过表述为所有平台 job 全绿。
