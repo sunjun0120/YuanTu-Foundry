@@ -1,12 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { _electron as electron } from 'playwright';
-import electronPath from 'electron';
 import { projectRoot } from './process-fixture.ts';
+
+/**
+ * The installed Electron executable, found the way the `electron` package finds it but without its fallback.
+ *
+ * Importing `electron` downloads the binary when it is missing, writing into node_modules — which the isolation
+ * harness refuses, and which a machine without the binary (the Linux check job) should not do inside a test.
+ */
+function installedElectron(): string | undefined {
+  const root = path.join(projectRoot, 'node_modules', 'electron');
+  try {
+    const executable = path.join(root, 'dist', readFileSync(path.join(root, 'path.txt'), 'utf8'));
+    return existsSync(executable) ? executable : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const electronPath = installedElectron();
+const electronSkip = electronPath
+  ? false
+  : 'the Electron binary is not installed (npx install-electron)';
 
 async function desktopPage(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-dom-locale-'));
@@ -58,7 +78,7 @@ async function desktopPage(t: test.TestContext) {
 
 test(
   'background entry follows current jobs even after a previous session had jobs',
-  { timeout: 30000 },
+  { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
     const states = await page.evaluate<
@@ -90,7 +110,7 @@ test(
 
 test(
   'background rows share subagent status markers and the entry has no icon',
-  { timeout: 30000 },
+  { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
     await page.setViewportSize({ width: 1100, height: 550 });
@@ -211,7 +231,7 @@ for (const surface of ['background', 'workspace']) {
 
 test(
   'locale round trips restore static attributes and preserve real session names and file paths',
-  { timeout: 30000 },
+  { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
     await page.evaluate(`
@@ -269,7 +289,7 @@ test(
 
 test(
   'the draft commands carry the interface language, and their refusal is translated',
-  { timeout: 30000 },
+  { timeout: 30000, skip: electronSkip },
   async (t) => {
     /**
      * A task draft's default steps are generated content rather than dictionary copy — they land in the fields the
@@ -314,7 +334,7 @@ test(
 
 test(
   'workspace management ignores stale project replies and recovers controls after IPC failure',
-  { timeout: 30000 },
+  { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
     await page.evaluate(`

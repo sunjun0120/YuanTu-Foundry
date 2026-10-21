@@ -32,6 +32,7 @@ import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { connectSocket, listeningHost } from './listening-host-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 import { withoutComments } from '../scripts/i18n-gate.mjs';
+import { nativeSkip } from './native-platform.ts';
 
 /** Poll until `condition` holds, so a test does not encode a sleep that is either slow or flaky. */
 async function waitFor(condition: () => boolean, what: string): Promise<void> {
@@ -223,7 +224,7 @@ test('a spawned carrier drives a real Host in Node, with no shell in the process
 
 test(
   'a recovered carrier restores its live sandbox and approval policy before accepting commands',
-  { timeout: 30_000 },
+  { timeout: 30_000, skip: nativeSkip },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-security-recovery-'));
     let toolResult: { is_error?: boolean; content: unknown } | undefined;

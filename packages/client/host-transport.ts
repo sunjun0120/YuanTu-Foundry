@@ -66,6 +66,17 @@ export function lineFramer(options: {
       const decoded = decoder.write(chunk);
       buffer += decoded;
       bufferedBytes += Buffer.byteLength(decoded, 'utf8');
+      // A chunk without a newline only extends the current line: searching the whole buffer for one would make
+      // V8 flatten the concatenated string on every chunk, which is quadratic in a long line — an oversized
+      // frame arriving in 64 KiB socket reads took seconds to be refused.
+      if (!decoded.includes('\n')) {
+        searchFrom = buffer.length;
+        if (bufferedBytes > options.maxFrameBytes) {
+          failed = true;
+          options.onError(new Error('Agent Host response exceeds frame limit'));
+        }
+        return;
+      }
       // Lines are consumed by offset and the remainder cut once: re-measuring the rest of the buffer after every
       // line made a chunk carrying many small events quadratic in its size.
       let newline: number,
@@ -172,7 +183,15 @@ class StdioTransport extends TransportBase implements HostTransport {
     this.child.stdin.end();
   }
   kill(): void {
-    this.child.kill('SIGKILL');
+    const pid = this.child.pid;
+    if (process.platform !== 'win32' && pid !== undefined) {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch (error) {
+        // Already gone, or not a group leader: fall back to the Host itself.
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') this.child.kill('SIGKILL');
+      }
+    } else this.child.kill('SIGKILL');
     this.child.stdout.destroy();
     this.child.stderr.destroy();
   }
@@ -241,6 +260,9 @@ export function stdioTransport(options: StdioTransportOptions): HostTransport {
     env,
     shell: false,
     windowsHide: true,
+    // On POSIX the Host leads its own process group, so a forced stop can end everything it started with one
+    // signal (the group convention `killTree` uses). Windows has no groups and is unchanged.
+    detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   return new StdioTransport(

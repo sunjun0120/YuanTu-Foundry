@@ -57,7 +57,11 @@ if (encoded && !controller) {
     if (hasViolations()) process.exitCode = 1;
   });
   installProcessProbe(config, violate);
-  installFilesystemProbe(checkWrite, violate);
+  installFilesystemProbe(checkWrite, violate, {
+    // On POSIX node-pty opens its master descriptor natively; the serialized PTY resource owns it, as it owns
+    // the ConPTY pipes on Windows.
+    nativeDescriptor: () => process.platform !== 'win32' && config.resources.includes('real-pty'),
+  });
   installSQLiteProbe(checkWrite, violate);
   installNetworkProbe(checkWrite, violate);
   syncBuiltinESMExports();

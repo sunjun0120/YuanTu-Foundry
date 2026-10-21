@@ -2,7 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function installFilesystemProbe(checkWrite, violate) {
+/**
+ * @param {(input: unknown) => void} checkWrite
+ * @param {(rule: string, message: string) => never} violate
+ * @param {{ nativeDescriptor?: (descriptor: number) => boolean }} [policy] answers whether a descriptor this
+ *   probe never saw opened (one created in native code) may be written.
+ */
+export function installFilesystemProbe(checkWrite, violate, policy = {}) {
   const original = Object.fromEntries(Object.keys(fs).map((key) => [key, fs[key]]));
   const descriptors = new Map();
   const writing = (flags) =>
@@ -19,7 +25,10 @@ export function installFilesystemProbe(checkWrite, violate) {
   const fd = (value) => {
     if (value >= 0 && value <= 2) return;
     const owner = descriptors.get(value);
-    if (owner === undefined) violate('ownership', `unknown writable file descriptor ${value}`);
+    if (owner === undefined) {
+      if (policy.nativeDescriptor?.(value)) return;
+      violate('ownership', `unknown writable file descriptor ${value}`);
+    }
     checkWrite(owner);
   };
   const target = (value) => (typeof value === 'number' ? fd(value) : checkWrite(value));
@@ -76,6 +85,17 @@ export function installFilesystemProbe(checkWrite, violate) {
       };
     }
   }
+  // A closed descriptor's number is reused by the next open, including opens in native code this probe never
+  // sees (a node-pty master on POSIX). Forgetting it on close keeps a later write from being attributed to
+  // whatever file last held that number.
+  fs.closeSync = function (descriptor, ...args) {
+    descriptors.delete(descriptor);
+    return original.closeSync.call(this, descriptor, ...args);
+  };
+  fs.close = function (descriptor, ...args) {
+    descriptors.delete(descriptor);
+    return original.close.call(this, descriptor, ...args);
+  };
   fs.openSync = function (file, flags, ...args) {
     if (writing(flags)) checkWrite(file);
     const descriptor = original.openSync.call(this, file, flags, ...args);
@@ -94,7 +114,13 @@ export function installFilesystemProbe(checkWrite, violate) {
   fs.promises.open = async function (file, flags, ...args) {
     if (writing(flags)) checkWrite(file);
     const handle = await open.call(this, file, flags, ...args);
-    descriptors.set(handle.fd, file);
+    const number = handle.fd;
+    descriptors.set(number, file);
+    const close = handle.close;
+    handle.close = function (...values) {
+      descriptors.delete(number);
+      return Reflect.apply(close, this, values);
+    };
     for (const name of [
       'write',
       'writev',
