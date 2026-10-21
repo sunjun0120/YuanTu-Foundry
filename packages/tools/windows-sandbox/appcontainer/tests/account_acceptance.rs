@@ -17,6 +17,43 @@ fn enabled() -> bool {
     std::env::var("YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE").as_deref() == Ok("1")
 }
 
+/// GitHub Actions workflow command: shows up as a run annotation, readable without downloading logs.
+fn annotate(kind: &str, title: &str, message: &str) {
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+        return;
+    }
+    let escape = |text: &str| {
+        text.chars()
+            .take(3500)
+            .collect::<String>()
+            .replace('%', "%25")
+            .replace('\r', "%0D")
+            .replace('\n', "%0A")
+    };
+    println!(
+        "::{kind} title={}::{}",
+        escape(title).replace(':', "%3A").replace(',', "%2C"),
+        escape(message)
+    );
+}
+
+fn report_panics() {
+    std::panic::set_hook(Box::new(|info| {
+        let message = info
+            .payload()
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| info.payload().downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let location = info
+            .location()
+            .map(|l| format!("line {}", l.line()))
+            .unwrap_or_default();
+        eprintln!("panicked at {location}: {message}");
+        annotate("error", &format!("account acceptance {location}"), &message);
+    }));
+}
+
 fn run(args: &[&str]) -> Output {
     Command::new(EXE).args(args).output().unwrap()
 }
@@ -31,11 +68,13 @@ struct Provisioned;
 impl Drop for Provisioned {
     fn drop(&mut self) {
         let output = run(&["account-remove", "--dev-direct"]);
-        eprintln!(
-            "account-remove: {} {}",
+        let text = format!(
+            "{} {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        eprintln!("account-remove: {text}");
+        annotate("notice", "account-remove (cleanup)", &text);
     }
 }
 
@@ -76,15 +115,21 @@ fn broker(account: &str) -> Broker {
         .args(["broker", "--account", account])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut line = String::new();
     BufReader::new(child.stdout.take().unwrap())
         .read_line(&mut line)
         .unwrap();
-    let reply: Value =
-        serde_json::from_str(&line).unwrap_or_else(|_| panic!("broker said {line:?}"));
+    let Ok(reply) = serde_json::from_str::<Value>(&line) else {
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "broker --account {account} did not start: {line:?} {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
     Broker {
         child,
         pipe: reply["pipe"].as_str().unwrap().to_string(),
@@ -170,12 +215,14 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
         );
         return;
     }
+    report_panics();
     let root = scratch();
     std::fs::create_dir_all(&root).unwrap();
 
     // 1. Provision.
     let output = run(&["account-initialize", "--dev-direct"]);
     let _cleanup = Provisioned;
+    annotate("notice", "account-initialize", &text(&output));
     assert!(output.status.success(), "initialize: {}", text(&output));
     let report = status();
     assert_eq!(report["ready"], json!(true), "{report}");
