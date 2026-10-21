@@ -1,0 +1,14 @@
+# TEMPORARY: macOS runner Seatbelt diagnostics. Remove before merge.
+name: diag-seatbelt
+on:
+  push:
+    branches: [claude/seatbelt-macos26]
+jobs:
+  diag:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node scripts/diag-seatbelt.mts
