@@ -87,24 +87,15 @@ fn icacls(path: &Path, grant: &str) {
     assert!(output.status.success(), "icacls {grant}: {output:?}");
 }
 
-/// A capability SID names no account, so icacls cannot map it (error 1332); grant it by SID object instead.
-fn grant_capability(path: &Path, sid: &str) {
-    let target = path.display();
-    let script = format!(
-        "$acl = Get-Acl -LiteralPath '{target}'; \
-         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(\
-         (New-Object System.Security.Principal.SecurityIdentifier '{sid}'), 'Modify', \
-         'ContainerInherit,ObjectInherit', 'None', 'Allow'); \
-         $acl.AddAccessRule($rule); Set-Acl -LiteralPath '{target}' -AclObject $acl"
-    );
-    // Started from PowerShell 7 (GitHub's default shell), PSModulePath lists PS7 modules that Windows
-    // PowerShell 5.1 cannot load, and Get-Acl/Set-Acl fail to autoload. Let 5.1 use its own default.
-    let output = Command::new("powershell.exe")
-        .env_remove("PSModulePath")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+/// The product's own workspace grant: group + capability Modify, reserved directories denied.
+fn grant_workspace(path: &Path, sid: &str) {
+    let output = Command::new(EXE)
+        .args(["grant", "--root"])
+        .arg(path)
+        .args(["--capability", sid])
         .output()
         .unwrap();
-    assert!(output.status.success(), "grant {sid}: {output:?}");
+    assert!(output.status.success(), "grant {sid}: {}", text(&output));
 }
 
 fn capability() -> String {
@@ -265,9 +256,8 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let (a, b) = (root.join("A"), root.join("B"));
     let (cap_a, cap_b) = (capability(), capability());
     for (dir, cap) in [(&a, &cap_a), (&b, &cap_b)] {
-        std::fs::create_dir_all(dir).unwrap();
-        icacls(dir, "YuanTuSandboxUsers:(OI)(CI)M");
-        grant_capability(dir, cap);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        grant_workspace(dir, cap);
     }
     let profile = PathBuf::from(std::env::var("USERPROFILE").unwrap());
     let secret = profile.join("yuantu-acceptance-secret.txt");
@@ -305,6 +295,12 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     );
     let readonly = shell(&offline.pipe, "echo x> A\\readonly.txt", &root, &[]);
     assert!(!a.join("readonly.txt").exists(), "{}", text(&readonly));
+    let metadata = shell(&offline.pipe, "echo x> A\\.git\\config", &root, &[&cap_a]);
+    assert!(
+        !a.join(".git").join("config").exists(),
+        "{}",
+        text(&metadata)
+    );
 
     // 4. Concurrency across workspaces with one broker.
     let (pipe_a, pipe_b, root_a, root_b) = (

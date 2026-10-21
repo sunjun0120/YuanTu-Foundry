@@ -130,10 +130,10 @@ agent-host (桌面用户, Medium)
 
 ### 5.1 写
 
-- 沿用现有 `acl.ps1` 的日志化授权、引用计数租约（同一工作区多会话共享）、恢复（`sandbox-recover`）机制。工作区根授予两个 ACE：`YuanTuSandboxUsers` 组（读 + 写，可继承）、该工作区能力 SID（写，可继承）。离线与联网账户同属该组，共用同一份授权。
+- **常驻授权（同 Codex，2c 修订）**：工作区首次使用时，由原生 `yuantu-sandbox grant` 给根目录加两条可继承 ACE：`YuanTuSandboxUsers` 组（Modify）、该工作区能力 SID（Modify），保留到卸载或 `ungrant`，记录在 `grants.json`。不做逐命令/逐会话的日志化恢复：只有持有该工作区能力 SID 的受限令牌（仅 runner 会造）能通过第二次访问检查，常驻 ACE 对其他进程无效。也因此不与旧后端共用 `acl.ps1` 的租约与日志。离线与联网账户同属该组，共用同一份授权。
 - **不变量：除沙箱账户自己的 profile 外，任何路径都不出现直接授予沙箱账户 SID 的 ACE。** `account-status` 检查工作区与读白名单中没有违反该不变量的 ACE。
-- scratch：每条命令一个目录，授予组（读写）+ 本命令 scratch 能力 SID（写），命令结束删除。
-- 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）保持现有保护，并对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE。
+- scratch：runner 在沙箱账户自己的 `%TEMP%` 下按命令创建、命令结束删除；该目录属于沙箱账户自己的 profile，无需能力 SID。
+- 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）中已存在者，对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE。
 - 已知弱点（同 Codex）：限制列表含 Everyone，所以“Everyone 可写”的目录仍然可写。初始化与 `account-status` 扫描工作区祖先、读白名单、`PATH` 目录中 Everyone 可写的位置并给出警告（对应 Codex `audit_everyone_writable`）。
 
 ### 5.2 读白名单

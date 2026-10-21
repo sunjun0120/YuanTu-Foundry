@@ -23,7 +23,7 @@ use windows_sys::Win32::{
     UI::{Shell::*, WindowsAndMessaging::SW_HIDE},
 };
 use yuantu_appcontainer::account::{
-    Account, credentials, firewall,
+    Account, credentials, firewall, grants,
     password::{self, Secret},
     status, users,
 };
@@ -112,6 +112,10 @@ fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> 
 }
 
 fn remove_everything() -> Result<()> {
+    // Workspace grants first: they name the group, which is about to disappear.
+    if let Some(group) = users::lookup_sid(yuantu_appcontainer::account::GROUP)? {
+        grants::ungrant_all(&group)?;
+    }
     firewall::remove_filters()?;
     users::remove()
 }
@@ -325,6 +329,30 @@ pub fn uninstall() -> Result<u32> {
     wait_success(&process)?;
     credentials::remove()?;
     print_status()
+}
+
+fn group_sid() -> Result<String> {
+    users::lookup_sid(yuantu_appcontainer::account::GROUP)?
+        .ok_or_else(|| "The sandbox accounts are not initialized".to_string())
+}
+
+/// `grant --root R --capability S`: the desktop user grants its own workspace; no elevation.
+pub fn grant(root: &str, capability: &str) -> Result<u32> {
+    if !crate::protocol::is_capability_sid(capability) {
+        return Err("Invalid capability SID".into());
+    }
+    let grant = grants::grant(root, &group_sid()?, capability)?;
+    println!(
+        "{}",
+        serde_json::json!({"version": 1, "root": grant.root, "capability": grant.capability})
+    );
+    Ok(0)
+}
+
+/// `ungrant --root R`: takes back a standing workspace grant.
+pub fn ungrant(root: &str) -> Result<u32> {
+    grants::ungrant(root, &group_sid()?)?;
+    Ok(0)
 }
 
 #[cfg(test)]

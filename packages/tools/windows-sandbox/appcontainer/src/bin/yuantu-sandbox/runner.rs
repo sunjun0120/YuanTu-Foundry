@@ -4,7 +4,7 @@ use crate::{
     frame::{read_frame, write_frame},
     pipe::{PipeIo, connect},
     protocol::{ErrorKind, FromRunner, ToRunner, validate},
-    spawn::{Running, start},
+    spawn::{Running, sandbox_environment, start},
     token::restricted_token,
     win::{Handle, Result, open_process, set_object_dacl},
 };
@@ -33,8 +33,33 @@ fn protect_self(owner: &str) -> Result<()> {
     set_object_dacl(process.0, &format!("D:P(A;;GA;;;SY)(A;;GA;;;{owner})"))
 }
 
+/// Removes scratch left by runners that were killed with their Job (a broker exit ends them before they can
+/// clean up). Several runners can share this account's TEMP, so only directories whose runner process is gone
+/// are removed.
+fn remove_stale_scratch() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(pid) = name
+            .strip_prefix("yuantu-sbx-")
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid != std::process::id()
+            && open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION).is_err()
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 pub fn run(control: &str, owner: &str) -> Result<u32> {
     protect_self(owner)?;
+    remove_stale_scratch();
     let down = connect(
         &format!(r"\\.\pipe\yuantu-sbx-{control}-down"),
         FILE_GENERIC_READ,
@@ -65,12 +90,31 @@ pub fn run(control: &str, owner: &str) -> Result<u32> {
                     send(&writer, &failure(ErrorKind::InvalidRequest, message));
                     continue;
                 }
+                let scratch =
+                    std::env::temp_dir().join(format!("yuantu-sbx-{}-{id}", std::process::id()));
+                if std::fs::create_dir_all(&scratch).is_err() {
+                    send(
+                        &writer,
+                        &failure(
+                            ErrorKind::LaunchFailed,
+                            "Create command scratch failed".into(),
+                        ),
+                    );
+                    continue;
+                }
+                let mut request = request;
+                request.env = sandbox_environment(
+                    &request.env,
+                    &|name| std::env::var(name).ok(),
+                    &scratch.to_string_lossy(),
+                );
                 let started = restricted_token(&request.capabilities)
                     .and_then(|token| start(&token, &request, stdio.each_ref().map(|h| h.0)));
                 drop(stdio);
                 let command = match started {
                     Ok(command) => Arc::new(command),
                     Err(message) => {
+                        let _ = std::fs::remove_dir_all(&scratch);
                         send(&writer, &failure(ErrorKind::LaunchFailed, message));
                         continue;
                     }
@@ -91,6 +135,8 @@ pub fn run(control: &str, owner: &str) -> Result<u32> {
                         Err(message) => failure(ErrorKind::LaunchFailed, message),
                     };
                     running.lock().unwrap().remove(&id);
+                    // The whole tree has ended (wait drains the Job), so nothing still holds the scratch.
+                    let _ = std::fs::remove_dir_all(&scratch);
                     send(&writer, &message);
                 });
             }

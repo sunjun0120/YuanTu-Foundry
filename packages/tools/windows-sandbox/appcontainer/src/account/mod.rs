@@ -3,6 +3,7 @@
 //! See docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md §4.
 pub mod credentials;
 pub mod firewall;
+pub mod grants;
 pub mod password;
 pub mod status;
 pub mod users;

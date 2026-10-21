@@ -21,6 +21,8 @@ pub struct Status {
     /// Diagnostic text for the problems above; not stable, for logs only.
     pub details: Vec<String>,
     pub accounts: Vec<AccountStatus>,
+    /// SID of the sandbox group, the trustee of every workspace grant.
+    pub group: Option<String>,
 }
 
 /// Proves the stored password still logs the account on (an administrator may have reset it).
@@ -120,6 +122,7 @@ pub fn status() -> Status {
         problems,
         details,
         accounts,
+        group: users::lookup_sid(super::GROUP).ok().flatten(),
     }
 }
 

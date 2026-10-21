@@ -55,8 +55,14 @@ impl Drop for Broker {
 }
 
 fn broker() -> Broker {
+    // The dev runner inherits this environment and makes per-command scratch under its TEMP; point it at the
+    // test target directory so the tests do not depend on the machine's TEMP being writable.
+    let temp = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runner-temp");
+    std::fs::create_dir_all(&temp).unwrap();
     let mut child = Command::new(EXE)
         .args(["broker", "--dev"])
+        .env("TEMP", &temp)
+        .env("TMP", &temp)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

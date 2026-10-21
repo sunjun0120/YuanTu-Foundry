@@ -69,6 +69,44 @@ pub fn environment_block(env: &BTreeMap<String, String>) -> Result<Vec<u16>> {
     Ok(block)
 }
 
+/// Variables that name the user's own profile. The command runs as the sandbox account, so these must be the
+/// account's own — otherwise npm, pip and git would write caches into the desktop user's profile and fail.
+pub const PROFILE_VARIABLES: [&str; 5] = [
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+];
+
+/// The command's environment: the host's variables, with the profile variables taken from the runner (the
+/// sandbox account) and TEMP/TMP pointed at this command's scratch. Keys are matched case-insensitively.
+pub fn sandbox_environment(
+    env: &BTreeMap<String, String>,
+    own: &dyn Fn(&str) -> Option<String>,
+    scratch: &str,
+) -> BTreeMap<String, String> {
+    let replaced = |key: &str| {
+        PROFILE_VARIABLES
+            .iter()
+            .chain(["TEMP", "TMP"].iter())
+            .any(|name| name.eq_ignore_ascii_case(key))
+    };
+    let mut out: BTreeMap<String, String> = env
+        .iter()
+        .filter(|(key, _)| !replaced(key))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for name in PROFILE_VARIABLES {
+        if let Some(value) = own(name) {
+            out.insert(name.to_string(), value);
+        }
+    }
+    out.insert("TEMP".into(), scratch.into());
+    out.insert("TMP".into(), scratch.into());
+    out
+}
+
 struct Attributes(Vec<usize>);
 impl Drop for Attributes {
     fn drop(&mut self) {
@@ -306,6 +344,25 @@ mod tests {
             command_line(&[r"C:\cmd.exe".into(), r#"/d /s /c "exit 7""#.into()], true),
             r#""C:\cmd.exe" /d /s /c "exit 7""#
         );
+    }
+
+    #[test]
+    fn profile_and_temp_come_from_the_sandbox_account() {
+        let host = BTreeMap::from([
+            ("Path".to_string(), r"C:\bin".to_string()),
+            ("userprofile".to_string(), r"C:\Users\me".to_string()),
+            ("Temp".to_string(), r"C:\Users\me\Temp".to_string()),
+        ]);
+        let own = |name: &str| (name == "USERPROFILE").then(|| r"C:\Users\Sandbox".to_string());
+        let env = sandbox_environment(&host, &own, "S");
+        assert_eq!(env.get("Path").map(String::as_str), Some(r"C:\bin"));
+        assert_eq!(
+            env.get("USERPROFILE").map(String::as_str),
+            Some(r"C:\Users\Sandbox")
+        );
+        assert!(!env.contains_key("userprofile") && !env.contains_key("Temp"));
+        assert_eq!(env.get("TEMP").map(String::as_str), Some("S"));
+        assert_eq!(env.get("TMP").map(String::as_str), Some("S"));
     }
 
     #[test]
