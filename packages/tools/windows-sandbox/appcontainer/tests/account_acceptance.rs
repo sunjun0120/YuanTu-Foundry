@@ -87,6 +87,23 @@ fn icacls(path: &Path, grant: &str) {
     assert!(output.status.success(), "icacls {grant}: {output:?}");
 }
 
+/// A capability SID names no account, so icacls cannot map it (error 1332); grant it by SID object instead.
+fn grant_capability(path: &Path, sid: &str) {
+    let target = path.display();
+    let script = format!(
+        "$acl = Get-Acl -LiteralPath '{target}'; \
+         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(\
+         (New-Object System.Security.Principal.SecurityIdentifier '{sid}'), 'Modify', \
+         'ContainerInherit,ObjectInherit', 'None', 'Allow'); \
+         $acl.AddAccessRule($rule); Set-Acl -LiteralPath '{target}' -AclObject $acl"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "grant {sid}: {output:?}");
+}
+
 fn capability() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -247,7 +264,7 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     for (dir, cap) in [(&a, &cap_a), (&b, &cap_b)] {
         std::fs::create_dir_all(dir).unwrap();
         icacls(dir, "YuanTuSandboxUsers:(OI)(CI)M");
-        icacls(dir, &format!("*{cap}:(OI)(CI)M"));
+        grant_capability(dir, cap);
     }
     let profile = PathBuf::from(std::env::var("USERPROFILE").unwrap());
     let secret = profile.join("yuantu-acceptance-secret.txt");

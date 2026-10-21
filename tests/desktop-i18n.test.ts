@@ -184,9 +184,12 @@ test(
 );
 
 for (const surface of ['background', 'workspace']) {
-  test(`failed IPC restores ${surface} actions for retry`, { timeout: 30000 }, async (t) => {
-    const page = await desktopPage(t);
-    const result = (await page.evaluate(`(async () => {
+  test(
+    `failed IPC restores ${surface} actions for retry`,
+    { timeout: 30000, skip: electronSkip },
+    async (t) => {
+      const page = await desktopPage(t);
+      const result = (await page.evaluate(`(async () => {
       window.addEventListener('unhandledrejection', event => event.preventDefault());
       let calls = 0, rejectAction;
       const state = {session:{sessionId:'parent',running:false,loading:false},background:[{id:'job',sessionId:'parent',command:'fixture',status:'running',exitCode:null,createdAt:new Date().toISOString()}]};
@@ -217,16 +220,17 @@ for (const surface of ['background', 'workspace']) {
       await new Promise(resolve => setTimeout(resolve,20));
       return {pendingDisabled,recovered,retried,busyDisabled:button()?.disabled};
     })()`)) as {
-      pendingDisabled: boolean;
-      recovered: boolean;
-      retried: boolean;
-      busyDisabled: boolean;
-    };
-    assert.equal(result.pendingDisabled, true);
-    assert.equal(result.recovered, true);
-    assert.equal(result.retried, true);
-    if (surface === 'workspace') assert.equal(result.busyDisabled, true);
-  });
+        pendingDisabled: boolean;
+        recovered: boolean;
+        retried: boolean;
+        busyDisabled: boolean;
+      };
+      assert.equal(result.pendingDisabled, true);
+      assert.equal(result.recovered, true);
+      assert.equal(result.retried, true);
+      if (surface === 'workspace') assert.equal(result.busyDisabled, true);
+    },
+  );
 }
 
 test(

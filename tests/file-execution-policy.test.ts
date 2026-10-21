@@ -57,7 +57,8 @@ test('explicit read-only file policy prevents a real file write before approval 
 test('container command restrictions leave approved workspace file edits available and denied edits have no effect', async (t) => {
   const { root, tools } = await fixture(t);
   let approvals = 0;
-  for (const mode of ['seatbelt', ...nativeModes] as const) {
+  const modes = ['seatbelt', ...nativeModes] as const;
+  for (const mode of modes) {
     for (const allowed of [false, true]) {
       const file = `${mode}-${allowed}.txt`;
       const result = await tools.execute(
@@ -76,7 +77,8 @@ test('container command restrictions leave approved workspace file edits availab
       else await assert.rejects(readFile(path.join(root, file)), { code: 'ENOENT' });
     }
   }
-  assert.equal(approvals, 4);
+  // One denied and one allowed write per backend.
+  assert.equal(approvals, modes.length * 2);
 });
 
 test('the policy factory refuses values a backend would otherwise reinterpret', () => {
