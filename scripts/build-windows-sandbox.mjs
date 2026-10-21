@@ -45,6 +45,11 @@ if (process.platform === 'win32') {
     const directory = path.resolve(project, destination);
     await mkdir(directory, { recursive: true });
     await copyFile(source, path.join(directory, 'yuantu-appcontainer.exe'));
+    // The sandbox account executor (exec/broker/runner and account maintenance) is built from the same crate.
+    await copyFile(
+      path.join(crate, 'target/release/yuantu-sandbox.exe'),
+      path.join(directory, 'yuantu-sandbox.exe'),
+    );
   }
-  console.log('Built native AppContainer helper (protocol 1).');
+  console.log('Built native AppContainer helper (protocol 1) and sandbox account executor.');
 }

@@ -40,6 +40,13 @@ if (helper) {
   }
   // Preserve signed bytes exactly across a clean TypeScript build.
   await writeFile(path.join(destination, 'yuantu-appcontainer.exe'), helper);
+  // The sandbox account executor ships beside it when it was built (signing pins come with the protected release).
+  const executor = path.join(project, 'packages/tools/windows-sandbox/yuantu-sandbox.exe');
+  try {
+    await writeFile(path.join(destination, 'yuantu-sandbox.exe'), await readFile(executor));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   if (signing)
     await writeFile(
       path.join(destination, 'helper-signature.json'),

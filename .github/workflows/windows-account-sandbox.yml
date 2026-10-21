@@ -8,10 +8,14 @@ on:
   push:
     paths:
       - 'packages/tools/windows-sandbox/appcontainer/**'
+      - 'packages/tools/sandbox-account*.ts'
+      - 'tests/sandbox-account-native.test.ts'
       - '.github/workflows/windows-account-sandbox.yml'
   pull_request:
     paths:
       - 'packages/tools/windows-sandbox/appcontainer/**'
+      - 'packages/tools/sandbox-account*.ts'
+      - 'tests/sandbox-account-native.test.ts'
       - '.github/workflows/windows-account-sandbox.yml'
   workflow_dispatch:
 permissions:
@@ -32,3 +36,10 @@ jobs:
           YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
           YUANTU_SANDBOX_DEV_PROVISION: '1'
         run: cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml --test account_acceptance -- --nocapture
+      - run: npm ci
+      # The same backend through the TypeScript provider a Host uses (debug helper built by the steps above).
+      - name: Sandbox account provider acceptance
+        env:
+          YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
+          YUANTU_SANDBOX_DEV_PROVISION: '1'
+        run: node scripts/run-tests.mjs tests/sandbox-account-native.test.ts
