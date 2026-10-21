@@ -147,12 +147,21 @@ test(
     assert.equal(tests.code, 0, tests.output);
     assert.match(tests.output, /pass 2/);
     // Scratch is the account's own, not the desktop user's TEMP.
-    const temp = await command(a, 'echo %TEMP%> temp.txt');
-    assert.equal(temp.code, 0, temp.output);
-    assert.match(
-      await readFile(path.join(a, 'temp.txt'), 'utf8'),
-      /YuanTuSandbox(Online|Offline)/i,
+    // Windows may expose TEMP with an 8.3 account-directory alias (YUANTU~1).
+    // Resolve it while the command's scratch still exists, and verify the actual token identity too.
+    const temp = await command(
+      a,
+      `"${process.execPath}" -e "const fs=require('fs');fs.writeFileSync(require('path').join(process.env.TEMP,'probe.txt'),'ok');console.log(JSON.stringify({temp:fs.realpathSync(process.env.TEMP),profile:fs.realpathSync(process.env.USERPROFILE),user:require('os').userInfo().username}))" > temp.json`,
     );
+    assert.equal(temp.code, 0, temp.output);
+    const scratch = JSON.parse(await readFile(path.join(a, 'temp.json'), 'utf8'));
+    assert.match(scratch.user, /^YuanTuSandbox(Online|Offline)$/i);
+    assert.notEqual(scratch.profile.toLowerCase(), userInfo().homedir.toLowerCase());
+    assert.ok(
+      scratch.temp.toLowerCase().startsWith(`${scratch.profile.toLowerCase()}\\`),
+      JSON.stringify(scratch),
+    );
+    assert.match(path.basename(scratch.temp), /^yuantu-sbx-/);
     // Offline: no connection; online: connects.
     const connect = (host: string) =>
       `"${process.execPath}" -e "const s=require('net').connect(443,'${host}');s.setTimeout(4000);s.on('connect',()=>{console.log('CONNECTED');s.destroy()});s.on('timeout',()=>{console.log('BLOCKED');s.destroy()});s.on('error',e=>console.log('BLOCKED '+e.code))"`;
