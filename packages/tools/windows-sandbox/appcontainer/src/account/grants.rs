@@ -210,6 +210,7 @@ fn reserved_under(root: &Path) -> Vec<PathBuf> {
 /// Grants `group_sid` and `capability_sid` Modify on `root`, denies the group writes to reserved directories,
 /// and records the grant. Granting the same root again only refreshes it.
 pub fn grant(root: &str, group_sid: &str, capability_sid: &str) -> Result<Grant> {
+    let _lock = reads::journal_lock(&grants_path()?)?;
     let root = workspace_root(root)?;
     for reserved in reserved_under(&root) {
         apply(&reserved, &[(group_sid, DENY_ACCESS, DENIED_WRITE)])?;
@@ -236,6 +237,10 @@ pub fn grant(root: &str, group_sid: &str, capability_sid: &str) -> Result<Grant>
 
 /// Takes back what `grant` added to one root. An unrecorded root is not an error.
 pub fn ungrant(root: &str, group_sid: &str) -> Result<()> {
+    let _lock = reads::journal_lock(&grants_path()?)?;
+    ungrant_locked(root, group_sid)
+}
+fn ungrant_locked(root: &str, group_sid: &str) -> Result<()> {
     let mut file = load()?;
     let position = file
         .grants
@@ -264,8 +269,9 @@ pub fn ungrant(root: &str, group_sid: &str) -> Result<()> {
 
 /// Takes back every recorded grant; used by uninstall. Stops at the first failure and keeps the record.
 pub fn ungrant_all(group_sid: &str) -> Result<()> {
+    let _lock = reads::journal_lock(&grants_path()?)?;
     for grant in load()?.grants {
-        ungrant(&grant.root, group_sid)?;
+        ungrant_locked(&grant.root, group_sid)?;
     }
     Ok(())
 }

@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { userInfo } from 'node:os';
 import { promisify } from 'node:util';
 import {
   configureAccountBackend,
@@ -114,6 +115,20 @@ test(
     assert.ok(await exists(path.join(b, 'own.txt')), second.output);
     assert.equal(await exists(path.join(b, 'from-a.txt')), false);
     assert.equal(await exists(path.join(a, 'from-b.txt')), false);
+    // Concurrent helper processes must retain both recovery records, not overwrite one another.
+    const grants = JSON.parse(
+      await readFile(
+        path.join(userInfo().homedir, '.yuantu', 'sandbox-state', 'windows-account', 'grants.json'),
+        'utf8',
+      ),
+    );
+    for (const root of [a, b])
+      assert.ok(
+        grants.grants.some(
+          (entry: { root: string }) => entry.root.toLowerCase() === root.toLowerCase(),
+        ),
+        `missing recovery record for ${root}`,
+      );
     // Protected metadata and read-only policy.
     await command(a, 'echo x> .git\\config');
     assert.equal(await exists(path.join(a, '.git', 'config')), false);

@@ -63,3 +63,4 @@
 - 本地验证：Rust 普通全回归、相关 TS 回归、真实 Electron smoke、typecheck、format、i18n 和隔离检查通过。一次本地 `npm test` 因 `host-carrier-auth.test.ts` 进程清理检查中断，18/287 文件结算，327 用例通过，**不是全量通过**；原始日志保留于 `.scratch/account-full-test.log`。
 - 最新分支改动仍需推送后的 Actions 账户验收及通用 `check` 确认；后续结果追加本节。不要在本机设定账户验收或建户开关。
 - `9577f2b` 已修复 TS 验收被跳过和 Electron 准备问题。真实运行 TS provider 后进一步复现：profile 下工作区的祖先目录缺少读取属性权限，Node 在 `AppData` 的 lstat 上 EPERM。本轮补充了仅遍历/属性的不可继承祖先授权，独立记录、按文件身份撤销；它不会授予目录枚举或文件内容读取。原生回归先复现缺失接口再通过，真实行为仍由后续 Actions 验证。
+- `444a2af` 的通用 `check` 已通过。账户 TS 验收发现并发工作区准备会争用祖先授权日志锁，已改为最长 5 秒的有界等待；工作区授权日志也复用该锁串行提交，验收新增同时保留两条恢复记录的断言。后续需确认该并发修复的账户 workflow 全部通过。

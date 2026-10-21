@@ -484,18 +484,34 @@ fn save(path: &Path, journal: &Journal) -> Result<()> {
     std::fs::rename(&temporary, path).map_err(|_| "Replace read journal failed".into())
 }
 
-fn journal_lock(path: &Path) -> Result<std::fs::File> {
+pub(super) fn journal_lock(path: &Path) -> Result<std::fs::File> {
     std::fs::create_dir_all(path.parent().ok_or("Invalid read journal path")?)
         .map_err(|_| "Create read journal directory")?;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .share_mode(0)
-        .access_mode(DELETE | FILE_READ_DATA | FILE_WRITE_DATA)
-        .custom_flags(FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path.with_extension("lock"))
-        .map_err(|_| "Another read allowlist operation is in progress".into())
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .share_mode(0)
+            .access_mode(DELETE | FILE_READ_DATA | FILE_WRITE_DATA)
+            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path.with_extension("lock"))
+        {
+            Ok(file) => return Ok(file),
+            Err(error)
+                if matches!(error.raw_os_error(), Some(5 | 32 | 33 | 303))
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Cannot acquire sandbox grant journal lock: {error}"
+                ));
+            }
+        }
+    }
 }
 
 pub(crate) fn grant_at(
@@ -806,4 +822,39 @@ pub fn audit(group: &str, accounts: &[String]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+    #[test]
+    fn a_concurrent_grant_waits_for_the_journal_owner_instead_of_failing() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/unit-tmp")
+            .join(format!("journal-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("grants.json");
+        let guard = journal_lock(&path).unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            finished.send(journal_lock(&path).map(drop)).unwrap();
+        });
+        ready.recv().unwrap();
+        assert!(
+            result
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err()
+        );
+        drop(guard);
+        assert!(
+            result
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .is_ok()
+        );
+        worker.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
