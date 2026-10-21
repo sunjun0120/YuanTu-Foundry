@@ -52,3 +52,13 @@
 - `cargo test` 从 PowerShell 7 启动时，子进程 Windows PowerShell 5.1 需要 `env_remove("PSModulePath")`。
 - WFP 会规范化安全描述符（通用权限映射、`AI` 标志），比对必须按语义（`network.rs` 的 `same_security`）。
 - 工作区里 `apps/desktop/layout.css`、`apps/desktop/renderer-permissions.ts` 有用户自己未提交的改动，不要提交或覆盖。
+
+## 2026-10-21 接续状态（覆盖上文旧状态）
+
+- 已确认 `61f1a20` 的账户 workflow `39565576275` 成功：Rust 和 TS 真实账户验收均通过。通用 CI `39565576344` 失败于 `tests/native-sandbox-bundle.test.ts` 格式，本轮已修正。
+- 2d 桌面账户状态、初始化/修复/卸载、自定义读取路径及中英文入口已实现。维护前停止本 Host 的 broker，维护后刷新桌面和运行中 Host 的就绪缓存；真实 Electron 开发版 smoke 验证了入口、中英文及禁用 UAC 操作。
+- 读取白名单已实现，覆盖默认用户 PATH 目录与 `.gitconfig`，支持显式增删；按卷序列号、文件 ID、创建时间记录对象并撤权，同卷移动和重命名也能恢复。卸载先以桌面用户身份撤销读/工作区授权，再执行固定 UAC 操作。
+- 安全审查修订 spec §5.2：读取授权采用**不可继承的逐对象 RX 快照**。原定继承 RX 会让后来新建的 `.ssh` 自动可读，因此选择拒绝规则优先；新增工具文件须重新授权。撤销不遍历后来新增的敏感目录或链接，权限/身份冲突保留恢复记录。
+- 发布链已接入两份 helper 的独立签名哈希、时间戳校验和打包后验证；本轮没有执行真实签名、安装或本机账户初始化。受保护安装生命周期仍保持原有验收门槛，私有 desktop 仍为可选后续项。
+- 本地验证：Rust 普通全回归、相关 TS 回归、真实 Electron smoke、typecheck、format、i18n 和隔离检查通过。一次本地 `npm test` 因 `host-carrier-auth.test.ts` 进程清理检查中断，18/287 文件结算，327 用例通过，**不是全量通过**；原始日志保留于 `.scratch/account-full-test.log`。
+- 最新分支改动仍需推送后的 Actions 账户验收及通用 `check` 确认；后续结果追加本节。不要在本机设定账户验收或建户开关。

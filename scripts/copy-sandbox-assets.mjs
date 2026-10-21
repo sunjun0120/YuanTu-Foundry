@@ -19,18 +19,18 @@ await copyFile(
   path.join(destination, 'appcontainer-acl.ps1'),
 );
 const nativeHelper = path.join(project, 'packages/tools/windows-sandbox/yuantu-appcontainer.exe');
+const protectedRelease =
+  process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1' ||
+  process.env.WINDOWS_SANDBOX_APPCONTAINER_RELEASE === '1';
 let helper;
 try {
   helper = await readFile(nativeHelper);
 } catch (error) {
-  if (error.code !== 'ENOENT') throw error;
+  if (protectedRelease || error.code !== 'ENOENT') throw error;
 }
 if (helper) {
   let signing;
-  if (
-    process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1' ||
-    process.env.WINDOWS_SANDBOX_APPCONTAINER_RELEASE === '1'
-  ) {
+  if (protectedRelease) {
     signing = JSON.parse(
       (
         await readFile(path.join(project, '.scratch/windows-sandbox-signing/manifest.json'), 'utf8')
@@ -43,9 +43,17 @@ if (helper) {
   // The sandbox account executor ships beside it when it was built (signing pins come with the protected release).
   const executor = path.join(project, 'packages/tools/windows-sandbox/yuantu-sandbox.exe');
   try {
-    await writeFile(path.join(destination, 'yuantu-sandbox.exe'), await readFile(executor));
+    const bytes = await readFile(executor);
+    if (signing)
+      assertPinnedHelperManifest(
+        signing,
+        await inspectHelperSignature(executor),
+        sha256(bytes),
+        'yuantu-sandbox.exe',
+      );
+    await writeFile(path.join(destination, 'yuantu-sandbox.exe'), bytes);
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (signing || error.code !== 'ENOENT') throw error;
   }
   if (signing)
     await writeFile(

@@ -20,7 +20,7 @@ async function page(api?: (command: SandboxSetupCommand) => Promise<SandboxSetup
   const beforeWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const beforeDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const ids = new Map(
-    ['section', 'title', 'note', 'feedback', 'initialize', 'refresh'].map((part) => [
+    ['section', 'title', 'note', 'feedback', 'initialize', 'refresh', 'uninstall'].map((part) => [
       `sandbox-setup-${part}`,
       new Node(),
     ]),
@@ -128,6 +128,34 @@ test('an unavailable runtime cannot enable the initialization button', async () 
     assert.equal(fixture.node('initialize').disabled, true);
     await fixture.node('initialize').click();
     assert.deepEqual(commands, [{ type: 'status' }]);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('damaged accounts show the reason and offer repair and uninstall', async () => {
+  const commands: SandboxSetupCommand[] = [];
+  const fixture = await page(async (command) => {
+    commands.push(command);
+    return {
+      ok: true,
+      view: {
+        supported: true,
+        ready: true,
+        installed: false,
+        reason: null,
+        state: command.type === 'uninstall' ? 'uninitialized' : 'damaged',
+        problems: ['logon-failed'],
+      },
+    };
+  });
+  try {
+    assert.match(fixture.node('feedback').textContent, /密码|password/i);
+    assert.equal(fixture.node('uninstall').disabled, false);
+    assert.equal(fixture.node('initialize').disabled, false);
+    await fixture.node('uninstall').click();
+    assert.deepEqual(commands[1], { type: 'uninstall', acknowledge: true });
+    assert.equal(fixture.node('uninstall').disabled, true);
   } finally {
     fixture.restore();
   }

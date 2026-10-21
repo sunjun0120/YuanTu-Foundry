@@ -565,7 +565,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 | 域         | 方法                                                                                                                                                                                                       |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`permission.update`、`invariants.list`                                                                                                                        |
+| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`sandbox.refresh`、`permission.update`、`invariants.list`                                                                                                     |
 | 会话       | `session.create`、`session.list`、`session.rename`、`session.archive`、`session.delete`、`session.recover`、`session.get`、`session.audit`、`session.events`                                               |
 | 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                                            |
 | 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                                     |
@@ -737,11 +737,11 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 285 个 | `tests/*.test.ts` |
+| 行为测试文件 | 287 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 61 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| Host JSON-RPC 方法 | 62 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->

@@ -171,7 +171,7 @@ pub fn current_user_sid() -> Result<String> {
 }
 
 /// Only the desktop user and SYSTEM, no inherited entries.
-fn protect_path(path: &std::path::Path) -> Result<()> {
+pub(crate) fn protect_path(path: &std::path::Path) -> Result<()> {
     let sddl = format!("D:P(A;;FA;;;SY)(A;;FA;;;{})", current_user_sid()?);
     let mut descriptor = null_mut();
     win(

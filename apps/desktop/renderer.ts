@@ -26,6 +26,7 @@ import { setupTurnChanges } from './renderer-changes.ts';
 import { RUN_CANCELLED, runStatusText, visibleRunError } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
+import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
 import { setupArchivedSessions } from './renderer-archived-sessions.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
@@ -965,8 +966,7 @@ new ResizeObserver(() => {
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
 setupGeneralSettings();
-// Windows 增强隔离入口暂不展示：AppContainer 后端尚未启用，初始化不改变实际沙箱。
-// 启用后改为在选择需要它的隔离策略时按需引导，renderer-sandbox-setup.ts 留作接入。
+setupSandboxInitialization();
 modelSettings = setupModelSettings(
   () =>
     Boolean(

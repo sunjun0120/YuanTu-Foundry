@@ -6,12 +6,13 @@ import {
   type SandboxRecoveryReply,
 } from './sandbox-recovery.ts';
 import {
-  WindowsSandboxSetup,
+  WindowsAccountSandboxSetup,
   parseSandboxSetupCommand,
   waitForSandboxInitialization,
   type SandboxSetupReply,
   type SandboxSetupView,
 } from './sandbox-setup.ts';
+import { refreshAccountBackend } from '../../packages/tools/sandbox-account.ts';
 import { parseFilesCommand, type FilesReply } from './files-contract.ts';
 import { maintainWorkspace } from './workspace-maintenance.ts';
 import {
@@ -403,14 +404,21 @@ void app
       nodePath: runtime.nodePath,
       workerPath: path.join(__dirname, 'sandbox-probe-worker.cjs'),
     });
-    const sandboxSetup = new WindowsSandboxSetup({
+    const sandboxSetup = new WindowsAccountSandboxSetup({
       platform: process.platform,
       packaged: app.isPackaged,
       nodePath: runtime.nodePath,
-      helperPath: path.resolve(
-        __dirname,
-        '../packages/tools/windows-sandbox/yuantu-appcontainer.exe',
-      ),
+      helperPath: path.resolve(__dirname, '../packages/tools/windows-sandbox/yuantu-sandbox.exe'),
+      changing: async () => {
+        await refreshAccountBackend();
+        await service?.refreshSandboxAccounts();
+      },
+      changed: async () => {
+        await refreshAccountBackend();
+        await service?.refreshSandboxAccounts();
+        await sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
+        choices.push();
+      },
     });
     // Probe with standalone Node, not Electron's executable; remember each mode's answer.
     void sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
@@ -655,7 +663,12 @@ void app
           if (switching || !service || service.busy) throw new Error(mainText('settingsMain.busy'));
           switching = true;
           try {
-            sandboxInitializing = sandboxSetup.initialize();
+            sandboxInitializing =
+              command.type === 'initialize'
+                ? sandboxSetup.initialize()
+                : command.type === 'uninstall'
+                  ? sandboxSetup.uninstall()
+                  : sandboxSetup.allowRead(command.path, command.type === 'read-remove');
             return { ok: true, view: await sandboxInitializing };
           } finally {
             sandboxInitializing = undefined;

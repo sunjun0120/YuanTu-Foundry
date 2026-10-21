@@ -16,7 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { toolEnvironment } from './environment.ts';
 import { windowsAccountCapabilities } from './execution-capabilities.ts';
-import { brokerPipe, type BrokerLauncher, type SandboxAccount } from './sandbox-account-broker.ts';
+import {
+  brokerPipe,
+  stopBrokers,
+  type BrokerLauncher,
+  type SandboxAccount,
+} from './sandbox-account-broker.ts';
 import { setWindowsAccountReady } from './sandbox-mode.ts';
 import {
   insideWorkspace,
@@ -118,6 +123,13 @@ export function parseAccountStatus(text: string): AccountStatus {
 }
 
 let status: Promise<AccountStatus> | undefined;
+
+/** Maintenance may replace account passwords and revoke grants: discard every process-local lease. */
+export async function refreshAccountBackend(): Promise<void> {
+  await stopBrokers();
+  grants.clear();
+  await refreshAccountReadiness();
+}
 
 /** Asks the helper for the backend's state and records whether `native` may use it. Never throws. */
 export async function refreshAccountReadiness(): Promise<AccountStatus | undefined> {

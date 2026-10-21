@@ -16,7 +16,7 @@ module.exports = {
     ...base.win,
     signExecutable: true,
     // These are signed before hashing; signing them again invalidates provenance.
-    signExts: ['!yuantu-appcontainer.exe', '!node.exe'],
+    signExts: ['!yuantu-appcontainer.exe', '!yuantu-sandbox.exe', '!node.exe'],
     signtoolOptions: {
       certificateSha1: certificate,
       signingHashAlgorithms: ['sha256'],

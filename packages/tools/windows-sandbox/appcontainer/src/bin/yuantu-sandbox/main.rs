@@ -33,6 +33,8 @@ fn main_result() -> Result<u32> {
         ["account-status"] => provision::print_status(),
         ["grant", "--root", root, "--capability", capability] => provision::grant(root, capability),
         ["ungrant", "--root", root] => provision::ungrant(root),
+        ["read-grant", "--root", root] => provision::read_grant(root, false),
+        ["read-ungrant", "--root", root] => provision::read_grant(root, true),
         ["account-setup"] => provision::setup(),
         ["account-uninstall"] => provision::uninstall(),
         ["account-initialize", "--handoff", pipe] => provision::initialize_handoff(pipe),

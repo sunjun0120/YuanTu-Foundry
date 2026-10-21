@@ -140,7 +140,7 @@ agent-host (桌面用户, Medium)
 
 - 默认条目：工作区（随租约授予）；桌面用户 `PATH` 中位于用户目录下的目录（如 `%APPDATA%\npm`、`%LOCALAPPDATA%\Programs\...`、nvm 当前版本目录）；`%USERPROFILE%\.gitconfig`（只读文件）。
 - 用户可在设置中追加路径；拒绝列表永远优先：`.ssh`、`.aws`、`.gnupg`、`.azure`、`.kube`、`.docker`、浏览器 profile 目录、`AppData\Roaming\Microsoft\Credentials`、`AppData\Local\Microsoft\Credentials`、DPAPI 目录、本产品的凭据目录。
-- 授予方式：对目录加可继承的只读 ACE（`YuanTuSandboxUsers` 组），日志记录原 DACL，卸载或移除条目时恢复；拒绝 reparse point、硬链接，单次上限沿用 100,000 对象。
+- 授予方式（2d 安全审查修订）：验证并锁定整棵现有对象树，为每个对象增加不可继承的组 RX ACE，形成读取快照；新增工具文件需要重新授权。不能给可变目录持续继承 RX，否则后来新建的 `.ssh` 等敏感目录会自动变为可读，与“拒绝列表永远优先”冲突。日志在修改前保存原 DACL、卷序列号、文件 ID 和创建时间；卸载或移除时按对象身份撤销，包含同卷移出和重命名对象，保留其他主体的权限。无法核实原对象或权限冲突时保留记录并报错。授予拒绝 reparse point、硬链接，单次上限沿用 100,000 对象；撤销只处理已记录身份，不跟随后来新增的危险对象。
 - 包缓存：沙箱账户使用自己 profile 下的缓存（npm/pnpm/pip/cargo 默认路径即落在沙箱账户 profile），环境变量中不传递指向桌面用户目录的缓存变量（`toolEnvironment` 增加过滤）。
 
 ## 6. TS 侧接入

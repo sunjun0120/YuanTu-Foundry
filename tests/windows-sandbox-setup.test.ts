@@ -85,7 +85,7 @@ test('initialization IPC requires acknowledgement and rejects all unrecognized i
     { type: 'initialize', acknowledge: false },
     { type: 'status', path: 'cmd.exe' },
     { type: 'initialize', acknowledge: true, command: 'cmd.exe' },
-    { type: 'uninstall', acknowledge: true },
+    { type: 'uninstall', acknowledge: false },
   ]) {
     assert.throws(() => parseSandboxSetupCommand(input));
   }

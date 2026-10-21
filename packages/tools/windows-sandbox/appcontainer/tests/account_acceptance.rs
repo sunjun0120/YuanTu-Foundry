@@ -14,7 +14,8 @@ use std::{
 const EXE: &str = env!("CARGO_BIN_EXE_yuantu-sandbox");
 
 fn enabled() -> bool {
-    std::env::var("YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE").as_deref() == Ok("1")
+    std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+        && std::env::var("YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE").as_deref() == Ok("1")
 }
 
 /// GitHub Actions workflow command: shows up as a run annotation, readable without downloading logs.
@@ -293,6 +294,81 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
         "{}",
         text(&read)
     );
+    let tool = profile.join("yuantu-acceptance-tool");
+    std::fs::create_dir_all(&tool).unwrap();
+    let readable = tool.join("tool.cmd");
+    std::fs::write(&readable, "allowlisted-tool-only").unwrap();
+    let granted = Command::new(EXE)
+        .args(["read-grant", "--root"])
+        .arg(&tool)
+        .output()
+        .unwrap();
+    assert!(granted.status.success(), "{}", text(&granted));
+    assert_eq!(status()["ready"], json!(true));
+    let read = shell(
+        &offline.pipe,
+        &format!("type \"{}\"", readable.display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(
+        text(&read).contains("allowlisted-tool-only"),
+        "{}",
+        text(&read)
+    );
+    let write = tool.join("sandbox-write.txt");
+    let _ = shell(
+        &offline.pipe,
+        &format!("echo x> \"{}\"", write.display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(!write.exists());
+    let new_secret = tool.join(".ssh");
+    std::fs::create_dir(&new_secret).unwrap();
+    std::fs::write(new_secret.join("key"), "new-private-key").unwrap();
+    let read = shell(
+        &offline.pipe,
+        &format!("type \"{}\"", new_secret.join("key").display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(!text(&read).contains("new-private-key"));
+    for denied in [
+        profile.clone(),
+        profile.join(".ssh"),
+        profile.join(r"AppData\Roaming\Microsoft\Protect"),
+    ] {
+        let reply = Command::new(EXE)
+            .args(["read-grant", "--root"])
+            .arg(denied)
+            .output()
+            .unwrap();
+        assert!(!reply.status.success());
+    }
+    let revoked = Command::new(EXE)
+        .args(["read-ungrant", "--root"])
+        .arg(&tool)
+        .output()
+        .unwrap();
+    assert!(revoked.status.success(), "{}", text(&revoked));
+    std::fs::remove_dir_all(&new_secret).unwrap();
+    let read = shell(
+        &offline.pipe,
+        &format!("type \"{}\"", readable.display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(!text(&read).contains("allowlisted-tool-only"));
+    // Leave a fresh grant for uninstall to revoke, including files created since setup.
+    assert!(
+        Command::new(EXE)
+            .args(["read-grant", "--root"])
+            .arg(&tool)
+            .status()
+            .unwrap()
+            .success()
+    );
     let readonly = shell(&offline.pipe, "echo x> A\\readonly.txt", &root, &[]);
     assert!(!a.join("readonly.txt").exists(), "{}", text(&readonly));
     let metadata = shell(&offline.pipe, "echo x> A\\.git\\config", &root, &[&cap_a]);
@@ -390,6 +466,12 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let _ = std::fs::remove_file(&secret);
     let removed = run(&["account-remove", "--dev-direct"]);
     assert!(removed.status.success(), "{}", text(&removed));
+    let journal = yuantu_appcontainer::account::credentials::state_directory()
+        .unwrap()
+        .join("read-grants.json");
+    let reads: Value = serde_json::from_slice(&std::fs::read(journal).unwrap()).unwrap();
+    assert_eq!(reads["grants"], json!([]));
+    std::fs::remove_dir_all(&tool).unwrap();
     let report = status();
     let problems = report["problems"].as_array().unwrap();
     for code in [

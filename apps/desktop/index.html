@@ -566,6 +566,30 @@
             hidden
           ></p>
         </form>
+        <section id="sandbox-setup-section" hidden>
+          <h3 id="sandbox-setup-title"></h3>
+          <p id="sandbox-setup-note"></p>
+          <p
+            id="sandbox-setup-feedback"
+            class="settings-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <div class="settings-actions">
+            <button id="sandbox-setup-initialize" type="button" disabled></button>
+            <button id="sandbox-setup-refresh" type="button"></button>
+            <button id="sandbox-setup-uninstall" type="button" disabled></button>
+          </div>
+          <label class="settings-field" for="sandbox-read-path"
+            ><span id="sandbox-read-title"></span><input id="sandbox-read-path" type="text" /><small
+              id="sandbox-read-note"
+            ></small
+          ></label>
+          <div class="settings-actions">
+            <button id="sandbox-read-add" type="button" disabled></button>
+            <button id="sandbox-read-remove" type="button" disabled></button>
+          </div>
+        </section>
       </section>
       <section
         id="model-settings-content"

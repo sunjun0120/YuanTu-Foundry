@@ -43,3 +43,6 @@ jobs:
           YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
           YUANTU_SANDBOX_DEV_PROVISION: '1'
         run: node scripts/run-tests.mjs tests/sandbox-account-native.test.ts
+      - run: npm run build
+      - name: Account settings desktop smoke (no account maintenance)
+        run: node scripts/run-tests.mjs tests/windows-account-settings.smoke.mjs

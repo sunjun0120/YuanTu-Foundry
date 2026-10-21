@@ -14,7 +14,10 @@ test('native helper staging refuses an output outside project scratch before bui
   await assert.rejects(
     promisify(execFile)(
       process.execPath,
-      [path.resolve('scripts/build-windows-sandbox.mjs'), `--output-directory=${os.tmpdir()}`],
+      [
+        path.resolve('scripts/build-windows-sandbox.mjs'),
+        `--output-directory=${path.parse(process.cwd()).root}`,
+      ],
       { windowsHide: true },
     ),
     /staged helper output.*scratch/i,
@@ -175,6 +178,10 @@ test('protected installer configuration requires an explicit production invocati
     assert.equal(config.nsis.deleteAppDataOnUninstall, false);
     assert.equal(config.win.signExecutable, true);
     assert.equal(config.forceCodeSigning, true);
+    assert.ok(
+      config.win.signExts.includes('!yuantu-sandbox.exe'),
+      'builder must preserve the executor signature bytes pinned before packaging',
+    );
   } finally {
     delete require.cache[filename];
     for (const [name, value] of Object.entries({

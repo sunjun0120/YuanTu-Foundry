@@ -71,12 +71,15 @@ pub fn environment_block(env: &BTreeMap<String, String>) -> Result<Vec<u16>> {
 
 /// Variables that name the user's own profile. The command runs as the sandbox account, so these must be the
 /// account's own — otherwise npm, pip and git would write caches into the desktop user's profile and fail.
-pub const PROFILE_VARIABLES: [&str; 5] = [
+pub const PROFILE_VARIABLES: [&str; 8] = [
     "USERPROFILE",
     "APPDATA",
     "LOCALAPPDATA",
     "HOMEDRIVE",
     "HOMEPATH",
+    "USERNAME",
+    "USER",
+    "LOGNAME",
 ];
 
 /// The command's environment: the host's variables, with the profile variables taken from the runner (the
@@ -89,7 +92,28 @@ pub fn sandbox_environment(
     let replaced = |key: &str| {
         PROFILE_VARIABLES
             .iter()
-            .chain(["TEMP", "TMP"].iter())
+            .chain(
+                [
+                    "TEMP",
+                    "TMP",
+                    "TMPDIR",
+                    "HOME",
+                    "XDG_CACHE_HOME",
+                    "XDG_CONFIG_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_RUNTIME_DIR",
+                    "NPM_CONFIG_CACHE",
+                    "NPM_CONFIG_USERCONFIG",
+                    "PIP_CACHE_DIR",
+                    "PIP_CONFIG_FILE",
+                    "CARGO_HOME",
+                    "RUSTUP_HOME",
+                    "PNPM_HOME",
+                    "YARN_CACHE_FOLDER",
+                    "GIT_CONFIG_GLOBAL",
+                ]
+                .iter(),
+            )
             .any(|name| name.eq_ignore_ascii_case(key))
     };
     let mut out: BTreeMap<String, String> = env
@@ -104,6 +128,10 @@ pub fn sandbox_environment(
     }
     out.insert("TEMP".into(), scratch.into());
     out.insert("TMP".into(), scratch.into());
+    out.insert("TMPDIR".into(), scratch.into());
+    if let Some(profile) = own("USERPROFILE") {
+        out.insert("HOME".into(), profile);
+    }
     out
 }
 
@@ -363,6 +391,37 @@ mod tests {
         assert!(!env.contains_key("userprofile") && !env.contains_key("Temp"));
         assert_eq!(env.get("TEMP").map(String::as_str), Some("S"));
         assert_eq!(env.get("TMP").map(String::as_str), Some("S"));
+    }
+
+    #[test]
+    fn home_identity_and_caches_do_not_point_back_to_the_desktop_user() {
+        let host = BTreeMap::from([
+            ("HOME".into(), r"C:\Users\Desktop".into()),
+            ("npm_config_cache".into(), r"C:\Users\Desktop\cache".into()),
+            ("PIP_CACHE_DIR".into(), r"C:\Users\Desktop\pip".into()),
+            ("CARGO_HOME".into(), r"C:\Users\Desktop\.cargo".into()),
+            ("XDG_CONFIG_HOME".into(), r"C:\Users\Desktop\.config".into()),
+            ("USERNAME".into(), "Desktop".into()),
+        ]);
+        let own = |key: &str| match key {
+            "USERPROFILE" => Some(r"C:\Users\Sandbox".into()),
+            "USERNAME" => Some("Sandbox".into()),
+            _ => None,
+        };
+        let env = sandbox_environment(&host, &own, "scratch");
+        assert_eq!(
+            env.get("HOME").map(String::as_str),
+            Some(r"C:\Users\Sandbox")
+        );
+        assert_eq!(env.get("USERNAME").map(String::as_str), Some("Sandbox"));
+        for name in [
+            "npm_config_cache",
+            "PIP_CACHE_DIR",
+            "CARGO_HOME",
+            "XDG_CONFIG_HOME",
+        ] {
+            assert!(!env.contains_key(name));
+        }
     }
 
     #[test]

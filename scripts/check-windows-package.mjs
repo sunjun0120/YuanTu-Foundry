@@ -45,7 +45,12 @@ export async function validateWindowsPackage(
     if (JSON.stringify(signingAsset) !== JSON.stringify(manifest.signedHelper))
       throw new Error('Packaged helper signing manifest was not preserved');
   }
-  for (const name of ['yuantu-appcontainer.exe', 'acl.ps1', 'appcontainer-acl.ps1']) {
+  for (const name of [
+    'yuantu-appcontainer.exe',
+    'yuantu-sandbox.exe',
+    'acl.ps1',
+    'appcontainer-acl.ps1',
+  ]) {
     const relative = `dist/packages/tools/windows-sandbox/${name}`;
     const packaged = path.join(resources, 'app', relative);
     const digest = sha256(await readFile(packaged));
@@ -57,6 +62,7 @@ export async function validateWindowsPackage(
         manifest.signedHelper,
         await inspectHelperSignature(packaged),
         digest,
+        name,
       );
   }
   await readFile(path.join(resources, 'app/dist/apps/agent-host/main.js'));

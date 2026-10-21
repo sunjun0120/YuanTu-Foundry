@@ -1,4 +1,5 @@
 import { parseSandboxMode } from '../../../packages/tools/sandbox-mode.ts';
+import { refreshAccountBackend } from '../../../packages/tools/sandbox-account.ts';
 import { PermissionPolicy } from '../../../packages/core/permissions.ts';
 import { negotiateHostVersion } from '../../../packages/protocol/host-wire.ts';
 import {
@@ -17,6 +18,12 @@ import type { Handler } from '../dispatch.ts';
  * session inherits, and the policy every tool call is judged by.
  */
 export const systemHandlers: Readonly<Record<string, Handler>> = {
+  'sandbox.refresh': async (ctx, params) => {
+    if (Object.keys(params).length) throw new Error('Invalid sandbox refresh parameters');
+    if (ctx.active.size) throw new Error('Wait for active runs before refreshing sandbox accounts');
+    await refreshAccountBackend();
+    return { refreshed: true };
+  },
   'host.info': async (ctx, params) => ({
     protocolVersion: negotiateHostVersion(params),
     runtime: 'yuantu',

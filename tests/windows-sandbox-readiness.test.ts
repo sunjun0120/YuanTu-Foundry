@@ -214,6 +214,45 @@ test('enhanced packaging rejects unsigned, mismatched, overwritten and untimesta
     assert.throws(() => assertPinnedHelperManifest(record, signed, hash), /signed helper/i);
 });
 
+test('account executor requires its own signed digest and cannot reuse the AppContainer digest', async () => {
+  const { assertPinnedHelperManifest } = await script('check-windows-appcontainer.mjs');
+  const signature = { valid: true, signerSha256: 'b'.repeat(64), timestamped: true };
+  const manifest = {
+    version: 1,
+    helperSha256: 'a'.repeat(64),
+    accountHelperSha256: 'c'.repeat(64),
+    signerSha256: 'b'.repeat(64),
+    timestamped: true,
+  };
+  assert.doesNotThrow(() =>
+    assertPinnedHelperManifest(manifest, signature, 'c'.repeat(64), 'yuantu-sandbox.exe'),
+  );
+  assert.throws(
+    () => assertPinnedHelperManifest(manifest, signature, 'a'.repeat(64), 'yuantu-sandbox.exe'),
+    /signed helper/i,
+  );
+  assert.throws(
+    () =>
+      assertPinnedHelperManifest(
+        { ...manifest, accountHelperSha256: undefined },
+        signature,
+        'c'.repeat(64),
+        'yuantu-sandbox.exe',
+      ),
+    /signed helper/i,
+  );
+  assert.throws(
+    () =>
+      assertPinnedHelperManifest(
+        manifest,
+        { ...signature, timestamped: false },
+        'c'.repeat(64),
+        'yuantu-sandbox.exe',
+      ),
+    /signed helper/i,
+  );
+});
+
 test('helper signing without an explicit certificate refuses before building or modifying assets', async () => {
   const helper = new URL('../scripts/sign-windows-sandbox.ps1', import.meta.url);
   assert.ok(existsSync(helper), 'Explicit-certificate signing workflow is missing');

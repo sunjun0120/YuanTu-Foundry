@@ -38,6 +38,7 @@ if ($TestOnly) {
     New-Item -ItemType Directory -Force -Path $testDirectory | Out-Null
     $assets = @(
         @{ source = (Join-Path $projectRoot 'packages/tools/windows-sandbox/yuantu-appcontainer.exe'); name = 'yuantu-appcontainer.exe' },
+        @{ source = (Join-Path $projectRoot 'packages/tools/windows-sandbox/yuantu-sandbox.exe'); name = 'yuantu-sandbox.exe' },
         @{ source = (Join-Path $projectRoot '.scratch/windows-appcontainer-runtime/node-v24.19.0-libuv-2cadaa4/candidate-diagnostic/node.exe'); name = 'node.exe' }
     )
     $results = @()
@@ -74,21 +75,23 @@ try {
 } finally {
     [Environment]::SetEnvironmentVariable('YUANTU_WINDOWS_SANDBOX_SIGNER_SHA256', $oldSigner, 'Process')
 }
-$sourceHelper = Join-Path $projectRoot 'packages/tools/windows-sandbox/yuantu-appcontainer.exe'
-$signedHelper = Join-Path $signingDirectory 'yuantu-appcontainer.exe'
-Copy-Item -LiteralPath (Join-Path $helperBuildDirectory 'yuantu-appcontainer.exe') -Destination $signedHelper -Force
-$signArguments = @('sign', '/fd', 'SHA256', '/sha1', $CertificateThumbprint, '/s', 'My', '/tr', $timestampUri.AbsoluteUri, '/td', 'SHA256')
-if ($CertificateStore -eq 'LocalMachine') { $signArguments += '/sm' }
-$signArguments += $signedHelper
-& $SignToolPath @signArguments
-if ($LASTEXITCODE -ne 0) { throw 'Helper signing or timestamping failed.' }
-& $SignToolPath verify /pa /all $signedHelper
-if ($LASTEXITCODE -ne 0) { throw 'Helper Authenticode verification failed.' }
-$signature = Get-AuthenticodeSignature -LiteralPath $signedHelper
-if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate) { throw 'Helper needs a valid signature and timestamp.' }
-$sha = [Security.Cryptography.SHA256]::Create()
-try { $actualSigner = ([BitConverter]::ToString($sha.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
-if ($actualSigner -ne $signerDigest) { throw 'Signed helper does not match the compiled signer pin.' }
+$helperDigests = @{}
+foreach ($helperName in @('yuantu-appcontainer.exe', 'yuantu-sandbox.exe')) {
+    $signedHelper = Join-Path $signingDirectory $helperName
+    Copy-Item -LiteralPath (Join-Path $helperBuildDirectory $helperName) -Destination $signedHelper -Force
+    $signArguments = @('sign', '/fd', 'SHA256', '/sha1', $CertificateThumbprint, '/s', 'My', '/tr', $timestampUri.AbsoluteUri, '/td', 'SHA256')
+    if ($CertificateStore -eq 'LocalMachine') { $signArguments += '/sm' }
+    & $SignToolPath @signArguments $signedHelper
+    if ($LASTEXITCODE -ne 0) { throw "Helper signing or timestamping failed: $helperName" }
+    & $SignToolPath verify /pa /all $signedHelper
+    if ($LASTEXITCODE -ne 0) { throw "Helper Authenticode verification failed: $helperName" }
+    $signature = Get-AuthenticodeSignature -LiteralPath $signedHelper
+    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or -not $signature.TimeStamperCertificate) { throw "Helper needs a valid signature and timestamp: $helperName" }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $actualSigner = ([BitConverter]::ToString($sha.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    if ($actualSigner -ne $signerDigest) { throw "Signed helper does not match the compiled signer pin: $helperName" }
+    $helperDigests[$helperName] = (Get-FileHash -LiteralPath $signedHelper -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 if ($RuntimeCandidateDirectory) {
     $runtimeDirectory = [IO.Path]::GetFullPath($RuntimeCandidateDirectory)
     if (-not $runtimeDirectory.StartsWith(($projectRoot + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime signing must stay inside the project.' }
@@ -115,9 +118,12 @@ if ($RuntimeCandidateDirectory) {
     $runtimeProvenance.binary | Add-Member -NotePropertyName signerSha256 -NotePropertyValue $signerDigest -Force
     $runtimeProvenance | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $provenancePath -Encoding utf8
 }
-$compiledHelper = Join-Path $projectRoot 'dist/packages/tools/windows-sandbox/yuantu-appcontainer.exe'
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $compiledHelper) | Out-Null
-Copy-Item -LiteralPath $signedHelper -Destination $sourceHelper -Force
-Copy-Item -LiteralPath $signedHelper -Destination $compiledHelper -Force
-@{ version = 1; signerSha256 = $signerDigest; helperSha256 = (Get-FileHash -LiteralPath $signedHelper -Algorithm SHA256).Hash.ToLowerInvariant(); timestamped = $true; signedAt = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $signingDirectory 'manifest.json')
+foreach ($helperName in @('yuantu-appcontainer.exe', 'yuantu-sandbox.exe')) {
+    $compiledHelper = Join-Path $projectRoot ('dist/packages/tools/windows-sandbox/' + $helperName)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $compiledHelper) | Out-Null
+    $signedHelper = Join-Path $signingDirectory $helperName
+    Copy-Item -LiteralPath $signedHelper -Destination (Join-Path $projectRoot ('packages/tools/windows-sandbox/' + $helperName)) -Force
+    Copy-Item -LiteralPath $signedHelper -Destination $compiledHelper -Force
+}
+@{ version = 1; signerSha256 = $signerDigest; helperSha256 = $helperDigests['yuantu-appcontainer.exe']; accountHelperSha256 = $helperDigests['yuantu-sandbox.exe']; timestamped = $true; signedAt = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $signingDirectory 'manifest.json')
 Write-Output 'Signed pinned helper prepared. This does not initialize WFP or enable AppContainer.'

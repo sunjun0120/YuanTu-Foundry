@@ -112,12 +112,18 @@ fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> 
 }
 
 fn remove_everything() -> Result<()> {
-    // Workspace grants first: they name the group, which is about to disappear.
+    firewall::remove_filters()?;
+    users::remove()
+}
+
+fn remove_user_grants() -> Result<()> {
+    // This journal belongs to the desktop user. Never interpret user-selected ACL paths in the UAC half,
+    // which may be running as a different administrator with a different profile.
+    grants::reads::revoke_all()?;
     if let Some(group) = users::lookup_sid(yuantu_appcontainer::account::GROUP)? {
         grants::ungrant_all(&group)?;
     }
-    firewall::remove_filters()?;
-    users::remove()
+    Ok(())
 }
 
 fn generate_all() -> Result<Vec<(Account, Secret)>> {
@@ -148,12 +154,14 @@ pub fn initialize_direct() -> Result<u32> {
     let passwords = generate_all()?;
     let sids = provision(&passwords)?;
     store(passwords, &sids)?;
+    grants::reads::grant_defaults(&group_sid()?)?;
     print_status()
 }
 
 #[cfg(debug_assertions)]
 pub fn remove_direct() -> Result<u32> {
     require_dev_direct()?;
+    remove_user_grants()?;
     remove_everything()?;
     credentials::remove()?;
     print_status()
@@ -310,6 +318,7 @@ pub fn setup() -> Result<u32> {
     };
     wait_success(&process)?;
     store(passwords, &sids)?;
+    grants::reads::grant_defaults(&group_sid()?)?;
     let report = status::status();
     let ready = report.ready;
     println!(
@@ -325,6 +334,7 @@ pub fn setup() -> Result<u32> {
 /// `account-uninstall`: the unelevated, user-facing removal.
 pub fn uninstall() -> Result<u32> {
     let _installation = yuantu_appcontainer::maintenance::preflight()?;
+    remove_user_grants()?;
     let process = elevate("account-remove --elevated")?;
     wait_success(&process)?;
     credentials::remove()?;
@@ -352,6 +362,15 @@ pub fn grant(root: &str, capability: &str) -> Result<u32> {
 /// `ungrant --root R`: takes back a standing workspace grant.
 pub fn ungrant(root: &str) -> Result<u32> {
     grants::ungrant(root, &group_sid()?)?;
+    Ok(0)
+}
+
+pub fn read_grant(root: &str, remove: bool) -> Result<u32> {
+    if remove {
+        grants::reads::revoke(std::path::Path::new(root), &group_sid()?)?;
+    } else {
+        grants::reads::grant(std::path::Path::new(root), &group_sid()?)?;
+    }
     Ok(0)
 }
 

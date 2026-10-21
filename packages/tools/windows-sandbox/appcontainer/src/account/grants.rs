@@ -16,6 +16,8 @@ use windows_sys::Win32::{
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
 };
+#[path = "read_grants.rs"]
+pub mod reads;
 
 /// Directories a sandboxed command must never write, even inside its workspace.
 pub const RESERVED: [&str; 7] = [
@@ -360,5 +362,139 @@ mod tests {
         let root = scratch("ok");
         assert!(workspace_root(root.to_str().unwrap()).is_ok());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn read_policy_denies_secrets_and_ancestors_before_defaults_or_custom_paths() {
+        let profile = Path::new(r"C:\Users\Alice");
+        for relative in [
+            ".ssh",
+            ".AWS",
+            ".gnupg",
+            ".azure",
+            ".kube",
+            ".docker",
+            r"AppData\Local\Google\Chrome\User Data",
+            r"AppData\Roaming\Microsoft\Protect",
+            r"AppData\Local\Microsoft\Credentials",
+            ".yuantu",
+            ".codex",
+            "AppData",
+        ] {
+            assert!(
+                !reads::allowed(&profile.join(relative), profile),
+                "{relative}"
+            );
+        }
+        assert!(!reads::allowed(profile, profile));
+        assert!(!reads::allowed(Path::new(r"C:\Users"), profile));
+        assert!(reads::allowed(
+            &profile.join(r"AppData\Roaming\npm"),
+            profile
+        ));
+        assert!(reads::allowed(&profile.join(".gitconfig"), profile));
+        assert!(reads::allowed(Path::new(r"D:\Tools"), profile));
+    }
+
+    #[test]
+    fn read_grants_are_rx_snapshots_and_revoke_preserves_foreign_aces() {
+        let base = scratch("read");
+        let root = base.join("tool");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("bin/tool.cmd"), "echo ok").unwrap();
+        let journal = base.join("reads.json");
+        let profile = base.join("profile");
+        let group = "S-1-5-21-1-2-3-9201";
+        reads::grant_at(&root, &profile, group, &journal).unwrap();
+        for file in [&root, &root.join("bin"), &root.join("bin/tool.cmd")] {
+            assert!(aces(file).iter().any(|(kind, _, mask, s)| *kind == 0
+                && s == group
+                && *mask == reads::READ_EXECUTE));
+            assert!(
+                !aces(file)
+                    .iter()
+                    .any(|(_, _, mask, s)| s == group && *mask & DENIED_WRITE != 0)
+            );
+        }
+        assert!(
+            aces(&root)
+                .iter()
+                .any(|(_, flags, _, s)| s == group && *flags as u32 & INHERIT == 0)
+        );
+        assert!(journal.exists());
+        apply(&root, &[(group, REVOKE_ACCESS, 0)]).unwrap();
+        reads::grant_at(&root, &profile, group, &journal).unwrap();
+        assert!(
+            aces(&root)
+                .iter()
+                .any(|(_, _, mask, s)| s == group && *mask == reads::READ_EXECUTE)
+        );
+        // Newly created secrets must not inherit any read grant.
+        std::fs::write(root.join("later"), "ok").unwrap();
+        assert!(
+            !aces(&root.join("later"))
+                .iter()
+                .any(|(_, _, _, s)| s == group)
+        );
+        std::fs::create_dir(root.join(".ssh")).unwrap();
+        std::fs::write(root.join(".ssh/key"), "secret").unwrap();
+        assert!(
+            !aces(&root.join(".ssh/key"))
+                .iter()
+                .any(|(_, _, _, s)| s == group)
+        );
+        let foreign = "S-1-5-21-1-2-3-9202";
+        apply(&root, &[(foreign, GRANT_ACCESS, FILE_GENERIC_READ)]).unwrap();
+        reads::revoke_at(&root, &profile, group, &journal).unwrap();
+        assert!(
+            !aces(&root.join("later"))
+                .iter()
+                .any(|(_, _, _, s)| s == group)
+        );
+        assert!(aces(&root).iter().any(|(_, _, _, s)| s == foreign));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn read_revoke_finds_renamed_roots_and_files_moved_outside_the_allowlist() {
+        let base = scratch("read-moved");
+        let root = base.join("tool");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("file"), "tool").unwrap();
+        let group = "S-1-5-21-1-2-3-9204";
+        let journal = base.join("reads.json");
+        reads::grant_at(&root, &base.join("profile"), group, &journal).unwrap();
+        let moved_file = base.join("moved-file");
+        std::fs::rename(root.join("file"), &moved_file).unwrap();
+        // A tool updater can replace the old path; both identities must remain recoverable.
+        std::fs::write(root.join("file"), "replacement").unwrap();
+        reads::grant_at(&root, &base.join("profile"), group, &journal).unwrap();
+        let moved_root = base.join("renamed-tool");
+        std::fs::rename(&root, &moved_root).unwrap();
+        reads::revoke_at(&root, &base.join("profile"), group, &journal).unwrap();
+        for path in [&moved_file, &moved_root, &moved_root.join("file")] {
+            assert!(!aces(path).iter().any(|(_, _, _, s)| s == group));
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn read_grants_refuse_hardlinks_and_nested_secret_directories_before_any_acl_change() {
+        let base = scratch("read-refuse");
+        let root = base.join("tool");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("file");
+        std::fs::write(&file, "secret").unwrap();
+        std::fs::hard_link(&file, root.join("alias")).unwrap();
+        let group = "S-1-5-21-1-2-3-9203";
+        let journal = base.join("reads.json");
+        assert!(reads::grant_at(&root, &base.join("profile"), group, &journal).is_err());
+        assert!(!journal.exists());
+        assert!(!aces(&root).iter().any(|(_, _, _, s)| s == group));
+        std::fs::remove_file(root.join("alias")).unwrap();
+        std::fs::create_dir(root.join(".ssh")).unwrap();
+        assert!(reads::grant_at(&root, &base.join("profile"), group, &journal).is_err());
+        assert!(!journal.exists());
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

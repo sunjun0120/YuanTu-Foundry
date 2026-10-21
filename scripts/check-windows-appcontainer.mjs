@@ -52,16 +52,27 @@ export async function inspectHelperSignature(helperPath) {
   return result;
 }
 
-export function assertPinnedHelperManifest(manifest, signature, digest) {
+export function assertPinnedHelperManifest(
+  manifest,
+  signature,
+  digest,
+  name = 'yuantu-appcontainer.exe',
+) {
+  const expected =
+    name === 'yuantu-appcontainer.exe'
+      ? manifest?.helperSha256
+      : name === 'yuantu-sandbox.exe'
+        ? manifest?.accountHelperSha256
+        : undefined;
   if (
     manifest?.version !== 1 ||
     manifest.timestamped !== true ||
-    !/^[0-9a-f]{64}$/.test(manifest.helperSha256 ?? '') ||
+    !/^[0-9a-f]{64}$/.test(expected ?? '') ||
     !/^[0-9a-f]{64}$/.test(manifest.signerSha256 ?? '') ||
     !signature?.valid ||
     !signature.timestamped ||
     signature.signerSha256 !== manifest.signerSha256 ||
-    digest !== manifest.helperSha256
+    digest !== expected
   )
     throw new Error(
       'Signed helper must match the pinned signer, timestamp and signing manifest; rebuilds require signing again',
@@ -79,12 +90,19 @@ export async function validateSignedHelperAssets(
   for (const relative of [
     'packages/tools/windows-sandbox/yuantu-appcontainer.exe',
     'dist/packages/tools/windows-sandbox/yuantu-appcontainer.exe',
+    'packages/tools/windows-sandbox/yuantu-sandbox.exe',
+    'dist/packages/tools/windows-sandbox/yuantu-sandbox.exe',
   ]) {
     const executable = path.join(root, relative);
     const digest = createHash('sha256')
       .update(await readFile(executable))
       .digest('hex');
-    assertPinnedHelperManifest(manifest, await inspectHelperSignature(executable), digest);
+    assertPinnedHelperManifest(
+      manifest,
+      await inspectHelperSignature(executable),
+      digest,
+      path.basename(executable),
+    );
   }
   return manifest;
 }

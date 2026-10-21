@@ -1,5 +1,5 @@
 //! Whether the sandbox account backend can run, and if not, every reason why. Never changes the system.
-use super::{Account, credentials, firewall, users};
+use super::{Account, credentials, firewall, grants, users};
 use crate::{Handle, wide};
 use serde::Serialize;
 use windows_sys::Win32::{Security::*, System::Services::*};
@@ -115,6 +115,13 @@ pub fn status() -> Status {
         Ok((start, _)) if start != SERVICE_DISABLED => {}
         _ => push("seclogon-disabled", &mut problems),
     }
+    let group = users::lookup_sid(super::GROUP).ok().flatten();
+    if let Some(ref group) = group {
+        if let Err(problem) = grants::reads::audit(group, &sids) {
+            push("read-allowlist-invalid", &mut problems);
+            details.push(format!("read allowlist: {problem}"));
+        }
+    }
     Status {
         version: 1,
         ready: problems.is_empty(),
@@ -122,7 +129,7 @@ pub fn status() -> Status {
         problems,
         details,
         accounts,
-        group: users::lookup_sid(super::GROUP).ok().flatten(),
+        group,
     }
 }
 

@@ -1,6 +1,16 @@
-# Windows basic native sandbox
+# Windows native sandboxes
 
-`windows` (and `native` on Windows) uses a Low integrity, write-restricted token. Workspace-specific and per-command scratch SIDs grant writes. Ambient Low integrity paths writable by Everyone or the logon SID remain writable. Reads and network are unrestricted; strict process read-only and denied-network requests fail before execution. This is a partial write boundary.
+`native` selects `windows-account` when its dedicated accounts are verified ready, and otherwise uses the basic `windows` backend described below. An explicit `windows-account` request fails closed when setup is missing or damaged. Settings > General > **Windows sandbox accounts** reports status and offers administrator setup, repair and uninstall. Setup refreshes the live Host without changing a session's permission preset. Development builds do not offer administrator setup.
+
+The account backend ships as `yuantu-sandbox.exe`: a desktop-user broker starts an offline or online account runner, which creates commands inside kill-on-close Jobs. Standing workspace grants use the sandbox group and a per-workspace capability SID; read-only commands omit the capability. WFP filters deny the offline account network access. Credentials use CurrentUser DPAPI. The runner replaces profile, HOME, identity and scratch variables and strips desktop-user cache/config overrides.
+
+Setup grants group RX to safe PATH directories under the desktop user's real profile and `.gitconfig`. Settings can add or revoke an absolute read-only path. Sensitive directories and their ancestors, reparse points, hardlinks and trees larger than 100,000 objects are refused; unsafe default PATH entries remain inaccessible. Read grants are non-inheritable snapshots: newly installed tool files need reauthorization, and newly created secret directories receive no grant. `read-grants.json` records original DACLs and filesystem identities before mutation. Removal reopens recorded file IDs even after same-volume moves, revokes owned RX and preserves other trustees' changes. Identity or permission conflicts retain the recovery record. Read and workspace grants are revoked as the desktop user before fixed UAC account removal, even when UAC uses another administrator.
+
+Real accounts are verified only on disposable GitHub Actions Windows runners in [the account workflow](../../../.github/workflows/windows-account-sandbox.yml). Local unit/development-runner tests never provision accounts. Protected packaging signs and timestamps both helpers with the compiled signer pin, records separate hashes, preserves the signed bytes and verifies both packaged assets. Real signing and protected-install lifecycle acceptance remain release requirements; private desktops are deferred and ConPTY is out of scope.
+
+## Basic backend
+
+`windows` uses a Low integrity, write-restricted token. Workspace-specific and per-command scratch SIDs grant writes. Ambient Low integrity paths writable by Everyone or the logon SID remain writable. Reads and network are unrestricted; strict process read-only and denied-network requests fail before execution. This is a partial write boundary.
 
 The launcher starts the command suspended, assigns it to an unnamed Job Object with kill-on-close and no breakaway, then resumes it. On ordinary command exit it terminates remaining descendants and waits for the job's active process count to reach zero before returning. Killing the launcher closes the job handle and terminates its descendants. The provider marks the plan's process tree as contained.
 
@@ -12,4 +22,4 @@ The workspace root's `.git`, `.yuantu`, `.agents`, `.codex`, `.aws`, `.ssh`, and
 
 After the final workspace lease ends, existing objects recover their original security and newly created objects receive Medium integrity labels. Approved atomic file replacements can inherit the same effective Low mandatory label: recovery ignores only the mandatory-label ACE's inherited provenance bit when checking for conflicts. DACLs, label SIDs/policies, and all other inheritance flags must still match; genuine operator permission or integrity-level changes retain the journal and lock without partially restoring other objects. Cleanup of a forged or deserialized plan cannot release a Host-owned lease or delete an arbitrary path. The owning Host must terminate the process tree before cleaning its original plan.
 
-The administrator-initialized backend remains [implementation pending](ENHANCED-DESIGN.md). No account or firewall initialization is implemented or performed by the basic backend.
+The earlier SYSTEM-service design is retained as [historical reference](ENHANCED-DESIGN.md). The basic backend does not initialize accounts or firewall policy.

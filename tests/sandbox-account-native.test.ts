@@ -31,9 +31,11 @@ const helper = path.join(
 const skip =
   process.platform !== 'win32'
     ? 'needs Windows'
-    : process.env.YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE !== '1'
-      ? 'changes machine accounts; set YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE=1 on a disposable machine'
-      : false;
+    : process.env.GITHUB_ACTIONS !== 'true'
+      ? 'real account provisioning is verified only on disposable GitHub Actions runners'
+      : process.env.YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE !== '1'
+        ? 'changes machine accounts; set YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE=1 on a disposable machine'
+        : false;
 
 const exec = promisify(execFile);
 
