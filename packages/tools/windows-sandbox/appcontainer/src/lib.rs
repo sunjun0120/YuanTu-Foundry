@@ -1,4 +1,5 @@
 //! Shared by the AppContainer launcher and the sandbox account executor.
+pub mod account;
 pub mod maintenance;
 pub mod network;
 

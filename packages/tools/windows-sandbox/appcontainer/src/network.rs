@@ -20,7 +20,7 @@ use windows_sys::{
 const PROVIDER: GUID = GUID::from_u128(0x9cfe0294_1d02_49dd_b930_5559414e5455);
 const SUBLAYER: GUID = GUID::from_u128(0x45ce4c21_e8b2_4c87_b830_5559414e5455);
 const DESCRIPTOR: &str = "O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU)";
-const LAYERS: [GUID; 8] = [
+pub(crate) const LAYERS: [GUID; 8] = [
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
     FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
     FWPM_LAYER_ALE_AUTH_CONNECT_V4,
@@ -73,14 +73,14 @@ fn derive(name: &str) -> Result<Sid> {
     }
     Ok(Sid(sid))
 }
-fn code(value: u32, operation: &str) -> Result<()> {
+pub(crate) fn code(value: u32, operation: &str) -> Result<()> {
     if value != 0 {
         Err(format!("{operation}: WFP error {value}"))
     } else {
         Ok(())
     }
 }
-struct Engine(HANDLE);
+pub(crate) struct Engine(pub(crate) HANDLE);
 impl Drop for Engine {
     fn drop(&mut self) {
         unsafe {
@@ -88,7 +88,7 @@ impl Drop for Engine {
         }
     }
 }
-fn engine() -> Result<Engine> {
+pub(crate) fn engine() -> Result<Engine> {
     let mut handle = null_mut();
     unsafe {
         code(
@@ -104,7 +104,7 @@ fn engine() -> Result<Engine> {
     }
     Ok(Engine(handle))
 }
-struct WfpMemory<T>(*mut T);
+pub(crate) struct WfpMemory<T>(pub(crate) *mut T);
 impl<T> Drop for WfpMemory<T> {
     fn drop(&mut self) {
         unsafe {
@@ -112,7 +112,7 @@ impl<T> Drop for WfpMemory<T> {
         }
     }
 }
-struct Descriptor(PSECURITY_DESCRIPTOR);
+pub(crate) struct Descriptor(pub(crate) PSECURITY_DESCRIPTOR);
 impl Drop for Descriptor {
     fn drop(&mut self) {
         unsafe {
@@ -120,7 +120,7 @@ impl Drop for Descriptor {
         }
     }
 }
-fn descriptor() -> Result<Descriptor> {
+pub(crate) fn descriptor() -> Result<Descriptor> {
     let mut result = null_mut();
     unsafe {
         win(
@@ -140,7 +140,7 @@ fn key(profile: usize, layer: usize) -> GUID {
         0xbfe82791_6b51_4d0e_aa11_5559414e0000u128 + ((profile as u128) << 8) + layer as u128,
     )
 }
-struct Transaction<'a>(&'a Engine, bool);
+pub(crate) struct Transaction<'a>(pub(crate) &'a Engine, pub(crate) bool);
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
         if !self.1 {
@@ -448,7 +448,7 @@ fn same_guid(a: &GUID, b: &GUID) -> bool {
     a.data1 == b.data1 && a.data2 == b.data2 && a.data3 == b.data3 && a.data4 == b.data4
 }
 
-type SecurityQuery = unsafe extern "system" fn(
+pub(crate) type SecurityQuery = unsafe extern "system" fn(
     HANDLE,
     *const GUID,
     u32,
@@ -484,7 +484,7 @@ fn security_text(descriptor: PSECURITY_DESCRIPTOR) -> Result<String> {
     }
     Ok(result)
 }
-fn verify_security(engine: &Engine, key: &GUID, query: SecurityQuery) -> Result<()> {
+pub(crate) fn verify_security(engine: &Engine, key: &GUID, query: SecurityQuery) -> Result<()> {
     let mut sd = null_mut();
     let mut owner = null_mut();
     let mut group = null_mut();
