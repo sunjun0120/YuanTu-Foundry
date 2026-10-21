@@ -60,6 +60,7 @@ const PLATFORM_FILES = [
   '/private/var/db/xcode_select_link',
   // macOS 26 xcode-select reads its developer-directory link here instead.
   '/private/var/select/developer_dir',
+  '/private/etc/gitconfig',
 ];
 const ownedPlans = new SeatbeltScratchRegistry();
 const verified = new Map<string, Promise<void>>();
@@ -77,8 +78,8 @@ interface ProfileInput {
   scratch: string;
   runtimePaths: readonly string[];
   protectedPaths?: readonly string[];
-  /** Tool trees of the administrator-selected developer directory (xcode-select), e.g. Xcode_26.6.app. */
-  developerTools?: readonly string[];
+  /** Developer directory that /usr/bin tool launchers (xcrun) resolve inside the sandbox. */
+  developerDirectory?: string;
   files: FileEffect;
   network: NetworkEffect;
 }
@@ -95,7 +96,11 @@ export function seatbeltProfile(input: ProfileInput): string {
     throw new Error('Seatbelt workspace root must be a dedicated directory');
   const root = seatbeltQuote(input.root);
   const scratch = seatbeltQuote(input.scratch);
-  const reads = [...PLATFORM_READS, ...(input.developerTools ?? [])];
+  const developer = input.developerDirectory;
+  const reads = [
+    ...PLATFORM_READS,
+    ...(developer ? [path.posix.join(developer, 'usr'), path.posix.join(developer, 'SDKs')] : []),
+  ];
   const lines = [
     '(version 1)',
     '(deny default)',
@@ -108,13 +113,13 @@ export function seatbeltProfile(input: ProfileInput): string {
     // with SIGABRT when denied, before the target program runs.
     '(allow file-read-data (literal "/"))',
     // /var is a root symlink to /private/var; resolving PLATFORM_FILES through it needs its metadata.
-    '(allow file-read-metadata (literal "/var"))',
+    '(allow file-read-metadata (literal "/var") (literal "/etc"))',
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     `(allow file-read* file-map-executable (subpath ${root}) (subpath ${scratch}))`,
     `(allow file-read-metadata (path-ancestors ${root}) (path-ancestors ${scratch}))`,
     ...reads.map((p) => `(allow file-read* file-map-executable (subpath ${seatbeltQuote(p)}))`),
     ...reads.map((p) => `(allow file-read-metadata (path-ancestors ${seatbeltQuote(p)}))`),
-    ...[...PLATFORM_FILES, ...input.runtimePaths].map(
+    ...[...PLATFORM_FILES, ...(developer ? [developer] : []), ...input.runtimePaths].map(
       (p) => `(allow file-read* file-map-executable (literal ${seatbeltQuote(p)}))`,
     ),
     '(allow file-write-data (literal "/dev/null"))',
@@ -187,6 +192,7 @@ async function policyInput(
   root: string,
   scratch: string,
   request: SandboxRequest,
+  developerDirectory: string | undefined,
 ): Promise<ProfileInput> {
   const runtimePaths = new Set<string>([await realpath(process.execPath)]);
   // Only trusted application paths, never arbitrary argv paths (which could otherwise grant secrets).
@@ -216,7 +222,7 @@ async function policyInput(
     scratch,
     runtimePaths: [...runtimePaths],
     protectedPaths,
-    developerTools: await activeDeveloperTools(),
+    developerDirectory,
     files: request.config.files ?? 'workspace-write',
     network: request.config.network ?? 'denied',
   };
@@ -224,18 +230,37 @@ async function policyInput(
   return input;
 }
 
-/** The root-owned xcode-select link names the active developer directory, which need not be Xcode.app. */
-async function activeDeveloperTools(): Promise<string[]> {
-  // macOS 26 moved the link; older releases keep the db location.
-  for (const link of ['/private/var/select/developer_dir', '/private/var/db/xcode_select_link']) {
+const COMMAND_LINE_TOOLS = '/Library/Developer/CommandLineTools';
+
+/**
+ * xcrun launchers (/usr/bin/git) need their developer directory readable. A full Xcode.app
+ * additionally consults its license, Info.plist, xcodebuild and SharedFrameworks, which this
+ * policy does not grant; the self-contained Command Line Tools are preferred when installed.
+ */
+async function sandboxDeveloperDirectory(
+  requested: string | undefined,
+): Promise<{ directory?: string; pin: boolean }> {
+  const resolve = async (candidate: string) => {
     try {
-      const developer = await realpath(link);
-      if (path.isAbsolute(developer) && developer !== '/') return [path.join(developer, 'usr')];
+      const directory = await realpath(candidate);
+      return path.isAbsolute(directory) && directory !== '/' ? directory : undefined;
     } catch {
-      // Missing or unreadable link: grant nothing beyond the fixed platform reads.
+      return undefined;
     }
+  };
+  if (requested) return { directory: await resolve(requested), pin: false };
+  try {
+    await stat(path.join(COMMAND_LINE_TOOLS, 'usr', 'bin', 'git'));
+    return { directory: COMMAND_LINE_TOOLS, pin: true };
+  } catch {
+    // No Command Line Tools: keep the administrator's xcode-select choice.
   }
-  return [];
+  // macOS 26 moved the root-owned link; older releases keep the db location.
+  for (const link of ['/private/var/select/developer_dir', '/private/var/db/xcode_select_link']) {
+    const directory = await resolve(link);
+    if (directory) return { directory, pin: false };
+  }
+  return { pin: false };
 }
 
 /** A path policy cannot distinguish an existing shared inode from an ordinary allowed workspace file. */
@@ -442,6 +467,7 @@ async function verify(input: ProfileInput, env: NodeJS.ProcessEnv): Promise<void
         input.runtimePaths,
         runtimeSubtrees.get(input),
         input.protectedPaths,
+        input.developerDirectory,
         artifact.dev,
         artifact.ino,
         artifact.size,
@@ -479,7 +505,9 @@ async function prepare(request: SandboxRequest): Promise<SandboxPlan> {
   try {
     scratch = await realpath(createdScratch);
     const env = seatbeltEnvironment(scratch, process.env, request.env);
-    const input = await policyInput(canonical.root, scratch, request);
+    const developer = await sandboxDeveloperDirectory(env.DEVELOPER_DIR);
+    if (developer.pin) env.DEVELOPER_DIR = developer.directory;
+    const input = await policyInput(canonical.root, scratch, request, developer.directory);
     await verify(input, env);
     const plan: SandboxPlan = {
       executable: EXECUTABLE,
