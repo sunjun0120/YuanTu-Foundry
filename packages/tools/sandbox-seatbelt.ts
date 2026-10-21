@@ -77,6 +77,8 @@ interface ProfileInput {
   scratch: string;
   runtimePaths: readonly string[];
   protectedPaths?: readonly string[];
+  /** Tool trees of the administrator-selected developer directory (xcode-select), e.g. Xcode_26.6.app. */
+  developerTools?: readonly string[];
   files: FileEffect;
   network: NetworkEffect;
 }
@@ -93,6 +95,7 @@ export function seatbeltProfile(input: ProfileInput): string {
     throw new Error('Seatbelt workspace root must be a dedicated directory');
   const root = seatbeltQuote(input.root);
   const scratch = seatbeltQuote(input.scratch);
+  const reads = [...PLATFORM_READS, ...(input.developerTools ?? [])];
   const lines = [
     '(version 1)',
     '(deny default)',
@@ -109,10 +112,8 @@ export function seatbeltProfile(input: ProfileInput): string {
     '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))',
     `(allow file-read* file-map-executable (subpath ${root}) (subpath ${scratch}))`,
     `(allow file-read-metadata (path-ancestors ${root}) (path-ancestors ${scratch}))`,
-    ...PLATFORM_READS.map(
-      (p) => `(allow file-read* file-map-executable (subpath ${seatbeltQuote(p)}))`,
-    ),
-    ...PLATFORM_READS.map((p) => `(allow file-read-metadata (path-ancestors ${seatbeltQuote(p)}))`),
+    ...reads.map((p) => `(allow file-read* file-map-executable (subpath ${seatbeltQuote(p)}))`),
+    ...reads.map((p) => `(allow file-read-metadata (path-ancestors ${seatbeltQuote(p)}))`),
     ...[...PLATFORM_FILES, ...input.runtimePaths].map(
       (p) => `(allow file-read* file-map-executable (literal ${seatbeltQuote(p)}))`,
     ),
@@ -215,11 +216,26 @@ async function policyInput(
     scratch,
     runtimePaths: [...runtimePaths],
     protectedPaths,
+    developerTools: await activeDeveloperTools(),
     files: request.config.files ?? 'workspace-write',
     network: request.config.network ?? 'denied',
   };
   runtimeSubtrees.set(input, subtrees);
   return input;
+}
+
+/** The root-owned xcode-select link names the active developer directory, which need not be Xcode.app. */
+async function activeDeveloperTools(): Promise<string[]> {
+  // macOS 26 moved the link; older releases keep the db location.
+  for (const link of ['/private/var/select/developer_dir', '/private/var/db/xcode_select_link']) {
+    try {
+      const developer = await realpath(link);
+      if (path.isAbsolute(developer) && developer !== '/') return [path.join(developer, 'usr')];
+    } catch {
+      // Missing or unreadable link: grant nothing beyond the fixed platform reads.
+    }
+  }
+  return [];
 }
 
 /** A path policy cannot distinguish an existing shared inode from an ordinary allowed workspace file. */
@@ -320,7 +336,11 @@ function run(
 async function probe(input: ProfileInput, env: NodeJS.ProcessEnv): Promise<void> {
   const fixture = await mkdtemp(path.join(input.root, '.yuantu-seatbelt-probe-'));
   let external: string | undefined;
-  const server = createServer((socket) => socket.end('reachable'));
+  const server = createServer((socket) => {
+    // The confined client disconnects as soon as it connects; a reset is not a probe failure.
+    socket.on('error', () => {});
+    socket.end('reachable');
+  });
   try {
     external = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-outside-'));
     const sentinel = path.join(external, 'sentinel');
