@@ -627,7 +627,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 77 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 79 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -660,6 +660,8 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SANDBOX_NETWORK` | `denied` / `unrestricted` | 命令网络权限；不支持所需隔离时拒绝执行 |
 | `YUANTU_SANDBOX_SPEC` | `string` | （内部）沙箱启动器的单次命令载荷 |
 | `YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS` | `string` | （测试）沙箱启动器创建命令后、恢复前暂停的毫秒数 |
+| `YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE` | `0` / `1` | （测试）仅在可丢弃 GitHub Actions runner 启用原生账户真实验收 |
+| `YUANTU_SANDBOX_DEV_PROVISION` | `0` / `1` | （测试）允许已提权 debug helper 的固定建户操作；不触发提权 |
 | `YUANTU_SANDBOX_ACL_SOURCE` | `string` | （内部）Host 快照的 ACL helper 载荷；不向客体传递 |
 | `YUANTU_PROGRAM_LAUNCH_DIR` | `string` | （内部）程序运行器离开工作区前记录的启动目录；由运行器覆盖 |
 | `YUANTU_SANDBOX_IMAGE` | `string` | 已停用：仅兼容旧配置，原生沙箱不读取镜像设置 |

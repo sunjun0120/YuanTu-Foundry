@@ -4,8 +4,9 @@
  * grants, the broker, and the runner, as a Host would drive them.
  *
  * It changes machine state (local accounts, logon rights, firewall filters), so it runs only where that is the
- * point — a disposable elevated CI machine that sets YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE=1 and
- * YUANTU_SANDBOX_DEV_PROVISION=1 — with the debug build of the helper, and it removes everything afterwards.
+ * point — a disposable elevated GitHub Actions machine that sets FOUNDRY_TEST_WINDOWS_ACCOUNT_ACCEPTANCE=1.
+ * The test harness deliberately strips YUANTU_* settings; the test enables the helper's debug provisioning
+ * flag only at its explicit exec boundary and removes everything afterwards.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,8 +34,8 @@ const skip =
     ? 'needs Windows'
     : process.env.GITHUB_ACTIONS !== 'true'
       ? 'real account provisioning is verified only on disposable GitHub Actions runners'
-      : process.env.YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE !== '1'
-        ? 'changes machine accounts; set YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE=1 on a disposable machine'
+      : process.env.FOUNDRY_TEST_WINDOWS_ACCOUNT_ACCEPTANCE !== '1'
+        ? 'changes machine accounts; enable FOUNDRY_TEST_WINDOWS_ACCOUNT_ACCEPTANCE only on a disposable Actions runner'
         : false;
 
 const exec = promisify(execFile);

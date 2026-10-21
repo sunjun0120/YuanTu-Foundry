@@ -40,9 +40,17 @@ jobs:
       # The same backend through the TypeScript provider a Host uses (debug helper built by the steps above).
       - name: Sandbox account provider acceptance
         env:
-          YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
-          YUANTU_SANDBOX_DEV_PROVISION: '1'
-        run: node scripts/run-tests.mjs tests/sandbox-account-native.test.ts
+          FOUNDRY_TEST_WINDOWS_ACCOUNT_ACCEPTANCE: '1'
+        run: |
+          $result = & node scripts/run-tests.mjs tests/sandbox-account-native.test.ts
+          $exit = $LASTEXITCODE
+          $result | Write-Output
+          if ($exit -ne 0) { throw "Account provider acceptance failed ($exit)" }
+          if (($result -join "`n") -notmatch 'tests=1 pass=1 fail=0 skip=0') {
+            throw 'Account provider acceptance must run one test with no skips'
+          }
       - run: npm run build
+      - name: Prepare Electron before isolated desktop tests
+        run: node node_modules/electron/install.js
       - name: Account settings desktop smoke (no account maintenance)
         run: node scripts/run-tests.mjs tests/windows-account-settings.smoke.mjs
