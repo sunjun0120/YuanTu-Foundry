@@ -40,7 +40,9 @@ function sessionAge(createdAt: string | number): string {
   const then = new Date(createdAt);
   const minutes = Math.max(0, Math.floor((Date.now() - then.getTime()) / 60_000));
   const unit = (value: number, name: 'minute' | 'hour' | 'day'): string =>
-    new Intl.NumberFormat(locale(), { style: 'unit', unit: name, unitDisplay: 'narrow' }).format(value);
+    new Intl.NumberFormat(locale(), { style: 'unit', unit: name, unitDisplay: 'narrow' }).format(
+      value,
+    );
   if (minutes < 60) return unit(Math.max(1, minutes), 'minute');
   if (minutes < 24 * 60) return unit(Math.floor(minutes / 60), 'hour');
   if (minutes < 30 * 24 * 60) return unit(Math.floor(minutes / (24 * 60)), 'day');

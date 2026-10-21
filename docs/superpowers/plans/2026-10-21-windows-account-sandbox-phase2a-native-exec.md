@@ -23,18 +23,18 @@
 
 `packages/tools/windows-sandbox/appcontainer/src/bin/yuantu-sandbox/`：
 
-| 文件 | 职责 |
-|---|---|
-| `main.rs` | 子命令分发 |
-| `win.rs` | `Handle`、`wide`、`win`、SID 文本互转、当前进程令牌用户/ logon SID 读取 |
-| `frame.rs` | 帧读写（泛型 `Read`/`Write`，纯逻辑，可单测） |
-| `protocol.rs` | 消息类型、请求校验（能力 SID 格式、路径绝对、argv 非空、env 键合法） |
-| `token.rs` | Codex 令牌配方 |
-| `spawn.rs` | 命令行引号、环境块、在 Job 内创建、等待、取消、排空 Job |
-| `pipe.rs` | 命名管道服务端（SDDL、FIRST_PIPE_INSTANCE）、客户端连接、对端身份校验 |
-| `runner.rs` | runner 主循环 |
-| `broker.rs` | broker 主循环（`--dev` 启动 runner） |
-| `exec.rs` | exec 客户端 |
+| 文件          | 职责                                                                    |
+| ------------- | ----------------------------------------------------------------------- |
+| `main.rs`     | 子命令分发                                                              |
+| `win.rs`      | `Handle`、`wide`、`win`、SID 文本互转、当前进程令牌用户/ logon SID 读取 |
+| `frame.rs`    | 帧读写（泛型 `Read`/`Write`，纯逻辑，可单测）                           |
+| `protocol.rs` | 消息类型、请求校验（能力 SID 格式、路径绝对、argv 非空、env 键合法）    |
+| `token.rs`    | Codex 令牌配方                                                          |
+| `spawn.rs`    | 命令行引号、环境块、在 Job 内创建、等待、取消、排空 Job                 |
+| `pipe.rs`     | 命名管道服务端（SDDL、FIRST_PIPE_INSTANCE）、客户端连接、对端身份校验   |
+| `runner.rs`   | runner 主循环                                                           |
+| `broker.rs`   | broker 主循环（`--dev` 启动 runner）                                    |
+| `exec.rs`     | exec 客户端                                                             |
 
 测试：`packages/tools/windows-sandbox/appcontainer/tests/sandbox_exec.rs`、fixture `tests/fixtures/fork.cjs`、`tests/fixtures/forks/a.test.cjs`、`b.test.cjs`。
 
@@ -109,6 +109,7 @@ pub struct PipeIo(pub HANDLE); // impl Read + Write
 ### Task 1: crate 骨架、帧与协议
 
 **Files:**
+
 - Create: `src/bin/yuantu-sandbox/main.rs`、`win.rs`、`frame.rs`、`protocol.rs`
 - Modify: `Cargo.toml`（windows-sys 增加 `Win32_System_Pipes`）
 
@@ -122,6 +123,7 @@ pub struct PipeIo(pub HANDLE); // impl Read + Write
 ### Task 2: 令牌与进程创建
 
 **Files:**
+
 - Create: `token.rs`、`spawn.rs`
 - Test: 同文件内 `#[cfg(test)]`
 
@@ -142,6 +144,7 @@ pub struct PipeIo(pub HANDLE); // impl Read + Write
 ### Task 4: runner、broker（--dev）、exec 与端到端测试
 
 **Files:**
+
 - Create: `runner.rs`、`broker.rs`、`exec.rs`
 - Create: `tests/sandbox_exec.rs`、`tests/fixtures/fork.cjs`、`tests/fixtures/forks/a.test.cjs`、`tests/fixtures/forks/b.test.cjs`
 

@@ -20,6 +20,7 @@
 ### Task 1: 令牌矩阵 spike
 
 **Files:**
+
 - Create（scratchpad）：`spike/run.mjs`、`spike/fixture/fork.js`、`spike/fixture/a.test.js`、`spike/fixture/b.test.js`
 
 - [ ] **Step 1:** 写 fixture：`fork.js` 用 `spawnSync(process.execPath, ['-e', ...], {stdio:'pipe', input})` 回显 stdin 并打印 `FORK-OK`；`a.test.js`、`b.test.js` 各一个通过的 `node:test` 用例。
@@ -32,21 +33,21 @@
 
 本机（Windows 11 26300，Node 24.19）结果，启动器 = 现有 C# 启动器 + 开关：
 
-| 令牌 | fork（spawnSync + stdio pipe） | `node --test`（2 个文件） |
-|---|---|---|
-| WRITE_RESTRICTED + Low | EPERM | EPERM |
-| WRITE_RESTRICTED，不降 Low | EPERM | EPERM |
-| WRITE_RESTRICTED，不降 Low，默认 DACL 补 Everyone + logon | EPERM | EPERM |
-| 无限制 SID（DISABLE_MAX_PRIVILEGE \| LUA_TOKEN）+ Low | OK | 2/2 通过 |
-| 无限制 SID，不降 Low | OK | 2/2 通过 |
+| 令牌                                                      | fork（spawnSync + stdio pipe） | `node --test`（2 个文件） |
+| --------------------------------------------------------- | ------------------------------ | ------------------------- |
+| WRITE_RESTRICTED + Low                                    | EPERM                          | EPERM                     |
+| WRITE_RESTRICTED，不降 Low                                | EPERM                          | EPERM                     |
+| WRITE_RESTRICTED，不降 Low，默认 DACL 补 Everyone + logon | EPERM                          | EPERM                     |
+| 无限制 SID（DISABLE_MAX_PRIVILEGE \| LUA_TOKEN）+ Low     | OK                             | 2/2 通过                  |
+| 无限制 SID，不降 Low                                      | OK                             | 2/2 通过                  |
 
 追加对照（修正最初“WRITE_RESTRICTED 本身导致 EPERM”的结论）：
 
-| 令牌（均为 WRITE_RESTRICTED，不降 Low） | spawnSync stdio=ignore | stdio=inherit | stdio=pipe | `node --test` |
-|---|---|---|---|---|
-| 限制 SID = 工作区 + Everyone + logon（现有做法） | OK | OK | EPERM | EPERM |
-| 同上，默认 DACL 换成 Codex 的 `D:(A;;GA;;;logon)(A;;RC;;;OW)` | OK | OK | EPERM | EPERM |
-| 限制 SID 再加**令牌用户 SID**（Codex elevated 做法），两种 DACL 都试 | OK | OK | OK | 2/2 通过 |
+| 令牌（均为 WRITE_RESTRICTED，不降 Low）                              | spawnSync stdio=ignore | stdio=inherit | stdio=pipe | `node --test` |
+| -------------------------------------------------------------------- | ---------------------- | ------------- | ---------- | ------------- |
+| 限制 SID = 工作区 + Everyone + logon（现有做法）                     | OK                     | OK            | EPERM      | EPERM         |
+| 同上，默认 DACL 换成 Codex 的 `D:(A;;GA;;;logon)(A;;RC;;;OW)`        | OK                     | OK            | EPERM      | EPERM         |
+| 限制 SID 再加**令牌用户 SID**（Codex elevated 做法），两种 DACL 都试 | OK                     | OK            | OK         | 2/2 通过      |
 
 - 根因：libuv 为子进程 stdio 创建命名管道时请求 `WRITE_DAC`；所有者（令牌用户 SID）的隐式权限在 `WRITE_RESTRICTED` 下同样要过限制 SID 检查，用户 SID 不在限制列表里就被拒。Low 完整性不是原因。
 - 设计文档 §3.3/§5.1 采用 Codex 配方：令牌限制 SID 含用户 SID；写 ACE 只授给本地组 + 每工作区能力 SID，绝不直接授给沙箱账户 → 多工作区可并发。

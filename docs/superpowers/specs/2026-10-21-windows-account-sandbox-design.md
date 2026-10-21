@@ -43,16 +43,16 @@ agent-host (桌面用户, Medium)
 
 在现有 crate `packages/tools/windows-sandbox/appcontainer` 中新增第二个 bin `yuantu-sandbox`。`maintenance.rs`（固定操作 UAC 入口、安装位置校验）和 `network.rs`（WFP）移到 crate 的 `lib.rs` 供两个 bin 共用。子命令：
 
-| 子命令 | 身份 | 作用 |
-|---|---|---|
-| `account-preflight` | 桌面用户 | 校验发布签名与安装位置，不改系统 |
-| `account-setup` | 桌面用户 → UAC | 生成密码、建立交接管道、以固定操作 `account-initialize` 提权 |
-| `account-initialize` | 管理员 | 只接受交接管道传来的密码，执行 §4.1 的固定操作 |
-| `account-status` | 桌面用户 | 输出账户、凭据、WFP、seclogon、读白名单状态（JSON，version 1） |
-| `account-uninstall` | 桌面用户 → UAC | 删除账户、profile、WFP 规则、读白名单 ACE、凭据 |
-| `broker` | 桌面用户 | 常驻；拉起并管理 runner；服务 exec |
-| `runner` | 沙箱账户 | 常驻；按请求创建受限进程 |
-| `exec` | 桌面用户 | 每条命令一个；agent-host 的 spawn 目标 |
+| 子命令               | 身份           | 作用                                                           |
+| -------------------- | -------------- | -------------------------------------------------------------- |
+| `account-preflight`  | 桌面用户       | 校验发布签名与安装位置，不改系统                               |
+| `account-setup`      | 桌面用户 → UAC | 生成密码、建立交接管道、以固定操作 `account-initialize` 提权   |
+| `account-initialize` | 管理员         | 只接受交接管道传来的密码，执行 §4.1 的固定操作                 |
+| `account-status`     | 桌面用户       | 输出账户、凭据、WFP、seclogon、读白名单状态（JSON，version 1） |
+| `account-uninstall`  | 桌面用户 → UAC | 删除账户、profile、WFP 规则、读白名单 ACE、凭据                |
+| `broker`             | 桌面用户       | 常驻；拉起并管理 runner；服务 exec                             |
+| `runner`             | 沙箱账户       | 常驻；按请求创建受限进程                                       |
+| `exec`               | 桌面用户       | 每条命令一个；agent-host 的 spawn 目标                         |
 
 ### 3.2 broker
 
@@ -165,16 +165,16 @@ agent-host (桌面用户, Medium)
 
 ## 7. 错误处理
 
-| 情况 | 行为 |
-|---|---|
-| 未初始化 / 损坏，模式为 `native` | 回退 `windows`，会话提示一次，附初始化入口 |
-| 未初始化 / 损坏，模式为 `windows-account` | 拒绝执行，说明缺少哪一项 |
-| 凭据解密失败或 logon 失败（密码被外部改动） | 标记“需要修复”，提示重新初始化（会重设密码） |
-| runner 启动失败（seclogon 停止等） | exec 输出 launch-failed 前缀行，退出 125；验收归为 `environment-error` |
-| runner 崩溃 | 进行中命令 `runner-lost`；下次请求重启 runner |
-| 工作区租约冲突 | 沿用现有提示（另一个 Host 持有租约等），在审批前检查 |
-| ACL 恢复冲突 | 沿用现有日志保留与 `sandbox-recover` |
-| 管道校验失败（疑似冒充） | 拒绝，杀掉 runner，错误信息不含细节以外的数据 |
+| 情况                                        | 行为                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| 未初始化 / 损坏，模式为 `native`            | 回退 `windows`，会话提示一次，附初始化入口                             |
+| 未初始化 / 损坏，模式为 `windows-account`   | 拒绝执行，说明缺少哪一项                                               |
+| 凭据解密失败或 logon 失败（密码被外部改动） | 标记“需要修复”，提示重新初始化（会重设密码）                           |
+| runner 启动失败（seclogon 停止等）          | exec 输出 launch-failed 前缀行，退出 125；验收归为 `environment-error` |
+| runner 崩溃                                 | 进行中命令 `runner-lost`；下次请求重启 runner                          |
+| 工作区租约冲突                              | 沿用现有提示（另一个 Host 持有租约等），在审批前检查                   |
+| ACL 恢复冲突                                | 沿用现有日志保留与 `sandbox-recover`                                   |
+| 管道校验失败（疑似冒充）                    | 拒绝，杀掉 runner，错误信息不含细节以外的数据                          |
 
 ## 8. 实施顺序与测试
 
