@@ -154,7 +154,7 @@ impl Drop for Transaction<'_> {
 /// No external executable or script can be invoked by this elevated operation.
 /// An unsigned development helper, or a helper without a compile-time publisher
 /// pin, is refused before opening an engine capable of changing policy.
-pub(crate) fn verify_release() -> Result<()> {
+pub fn verify_release() -> Result<()> {
     let expected = option_env!("YUANTU_WINDOWS_SANDBOX_SIGNER_SHA256").unwrap_or("");
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Administrator initialization requires a release helper with a pinned signer certificate".into());

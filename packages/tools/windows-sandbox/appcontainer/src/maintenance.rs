@@ -159,7 +159,7 @@ fn protected_handle(path: &Path, part: InstallationPart) -> Result<Handle> {
     Ok(handle)
 }
 
-pub(crate) fn preflight() -> Result<Vec<Handle>> {
+pub fn preflight() -> Result<Vec<Handle>> {
     // Missing compile-time pin refuses before any shell/UAC operation.
     network::verify_release()?;
     let executable =
@@ -194,7 +194,7 @@ pub(crate) fn preflight() -> Result<Vec<Handle>> {
     Ok(handles)
 }
 
-pub(crate) fn setup() -> Result<u32> {
+pub fn setup() -> Result<u32> {
     let _installation = preflight()?;
     let executable = std::env::current_exe().map_err(|_| "Cannot locate initializer")?;
     let filename = wide(executable.to_str().ok_or("Invalid initializer path")?)?;

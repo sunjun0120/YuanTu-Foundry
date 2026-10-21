@@ -1,6 +1,4 @@
 //! Non-elevated AppContainer launcher. No network capabilities, no breakaway, explicit stdio handles.
-mod maintenance;
-mod network;
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -11,53 +9,13 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Security::{Authorization::*, Isolation::*, *},
+    Security::{Isolation::*, *},
     System::{Console::*, JobObjects::*, Threading::*},
 };
+use yuantu_appcontainer::{
+    Handle, Result, Sid, maintenance, network, profile_name, sid_text, wide, win,
+};
 
-type Result<T> = std::result::Result<T, String>;
-fn wide(text: &str) -> Result<Vec<u16>> {
-    if text.contains('\0') {
-        return Err("NUL in launcher input".into());
-    }
-    Ok(text.encode_utf16().chain(Some(0)).collect())
-}
-fn win(result: i32, operation: &str) -> Result<()> {
-    if result == 0 {
-        Err(format!("{operation}: Windows error {}", unsafe {
-            GetLastError()
-        }))
-    } else {
-        Ok(())
-    }
-}
-struct Handle(HANDLE);
-impl Drop for Handle {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.0);
-        }
-    }
-}
-struct Sid(PSID);
-impl Drop for Sid {
-    fn drop(&mut self) {
-        unsafe {
-            FreeSid(self.0);
-        }
-    }
-}
-fn profile_name(name: &str) -> Result<Vec<u16>> {
-    if !name.starts_with("Yuantu.Sandbox.")
-        || name.len() != 51
-        || !name[15..]
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() || b == b'-')
-    {
-        return Err("Profile identity must be a fresh Yuantu.Sandbox.UUID".into());
-    }
-    wide(name)
-}
 fn quote(argument: &str) -> String {
     let mut output = String::from("\"");
     let mut slash = 0;
@@ -143,23 +101,6 @@ fn capability(name: &str) -> Result<Capability> {
         LocalFree(sids as _);
         Ok(Capability(sid))
     }
-}
-fn sid_text(sid: PSID) -> Result<String> {
-    let mut text = null_mut();
-    unsafe {
-        win(ConvertSidToStringSidW(sid, &mut text), "Format sandbox SID")?;
-    }
-    let mut length = 0;
-    unsafe {
-        while *text.add(length) != 0 {
-            length += 1;
-        }
-    }
-    let value = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, length)) };
-    unsafe {
-        LocalFree(text as _);
-    }
-    Ok(value)
 }
 struct Attributes(LPPROC_THREAD_ATTRIBUTE_LIST);
 impl Drop for Attributes {
