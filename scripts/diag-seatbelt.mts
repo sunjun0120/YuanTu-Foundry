@@ -28,10 +28,13 @@ function attempt(label: string, prof: string, args: string[]) {
   console.log('-- crash reports:', crash.stdout);
 }
 
-const root1 = profile + '\n(allow file-read-data (literal "/"))';
-attempt('root /usr/bin/true', root1, ['/usr/bin/true']);
-attempt('root node', root1, [node, '-e', 'console.log("ok")']);
-attempt('root node ls /', root1, [node, '-e', 'console.log(require("fs").readdirSync("/").join(","))']);
-attempt('root node read outside', root1, [node, '-e', 'try{require("fs").readFileSync("/private/etc/hosts");console.log("READ")}catch(e){console.log(e.code)}']);
-attempt('root git', root1, ['/usr/bin/git', '--version']);
-console.log('PROFILE\n' + profile);
+const dev = realpathSync('/private/var/select/developer_dir');
+console.log('developer dir', dev);
+const usr = path.join(dev, 'usr');
+const prod = seatbeltProfile({ root, scratch, runtimePaths: [node], developerTools: [usr], files: 'workspace-write', network: 'denied' });
+attempt('git product', prod, ['/usr/bin/git', '--version']);
+attempt('git +literal dev', prod + `
+(allow file-read* (literal ${JSON.stringify(dev)}))`, ['/usr/bin/git', '--version']);
+attempt('git +subpath Contents', prod + `
+(allow file-read* (subpath ${JSON.stringify(path.dirname(dev))}))`, ['/usr/bin/git', '--version']);
+
