@@ -28,8 +28,7 @@ function attempt(label: string, prof: string, args: string[]) {
   console.log('-- crash reports:', crash.stdout);
 }
 
-const root1 = profile + '
-(allow file-read-data (literal "/"))';
+const root1 = profile + '\n(allow file-read-data (literal "/"))';
 attempt('root /usr/bin/true', root1, ['/usr/bin/true']);
 attempt('root node', root1, [node, '-e', 'console.log("ok")']);
 attempt('root node ls /', root1, [node, '-e', 'console.log(require("fs").readdirSync("/").join(","))']);
