@@ -23,15 +23,16 @@ function attempt(label: string, prof: string, args: string[]) {
   console.log(`== ${label}: status=${r.status} signal=${r.signal} error=${r.error}\nstdout=${r.stdout?.slice(0, 500)}\nstderr=${r.stderr?.slice(0, 2000)}`);
   const since = new Date(started.getTime() - 1000).toISOString().replace('T', ' ').slice(0, 19);
   const log = spawnSync('/usr/bin/log', ['show', '--style', 'compact', '--start', since, '--predicate', 'sender == "Sandbox" OR subsystem == "com.apple.sandbox.reporting" OR eventMessage CONTAINS "deny("'], { encoding: 'utf8' });
-  console.log(`-- sandbox log for ${label}:\n${(log.stdout || '').split('\n').filter((l) => /deny|kill|Sandbox/i.test(l)).slice(0, 80).join('\n')}`);
+  console.log(`-- sandbox log for ${label}:\n${(log.stdout || '').split('\n').filter((l) => /deny/.test(l) && /\b(true|node|git|sandbox-exec|xcrun|xcode)[-\w]*\(\d+\)/.test(l)).slice(0, 80).join('\n')}`);
   const crash = spawnSync('/bin/sh', ['-c', 'ls -t ~/Library/Logs/DiagnosticReports 2>/dev/null | head -3'], { encoding: 'utf8' });
   console.log('-- crash reports:', crash.stdout);
 }
 
-attempt('allow-default /usr/bin/true', '(version 1)(allow default)', ['/usr/bin/true']);
-attempt('allow-default node', '(version 1)(allow default)', [node, '-e', 'console.log("ok")']);
-attempt('product /usr/bin/true', profile, ['/usr/bin/true']);
-attempt('product node', profile, [node, '-e', 'console.log("ok")']);
-for (const extra of ['(allow file-read*)', '(allow mach-lookup)', '(allow file-read-metadata)', '(allow ipc-posix-shm*)', '(allow iokit-open)', '(allow process-codesigning*)', '(allow file-read*)(allow mach*)(allow ipc*)(allow iokit*)(allow system*)'])
-  attempt('product+' + extra, profile + '\n' + extra, [node, '-e', 'console.log("ok")']);
+const root1 = profile + '
+(allow file-read-data (literal "/"))';
+attempt('root /usr/bin/true', root1, ['/usr/bin/true']);
+attempt('root node', root1, [node, '-e', 'console.log("ok")']);
+attempt('root node ls /', root1, [node, '-e', 'console.log(require("fs").readdirSync("/").join(","))']);
+attempt('root node read outside', root1, [node, '-e', 'try{require("fs").readFileSync("/private/etc/hosts");console.log("READ")}catch(e){console.log(e.code)}']);
+attempt('root git', root1, ['/usr/bin/git', '--version']);
 console.log('PROFILE\n' + profile);
