@@ -14,6 +14,7 @@ import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { spawnedCarrier } from '../packages/carrier/index.ts';
 import { projectRoot } from './process-fixture.ts';
+import { nativeSkip } from './native-platform.ts';
 
 /**
  * A workspace whose session is gone.
@@ -317,69 +318,77 @@ test('deleting the delegating session leaves its descendants workspaces listable
   );
 });
 
-test('orphan maintenance rechecks the live Host file and execution policy', async (t) => {
-  const h = await host(t);
-  const { binding } = await delegatedChild(h, {
-    projectRoot: h.root,
-    parentSessionId: h.sessionId,
-    delete: true,
-  });
-  for (const [method, expectedState] of [
-    ['workspace.archive', 'ready'],
-    ['workspace.remove', 'archived'],
-    ['workspace.restore', 'removed'],
-  ] as const) {
-    // Only the file policy decides: a native default with workspace-write may maintain a worktree (the Host runs
-    // the Git plumbing itself), and a read-only one may not, whichever backend enforces it.
-    for (const [mode, files] of [
-      ['native', 'read-only'],
-      ['host', 'read-only'],
+test(
+  'orphan maintenance rechecks the live Host file and execution policy',
+  { skip: nativeSkip },
+  async (t) => {
+    const h = await host(t);
+    const { binding } = await delegatedChild(h, {
+      projectRoot: h.root,
+      parentSessionId: h.sessionId,
+      delete: true,
+    });
+    for (const [method, expectedState] of [
+      ['workspace.archive', 'ready'],
+      ['workspace.remove', 'archived'],
+      ['workspace.restore', 'removed'],
     ] as const) {
-      h.ctx.defaultSandboxMode = mode;
-      h.ctx.defaultSandboxFiles = files;
-      await assert.rejects(
-        h.dispatch(method, { bindingId: binding.id }),
-        /WORKSPACE_POLICY_UNSUPPORTED/,
-        `${method} under ${mode}/${files}`,
-      );
-      assert.equal(h.store.workspaceById(binding.id)!.state, expectedState);
+      // Only the file policy decides: a native default with workspace-write may maintain a worktree (the Host runs
+      // the Git plumbing itself), and a read-only one may not, whichever backend enforces it.
+      for (const [mode, files] of [
+        ['native', 'read-only'],
+        ['host', 'read-only'],
+      ] as const) {
+        h.ctx.defaultSandboxMode = mode;
+        h.ctx.defaultSandboxFiles = files;
+        await assert.rejects(
+          h.dispatch(method, { bindingId: binding.id }),
+          /WORKSPACE_POLICY_UNSUPPORTED/,
+          `${method} under ${mode}/${files}`,
+        );
+        assert.equal(h.store.workspaceById(binding.id)!.state, expectedState);
+      }
+      h.ctx.defaultSandboxMode = method === 'workspace.remove' ? 'native' : 'host';
+      h.ctx.defaultSandboxFiles = 'workspace-write';
+      await h.dispatch(method, { bindingId: binding.id });
     }
-    h.ctx.defaultSandboxMode = method === 'workspace.remove' ? 'native' : 'host';
-    h.ctx.defaultSandboxFiles = 'workspace-write';
-    await h.dispatch(method, { bindingId: binding.id });
-  }
-  assert.equal(
-    await readFile(path.join(binding.executionRoot, 'made.txt'), 'utf8'),
-    'by the child\n',
-  );
-});
+    assert.equal(
+      await readFile(path.join(binding.executionRoot, 'made.txt'), 'utf8'),
+      'by the child\n',
+    );
+  },
+);
 
-test('session maintenance uses its current selection rather than the Host default', async (t) => {
-  const h = await host(t);
-  const { childId, binding } = await delegatedChild(h, {
-    projectRoot: h.root,
-    parentSessionId: h.sessionId,
-    delete: false,
-  });
-  h.ctx.sessionSandboxes.set(childId, 'native');
-  h.ctx.sessionSandboxFiles.set(childId, 'read-only');
-  await assert.rejects(
-    h.dispatch('workspace.archive', { sessionId: childId }),
-    /WORKSPACE_POLICY_UNSUPPORTED/,
-  );
-  h.ctx.sessionSandboxes.set(childId, 'host');
-  await assert.rejects(
-    h.dispatch('workspace.archive', { sessionId: childId }),
-    /WORKSPACE_POLICY_UNSUPPORTED/,
-  );
-  assert.equal(h.store.workspaceById(binding.id)!.state, 'ready');
-  // The session's own selection wins over a read-only Host default.
-  h.ctx.sessionSandboxes.set(childId, 'native');
-  h.ctx.sessionSandboxFiles.set(childId, 'workspace-write');
-  h.ctx.defaultSandboxFiles = 'read-only';
-  await h.dispatch('workspace.archive', { sessionId: childId });
-  assert.equal(h.store.workspaceById(binding.id)!.state, 'archived');
-});
+test(
+  'session maintenance uses its current selection rather than the Host default',
+  { skip: nativeSkip },
+  async (t) => {
+    const h = await host(t);
+    const { childId, binding } = await delegatedChild(h, {
+      projectRoot: h.root,
+      parentSessionId: h.sessionId,
+      delete: false,
+    });
+    h.ctx.sessionSandboxes.set(childId, 'native');
+    h.ctx.sessionSandboxFiles.set(childId, 'read-only');
+    await assert.rejects(
+      h.dispatch('workspace.archive', { sessionId: childId }),
+      /WORKSPACE_POLICY_UNSUPPORTED/,
+    );
+    h.ctx.sessionSandboxes.set(childId, 'host');
+    await assert.rejects(
+      h.dispatch('workspace.archive', { sessionId: childId }),
+      /WORKSPACE_POLICY_UNSUPPORTED/,
+    );
+    assert.equal(h.store.workspaceById(binding.id)!.state, 'ready');
+    // The session's own selection wins over a read-only Host default.
+    h.ctx.sessionSandboxes.set(childId, 'native');
+    h.ctx.sessionSandboxFiles.set(childId, 'workspace-write');
+    h.ctx.defaultSandboxFiles = 'read-only';
+    await h.dispatch('workspace.archive', { sessionId: childId });
+    assert.equal(h.store.workspaceById(binding.id)!.state, 'archived');
+  },
+);
 
 test('busy Hosts refuse orphan writes while keeping their inventory readable', async (t) => {
   const h = await host(t);

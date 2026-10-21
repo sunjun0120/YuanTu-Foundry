@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { listeningHost, connectClient } from './listening-host-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
+import { nativeSkip } from './native-platform.ts';
 
 test('the Host advertises and echoes the file and network policy it was given', async (t) => {
   const host = await listeningHost(t, { YUANTU_SANDBOX: 'host' });
@@ -106,7 +107,7 @@ test(
 
 test(
   'switching the session sandbox during approval executes the pending command in the new backend',
-  { timeout: 15000 },
+  { timeout: 15000, skip: nativeSkip },
   async (t) => {
     const results: unknown[] = [];
     const systems: string[] = [];
