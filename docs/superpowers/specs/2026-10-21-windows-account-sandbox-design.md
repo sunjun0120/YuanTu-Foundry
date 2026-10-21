@@ -72,17 +72,22 @@ agent-host (桌面用户, Medium)
 - 启动后把自身进程对象 DACL 设为只允许 SYSTEM 和桌面用户（经 broker 传入的 SID），使沙箱子进程无法打开 runner 读内存或注入。
 - 私有桌面：broker 创建 `CreateDesktopW("yuantu-sbx-<account>")`，DACL 授予该账户 logon SID；runner 和子进程都在其中，看不到也操作不了用户桌面窗口。
 - 每条命令：
-  1. 以 runner 自身令牌 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED)`，限制 SID = {工作区 SID（读写模式才加）, 本命令 scratch SID, Everyone, logon SID}。**不降 Low 完整性级别。**默认 DACL 加上这几个限制 SID。
+  1. 以 runner 自身令牌 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)`，**不加任何限制 SID，不降 Low 完整性级别**（spike 结论，见下）。写边界完全由沙箱账户 SID 上的 ACL 决定。
   2. `CreateJobObjectW`（kill-on-close、禁止 breakaway），通过 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在 Job 内创建；`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 只继承三个 std 句柄。
   3. `CreateProcessAsUserW`（受限的自身令牌无需特权）。
   4. 子进程退出后终止 Job 内剩余后代，等活动进程数归零，再把退出码回复给 broker。
 - 取消：broker 转发 `cancel{id}` → runner `TerminateJobObject`。
 
-> **Spike 门槛**：§3.3 第 1 步的令牌组合必须先在 §8 的 spike 中证明 `node --test` 与 vitest 能 fork。若 `WRITE_RESTRICTED` 本身导致 EPERM，则改用**退路方案**：runner 不加受限令牌，直接以沙箱账户令牌创建进程；工作区写权限直接授予沙箱账户 SID；同一账户同一时刻只租给一个工作区（租约冲突时排队或拒绝，提示用户）。本文其余部分不受影响。
+> **Spike 结论（2026-10-21，见 `docs/superpowers/plans/2026-10-21-windows-account-sandbox-phase1-spike.md`）**：`WRITE_RESTRICTED` 本身导致 `spawn EPERM`，与是否降 Low 无关；给默认 DACL 补 Everyone/logon SID 也无效。去掉限制 SID 后（无论是否降 Low）fork 与 `node --test` 均正常。因此采用**退路方案**：
+>
+> - 不使用受限令牌做写隔离；工作区写权限直接授予沙箱账户 SID（§5.1）。
+> - **账户租约**：同一账户的写授权同一时刻只属于一个工作区。工作区 A 的授权在其命令之间保留（不每条命令重做 ACL）；工作区 B 需要该账户时，若 A 没有正在运行的命令，则撤销 A 的授权、授予 B；若 A 有命令在跑，B 的命令排队等待（受命令超时约束），等待时在工具卡片显示“等待沙箱账户（另一个工作区正在使用）”。
+> - 只读模式：该命令不持有写授权，工作区授权中的写 ACE 暂时不授予（若当前已授予给同一工作区的写，则只读命令排队到无写命令运行时，或改为撤销写 ACE 后执行）。v1 采用简单规则：只读命令同样获取租约，并在获取时把工作区 ACE 切换为只读。
+> - 后续如需并发多工作区，再引入账户池（`YuanTuSandboxOffline1..N`），不在本次范围。
 
 ### 3.4 exec
 
-- 参数：`exec --broker <管道名> --request <私有请求文件>`。请求文件位于命令的宿主私有控制目录（沿用现有 AppContainer 后端的做法），内容为 JSON：`{version:1, argv[], cwd, env{}, workspaceRoot, workspaceSid, scratch, files:'read-write'|'read-only', timeoutMs?}`，上限 1 MiB，读后删除。
+- 参数：`exec --broker <管道名> --request <私有请求文件>`。请求文件位于命令的宿主私有控制目录（沿用现有 AppContainer 后端的做法），内容为 JSON：`{version:1, argv[], cwd, env{}, workspaceRoot, scratch, files:'read-write'|'read-only', timeoutMs?}`，上限 1 MiB，读后删除。
 - 连接 broker 后校验服务端：`GetNamedPipeServerProcessId` → 打开进程令牌，用户 SID 必须等于自己的 SID，且镜像路径等于已安装的 `yuantu-sandbox.exe`。
 - 发送请求 + 自己的 PID + 三个 std 句柄值；等待 `{started, pid}`、`{exit, code}` 或 `{error, kind, message}`。
 - 以子进程退出码退出；broker 断开或出错时向 stderr 打印 `SANDBOX_LAUNCH_FAILED_PREFIX` 前缀的一行（复用 `sandbox-launch-failure.ts` 的识别）并以 `125` 退出。
@@ -123,10 +128,10 @@ agent-host (桌面用户, Medium)
 
 ### 5.1 写
 
-- 沿用现有 `acl.ps1` 的日志化授权、租约、恢复（`sandbox-recover`）机制。`windows-account` 授权时对工作区根同时授予：沙箱账户 SID（读 + 写）、工作区 SID（写，限制 SID 检查用）。两个账户都授予（同一工作区可能先后跑离线/联网命令）。
-- scratch：每条命令一个目录，授予两账户 + scratch SID，命令结束删除。
+- 沿用现有 `acl.ps1` 的日志化授权、恢复（`sandbox-recover`）机制，授权对象为沙箱账户 SID（读 + 写，或只读）。按 §3.3 的账户租约切换；离线与联网是两个独立账户、各自一份租约。
+- scratch：每条命令一个目录，授予该命令所用账户（读写），命令结束删除。
 - 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）保持现有保护，并对两个账户 SID 加显式拒绝写入 ACE。
-- 只读模式：限制 SID 中不含工作区 SID，因此工作区不可写；scratch 可写。
+- 只读模式：工作区 ACE 为只读；scratch 可写。
 
 ### 5.2 读白名单
 
