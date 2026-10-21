@@ -33,6 +33,5 @@ attempt('allow-default node', '(version 1)(allow default)', [node, '-e', 'consol
 attempt('product /usr/bin/true', profile, ['/usr/bin/true']);
 attempt('product node', profile, [node, '-e', 'console.log("ok")']);
 for (const extra of ['(allow file-read*)', '(allow mach-lookup)', '(allow file-read-metadata)', '(allow ipc-posix-shm*)', '(allow iokit-open)', '(allow process-codesigning*)', '(allow file-read*)(allow mach*)(allow ipc*)(allow iokit*)(allow system*)'])
-  attempt('product+' + extra, profile + '
-' + extra, [node, '-e', 'console.log("ok")']);
+  attempt('product+' + extra, profile + '\n' + extra, [node, '-e', 'console.log("ok")']);
 console.log('PROFILE\n' + profile);
