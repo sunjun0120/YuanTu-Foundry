@@ -222,6 +222,25 @@ fn policy() -> Result<Policy> {
     Ok(Policy(handle))
 }
 
+/// A SID parsed from text, freed on drop.
+pub struct ParsedSid(pub PSID);
+impl Drop for ParsedSid {
+    fn drop(&mut self) {
+        unsafe {
+            LocalFree(self.0 as _);
+        }
+    }
+}
+
+pub fn parse_sid(text: &str) -> Result<ParsedSid> {
+    let mut parsed = null_mut();
+    win(
+        unsafe { ConvertStringSidToSidW(wide(text)?.as_ptr(), &mut parsed) },
+        "Parse account SID",
+    )?;
+    Ok(ParsedSid(parsed))
+}
+
 fn with_sid<T>(sid: &str, use_sid: impl FnOnce(PSID) -> Result<T>) -> Result<T> {
     let mut parsed = null_mut();
     win(

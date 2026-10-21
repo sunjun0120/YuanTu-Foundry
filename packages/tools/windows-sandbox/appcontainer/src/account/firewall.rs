@@ -204,10 +204,7 @@ fn check(offline_sid: &str) -> std::result::Result<(), String> {
         .map_err(|e| format!("provider: {e}"))?;
     verify_security(&engine, &SUBLAYER, FwpmSubLayerGetSecurityInfoByKey0)
         .map_err(|e| format!("sublayer: {e}"))?;
-    let expected = user_condition(offline_sid)?;
-    let expected_length = unsafe { GetSecurityDescriptorLength(expected.0) } as usize;
-    let expected_bytes =
-        unsafe { std::slice::from_raw_parts(expected.0 as *const u8, expected_length) };
+    let offline = crate::account::users::parse_sid(offline_sid)?;
     for (index, layer) in LAYERS.iter().enumerate() {
         verify_security(&engine, &key(index), FwpmFilterGetSecurityInfoByKey0)
             .map_err(|e| format!("filter {index}: {e}"))?;
@@ -239,8 +236,9 @@ fn check(offline_sid: &str) -> std::result::Result<(), String> {
             return Err("condition field/match/type differs".to_string());
         }
         let blob = unsafe { &*condition.conditionValue.Anonymous.sd };
-        let actual = unsafe { std::slice::from_raw_parts(blob.data, blob.size as usize) };
-        if actual != expected_bytes {
+        if blob.data.is_null()
+            || !grants_only_match_to(blob.data as PSECURITY_DESCRIPTOR, offline.0)
+        {
             return Err(format!(
                 "condition descriptor differs: {}",
                 crate::network::security_text(blob.data as _).unwrap_or_default()
@@ -250,12 +248,44 @@ fn check(offline_sid: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Whether a condition descriptor is a single allow ACE granting `FWP_ACTRL_MATCH_FILTER` to `sid` — compared by
+/// meaning, since WFP may store a normalized copy of the descriptor it was given.
+fn grants_only_match_to(
+    descriptor: PSECURITY_DESCRIPTOR,
+    sid: windows_sys::Win32::Security::PSID,
+) -> bool {
+    let (mut present, mut defaulted, mut dacl) = (0, 0, null_mut());
+    if unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) }
+        == 0
+        || present == 0
+        || dacl.is_null()
+        || unsafe { (*dacl).AceCount } != 1
+    {
+        return false;
+    }
+    let mut ace = null_mut();
+    if unsafe { GetAce(dacl, 0, &mut ace) } == 0 {
+        return false;
+    }
+    let header = unsafe { &*(ace as *const ACE_HEADER) };
+    if header.AceType != 0 {
+        return false;
+    }
+    let allow = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
+    allow.Mask == 0x1 && unsafe { EqualSid(&allow.SidStart as *const u32 as _, sid) } != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn condition_grants_only_the_match_right_to_the_offline_account() {
+        let built = user_condition("S-1-5-21-1-2-3-1001").unwrap();
+        let sid = crate::account::users::parse_sid("S-1-5-21-1-2-3-1001").unwrap();
+        assert!(grants_only_match_to(built.0, sid.0));
+        let other = crate::account::users::parse_sid("S-1-5-21-1-2-3-1002").unwrap();
+        assert!(!grants_only_match_to(built.0, other.0));
         assert_eq!(
             user_condition_sddl("S-1-5-21-1-2-3-1001"),
             "O:SYD:(A;;CC;;;S-1-5-21-1-2-3-1001)"
