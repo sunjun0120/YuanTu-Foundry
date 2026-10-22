@@ -47,7 +47,15 @@ jobs:
           $result = & node scripts/run-tests.mjs tests/sandbox-account-native.test.ts
           $exit = $LASTEXITCODE
           $result | Write-Output
-          if ($exit -ne 0) { throw "Account provider acceptance failed ($exit)" }
+          if ($exit -ne 0) {
+            $log = Get-ChildItem .scratch/test-logs/*sandbox-account-native*.log -ErrorAction SilentlyContinue | Select-Object -Last 1
+            if ($log) {
+              $detail = (Get-Content $log.FullName | Select-Object -Last 80) -join "`n"
+              $detail = $detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+              Write-Output "::error title=TS account acceptance::$detail"
+            }
+            throw "Account provider acceptance failed ($exit)"
+          }
           if (($result -join "`n") -notmatch 'tests=1 pass=1 fail=0 skip=0') {
             throw 'Account provider acceptance must run one test with no skips'
           }

@@ -5,8 +5,8 @@
  *
  * It changes machine state (local accounts, logon rights, firewall filters), so it runs only where that is the
  * point — a disposable elevated GitHub Actions machine that sets FOUNDRY_TEST_WINDOWS_ACCOUNT_ACCEPTANCE=1.
- * The test harness deliberately strips YUANTU_* settings; the test enables the helper's debug provisioning
- * flag only at its explicit exec boundary and removes everything afterwards.
+ * The test harness deliberately strips YUANTU_* settings; the helper is invoked through the same `account-setup`
+ * / `account-uninstall` entries the desktop uses, and everything is removed afterwards.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -40,6 +40,17 @@ const skip =
         : false;
 
 const exec = promisify(execFile);
+
+/** Failure details as a run annotation: the job log needs authentication, annotations do not. */
+function annotate(title: string, message: string): void {
+  if (process.env.GITHUB_ACTIONS !== 'true') return;
+  const text = message
+    .slice(0, 3500)
+    .replaceAll('%', '%25')
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A');
+  console.log(`::error title=${title.replaceAll(':', '%3A').replaceAll(',', '%2C')}::${text}`);
+}
 
 async function run(plan: SandboxPlan): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
@@ -89,16 +100,45 @@ test(
     const state = await tempRoot(t, 'yuantu-account-native-');
     configureAccountBackend({ helper, state });
     const env = { ...process.env };
-    await exec(helper, ['account-setup'], { env });
     t.after(async () => {
       await stopBrokers();
-      await exec(helper, ['account-uninstall'], { env });
+      try {
+        await exec(helper, ['account-uninstall'], { env });
+      } catch (error) {
+        const failure = error as { stdout?: string; stderr?: string; message: string };
+        annotate(
+          'account-uninstall',
+          `${failure.message}\n${failure.stdout ?? ''}\n${failure.stderr ?? ''}`,
+        );
+        throw error;
+      }
     });
+    try {
+      const setup = await exec(helper, ['account-setup'], { env });
+      console.log(`account-setup: ${setup.stdout}`);
+    } catch (error) {
+      const failure = error as { stdout?: string; stderr?: string; message: string };
+      annotate(
+        'account-setup',
+        `${failure.message}\n${failure.stdout ?? ''}\n${failure.stderr ?? ''}`,
+      );
+      throw error;
+    }
     // The accounts must be able to run the helper and node (outside any workspace grant on a CI machine).
     for (const directory of [path.dirname(helper), path.dirname(process.execPath)])
       await exec('icacls', [directory, '/grant', 'YuanTuSandboxUsers:(OI)(CI)RX']);
 
     const ready = await refreshAccountReadiness();
+    if (!ready?.ready) {
+      const verify = await exec(helper, ['account-status', '--verify'], { env }).catch(
+        (error: unknown) => error as { stdout?: string; stderr?: string; message: string },
+      );
+      const verifyText = 'message' in verify ? verify.message : verify.stdout;
+      annotate(
+        'account-status after setup',
+        `${JSON.stringify(ready)}\n${verifyText}\n${verify.stderr ?? ''}`,
+      );
+    }
     assert.equal(ready?.ready, true, JSON.stringify(ready));
     assert.equal(nativeSandboxBackend('win32'), 'windows-account');
 
