@@ -139,6 +139,9 @@ jobs:
           cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml
           node scripts/run-tests.mjs tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts tests/native-git-native.test.ts
       - run: npm run build
+      # Electron's lazy installation writes into node_modules, outside an isolated test worker's ownership.
+      - name: Prepare Electron before isolated desktop tests
+        run: node node_modules/electron/install.js
       - name: Windows desktop basic sandbox real acceptance without skips
         run: node scripts/check-windows-sandbox.mjs --desktop
       - run: npm run smoke:desktop

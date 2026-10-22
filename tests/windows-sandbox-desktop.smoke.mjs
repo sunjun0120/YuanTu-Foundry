@@ -12,6 +12,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
+import { verificationNudge } from './desktop-smoke-support.mjs';
 import { quoteWindowsArgument } from '../packages/tools/sandbox-windows.ts';
 
 const execute = promisify(execFile);
@@ -66,6 +67,10 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
         response.end('{"data":[]}');
         return;
       }
+      if (verificationNudge(body)) {
+        sendFrames(response, frames('desktop command settled'));
+        return;
+      }
       const last = body.messages.at(-1);
       for (const block of Array.isArray(last?.content) ? last.content : []) {
         if (block.type === 'tool_result') receipts.set(block.tool_use_id, block);
@@ -74,13 +79,12 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
         role: last?.role,
         types: Array.isArray(last?.content) ? last.content.map((b) => b.type) : 'text',
       });
-      const prompt =
+      // Skill/runtime context can accompany the user's command in a separate text block.
+      const texts =
         typeof last?.content === 'string'
-          ? last.content
-          : last?.content
-              ?.filter((b) => b.type === 'text')
-              .map((b) => b.text)
-              .join('');
+          ? [last.content]
+          : (last?.content?.filter((b) => b.type === 'text').map((b) => b.text) ?? []);
+      const prompt = texts.findLast((text) => Object.hasOwn(commands, text));
       // A restored cancelled call may be bundled with the new user's text.
       if (
         !commands[prompt] &&
@@ -90,7 +94,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
         sendFrames(response, frames('desktop command settled'));
         return;
       }
-      assert.ok(commands[prompt], `Unexpected model prompt: ${prompt}`);
+      assert.ok(commands[prompt], `Unexpected model prompt: ${texts.join('\n')}`);
       sendFrames(
         response,
         frames('', [
@@ -220,7 +224,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
         `${quoteWindowsArgument(process.execPath)} ${quoteWindowsArgument(probe)} ${quoteWindowsArgument(token)}`;
       const toolId = await send(page, 'verify basic');
       const receipt = await eventually(() => receipts.get(toolId));
-      assert.notEqual(receipt.is_error, true);
+      assert.notEqual(receipt.is_error, true, JSON.stringify(receipt));
       const text =
         typeof receipt.content === 'string'
           ? receipt.content
@@ -240,8 +244,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
       assert.equal(await readFile(path.join(outside, 'canary'), 'utf8'), 'unchanged');
       await assert.rejects(readFile(path.join(outside, 'forbidden')), { code: 'ENOENT' });
     };
-    let page = await launch();
-    for (const preset of ['observe', 'guarded']) {
+    const choosePreset = async (page, preset) => {
       await page.locator('#permission-trigger').click();
       await page.locator(`#permission-menu [data-preset="${preset}"]`).click();
       await page.waitForFunction(
@@ -250,7 +253,9 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
           !document.querySelector('#permission-mode').disabled,
         preset,
       );
-    }
+    };
+    let page = await launch();
+    for (const preset of ['observe', 'guarded']) await choosePreset(page, preset);
     const choice = await page.evaluate(() => window.yuantu.presets({ type: 'get' }));
     assert.equal(choice.ok, true);
     assert.equal(choice.view.current, 'guarded');
@@ -276,7 +281,9 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     await assertRestored();
     page = await launch();
     assert.equal((await snapshot(page)).session.sessionId, sessionId);
-    assert.equal(await page.locator('#permission-mode').inputValue(), 'guarded');
+    // Session choices last for this window's lifetime; restarting restores the session at the auto default.
+    assert.equal(await page.locator('#permission-mode').inputValue(), 'auto');
+    await choosePreset(page, 'guarded');
     await rm(path.join(root, 'descendant.pid'));
     await send(page, 'wait for exit');
     const exitedPid = await readPid();
@@ -287,6 +294,8 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     await assertRestored();
     page = await launch();
     assert.equal((await snapshot(page)).session.sessionId, sessionId);
+    assert.equal(await page.locator('#permission-mode').inputValue(), 'auto');
+    await choosePreset(page, 'guarded');
     await verify(page);
     await app.close();
     app = undefined;
