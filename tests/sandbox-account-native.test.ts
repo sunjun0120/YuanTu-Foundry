@@ -1,4 +1,5 @@
 // @test-serial windows-sandbox: Creates and removes the machine's sandbox accounts, group and WFP filters.
+// @test-serial real-pty: Opens a terminal on the account runner through node-pty.
 /**
  * The sandbox account backend through the TypeScript provider, on a real machine: initialization, workspace
  * grants, the broker, and the runner, as a Host would drive them.
