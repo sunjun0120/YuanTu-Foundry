@@ -35,23 +35,36 @@ const SYSTEM_LOGON: LUID = LUID {
     HighPart: 0,
 };
 
-/// Terminates every process whose token user is one of `sids`, then waits until no logon session of those users
-/// remains. Fails when either is still there at `deadline`; the caller keeps the protections in place.
+/// How long a logon session may outlive the last sandbox process before uninstall goes on without it.
+const LOGON_GRACE: Duration = Duration::from_secs(3);
+
+/// Terminates every process whose token user is one of `sids`, then gives their logon sessions a short grace to end.
+/// Fails when a process is still running at `deadline`; the caller keeps the protections in place.
+///
+/// A session that outlives every process is reported, not fatal. Unlike Codex, nothing of ours keeps a sandbox token
+/// without a process: the broker holds only the password, so such a session is held by a system service (seclogon or
+/// the profile service unloading the profile `LOGON_WITH_PROFILE` loaded), runs no code, and the disabled account
+/// cannot start another. Real acceptance run 39749426970 showed one surviving well past every process.
 pub fn stop(sids: &[String], deadline: Duration) -> Result<()> {
-    stop_where(
+    if let Some(lingering) = stop_where(
         |_, sid| sids.iter().any(|known| known == sid),
         sids,
         deadline,
-    )
+    )? {
+        eprintln!("A sandbox logon remains without any process ({lingering}); continuing");
+    }
+    Ok(())
 }
 
-/// `select(pid, user_sid)` picks the processes to terminate; `logons` are the users whose sessions must be gone.
+/// `select(pid, user_sid)` picks the processes to terminate; `logons` are the users whose sessions are waited for.
+/// Returns the logon session still present after the grace, if any.
 fn stop_where(
     select: impl Fn(u32, &str) -> bool,
     logons: &[String],
     deadline: Duration,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let deadline = Instant::now() + deadline;
+    let mut grace_end: Option<Instant> = None;
     loop {
         let processes = selected(&select)?;
         for process in &processes {
@@ -71,20 +84,17 @@ fn stop_where(
                 return Err("A sandbox process did not exit before the uninstall deadline".into());
             }
         }
-        // A runner may start a child between two snapshots, and a token can outlive its process: only an empty
-        // snapshot with no remaining logon session ends the wait.
-        let blocker = if processes.is_empty() {
+        // A runner may start a child between two snapshots: only an empty snapshot ends the process wait.
+        if processes.is_empty() {
+            let now = Instant::now();
+            let grace_end = *grace_end.get_or_insert_with(|| (now + LOGON_GRACE).min(deadline));
             match blocking_logon(logons)? {
-                None => return Ok(()),
-                Some(blocker) => blocker,
+                None => return Ok(None),
+                Some(lingering) if now >= grace_end => return Ok(Some(lingering)),
+                Some(_) => {}
             }
-        } else {
-            "processes were still starting".to_string()
-        };
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "Sandbox processes or logons remain after the uninstall deadline: {blocker}"
-            ));
+        } else if Instant::now() >= deadline {
+            return Err("Sandbox processes kept starting until the uninstall deadline".into());
         }
         std::thread::sleep(
             Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
@@ -280,6 +290,26 @@ mod tests {
         // Reading another user's session data needs administrator rights, which uninstall always has.
         match blocking_logon(&["S-1-5-21-1-2-3-999999".into()]) {
             Ok(blocker) => assert_eq!(blocker, None),
+            Err(error) => {
+                eprintln!("not elevated, cannot read other logon sessions ({error}); skipping")
+            }
+        }
+    }
+
+    #[test]
+    fn a_logon_without_processes_is_reported_after_the_grace_not_fatal() {
+        // The test user certainly has a logon session; nothing is selected, so only the session remains.
+        let me = crate::account::credentials::current_user_sid().unwrap();
+        let started = Instant::now();
+        match stop_where(|_, _| false, &[me], Duration::from_secs(10)) {
+            Ok(lingering) => {
+                assert!(
+                    lingering.is_some(),
+                    "the test user's own logon was not seen"
+                );
+                assert!(started.elapsed() >= LOGON_GRACE);
+                assert!(started.elapsed() < Duration::from_secs(10));
+            }
             Err(error) => {
                 eprintln!("not elevated, cannot read other logon sessions ({error}); skipping")
             }

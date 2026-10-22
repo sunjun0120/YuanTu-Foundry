@@ -123,11 +123,11 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 卸载的提权部分按以下顺序，任何一步之前都不移除保护：
 
 1. 禁用存在的沙箱账户（`UF_ACCOUNTDISABLE`），阻止新的登录；
-2. 结束这两个账户的全部进程（快照后从进程令牌复核 SID，防 PID 复用），并等它们的登录会话全部退出，上限 10 秒；
+2. 结束这两个账户的全部进程（快照后从进程令牌复核 SID，防 PID 复用），上限 10 秒；进程清空后给登录会话 3 秒宽限。仍存在的会话只记警告、不阻止卸载：我们没有任何组件在无进程时持有沙箱令牌（broker 只持有密码），这样的会话由系统服务（seclogon、卸载 `LOGON_WITH_PROFILE` 加载的配置文件的用户配置文件服务）持有，不运行代码，且账户已禁用、无法再登录。真实账户 run `39749426970` 观察到会话在所有进程结束后仍长时间存在。这一点有意不同于 Codex（它把残留会话视为阻塞）；
 3. 删除离线账户的 WFP 过滤；
 4. 删除账户、登录权限、隐藏项与组。
 
-第 1–2 步失败时恢复账户原标志并返回错误，WFP 与账户保持原样。初始化遇到已存在但被禁用的账户（中断的卸载）会重新启用。参照 Codex `setup_mutex.rs`、`uninstall_windows/processes.rs`（不含它为 SYSTEM 清理服务保留的登录）。
+第 1–2 步失败时恢复账户原标志并返回错误，WFP 与账户保持原样。初始化遇到已存在但被禁用的账户（中断的卸载）会重新启用。参照 Codex `setup_mutex.rs`、`uninstall_windows/processes.rs`（不含它为 SYSTEM 清理服务保留的登录，残留会话处理见第 2 步）。
 
 ### 4.2 用户入口（`account-setup` / `account-uninstall`）
 
@@ -212,7 +212,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 | 凭据解密失败或 logon 失败（密码被外部改动）              | 标记“需要修复”，提示重新初始化（会重设密码）                                                           |
 | 标记仍有效但账户/WFP 被外部删除                          | 命令失败时提示去设置页修复或重新初始化；`account-status --verify` 给出真实问题码                       |
 | runner 启动失败（seclogon 停止、密码失效等）             | exec 输出 launch-failed 前缀行，退出 125；错误提示去设置页修复或重新初始化                             |
-| 卸载时沙箱账户仍有进程或登录会话未在期限内退出           | 卸载失败，恢复账户标志，WFP 与账户保留；提示稍后重试                                                   |
+| 卸载时沙箱账户仍有进程未在期限内退出                     | 卸载失败，恢复账户标志，WFP 与账户保留；提示稍后重试                                                   |
 | runner 崩溃                                              | 进行中命令 `runner-lost`；下次请求重启 runner                                                          |
 | 工作区租约冲突                                           | 沿用现有提示（另一个 Host 持有租约等），在审批前检查                                                   |
 | ACL 恢复冲突                                             | 沿用现有日志保留与 `sandbox-recover`                                                                   |
