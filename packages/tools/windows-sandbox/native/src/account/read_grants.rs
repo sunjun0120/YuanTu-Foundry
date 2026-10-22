@@ -323,25 +323,54 @@ fn group_aces(acl: *mut ACL, group: &Sid) -> Result<Vec<u32>> {
     }
     Ok(rights)
 }
-fn apply_acl(object: &Object, acl: *const ACL, original: &Descriptor) -> Result<()> {
+fn apply_acl(
+    object: &Object,
+    acl: *const ACL,
+    original: &Descriptor,
+    propagate: bool,
+) -> Result<()> {
+    let (mut control, mut revision) = (0, 0);
+    win(
+        unsafe { GetSecurityDescriptorControl(original.pointer(), &mut control, &mut revision) },
+        "Read allowlist inheritance",
+    )?;
+    if propagate {
+        // Only the auto-inheritance API re-derives the inherited ACEs of existing children: that is how an
+        // inheritable root grant reaches files that were there before the refresh, and how its revoke clears them.
+        // It walks the whole subtree, so the per-object snapshot writes below stay on the plain handle write.
+        let protection = if control & SE_DACL_PROTECTED != 0 {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+        let status = unsafe {
+            SetSecurityInfo(
+                object.handle.0,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | protection,
+                null_mut(),
+                null_mut(),
+                acl,
+                null(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(format!(
+                "Apply inheritable allowlist permissions: Windows error {status}"
+            ));
+        }
+        return Ok(());
+    }
     let mut updated = SECURITY_DESCRIPTOR::default();
     win(
         unsafe {
-            InitializeSecurityDescriptor(
-                &mut updated as *mut _ as _,
-                SECURITY_DESCRIPTOR_REVISION,
-            )
+            InitializeSecurityDescriptor(&mut updated as *mut _ as _, SECURITY_DESCRIPTOR_REVISION)
         },
         "Initialize allowlist descriptor",
     )?;
     win(
         unsafe { SetSecurityDescriptorDacl(&mut updated as *mut _ as _, 1, acl as *mut ACL, 0) },
         "Set allowlist DACL",
-    )?;
-    let (mut control, mut revision) = (0, 0);
-    win(
-        unsafe { GetSecurityDescriptorControl(original.pointer(), &mut control, &mut revision) },
-        "Read allowlist inheritance",
     )?;
     win(
         unsafe {
@@ -353,8 +382,6 @@ fn apply_acl(object: &Object, acl: *const ACL, original: &Descriptor) -> Result<
         },
         "Preserve allowlist inheritance",
     )?;
-    // A handle-based DACL write on a directory also propagates its inheritable ACEs to existing children, which is
-    // how an inherited grant reaches files that were there before the refresh.
     win(
         unsafe {
             SetKernelObjectSecurity(
@@ -368,13 +395,7 @@ fn apply_acl(object: &Object, acl: *const ACL, original: &Descriptor) -> Result<
 }
 /// Adds one explicit ACE for the group. `inheritance` 0 is the snapshot shape: a credential subtree created later
 /// must never become readable just because an ancestor was granted.
-fn add_ace(
-    object: &Object,
-    group: &Sid,
-    rights: u32,
-    inheritance: u32,
-    deny: bool,
-) -> Result<()> {
+fn add_ace(object: &Object, group: &Sid, rights: u32, inheritance: u32, deny: bool) -> Result<()> {
     let original = descriptor(object)?;
     let acl = original.dacl()?;
     let entry = EXPLICIT_ACCESS_W {
@@ -393,7 +414,7 @@ fn add_ace(
     if status != ERROR_SUCCESS {
         return Err("Merge allowlist permissions failed".into());
     }
-    let result = apply_acl(object, merged, &original);
+    let result = apply_acl(object, merged, &original, inheritance != 0);
     unsafe { LocalFree(merged as _) };
     result
 }
@@ -409,6 +430,7 @@ fn remove_aces(object: &Object, group: &Sid, remove_denies: bool) -> Result<()> 
         unsafe { InitializeAcl(merged, (filtered.len() * 4) as u32, 2) },
         "Initialize revoked allowlist ACL",
     )?;
+    let mut propagate = false;
     for index in 0..unsafe { (*acl).AceCount } as u32 {
         let mut ace = null_mut();
         win(
@@ -426,6 +448,9 @@ fn remove_aces(object: &Object, group: &Sid, remove_denies: bool) -> Result<()> 
                 )
             } != 0;
         if ours {
+            // Withdrawing an inheritable ACE must also clear the copies its children inherited.
+            propagate |= header.AceFlags as u32 & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) != 0
+                && header.AceFlags as u32 & INHERITED_ACE_FLAG == 0;
             continue;
         }
         win(
@@ -433,7 +458,7 @@ fn remove_aces(object: &Object, group: &Sid, remove_denies: bool) -> Result<()> 
             "Preserve other allowlist ACEs",
         )?;
     }
-    apply_acl(object, merged, &original)
+    apply_acl(object, merged, &original, propagate)
 }
 
 /// Who owns a read root: the automatic discovery, or a path the user added.
@@ -511,7 +536,8 @@ fn recorded(entry: &Entry) -> Result<Option<Object>> {
     };
     if raw == INVALID_HANDLE_VALUE {
         let error = unsafe { GetLastError() };
-        if error == ERROR_FILE_NOT_FOUND {
+        // NTFS answers a file id that no longer exists with ERROR_INVALID_PARAMETER, not ERROR_FILE_NOT_FOUND.
+        if error == ERROR_FILE_NOT_FOUND || error == ERROR_INVALID_PARAMETER {
             return Ok(None);
         }
         return Err(format!(
@@ -686,6 +712,13 @@ pub(crate) fn grant_snapshot_locked(
     journal: &mut Journal,
     journal_path: &Path,
 ) -> Result<()> {
+    if journal
+        .grants
+        .iter()
+        .any(|g| g.group == group && g.mode == Mode::Inherit && under(&key(root), &key(&g.root)))
+    {
+        return Err("Path is already readable through an automatic read root".into());
+    }
     let existing = journal.grants.iter().position(|g| {
         g.group == group && g.mode == Mode::Snapshot && under(&key(root), &key(&g.root))
     });
@@ -749,7 +782,14 @@ pub(crate) fn grant_at(
 ) -> Result<()> {
     let _lock = journal_lock(journal_path)?;
     let mut journal = load(journal_path)?;
-    grant_snapshot_locked(root, profile, group, Source::User, &mut journal, journal_path)
+    grant_snapshot_locked(
+        root,
+        profile,
+        group,
+        Source::User,
+        &mut journal,
+        journal_path,
+    )
 }
 
 /// One inheritable RX ACE on a discovered toolchain root. Answers `false` when a broad group can already read it,
@@ -788,7 +828,13 @@ pub(crate) fn grant_inherit_locked(
     record_inherit_root(root, group, &object, journal)?;
     save(journal_path, journal)?; // durable intent BEFORE the ACL change
     add_ace(&object, &group_sid, READ_EXECUTE, inherit, false)?;
-    grant_metadata_at(root, profile, group, &metadata_path()?)?;
+    // The traverse journal sits beside the read journal (`metadata_path`), so a test's journals stay together.
+    grant_metadata_at(
+        root,
+        profile,
+        group,
+        &journal_path.with_file_name("traverse-grants.json"),
+    )?;
     Ok(true)
 }
 
@@ -799,15 +845,16 @@ fn record_inherit_root(
     journal: &mut Journal,
 ) -> Result<()> {
     let entry = entry(object)?;
-    match journal
-        .grants
-        .iter_mut()
-        .find(|grant| {
-            grant.group == group && grant.mode == Mode::Inherit && key(&grant.root) == key(root)
-        }) {
+    match journal.grants.iter_mut().find(|grant| {
+        grant.group == group && grant.mode == Mode::Inherit && key(&grant.root) == key(root)
+    }) {
         Some(grant) => {
             // A recreated root has a new identity, and the denials recorded for the old one no longer apply.
-            if grant.entries.first().is_none_or(|known| !same_object(known, &entry)) {
+            if grant
+                .entries
+                .first()
+                .is_none_or(|known| !same_object(known, &entry))
+            {
                 grant.entries = vec![entry];
                 grant.guards.clear();
             }
@@ -841,7 +888,10 @@ fn broadly_readable(acl: *mut ACL) -> Result<bool> {
 /// The credential files `guard_credentials_locked` denies under one root: the fixed relative paths, plus the
 /// distinctive names wherever they appear inside the root.
 fn guard_paths(root: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = CREDENTIAL_FILES.iter().map(|name| root.join(name)).collect();
+    let mut paths: Vec<PathBuf> = CREDENTIAL_FILES
+        .iter()
+        .map(|name| root.join(name))
+        .collect();
     paths.extend(CREDENTIAL_NAMES.iter().map(|name| root.join(name)));
     paths.sort();
     paths.dedup();
@@ -862,9 +912,7 @@ pub(crate) fn guard_credentials_locked(
         Ok(()) => Ok(()),
         Err(error) => {
             let index = journal.grants.iter().position(|grant| {
-                grant.group == group
-                    && grant.mode == Mode::Inherit
-                    && key(&grant.root) == key(root)
+                grant.group == group && grant.mode == Mode::Inherit && key(&grant.root) == key(root)
             });
             if let Some(index) = index {
                 if let Err(withdraw) = revoke_inherit_locked(index, group, journal, journal_path) {
@@ -890,8 +938,13 @@ fn guard_credentials_inner(
     let mut additions: Vec<Entry> = Vec::new();
     let mut objects: Vec<Object> = Vec::new();
     for path in guard_paths(root) {
-        if !path.is_file() {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
             continue;
+        };
+        // Anything else under a credential name (a directory, a link) cannot take a file denial, and whatever it
+        // holds would stay readable through the root's inheritance.
+        if !meta.is_file() {
+            return Err("Credential path is not a regular file".into());
         }
         let object = guarded(&path)?;
         let descriptor = descriptor(&object)?;
@@ -948,7 +1001,10 @@ pub(crate) fn revoke_inherit_locked(
     let group_sid = sid(group)?;
     let inherit = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
     let grant = &journal.grants[index];
-    let root_entry = grant.entries.first().ok_or("Read root record is incomplete")?;
+    let root_entry = grant
+        .entries
+        .first()
+        .ok_or("Read root record is incomplete")?;
     let root_object = recorded(root_entry)?;
     if let Some(object) = &root_object {
         let aces = explicit_aces(group_ace_list(descriptor(object)?.dacl()?, &group_sid)?);
@@ -1054,7 +1110,13 @@ pub(crate) fn revoke_at(
     if journal.grants[index].source == Source::Auto {
         return Err("Automatic read roots are managed by refresh".into());
     }
-    revoke_snapshot_locked(index, &sid(group)?, READ_EXECUTE, &mut journal, journal_path)
+    revoke_snapshot_locked(
+        index,
+        &sid(group)?,
+        READ_EXECUTE,
+        &mut journal,
+        journal_path,
+    )
 }
 
 pub(crate) fn journal_path() -> Result<PathBuf> {
@@ -1226,6 +1288,41 @@ pub(crate) fn may_change_dacl(path: &Path) -> bool {
     open_object(path).is_ok()
 }
 
+/// Gives a test directory the DACL of a real `%USERPROFILE%`: protected, and only SYSTEM, Administrators and the
+/// desktop user, all inheritable. Without it the directory inherits whatever its drive grants, and a data drive
+/// that lets `Users` read everything makes every root look broadly readable, so no grant is ever made.
+#[cfg(test)]
+pub(crate) fn make_profile_like(path: &Path) {
+    let sddl = format!(
+        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{})",
+        super::super::credentials::current_user_sid().unwrap()
+    );
+    let mut descriptor = null_mut();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide(&sddl).unwrap().as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            null_mut(),
+        );
+    }
+    let (mut present, mut defaulted, mut dacl) = (0, 0, null_mut());
+    unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) };
+    // A token that may not write DACLs fails here; the tests check `may_change_dacl` and skip.
+    unsafe {
+        SetNamedSecurityInfoW(
+            wide(path.to_str().unwrap()).unwrap().as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            dacl,
+            null(),
+        );
+        LocalFree(descriptor);
+    }
+}
+
 /// Every journaled read root. An unreadable journal is an empty answer here: `audit` is what reports it.
 pub fn read_roots() -> Result<Vec<ReadRootView>> {
     Ok(load(&journal_path()?)?
@@ -1276,7 +1373,8 @@ pub fn audit(group: &str, accounts: &[String]) -> Result<()> {
                     let Some(object) = recorded(guard)? else {
                         continue;
                     };
-                    let aces = explicit_aces(group_ace_list(descriptor(&object)?.dacl()?, &group_sid)?);
+                    let aces =
+                        explicit_aces(group_ace_list(descriptor(&object)?.dacl()?, &group_sid)?);
                     if !aces.iter().any(|(allowed, mask, flags)| {
                         !*allowed && *mask & READ_EXECUTE == READ_EXECUTE && *flags == 0
                     }) {
@@ -1293,7 +1391,9 @@ pub fn audit(group: &str, accounts: &[String]) -> Result<()> {
                     }
                     for account in accounts {
                         if !group_aces(descriptor.dacl()?, &sid(account)?)?.is_empty() {
-                            return Err("Read allowlist must not grant an account SID directly".into());
+                            return Err(
+                                "Read allowlist must not grant an account SID directly".into()
+                            );
                         }
                     }
                 }
@@ -1397,6 +1497,7 @@ mod tests {
             .join(format!("read-grants-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
+        make_profile_like(&root);
         root
     }
 
@@ -1423,11 +1524,7 @@ mod tests {
         assert!(text.contains(r#""source":"user""#), "{text}");
         assert!(text.contains(r#""mode":"snapshot""#), "{text}");
         // Unknown fields stay refused in either version.
-        std::fs::write(
-            &path,
-            br#"{"version":2,"grants":[],"path":"C:\\Windows"}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, br#"{"version":2,"grants":[],"path":"C:\\Windows"}"#).unwrap();
         assert!(load(&path).is_err());
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -1451,7 +1548,10 @@ mod tests {
         assert_eq!(grants.len(), 1, "{grants:?}");
         let (kind, flags, mask) = grants[0];
         assert_eq!(kind, 0);
-        assert_eq!(flags as u32 & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE), OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE);
+        assert_eq!(
+            flags as u32 & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE),
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+        );
         assert_eq!(mask, READ_EXECUTE);
         // Existing children inherit the ACE, and so do files created afterwards without another refresh.
         assert!(!group_grants(&root.join("bin/tool.cmd"), group).is_empty());
@@ -1497,8 +1597,8 @@ mod tests {
         )
         .unwrap();
         let mut journal = load(&journal_path).unwrap();
-        let error = grant_inherit_locked(&root, &profile, group, &mut journal, &journal_path)
-            .unwrap_err();
+        let error =
+            grant_inherit_locked(&root, &profile, group, &mut journal, &journal_path).unwrap_err();
         assert_eq!(error, "Read root has a conflicting sandbox group grant");
         assert!(!journal_path.exists());
         std::fs::remove_dir_all(&base).unwrap();
@@ -1524,7 +1624,9 @@ mod tests {
         let journal_path = base.join("reads.json");
         let group = "S-1-5-21-1-2-3-9303";
         let mut journal = load(&journal_path).unwrap();
-        assert!(!grant_inherit_locked(&root, &profile, group, &mut journal, &journal_path).unwrap());
+        assert!(
+            !grant_inherit_locked(&root, &profile, group, &mut journal, &journal_path).unwrap()
+        );
         assert!(group_grants(&root, group).is_empty());
         assert!(journal.grants.is_empty());
         std::fs::remove_dir_all(&base).unwrap();
@@ -1548,7 +1650,12 @@ mod tests {
         let mut journal = load(&journal_path).unwrap();
         grant_inherit_locked(&root, &profile, group, &mut journal, &journal_path).unwrap();
         guard_credentials_locked(&root, group, &mut journal, &journal_path).unwrap();
-        assert_eq!(journal.grants[0].guards.len(), 2, "{:?}", journal.grants[0].guards);
+        assert_eq!(
+            journal.grants[0].guards.len(),
+            2,
+            "{:?}",
+            journal.grants[0].guards
+        );
         for path in [root.join(".npmrc"), root.join(".cargo/credentials.toml")] {
             let grants = group_grants(&path, group);
             assert!(
@@ -1558,9 +1665,11 @@ mod tests {
                 "{path:?}: {grants:?}"
             );
         }
-        assert!(group_grants(&root.join("config.json"), group)
-            .iter()
-            .all(|(kind, _, _)| *kind == 0));
+        assert!(
+            group_grants(&root.join("config.json"), group)
+                .iter()
+                .all(|(kind, _, _)| *kind == 0)
+        );
         // A second guard is idempotent, and a credential added later is caught by the next refresh.
         guard_credentials_locked(&root, group, &mut journal, &journal_path).unwrap();
         assert_eq!(journal.grants[0].guards.len(), 2);
@@ -1570,7 +1679,11 @@ mod tests {
         // The audit accepts the root, its denial and the group ACEs.
         revoke_inherit_locked(0, group, &mut journal, &journal_path).unwrap();
         assert!(journal.grants.is_empty());
-        for path in [root.join(".npmrc"), root.join(".cargo/credentials.toml"), root.join(".netrc")] {
+        for path in [
+            root.join(".npmrc"),
+            root.join(".cargo/credentials.toml"),
+            root.join(".netrc"),
+        ] {
             assert!(group_grants(&path, group).is_empty(), "{path:?}");
         }
         std::fs::remove_dir_all(&base).unwrap();
@@ -1624,20 +1737,52 @@ mod tests {
         }
         let profile = base.join("profile");
         let root = profile.join("tool");
+        let user = profile.join("picked");
         std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(user.join("bin")).unwrap();
         let journal_path = base.join("reads.json");
         let group = "S-1-5-21-1-2-3-9307";
         let mut journal = load(&journal_path).unwrap();
         grant_inherit_locked(&root, &profile, group, &mut journal, &journal_path).unwrap();
         guard_credentials_locked(&root, group, &mut journal, &journal_path).unwrap();
-        grant_at(&root, &profile, group, &journal_path).unwrap();
-        // Both shapes of grant are recorded, and a full revoke takes the root down to its original DACL.
+        // A user path inside an automatic root is already readable, and is refused rather than layered on it.
+        let error = grant_snapshot_locked(
+            &root.join("bin"),
+            &profile,
+            group,
+            Source::User,
+            &mut journal,
+            &journal_path,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "Path is already readable through an automatic read root"
+        );
+        grant_snapshot_locked(
+            &user,
+            &profile,
+            group,
+            Source::User,
+            &mut journal,
+            &journal_path,
+        )
+        .unwrap();
+        // Both shapes of grant are recorded, and a full revoke takes both roots down to their original DACLs.
+        assert_eq!(journal.grants.len(), 2);
         revoke_inherit_locked(0, &group, &mut journal, &journal_path).unwrap();
-        revoke_snapshot_locked(0, &sid(group).unwrap(), READ_EXECUTE, &mut journal, &journal_path)
-            .unwrap();
+        revoke_snapshot_locked(
+            0,
+            &sid(group).unwrap(),
+            READ_EXECUTE,
+            &mut journal,
+            &journal_path,
+        )
+        .unwrap();
         assert!(journal.grants.is_empty());
-        assert!(group_grants(&root, group).is_empty());
-        assert!(group_grants(&root.join("bin"), group).is_empty());
+        for path in [&root, &root.join("bin"), &user, &user.join("bin")] {
+            assert!(group_grants(path, group).is_empty(), "{path:?}");
+        }
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

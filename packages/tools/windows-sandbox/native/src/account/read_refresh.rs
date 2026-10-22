@@ -68,7 +68,8 @@ pub(crate) fn refresh_with(
             // `Users` (or everyone) can already read it: no ACE, no journal entry, nothing to guard.
             continue;
         }
-        if let Err(reason) = reads::guard_credentials_locked(root, group, &mut journal, journal_path)
+        if let Err(reason) =
+            reads::guard_credentials_locked(root, group, &mut journal, journal_path)
         {
             // The root withdrew its own grant rather than stay partly readable.
             report.skip(root, reason);
@@ -91,7 +92,8 @@ pub(crate) fn refresh_with(
         .collect();
     for index in stale.into_iter().rev() {
         let root = journal.grants[index].root.clone();
-        if let Err(reason) = reads::revoke_inherit_locked(index, group, &mut journal, journal_path) {
+        if let Err(reason) = reads::revoke_inherit_locked(index, group, &mut journal, journal_path)
+        {
             report.skip(&root, reason);
         }
     }
@@ -118,7 +120,9 @@ pub(crate) fn refresh_with(
             }
         }
     } else if recorded {
-        if let Err(reason) = reads::revoke_snapshot_at(&gitconfig, group, &mut journal, journal_path) {
+        if let Err(reason) =
+            reads::revoke_snapshot_at(&gitconfig, group, &mut journal, journal_path)
+        {
             report.skip(&gitconfig, reason);
         }
     }
@@ -154,11 +158,13 @@ mod tests {
     impl Fixture {
         fn new(name: &str) -> Fixture {
             let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target/unit-tmp")
+                .join("target")
+                .join("unit-tmp")
                 .join(format!("read-refresh-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&base);
             let profile = base.join("Profile");
             std::fs::create_dir_all(&profile).unwrap();
+            reads::make_profile_like(&base);
             Fixture {
                 journal: base.join("read-grants.json"),
                 base,
