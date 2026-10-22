@@ -10,6 +10,7 @@ import {
   capabilityFor,
   configureAccountBackend,
   ensureReadRefresh,
+  READ_REFRESH_TTL_MS,
   parseAccountStatus,
   refreshAccountBackend,
   refreshAccountReadiness,
@@ -142,6 +143,30 @@ test('the automatic read roots are refreshed once per environment and retried af
   await refreshAccountBackend();
   await ensureReadRefresh(env);
   assert.equal(calls.filter((args) => args[0] === 'read-refresh').length, 4);
+});
+
+test('a read refresh expires, so a credential file created later is denied without a Host restart', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-ttl-');
+  const calls: string[][] = [];
+  let clock = 1_000_000;
+  t.after(() => configureAccountBackend({ now: Date.now }));
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    now: () => clock,
+    run: async (_helper, args) => {
+      calls.push(args);
+      return '{}';
+    },
+  });
+  const env = { PATH: 'C:\\one' };
+  await ensureReadRefresh(env);
+  clock += READ_REFRESH_TTL_MS - 1;
+  await ensureReadRefresh(env);
+  assert.equal(calls.length, 1, 'an unexpired refresh answers for the same environment');
+  clock += 1;
+  await ensureReadRefresh(env);
+  assert.equal(calls.length, 2, 'an expired refresh asks the helper again');
 });
 
 test('a failed refresh never stops a command', { skip: windowsOnly }, async (t) => {

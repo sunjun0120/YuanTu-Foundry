@@ -157,7 +157,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 
 ### 5.2 读根目录
 
-- **自动发现（2e 修订）**：每个 Host 进程首次执行沙箱命令前、以及 `PATH` 等环境变化后，由 TS 侧调用一次 `read-refresh --env FILE`（绝不提权）。原生侧按这次传入的环境发现根目录：
+- **自动发现（2e 修订）**：每个 Host 进程首次执行沙箱命令前、`PATH` 等环境变化后，以及同一环境上次 refresh 已超过 60 秒（`READ_REFRESH_TTL_MS`）时，由 TS 侧调用一次 `read-refresh --env FILE`（绝不提权）。过期重跑是为了让 Host 运行期间新建的凭据文件和 SSH 配置改动最多 60 秒内被拒绝，而不是等到 Host 重启。原生侧按这次传入的环境发现根目录：
   - `PATH` 中位于桌面用户 profile 下的目录；
   - `CARGO_HOME`（默认 `%USERPROFILE%\.cargo`）→ 只取 `bin`（`.cargo` 内含 `credentials.toml`）；`RUSTUP_HOME`（默认 `%USERPROFILE%\.rustup`）；
   - `NVM_HOME`、`NVM_SYMLINK`；`%APPDATA%\npm`；`PNPM_HOME`（默认 `%LOCALAPPDATA%\pnpm`）；
