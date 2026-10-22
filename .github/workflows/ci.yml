@@ -22,9 +22,8 @@ on:
         type: choice
         options: [all, desktop-smoke]
         default: all
-# Desktop-smoke-only runs: a manual run with jobs=desktop-smoke, and — while the Windows sandbox work is iterated
-# there — every push to windows-account-sandbox. A pull request still runs everything before anything reaches
-# main. Remove the branch clause once that branch is merged.
+# Desktop-smoke-only runs: a manual run with jobs=desktop-smoke. A pull request and a manual jobs=all run execute
+# every job before anything reaches main.
 permissions:
   contents: read
 # A newer push to the same branch makes the older run's result moot, so it is cancelled rather than finished.
@@ -36,9 +35,7 @@ jobs:
   check:
     # Skipped in a desktop-smoke-only run (see the note above `permissions`); bench, coverage and native-macos
     # need it and are skipped with it.
-    if: >-
-      !((github.event_name == 'push' && github.ref == 'refs/heads/windows-account-sandbox') ||
-      (github.event_name == 'workflow_dispatch' && inputs.jobs == 'desktop-smoke'))
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.jobs == 'desktop-smoke') }}
     runs-on: ubuntu-latest
     # Linux runs the portable/host contract suite; product native backends target
     # Windows and macOS and must not silently fall back on this runner.
@@ -108,7 +105,6 @@ jobs:
     if: >-
       !cancelled() && (
       (needs.check.result == 'success' && (github.ref == 'refs/heads/main' || github.event_name != 'push')) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/windows-account-sandbox') ||
       (github.event_name == 'workflow_dispatch' && inputs.jobs == 'desktop-smoke'))
     runs-on: windows-latest
     # A hung sandbox helper used to run the acceptance step into its per-test timeouts for ~20 minutes. The
