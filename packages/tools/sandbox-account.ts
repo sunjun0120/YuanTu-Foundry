@@ -8,7 +8,7 @@
  * the files are read-only), and what command line. See docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md.
  */
 import { execFile } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,6 +68,7 @@ let configuration: Configuration = {
 export function configureAccountBackend(change: Partial<Configuration>): void {
   configuration = { ...configuration, ...change };
   grants.clear();
+  readRefreshes.clear();
   capabilities = undefined;
   status = undefined;
 }
@@ -79,6 +80,8 @@ export interface AccountStatus {
   details: string[];
   accounts: { account: SandboxAccount; sid: string | null }[];
   group: string | null;
+  /** Directories a sandboxed command may read, and whether refresh or the user put them there. */
+  readRoots: { path: string; source: 'auto' | 'user' }[];
 }
 
 const SID = /^S-1-5-21(?:-\d{1,10}){4}$/;
@@ -95,6 +98,17 @@ export function parseAccountStatus(text: string): AccountStatus {
   const strings = (list: unknown) =>
     Array.isArray(list) && list.every((x) => typeof x === 'string');
   const accounts = status?.accounts;
+  const readRoots = status?.readRoots;
+  const readRoot = (entry: unknown) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const root = entry as Record<string, unknown>;
+    return (
+      typeof root.path === 'string' &&
+      root.path.length > 0 &&
+      (root.source === 'auto' || root.source === 'user') &&
+      Object.keys(root).length === 2
+    );
+  };
   if (
     !status ||
     typeof status !== 'object' ||
@@ -110,7 +124,9 @@ export function parseAccountStatus(text: string): AccountStatus {
         (entry.account === 'offline' || entry.account === 'online') &&
         (entry.sid === null || (typeof entry.sid === 'string' && SID.test(entry.sid))),
     ) ||
-    Object.keys(status).length !== 6
+    !Array.isArray(readRoots) ||
+    !readRoots.every(readRoot) ||
+    Object.keys(status).length !== 7
   )
     throw new Error('The sandbox account helper returned an invalid status');
   // A status that calls itself ready while naming problems is not believed.
@@ -125,6 +141,7 @@ let status: Promise<AccountStatus> | undefined;
 export async function refreshAccountBackend(): Promise<void> {
   await stopBrokers();
   grants.clear();
+  readRefreshes.clear();
   await refreshAccountReadiness();
 }
 
@@ -226,6 +243,62 @@ async function ensureGrant(root: string, capability: string): Promise<void> {
   await pending;
 }
 
+/**
+ * The environment values the helper's read-root discovery reads. Everything else is left out of the request, so a
+ * tool never sees the whole environment of the Host in a file.
+ */
+const REFRESH_ENVIRONMENT = [
+  'PATH',
+  'CARGO_HOME',
+  'RUSTUP_HOME',
+  'NVM_HOME',
+  'NVM_SYMLINK',
+  'PNPM_HOME',
+  'GOPATH',
+  'SCOOP',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'USERPROFILE',
+] as const;
+
+const readRefreshes = new Map<string, Promise<void>>();
+
+/**
+ * Authorizes the toolchain roots this environment names, once per environment per process.
+ *
+ * The helper decides what those roots are; this side only decides *when* to ask. A different `PATH` (a version
+ * manager switching toolchains) asks again, and a failed refresh is forgotten so the next command retries.
+ */
+export async function ensureReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
+  const values = REFRESH_ENVIRONMENT.map((name) => env[name] ?? '');
+  const key = createHash('sha256').update(JSON.stringify(values)).digest('hex');
+  let pending = readRefreshes.get(key);
+  if (!pending) {
+    pending = runReadRefresh(env);
+    readRefreshes.set(key, pending);
+    pending.catch(() => readRefreshes.delete(key));
+  }
+  await pending;
+}
+
+async function runReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
+  const requested: Record<string, string> = {};
+  for (const name of REFRESH_ENVIRONMENT) {
+    const value = env[name];
+    if (typeof value === 'string') requested[name] = value;
+  }
+  const requests = path.join(configuration.state, 'requests');
+  await mkdir(requests, { recursive: true });
+  const file = path.join(requests, `${randomBytes(16).toString('hex')}.json`);
+  await writeFile(file, JSON.stringify({ version: 1, env: requested }), { flag: 'wx' });
+  try {
+    await configuration.run(configuration.helper, ['read-refresh', '--env', file]);
+  } finally {
+    // The helper deletes the request once it has read it; a helper that never started must not leave it behind.
+    await rm(file, { force: true });
+  }
+}
+
 function comspec(): string {
   return (
     process.env.ComSpec ?? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
@@ -261,8 +334,22 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   const cwd = await realpath(request.cwd);
   insideWorkspace(root, cwd);
   const capability = await capabilityFor(root);
+  const env = Object.fromEntries(
+    Object.entries({ ...toolEnvironment(), ...(request.env ?? {}) }).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    ),
+  );
   // Even a read-only command needs the grant: the group's ACE is what lets the account read the workspace.
   await ensureGrant(root, capability);
+  // The toolchains this environment names are authorized once per process, before the first command runs. A failure
+  // must not stop the command: the workspace grant above is all it needs, and a missing read root shows up as the
+  // tool not being found rather than as a launch failure.
+  await ensureReadRefresh(env).catch((failure: unknown) => {
+    console.error(
+      'sandbox account: the automatic read roots could not be refreshed',
+      failure instanceof Error ? failure.message : failure,
+    );
+  });
   const account: SandboxAccount = request.config.network === 'denied' ? 'offline' : 'online';
   let pipe: string;
   try {
@@ -274,11 +361,6 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
         'Windows sandbox accounts to repair or reinitialize the accounts.',
     );
   }
-  const env = Object.fromEntries(
-    Object.entries({ ...toolEnvironment(), ...(request.env ?? {}) }).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
-    ),
-  );
   const command = accountCommand(request, env);
   const requests = path.join(configuration.state, 'requests');
   await mkdir(requests, { recursive: true });

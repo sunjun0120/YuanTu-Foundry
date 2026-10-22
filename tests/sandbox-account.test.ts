@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, readFile, stat } from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import {
   accountCommand,
   capabilityFor,
   configureAccountBackend,
+  ensureReadRefresh,
   parseAccountStatus,
+  refreshAccountBackend,
   refreshAccountReadiness,
   windowsAccountSandboxProvider,
   type HelperRunner,
@@ -36,6 +40,7 @@ function status(ready: boolean, problems: string[] = ready ? [] : ['accounts-mis
       { account: 'online', sid: ready ? 'S-1-5-21-1-2-3-1004' : null },
     ],
     group: ready ? 'S-1-5-21-1-2-3-1005' : null,
+    readRoots: [],
   });
 }
 
@@ -63,6 +68,7 @@ async function backend(t: test.TestContext, ready = true) {
     calls.push(args);
     if (args[0] === 'account-status') return status(ready);
     if (args[0] === 'grant') return '{}';
+    if (args[0] === 'read-refresh') return '{"version":1,"roots":[],"skipped":[]}';
     throw new Error(`unexpected helper call ${args.join(' ')}`);
   };
   configureAccountBackend({
@@ -80,6 +86,12 @@ async function backend(t: test.TestContext, ready = true) {
 test('the helper status is accepted only in exactly its own shape', () => {
   assert.equal(parseAccountStatus(status(true)).ready, true);
   assert.deepEqual(parseAccountStatus(status(false)).problems, ['accounts-missing']);
+  const withRoots = JSON.parse(status(true));
+  withRoots.readRoots = [
+    { path: 'C:\\Users\\Alice\\.cargo\\bin', source: 'auto' },
+    { path: 'D:\\Tools', source: 'user' },
+  ];
+  assert.deepEqual(parseAccountStatus(JSON.stringify(withRoots)).readRoots, withRoots.readRoots);
   const base = JSON.parse(status(true));
   for (const broken of [
     'not json',
@@ -89,8 +101,86 @@ test('the helper status is accepted only in exactly its own shape', () => {
     JSON.stringify({ ...base, group: 'S-1-1-0' }),
     JSON.stringify({ ...base, accounts: [base.accounts[0]] }),
     JSON.stringify({ ...base, accounts: [{ account: 'root', sid: null }, base.accounts[1]] }),
+    // The read roots are part of the shape: a status without them is from another build.
+    JSON.stringify({ ...base, readRoots: undefined }),
+    JSON.stringify({ ...base, readRoots: [{ path: 'D:\\Tools', source: 'other' }] }),
+    JSON.stringify({ ...base, readRoots: [{ path: '', source: 'user' }] }),
+    JSON.stringify({ ...base, readRoots: [{ path: 'D:\\Tools', source: 'user', mode: 'x' }] }),
   ])
     assert.throws(() => parseAccountStatus(broken), broken);
+});
+
+test('the automatic read roots are refreshed once per environment and retried after a failure', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-');
+  const calls: string[][] = [];
+  let failures = 1;
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    run: async (_helper, args) => {
+      calls.push(args);
+      if (args[0] === 'read-refresh' && failures-- > 0) throw new Error('refresh refused');
+      return '{}';
+    },
+  });
+  const env = { PATH: 'C:\\one', CARGO_HOME: 'C:\\cargo' };
+  // The first attempt fails and is forgotten, so the next command asks again.
+  await assert.rejects(ensureReadRefresh(env), /refresh refused/);
+  await ensureReadRefresh(env);
+  await ensureReadRefresh({ ...env });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0]![0], 'read-refresh');
+  assert.equal(calls[0]![1], '--env');
+  // A new PATH names other toolchains: that is a different question and is asked again.
+  await ensureReadRefresh({ ...env, PATH: 'C:\\two' });
+  assert.equal(calls.length, 3);
+  // The request file carries only the values discovery reads, and is gone afterwards.
+  const file = calls[0]![2]!;
+  assert.ok(file.startsWith(path.join(state, 'requests')));
+  await assert.rejects(stat(file), { code: 'ENOENT' });
+  // Maintenance forgets the cache: the next command refreshes again.
+  await refreshAccountBackend();
+  await ensureReadRefresh(env);
+  assert.equal(calls.filter((args) => args[0] === 'read-refresh').length, 4);
+});
+
+test('a failed refresh never stops a command', { skip: windowsOnly }, async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-fail-');
+  // A broker announcement without a child process: the point here is the refresh, and a confined CI runner may
+  // refuse to spawn one at all.
+  const announcing: BrokerLauncher = () => {
+    const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    const [stdin, stdout, stderr] = [new PassThrough(), new PassThrough(), new PassThrough()];
+    Object.assign(child, {
+      stdin,
+      stdout,
+      stderr,
+      unref: () => {},
+      kill: () => true,
+    });
+    setImmediate(() => stdout.write(`${JSON.stringify({ version: 1, pipe: PIPE })}\n`));
+    return child as unknown as ChildProcess;
+  };
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    run: async (_helper, args) => {
+      if (args[0] === 'account-status') return status(true);
+      if (args[0] === 'read-refresh') throw new Error('refresh refused');
+      if (args[0] === 'grant') return '{}';
+      throw new Error(`unexpected helper call ${args.join(' ')}`);
+    },
+    launch: announcing,
+  });
+  t.after(stopBrokers);
+  const root = await tempRoot(t, 'yuantu-account-ws-');
+  const plan = await windowsAccountSandboxProvider.prepare({
+    root,
+    cwd: root,
+    command: 'echo hi',
+    config: { mode: 'windows-account', image: '' },
+  });
+  assert.equal(plan.args[0], 'exec');
 });
 
 test('a broker announcement must name one of its own pipes', () => {

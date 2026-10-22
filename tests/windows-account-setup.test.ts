@@ -17,6 +17,12 @@ const report = (ready = false, problems = ready ? [] : ['accounts-missing']) =>
       { account: 'online', sid: ready ? 'S-1-5-21-1-2-3-1002' : null },
     ],
     group: ready ? 'S-1-5-21-1-2-3-1003' : null,
+    readRoots: ready
+      ? [
+          { path: 'C:\\Users\\Alice\\.cargo\\bin', source: 'auto' },
+          { path: 'D:\\Tools', source: 'user' },
+        ]
+      : [],
   });
 
 test('account setup distinguishes missing, damaged and ready without elevation', async () => {
@@ -58,20 +64,88 @@ test('the settings diagnostic uses account-status --verify', async () => {
 });
 
 test('read allowlist IPC requires explicit acknowledgement and never forwards a renderer command', () => {
+  assert.deepEqual(setupModule.parseSandboxSetupCommand({ type: 'read-add', acknowledge: true }), {
+    type: 'read-add',
+    acknowledge: true,
+  });
   assert.deepEqual(
     setupModule.parseSandboxSetupCommand({
-      type: 'read-add',
+      type: 'read-remove',
       path: 'D:\\Tools',
       acknowledge: true,
     }),
-    { type: 'read-add', path: 'D:\\Tools', acknowledge: true },
+    { type: 'read-remove', path: 'D:\\Tools', acknowledge: true },
   );
   for (const input of [
-    { type: 'read-add', path: 'D:\\Tools' },
-    { type: 'read-add', path: 'D:\\Tools', acknowledge: true, command: 'cmd.exe' },
+    // The path of an added root comes from the native picker, not from the page.
+    { type: 'read-add', path: 'D:\\Tools', acknowledge: true },
+    { type: 'read-add' },
+    { type: 'read-add', acknowledge: true, command: 'cmd.exe' },
+    { type: 'read-remove', path: 'D:\\Tools' },
     { type: 'read-remove', path: '', acknowledge: true },
+    { type: 'read-remove', acknowledge: true },
+    { type: 'read-remove', path: 'D:\\Tools', acknowledge: true, command: 'cmd.exe' },
   ])
     assert.throws(() => setupModule.parseSandboxSetupCommand(input));
+});
+
+test('an added read root comes from the picker, and a cancelled picker calls nothing', async () => {
+  const calls: string[][] = [];
+  const roots: { path: string; source: 'auto' | 'user' }[] = [];
+  const setup = new setupModule.WindowsAccountSandboxSetup({
+    platform: 'win32',
+    helperPath: 'fixed',
+    chooseDirectory: async () => 'D:\\Tools',
+    execute: async (_file, args) => {
+      calls.push(args);
+      if (args[0] === 'read-grant') roots.push({ path: args[2]!, source: 'user' });
+      if (args[0] === 'read-ungrant') roots.splice(0, roots.length);
+      return { stdout: report(true) };
+    },
+  });
+  await setup.addRead();
+  assert.deepEqual(calls, [
+    ['account-status'],
+    ['read-grant', '--root', 'D:\\Tools'],
+    ['account-status'],
+  ]);
+  const cancelled = new setupModule.WindowsAccountSandboxSetup({
+    platform: 'win32',
+    helperPath: 'fixed',
+    chooseDirectory: async () => undefined,
+    execute: async (_file, args) => {
+      calls.push(args);
+      return { stdout: report(true) };
+    },
+  });
+  calls.length = 0;
+  const view = await cancelled.addRead();
+  assert.equal(view.state, 'ready');
+  assert.deepEqual(calls, [['account-status']]);
+});
+
+test('only a directory the settings page added can be removed', async () => {
+  const calls: string[][] = [];
+  const execute = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: report(true) };
+  };
+  const setup = new setupModule.WindowsAccountSandboxSetup({
+    platform: 'win32',
+    helperPath: 'fixed',
+    execute,
+  });
+  await setup.removeRead('D:\\Tools');
+  assert.deepEqual(calls, [
+    ['account-status'],
+    ['read-ungrant', '--root', 'D:\\Tools'],
+    ['account-status'],
+  ]);
+  calls.length = 0;
+  // An automatic root and a path the journal never listed are both refused before the helper is asked.
+  for (const path of ['C:\\Users\\Alice\\.cargo\\bin', 'C:\\Windows'])
+    await assert.rejects(setup.removeRead(path), /added in these settings/);
+  assert.deepEqual(calls, [['account-status'], ['account-status']]);
 });
 
 test('a damaged read allowlist can still be revoked through the settings service', async () => {
@@ -81,10 +155,23 @@ test('a damaged read allowlist can still be revoked through the settings service
     helperPath: 'fixed',
     execute: async (_file, args) => {
       calls.push(args);
-      return { stdout: report(false, ['read-allowlist-invalid']) };
+      return {
+        stdout: JSON.stringify({
+          version: 1,
+          ready: false,
+          problems: ['read-allowlist-invalid'],
+          details: [],
+          accounts: [
+            { account: 'offline', sid: 'S-1-5-21-1-2-3-1001' },
+            { account: 'online', sid: 'S-1-5-21-1-2-3-1002' },
+          ],
+          group: 'S-1-5-21-1-2-3-1003',
+          readRoots: [{ path: 'D:\\Tools', source: 'user' }],
+        }),
+      };
     },
   });
-  await setup.allowRead('D:\\Tools', true);
+  await setup.removeRead('D:\\Tools');
   assert.ok(calls.some((args) => args[0] === 'read-ungrant'));
 });
 

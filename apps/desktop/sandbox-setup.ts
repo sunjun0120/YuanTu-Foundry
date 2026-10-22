@@ -3,12 +3,17 @@ import { promisify } from 'node:util';
 import { toolEnvironment } from '../../packages/tools/environment.ts';
 import { parseAccountStatus } from '../../packages/tools/sandbox-account.ts';
 
+/**
+ * What the settings page asks for. A read root is added by picking a directory in the native dialog and removed by
+ * naming one the journal already lists as the user's own; nothing here accepts a path to grant blindly.
+ */
 export type SandboxSetupCommand =
   | { type: 'status' }
   | { type: 'verify' }
   | { type: 'initialize'; acknowledge: true }
   | { type: 'uninstall'; acknowledge: true }
-  | { type: 'read-add' | 'read-remove'; path: string; acknowledge: true };
+  | { type: 'read-add'; acknowledge: true }
+  | { type: 'read-remove'; path: string; acknowledge: true };
 export interface SandboxSetupView {
   supported: boolean;
   ready: boolean;
@@ -17,6 +22,8 @@ export interface SandboxSetupView {
   state?: 'uninitialized' | 'ready' | 'damaged';
   problems?: string[];
   details?: string[];
+  /** Every directory the sandbox may read, and who put it there: `auto` is refresh's, `user` is the settings page's. */
+  readRoots?: { path: string; source: 'auto' | 'user' }[];
 }
 export type SandboxSetupReply = { ok: true; view: SandboxSetupView } | { ok: false; error: string };
 /** Bound the UI's wait, without pretending a detached elevated initializer can be cancelled. */
@@ -44,7 +51,7 @@ export function parseSandboxSetupCommand(input: unknown): SandboxSetupCommand {
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const value = input as Record<string, unknown>;
     if (
-      (value.type === 'read-add' || value.type === 'read-remove') &&
+      value.type === 'read-remove' &&
       value.acknowledge === true &&
       typeof value.path === 'string' &&
       value.path.trim().length > 0 &&
@@ -52,7 +59,13 @@ export function parseSandboxSetupCommand(input: unknown): SandboxSetupCommand {
       !value.path.includes('\0') &&
       Object.keys(value).every((key) => ['type', 'path', 'acknowledge'].includes(key))
     )
-      return { type: value.type, path: value.path.trim(), acknowledge: true };
+      return { type: 'read-remove', path: value.path.trim(), acknowledge: true };
+    if (
+      value.type === 'read-add' &&
+      value.acknowledge === true &&
+      Object.keys(value).every((key) => key === 'type' || key === 'acknowledge')
+    )
+      return { type: 'read-add', acknowledge: true };
     if (value.type === 'status' && Object.keys(value).length === 1) return { type: 'status' };
     if (value.type === 'verify' && Object.keys(value).length === 1) return { type: 'verify' };
     if (
@@ -70,6 +83,8 @@ export interface SandboxSetupOptions {
   execute?: (file: string, args: string[], timeout: number) => Promise<{ stdout: string }>;
   changed?: () => Promise<void>;
   changing?: () => Promise<void>;
+  /** The native directory picker; without one, adding a read root is refused rather than guessed. */
+  chooseDirectory?: () => Promise<string | undefined>;
 }
 /** Account maintenance uses a captured helper and fixed operations; opening settings never requests UAC. */
 export class WindowsAccountSandboxSetup {
@@ -123,6 +138,7 @@ export class WindowsAccountSandboxSetup {
         state: status.ready ? 'ready' : uninitialized ? 'uninitialized' : 'damaged',
         problems: status.problems,
         details: status.details,
+        readRoots: status.readRoots,
       };
     } catch {
       return { ...base, reason: 'unavailable' };
@@ -161,19 +177,45 @@ export class WindowsAccountSandboxSetup {
   uninstall(): Promise<SandboxSetupView> {
     return this.mutate('account-uninstall');
   }
-  async allowRead(path: string, remove: boolean): Promise<SandboxSetupView> {
+  /**
+   * `read-add`: the path comes from the native directory picker, never from the renderer. A cancelled dialog answers
+   * the unchanged view and never starts the helper.
+   */
+  async addRead(): Promise<SandboxSetupView> {
     if (this.pending) throw new Error('Sandbox maintenance is already in progress');
     this.pending = true;
     try {
       const before = await this.status();
-      if (!before.ready || (!remove && before.state === 'uninitialized'))
+      if (!before.ready || before.state === 'uninitialized')
         throw new Error('Sandbox accounts must be ready before changing read access');
+      const chosen = await this.options.chooseDirectory?.();
+      if (!chosen) return before;
       try {
-        await this.execute(
-          this.options.helperPath,
-          [remove ? 'read-ungrant' : 'read-grant', '--root', path],
-          0,
-        );
+        await this.execute(this.options.helperPath, ['read-grant', '--root', chosen], 0);
+      } finally {
+        await this.options.changed?.();
+      }
+      return await this.status();
+    } finally {
+      this.pending = false;
+    }
+  }
+  /** `read-remove`: only a directory this page added, named by the list it was read from. */
+  async removeRead(path: string): Promise<SandboxSetupView> {
+    if (this.pending) throw new Error('Sandbox maintenance is already in progress');
+    this.pending = true;
+    try {
+      const before = await this.status();
+      if (!before.ready) throw new Error(`Sandbox maintenance is unavailable: ${before.reason}`);
+      const wanted = path.toLowerCase();
+      if (
+        !(before.readRoots ?? []).some(
+          (root) => root.source === 'user' && root.path.toLowerCase() === wanted,
+        )
+      )
+        throw new Error('Only a directory added in these settings can be removed');
+      try {
+        await this.execute(this.options.helperPath, ['read-ungrant', '--root', path], 0);
       } finally {
         await this.options.changed?.();
       }

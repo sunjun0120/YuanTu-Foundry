@@ -49,9 +49,10 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 | `account-setup`           | 桌面用户         | 生成密码；已提权则同进程建户，否则 UAC 调 `account-initialize`             |
 | `account-initialize`      | 管理员（仅交接） | 只接受交接管道传来的密码，执行 §4.1 的固定操作                             |
 | `account-status`          | 桌面用户         | 读初始化标记与 DPAPI 凭据（JSON，version 1）                               |
-| `account-status --verify` | 桌面用户         | 实时检查账户、凭据、WFP、seclogon、读白名单，供诊断和日志                  |
+| `account-status --verify` | 桌面用户         | 实时检查账户、凭据、WFP、seclogon、读根目录，供诊断和日志                  |
 | `account-uninstall`       | 桌面用户         | 先删标记，再撤用户授权；已提权则同进程删账户，否则 UAC 调 `account-remove` |
 | `account-remove`          | 管理员（仅 UAC） | 删除账户、profile、WFP 规则                                                |
+| `read-refresh --env FILE` | 桌面用户         | 按 FILE 里的环境自动授权工具链根目录（§5.2）；不提权                       |
 | `broker`                  | 桌面用户         | 常驻；拉起并管理 runner；服务 exec                                         |
 | `runner`                  | 沙箱账户         | 常驻；按请求创建受限进程                                                   |
 | `exec`                    | 桌面用户         | 每条命令一个；agent-host 的 spawn 目标                                     |
@@ -121,13 +122,13 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 
 1. 生成两个密码。当前进程**已经提权**时，直接在本进程执行 §4.1 和 §4.2 的收尾；否则创建交接管道（`FIRST_PIPE_INSTANCE`，DACL：当前用户 + Administrators），用 `ShellExecuteExW(runas)` 以固定参数 `account-initialize --handoff <管道名>` 提权，密码只经管道传输，从不落盘、不进命令行。两条路径共用“建户 → 保存凭据 → 默认读取授权 → 写标记”的同一段代码。
 2. 用 DPAPI（CurrentUser，附加熵为固定常量 + 账户 SID）加密密码，写入 `<账户派生 profile>/.yuantu/sandbox-state/windows-account/credentials.json`，ACL 只允许桌面用户与 SYSTEM，禁用继承。
-3. 读白名单（§5.2）授予并写日志。
+3. 读根目录（§5.2）：初始化收尾时用当前进程环境执行一次 `read-refresh`；单个根失败只记 `skipped` 与警告，不让初始化失败。
 4. 全部成功之后，原子写入 `setup_marker.json`（`SETUP_VERSION = 1`，含两个账户 SID、组 SID、离线过滤配置）。初始化中途失败或 UAC 被取消时不留下标记；重新初始化在开始时删除旧标记。
 5. 卸载先删除标记，再撤销用户授权；已提权时同进程删除账户，否则用固定操作 `account-remove --elevated`，最后由桌面用户删除凭据。
 
 ### 4.3 桌面端
 
-- `apps/desktop/sandbox-setup.ts` 提供账户后端的 status/verify/initialize/uninstall，渲染层在沙箱设置面板显示：未初始化 / 就绪 / 损坏（附原因和 `--verify` 诊断）/ 需要修复。
+- `apps/desktop/sandbox-setup.ts` 提供账户后端的 status/verify/initialize/uninstall，以及读根目录的添加与移除；渲染层只显示三类状态：未初始化（一句说明 + 初始化按钮）、就绪（一行状态 + 卸载文字按钮，其下默认折叠的「高级：沙箱可读目录」，自动项只读、用户项逐项可移除、「添加目录…」）、损坏（问题列表 + 修复按钮，进入该状态时自动取一次 `--verify` 的诊断详情）。「添加目录…」由主进程弹系统目录选择框，取消则原样返回视图、不调用 helper。
 - 开发版和正式版走同一流程：初始化/修复按钮触发一次 UAC；已经提权时直接执行，不再弹 UAC。没有超时（杀掉 UAC 父进程无法取消提权子进程）。
 - 卸载后 `native` 会拒绝执行，直到重新初始化或由用户手动改为 `windows`。
 
@@ -141,11 +142,22 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 - 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）中已存在者，对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE。
 - 已知弱点（同 Codex）：限制列表含 Everyone，所以“Everyone 可写”的目录仍然可写。初始化与 `account-status --verify` 扫描工作区祖先、读白名单、`PATH` 目录中 Everyone 可写的位置并给出警告（对应 Codex `audit_everyone_writable`）。
 
-### 5.2 读白名单
+### 5.2 读根目录
 
-- 默认条目：工作区（随租约授予）；桌面用户 `PATH` 中位于用户目录下的目录（如 `%APPDATA%\npm`、`%LOCALAPPDATA%\Programs\...`、nvm 当前版本目录）；`%USERPROFILE%\.gitconfig`（只读文件）。
-- 用户可在设置中追加路径；拒绝列表永远优先：`.ssh`、`.aws`、`.gnupg`、`.azure`、`.kube`、`.docker`、浏览器 profile 目录、`AppData\Roaming\Microsoft\Credentials`、`AppData\Local\Microsoft\Credentials`、DPAPI 目录、本产品的凭据目录。
-- 授予方式（2d 安全审查修订）：验证并锁定整棵现有对象树，为每个对象增加不可继承的组 RX ACE，形成读取快照；新增工具文件需要重新授权。不能给可变目录持续继承 RX，否则后来新建的 `.ssh` 等敏感目录会自动变为可读，与“拒绝列表永远优先”冲突。日志在修改前保存原 DACL、卷序列号、文件 ID 和创建时间；卸载或移除时按对象身份撤销，包含同卷移出和重命名对象，保留其他主体的权限。无法核实原对象或权限冲突时保留记录并报错。授予拒绝 reparse point、硬链接，单次上限沿用 100,000 对象；撤销只处理已记录身份，不跟随后来新增的危险对象。
+- **自动发现（2e 修订）**：每个 Host 进程首次执行沙箱命令前、以及 `PATH` 等环境变化后，由 TS 侧调用一次 `read-refresh --env FILE`（绝不提权）。原生侧按这次传入的环境发现根目录：
+  - `PATH` 中位于桌面用户 profile 下的目录；
+  - `CARGO_HOME`（默认 `%USERPROFILE%\.cargo`）→ 只取 `bin`（`.cargo` 内含 `credentials.toml`）；`RUSTUP_HOME`（默认 `%USERPROFILE%\.rustup`）；
+  - `NVM_HOME`、`NVM_SYMLINK`；`%APPDATA%\npm`；`PNPM_HOME`（默认 `%LOCALAPPDATA%\pnpm`）；
+  - `GOPATH`（默认 `%USERPROFILE%\go`）→ 只取 `bin`；`%USERPROFILE%\.bun\bin`、`%USERPROFILE%\.deno\bin`；
+  - `%LOCALAPPDATA%\Programs` 下出现在 `PATH` 里的直接子目录（不整体授 `Programs`）；
+  - scoop：`SCOOP`（默认 `%USERPROFILE%\scoop`）→ `shims` 与 `apps`。
+    不在 profile 下、不存在、未通过拒绝清单者丢弃；一个根是另一个根的子目录时只保留父根，让一条 ACE 覆盖整棵树并保持幂等。
+- **自动根的授予方式**：根对象上一条可继承的 `YuanTuSandboxUsers` 组 RX ACE（`OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE`），授权后新建的工具文件自动可读，不做整树快照。放弃快照的理由：快照每次补授权都要重走整棵树（`.rustup`、nvm 易逼近 100,000 对象上限），无法做到每次启动自动 refresh；工具链目录基本不会长出凭据目录。
+- **残余风险与兜底**：自动根下以后新建、且不在凭据清单里的敏感文件会继承可读。兜底是每次 refresh 对每个根做凭据定点检查（只 `exists()` 固定路径，不遍历）：`.cargo\credentials.toml`、`.cargo\credentials`、`.npmrc`、`.pypirc`、`.netrc`、`_netrc`、`.git-credentials`、`.docker\config.json`，以及根内出现的同名文件；命中则给该路径加一条不可继承的组显式拒绝读 ACE。加拒绝失败时撤销该根的可继承 ACE 并跳过整根，不留半可读的根。
+- **用户手动添加的路径**仍走快照授权：验证并锁定整棵现有对象树，为每个对象增加不可继承的组 RX ACE，新增文件需重新授权；日志在修改前保存原 DACL、卷序列号、文件 ID 和创建时间；撤销按对象身份进行，保留其他主体的权限。日志 v2 用 `source: auto|user` 与 `mode: inherit|snapshot` 区分两种授权；读到 v1 日志时迁移为 `source=user, mode=snapshot`，下次写入变成 v2。
+- **刷新语义**：新根授权并做凭据检查、已授权的自动根重跑凭据检查（捕获新出现的凭据文件）、本次未发现的 `auto` 根撤销；`%USERPROFILE%\.gitconfig` 是文件，存在时保留一条 `source=auto, mode=snapshot` 的快照授权，文件消失则撤销。单根失败只进 `skipped`，不中断 refresh，也不阻断命令执行——工作区读写不依赖它。
+- **拒绝清单与不变式**：拒绝列表永远优先：`.ssh`、`.aws`、`.gnupg`、`.azure`、`.kube`、`.docker`、浏览器 profile 目录、`AppData\Roaming\Microsoft\Credentials`、`AppData\Local\Microsoft\Credentials`、DPAPI 目录、本产品的凭据目录、上面的凭据文件；profile 根本身永不授权；已经允许 `Users` / `Authenticated Users` / `Everyone` 读取的根直接跳过（系统目录因此不需要处理，也不加入发现列表）；除沙箱账户自己的 profile 外，所有读 ACE 的受托者都是 `YuanTuSandboxUsers` 组，不出现账户 SID 直授；`read-ungrant` 拒绝撤销 `source=auto` 的条目（返回 `Automatic read roots are managed by refresh`）。
+- `account-status --verify` 的读授权审计按 `mode` 分派：`inherit` 只检查根对象上那条掩码精确为 `READ_EXECUTE`、带 OI|CI 的组 ACE、凭据拒绝 ACE 仍在、以及没有账户 SID 直授；`snapshot` 沿用逐对象检查。根目录已被卸载而消失时视为待刷新，不算损坏。
 - 包缓存：沙箱账户使用自己 profile 下的缓存（npm/pnpm/pip/cargo 默认路径即落在沙箱账户 profile），环境变量中不传递指向桌面用户目录的缓存变量（`toolEnvironment` 增加过滤）。
 - 位于桌面 profile 下的工作区/工具链，其祖先目录仅增加不可继承的 `FILE_TRAVERSE | FILE_READ_ATTRIBUTES`，使 Node 的 realpath/lstat 能解析完整路径；不授予列目录或读取文件内容。`traverse-grants.json` 独立记录这些授权及对象身份，卸载在撤销工作区/读取授权之后收回。
 
@@ -160,10 +172,10 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 ### 6.2 修改
 
 - `sandbox-mode.ts`：加入 `windows-account`；`nativeSandboxBackend` 在 Windows 上**始终**返回 `windows-account`，不再读取/缓存就绪状态，也不回退到 `windows`。
-- `sandbox-account.ts`：未就绪时 `available()` 返回可操作错误（未初始化、标记版本、去设置页）；runner/broker 启动失败附加“去设置页修复或重新初始化”。
+- `sandbox-account.ts`：未就绪时 `available()` 返回可操作错误（未初始化、标记版本、去设置页）；runner/broker 启动失败附加“去设置页修复或重新初始化”。`prepare` 在拿到工作区授权之后、启动 broker 之前调用一次 `ensureReadRefresh(env)`：以 `PATH`、`CARGO_HOME`、`RUSTUP_HOME`、`NVM_HOME`、`NVM_SYMLINK`、`PNPM_HOME`、`GOPATH`、`SCOOP`、`APPDATA`、`LOCALAPPDATA`、`USERPROFILE` 的哈希做进程内缓存，同一环境只跑一次、失败可重试；`refreshAccountBackend()` 与 `configureAccountBackend()` 清空该缓存。refresh 失败只记日志，不阻断命令。
 - `sandbox.ts`：注册新 provider。
 - 网络选择：请求 `network: deny`（或默认离线）→ 离线账户；允许网络 → 联网账户。
-- `sandbox-launch-failure.ts` 的 `SANDBOX_CHILD_SPAWN_NOTE`：`windows` 后端出现 EPERM 时，说明这是手动选择的弱后端，提示初始化账户并切回 native，而不是只建议完全访问。
+- `sandbox-launch-failure.ts`：`windows` 后端出现 EPERM 时用 `SANDBOX_CHILD_SPAWN_NOTE`，说明这是手动选择的弱后端，提示初始化账户并切回 native，而不是只建议完全访问；`windows-account` 后端出现 EPERM / `EACCES` / `Access is denied` 时用 `WINDOWS_ACCOUNT_ACCESS_NOTE`，说明账户只能读工作区与发现到的工具链根目录，并指出 设置 → 通用设置 → Windows 沙箱账户 → 高级：沙箱可读目录。
 - `README.md`（windows-sandbox 目录）与 `ENHANCED-DESIGN.md`：更新为当前实现与边界。
 
 ### 6.3 就绪判定
@@ -173,7 +185,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 1. `setup_marker.json` 存在、`SETUP_VERSION` 一致，且账户/组/离线过滤字段形状有效；
 2. `credentials.json` 能用当前用户的 DPAPI 解开，且其中的账户 SID 与标记一致。
 
-满足即就绪；不再在每次查询时做 `LogonUserW`、WFP 审计或读取白名单审计。`account-status --verify` 保留原来的实时检查（账户存在、组成员、凭据 SID、logon、WFP、seclogon、读取白名单），并核对标记与实时账户 SID，供设置页“检查状态”和日志使用。
+满足即就绪；不再在每次查询时做 `LogonUserW`、WFP 审计或读根目录审计。`account-status --verify` 保留原来的实时检查（账户存在、组成员、凭据 SID、logon、WFP、seclogon、读根目录），并核对标记与实时账户 SID，供设置页诊断和日志使用。两种状态都附带 `readRoots: [{path, source}]`（来自日志），设置页用它渲染「高级：沙箱可读目录」。
 
 运行时 provider 首次使用仍执行一次运行时探针（runner 内 `spawnSync` 子进程读写 stdio，离线账户再做一次连接被拒探针），结果缓存到进程结束；探针失败不等于状态文件损坏，错误会提示去设置里修复。
 

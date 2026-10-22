@@ -52,10 +52,10 @@ test(
       { timeout: 15000 },
     );
     // Initialization is offered on an unpackaged development build too; clicking it would ask for UAC, which
-    // this smoke never does. Uninstall and read grants stay unavailable until accounts exist.
+    // this smoke never does. Uninstall and the read-root list stay hidden until accounts exist.
     assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), false);
-    assert.equal(await page.locator('#sandbox-setup-uninstall').isDisabled(), true);
-    assert.equal(await page.locator('#sandbox-read-add').isDisabled(), true);
+    assert.equal(await page.locator('#sandbox-setup-uninstall').isHidden(), true);
+    assert.equal(await page.locator('#sandbox-read-advanced').isHidden(), true);
     assert.match(await page.locator('#sandbox-setup-feedback').innerText(), /未初始化|无法读取/);
     await page.locator('#ui-language').selectOption('en-US');
     await page.waitForFunction(
@@ -67,12 +67,9 @@ test(
       /not been initialized|cannot read/i,
     );
     assert.equal(
-      await page.locator('#sandbox-setup-uninstall').innerText(),
-      'Uninstall sandbox accounts',
+      await page.locator('#sandbox-setup-initialize').innerText(),
+      'Initialize as administrator',
     );
-    await page.locator('#sandbox-setup-refresh').click();
-    await page.waitForFunction(() => !document.querySelector('#sandbox-setup-refresh').disabled);
-    assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), false);
     const bounds = await page.locator('#sandbox-setup-section').boundingBox();
     assert.ok(bounds && bounds.width > 200 && bounds.height > 100);
   },

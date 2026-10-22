@@ -407,6 +407,13 @@ void app
     const sandboxSetup = new WindowsAccountSandboxSetup({
       platform: process.platform,
       helperPath: path.resolve(__dirname, '../packages/tools/windows-sandbox/yuantu-sandbox.exe'),
+      // A read root is chosen in the native picker and never typed into the page: the journal, not the renderer, is
+      // the list of what may be removed.
+      chooseDirectory: async () => {
+        if (!window) return undefined;
+        const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+        return picked.canceled ? undefined : picked.filePaths[0];
+      },
       changing: async () => {
         await refreshAccountBackend();
         await service?.refreshSandboxAccounts();
@@ -674,7 +681,9 @@ void app
                 ? sandboxSetup.initialize()
                 : command.type === 'uninstall'
                   ? sandboxSetup.uninstall()
-                  : sandboxSetup.allowRead(command.path, command.type === 'read-remove');
+                  : command.type === 'read-add'
+                    ? sandboxSetup.addRead()
+                    : sandboxSetup.removeRead(command.path);
             return { ok: true, view: await sandboxInitializing };
           } finally {
             sandboxInitializing = undefined;
