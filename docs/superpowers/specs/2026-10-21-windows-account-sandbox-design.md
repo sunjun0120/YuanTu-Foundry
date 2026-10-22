@@ -134,10 +134,11 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 ### 4.2 用户入口（`account-setup` / `account-uninstall`）
 
 1. 生成两个密码。当前进程**已经提权**时，直接在本进程执行 §4.1 和 §4.2 的收尾；否则创建交接管道（`FIRST_PIPE_INSTANCE`，DACL：当前用户 + Administrators），用 `ShellExecuteExW(runas)` 以固定参数 `account-initialize --handoff <管道名>` 提权，密码只经管道传输，从不落盘、不进命令行。两条路径共用“建户 → 保存凭据 → 默认读取授权 → 写标记”的同一段代码。
-2. 用 DPAPI（CurrentUser，附加熵为固定常量 + 账户 SID）加密密码，写入 `<账户派生 profile>/.yuantu/sandbox-state/windows-account/credentials.json`，ACL 只允许桌面用户与 SYSTEM，禁用继承。
-3. 读根目录（§5.2）：初始化收尾时用当前进程环境执行一次 `read-refresh`；单个根失败只记 `skipped` 与警告，不让初始化失败。
-4. 全部成功之后，原子写入 `setup_marker.json`（`SETUP_VERSION = 1`，含两个账户 SID、组 SID、离线过滤配置）。初始化中途失败或 UAC 被取消时不留下标记；重新初始化在开始时删除旧标记。
-5. 卸载先删除标记，再撤销用户授权；已提权时同进程删除账户，否则用固定操作 `account-remove --elevated`，最后由桌面用户删除凭据。
+2. 预建配置文件：用新密码以 `CreateProcessWithLogonW(LOGON_WITH_PROFILE)` 为每个账户运行一次 `cmd /c exit 0`（最多等 120 秒），让 Windows 现在就建好配置文件和注册表 hive。首次带配置文件的登录在繁忙机器上可能超过 Host 启动 broker 的 20 秒时限（真实账户验收中出现过首条离线命令超时）；失败只打印警告，不影响初始化。
+3. 用 DPAPI（CurrentUser，附加熵为固定常量 + 账户 SID）加密密码，写入 `<账户派生 profile>/.yuantu/sandbox-state/windows-account/credentials.json`，ACL 只允许桌面用户与 SYSTEM，禁用继承。
+4. 读根目录（§5.2）：初始化收尾时用当前进程环境执行一次 `read-refresh`；单个根失败只记 `skipped` 与警告，不让初始化失败。
+5. 全部成功之后，原子写入 `setup_marker.json`（`SETUP_VERSION = 1`，含两个账户 SID、组 SID、离线过滤配置）。初始化中途失败或 UAC 被取消时不留下标记；重新初始化在开始时删除旧标记。
+6. 卸载先删除标记，再撤销用户授权；已提权时同进程删除账户，否则用固定操作 `account-remove --elevated`，最后由桌面用户删除凭据。
 
 ### 4.3 桌面端
 

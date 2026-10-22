@@ -179,6 +179,11 @@ fn finish_initialization(
     passwords: Vec<(Account, Secret)>,
     sids: &[(Account, String)],
 ) -> Result<u32> {
+    for (account, password) in &passwords {
+        if let Err(error) = create_profile(*account, password) {
+            eprintln!("Profile for {} not created ahead: {error}", account.name());
+        }
+    }
     store(passwords, sids)?;
     let group = group_sid()?;
     // A root that cannot be granted must not fail initialization: the workspace grant is what commands need, and
@@ -203,6 +208,43 @@ fn finish_initialization(
         return Err("Initialization finished but the sandbox accounts are not ready".into());
     }
     Ok(0)
+}
+
+/// Signs the account in once with its profile, so Windows creates the profile now rather than on the first command.
+/// A first `LOGON_WITH_PROFILE` builds the whole profile directory and registry hive, which on a busy machine
+/// outlasts the Host's broker start timeout; real acceptance saw a first offline command time out that way.
+/// Failure is reported, not fatal: the first command then only pays that cost itself.
+fn create_profile(account: Account, password: &Secret) -> Result<()> {
+    let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let image = wide(&format!(r"{system}\System32\cmd.exe"))?;
+    let mut command = wide("cmd.exe /d /c exit 0")?;
+    let directory = wide(&format!(r"{system}\System32"))?;
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = size_of::<STARTUPINFOW>() as u32;
+    let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    win(
+        unsafe {
+            CreateProcessWithLogonW(
+                wide(account.name())?.as_ptr(),
+                wide(".")?.as_ptr(),
+                wide(password.expose())?.as_ptr(),
+                LOGON_WITH_PROFILE,
+                image.as_ptr(),
+                command.as_mut_ptr(),
+                CREATE_NO_WINDOW,
+                null(),
+                directory.as_ptr(),
+                &startup,
+                &mut info,
+            )
+        },
+        "Sign the sandbox account in",
+    )?;
+    let (process, _thread) = (Handle(info.hProcess), Handle(info.hThread));
+    if unsafe { WaitForSingleObject(process.0, 120_000) } != WAIT_OBJECT_0 {
+        return Err("The first sign-in did not finish in time".into());
+    }
+    Ok(())
 }
 
 /// The current process environment, as the refresh request carries it.

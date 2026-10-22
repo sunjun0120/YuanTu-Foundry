@@ -301,6 +301,20 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let report = status();
     assert_eq!(report["ready"], json!(true), "{report}");
     let group = report["group"].as_str().expect("group SID").to_string();
+    // Setup signs each account in once, so the first command does not have to build a profile.
+    for entry in report["accounts"].as_array().expect("accounts") {
+        let sid = entry["sid"].as_str().expect("account SID");
+        let key = format!(r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}");
+        let listed = Command::new("reg")
+            .args(["query", &key, "/v", "ProfileImagePath"])
+            .output()
+            .unwrap();
+        assert!(
+            listed.status.success(),
+            "no profile was created for {sid} during setup: {}",
+            text(&listed)
+        );
+    }
     let roots: Vec<String> = report["readRoots"]
         .as_array()
         .expect("read roots")
