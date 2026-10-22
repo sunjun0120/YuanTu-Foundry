@@ -594,7 +594,9 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let traverse: Value = serde_json::from_slice(&std::fs::read(&traverse).unwrap_or_default())
         .unwrap_or_else(|_| json!({ "grants": [] }));
     assert_eq!(traverse["grants"], json!([]));
-    for path in [&automatic, &tool, &profile, &root] {
+    // `root` is left out: the test granted it by hand with icacls in step 1, and uninstall rightly keeps what it
+    // never recorded.
+    for path in [&automatic, &tool, &profile] {
         let listing = Command::new("icacls").arg(path).output().unwrap();
         let listing = String::from_utf8_lossy(&listing.stdout);
         assert!(
