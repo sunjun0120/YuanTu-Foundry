@@ -10,17 +10,21 @@
 - `d1e2586` 开发版与正式版统一账户初始化流程
 - `1bde623` 用初始化标记判断账户就绪
 - `14596ef` 去掉 `native` 到 `windows` 的自动回退
+- `da65401` 自动发现并授权工具链读根目录（2e，原生）
+- `9f20fbb` 沙箱可读目录改为自动发现，设置页收敛为三态（2e，TS/桌面）
+- `84f35a4` 可继承读授权真正传播到子对象，修正已删除对象与重叠授权（2e 本地实跑单测后的修复）
 
-| 阶段 / 任务                                                        | 状态                                                                |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| 1 spike                                                            | 完成                                                                |
-| 2a 原生执行链路（exec/broker/runner、IPC、Job）                    | 完成，CI 通过                                                       |
-| 2b 初始化/卸载/状态、DPAPI 凭据、WFP 按用户 SID 断网               | 完成，真实账户验收通过                                              |
-| 2c TS 接入（provider、broker 管理、常驻 grant、构建产出 exe）      | 完成，真实账户 TS 验收 1 pass / 0 skip                              |
-| 2d 桌面设置、读取白名单、初始化标记                                | 完成，Electron 设置 smoke 通过                                      |
-| 2026-10-22 收尾：删除签名/受保护安装、统一初始化、标记就绪、去回退 | 完成；真实账户 run `39728114611` 通过，后续 run `39729396999` 见 CI |
-| 私有桌面                                                           | **未做**（已知限制，见设计 §3.3 / §7.1）                            |
-| 全量 `CI`（`jobs=all`）与 PR                                       | 待用户触发/同意，见文末                                             |
+| 阶段 / 任务                                                                | 状态                                                                |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| 1 spike                                                                    | 完成                                                                |
+| 2a 原生执行链路（exec/broker/runner、IPC、Job）                            | 完成，CI 通过                                                       |
+| 2b 初始化/卸载/状态、DPAPI 凭据、WFP 按用户 SID 断网                       | 完成，真实账户验收通过                                              |
+| 2c TS 接入（provider、broker 管理、常驻 grant、构建产出 exe）              | 完成，真实账户 TS 验收 1 pass / 0 skip                              |
+| 2d 桌面设置、读取白名单、初始化标记                                        | 完成，Electron 设置 smoke 通过                                      |
+| 2026-10-22 收尾：删除签名/受保护安装、统一初始化、标记就绪、去回退         | 完成；真实账户 run `39728114611` 通过，后续 run `39729396999` 见 CI |
+| 2e 读根目录自动 refresh、设置页三态（计划 `2026-10-22-…-read-refresh.md`） | 完成；本地 `cargo test` 69 pass，真实账户验收待 CI                  |
+| 私有桌面                                                                   | **未做**（已知限制，见设计 §3.3 / §7.1）                            |
+| 全量 `CI`（`jobs=all`）与 PR                                               | 待用户触发/同意，见文末                                             |
 
 真实账户验收只允许在一次性 GitHub Actions Windows runner 上进行；**不要在本机初始化或移除账户**。
 
@@ -56,7 +60,7 @@ agent-host（桌面用户）
 
 ## 子命令速查（`yuantu-sandbox.exe`）
 
-`account-status`（标记 + 凭据）｜`account-status --verify`（实时诊断）｜`account-setup` / `account-uninstall`（用户入口；已提权则同进程，否则 UAC）｜`account-initialize --handoff PIPE`、`account-remove --elevated`（UAC 半边）｜`broker --dev`（测试）｜`broker --account offline|online`｜`grant --root R --capability S`、`ungrant --root R`｜`read-grant` / `read-ungrant`｜`exec --broker PIPE --request FILE`｜`runner --control ID --owner SID`
+`account-status`（标记 + 凭据）｜`account-status --verify`（实时诊断）｜`account-setup` / `account-uninstall`（用户入口；已提权则同进程，否则 UAC）｜`account-initialize --handoff PIPE`、`account-remove --elevated`（UAC 半边）｜`broker --dev`（测试）｜`broker --account offline|online`｜`grant --root R --capability S`、`ungrant --root R`｜`read-refresh --env FILE`（自动根）｜`read-grant` / `read-ungrant`（用户路径）｜`exec --broker PIPE --request FILE`｜`runner --control ID --owner SID`
 
 `--dev-direct`、`YUANTU_SANDBOX_DEV_PROVISION`、`install-preflight`、`maintenance.rs`、签名清单和受保护打包配置都已删除。
 
@@ -65,6 +69,7 @@ agent-host（桌面用户）
 - 全量 CI 基线 `11d9e28`：run `39724750494`（`jobs=all`）5 个 job 全绿；`check` 2986 = 2889 pass / 0 fail / 97 skip，`bench` 15 条规则通过，`native-macos` 通过。
 - 任务 2 真实账户：run `39728114611` 全绿。Rust `account-setup`/`account-uninstall` 真实验收、TS provider 验收、Electron 设置 smoke 都实际执行，0 skip。
 - 任务 3/4 真实账户：run `39729396999`（提交 `14596ef`）已触发；看 run 页面与原始日志确认标记写入/删除和设置 smoke。
+- 2e（`da65401`/`9f20fbb`/`84f35a4`）：本地 `cargo test` 69 pass / 0 fail，typecheck、format、i18n、docs、references、isolation 检查通过；推送后看 CI 与 Windows sandbox accounts 的 run。
 - 尚未完成：最终提交的全量 `CI`（`jobs=all`）需要用户手动触发；创建 PR 需用户同意；私有桌面未做。
 
 ## 约定与坑
@@ -76,4 +81,6 @@ agent-host（桌面用户）
 - 用脚本写含反斜杠的 Rust/TS 代码会被转义吞掉，直接用编辑器写文件。
 - 从 PowerShell 7 启动 `cargo test` 时，子进程 Windows PowerShell 5.1 需要 `env_remove("PSModulePath")`；本机 `%TEMP%`（`D:\Temp\sunjun`）下旧 `windows` 后端的 ACL `Pin` 会失败，这是本机环境问题，不等同于 CI 失败。
 - `npm run smoke:desktop` 在 Windows 上没有初始化账户时使用 `windows` 后端：CI 的 smoke 步骤设置 `YUANTU_SANDBOX=windows`；本机手动跑也可这样设置。
+- 读授权 ACL 单测必须在受保护的临时目录上跑（`make_profile_like`）：数据盘默认给 `Users` 读，根目录会被 `broadly_readable` 跳过，测试会在什么都没测的情况下提前返回。
+- 可继承 ACE 必须用 `SetSecurityInfo` 写才会传播到已有子对象；`SetKernelObjectSecurity` 不传播。`OpenFileById` 打开已删除文件返回 87（`ERROR_INVALID_PARAMETER`），按"对象已删除"处理。
 - `bench` 和 `native-macos` 当前基线已通过，不要在无证据时改门槛或加 skip。
