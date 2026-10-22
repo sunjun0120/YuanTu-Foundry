@@ -404,6 +404,15 @@ test('a preset keeps an explicitly selected windows backend', () => {
     sandbox: 'host',
     permission: 'full-access',
   });
+  // A launch default of windows survives an unconfined -> guarded switch.
+  assert.deepEqual(choiceForPreset(permissionPreset('guarded'), 'host', 'windows'), {
+    sandbox: 'windows',
+    permission: 'ask',
+  });
+  assert.deepEqual(choiceForPreset(permissionPreset('guarded'), 'host', 'native'), {
+    sandbox: 'native',
+    permission: 'ask',
+  });
 });
 
 test('a preset command is validated, including the host acknowledgement it must not bypass', () => {

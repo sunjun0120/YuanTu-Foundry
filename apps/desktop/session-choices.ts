@@ -21,11 +21,21 @@ export interface SessionChoice {
  * The pair a preset asks for, without silently upgrading an explicit `windows` backend.
  *
  * `windows` is the operator's weaker, manually selected implementation of the same isolation rung. A preset moves
- * the approval half; only a non-native preset (the host rung) changes the backend.
+ * the approval half when either the current session or the launch default uses it; only a non-native preset (the
+ * host rung) changes the backend. This keeps `YUANTU_SANDBOX=windows` meaningful across unconfined → guarded
+ * switches on a machine without initialized accounts.
  */
-export function choiceForPreset(preset: PermissionPreset, current: SandboxMode): SessionChoice {
+export function choiceForPreset(
+  preset: PermissionPreset,
+  current: SandboxMode,
+  launchDefault: SandboxMode = current,
+): SessionChoice {
+  const nativeRung = preset.sandbox === 'native';
   return {
-    sandbox: preset.sandbox === 'native' && current === 'windows' ? 'windows' : preset.sandbox,
+    sandbox:
+      nativeRung && (current === 'windows' || launchDefault === 'windows')
+        ? 'windows'
+        : preset.sandbox,
     permission: preset.permission,
   };
 }
