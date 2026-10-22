@@ -25,17 +25,17 @@
 
 ### Task 1：runner 侧 ConPTY
 
-- [ ] 失败测试（`tests/sandbox_exec.rs`，dev broker，exec 的 stdio 为管道）：带 `tty: {columns: 100, rows: 30}` 的 `powershell -Command "[Console]::IsOutputRedirected"` 输出含 `False`；带 TTY 的 `cmd /c echo hi` 输出含 `hi`；不带 TTY 的同一 PowerShell 命令输出 `True`（回归）。
-- [ ] `protocol::Request` 增加 `#[serde(default)] tty: Option<Size>`，`Size { columns: u16, rows: u16 }`，校验 1–1000。
-- [ ] `spawn.rs`：TTY 时 `CreatePipe` ×2 + `CreatePseudoConsole`，属性表加 `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`，不设 `STARTF_USESTDHANDLES`；两个转发线程（exec stdin → ConPTY 输入、ConPTY 输出 → exec stdout）；进程退出后 `ClosePseudoConsole` 并排空输出。`Running` 持有 `HPCON` 供 resize。
-- [ ] 通过并提交 `feat(windows-sandbox): runner 以 ConPTY 运行 TTY 请求`。
+- [x] 失败测试（`tests/sandbox_exec.rs`，dev broker，exec 的 stdio 为管道）：带 `tty: {columns: 100, rows: 30}` 的 `powershell -Command "[Console]::IsOutputRedirected"` 输出含 `False`；带 TTY 的 `cmd /c echo hi` 输出含 `hi`；不带 TTY 的同一 PowerShell 命令输出 `True`（回归）。
+- [x] `protocol::Request` 增加 `#[serde(default)] tty: Option<Size>`，`Size { columns: u16, rows: u16 }`，校验 1–1000。
+- [x] `spawn.rs`：TTY 时 `CreatePipe` ×2 + `CreatePseudoConsole`，属性表加 `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`，不设 `STARTF_USESTDHANDLES`；两个转发线程（exec stdin → ConPTY 输入、ConPTY 输出 → exec stdout）；进程退出后 `ClosePseudoConsole` 并排空输出。`Running` 持有 `HPCON` 供 resize。
+- [x] 通过并提交 `feat(windows-sandbox): runner 以 ConPTY 运行 TTY 请求`。
 
 ### Task 2：resize 与 exec 的控制台转发
 
-- [ ] 协议：`ToBroker::Resize { columns, rows }`（exec → broker，同一连接，Spawn 之后）、`ToRunner::Resize { id, columns, rows }`；broker 按连接对应的 id 转发；runner `ResizePseudoConsole`。
-- [ ] exec：TTY 请求时自建两条管道交给 broker；标准输入/输出若为控制台，保存原模式，输入改为去掉 `ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT` 并加 `ENABLE_VIRTUAL_TERMINAL_INPUT`，输出加 `ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN`，退出时恢复；每 250ms 读 `GetConsoleScreenBufferInfo` 窗口大小，变化即发 `Resize`。非控制台则只转发字节。
-- [ ] 测试：协议往返与校验单测；dev broker 下 TTY 请求发 `Resize` 后 `powershell [Console]::WindowWidth` 反映新宽度。
-- [ ] 提交 `feat(windows-sandbox): TTY 请求的窗口大小与 exec 控制台转发`。
+- [x] 协议：`ToBroker::Resize { columns, rows }`（exec → broker，同一连接，Spawn 之后）、`ToRunner::Resize { id, columns, rows }`；broker 按连接对应的 id 转发；runner `ResizePseudoConsole`。
+- [x] exec：TTY 请求时自建两条管道交给 broker；标准输入/输出若为控制台，保存原模式，输入改为去掉 `ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT` 并加 `ENABLE_VIRTUAL_TERMINAL_INPUT`，输出加 `ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN`，退出时恢复；每 250ms 读 `GetConsoleScreenBufferInfo` 窗口大小，变化即发 `Resize`。非控制台则只转发字节。
+- [x] 测试：协议往返与校验单测；dev broker 下 TTY 请求发 `Resize` 后 `powershell [Console]::WindowWidth` 反映新宽度。
+- [x] 提交 `feat(windows-sandbox): TTY 请求的窗口大小与 exec 控制台转发`。
 
 ### Task 3：TS 接入与端到端
 

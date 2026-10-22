@@ -98,12 +98,14 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 - 以子进程退出码退出；broker 断开或出错时向 stderr 打印 `SANDBOX_LAUNCH_FAILED_PREFIX` 前缀的一行（复用 `sandbox-launch-failure.ts` 的识别）并以 `125` 退出。
 - exec 被杀（宿主取消/超时）→ broker 检测到 exec 连接断开 → 转发 `cancel`。
 - exec 自身放在 agent-host 已有的进程树控制中；`SandboxPlan.processTree = 'contained'`（真正的后代在 runner 的 Job 里，由取消链路保证）。
+- **终端（TTY）**：`terminal_open` 把 exec 放进 node-pty 的伪终端，请求带 `tty{columns, rows}`。exec 的控制台句柄不能交给 runner（命令在另一个控制台和桌面上，写入会全部丢失），所以 exec 若在控制台上，就自建两条管道交给 broker，把控制台切到原始 VT 输入/输出与 UTF-8，在控制台与管道间双向转发，以实际窗口大小为初始尺寸，并每 50ms 轮询窗口大小、变化时发 `resize`。runner 对 TTY 请求 `CreatePseudoConsole`，以 `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` 启动命令（标准句柄置无效、不继承句柄、不加 `CREATE_NO_WINDOW`），在 ConPTY 与 exec 的管道间转发；命令结束后 `ClosePseudoConsole` 并等输出排空再报告退出。ConPTY 的输入管道保持到控制台关闭：conhost 把输入管道断开当作关闭控制台，会以 `STATUS_CONTROL_C_EXIT` 结束命令。参照 Codex `conpty/mod.rs`。
 
 ### 3.5 IPC 协议
 
 - 帧：4 字节小端长度 + UTF-8 JSON，单帧上限 1 MiB，未知字段拒绝（serde `deny_unknown_fields`），带 `version: 1`。
-- exec ↔ broker：`spawn{request, execPid, stdin, stdout, stderr}` → `started{pid}` | `exit{code}` | `error{kind, message}`。
-- broker ↔ runner：`spawn{id, request, stdin, stdout, stderr}`（句柄已是 runner 端值）、`cancel{id}` → `started{id, pid}`、`exit{id, code}`、`error{id, kind, message}`。
+- exec ↔ broker：`spawn{request, execPid, stdin, stdout, stderr}`，之后可有任意个 `resize{size}` → `started{pid}` | `exit{code}` | `error{kind, message}`。TTY 时双方都用 `PeekNamedPipe` 轮询：同步管道上一个阻塞的读会挡住同一句柄上的写。
+- broker ↔ runner：`spawn{id, request, stdin, stdout, stderr}`（句柄已是 runner 端值）、`cancel{id}`、`resize{id, size}` → `started{id, pid}`、`exit{id, code}`、`error{id, kind, message}`。
+- `request.tty` 可选，缺省即管道模式；`size` 的列和行都在 1–1000。
 - `error.kind` 取值固定：`invalid-request`、`launch-failed`、`runner-lost`、`not-ready`、`lease-conflict`，消息不包含环境变量或密码。
 
 ## 4. 初始化

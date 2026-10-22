@@ -24,7 +24,9 @@
 | 2026-10-22 收尾：删除签名/受保护安装、统一初始化、标记就绪、去回退                                                             | 完成；真实账户 run `39728114611` 通过，后续 run `39729396999` 见 CI |
 | 2e 读根目录自动 refresh、设置页三态（计划 `2026-10-22-…-read-refresh.md`）                                                     | 完成；真实账户 run `39741279867`（`4d08d1a`）通过                   |
 | 加固 1：卸载前停进程、初始化/卸载互斥（计划 `2026-10-23-windows-sandbox-uninstall-lock.md`，分支 `windows-sandbox-hardening`） | 真实账户 run `39750365365` 通过                                     |
-| 加固 2：私有桌面（计划 `2026-10-23-windows-sandbox-private-desktop.md`，分支 `windows-sandbox-hardening`）                     | 本地 `broker --dev` 测试通过，真实账户验收待 CI                     |
+| 加固 2：私有桌面（计划 `2026-10-23-windows-sandbox-private-desktop.md`，分支 `windows-sandbox-hardening`）                     | 真实账户 run `39751168935` 通过                                     |
+| 加固 3：SSH 配置引用的文件不进入可读根（计划 `2026-10-23-windows-sandbox-ssh-dependencies.md`）                                | 真实账户 run `39751914337` 通过                                     |
+| 加固 4：终端走 ConPTY（计划 `2026-10-23-windows-sandbox-conpty.md`；修复 main 上 windows-account 终端无输出）                  | 本地 dev broker 与 node-pty 端到端通过，真实账户验收待 CI           |
 | 全量 `CI`（`jobs=all`）与 PR                                                                                                   | 待用户触发/同意，见文末                                             |
 
 真实账户验收只允许在一次性 GitHub Actions Windows runner 上进行；**不要在本机初始化或移除账户**。
