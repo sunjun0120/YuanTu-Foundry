@@ -1,6 +1,9 @@
 param([Parameter(Mandatory=$true)][string]$Operation, [Parameter(Mandatory=$true)][string]$Root, [Parameter(Mandatory=$true)][string]$Journal, [string]$Sid, [string[]]$ControlRoots = @())
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# In-box modules only, by absolute path: auto-loading analyses every installed module first (see IN_BOX_MODULES).
+$PSModuleAutoLoadingPreference = 'None'
+foreach ($module in 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') { Import-Module -Name ($PSHOME + '\Modules\' + $module + '\' + $module + '.psd1') }
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Add-Type -TypeDefinition @'
 using System;

@@ -451,6 +451,7 @@ function powerShellLiteral(value: string): string {
 function bootstrap(dll: string, source: string): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    ...IN_BOX_MODULES,
     // Without this a non-interactive PowerShell writes progress records to stderr as CLIXML, which buries the
     // real error and makes every failure message start with a serialised object graph.
     '$ProgressPreference = "SilentlyContinue"',
@@ -499,6 +500,18 @@ function starterEnvironment(spec: Spec, base: NodeJS.ProcessEnv): NodeJS.Process
     ),
   };
 }
+/**
+ * The first lines of every helper program: load the in-box modules it uses from `$PSHOME`, and nothing else.
+ *
+ * Left to auto-loading, the first cmdlet a process calls makes PowerShell analyse every module on PSModulePath,
+ * which always includes Program Files: on a machine with many modules installed (GitHub's Windows runner) that
+ * cost 12 to 40 seconds per helper process, and a sandboxed command needs several. Explicit imports by absolute path
+ * also mean a module someone installed cannot stand in for a cmdlet these security helpers rely on.
+ */
+const IN_BOX_MODULES = [
+  "$PSModuleAutoLoadingPreference = 'None'",
+  "foreach ($module in 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') { Import-Module -Name ($PSHOME + '\\Modules\\' + $module + '\\' + $module + '.psd1') }",
+];
 /** The `-EncodedCommand` argument: UTF-16LE base64 of the bootstrap, so no shell ever parses it. */
 function launcherArgs(program: string): string[] {
   return [
@@ -659,6 +672,7 @@ const aclSource = (): string =>
 const ACL_VARIABLE = 'YUANTU_SANDBOX_ACL_SOURCE';
 const aclBootstrap = [
   "$ErrorActionPreference = 'Stop'",
+  ...IN_BOX_MODULES,
   "$ProgressPreference = 'SilentlyContinue'",
   `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
   `$bytes = [Convert]::FromBase64String($env:${ACL_VARIABLE})`,
