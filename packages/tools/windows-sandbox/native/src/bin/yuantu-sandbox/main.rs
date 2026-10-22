@@ -39,10 +39,6 @@ fn main_result() -> Result<u32> {
         ["account-uninstall"] => provision::uninstall(),
         ["account-initialize", "--handoff", pipe] => provision::initialize_handoff(pipe),
         ["account-remove", "--elevated"] => provision::remove_elevated(),
-        #[cfg(debug_assertions)]
-        ["account-initialize", "--dev-direct"] => provision::initialize_direct(),
-        #[cfg(debug_assertions)]
-        ["account-remove", "--dev-direct"] => provision::remove_direct(),
         ["runner", "--control", control, "--owner", owner]
             if control.len() == 32
                 && control.bytes().all(|b| b.is_ascii_hexdigit())

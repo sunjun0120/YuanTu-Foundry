@@ -7,7 +7,7 @@ import electronPath from 'electron';
 import { tempRoot } from './temp-fixture.ts';
 
 test(
-  'account settings are translated and development installs cannot request UAC',
+  'account settings are translated and an uninitialized install can request setup',
   { timeout: 60000 },
   async (t) => {
     let app;
@@ -23,7 +23,6 @@ test(
       OPENAI_API_KEY: '',
       ANTHROPIC_API_KEY: '',
       YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '',
-      YUANTU_SANDBOX_DEV_PROVISION: '',
     };
     delete env.ELECTRON_RUN_AS_NODE;
     app = await electron.launch({
@@ -44,23 +43,36 @@ test(
       return;
     }
     await page.locator('#sandbox-setup-section').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), true);
+    await page.waitForFunction(
+      () =>
+        /未初始化|无法读取/.test(
+          document.querySelector('#sandbox-setup-feedback')?.textContent ?? '',
+        ),
+      undefined,
+      { timeout: 15000 },
+    );
+    // Initialization is offered on an unpackaged development build too; clicking it would ask for UAC, which
+    // this smoke never does. Uninstall and read grants stay unavailable until accounts exist.
+    assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), false);
     assert.equal(await page.locator('#sandbox-setup-uninstall').isDisabled(), true);
     assert.equal(await page.locator('#sandbox-read-add').isDisabled(), true);
-    assert.match(await page.locator('#sandbox-setup-feedback').innerText(), /签名安装版本/);
+    assert.match(await page.locator('#sandbox-setup-feedback').innerText(), /未初始化|无法读取/);
     await page.locator('#ui-language').selectOption('en-US');
     await page.waitForFunction(
       () =>
         document.querySelector('#sandbox-setup-title').textContent === 'Windows sandbox accounts',
     );
-    assert.match(await page.locator('#sandbox-setup-feedback').innerText(), /signed release/);
+    assert.match(
+      await page.locator('#sandbox-setup-feedback').innerText(),
+      /not been initialized|cannot read/i,
+    );
     assert.equal(
       await page.locator('#sandbox-setup-uninstall').innerText(),
       'Uninstall sandbox accounts',
     );
     await page.locator('#sandbox-setup-refresh').click();
     await page.waitForFunction(() => !document.querySelector('#sandbox-setup-refresh').disabled);
-    assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), true);
+    assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), false);
     const bounds = await page.locator('#sandbox-setup-section').boundingBox();
     assert.ok(bounds && bounds.width > 200 && bounds.height > 100);
   },

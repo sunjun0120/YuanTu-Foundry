@@ -1,12 +1,10 @@
 //! `account-*` subcommands: status, setup/initialize, uninstall/remove.
 //!
-//! Release: the unelevated `account-setup` / `account-uninstall` elevate this same executable for one fixed
-//! operation (`account-initialize --handoff PIPE` / `account-remove --elevated`). The passwords travel from the
-//! unelevated side over a pipe only it and Administrators can open, so they never touch a command line or disk in
-//! clear, and DPAPI protects them for the desktop user — not for whichever administrator approved UAC.
-//!
-//! Debug builds add `--dev-direct`: no UAC and no self-elevation; it runs only in a process that is already
-//! elevated and has `YUANTU_SANDBOX_DEV_PROVISION=1`. It exists for disposable CI machines.
+//! `account-setup` / `account-uninstall` are the user-facing entries. When the current process is already
+//! elevated they run in-process; otherwise they elevate this same executable for one fixed operation
+//! (`account-initialize --handoff PIPE` / `account-remove --elevated`). The passwords travel from the unelevated
+//! side over a pipe only it and Administrators can open, so they never touch a command line or disk in clear, and
+//! DPAPI protects them for the desktop user — not for whichever administrator approved UAC.
 use crate::{
     frame::{read_frame, write_frame},
     pipe::{PipeIo, accept, client_pid, connect, random_suffix, server},
@@ -90,14 +88,6 @@ fn require_elevated() -> Result<()> {
     Ok(())
 }
 
-#[cfg(debug_assertions)]
-fn require_dev_direct() -> Result<()> {
-    if std::env::var("YUANTU_SANDBOX_DEV_PROVISION").as_deref() != Ok("1") {
-        return Err("--dev-direct requires YUANTU_SANDBOX_DEV_PROVISION=1".into());
-    }
-    require_elevated()
-}
-
 /// Accounts, group, rights, sign-in hiding, Secondary Logon, then the offline account's network filters.
 fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> {
     let sids = users::provision(passwords)?;
@@ -147,23 +137,23 @@ fn store(passwords: Vec<(Account, Secret)>, sids: &[(Account, String)]) -> Resul
     credentials::store(&entries)
 }
 
-#[cfg(debug_assertions)]
-pub fn initialize_direct() -> Result<u32> {
-    require_dev_direct()?;
-    let passwords = generate_all()?;
-    let sids = provision(&passwords)?;
-    store(passwords, &sids)?;
+/// Shared tail of both initialization paths: credentials, default read grants and the readiness report.
+fn finish_initialization(
+    passwords: Vec<(Account, Secret)>,
+    sids: &[(Account, String)],
+) -> Result<u32> {
+    store(passwords, sids)?;
     grants::reads::grant_defaults(&group_sid()?)?;
-    print_status()
-}
-
-#[cfg(debug_assertions)]
-pub fn remove_direct() -> Result<u32> {
-    require_dev_direct()?;
-    remove_user_grants()?;
-    remove_everything()?;
-    credentials::remove()?;
-    print_status()
+    let report = status::status();
+    let ready = report.ready;
+    println!(
+        "{}",
+        serde_json::to_string(&report).map_err(|_| "Serialize status")?
+    );
+    if !ready {
+        return Err("Initialization finished but the sandbox accounts are not ready".into());
+    }
+    Ok(0)
 }
 
 /// Elevated half of `account-setup`.
@@ -274,9 +264,13 @@ fn wait_success(process: &Handle) -> Result<()> {
     Ok(())
 }
 
-/// `account-setup`: the unelevated, user-facing initialization.
+/// `account-setup`: user-facing initialization; UAC only when the current process is not elevated.
 pub fn setup() -> Result<u32> {
     let passwords = generate_all()?;
+    if elevated()? {
+        let sids = provision(&passwords)?;
+        return finish_initialization(passwords, &sids);
+    }
     let name = format!(r"\\.\pipe\yuantu-sbx-handoff-{}", random_suffix()?);
     let channel = server(
         &name,
@@ -313,23 +307,17 @@ pub fn setup() -> Result<u32> {
         _ => return Err("Unsupported handoff reply".into()),
     };
     wait_success(&process)?;
-    store(passwords, &sids)?;
-    grants::reads::grant_defaults(&group_sid()?)?;
-    let report = status::status();
-    let ready = report.ready;
-    println!(
-        "{}",
-        serde_json::to_string(&report).map_err(|_| "Serialize status")?
-    );
-    if !ready {
-        return Err("Initialization finished but the sandbox accounts are not ready".into());
-    }
-    Ok(0)
+    finish_initialization(passwords, &sids)
 }
 
-/// `account-uninstall`: the unelevated, user-facing removal.
+/// `account-uninstall`: user-facing removal; UAC only when the current process is not elevated.
 pub fn uninstall() -> Result<u32> {
     remove_user_grants()?;
+    if elevated()? {
+        remove_everything()?;
+        credentials::remove()?;
+        return print_status();
+    }
     let process = elevate("account-remove --elevated")?;
     wait_success(&process)?;
     credentials::remove()?;
@@ -386,14 +374,5 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn dev_direct_requires_the_explicit_variable() {
-        if std::env::var("YUANTU_SANDBOX_DEV_PROVISION").is_ok() {
-            return;
-        }
-        assert!(require_dev_direct().is_err());
     }
 }

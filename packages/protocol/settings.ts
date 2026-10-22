@@ -362,11 +362,6 @@ export const ENVIRONMENT = {
     values: ['0', '1'],
     description: '（测试）仅在可丢弃 GitHub Actions runner 启用原生账户真实验收',
   },
-  YUANTU_SANDBOX_DEV_PROVISION: {
-    kind: 'enum',
-    values: ['0', '1'],
-    description: '（测试）允许已提权 debug helper 的固定建户操作；不触发提权',
-  },
   YUANTU_SANDBOX_ACL_SOURCE: {
     kind: 'string',
     description: '（内部）Host 快照的 ACL helper 载荷；不向客体传递',

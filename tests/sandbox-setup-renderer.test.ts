@@ -115,19 +115,20 @@ test('unsupported platforms and browser bridges keep administrator controls hidd
   }
 });
 
-test('an unverified release cannot enable the initialization button', async () => {
+test('an unavailable helper cannot enable the initialization button', async () => {
   const commands: SandboxSetupCommand[] = [];
   const fixture = await page(async (command) => {
     commands.push(command);
     return {
       ok: true,
-      view: { supported: true, ready: false, installed: false, reason: 'release' },
+      view: { supported: true, ready: false, installed: false, reason: 'unavailable' },
     };
   });
   try {
     assert.equal(fixture.node('initialize').disabled, true);
     await fixture.node('initialize').click();
     assert.deepEqual(commands, [{ type: 'status' }]);
+    assert.match(fixture.node('feedback').textContent, /cannot read|无法读取/i);
   } finally {
     fixture.restore();
   }

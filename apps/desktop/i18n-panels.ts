@@ -264,9 +264,9 @@ export const panelMessages: Record<string, [string, string]> = {
     'Secondary Logon 服务不可用',
     'Secondary Logon service is unavailable',
   ],
-  'sandboxSetup.problem.installation-unverified': [
-    '发布签名或安装位置未通过验证',
-    'Release signature or installation location could not be verified',
+  'sandboxSetup.unavailable': [
+    '无法读取沙箱账户状态，请确认应用目录中存在 yuantu-sandbox.exe。',
+    'Cannot read the sandbox account status; check that yuantu-sandbox.exe exists beside the application.',
   ],
   'sandboxSetup.refresh': ['检查状态', 'Check status'],
   'sandboxSetup.pending': [
@@ -278,14 +278,6 @@ export const panelMessages: Record<string, [string, string]> = {
   'sandboxSetup.installed': [
     '沙箱账户就绪，原生沙箱将使用账户隔离。',
     'Sandbox accounts are ready; the native sandbox will use account isolation.',
-  ],
-  'sandboxSetup.development': [
-    '开发版本不提供管理员初始化，请使用受保护目录中的签名安装版本。',
-    'Administrator initialization requires a signed release in a protected installation directory.',
-  ],
-  'sandboxSetup.release': [
-    '安装位置或发布签名未通过检查，无法进行管理员初始化。',
-    'Installation location or release signature verification failed; initialization is unavailable.',
   ],
   'sandboxSetup.failed': [
     '初始化未完成或状态检查失败。请确认管理员提示并重新检查状态。',

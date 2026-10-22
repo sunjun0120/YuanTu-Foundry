@@ -406,7 +406,6 @@ void app
     });
     const sandboxSetup = new WindowsAccountSandboxSetup({
       platform: process.platform,
-      packaged: app.isPackaged,
       helperPath: path.resolve(__dirname, '../packages/tools/windows-sandbox/yuantu-sandbox.exe'),
       changing: async () => {
         await refreshAccountBackend();

@@ -76,7 +76,6 @@ export function configureAccountBackend(change: Partial<Configuration>): void {
 export interface AccountStatus {
   version: 1;
   ready: boolean;
-  development: boolean;
   problems: string[];
   details: string[];
   accounts: { account: SandboxAccount; sid: string | null }[];
@@ -102,7 +101,6 @@ export function parseAccountStatus(text: string): AccountStatus {
     typeof status !== 'object' ||
     status.version !== 1 ||
     typeof status.ready !== 'boolean' ||
-    typeof status.development !== 'boolean' ||
     !strings(status.problems) ||
     !strings(status.details) ||
     !(status.group === null || (typeof status.group === 'string' && SID.test(status.group))) ||
@@ -113,7 +111,7 @@ export function parseAccountStatus(text: string): AccountStatus {
         (entry.account === 'offline' || entry.account === 'online') &&
         (entry.sid === null || (typeof entry.sid === 'string' && SID.test(entry.sid))),
     ) ||
-    Object.keys(status).length !== 7
+    Object.keys(status).length !== 6
   )
     throw new Error('The sandbox account helper returned an invalid status');
   // A status that calls itself ready while naming problems is not believed.

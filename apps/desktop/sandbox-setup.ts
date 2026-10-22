@@ -12,7 +12,7 @@ export interface SandboxSetupView {
   supported: boolean;
   ready: boolean;
   installed: boolean;
-  reason: 'platform' | 'development' | 'release' | null;
+  reason: 'platform' | 'unavailable' | null;
   state?: 'uninitialized' | 'ready' | 'damaged';
   problems?: string[];
 }
@@ -63,7 +63,6 @@ export function parseSandboxSetupCommand(input: unknown): SandboxSetupCommand {
 }
 export interface SandboxSetupOptions {
   platform: NodeJS.Platform;
-  packaged: boolean;
   helperPath: string;
   execute?: (file: string, args: string[], timeout: number) => Promise<{ stdout: string }>;
   changed?: () => Promise<void>;
@@ -97,7 +96,6 @@ export class WindowsAccountSandboxSetup {
       reason: null,
     };
     if (!base.supported) return { ...base, reason: 'platform' };
-    if (!this.options.packaged) return { ...base, reason: 'development' };
     try {
       const status = parseAccountStatus(
         (await this.execute(this.options.helperPath, ['account-status'], 15000)).stdout,
@@ -106,13 +104,9 @@ export class WindowsAccountSandboxSetup {
         status.accounts.some((account) => account.sid !== null) || status.group !== null;
       return {
         ...base,
-        ready: !status.development && !status.problems.includes('installation-unverified'),
+        ready: true,
         installed: status.ready,
-        reason: status.development
-          ? 'development'
-          : status.problems.includes('installation-unverified')
-            ? 'release'
-            : null,
+        reason: null,
         state: status.ready
           ? 'ready'
           : initialized || !status.problems.includes('accounts-missing')
@@ -121,7 +115,7 @@ export class WindowsAccountSandboxSetup {
         problems: status.problems,
       };
     } catch {
-      return { ...base, reason: 'release' };
+      return { ...base, reason: 'unavailable' };
     }
   }
   private async mutate(

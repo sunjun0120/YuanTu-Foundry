@@ -88,12 +88,12 @@ test(
   async (t) => {
     const state = await tempRoot(t, 'yuantu-account-native-');
     configureAccountBackend({ helper, state });
-    const env = { ...process.env, YUANTU_SANDBOX_DEV_PROVISION: '1' };
-    await exec(helper, ['account-initialize', '--dev-direct'], { env });
+    const env = { ...process.env };
+    await exec(helper, ['account-setup'], { env });
     t.after(async () => {
       await stopBrokers();
       setWindowsAccountReady(false);
-      await exec(helper, ['account-remove', '--dev-direct'], { env });
+      await exec(helper, ['account-uninstall'], { env });
     });
     // The accounts must be able to run the helper and node (outside any workspace grant on a CI machine).
     for (const directory of [path.dirname(helper), path.dirname(process.execPath)])

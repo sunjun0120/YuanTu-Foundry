@@ -10,7 +10,6 @@ const report = (ready = false, problems = ready ? [] : ['accounts-missing']) =>
   JSON.stringify({
     version: 1,
     ready,
-    development: false,
     problems,
     details: [],
     accounts: [
@@ -30,7 +29,6 @@ test('account setup distinguishes missing, damaged and ready without elevation',
     const calls: string[][] = [];
     const setup = new setupModule.WindowsAccountSandboxSetup({
       platform: 'win32',
-      packaged: true,
       helperPath: 'C:\\protected\\yuantu-sandbox.exe',
       execute: async (_file, args) => {
         calls.push(args);
@@ -63,7 +61,6 @@ test('a damaged read allowlist can still be revoked through the settings service
   const calls: string[][] = [];
   const setup = new setupModule.WindowsAccountSandboxSetup({
     platform: 'win32',
-    packaged: true,
     helperPath: 'fixed',
     execute: async (_file, args) => {
       calls.push(args);
@@ -81,7 +78,6 @@ test('account setup verifies mutations, refreshes even on UAC failure and has no
   const mutations: [string, string[], number][] = [];
   const setup = new setupModule.WindowsAccountSandboxSetup({
     platform: 'win32',
-    packaged: true,
     helperPath: 'C:\\protected\\yuantu-sandbox.exe',
     changed: async () => {
       refreshes++;
@@ -102,7 +98,6 @@ test('account setup verifies mutations, refreshes even on UAC failure and has no
   ]);
   const cancelled = new setupModule.WindowsAccountSandboxSetup({
     platform: 'win32',
-    packaged: true,
     helperPath: 'fixed',
     changed: async () => {
       refreshes++;
@@ -116,28 +111,35 @@ test('account setup verifies mutations, refreshes even on UAC failure and has no
   assert.equal(refreshes, 3);
 });
 
-test('account maintenance fails closed in development, invalid status and concurrent operations', async () => {
+test('account maintenance fails closed when the platform or helper is unavailable', async () => {
   assert.equal(typeof setupModule.WindowsAccountSandboxSetup, 'function');
-  for (const options of [{ packaged: false }, { platform: 'darwin' as const }]) {
-    const setup = new setupModule.WindowsAccountSandboxSetup({
-      platform: 'win32',
-      packaged: true,
-      helperPath: 'fixed',
-      ...options,
-      execute: async () => {
-        throw new Error('must not execute');
-      },
-    });
-    await assert.rejects(setup.initialize(), /unavailable/);
-    await assert.rejects(setup.uninstall(), /unavailable/);
-  }
+  const platform = new setupModule.WindowsAccountSandboxSetup({
+    platform: 'darwin',
+    helperPath: 'fixed',
+    execute: async () => {
+      throw new Error('must not execute');
+    },
+  });
+  await assert.rejects(platform.initialize(), /unavailable/);
+  await assert.rejects(platform.uninstall(), /unavailable/);
+  const missing = new setupModule.WindowsAccountSandboxSetup({
+    platform: 'win32',
+    helperPath: 'fixed',
+    execute: async () => {
+      throw new Error('helper missing');
+    },
+  });
+  await assert.rejects(missing.initialize(), /unavailable/);
+  await assert.rejects(missing.uninstall(), /unavailable/);
+});
+
+test('account maintenance serializes concurrent operations', async () => {
   let complete!: () => void;
   const pending = new Promise<void>((resolve) => {
     complete = resolve;
   });
   const setup = new setupModule.WindowsAccountSandboxSetup({
     platform: 'win32',
-    packaged: true,
     helperPath: 'fixed',
     execute: async (_file, args) => {
       if (args[0] !== 'account-status') await pending;

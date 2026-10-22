@@ -29,7 +29,6 @@ function status(ready: boolean, problems: string[] = ready ? [] : ['accounts-mis
   return JSON.stringify({
     version: 1,
     ready,
-    development: true,
     problems,
     details: [],
     accounts: [

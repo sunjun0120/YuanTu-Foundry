@@ -1,7 +1,6 @@
 //! Real acceptance of the sandbox account backend. It creates local accounts, a group, logon rights, and WFP
 //! filters, so it runs only on a disposable elevated machine (CI) that sets
-//! `YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE=1` and `YUANTU_SANDBOX_DEV_PROVISION=1`. Everything is removed at the end,
-//! also when an assertion fails.
+//! `YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE=1`. Everything is removed at the end, also when an assertion fails.
 #![cfg(all(windows, debug_assertions))]
 use serde_json::{Value, json};
 use std::{
@@ -68,7 +67,7 @@ fn status() -> Value {
 struct Provisioned;
 impl Drop for Provisioned {
     fn drop(&mut self) {
-        let output = run(&["account-remove", "--dev-direct"]);
+        let output = run(&["account-uninstall"]);
         let text = format!(
             "{} {}",
             String::from_utf8_lossy(&output.stdout),
@@ -231,10 +230,10 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let root = scratch();
     std::fs::create_dir_all(&root).unwrap();
 
-    // 1. Provision.
-    let output = run(&["account-initialize", "--dev-direct"]);
+    // 1. Provision through the same entry the desktop uses.
+    let output = run(&["account-setup"]);
     let _cleanup = Provisioned;
-    annotate("notice", "account-initialize", &text(&output));
+    annotate("notice", "account-setup", &text(&output));
     assert!(output.status.success(), "initialize: {}", text(&output));
     let report = status();
     assert_eq!(report["ready"], json!(true), "{report}");
@@ -464,7 +463,7 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
 
     // 7. Removal leaves nothing behind.
     let _ = std::fs::remove_file(&secret);
-    let removed = run(&["account-remove", "--dev-direct"]);
+    let removed = run(&["account-uninstall"]);
     assert!(removed.status.success(), "{}", text(&removed));
     let journal = yuantu_sandbox::account::credentials::state_directory()
         .unwrap()

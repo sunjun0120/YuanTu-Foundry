@@ -14,8 +14,6 @@ pub struct AccountStatus {
 pub struct Status {
     pub version: u32,
     pub ready: bool,
-    /// A debug build: usable for tests, never an installed product.
-    pub development: bool,
     /// Stable codes; the host maps them to messages.
     pub problems: Vec<&'static str>,
     /// Diagnostic text for the problems above; not stable, for logs only.
@@ -122,7 +120,6 @@ pub fn status() -> Status {
     Status {
         version: 1,
         ready: problems.is_empty(),
-        development: cfg!(debug_assertions),
         problems,
         details,
         accounts,
@@ -142,7 +139,6 @@ mod tests {
         }
         let status = status();
         assert!(!status.ready);
-        assert!(status.development);
         assert!(status.problems.contains(&"accounts-missing"));
         assert!(status.problems.contains(&"firewall-missing"));
         serde_json::to_string(&status).unwrap();
