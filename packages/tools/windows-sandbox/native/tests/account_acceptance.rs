@@ -159,6 +159,13 @@ fn scratch() -> PathBuf {
 }
 
 fn exec(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: bool) -> Output {
+    exec_spawn(pipe, argv, cwd, capabilities, verbatim)
+        .wait_with_output()
+        .unwrap()
+}
+
+/// `exec` without waiting: the command keeps running in the sandbox while the test does something else.
+fn exec_spawn(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: bool) -> Child {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let file = scratch().join(format!(
         "request-{}.json",
@@ -183,7 +190,7 @@ fn exec(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: 
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(b"").unwrap();
-    child.wait_with_output().unwrap()
+    child
 }
 
 fn cmd() -> String {
@@ -582,10 +589,36 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     drop(online);
 
     // 7. Removal leaves nothing behind: no journal entry, no group ACE on an automatic root, a user path or the
-    //    profile ancestors that only carried traverse, and both journals empty.
+    //    profile ancestors that only carried traverse, and both journals empty. An offline command is still running
+    //    when uninstall starts: uninstall must end it before the network filters go, not leave it running online.
     let _ = std::fs::remove_file(&secret);
+    let offline = broker("offline");
+    let mut running = exec_spawn(
+        &offline.pipe,
+        &[&node, "-e", "setInterval(()=>{},1000)"],
+        &a,
+        &[&cap_a],
+        false,
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert!(
+        running.try_wait().unwrap().is_none(),
+        "the long-running sandbox command ended before uninstall started"
+    );
     let removed = run(&["account-uninstall"]);
     assert!(removed.status.success(), "{}", text(&removed));
+    let stopped = (0..150).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        running.try_wait().unwrap().is_some()
+    });
+    if !stopped {
+        let _ = running.kill();
+    }
+    assert!(
+        stopped,
+        "the sandbox command was still running after uninstall"
+    );
+    drop(offline);
     let state = yuantu_sandbox::account::credentials::state_directory().unwrap();
     let reads: Value =
         serde_json::from_slice(&std::fs::read(state.join("read-grants.json")).unwrap()).unwrap();
