@@ -131,43 +131,80 @@ async function workspace() {
   // the tools run (a crash mid-tool must leave that record), then three results are appended, then the
   // round boundary flushes them together. The same shape is measured twice in one run: with a flush after
   // every append — which is exactly what a per-message commit did — and batched.
+  //
+  // The two sides are measured in alternating pairs after a warm-up pair, not as three of one then three of
+  // the other. Run back to back, each side sat in a different stretch of the run — the first one paid for
+  // compiling the round's message shapes, and a WAL checkpoint landed in whichever side it landed in — and
+  // on the Linux runner the same commit measured anywhere from 1.19x to 1.62x across eight runs, while
+  // interleaved pairs measured 1.61-1.68x. A single pass still swings (one checkpoint is a large share of a
+  // 40ms pass), which is what the eleven pairs and the medians are for. What pairing cannot remove is a
+  // per-process mode: on the runner a whole process measures the per-message side at either ~0.35 or ~0.39ms,
+  // so the same build lands near 1.4x or near 1.6x. That is why the property itself — how many commits a round
+  // costs — is counted rather than inferred from the timing.
   const rounds = 200;
+  const pairs = 11;
   const measureRounds = (flushEveryMessage) => {
-    const samples = [];
-    for (let pass = 0; pass < 3; pass++) {
-      const round = store.create(root);
-      const measured = time(() => {
-        for (let index = 0; index < rounds; index++) {
+    const round = store.create(root);
+    const measured = time(() => {
+      for (let index = 0; index < rounds; index++) {
+        store.append(round.id, {
+          role: 'assistant',
+          content: `round ${index}`,
+          toolCalls: [],
+        });
+        flush(round.id);
+        for (let tool = 0; tool < 3; tool++) {
           store.append(round.id, {
-            role: 'assistant',
-            content: `round ${index}`,
-            toolCalls: [],
+            role: 'tool',
+            toolCallId: `call-${tool}`,
+            content: text,
+            isError: false,
           });
-          flush(round.id);
-          for (let tool = 0; tool < 3; tool++) {
-            store.append(round.id, {
-              role: 'tool',
-              toolCallId: `call-${tool}`,
-              content: text,
-              isError: false,
-            });
-            if (flushEveryMessage) flush(round.id);
-          }
-          flush(round.id);
+          if (flushEveryMessage) flush(round.id);
         }
-      });
-      samples.push(measured.ms / rounds);
-    }
-    samples.sort((a, b) => a - b);
-    return samples[1];
+        flush(round.id);
+      }
+    });
+    return measured.ms / rounds;
   };
-  const unbatched = measureRounds(true);
-  const batched = measureRounds(false);
+  // Counted on a pass of its own, so the counting wrapper is never inside a timed pass.
+  const commitsPerRound = (flushEveryMessage) => {
+    const exec = DatabaseSync.prototype.exec;
+    let commits = 0;
+    DatabaseSync.prototype.exec = function (sql) {
+      if (/^\s*COMMIT\b/i.test(sql)) commits++;
+      return exec.call(this, sql);
+    };
+    try {
+      measureRounds(flushEveryMessage);
+    } finally {
+      DatabaseSync.prototype.exec = exec;
+    }
+    return commits / rounds;
+  };
+  record(
+    'append.commitsPerRoundUnbatched',
+    commitsPerRound(true),
+    'commits',
+    'flush after every message',
+  );
+  record('append.commitsPerRound', commitsPerRound(false), 'commits', 'batched round');
+  measureRounds(true);
+  measureRounds(false);
+  const unbatchedSamples = [];
+  const batchedSamples = [];
+  for (let pair = 0; pair < pairs; pair++) {
+    unbatchedSamples.push(measureRounds(true));
+    batchedSamples.push(measureRounds(false));
+  }
+  const middle = (samples) => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)];
+  const unbatched = middle(unbatchedSamples);
+  const batched = middle(batchedSamples);
   record(
     'append.perRoundUnbatched',
     unbatched.toFixed(3),
     'ms',
-    `median of 3 x ${rounds} rounds, one commit per message (4 commits)`,
+    `median of ${pairs} x ${rounds} rounds, one commit per message (4 commits)`,
   );
   record(
     'append.perRound',
@@ -533,9 +570,23 @@ const RULES = [
     'I8：一条消息恰好一行加一条事件，多一条就是又出现了第二个事实来源',
   ],
   [
+    'append.commitsPerRoundUnbatched',
+    (v) => Number(v) === 4,
+    '对照组必须真的是逐条提交：一轮 4 条消息 4 次 COMMIT，否则下面的比值比的不是批量',
+  ],
+  [
+    'append.commitsPerRound',
+    (v) => Number(v) === 2,
+    '批量追加的不变式：一轮 4 条消息只提交 2 次（工具调用前一次、轮次边界一次），多一次就是批量失效',
+  ],
+  [
     'append.perRound',
-    (v) => v <= value('append.perRoundUnbatched') * 0.75,
-    '批量追加必须真的更便宜：一轮 4 条消息应当比每条一次提交省下至少 25%',
+    // 0.8 rather than 0.75, from measurement rather than taste: with the passes paired, the Linux runner measured
+    // 1.34-1.45x over 13 runs and 1.41-1.68x standalone, and Windows 1.39-1.50x over 11; 0.75 sat on the low end
+    // of that spread and failed on runner noise. Batching that stopped working measures 1.0x and fails either way,
+    // and the commit counts above are what pin the property itself.
+    (v) => v <= value('append.perRoundUnbatched') * 0.8,
+    '批量追加必须真的更便宜：一轮 4 条消息应当比每条一次提交省下至少 20%',
   ],
   [
     'read.threePerRoundCached.10000',
