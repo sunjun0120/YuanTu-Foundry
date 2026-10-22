@@ -22,11 +22,13 @@ use windows_sys::Win32::{
 use yuantu_sandbox::account::{
     Account, credentials, firewall, grants,
     password::{self, Secret},
-    read_refresh, setup_lock, setup_marker, status, users,
+    processes, read_refresh, setup_lock, setup_marker, status, users,
 };
 
 /// How long an elevated setup or uninstall waits for another one to finish before giving up.
 const SETUP_LOCK_TIMEOUT_MS: u32 = 30_000;
+/// How long uninstall waits for the sandbox accounts' processes and logons to end.
+const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,8 +123,21 @@ fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> 
     Ok(sids)
 }
 
+/// Stops the sandbox before taking its protections away: accounts disabled, their processes ended and their logons
+/// gone, and only then the offline account's network filters and the accounts themselves. Removing the filters
+/// first would put a still-running offline command on the network.
 fn remove_everything() -> Result<()> {
     let _lock = setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS)?;
+    let disabled = users::disable()?;
+    if let Err(error) = processes::stop(&disabled.sids(), STOP_DEADLINE) {
+        // The filters and accounts are still in place, so restoring the flags returns to a safe, working sandbox.
+        return Err(match disabled.restore() {
+            Ok(()) => error,
+            Err(restore) => {
+                format!("{error}; restoring the sandbox accounts also failed: {restore}")
+            }
+        });
+    }
     firewall::remove_filters()?;
     users::remove()
 }
