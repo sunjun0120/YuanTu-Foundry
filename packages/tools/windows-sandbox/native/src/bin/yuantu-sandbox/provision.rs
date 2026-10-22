@@ -11,7 +11,7 @@ use crate::{
     win::{Handle, Result, current_token, current_user, wide, win},
 };
 use serde::{Deserialize, Serialize};
-use std::{ffi::c_void, mem::size_of, ptr::null};
+use std::{collections::BTreeMap, ffi::c_void, mem::size_of, ptr::null};
 use windows_sys::Win32::{
     Foundation::*,
     Security::*,
@@ -22,8 +22,15 @@ use windows_sys::Win32::{
 use yuantu_sandbox::account::{
     Account, credentials, firewall, grants,
     password::{self, Secret},
-    setup_marker, status, users,
+    read_refresh, setup_marker, status, users,
 };
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RefreshRequest {
+    version: u32,
+    env: BTreeMap<String, String>,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -147,14 +154,23 @@ fn store(passwords: Vec<(Account, Secret)>, sids: &[(Account, String)]) -> Resul
     credentials::store(&entries)
 }
 
-/// Shared tail of both initialization paths: credentials, default read grants and the readiness report.
+/// Shared tail of both initialization paths: credentials, the automatic read roots, and the readiness report.
 fn finish_initialization(
     passwords: Vec<(Account, Secret)>,
     sids: &[(Account, String)],
 ) -> Result<u32> {
     store(passwords, sids)?;
     let group = group_sid()?;
-    grants::reads::grant_defaults(&group)?;
+    // A root that cannot be granted must not fail initialization: the workspace grant is what commands need, and
+    // the next refresh retries the toolchain roots.
+    match read_refresh::refresh(&environment(), &group) {
+        Ok(report) => {
+            for skipped in &report.skipped {
+                eprintln!("Skipped read root {}: {}", skipped.path, skipped.reason);
+            }
+        }
+        Err(error) => eprintln!("Read refresh failed: {error}"),
+    }
     setup_marker::write(&setup_marker::build(sids, &group)?)?;
     let report = status::status();
     let ready = report.ready;
@@ -167,6 +183,41 @@ fn finish_initialization(
         return Err("Initialization finished but the sandbox accounts are not ready".into());
     }
     Ok(0)
+}
+
+/// The current process environment, as the refresh request carries it.
+fn environment() -> BTreeMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+/// `read-refresh --env FILE`: authorize the toolchain roots one environment names. Never elevates.
+pub fn read_refresh(file: &str) -> Result<u32> {
+    let request = refresh_request(file)?;
+    if request.version != 1 {
+        return Err("Unsupported read refresh request".into());
+    }
+    let report = read_refresh::refresh(&request.env, &group_sid()?)?;
+    println!(
+        "{}",
+        serde_json::to_string(&report).map_err(|_| "Serialize read refresh")?
+    );
+    Ok(0)
+}
+
+/// The request is a one-shot message from the Host, in a file only the desktop user can read. It is deleted before
+/// it is parsed: a rejected request must not be retried forever.
+fn refresh_request(file: &str) -> Result<RefreshRequest> {
+    let path = std::path::Path::new(file);
+    let metadata = std::fs::metadata(path).map_err(|_| "Read refresh request is missing")?;
+    if metadata.len() > 1 << 20 {
+        let _ = std::fs::remove_file(path);
+        return Err("Read refresh request is too large".into());
+    }
+    let bytes = std::fs::read(path).map_err(|_| "Read refresh request failed")?;
+    let _ = std::fs::remove_file(path);
+    serde_json::from_slice(&bytes).map_err(|_| "Invalid read refresh request".into())
 }
 
 /// Elevated half of `account-setup`.

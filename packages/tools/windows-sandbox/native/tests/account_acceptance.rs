@@ -218,6 +218,50 @@ fn node() -> String {
         .to_string()
 }
 
+/// The first `PATH` match for a program, if any.
+fn on_path(program: &str) -> Option<PathBuf> {
+    let output = Command::new("where").arg(program).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .next()
+        .map(|line| PathBuf::from(line.trim()))
+}
+
+fn inside(path: &Path, profile: &Path) -> bool {
+    let path = path.to_string_lossy().to_lowercase();
+    let profile = profile.to_string_lossy().to_lowercase();
+    path != profile && path.starts_with(&(profile + "\\"))
+}
+
+/// Authorizes the automatic read roots for an environment: the same call the Host makes before its first command.
+fn read_refresh(prepend: &Path) -> Output {
+    let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    // `vars()` spells it `Path`; the request carries one `PATH`, so drop the original spelling first.
+    env.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
+    let path = std::env::var("PATH").unwrap_or_default();
+    env.insert("PATH".into(), format!("{};{path}", prepend.display()));
+    let file = scratch().join("refresh.json");
+    std::fs::write(&file, json!({ "version": 1, "env": env }).to_string()).unwrap();
+    Command::new(EXE)
+        .args(["read-refresh", "--env"])
+        .arg(&file)
+        .output()
+        .unwrap()
+}
+
+/// `account-setup`, with a `PATH` the automatic discovery can see.
+fn setup_with_path(prepend: &Path) -> Output {
+    let path = std::env::var("PATH").unwrap_or_default();
+    Command::new(EXE)
+        .arg("account-setup")
+        .env("PATH", format!("{};{path}", prepend.display()))
+        .output()
+        .unwrap()
+}
+
 const CONNECT: &str = "const s=require('net').connect({host:process.argv[1],port:443,family:process.argv[2]==='6'?6:4});\
 s.setTimeout(4000);s.on('connect',()=>{console.log('CONNECTED');s.destroy()});\
 s.on('timeout',()=>{console.log('BLOCKED timeout');s.destroy()});s.on('error',e=>console.log('BLOCKED '+e.code));";
@@ -236,13 +280,32 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let root = scratch();
     std::fs::create_dir_all(&root).unwrap();
 
-    // 1. Provision through the same entry the desktop uses.
-    let output = run(&["account-setup"]);
+    // 1. Provision through the same entry the desktop uses. A profile-local toolchain directory is put on `PATH`
+    //    first: nothing below authorizes it by hand, so reading it proves the automatic refresh.
+    let profile = PathBuf::from(std::env::var("USERPROFILE").unwrap());
+    let automatic = profile.join("yuantu-acceptance-path-tool");
+    let _ = std::fs::remove_dir_all(&automatic);
+    std::fs::create_dir_all(&automatic).unwrap();
+    std::fs::write(automatic.join("readable.txt"), "discovered-root").unwrap();
+    let output = setup_with_path(&automatic);
     let _cleanup = Provisioned;
     annotate("notice", "account-setup", &text(&output));
     assert!(output.status.success(), "initialize: {}", text(&output));
     let report = status();
     assert_eq!(report["ready"], json!(true), "{report}");
+    let group = report["group"].as_str().expect("group SID").to_string();
+    let roots: Vec<String> = report["readRoots"]
+        .as_array()
+        .expect("read roots")
+        .iter()
+        .map(|entry| entry["path"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        roots
+            .iter()
+            .any(|entry| entry.eq_ignore_ascii_case(&automatic.to_string_lossy())),
+        "the automatic refresh did not record {automatic:?}: {roots:?}"
+    );
 
     // The accounts must be able to run this executable, node, and the fixtures.
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -265,13 +328,64 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         grant_workspace(dir, cap);
     }
-    let profile = PathBuf::from(std::env::var("USERPROFILE").unwrap());
     let secret = profile.join("yuantu-acceptance-secret.txt");
     std::fs::write(&secret, "desktop-user-only").unwrap();
 
     let offline = broker("offline");
 
-    // 3. Writes and reads.
+    // 3. The automatic read roots, with no manual grant at all: a toolchain directory refresh discovered from
+    //    `PATH`, a file created after the refresh (inheritance), and a credential file the next refresh denies.
+    let discovered = automatic.join("readable.txt");
+    let read = shell(
+        &offline.pipe,
+        &format!("type \"{}\"", discovered.display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(
+        text(&read).contains("discovered-root"),
+        "the automatic read root is not readable: {}",
+        text(&read)
+    );
+    let later = automatic.join("later.txt");
+    std::fs::write(&later, "inherited-root").unwrap();
+    let read = shell(
+        &offline.pipe,
+        &format!("type \"{}\"", later.display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(
+        text(&read).contains("inherited-root"),
+        "a file created after the refresh is not readable through inheritance: {}",
+        text(&read)
+    );
+    // `cargo` proves the whole chain: `%USERPROFILE%\.cargo\bin` on PATH, `%USERPROFILE%\.rustup` readable.
+    if on_path("cargo").is_some_and(|path| inside(&path, &profile)) {
+        let output = shell(&offline.pipe, "cargo --version", &root, &[&cap_a]);
+        assert!(
+            output.status.success(),
+            "cargo is not readable through the automatic read roots: {}",
+            text(&output)
+        );
+    }
+    let token = automatic.join(".npmrc");
+    std::fs::write(&token, "sandbox-token").unwrap();
+    let refreshed = read_refresh(&automatic);
+    assert!(refreshed.status.success(), "{}", text(&refreshed));
+    let read = shell(
+        &offline.pipe,
+        &format!("type \"{}\"", token.display()),
+        &root,
+        &[&cap_a],
+    );
+    assert!(
+        !text(&read).contains("sandbox-token"),
+        "a credential file inside an automatic root stayed readable: {}",
+        text(&read)
+    );
+
+    // 4. Writes and reads.
     let wrote = shell(&offline.pipe, "echo ok> A\\own.txt", &root, &[&cap_a]);
     assert!(
         wrote.status.success() && a.join("own.txt").exists(),
@@ -467,15 +581,29 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     );
     drop(online);
 
-    // 7. Removal leaves nothing behind.
+    // 7. Removal leaves nothing behind: no journal entry, no group ACE on an automatic root, a user path or the
+    //    profile ancestors that only carried traverse, and both journals empty.
     let _ = std::fs::remove_file(&secret);
     let removed = run(&["account-uninstall"]);
     assert!(removed.status.success(), "{}", text(&removed));
-    let journal = yuantu_sandbox::account::credentials::state_directory()
-        .unwrap()
-        .join("read-grants.json");
-    let reads: Value = serde_json::from_slice(&std::fs::read(journal).unwrap()).unwrap();
+    let state = yuantu_sandbox::account::credentials::state_directory().unwrap();
+    let reads: Value =
+        serde_json::from_slice(&std::fs::read(state.join("read-grants.json")).unwrap()).unwrap();
     assert_eq!(reads["grants"], json!([]));
+    let traverse = state.join("traverse-grants.json");
+    let traverse: Value = serde_json::from_slice(&std::fs::read(&traverse).unwrap_or_default())
+        .unwrap_or_else(|_| json!({ "grants": [] }));
+    assert_eq!(traverse["grants"], json!([]));
+    for path in [&automatic, &tool, &profile, &root] {
+        let listing = Command::new("icacls").arg(path).output().unwrap();
+        let listing = String::from_utf8_lossy(&listing.stdout);
+        assert!(
+            !listing.contains(&group),
+            "{} still carries an ACE for {group}: {listing}",
+            path.display()
+        );
+    }
+    let _ = std::fs::remove_dir_all(&automatic);
     std::fs::remove_dir_all(&tool).unwrap();
     let report = verify();
     let problems = report["problems"].as_array().unwrap();

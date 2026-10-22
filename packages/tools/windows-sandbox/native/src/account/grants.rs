@@ -326,6 +326,10 @@ mod tests {
     #[test]
     fn grant_adds_inheritable_modify_and_reserved_denies_without_recording_elsewhere() {
         let root = scratch("apply");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
         let (group, cap) = ("S-1-5-21-1-2-3-9001", "S-1-5-21-1-2-3-9002");
         apply(
             &root,
@@ -405,6 +409,10 @@ mod tests {
     #[test]
     fn read_grants_are_rx_snapshots_and_revoke_preserves_foreign_aces() {
         let base = scratch("read");
+        if !reads::may_change_dacl(&base) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
         let root = base.join("tool");
         std::fs::create_dir_all(root.join("bin")).unwrap();
         std::fs::write(root.join("bin/tool.cmd"), "echo ok").unwrap();
@@ -464,6 +472,10 @@ mod tests {
     #[test]
     fn read_revoke_finds_renamed_roots_and_files_moved_outside_the_allowlist() {
         let base = scratch("read-moved");
+        if !reads::may_change_dacl(&base) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
         let root = base.join("tool");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("file"), "tool").unwrap();
@@ -487,6 +499,10 @@ mod tests {
     #[test]
     fn profile_ancestors_get_only_noninheritable_metadata_access_and_are_recoverable() {
         let base = scratch("metadata");
+        if !reads::may_change_dacl(&base) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
         let profile = base.join("profile");
         let root = profile.join("AppData/Local/Temp/workspace");
         std::fs::create_dir_all(&root).unwrap();

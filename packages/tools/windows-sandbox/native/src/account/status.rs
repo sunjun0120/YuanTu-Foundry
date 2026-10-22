@@ -25,6 +25,19 @@ pub struct Status {
     pub accounts: Vec<AccountStatus>,
     /// SID of the sandbox group, the trustee of every workspace grant.
     pub group: Option<String>,
+    /// Directories a sandboxed command may read, and who added them: the settings page lists these.
+    pub read_roots: Vec<grants::reads::ReadRootView>,
+}
+
+/// The journal is the only source of read roots; an unreadable one is a diagnostic, not a failed status.
+fn read_roots(details: &mut Vec<String>) -> Vec<grants::reads::ReadRootView> {
+    match grants::reads::read_roots() {
+        Ok(roots) => roots,
+        Err(error) => {
+            details.push(format!("read roots: {error}"));
+            Vec::new()
+        }
+    }
 }
 
 fn push(code: &'static str, problems: &mut Vec<&'static str>) {
@@ -141,6 +154,7 @@ pub fn status() -> Status {
         .collect();
     let group = marker.as_ref().map(|marker| marker.group.clone());
     check_credentials(marker.as_ref(), &mut problems, &mut details);
+    let read_roots = read_roots(&mut details);
     Status {
         version: 1,
         ready: problems.is_empty(),
@@ -148,6 +162,7 @@ pub fn status() -> Status {
         details,
         accounts,
         group,
+        read_roots,
     }
 }
 
@@ -233,6 +248,7 @@ pub fn verify() -> Status {
             }
         }
     }
+    let read_roots = read_roots(&mut details);
     Status {
         version: 1,
         ready: problems.is_empty(),
@@ -240,6 +256,7 @@ pub fn verify() -> Status {
         details,
         accounts,
         group,
+        read_roots,
     }
 }
 

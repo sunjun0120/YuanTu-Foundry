@@ -14,7 +14,7 @@ mod win;
 use win::Result;
 
 fn usage() -> Result<u32> {
-    Err("Expected: exec --broker PIPE --request FILE | broker --dev|--account offline|online | account-status | grant --root R --capability S | ungrant --root R | account-setup | account-uninstall | runner --control ID --owner SID".into())
+    Err("Expected: exec --broker PIPE --request FILE | broker --dev|--account offline|online | account-status [--verify] | grant --root R --capability S | ungrant --root R | read-grant --root R | read-ungrant --root R | read-refresh --env FILE | account-setup | account-uninstall | runner --control ID --owner SID".into())
 }
 
 fn main_result() -> Result<u32> {
@@ -36,6 +36,7 @@ fn main_result() -> Result<u32> {
         ["ungrant", "--root", root] => provision::ungrant(root),
         ["read-grant", "--root", root] => provision::read_grant(root, false),
         ["read-ungrant", "--root", root] => provision::read_grant(root, true),
+        ["read-refresh", "--env", file] => provision::read_refresh(file),
         ["account-setup"] => provision::setup(),
         ["account-uninstall"] => provision::uninstall(),
         ["account-initialize", "--handoff", pipe] => provision::initialize_handoff(pipe),
