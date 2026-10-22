@@ -1,9 +1,9 @@
 //! `account-*` subcommands: status, setup/initialize, uninstall/remove.
 //!
-//! Release: the unelevated `account-setup` / `account-uninstall` verify the signed, protected installation and
-//! elevate this same executable for one fixed operation (`account-initialize --handoff PIPE` /
-//! `account-remove --elevated`). The passwords travel from the unelevated side over a pipe only it and
-//! Administrators can open, so they never touch a command line or disk in clear, and DPAPI protects them for the desktop user — not for whichever administrator approved UAC.
+//! Release: the unelevated `account-setup` / `account-uninstall` elevate this same executable for one fixed
+//! operation (`account-initialize --handoff PIPE` / `account-remove --elevated`). The passwords travel from the
+//! unelevated side over a pipe only it and Administrators can open, so they never touch a command line or disk in
+//! clear, and DPAPI protects them for the desktop user — not for whichever administrator approved UAC.
 //!
 //! Debug builds add `--dev-direct`: no UAC and no self-elevation; it runs only in a process that is already
 //! elevated and has `YUANTU_SANDBOX_DEV_PROVISION=1`. It exists for disposable CI machines.
@@ -168,7 +168,6 @@ pub fn remove_direct() -> Result<u32> {
 
 /// Elevated half of `account-setup`.
 pub fn initialize_handoff(pipe: &str) -> Result<u32> {
-    let _installation = yuantu_sandbox::maintenance::preflight()?;
     require_elevated()?;
     if !pipe.starts_with(r"\\.\pipe\yuantu-sbx-handoff-") {
         return Err("Invalid handoff pipe".into());
@@ -204,7 +203,6 @@ pub fn initialize_handoff(pipe: &str) -> Result<u32> {
 
 /// Elevated half of `account-uninstall`.
 pub fn remove_elevated() -> Result<u32> {
-    let _installation = yuantu_sandbox::maintenance::preflight()?;
     require_elevated()?;
     remove_everything()?;
     Ok(0)
@@ -278,7 +276,6 @@ fn wait_success(process: &Handle) -> Result<()> {
 
 /// `account-setup`: the unelevated, user-facing initialization.
 pub fn setup() -> Result<u32> {
-    let _installation = yuantu_sandbox::maintenance::preflight()?;
     let passwords = generate_all()?;
     let name = format!(r"\\.\pipe\yuantu-sbx-handoff-{}", random_suffix()?);
     let channel = server(
@@ -332,7 +329,6 @@ pub fn setup() -> Result<u32> {
 
 /// `account-uninstall`: the unelevated, user-facing removal.
 pub fn uninstall() -> Result<u32> {
-    let _installation = yuantu_sandbox::maintenance::preflight()?;
     remove_user_grants()?;
     let process = elevate("account-remove --elevated")?;
     wait_success(&process)?;

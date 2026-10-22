@@ -3,11 +3,8 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 async function script(name: string) {
   const url = new URL(`../scripts/${name}`, import.meta.url);
@@ -132,58 +129,4 @@ test('Windows acceptance refuses leftover leases and newly retained or changed A
     () => assertStateRestored(before, { locks: [], journals: { 'existing.json': 'changed' } }),
     /state/i,
   );
-});
-
-test('protected packaging rejects unsigned, mismatched, overwritten and untimestamped helper assets', async () => {
-  const { assertPinnedHelperManifest } = await script('windows-helper-signature.mjs');
-  const digest = 'a'.repeat(64);
-  const signer = 'b'.repeat(64);
-  const manifest = {
-    version: 1,
-    accountHelperSha256: digest,
-    signerSha256: signer,
-    timestamped: true,
-  };
-  const signature = { valid: true, signerSha256: signer, timestamped: true };
-  assert.doesNotThrow(() => assertPinnedHelperManifest(manifest, signature, digest));
-  for (const [record, signed, hash] of [
-    [manifest, { ...signature, valid: false }, digest],
-    [manifest, { ...signature, signerSha256: 'c'.repeat(64) }, digest],
-    [manifest, signature, 'd'.repeat(64)],
-    [{ ...manifest, timestamped: false }, signature, digest],
-    [manifest, { ...signature, timestamped: false }, digest],
-    [{ ...manifest, accountHelperSha256: undefined }, signature, digest],
-    // A manifest from before the account executor pinned only the retired AppContainer helper.
-    [
-      { version: 1, helperSha256: digest, signerSha256: signer, timestamped: true },
-      signature,
-      digest,
-    ],
-  ])
-    assert.throws(() => assertPinnedHelperManifest(record, signed, hash), /signed helper/i);
-});
-test('helper signing without an explicit certificate refuses before building or modifying assets', async () => {
-  const helper = new URL('../scripts/sign-windows-sandbox.ps1', import.meta.url);
-  assert.ok(existsSync(helper), 'Explicit-certificate signing workflow is missing');
-  if (process.platform !== 'win32') return;
-  const binary = new URL('../packages/tools/windows-sandbox/yuantu-sandbox.exe', import.meta.url);
-  const before = existsSync(binary) ? await readFile(binary) : undefined;
-  await assert.rejects(
-    promisify(execFile)('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      fileURLToPath(helper),
-      '-Check',
-    ]),
-    (error: unknown) => {
-      const result = error as { stderr: string; code: number };
-      assert.equal(result.code, 2);
-      assert.match(result.stderr, /certificate/i);
-      return true;
-    },
-  );
-  if (before) assert.deepEqual(await readFile(binary), before);
 });

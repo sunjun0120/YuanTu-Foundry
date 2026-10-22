@@ -3,20 +3,14 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertWindowsRuntime, inspectWindowsRuntime } from './windows-runtime.mjs';
-import { validateSignedHelperAssets, inspectHelperSignature } from './windows-helper-signature.mjs';
 import { validateRuntimeCandidate, sha256 } from './windows-runtime-product.mjs';
 
 export async function prepareWindowsRuntime({
   executable,
   candidateDirectory = process.env.WINDOWS_SANDBOX_NODE_CANDIDATE,
   directory = path.resolve('.scratch/packaging/runtime'),
-  production = process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1',
 } = {}) {
-  const candidate = candidateDirectory
-    ? await validateRuntimeCandidate(candidateDirectory, { production })
-    : null;
-  if (production && !candidate)
-    throw new Error('Production packaging requires an explicit candidate directory');
+  const candidate = candidateDirectory ? await validateRuntimeCandidate(candidateDirectory) : null;
   executable ??= candidateDirectory
     ? path.join(candidateDirectory, 'node.exe')
     : process.env.WINDOWS_SANDBOX_NODE_EXECUTABLE || process.execPath;
@@ -24,18 +18,6 @@ export async function prepareWindowsRuntime({
     throw new Error('Selected executable differs from explicit runtime candidate');
   const info = await inspectWindowsRuntime(executable);
   assertWindowsRuntime(info);
-  const signing = production ? await validateSignedHelperAssets() : null;
-  if (production) {
-    const signature = await inspectHelperSignature(executable);
-    if (
-      !signature.valid ||
-      !signature.timestamped ||
-      signature.signerSha256 !== signing.signerSha256
-    )
-      throw new Error(
-        'Production Node needs a valid timestamped signature matching the helper signer',
-      );
-  }
   // Include the complete upstream distribution license when redistributing Node.
   const licenseUrl = `https://raw.githubusercontent.com/nodejs/node/v${info.nodeVersion}/LICENSE`;
   let licenseText = candidate?.licenseBytes.toString('utf8');
@@ -86,7 +68,6 @@ export async function prepareWindowsRuntime({
       licenseUrl,
       licenseSha256: createHash('sha256').update(licenseText).digest('hex'),
       ...(candidate ? { provenanceSha256: sha256(candidate.provenanceBytes) } : {}),
-      ...(signing ? { signedHelper: signing } : {}),
     };
     await writeFile(path.join(stage, 'LICENSE.node'), licenseText);
     if (candidate) await writeFile(path.join(stage, 'provenance.json'), candidate.provenanceBytes);
@@ -111,14 +92,12 @@ export async function prepareWindowsRuntime({
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.some((arg) => arg !== '--protected' && !arg.startsWith('--candidate=')))
-    throw new Error('Use --protected, --candidate=directory or no arguments');
-  const production =
-    args.includes('--protected') || process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1';
+  if (args.some((arg) => !arg.startsWith('--candidate=')))
+    throw new Error('Use --candidate=directory or no arguments');
   const candidateDirectory =
     args.find((arg) => arg.startsWith('--candidate='))?.slice(12) ||
     process.env.WINDOWS_SANDBOX_NODE_CANDIDATE;
-  const manifest = await prepareWindowsRuntime({ production, candidateDirectory });
+  const manifest = await prepareWindowsRuntime({ candidateDirectory });
   console.log(
     `Prepared bundled Node ${manifest.nodeVersion} (libuv ${manifest.uvVersion}) for Windows x64`,
   );

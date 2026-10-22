@@ -14,7 +14,7 @@ mod win;
 use win::Result;
 
 fn usage() -> Result<u32> {
-    Err("Expected: exec --broker PIPE --request FILE | broker --dev|--account offline|online | account-status | install-preflight | grant --root R --capability S | ungrant --root R | account-setup | account-uninstall | runner --control ID --owner SID".into())
+    Err("Expected: exec --broker PIPE --request FILE | broker --dev|--account offline|online | account-status | grant --root R --capability S | ungrant --root R | account-setup | account-uninstall | runner --control ID --owner SID".into())
 }
 
 fn main_result() -> Result<u32> {
@@ -31,12 +31,6 @@ fn main_result() -> Result<u32> {
             }
         }
         ["account-status"] => provision::print_status(),
-        // Protected-install acceptance: signature pin, hardlinks, loader protection and pinned path handles.
-        ["install-preflight"] => {
-            let _installation = yuantu_sandbox::maintenance::preflight()?;
-            println!("{}", serde_json::json!({"version":1,"ready":true}));
-            Ok(0)
-        }
         ["grant", "--root", root, "--capability", capability] => provision::grant(root, capability),
         ["ungrant", "--root", root] => provision::ungrant(root),
         ["read-grant", "--root", root] => provision::read_grant(root, false),

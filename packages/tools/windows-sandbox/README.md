@@ -8,7 +8,7 @@ Setup grants group RX to safe PATH directories under the desktop user's real pro
 
 For workspaces and toolchains under the desktop profile, ancestor directories receive only non-inheritable traverse and read-attributes rights. Node's path resolution can inspect those ancestors without listing them or reading files elsewhere in the profile. These separate grants are recorded in `traverse-grants.json` and revoked after workspace/read grants during uninstall.
 
-Real accounts are verified only on disposable GitHub Actions Windows runners in [the account workflow](../../../.github/workflows/windows-account-sandbox.yml). Local unit/development-runner tests never provision accounts. Protected packaging signs and timestamps `yuantu-sandbox.exe` with the compiled signer pin, records its hash, preserves the signed bytes and verifies the packaged asset; `yuantu-sandbox.exe install-preflight` rechecks the installed signature and protected location. Real signing and protected-install lifecycle acceptance remain release requirements; private desktops are deferred and ConPTY is out of scope.
+Real accounts are verified only on disposable GitHub Actions Windows runners in [the account workflow](../../../.github/workflows/windows-account-sandbox.yml). Local unit/development-runner tests never provision accounts. Packaging no longer verifies an Authenticode signature or requires a protected installation directory: the helper is trusted by its fixed location beside the application, and a missing helper is an error. The official Node runtime is still checked against the release key's signed checksums. Private desktops are deferred and ConPTY is out of scope.
 
 ## Basic backend
 

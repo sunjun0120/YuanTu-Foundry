@@ -59,9 +59,6 @@ pub fn status() -> Status {
             problems.push(code);
         }
     };
-    if !cfg!(debug_assertions) && crate::maintenance::preflight().is_err() {
-        push("installation-unverified", &mut problems);
-    }
     let accounts: Vec<AccountStatus> = Account::ALL
         .iter()
         .map(|account| AccountStatus {

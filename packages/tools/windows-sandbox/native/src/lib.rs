@@ -1,6 +1,5 @@
-//! Sandbox account provisioning, status and protected installation checks used by `yuantu-sandbox`.
+//! Sandbox account provisioning and status used by `yuantu-sandbox`.
 pub mod account;
-pub mod maintenance;
 pub(crate) mod wfp;
 
 use std::ptr::null_mut;

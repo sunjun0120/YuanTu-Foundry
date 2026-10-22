@@ -117,7 +117,7 @@ export async function verifyRuntimeArchive({ cache = defaultCache, gpg } = {}) {
   }
 }
 
-/** The candidate is the locked official release, before or after our release re-signing. */
+/** The candidate is the locked official release, byte for byte. */
 export function assertOfficialCandidate(candidate) {
   const { provenance } = candidate;
   if (
@@ -125,7 +125,7 @@ export function assertOfficialCandidate(candidate) {
     provenance.source?.sha256 !== lock.archive.sha256 ||
     provenance.source?.releaseSigner !== lock.releaseSigner ||
     provenance.binary?.licenseSHA256 !== lock.licenseSha256 ||
-    (provenance.binary?.upstreamSha256 ?? provenance.binary?.sha256) !== lock.executableSha256
+    provenance.binary?.sha256 !== lock.executableSha256
   )
     throw new Error('Runtime candidate differs from the locked official Node release');
 }

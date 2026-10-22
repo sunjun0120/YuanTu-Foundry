@@ -3,20 +3,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, validatePackagedWindowsRuntime } from './windows-runtime-product.mjs';
 import { assertWindowsRuntime, inspectWindowsRuntime } from './windows-runtime.mjs';
-import { assertPinnedHelperManifest, inspectHelperSignature } from './windows-helper-signature.mjs';
 
 const project = fileURLToPath(new URL('..', import.meta.url));
-export async function validateWindowsPackage(
-  directory,
-  { production = false, inspect = true } = {},
-) {
+const lock = JSON.parse(
+  await readFile(path.join(project, 'build/windows-runtime.lock.json'), 'utf8'),
+);
+export async function validateWindowsPackage(directory, { inspect = true } = {}) {
   const resources = path.join(directory, 'resources');
-  const manifest = await validatePackagedWindowsRuntime(path.join(resources, 'runtime'), {
-    production,
-  });
+  const manifest = await validatePackagedWindowsRuntime(path.join(resources, 'runtime'));
   const staged = await validatePackagedWindowsRuntime(
     path.join(project, '.scratch/packaging/runtime'),
-    { production },
   );
   if (
     manifest.sha256 !== staged.sha256 ||
@@ -24,24 +20,20 @@ export async function validateWindowsPackage(
     manifest.licenseSha256 !== staged.licenseSha256
   )
     throw new Error('Packaged runtime differs from the explicitly prepared runtime');
-  const helperHashes = {};
-  if (production) {
-    const signature = await inspectHelperSignature(path.join(resources, 'runtime/node.exe'));
-    if (
-      !signature.valid ||
-      !signature.timestamped ||
-      signature.signerSha256 !== manifest.signedHelper?.signerSha256
-    )
-      throw new Error('Packaged production Node signature differs from pinned helper signer');
-    const signingAsset = JSON.parse(
-      await readFile(
-        path.join(resources, 'app/dist/packages/tools/windows-sandbox/helper-signature.json'),
-        'utf8',
-      ),
+  if (manifest.selection === 'candidate') {
+    const provenance = JSON.parse(
+      await readFile(path.join(resources, 'runtime/provenance.json'), 'utf8'),
     );
-    if (JSON.stringify(signingAsset) !== JSON.stringify(manifest.signedHelper))
-      throw new Error('Packaged helper signing manifest was not preserved');
+    if (
+      provenance.source?.version !== lock.nodeVersion ||
+      provenance.source?.sha256 !== lock.archive.sha256 ||
+      provenance.source?.releaseSigner !== lock.releaseSigner ||
+      provenance.binary?.sha256 !== lock.executableSha256 ||
+      provenance.binary?.licenseSHA256 !== lock.licenseSha256
+    )
+      throw new Error('Packaged Node provenance differs from the locked official release');
   }
+  const helperHashes = {};
   for (const name of ['yuantu-sandbox.exe', 'acl.ps1']) {
     const relative = `dist/packages/tools/windows-sandbox/${name}`;
     const packaged = path.join(resources, 'app', relative);
@@ -49,12 +41,6 @@ export async function validateWindowsPackage(
     if (digest !== sha256(await readFile(path.join(project, relative))))
       throw new Error(`Packaged helper asset differs from prepared asset: ${name}`);
     helperHashes[name] = digest;
-    if (production && name.endsWith('.exe'))
-      assertPinnedHelperManifest(
-        manifest.signedHelper,
-        await inspectHelperSignature(packaged),
-        digest,
-      );
   }
   await readFile(path.join(resources, 'app/dist/apps/agent-host/main.js'));
   // The entry the desktop actually launches: one bundled file. The compiled entry stays (tests and a tsc-only
@@ -88,7 +74,6 @@ export async function validateWindowsPackage(
   return {
     checkedAt: new Date().toISOString(),
     directory,
-    production,
     runtime: manifest,
     helperHashes,
     inspected: info,
@@ -98,14 +83,11 @@ export async function validateWindowsPackage(
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.some((arg) => arg !== '--production' && !arg.startsWith('--directory=')))
-    throw new Error('Use --directory=path and/or --production');
+  if (args.some((arg) => !arg.startsWith('--directory='))) throw new Error('Use --directory=path');
   const directory = path.resolve(
     args.find((arg) => arg.startsWith('--directory='))?.slice(12) || 'dist/release/win-unpacked',
   );
-  const report = await validateWindowsPackage(directory, {
-    production: args.includes('--production'),
-  });
+  const report = await validateWindowsPackage(directory);
   const output = path.join(project, '.scratch/windows-package-check');
   await mkdir(output, { recursive: true });
   await writeFile(path.join(output, 'latest.json'), JSON.stringify(report, null, 2));

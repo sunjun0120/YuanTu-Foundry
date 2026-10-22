@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { parseSandboxSetupCommand } from '../apps/desktop/sandbox-setup.ts';
@@ -71,28 +70,4 @@ test('initialization IPC requires acknowledgement and rejects all unrecognized i
   ]) {
     assert.throws(() => parseSandboxSetupCommand(input));
   }
-});
-
-test('unsigned development preflight refuses before any UAC or system mutation', windows, () => {
-  for (const operation of ['install-preflight', 'account-setup', 'account-uninstall']) {
-    const reply = spawnSync(helper, [operation], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 5000,
-    });
-    assert.equal(reply.error, undefined);
-    assert.equal(reply.status, 1, operation);
-    assert.match(reply.stderr, /pinned signer certificate/, operation);
-  }
-});
-
-test('preflight accepts no executable, script, path, account or SID arguments', windows, () => {
-  const reply = spawnSync(helper, ['install-preflight', 'cmd.exe'], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 5000,
-  });
-  assert.equal(reply.error, undefined);
-  assert.equal(reply.status, 1);
-  assert.doesNotMatch(reply.stderr, /pinned signer certificate/);
 });

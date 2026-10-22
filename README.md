@@ -383,7 +383,7 @@ Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复
 
 Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩包、`node.exe` 与许可证哈希及发布者 GPG 指纹由 [运行时锁](build/windows-runtime.lock.json) 固定。`npm.cmd run fetch:windows-runtime` 下载并以签名的 `SHASUMS256.txt.asc` 校验后生成候选（`.scratch/windows-runtime/node-v<版本>-win-x64`），`npm.cmd run check:windows-runtime-source` 重验已有候选，`npm.cmd run package:windows:candidate:dir` 打包该候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。
 
-`npm.cmd run package:windows:protected` 使用 [受保护安装配置](electron-builder.protected.config.cjs)：强制代码签名、按机器安装、固定安装目录，并在签名后核对运行时和签名者。此入口要求显式设置 `WINDOWS_SANDBOX_PROTECTED_RELEASE=1`、`WINDOWS_SIGN_CERTIFICATE_SHA1`、无凭据的 HTTPS `WINDOWS_SIGN_TIMESTAMP_URL`，以及指向官方运行时候选的 `WINDOWS_SANDBOX_NODE_CANDIDATE`。发布前用 `sign-windows-sandbox.ps1 -Sign -RuntimeCandidateDirectory <候选>` 以固定签名者重新签名 `node.exe`（替换 OpenJS Foundation 签名，来源记录保留上游哈希），签名辅助程序还需匹配固定签名清单。该配置是保留的发行门禁，不能因历史文档删除而移除；正式发行仍需完成目标平台安装与沙箱账户、WFP 的实际验收。
+`npm.cmd run package:windows` 生成普通安装包；`npm.cmd run package:windows:candidate:dir` 使用已用 GPG 校验的官方 Node 候选（`WINDOWS_SANDBOX_NODE_CANDIDATE` 可指定其他候选）。打包不再校验 helper 签名，也不再要求以固定签名者重新签名 `node.exe`：`yuantu-sandbox.exe` 按安装目录中的固定位置定位，找不到就报错。官方 Node 下载仍用发布者 GPG 签名的 `SHASUMS256.txt.asc` 校验；`npm.cmd run check:windows-package` 校验 helper 存在、打包运行时与来源记录。正式发行仍需完成目标 Windows 上的账户、WFP 与安装包实机验收。
 
 全部原生 Git 工具与 stdio MCP 在非 `host` 模式仍明确拒绝：它们尚未接入原生进程启动器。远程 HTTP/SSE MCP、网页抓取和浏览器不受命令沙箱约束。显式 `host` 表示无操作系统隔离，命令可访问宿主其他位置和网络。macOS 取消按进程组执行，主动脱离进程组的子孙回收尚未解决；后台记录不会将其标为整棵进程树清理已确认。macOS 真机隔离与签名/公证验收仍需在 Mac 完成：打包走 `scripts/prepare-macos-package.mjs` 与 `npm run package:macos`，真机探针走 `npm run check:macos-sandbox`。
 
