@@ -1,6 +1,7 @@
 //! Sandbox account executor: `exec` (per command, desktop user), `broker` (per host, desktop user),
 //! and `runner` (per broker, sandbox account). See docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md.
 mod broker;
+mod desktop;
 mod exec;
 mod frame;
 mod pipe;
