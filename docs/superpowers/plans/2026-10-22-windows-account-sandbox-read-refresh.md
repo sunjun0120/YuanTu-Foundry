@@ -143,11 +143,11 @@
 
 - Modify: `packages/tools/windows-sandbox/native/tests/account_acceptance.rs`
 
-- [ ] 初始化后**不做任何手动授权**，沙箱离线账户可执行 PATH 中位于 profile 下的工具（CI 上至少 `cargo --version`；有 node 时 `node --version`）。
-- [ ] 在已授权的自动根下新建一个可执行文件，不重新 refresh，沙箱账户能读取（验证可继承）。
-- [ ] 在自动根下放一个 `.npmrc`/`credentials.toml` 后 refresh，沙箱账户读取该文件失败。
-- [ ] 卸载后所有自动根与用户路径上的组 ACE 均被移除，`read-grants.json` / `traverse-grants.json` 为空或删除。
-- [ ] 全量运行：`cargo test`（native 目录）、仓库 TS 测试（`npm test` 或项目约定命令）通过；`account-status --verify` 在就绪机器上 `ready: true`。
+- [x] 初始化后**不做任何手动授权**，沙箱离线账户可执行 PATH 中位于 profile 下的工具（CI 上至少 `cargo --version`；有 node 时 `node --version`）。
+- [x] 在已授权的自动根下新建一个可执行文件，不重新 refresh，沙箱账户能读取（验证可继承）。
+- [x] 在自动根下放一个 `.npmrc`/`credentials.toml` 后 refresh，沙箱账户读取该文件失败。
+- [x] 卸载后所有自动根与用户路径上的组 ACE 均被移除，`read-grants.json` / `traverse-grants.json` 为空或删除。
+- [x] 全量运行：`cargo test`（native 目录）、仓库 TS 测试（`npm test` 或项目约定命令）通过；`account-status --verify` 在就绪机器上 `ready: true`。
 
 ---
 
