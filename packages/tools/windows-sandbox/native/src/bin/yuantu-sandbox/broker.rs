@@ -7,7 +7,7 @@
 use crate::{
     desktop::PrivateDesktop,
     frame::{read_frame, write_frame},
-    pipe::{PipeIo, accept, client_pid, peer_disconnected, random_suffix, server},
+    pipe::{PipeIo, accept, client_pid, has_data, peer_disconnected, random_suffix, server},
     protocol::{ErrorKind, FromBroker, FromRunner, ToBroker, ToRunner, validate},
     win::{Handle, Result, current_user, open_process, process_token, token_user, wide, win},
 };
@@ -310,14 +310,14 @@ fn serve_exec(runner: &Runner, me: &str, pipe: Handle) -> Result<()> {
             return Ok(());
         }
     };
-    let ToBroker::Spawn {
-        request,
-        stdin,
-        stdout,
-        stderr,
-    } = match read_frame(&mut PipeIo(&pipe)) {
-        Ok(message) => message,
-        Err(_) => {
+    let (request, stdin, stdout, stderr) = match read_frame(&mut PipeIo(&pipe)) {
+        Ok(ToBroker::Spawn {
+            request,
+            stdin,
+            stdout,
+            stderr,
+        }) => (request, stdin, stdout, stderr),
+        _ => {
             refuse(ErrorKind::InvalidRequest, "Invalid sandbox request".into());
             return Ok(());
         }
@@ -368,6 +368,16 @@ fn serve_exec(runner: &Runner, me: &str, pipe: Handle) -> Result<()> {
                 return Ok(());
             }
             Err(RecvTimeoutError::Timeout) => {
+                // A terminal resize from exec: only a size is accepted, and only for this command.
+                while has_data(&pipe) {
+                    match read_frame::<_, ToBroker>(&mut PipeIo(&pipe)) {
+                        Ok(ToBroker::Resize { size }) if size.validate().is_ok() => {
+                            let down = runner.down.lock().unwrap();
+                            let _ = write_frame(&mut PipeIo(&down), &ToRunner::Resize { id, size });
+                        }
+                        _ => break,
+                    }
+                }
                 // exec was killed (host cancel or timeout): stop the command's whole tree.
                 if !cancelled && peer_disconnected(&pipe) {
                     cancelled = true;

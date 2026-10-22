@@ -154,6 +154,11 @@ pub fn run(control: &str, owner: &str, desktop: &str) -> Result<u32> {
                     command.cancel();
                 }
             }
+            ToRunner::Resize { id, size } => {
+                if let Some(command) = running.lock().unwrap().get(&id) {
+                    let _ = command.resize(size);
+                }
+            }
         }
     }
     // The broker is gone: nobody can receive these commands' output or exit codes.

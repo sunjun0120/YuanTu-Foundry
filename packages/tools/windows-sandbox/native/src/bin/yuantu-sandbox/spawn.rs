@@ -305,7 +305,7 @@ fn coord(size: crate::protocol::Size) -> COORD {
     }
 }
 
-fn pipe() -> Result<(Handle, Handle)> {
+pub(crate) fn pipe() -> Result<(Handle, Handle)> {
     let (mut read, mut write) = (null_mut(), null_mut());
     win(
         unsafe { CreatePipe(&mut read, &mut write, null(), 0) },
@@ -315,7 +315,7 @@ fn pipe() -> Result<(Handle, Handle)> {
 }
 
 /// Copies bytes from `from` to `to` until either side ends.
-fn pump(from: &Handle, to: &Handle) {
+pub(crate) fn pump(from: &Handle, to: &Handle) {
     let mut buffer = [0u8; 8192];
     loop {
         let mut read = 0;

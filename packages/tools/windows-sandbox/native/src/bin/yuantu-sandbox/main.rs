@@ -9,6 +9,7 @@ mod protocol;
 mod provision;
 mod runner;
 mod spawn;
+mod terminal;
 mod token;
 mod win;
 

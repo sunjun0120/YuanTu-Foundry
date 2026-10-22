@@ -71,6 +71,11 @@ pub enum ToRunner {
     Cancel {
         id: u64,
     },
+    /// The host's terminal changed size; meaningful only for a TTY command.
+    Resize {
+        id: u64,
+        size: Size,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -100,6 +105,8 @@ pub enum ToBroker {
         stdout: u64,
         stderr: u64,
     },
+    /// Sent by exec after `Spawn`, whenever its own console changes size.
+    Resize { size: Size },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -187,6 +194,28 @@ mod tests {
             verbatim: false,
             tty: None,
         }
+    }
+
+    #[test]
+    fn resize_messages_carry_only_a_size() {
+        let size = Size {
+            columns: 130,
+            rows: 30,
+        };
+        let text = r#"{"type":"resize","size":{"columns":130,"rows":30}}"#;
+        assert!(
+            matches!(serde_json::from_str::<ToBroker>(text).unwrap(), ToBroker::Resize { size: got } if got == size)
+        );
+        let text = r#"{"type":"resize","id":7,"size":{"columns":130,"rows":30}}"#;
+        assert!(
+            matches!(serde_json::from_str::<ToRunner>(text).unwrap(), ToRunner::Resize { id: 7, size: got } if got == size)
+        );
+        assert!(
+            serde_json::from_str::<ToBroker>(
+                r#"{"type":"resize","size":{"columns":1,"rows":1},"id":7}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

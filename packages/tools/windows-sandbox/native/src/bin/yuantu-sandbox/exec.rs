@@ -2,8 +2,9 @@
 //! waits, and exits with the command's exit code — so callers treat it like the command itself.
 use crate::{
     frame::{read_frame, write_frame},
-    pipe::{PipeIo, connect, server_pid},
+    pipe::{PipeIo, connect, has_data, peer_disconnected, server_pid},
     protocol::{ErrorKind, FromBroker, Request, ToBroker, validate},
+    terminal::Terminal,
     win::{Result, current_user, image_path, open_process, process_token, token_user},
 };
 use std::path::Path;
@@ -65,27 +66,63 @@ pub fn run(broker: &str, request_file: &str) -> u32 {
 }
 
 fn exec(broker: &str, request_file: &str) -> Result<u32> {
-    let request = read_request(request_file)?;
+    let mut request = read_request(request_file)?;
     if !broker.starts_with(r"\\.\pipe\yuantu-sbx-broker-") {
         return Err("Invalid broker pipe name".into());
     }
     let pipe = connect(broker, FILE_GENERIC_READ | FILE_GENERIC_WRITE)?;
     verify_broker(&pipe)?;
+    // A TTY command run from a console gets pipes and a relay; from pipes, exec's own handles serve as they are.
+    let mut terminal = match request.tty {
+        Some(_) => Terminal::attach()?,
+        None => None,
+    };
+    if let Some(size) = terminal.as_ref().and_then(Terminal::size) {
+        request.tty = Some(size);
+    }
     let handle = |which| unsafe { GetStdHandle(which) } as usize as u64;
+    let [stdin, stdout, stderr] = terminal.as_ref().map_or(
+        [
+            handle(STD_INPUT_HANDLE),
+            handle(STD_OUTPUT_HANDLE),
+            handle(STD_ERROR_HANDLE),
+        ],
+        Terminal::handles,
+    );
     write_frame(
         &mut PipeIo(&pipe),
         &ToBroker::Spawn {
             request,
-            stdin: handle(STD_INPUT_HANDLE),
-            stdout: handle(STD_OUTPUT_HANDLE),
-            stderr: handle(STD_ERROR_HANDLE),
+            stdin,
+            stdout,
+            stderr,
         },
     )
     .map_err(|_| "Send sandbox request failed")?;
     loop {
+        if let Some(terminal) = terminal.as_mut() {
+            // Poll instead of blocking on the reply, so resizes can be sent on the same synchronous pipe.
+            if let Some(size) = terminal.resized() {
+                let _ = write_frame(&mut PipeIo(&pipe), &ToBroker::Resize { size });
+            }
+            if !has_data(&pipe) && !peer_disconnected(&pipe) {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+        }
         match read_frame::<_, FromBroker>(&mut PipeIo(&pipe)) {
-            Ok(FromBroker::Started { .. }) => continue,
-            Ok(FromBroker::Exit { code }) => return Ok(code),
+            Ok(FromBroker::Started { .. }) => {
+                if let Some(terminal) = terminal.as_mut() {
+                    terminal.handed_over();
+                }
+                continue;
+            }
+            Ok(FromBroker::Exit { code }) => {
+                if let Some(terminal) = terminal.as_mut() {
+                    terminal.finish();
+                }
+                return Ok(code);
+            }
             Ok(FromBroker::Error { kind, message }) => {
                 let kind = serde_json::to_value(kind).unwrap_or_default();
                 return Err(format!("{} ({message})", kind.as_str().unwrap_or("error")));
