@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as setupModule from '../apps/desktop/sandbox-setup.ts';
 import { systemHandlers } from '../apps/agent-host/handlers/system.ts';
 import { configureAccountBackend } from '../packages/tools/sandbox-account.ts';
-import { nativeSandboxBackend, setWindowsAccountReady } from '../packages/tools/sandbox-mode.ts';
+import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 
 const report = (ready = false, problems = ready ? [] : ['accounts-missing']) =>
@@ -170,25 +170,21 @@ test('account maintenance serializes concurrent operations', async () => {
 });
 
 test(
-  'the live Host refresh refuses active work and updates native selection without changing session policies',
+  'the live Host refresh refuses active work and keeps native on the account backend',
   { skip: process.platform !== 'win32' && 'Windows account readiness requires Windows' },
   async () => {
     const handler = systemHandlers['sandbox.refresh'];
     assert.equal(typeof handler, 'function');
     const ctx = { active: new Map() } as HostContext;
     configureAccountBackend({ run: async () => report(true) });
-    try {
-      await handler!(ctx, {});
-      assert.equal(nativeSandboxBackend('win32'), 'windows-account');
-      ctx.active.set('busy', {} as never);
-      await assert.rejects(handler!(ctx, {}), /active/);
-      ctx.active.clear();
-      configureAccountBackend({ run: async () => report() });
-      await handler!(ctx, {});
-      assert.equal(nativeSandboxBackend('win32'), 'windows');
-      await assert.rejects(handler!(ctx, { path: 'x' }), /parameters/);
-    } finally {
-      setWindowsAccountReady(false);
-    }
+    await handler!(ctx, {});
+    assert.equal(nativeSandboxBackend('win32'), 'windows-account');
+    ctx.active.set('busy', {} as never);
+    await assert.rejects(handler!(ctx, {}), /active/);
+    ctx.active.clear();
+    configureAccountBackend({ run: async () => report() });
+    await handler!(ctx, {});
+    assert.equal(nativeSandboxBackend('win32'), 'windows-account');
+    await assert.rejects(handler!(ctx, { path: 'x' }), /parameters/);
   },
 );

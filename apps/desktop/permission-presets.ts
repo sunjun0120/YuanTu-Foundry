@@ -54,18 +54,18 @@ export function permissionPreset(id: PermissionPresetId): PermissionPreset {
 /**
  * Which preset a pair *is*, or `null` when it is one no preset declares.
  *
- * This is the reader the selector needs: the current state is shown as the preset it matches, and an
- * unlisted pair shows as custom — the difference between "you are in the guarded preset" and "you are
- * somewhere we do not have a name for" is exactly what makes the control honest.
+ * `windows` is the explicit weaker Windows implementation of the same "native isolation" rung, so presets keep
+ * matching it: an operator who selected that backend must not see the chip fall through to `custom` just because
+ * they moved the approval half. `session-choices` keeps the selected backend when it applies such a preset.
  */
 export function presetIdFor(
   sandbox: SandboxMode,
   permission: PermissionMode,
 ): PermissionPresetId | null {
+  const rung = sandbox === 'windows' ? 'native' : sandbox;
   return (
-    PERMISSION_PRESETS.find(
-      (preset) => preset.sandbox === sandbox && preset.permission === permission,
-    )?.id ?? null
+    PERMISSION_PRESETS.find((preset) => preset.sandbox === rung && preset.permission === permission)
+      ?.id ?? null
   );
 }
 /** Both knobs as the desktop shows them, plus which preset (if any) they currently are. */

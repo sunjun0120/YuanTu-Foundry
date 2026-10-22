@@ -21,7 +21,7 @@ import {
   windowsAccountSandboxProvider,
 } from '../packages/tools/sandbox-account.ts';
 import { stopBrokers } from '../packages/tools/sandbox-account-broker.ts';
-import { nativeSandboxBackend, setWindowsAccountReady } from '../packages/tools/sandbox-mode.ts';
+import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import type { SandboxConfig, SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 import { projectRoot } from './process-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
@@ -92,7 +92,6 @@ test(
     await exec(helper, ['account-setup'], { env });
     t.after(async () => {
       await stopBrokers();
-      setWindowsAccountReady(false);
       await exec(helper, ['account-uninstall'], { env });
     });
     // The accounts must be able to run the helper and node (outside any workspace grant on a CI machine).

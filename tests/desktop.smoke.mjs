@@ -333,7 +333,7 @@ test(
       ...process.env,
       YUANTU_WORKSPACE: root,
       YUANTU_NODE_PATH: process.execPath,
-      YUANTU_SANDBOX: 'native',
+      YUANTU_SANDBOX: process.platform === 'win32' ? 'windows' : 'native',
       YUANTU_PROTOCOL: 'anthropic',
       YUANTU_BASE_URL: url,
       YUANTU_MODEL: 'fixture',

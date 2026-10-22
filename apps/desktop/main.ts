@@ -62,7 +62,7 @@ import {
   type PermissionPresetReply,
 } from './permission-presets.ts';
 import { runtimePaths, safeError, type MainContext } from './main-context.ts';
-import { SessionChoices, type SessionChoice } from './session-choices.ts';
+import { SessionChoices, choiceForPreset, type SessionChoice } from './session-choices.ts';
 import { DesktopBackups } from './main-backups.ts';
 import { mcpOAuthDirectory, registerMcpIpc } from './main-mcp.ts';
 import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
@@ -604,8 +604,11 @@ void app
           switching = true;
           try {
             await choices.following;
+            // `windows` is the operator's explicit weaker backend; a preset moves the approval half without
+            // silently upgrading it to the account backend.
+            const sandbox = choiceForPreset(preset, choices.view().sandbox.mode).sandbox;
             const choice: SessionChoice = {
-              sandbox: preset.sandbox,
+              sandbox,
               permission: preset.permission,
             };
             const sessionId = service?.snapshot.session.sessionId ?? undefined;
@@ -614,7 +617,7 @@ void app
             return {
               ok: true,
               view: choices.view(),
-              message: `Preset applied: ${preset.sandbox} + ${preset.permission}.`,
+              message: `Preset applied: ${sandbox} + ${preset.permission}.`,
             };
           } finally {
             switching = false;

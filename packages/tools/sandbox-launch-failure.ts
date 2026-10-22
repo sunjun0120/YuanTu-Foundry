@@ -47,8 +47,8 @@ export function sandboxChildSpawnBlocked(output: string): boolean {
 
 /** The note appended to a Windows-sandboxed command that could not fork, for the model and the reader. */
 export const SANDBOX_CHILD_SPAWN_NOTE =
-  'The command ran but could not start its own child process: the Windows sandbox backend gives it a restricted ' +
-  'token whose child-process creation with inherited pipes is refused (Node reports spawn EPERM). This is the ' +
-  'execution environment, not the command — test runners that fork (node --test, vitest, jest) fail here. Run a ' +
-  'test file directly when it does not fork, or initialize sandbox accounts in Settings > General ' +
-  '(设置 > 通用 > 管理员初始化) to enable the windows-account backend, then retry.';
+  'The command ran but could not start its own child process: the manually selected `windows` backend gives it a ' +
+  'restricted token whose child-process creation with inherited pipes is refused (Node reports spawn EPERM). This ' +
+  'is the execution environment, not the command — test runners that fork (node --test, vitest, jest) fail here. ' +
+  'That backend has no separate account and weaker network isolation. Initialize sandbox accounts in Settings > ' +
+  'General, switch back to native (windows-account), and retry; or run a test file directly when it does not fork.';

@@ -227,8 +227,8 @@ export const panelMessages: Record<string, [string, string]> = {
     'Initialization is still pending and cleanup is unconfirmed. Check sandbox account status after reopening the app.',
   ],
   'sandboxSetup.note': [
-    '初始化或修复需要一次管理员确认。就绪后，原生沙箱会自动使用专用低权限账户；卸载后恢复基础隔离。',
-    'Setup or repair requires administrator approval. Once ready, the native sandbox uses dedicated low-privilege accounts; uninstalling restores basic isolation.',
+    '初始化或修复需要一次管理员确认。就绪后，原生沙箱使用专用低权限账户；卸载后原生沙箱会拒绝执行，除非重新初始化，或手动改用较弱的 windows 模式（没有独立账户、网络隔离更弱，子进程可能 spawn EPERM）。',
+    'Setup or repair requires administrator approval. Once ready, the native sandbox uses dedicated low-privilege accounts. After uninstalling, the native sandbox refuses to run until you initialize again or manually select the weaker windows mode (no separate account, weaker network isolation, possible child-process spawn EPERM).',
   ],
   'sandboxSetup.initialize': ['管理员初始化', 'Initialize as administrator'],
   'sandboxSetup.repair': ['修复沙箱账户', 'Repair sandbox accounts'],

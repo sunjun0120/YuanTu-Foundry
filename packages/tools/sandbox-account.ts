@@ -22,7 +22,6 @@ import {
   type BrokerLauncher,
   type SandboxAccount,
 } from './sandbox-account-broker.ts';
-import { setWindowsAccountReady } from './sandbox-mode.ts';
 import {
   insideWorkspace,
   type SandboxPlan,
@@ -129,16 +128,13 @@ export async function refreshAccountBackend(): Promise<void> {
   await refreshAccountReadiness();
 }
 
-/** Asks the helper for the backend's state and records whether `native` may use it. Never throws. */
+/** Asks the helper for the backend's state. Never throws. */
 export async function refreshAccountReadiness(): Promise<AccountStatus | undefined> {
   if (process.platform !== 'win32') return undefined;
   status = configuration.run(configuration.helper, ['account-status']).then(parseAccountStatus);
   try {
-    const current = await status;
-    setWindowsAccountReady(current.ready);
-    return current;
+    return await status;
   } catch {
-    setWindowsAccountReady(false);
     return undefined;
   }
 }
@@ -149,7 +145,16 @@ async function readiness(): Promise<string | null> {
   const current = status ? await status.catch(() => undefined) : await refreshAccountReadiness();
   if (!current) return 'The Windows sandbox account helper is unavailable';
   if (current.ready) return null;
-  return `The Windows sandbox accounts are not ready (${current.problems.join(', ')}); initialize them in Settings`;
+  const state = current.problems.includes('setup-marker-missing')
+    ? 'The Windows sandbox accounts have not been initialized'
+    : current.problems.includes('setup-marker-version')
+      ? 'The Windows sandbox setup marker is from an older version and needs to be repaired'
+      : `The Windows sandbox accounts are not ready (${current.problems.join(', ')})`;
+  return (
+    `${state}. Open Settings > General > Windows sandbox accounts to initialize or repair them. ` +
+    'If administrator initialization is impossible, select the weaker "windows" sandbox mode manually: it has ' +
+    'no separate account, weaker network isolation, and known child-process spawn EPERM failures.'
+  );
 }
 
 interface CapabilityFile {
@@ -259,7 +264,16 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   // Even a read-only command needs the grant: the group's ACE is what lets the account read the workspace.
   await ensureGrant(root, capability);
   const account: SandboxAccount = request.config.network === 'denied' ? 'offline' : 'online';
-  const pipe = await brokerPipe(configuration.helper, account, configuration.launch);
+  let pipe: string;
+  try {
+    pipe = await brokerPipe(configuration.helper, account, configuration.launch);
+  } catch (failure) {
+    const message = failure instanceof Error ? failure.message : String(failure);
+    throw new Error(
+      `The Windows sandbox account runner could not start (${message}). Open Settings > General > ` +
+        'Windows sandbox accounts to repair or reinitialize the accounts.',
+    );
+  }
   const env = Object.fromEntries(
     Object.entries({ ...toolEnvironment(), ...(request.env ?? {}) }).filter(
       (entry): entry is [string, string] => typeof entry[1] === 'string',

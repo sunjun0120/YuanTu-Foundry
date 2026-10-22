@@ -18,7 +18,7 @@ import {
   stopBrokers,
   type BrokerLauncher,
 } from '../packages/tools/sandbox-account-broker.ts';
-import { nativeSandboxBackend, setWindowsAccountReady } from '../packages/tools/sandbox-mode.ts';
+import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import { tempRoot } from './temp-fixture.ts';
 
@@ -73,7 +73,6 @@ async function backend(t: test.TestContext, ready = true) {
   });
   t.after(async () => {
     await stopBrokers();
-    setWindowsAccountReady(false);
   });
   return { state, calls, starts };
 }
@@ -137,12 +136,12 @@ test('a workspace keeps one capability SID, distinct from every other workspace'
 });
 
 test(
-  'native picks the account backend only while it is ready',
+  'native always selects the account backend and refuses until it is ready',
   { skip: windowsOnly },
   async (t) => {
     await backend(t, false);
     await refreshAccountReadiness();
-    assert.equal(nativeSandboxBackend('win32'), 'windows');
+    assert.equal(nativeSandboxBackend('win32'), 'windows-account');
     assert.match((await windowsAccountSandboxProvider.available()) ?? '', /accounts-missing/);
     await backend(t, true);
     await refreshAccountReadiness();

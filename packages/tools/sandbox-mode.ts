@@ -13,26 +13,16 @@ export function parseSandboxMode(value: unknown, name = 'sandbox mode'): Executi
   return value as ExecutionMode;
 }
 
-let windowsAccountReady = false;
-/**
- * Recorded by the account backend whenever it learns its status (Host start, initialization, uninstall).
- *
- * `native` stays a synchronous choice: it reads this answer rather than asking the helper on every call.
- */
-export function setWindowsAccountReady(ready: boolean): void {
-  windowsAccountReady = ready;
-}
-
 /**
  * The platform backend `native` stands for.
  *
- * On Windows that is the sandbox account backend once it is initialized and verified, otherwise the restricted
- * token backend — the weaker boundary, kept so an uninitialized machine still confines writes.
+ * On Windows that is always the sandbox account backend. It is never silently replaced by the weaker restricted
+ * token backend: `windows` remains an explicit, manual choice for machines where account setup is impossible.
  */
 export function nativeSandboxBackend(
   platform: NodeJS.Platform = process.platform,
 ): 'windows' | 'windows-account' | 'seatbelt' {
-  if (platform === 'win32') return windowsAccountReady ? 'windows-account' : 'windows';
+  if (platform === 'win32') return 'windows-account';
   if (platform === 'darwin') return 'seatbelt';
   throw new Error(`Native sandbox is unavailable on ${platform}; no host fallback is allowed`);
 }

@@ -5,6 +5,7 @@ import {
   DEFAULT_PRESET,
   permissionPreset,
   presetIdFor,
+  type PermissionPreset,
   type PermissionPresetView,
 } from './permission-presets.ts';
 import type { SandboxEnvironment } from './sandbox-environment.ts';
@@ -14,6 +15,19 @@ import type { SandboxMode } from './sandbox-settings.ts';
 export interface SessionChoice {
   sandbox: SandboxMode;
   permission: PermissionMode;
+}
+
+/**
+ * The pair a preset asks for, without silently upgrading an explicit `windows` backend.
+ *
+ * `windows` is the operator's weaker, manually selected implementation of the same isolation rung. A preset moves
+ * the approval half; only a non-native preset (the host rung) changes the backend.
+ */
+export function choiceForPreset(preset: PermissionPreset, current: SandboxMode): SessionChoice {
+  return {
+    sandbox: preset.sandbox === 'native' && current === 'windows' ? 'windows' : preset.sandbox,
+    permission: preset.permission,
+  };
 }
 
 /**

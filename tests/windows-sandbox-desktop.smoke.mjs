@@ -126,6 +126,8 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
       'YUANTU_SANDBOX_NETWORK',
     ])
       delete env[key];
+    // This suite exercises the basic restricted-token backend; native now always means the account backend.
+    env.YUANTU_SANDBOX = 'windows';
     if (packagedApp) delete env.YUANTU_NODE_PATH;
     let app;
     const assertRestored = async () => {
@@ -259,7 +261,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     const choice = await page.evaluate(() => window.yuantu.presets({ type: 'get' }));
     assert.equal(choice.ok, true);
     assert.equal(choice.view.current, 'guarded');
-    assert.equal(choice.view.sandbox.mode, 'native');
+    assert.equal(choice.view.sandbox.mode, 'windows');
     assert.equal(choice.view.sandbox.availability, null);
     const sessionId = (await snapshot(page)).session.sessionId;
     await verify(page);

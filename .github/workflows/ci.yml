@@ -144,7 +144,13 @@ jobs:
         run: node node_modules/electron/install.js
       - name: Windows desktop basic sandbox real acceptance without skips
         run: node scripts/check-windows-sandbox.mjs --desktop
-      - run: npm run smoke:desktop
+      # The runner has no initialized sandbox accounts, so `native` (windows-account) cannot run commands here.
+      # Smoke suites that do not name a backend use the explicit weaker `windows` backend; suites that set their
+      # own YUANTU_SANDBOX (host, native, ...) keep it.
+      - name: Desktop smoke on the basic Windows backend
+        run: npm run smoke:desktop
+        env:
+          YUANTU_SANDBOX: windows
 
   native-macos:
     needs: check
