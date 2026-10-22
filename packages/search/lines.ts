@@ -107,9 +107,11 @@ export async function readRange(
     let totalLines: number;
     let endsWithNewline: boolean;
 
-    if (reusable && startLine > 1) {
+    if (reusable) {
       // Seek to the nearest recorded line start at or before the window and read forward from there. A hit does
-      // not read the file to the end: the count is already known and verified against size and mtime.
+      // not read the file to the end: the count is already known and verified against size and mtime. Line 1 is
+      // no exception: its entry is offset 0, and rescanning a large file just to show its head is the cost the
+      // index exists to avoid.
       const entry = nearestEntry(cached!.entries, startLine);
       await readLines(handle, file, entry.byteOffset, entry.line, {
         stopAfter: endLine,
