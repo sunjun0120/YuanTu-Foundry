@@ -5,6 +5,7 @@ import { parseAccountStatus } from '../../packages/tools/sandbox-account.ts';
 
 export type SandboxSetupCommand =
   | { type: 'status' }
+  | { type: 'verify' }
   | { type: 'initialize'; acknowledge: true }
   | { type: 'uninstall'; acknowledge: true }
   | { type: 'read-add' | 'read-remove'; path: string; acknowledge: true };
@@ -15,6 +16,7 @@ export interface SandboxSetupView {
   reason: 'platform' | 'unavailable' | null;
   state?: 'uninitialized' | 'ready' | 'damaged';
   problems?: string[];
+  details?: string[];
 }
 export type SandboxSetupReply = { ok: true; view: SandboxSetupView } | { ok: false; error: string };
 /** Bound the UI's wait, without pretending a detached elevated initializer can be cancelled. */
@@ -52,6 +54,7 @@ export function parseSandboxSetupCommand(input: unknown): SandboxSetupCommand {
     )
       return { type: value.type, path: value.path.trim(), acknowledge: true };
     if (value.type === 'status' && Object.keys(value).length === 1) return { type: 'status' };
+    if (value.type === 'verify' && Object.keys(value).length === 1) return { type: 'verify' };
     if (
       (value.type === 'initialize' || value.type === 'uninstall') &&
       value.acknowledge === true &&
@@ -89,6 +92,13 @@ export class WindowsAccountSandboxSetup {
       });
   }
   async status(): Promise<SandboxSetupView> {
+    return this.inspect(false);
+  }
+  /** The settings page's diagnostic check: live accounts, logon, WFP and read allowlist. */
+  async verify(): Promise<SandboxSetupView> {
+    return this.inspect(true);
+  }
+  private async inspect(live: boolean): Promise<SandboxSetupView> {
     const base: SandboxSetupView = {
       supported: this.options.platform === 'win32',
       ready: false,
@@ -97,22 +107,22 @@ export class WindowsAccountSandboxSetup {
     };
     if (!base.supported) return { ...base, reason: 'platform' };
     try {
+      const args = live ? ['account-status', '--verify'] : ['account-status'];
       const status = parseAccountStatus(
-        (await this.execute(this.options.helperPath, ['account-status'], 15000)).stdout,
+        (await this.execute(this.options.helperPath, args, live ? 30000 : 15000)).stdout,
       );
-      const initialized =
-        status.accounts.some((account) => account.sid !== null) || status.group !== null;
+      const uninitialized =
+        status.problems.includes('accounts-missing') ||
+        (status.problems.includes('setup-marker-missing') &&
+          status.problems.includes('credentials-missing'));
       return {
         ...base,
         ready: true,
         installed: status.ready,
         reason: null,
-        state: status.ready
-          ? 'ready'
-          : initialized || !status.problems.includes('accounts-missing')
-            ? 'damaged'
-            : 'uninitialized',
+        state: status.ready ? 'ready' : uninitialized ? 'uninitialized' : 'damaged',
         problems: status.problems,
+        details: status.details,
       };
     } catch {
       return { ...base, reason: 'unavailable' };

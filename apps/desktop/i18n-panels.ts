@@ -264,6 +264,18 @@ export const panelMessages: Record<string, [string, string]> = {
     'Secondary Logon 服务不可用',
     'Secondary Logon service is unavailable',
   ],
+  'sandboxSetup.problem.setup-marker-missing': [
+    '缺少初始化标记，需要重新初始化',
+    'The setup marker is missing; initialize again',
+  ],
+  'sandboxSetup.problem.setup-marker-version': [
+    '初始化标记版本过旧，需要重新初始化',
+    'The setup marker version is outdated; initialize again',
+  ],
+  'sandboxSetup.problem.setup-marker-invalid': [
+    '初始化标记无效或与账户不一致',
+    'The setup marker is invalid or does not match the accounts',
+  ],
   'sandboxSetup.unavailable': [
     '无法读取沙箱账户状态，请确认应用目录中存在 yuantu-sandbox.exe。',
     'Cannot read the sandbox account status; check that yuantu-sandbox.exe exists beside the application.',

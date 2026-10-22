@@ -22,7 +22,7 @@ use windows_sys::Win32::{
 use yuantu_sandbox::account::{
     Account, credentials, firewall, grants,
     password::{self, Secret},
-    status, users,
+    setup_marker, status, users,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +55,16 @@ enum HandoffReply {
 
 pub fn print_status() -> Result<u32> {
     let report = status::status();
+    println!(
+        "{}",
+        serde_json::to_string(&report).map_err(|_| "Serialize status")?
+    );
+    Ok(0)
+}
+
+/// `account-status --verify`: the live diagnostic answer, for the settings page and logs.
+pub fn print_verify() -> Result<u32> {
+    let report = status::verify();
     println!(
         "{}",
         serde_json::to_string(&report).map_err(|_| "Serialize status")?
@@ -143,7 +153,9 @@ fn finish_initialization(
     sids: &[(Account, String)],
 ) -> Result<u32> {
     store(passwords, sids)?;
-    grants::reads::grant_defaults(&group_sid()?)?;
+    let group = group_sid()?;
+    grants::reads::grant_defaults(&group)?;
+    setup_marker::write(&setup_marker::build(sids, &group)?)?;
     let report = status::status();
     let ready = report.ready;
     println!(
@@ -151,6 +163,7 @@ fn finish_initialization(
         serde_json::to_string(&report).map_err(|_| "Serialize status")?
     );
     if !ready {
+        setup_marker::remove()?;
         return Err("Initialization finished but the sandbox accounts are not ready".into());
     }
     Ok(0)
@@ -266,6 +279,8 @@ fn wait_success(process: &Handle) -> Result<()> {
 
 /// `account-setup`: user-facing initialization; UAC only when the current process is not elevated.
 pub fn setup() -> Result<u32> {
+    // A failed or cancelled re-initialization must not leave an old marker claiming readiness.
+    setup_marker::remove()?;
     let passwords = generate_all()?;
     if elevated()? {
         let sids = provision(&passwords)?;
@@ -312,6 +327,8 @@ pub fn setup() -> Result<u32> {
 
 /// `account-uninstall`: user-facing removal; UAC only when the current process is not elevated.
 pub fn uninstall() -> Result<u32> {
+    // Remove the marker first: an interrupted uninstall must be judged not ready.
+    setup_marker::remove()?;
     remove_user_grants()?;
     if elevated()? {
         remove_everything()?;

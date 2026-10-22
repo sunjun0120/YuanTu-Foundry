@@ -46,10 +46,14 @@ export function setupSandboxInitialization(): void {
     refresh.disabled = pending;
     feedback.classList.toggle('error', Boolean(error));
     feedback.textContent = pending
-      ? t(operation !== 'status' ? 'sandboxSetup.pending' : 'sandboxSetup.checking')
+      ? t(
+          operation === 'status' || operation === 'verify'
+            ? 'sandboxSetup.checking'
+            : 'sandboxSetup.pending',
+        )
       : error ||
         (view?.state === 'damaged'
-          ? `${t('sandboxSetup.damaged')} ${(view.problems ?? []).map((problem) => t(`sandboxSetup.problem.${problem}`)).join('；')}`
+          ? `${t('sandboxSetup.damaged')} ${(view.problems ?? []).map((problem) => t(`sandboxSetup.problem.${problem}`)).join('；')}${view.details?.length ? ` (${view.details.join('; ')})` : ''}`
           : view?.installed
             ? t('sandboxSetup.installed')
             : view?.ready
@@ -79,7 +83,7 @@ export function setupSandboxInitialization(): void {
     }
   };
   initialize.addEventListener('click', () => request({ type: 'initialize', acknowledge: true }));
-  refresh.addEventListener('click', () => request({ type: 'status' }));
+  refresh.addEventListener('click', () => request({ type: 'verify' }));
   uninstall?.addEventListener('click', () => request({ type: 'uninstall', acknowledge: true }));
   readPath?.addEventListener('input', draw);
   readAdd?.addEventListener('click', () =>

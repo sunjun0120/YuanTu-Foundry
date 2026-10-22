@@ -55,6 +55,7 @@ test(
 
 test('initialization IPC requires acknowledgement and rejects all unrecognized input', () => {
   assert.deepEqual(parseSandboxSetupCommand({ type: 'status' }), { type: 'status' });
+  assert.deepEqual(parseSandboxSetupCommand({ type: 'verify' }), { type: 'verify' });
   assert.deepEqual(parseSandboxSetupCommand({ type: 'initialize', acknowledge: true }), {
     type: 'initialize',
     acknowledge: true,
@@ -65,6 +66,7 @@ test('initialization IPC requires acknowledgement and rejects all unrecognized i
     { type: 'initialize' },
     { type: 'initialize', acknowledge: false },
     { type: 'status', path: 'cmd.exe' },
+    { type: 'verify', path: 'cmd.exe' },
     { type: 'initialize', acknowledge: true, command: 'cmd.exe' },
     { type: 'uninstall', acknowledge: false },
   ]) {

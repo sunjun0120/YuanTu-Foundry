@@ -48,6 +48,24 @@ async function page(api?: (command: SandboxSetupCommand) => Promise<SandboxSetup
   };
 }
 
+test('refresh requests a live diagnostic instead of the fast status', async () => {
+  const commands: SandboxSetupCommand[] = [];
+  const fixture = await page(async (command) => {
+    commands.push(command);
+    return {
+      ok: true,
+      view: { supported: true, ready: true, installed: false, reason: null },
+    };
+  });
+  try {
+    assert.deepEqual(commands, [{ type: 'status' }]);
+    await fixture.node('refresh').click();
+    assert.deepEqual(commands[1], { type: 'verify' });
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('opening settings only reads status and initialization requires a deliberate click', async () => {
   const commands: SandboxSetupCommand[] = [];
   const fixture = await page(async (command) => {

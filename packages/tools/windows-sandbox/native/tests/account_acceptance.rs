@@ -63,6 +63,12 @@ fn status() -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+/// Live diagnostics: after removal the marker is gone, so only `--verify` still names the missing objects.
+fn verify() -> Value {
+    let output = run(&["account-status", "--verify"]);
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
 /// Removes everything on drop, so a failed assertion still leaves a clean machine.
 struct Provisioned;
 impl Drop for Provisioned {
@@ -471,7 +477,7 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let reads: Value = serde_json::from_slice(&std::fs::read(journal).unwrap()).unwrap();
     assert_eq!(reads["grants"], json!([]));
     std::fs::remove_dir_all(&tool).unwrap();
-    let report = status();
+    let report = verify();
     let problems = report["problems"].as_array().unwrap();
     for code in [
         "accounts-missing",

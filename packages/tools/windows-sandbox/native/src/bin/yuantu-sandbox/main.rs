@@ -31,6 +31,7 @@ fn main_result() -> Result<u32> {
             }
         }
         ["account-status"] => provision::print_status(),
+        ["account-status", "--verify"] => provision::print_verify(),
         ["grant", "--root", root, "--capability", capability] => provision::grant(root, capability),
         ["ungrant", "--root", root] => provision::ungrant(root),
         ["read-grant", "--root", root] => provision::read_grant(root, false),

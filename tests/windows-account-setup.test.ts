@@ -23,6 +23,8 @@ test('account setup distinguishes missing, damaged and ready without elevation',
   assert.equal(typeof setupModule.WindowsAccountSandboxSetup, 'function');
   for (const [stdout, state] of [
     [report(), 'uninitialized'],
+    [report(false, ['setup-marker-missing', 'credentials-missing']), 'uninitialized'],
+    [report(false, ['setup-marker-version']), 'damaged'],
     [report(false, ['logon-failed']), 'damaged'],
     [report(true), 'ready'],
   ] as const) {
@@ -38,6 +40,21 @@ test('account setup distinguishes missing, damaged and ready without elevation',
     assert.equal((await setup.status()).state, state);
     assert.deepEqual(calls, [['account-status']]);
   }
+});
+
+test('the settings diagnostic uses account-status --verify', async () => {
+  const calls: string[][] = [];
+  const setup = new setupModule.WindowsAccountSandboxSetup({
+    platform: 'win32',
+    helperPath: 'C:\\protected\\yuantu-sandbox.exe',
+    execute: async (_file, args) => {
+      calls.push(args);
+      return { stdout: report(false, ['accounts-missing']) };
+    },
+  });
+  const view = await setup.verify();
+  assert.deepEqual(calls, [['account-status', '--verify']]);
+  assert.equal(view.state, 'uninitialized');
 });
 
 test('read allowlist IPC requires explicit acknowledgement and never forwards a renderer command', () => {

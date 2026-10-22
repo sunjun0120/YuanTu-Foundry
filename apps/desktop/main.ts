@@ -658,6 +658,7 @@ void app
           const command = parseSandboxSetupCommand(input);
           if (quitting) throw new Error(mainText('desktop.quitting'));
           if (command.type === 'status') return { ok: true, view: await sandboxSetup.status() };
+          if (command.type === 'verify') return { ok: true, view: await sandboxSetup.verify() };
           if (switching || !service || service.busy) throw new Error(mainText('settingsMain.busy'));
           switching = true;
           try {
