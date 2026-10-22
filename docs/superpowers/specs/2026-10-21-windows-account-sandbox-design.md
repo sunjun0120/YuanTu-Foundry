@@ -1,7 +1,7 @@
 # Windows 沙箱账户后端（windows-account）设计
 
-日期：2026-10-21
-状态：待审阅
+日期：2026-10-21（2026-10-22 按 Codex elevated 沙箱调整签名、初始化与就绪判定）
+状态：已实现，真实账户验收见交接文档
 
 ## 1. 背景与目标
 
@@ -23,8 +23,9 @@
 ## 2. 模式选择
 
 - 新增模式 `windows-account`（加入 `SANDBOX_MODES`），可显式选择。
-- `native` 在 Windows 上动态解析：账户后端**就绪**（见 §6.3）→ `windows-account`；否则 → `windows`（受限令牌），并在会话中给出一次性提示“沙箱账户未初始化，当前隔离较弱，子进程可能被拒”，附“初始化”入口。
-- 显式选择 `windows-account` 但未就绪：fail closed，拒绝执行并说明原因，不回退。
+- `native` 在 Windows 上**始终**解析为 `windows-account`。未就绪时拒绝执行，错误说明缺少初始化或标记版本过旧，并提示去设置页初始化/修复；不会自动切到 `windows`。
+- 如果管理员初始化无法完成（UAC 被拒、策略不允许建本地账户或改防火墙等），由用户在设置里把模式手动改为 `windows`；`windows` 是较弱的隔离（没有独立账户、网络隔离更弱、子进程可能 `spawn EPERM`），但仍然可用。
+- 显式选择 `windows-account` 但未就绪时行为相同：fail closed，不回退。
 - `windows` 模式保持现状（如实标注为弱边界），对应 Codex 的 `unelevated`。
 
 ## 3. 架构
@@ -33,7 +34,7 @@
 agent-host (桌面用户, Medium)
   ├─ spawn yuantu-sandbox.exe broker --account offline|online      (桌面用户, 常驻, 按需启动)
   │     └─ CreateProcessWithLogonW(YuanTuSandboxOffline|Online, LOGON_WITH_PROFILE)
-  │           → yuantu-sandbox.exe runner                          (沙箱账户, Medium, 私有桌面)
+  │           → yuantu-sandbox.exe runner                          (沙箱账户, Medium；私有桌面尚未实现)
   │                 └─ 每条命令: 受限令牌 → CreateProcessAsUserW，在本命令的 Job 内创建
   └─ 每条命令 spawn yuantu-sandbox.exe exec                        (桌面用户, = SandboxPlan.executable)
         └─ 连 broker → 双向校验 → 交出 stdio 句柄 → 等待退出码 → 以同一退出码退出
@@ -41,25 +42,26 @@ agent-host (桌面用户, Medium)
 
 ### 3.1 原生二进制
 
-crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppContainer 启动器后改名）只产出 bin `yuantu-sandbox`。`maintenance.rs`（签名钉扎、安装位置校验）和 `wfp.rs`（WFP 引擎、事务与安全描述符校验）在 crate 的 `lib.rs` 中。子命令：
+crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppContainer 启动器后改名）只产出 bin `yuantu-sandbox`。`wfp.rs`（WFP 引擎、事务与安全描述符校验）和 `account/`（账户、凭据、过滤、授权、就绪判定）在 crate 的 `lib.rs` 中。子命令：
 
-| 子命令               | 身份           | 作用                                                           |
-| -------------------- | -------------- | -------------------------------------------------------------- |
-| `account-preflight`  | 桌面用户       | 校验发布签名与安装位置，不改系统                               |
-| `account-setup`      | 桌面用户 → UAC | 生成密码、建立交接管道、以固定操作 `account-initialize` 提权   |
-| `account-initialize` | 管理员         | 只接受交接管道传来的密码，执行 §4.1 的固定操作                 |
-| `account-status`     | 桌面用户       | 输出账户、凭据、WFP、seclogon、读白名单状态（JSON，version 1） |
-| `account-uninstall`  | 桌面用户 → UAC | 删除账户、profile、WFP 规则、读白名单 ACE、凭据                |
-| `broker`             | 桌面用户       | 常驻；拉起并管理 runner；服务 exec                             |
-| `runner`             | 沙箱账户       | 常驻；按请求创建受限进程                                       |
-| `exec`               | 桌面用户       | 每条命令一个；agent-host 的 spawn 目标                         |
+| 子命令                    | 身份             | 作用                                                                       |
+| ------------------------- | ---------------- | -------------------------------------------------------------------------- |
+| `account-setup`           | 桌面用户         | 生成密码；已提权则同进程建户，否则 UAC 调 `account-initialize`             |
+| `account-initialize`      | 管理员（仅交接） | 只接受交接管道传来的密码，执行 §4.1 的固定操作                             |
+| `account-status`          | 桌面用户         | 读初始化标记与 DPAPI 凭据（JSON，version 1）                               |
+| `account-status --verify` | 桌面用户         | 实时检查账户、凭据、WFP、seclogon、读白名单，供诊断和日志                  |
+| `account-uninstall`       | 桌面用户         | 先删标记，再撤用户授权；已提权则同进程删账户，否则 UAC 调 `account-remove` |
+| `account-remove`          | 管理员（仅 UAC） | 删除账户、profile、WFP 规则                                                |
+| `broker`                  | 桌面用户         | 常驻；拉起并管理 runner；服务 exec                                         |
+| `runner`                  | 沙箱账户         | 常驻；按请求创建受限进程                                                   |
+| `exec`                    | 桌面用户         | 每条命令一个；agent-host 的 spawn 目标                                     |
 
 ### 3.2 broker
 
 - 由 agent-host 在首次需要某账户时 spawn（每个 agent-host 进程、每个账户各一个），stdin 保持连接；stdin 关闭即视为宿主退出。
 - 启动顺序：
   1. 创建 runner 控制管道 `\\.\pipe\yuantu-sbx-<随机128位>`，`FILE_FLAG_FIRST_PIPE_INSTANCE`，`nMaxInstances=1`，DACL 只允许该沙箱账户 SID 连接、只允许桌面用户创建实例。
-  2. 从 DPAPI（CurrentUser）解密该账户密码，`CreateProcessWithLogonW(LOGON_WITH_PROFILE)` 拉起 `runner --control <管道名>`，`lpDesktop` 指向私有桌面（见 §3.3），拿到 runner 进程完整句柄后立即清零内存中的密码。
+  2. 从 DPAPI（CurrentUser）解密该账户密码，`CreateProcessWithLogonW(LOGON_WITH_PROFILE)` 拉起 `runner --control <管道名>`，`lpDesktop` 为空（沿用当前桌面；私有桌面见 §3.3，尚未实现），拿到 runner 进程完整句柄后立即清零内存中的密码。
   3. 接受连接后校验：`GetNamedPipeClientProcessId` 等于 runner PID，`ImpersonateNamedPipeClient` 得到的用户 SID 等于该沙箱账户 SID，且令牌不是受限令牌。任一不符则杀掉 runner、报错退出。
   4. 创建 exec 服务管道 `\\.\pipe\yuantu-sbx-broker-<桌面用户SID哈希>-<agent-host PID>-<account>`，`FIRST_PIPE_INSTANCE`，DACL 只允许桌面用户 SID。管道名通过 stdout 一行 JSON 报告给 agent-host，agent-host 再经 SandboxPlan 参数传给 exec。
 - 校验 exec：客户端令牌用户 SID == 桌面用户 SID，非受限令牌、完整性 ≥ Medium（沙箱子进程是沙箱账户且是受限令牌，连不上也冒充不了）。
@@ -70,7 +72,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 ### 3.3 runner
 
 - 启动后把自身进程对象 DACL 设为只允许 SYSTEM 和桌面用户（经 broker 传入的 SID），使沙箱子进程无法打开 runner 读内存或注入。
-- 私有桌面：broker 创建 `CreateDesktopW("yuantu-sbx-<account>")`，DACL 授予该账户 logon SID；runner 和子进程都在其中，看不到也操作不了用户桌面窗口。
+- **私有桌面（已知未实现）**：runner 和命令目前与用户共享桌面，因此沙箱进程理论上可以通过 UI Automation、窗口消息或输入合成操作同一桌面上的窗口（包括审批界面）；它不能读取或改写文件、网络，也不能跨账户打开进程。私有桌面（`CreateDesktopW` + `lpDesktop`）可以补上这层 UI 隔离，但需要单独的 CI 验证，本次合并未做。
 - 每条命令：
   1. 以 runner 自身令牌 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED)`，**不降 Low 完整性级别**。限制 SID（顺序同 Codex `token.rs`）= {工作区能力 SID（仅读写模式）, 本命令 scratch 能力 SID, **令牌用户 SID（沙箱账户）**, logon SID, Everyone}。默认 DACL 替换为 `D:(A;;GA;;;<logon SID>)(A;;RC;;;OW)`（Codex 做法：同一账户的不同 runner/命令之间互不能打开对方的进程、线程与 IPC），并启用 `SeChangeNotifyPrivilege`。
   2. `CreateJobObjectW`（kill-on-close、禁止 breakaway），通过 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在 Job 内创建；`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 只继承三个 std 句柄。
@@ -105,36 +107,39 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 
 ## 4. 初始化
 
-### 4.1 管理员固定操作（`account-initialize`）
+### 4.1 管理员固定操作（`account-initialize` / 同进程提权路径）
 
-只接受交接管道传入的两个密码，不接受路径、命令或 SID 参数。全部操作写入事务日志（`HKLM` 下受保护的位置或 Program Files 安装目录旁的 SYSTEM 日志文件），失败时回滚本次创建的对象。
+只接受交接管道传入的两个密码（或已提权时由 `account-setup` 直接生成），不接受路径、命令或 SID 参数。
 
 1. 创建或重设本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`：随机 32 字节密码、密码永不过期、用户不能改密码；属于 `Users` 组和新建的本地组 `YuanTuSandboxUsers`（不存在则创建；组内只允许这两个账户）。
 2. 登录权限：授予本地交互登录所需的权限（`CreateProcessWithLogonW` 使用交互登录类型）；`SeDenyRemoteInteractiveLogonRight`、`SeDenyNetworkLogonRight` 拒绝；在 `HKLM\...\Winlogon\SpecialAccounts\UserList` 中隐藏，不出现在登录界面。
 3. WFP：用 `wfp.rs` 的 provider/sublayer/事务与安全描述符校验；过滤条件为 `FWPM_CONDITION_ALE_USER_ID`（离线账户 SID），覆盖 IPv4/IPv6 的 ALE connect、recv/accept、resource assignment（listen），包括回环。联网账户不加过滤。
 4. Secondary Logon（seclogon）服务：若被禁用则设为手动启动。
-5. 返回两个账户 SID，供非提权部分写入状态文件。
+5. 返回两个账户 SID，供非提权部分写入凭据和初始化标记。
 
-### 4.2 非提权部分（`account-setup` 外层）
+### 4.2 用户入口（`account-setup` / `account-uninstall`）
 
-1. 生成两个密码，创建交接管道（`FIRST_PIPE_INSTANCE`，DACL：当前用户 + Administrators），`ShellExecuteExW(runas)` 以 `account-initialize --handoff <管道名>` 提权，管道发送密码，明文从不落盘、不进命令行。
-2. 用 DPAPI（CurrentUser，附加熵为固定常量 + 账户 SID）加密密码，写入 `<账户派生 profile>/.yuantu/sandbox-state/windows-account/credentials.bin`，ACL 只允许桌面用户与 SYSTEM，禁用继承。路径沿用现有 README 所述的账户派生 profile 位置（不受 TEMP/USERPROFILE 覆盖与 MSIX 虚拟化影响）。
+1. 生成两个密码。当前进程**已经提权**时，直接在本进程执行 §4.1 和 §4.2 的收尾；否则创建交接管道（`FIRST_PIPE_INSTANCE`，DACL：当前用户 + Administrators），用 `ShellExecuteExW(runas)` 以固定参数 `account-initialize --handoff <管道名>` 提权，密码只经管道传输，从不落盘、不进命令行。两条路径共用“建户 → 保存凭据 → 默认读取授权 → 写标记”的同一段代码。
+2. 用 DPAPI（CurrentUser，附加熵为固定常量 + 账户 SID）加密密码，写入 `<账户派生 profile>/.yuantu/sandbox-state/windows-account/credentials.json`，ACL 只允许桌面用户与 SYSTEM，禁用继承。
 3. 读白名单（§5.2）授予并写日志。
+4. 全部成功之后，原子写入 `setup_marker.json`（`SETUP_VERSION = 1`，含两个账户 SID、组 SID、离线过滤配置）。初始化中途失败或 UAC 被取消时不留下标记；重新初始化在开始时删除旧标记。
+5. 卸载先删除标记，再撤销用户授权；已提权时同进程删除账户，否则用固定操作 `account-remove --elevated`，最后由桌面用户删除凭据。
 
 ### 4.3 桌面端
 
-- `apps/desktop/sandbox-setup.ts` 增加账户后端的 status/initialize/uninstall（结构同现有 `WindowsSandboxSetup`），渲染层在沙箱设置面板显示：未初始化 / 就绪 / 损坏（附原因）/ 需要修复。
-- 初始化按钮触发一次 UAC；没有超时（同现有约束：杀掉 UAC 父进程无法取消提权子进程）。
+- `apps/desktop/sandbox-setup.ts` 提供账户后端的 status/verify/initialize/uninstall，渲染层在沙箱设置面板显示：未初始化 / 就绪 / 损坏（附原因和 `--verify` 诊断）/ 需要修复。
+- 开发版和正式版走同一流程：初始化/修复按钮触发一次 UAC；已经提权时直接执行，不再弹 UAC。没有超时（杀掉 UAC 父进程无法取消提权子进程）。
+- 卸载后 `native` 会拒绝执行，直到重新初始化或由用户手动改为 `windows`。
 
 ## 5. 文件访问
 
 ### 5.1 写
 
 - **常驻授权（同 Codex，2c 修订）**：工作区首次使用时，由原生 `yuantu-sandbox grant` 给根目录加两条可继承 ACE：`YuanTuSandboxUsers` 组（Modify）、该工作区能力 SID（Modify），保留到卸载或 `ungrant`，记录在 `grants.json`。不做逐命令/逐会话的日志化恢复：只有持有该工作区能力 SID 的受限令牌（仅 runner 会造）能通过第二次访问检查，常驻 ACE 对其他进程无效。也因此不与旧后端共用 `acl.ps1` 的租约与日志。离线与联网账户同属该组，共用同一份授权。
-- **不变量：除沙箱账户自己的 profile 外，任何路径都不出现直接授予沙箱账户 SID 的 ACE。** `account-status` 检查工作区与读白名单中没有违反该不变量的 ACE。
+- **不变量：除沙箱账户自己的 profile 外，任何路径都不出现直接授予沙箱账户 SID 的 ACE。** `account-status --verify` 检查工作区与读白名单中没有违反该不变量的 ACE。
 - scratch：runner 在沙箱账户自己的 `%TEMP%` 下按命令创建、命令结束删除；该目录属于沙箱账户自己的 profile，无需能力 SID。
 - 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）中已存在者，对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE。
-- 已知弱点（同 Codex）：限制列表含 Everyone，所以“Everyone 可写”的目录仍然可写。初始化与 `account-status` 扫描工作区祖先、读白名单、`PATH` 目录中 Everyone 可写的位置并给出警告（对应 Codex `audit_everyone_writable`）。
+- 已知弱点（同 Codex）：限制列表含 Everyone，所以“Everyone 可写”的目录仍然可写。初始化与 `account-status --verify` 扫描工作区祖先、读白名单、`PATH` 目录中 Everyone 可写的位置并给出警告（对应 Codex `audit_everyone_writable`）。
 
 ### 5.2 读白名单
 
@@ -154,35 +159,54 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 
 ### 6.2 修改
 
-- `sandbox-mode.ts`：加入 `windows-account`；`nativeSandboxBackend` 在 Windows 上返回由就绪状态决定的后端（结果按进程缓存，初始化/卸载后失效）。
+- `sandbox-mode.ts`：加入 `windows-account`；`nativeSandboxBackend` 在 Windows 上**始终**返回 `windows-account`，不再读取/缓存就绪状态，也不回退到 `windows`。
+- `sandbox-account.ts`：未就绪时 `available()` 返回可操作错误（未初始化、标记版本、去设置页）；runner/broker 启动失败附加“去设置页修复或重新初始化”。
 - `sandbox.ts`：注册新 provider。
 - 网络选择：请求 `network: deny`（或默认离线）→ 离线账户；允许网络 → 联网账户。
-- `sandbox-launch-failure.ts` 的 `SANDBOX_CHILD_SPAWN_NOTE`：`windows` 后端出现 EPERM 时，提示改为“初始化沙箱账户”而非只建议完全访问。
+- `sandbox-launch-failure.ts` 的 `SANDBOX_CHILD_SPAWN_NOTE`：`windows` 后端出现 EPERM 时，说明这是手动选择的弱后端，提示初始化账户并切回 native，而不是只建议完全访问。
 - `README.md`（windows-sandbox 目录）与 `ENHANCED-DESIGN.md`：更新为当前实现与边界。
 
 ### 6.3 就绪判定
 
-`account-status` 全部满足才算就绪：发布签名与安装位置校验通过；两账户存在且 SID 与状态文件一致；凭据文件可解密且能完成一次 logon（status 中做一次 `LogonUserW` 交互验证后立即关闭令牌）；WFP 过滤器与安装 schema 一致；seclogon 未禁用。另外 provider 首次使用时执行一次运行时探针（runner 内 `spawnSync` 子进程读写 stdio，复用 `APPCONTAINER_CHILD_STDIO_PROBE` 的形式；离线账户再做一次连接被拒探针），结果缓存到进程结束。
+`account-status` 的快速判定只读两样东西：
+
+1. `setup_marker.json` 存在、`SETUP_VERSION` 一致，且账户/组/离线过滤字段形状有效；
+2. `credentials.json` 能用当前用户的 DPAPI 解开，且其中的账户 SID 与标记一致。
+
+满足即就绪；不再在每次查询时做 `LogonUserW`、WFP 审计或读取白名单审计。`account-status --verify` 保留原来的实时检查（账户存在、组成员、凭据 SID、logon、WFP、seclogon、读取白名单），并核对标记与实时账户 SID，供设置页“检查状态”和日志使用。
+
+运行时 provider 首次使用仍执行一次运行时探针（runner 内 `spawnSync` 子进程读写 stdio，离线账户再做一次连接被拒探针），结果缓存到进程结束；探针失败不等于状态文件损坏，错误会提示去设置里修复。
+
+**已知代价**：账户被外部删除、WFP 过滤器丢失或 seclogon 被禁用后，标记仍可能让 `account-status` 报“就绪”，直到下一次命令失败；此时用 `--verify` 能看到真实原因。这是用启动速度换实时性所接受的取舍。
 
 ## 7. 错误处理
 
-| 情况                                        | 行为                                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------------- |
-| 未初始化 / 损坏，模式为 `native`            | 回退 `windows`，会话提示一次，附初始化入口                             |
-| 未初始化 / 损坏，模式为 `windows-account`   | 拒绝执行，说明缺少哪一项                                               |
-| 凭据解密失败或 logon 失败（密码被外部改动） | 标记“需要修复”，提示重新初始化（会重设密码）                           |
-| runner 启动失败（seclogon 停止等）          | exec 输出 launch-failed 前缀行，退出 125；验收归为 `environment-error` |
-| runner 崩溃                                 | 进行中命令 `runner-lost`；下次请求重启 runner                          |
-| 工作区租约冲突                              | 沿用现有提示（另一个 Host 持有租约等），在审批前检查                   |
-| ACL 恢复冲突                                | 沿用现有日志保留与 `sandbox-recover`                                   |
-| 管道校验失败（疑似冒充）                    | 拒绝，杀掉 runner，错误信息不含细节以外的数据                          |
+| 情况                                                     | 行为                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 未初始化 / 标记缺失 / 标记版本旧 / 损坏，模式为 `native` | 拒绝执行，说明缺少什么并提示去设置页初始化或修复；不自动切换后端                                       |
+| 同上，模式为 `windows-account`                           | 同上                                                                                                   |
+| 初始化无法完成（UAC 被拒、策略不允许建账户或改防火墙）   | 设置页给出原因；用户可手动把模式改为较弱的 `windows`（无独立账户、网络更弱、子进程可能 `spawn EPERM`） |
+| 凭据解密失败或 logon 失败（密码被外部改动）              | 标记“需要修复”，提示重新初始化（会重设密码）                                                           |
+| 标记仍有效但账户/WFP 被外部删除                          | 命令失败时提示去设置页修复或重新初始化；`account-status --verify` 给出真实问题码                       |
+| runner 启动失败（seclogon 停止、密码失效等）             | exec 输出 launch-failed 前缀行，退出 125；错误提示去设置页修复或重新初始化                             |
+| runner 崩溃                                              | 进行中命令 `runner-lost`；下次请求重启 runner                                                          |
+| 工作区租约冲突                                           | 沿用现有提示（另一个 Host 持有租约等），在审批前检查                                                   |
+| ACL 恢复冲突                                             | 沿用现有日志保留与 `sandbox-recover`                                                                   |
+| 管道校验失败（疑似冒充）                                 | 拒绝，杀掉 runner，错误信息不含细节以外的数据                                                          |
+
+### 7.1 安全取舍
+
+- **不校验 helper 签名**：helper 按“主程序旁的固定路径”定位和信任，找不到就报错；不再校验 Authenticode、签名者或受保护安装目录。能替换该目录里 helper 的人，可以借用户点一次 UAC 获得管理员权限——这是与 Codex 一致、但在本仓库中明确记录的取舍。
+- **开发版与正式版同一流程**：不再有“只有签名正式版才能初始化”的限制；任何能运行 helper 的构建都可以请求 UAC。密码交换、DPAPI、卸载前先撤授权等边界保持不变。
+- **标记文件判定就绪**：如 §6.3 所述，外部删除账户或 WFP 过滤器不会立刻被发现；运行时错误必须可操作，诊断用 `--verify`。
+- **私有桌面未实现**：沙箱命令与用户共享桌面，UI 自动化/窗口消息不在隔离边界内；文件、网络、进程边界仍由令牌、ACL 和 WFP 负责。
 
 ## 8. 实施顺序与测试
 
 1. **Spike（门槛）**：一个临时 Rust 测试程序，在手动创建的测试账户下用 `CreateProcessWithLogonW` 拉起，再按 §3.3 生成令牌启动 `node --test`（会 fork 的 fixture）与 vitest。记录结论，决定用主方案还是退路方案。spike 代码不保留。
 2. 协议与 exec/broker/runner 骨架 + Rust 单元测试（帧编解码、未知字段拒绝、校验逻辑的纯函数部分）。
 3. 初始化/卸载/状态 + WFP 用户 SID 过滤 + Rust 单元测试（无系统修改的部分）。
-4. TS provider、broker 管理、模式解析 + `tests/` 下单元测试（mock `execute` / broker 进程，同现有 `sandbox-windows.test.ts`、`windows-sandbox-setup.test.ts` 风格）。
+4. TS provider、broker 管理、模式解析 + `tests/` 下单元测试（mock `execute` / broker 进程，见 `tests/sandbox-account.test.ts`、`tests/windows-account-setup.test.ts`、`tests/sandbox-setup-renderer.test.ts`）。
 5. 原生集成测试（仅在已初始化的 Windows 机器上运行，未就绪时跳过并说明）：`tests/sandbox-account-native.test.ts` 覆盖
    - `node --test` fork、vitest fork、stdin/stdout/stderr 流式；
    - 工作区可写，另一工作区、桌面用户目录、保留路径不可写；

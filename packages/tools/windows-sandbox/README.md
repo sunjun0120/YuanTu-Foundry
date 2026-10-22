@@ -25,3 +25,21 @@ The workspace root's `.git`, `.yuantu`, `.agents`, `.codex`, `.aws`, `.ssh`, and
 After the final workspace lease ends, existing objects recover their original security and newly created objects receive Medium integrity labels. Approved atomic file replacements can inherit the same effective Low mandatory label: recovery ignores only the mandatory-label ACE's inherited provenance bit when checking for conflicts. DACLs, label SIDs/policies, and all other inheritance flags must still match; genuine operator permission or integrity-level changes retain the journal and lock without partially restoring other objects. Cleanup of a forged or deserialized plan cannot release a Host-owned lease or delete an arbitrary path. The owning Host must terminate the process tree before cleaning its original plan.
 
 The earlier SYSTEM-service design is retained as [historical reference](ENHANCED-DESIGN.md). The basic backend does not initialize accounts or firewall policy.
+
+## 本机开发测试
+
+本机只做构建和只读检查；真实建户/删户只在一次性 GitHub Actions Windows runner 上做（见 `.github/workflows/windows-account-sandbox.yml`）。不要在本机执行账户初始化或卸载，除非你明确要在这台机器上使用账户沙箱。
+
+1. 构建 helper：`npm run build:windows-sandbox`。它同时写入 `packages/tools/windows-sandbox/yuantu-sandbox.exe` 和 `dist/packages/tools/windows-sandbox/yuantu-sandbox.exe`；安装包和 `npm run build` 都从这里取。
+2. 启动开发版桌面：`npm run desktop`（会先构建）。打开设置 → 通用 → **Windows 沙箱账户**，点“管理员初始化”。未提权时会弹一次 UAC；从已经提权的终端启动时直接在本进程执行，不再弹 UAC。开发版和正式版走同一套流程。
+3. 初始化成功后，系统里会多出：
+   - 本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`，以及本地组 `YuanTuSandboxUsers`；
+   - 两个账户的交互登录权限、远程/网络登录拒绝，以及登录界面隐藏项；
+   - 离线账户的 WFP 过滤器（按该账户 SID 断网），必要时把 Secondary Logon 服务设为手动启动；
+   - `%USERPROFILE%\.yuantu\sandbox-state\windows-account\setup_marker.json`（版本、账户/组 SID、离线过滤配置）和 `credentials.json`（DPAPI 加密的密码）；
+   - 工作区授权、默认只读白名单，以及桌面 profile 下祖先目录的 traverse/read-attributes 授权记录。
+4. 卸载：在同一设置页点“卸载沙箱账户”。它会先删除 `setup_marker.json`，再以桌面用户身份撤销工作区/读取授权，最后删除账户、组、WFP 过滤器和凭据。确认已清理干净：
+   - `packages/tools/windows-sandbox/yuantu-sandbox.exe account-status --verify` 应报告 `accounts-missing`、`group-missing`、`firewall-missing`，`ready` 为 false；
+   - `net user YuanTuSandboxOffline`、`net user YuanTuSandboxOnline`、`net localgroup YuanTuSandboxUsers` 都应失败；
+   - 状态目录里没有 `setup_marker.json` 和 `credentials.json`，`read-grants.json` / `traverse-grants.json` 的 `grants` 为空。`account-status` 只看标记和凭据，清理后必须用 `--verify` 才能看到账户/WFP 的真实状态。
+5. 如果管理员初始化无法完成（UAC 被拒、策略不允许建本地账户或改防火墙），可以由用户手动选择较弱的 `windows` 模式：它没有独立账户、网络隔离更弱，并且已知子进程可能 `spawn EPERM`。它不是自动回退，`native` 不会自己切过去。
