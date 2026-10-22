@@ -185,6 +185,22 @@ fn long_running(broker: &Broker, node: &str) -> (Child, Watch) {
 }
 
 #[test]
+fn commands_run_on_a_private_desktop_not_the_users_own() {
+    let broker = broker();
+    let probe = exec(
+        &broker.pipe,
+        &request(&[env!("CARGO_BIN_EXE_desktop-probe")], r"C:\"),
+        "",
+    );
+    assert_eq!(probe.status.code(), Some(0), "{probe:?}");
+    let desktop = stdout(&probe);
+    assert!(
+        desktop.starts_with("YuanTuSandboxDesktop-"),
+        "the command ran on {desktop:?}"
+    );
+}
+
+#[test]
 fn echoes_and_reports_exit_codes() {
     let broker = broker();
     let echo = exec(

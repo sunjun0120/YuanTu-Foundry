@@ -15,7 +15,7 @@ mod win;
 use win::Result;
 
 fn usage() -> Result<u32> {
-    Err("Expected: exec --broker PIPE --request FILE | broker --dev|--account offline|online | account-status [--verify] | grant --root R --capability S | ungrant --root R | read-grant --root R | read-ungrant --root R | read-refresh --env FILE | account-setup | account-uninstall | runner --control ID --owner SID".into())
+    Err("Expected: exec --broker PIPE --request FILE | broker --dev|--account offline|online | account-status [--verify] | grant --root R --capability S | ungrant --root R | read-grant --root R | read-ungrant --root R | read-refresh --env FILE | account-setup | account-uninstall | runner --control ID --owner SID --desktop NAME".into())
 }
 
 fn main_result() -> Result<u32> {
@@ -42,13 +42,21 @@ fn main_result() -> Result<u32> {
         ["account-uninstall"] => provision::uninstall(),
         ["account-initialize", "--handoff", pipe] => provision::initialize_handoff(pipe),
         ["account-remove", "--elevated"] => provision::remove_elevated(),
-        ["runner", "--control", control, "--owner", owner]
-            if control.len() == 32
-                && control.bytes().all(|b| b.is_ascii_hexdigit())
-                && owner.starts_with("S-1-5-")
-                && owner[6..].bytes().all(|b| b.is_ascii_digit() || b == b'-') =>
+        [
+            "runner",
+            "--control",
+            control,
+            "--owner",
+            owner,
+            "--desktop",
+            desktop,
+        ] if control.len() == 32
+            && desktop::validate_name(desktop)
+            && control.bytes().all(|b| b.is_ascii_hexdigit())
+            && owner.starts_with("S-1-5-")
+            && owner[6..].bytes().all(|b| b.is_ascii_digit() || b == b'-') =>
         {
-            runner::run(control, owner)
+            runner::run(control, owner, desktop)
         }
         _ => usage(),
     }

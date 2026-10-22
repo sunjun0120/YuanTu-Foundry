@@ -1,6 +1,7 @@
 //! The runner: started by its broker as the sandbox account, it creates each command under the restricted
 //! token. Commands run concurrently; the broker multiplexes them by id.
 use crate::{
+    desktop,
     frame::{read_frame, write_frame},
     pipe::{PipeIo, connect},
     protocol::{ErrorKind, FromRunner, ToRunner, validate},
@@ -57,8 +58,10 @@ fn remove_stale_scratch() {
     }
 }
 
-pub fn run(control: &str, owner: &str) -> Result<u32> {
+pub fn run(control: &str, owner: &str, desktop: &str) -> Result<u32> {
     protect_self(owner)?;
+    // The broker's private desktop; a missing one stops the runner rather than putting commands on `Default`.
+    let desktop = desktop::open(desktop)?;
     remove_stale_scratch();
     let down = connect(
         &format!(r"\\.\pipe\yuantu-sbx-{control}-down"),
@@ -108,8 +111,14 @@ pub fn run(control: &str, owner: &str) -> Result<u32> {
                     &|name| std::env::var(name).ok(),
                     &scratch.to_string_lossy(),
                 );
-                let started = restricted_token(&request.capabilities)
-                    .and_then(|token| start(&token, &request, stdio.each_ref().map(|h| h.0)));
+                let started = restricted_token(&request.capabilities).and_then(|token| {
+                    start(
+                        &token,
+                        &request,
+                        stdio.each_ref().map(|h| h.0),
+                        Some(&desktop),
+                    )
+                });
                 drop(stdio);
                 let command = match started {
                     Ok(command) => Arc::new(command),

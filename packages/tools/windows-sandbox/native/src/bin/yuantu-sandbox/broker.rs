@@ -5,6 +5,7 @@
 //! every command) and ends the broker. If the runner dies, pending commands get `runner-lost` and the broker
 //! exits non-zero so the host starts a fresh one for the next command.
 use crate::{
+    desktop::PrivateDesktop,
     frame::{read_frame, write_frame},
     pipe::{PipeIo, accept, client_pid, peer_disconnected, random_suffix, server},
     protocol::{ErrorKind, FromBroker, FromRunner, ToBroker, ToRunner, validate},
@@ -62,6 +63,8 @@ pub fn run(launch: Launch) -> Result<u32> {
             (sid, Some((account, secret)))
         }
     };
+    // Held until the broker exits: every command of this runner starts on it.
+    let desktop = PrivateDesktop::create(&runner_sid)?;
     let control = random_suffix()?;
     let control_sddl = format!("D:P(A;;GA;;;{runner_sid})(A;;GA;;;{me})");
     let down = server(
@@ -78,7 +81,7 @@ pub fn run(launch: Launch) -> Result<u32> {
         true,
         1,
     )?;
-    let (process, job) = start_runner(&control, &me, logon)?;
+    let (process, job) = start_runner(&control, &me, desktop.name(), logon)?;
     let pid = unsafe { GetProcessId(process.0) };
     accept(&down)?;
     accept(&up)?;
@@ -144,6 +147,7 @@ pub fn run(launch: Launch) -> Result<u32> {
 fn start_runner(
     control: &str,
     owner: &str,
+    desktop: &str,
     logon: Option<(Account, Secret)>,
 ) -> Result<(Handle, Handle)> {
     let job = Handle(unsafe { CreateJobObjectW(null(), null()) });
@@ -166,7 +170,7 @@ fn start_runner(
     let image = std::env::current_exe().map_err(|_| "Locate sandbox executable")?;
     let image = image.to_string_lossy().into_owned();
     let mut command = wide(&format!(
-        "\"{image}\" runner --control {control} --owner {owner}"
+        "\"{image}\" runner --control {control} --owner {owner} --desktop {desktop}"
     ))?;
     let image = wide(&image)?;
     let mut startup: STARTUPINFOW = unsafe { zeroed() };

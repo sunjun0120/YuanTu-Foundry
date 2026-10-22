@@ -1,5 +1,6 @@
 //! Starts one command inside its own kill-on-close Job, with only its three stdio handles inherited.
 use crate::{
+    desktop::OpenedDesktop,
     protocol::Request,
     win::{Handle, Result, process_token, wide, win},
 };
@@ -195,7 +196,13 @@ pub struct Running {
 
 /// Creates the command suspended, already inside its Job, verifies the kernel gave it a restricted token,
 /// and only then resumes it.
-pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Running> {
+/// Starts `request` under `token`, on `desktop` when given (the runner always gives the broker's private desktop).
+pub fn start(
+    token: &Handle,
+    request: &Request,
+    stdio: [HANDLE; 3],
+    desktop: Option<&OpenedDesktop>,
+) -> Result<Running> {
     let handles = [
         inheritable(stdio[0])?,
         inheritable(stdio[1])?,
@@ -266,6 +273,7 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
     startup.StartupInfo.hStdOutput = handles[1].0;
     startup.StartupInfo.hStdError = handles[2].0;
     startup.lpAttributeList = list;
+    startup.StartupInfo.lpDesktop = desktop.map_or(null_mut(), |desktop| desktop.startup_name());
     let image = wide(&request.argv[0])?;
     let mut command = wide(&command_line(&request.argv, request.verbatim))?;
     let cwd = wide(&request.cwd)?;
@@ -468,6 +476,7 @@ mod tests {
             &token,
             &cmd(&["/c", "exit", "7"]),
             [null_mut(), out.0, out.0],
+            None,
         )
         .unwrap();
         assert_eq!(running.wait().unwrap(), 7);
@@ -478,7 +487,7 @@ mod tests {
         let token = restricted_token(&["S-1-5-21-11-22-33-44".into()]).unwrap();
         let (_, out) = pipe();
         let request = cmd(&["/c", "ping", "-n", "30", "127.0.0.1"]);
-        let running = start(&token, &request, [null_mut(), out.0, out.0]).unwrap();
+        let running = start(&token, &request, [null_mut(), out.0, out.0], None).unwrap();
         let started = std::time::Instant::now();
         running.cancel();
         running.wait().unwrap();
