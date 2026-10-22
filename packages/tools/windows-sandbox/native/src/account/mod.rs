@@ -5,6 +5,7 @@ pub mod credentials;
 pub mod firewall;
 pub mod grants;
 pub mod password;
+pub mod processes;
 pub mod read_refresh;
 pub mod read_roots;
 pub mod setup_lock;
