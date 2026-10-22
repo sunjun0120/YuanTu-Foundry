@@ -39,17 +39,17 @@
 
 - Produces: `pub struct PrivateDesktop`（Drop 时 `CloseDesktop`）；`pub fn create(participant_sid: &str) -> Result<PrivateDesktop>`；`pub fn name(&self) -> &str`；`pub fn validate_name(name: &str) -> bool`（`YuanTuSandboxDesktop-` 后接 32 位十六进制）；`pub fn open(name: &str) -> Result<OpenedDesktop>`（校验名字后 `OpenDesktopW`，不存在即错误）；`pub fn startup_name(name: &str) -> String`（`Winsta0\{name}`）。
 
-- [ ] **Step 1：失败测试**（`desktop.rs` 内）：`create(当前用户 SID)` 得到合法名字，`open(name)` 成功；Drop 后 `open` 失败；`validate_name` 拒绝 `Default`、`YuanTuSandboxDesktop-`、带非十六进制或超长后缀。
-- [ ] **Step 2：确认失败**。
-- [ ] **Step 3：实现**：名字用 `password::generate` 同源的随机数生成 128 位十六进制；SDDL `D:P(A;;0x{ALL:x};;;{owner})(A;;0x{PARTICIPANT:x};;;{participant})`，`ALL` 与 `PARTICIPANT` 取值同 Codex（参与者去掉 `WRITE_DAC | WRITE_OWNER | DELETE`）；owner 为当前进程令牌用户 SID（不用 logon SID：它与沙箱共享）。
-- [ ] **Step 4：通过并提交** `feat(windows-sandbox): broker 侧私有桌面对象`。
+- [x] **Step 1：失败测试**（`desktop.rs` 内）：`create(当前用户 SID)` 得到合法名字，`open(name)` 成功；Drop 后 `open` 失败；`validate_name` 拒绝 `Default`、`YuanTuSandboxDesktop-`、带非十六进制或超长后缀。
+- [x] **Step 2：确认失败**。
+- [x] **Step 3：实现**：名字用 `password::generate` 同源的随机数生成 128 位十六进制；SDDL `D:P(A;;0x{ALL:x};;;{owner})(A;;0x{PARTICIPANT:x};;;{participant})`，`ALL` 与 `PARTICIPANT` 取值同 Codex（参与者去掉 `WRITE_DAC | WRITE_OWNER | DELETE`）；owner 为当前进程令牌用户 SID（不用 logon SID：它与沙箱共享）。
+- [x] **Step 4：通过并提交** `feat(windows-sandbox): broker 侧私有桌面对象`。
 
 ### Task 2：broker → runner → 命令接入
 
-- [ ] **Step 1：失败测试**（`tests/sandbox_exec.rs`）：`broker --dev` 下以 `desktop-probe` 为命令，输出以 `YuanTuSandboxDesktop-` 开头且不是 `Default`；新建 `src/bin/desktop-probe.rs`（`GetThreadDesktop(GetCurrentThreadId())` + `GetUserObjectInformationW(UOI_NAME)`）。
-- [ ] **Step 2：确认失败**（输出为 `Default`）。
-- [ ] **Step 3：实现**：broker 启动时 `desktop::create(participant)`（`--account` 为账户 SID，`--dev` 为当前用户 SID），保存在 broker 状态中；runner 命令行追加 `--desktop {name}`；`main.rs` 匹配 `["runner", "--control", c, "--owner", o, "--desktop", d]` 且 `validate_name(d)`；`runner::run` 启动时 `desktop::open(d)` 并保存，`spawn` 设置 `StartupInfo.lpDesktop`。
-- [ ] **Step 4：全量 `cargo test --locked` 通过并提交** `feat(windows-sandbox): 沙箱命令运行在私有桌面上`。
+- [x] **Step 1：失败测试**（`tests/sandbox_exec.rs`）：`broker --dev` 下以 `desktop-probe` 为命令，输出以 `YuanTuSandboxDesktop-` 开头且不是 `Default`；新建 `src/bin/desktop-probe.rs`（`GetThreadDesktop(GetCurrentThreadId())` + `GetUserObjectInformationW(UOI_NAME)`）。
+- [x] **Step 2：确认失败**（输出为 `Default`）。
+- [x] **Step 3：实现**：broker 启动时 `desktop::create(participant)`（`--account` 为账户 SID，`--dev` 为当前用户 SID），保存在 broker 状态中；runner 命令行追加 `--desktop {name}`；`main.rs` 匹配 `["runner", "--control", c, "--owner", o, "--desktop", d]` 且 `validate_name(d)`；`runner::run` 启动时 `desktop::open(d)` 并保存，`spawn` 设置 `StartupInfo.lpDesktop`。
+- [x] **Step 4：全量 `cargo test --locked` 通过并提交** `feat(windows-sandbox): 沙箱命令运行在私有桌面上`。
 
 ### Task 3：真实账户验收与文档
 

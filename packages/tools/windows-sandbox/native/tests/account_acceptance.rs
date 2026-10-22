@@ -340,6 +340,20 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
 
     let offline = broker("offline");
 
+    // Commands run on the broker's private desktop, never on the user's own (`Default`) where the approval UI is.
+    let probe = exec(
+        &offline.pipe,
+        &[env!("CARGO_BIN_EXE_desktop-probe")],
+        &a,
+        &[&cap_a],
+        false,
+    );
+    assert!(
+        text(&probe).trim().starts_with("YuanTuSandboxDesktop-"),
+        "a sandbox account command ran on another desktop: {}",
+        text(&probe)
+    );
+
     // 3. The automatic read roots, with no manual grant at all: a toolchain directory refresh discovered from
     //    `PATH`, a file created after the refresh (inheritance), and a credential file the next refresh denies.
     let discovered = automatic.join("readable.txt");

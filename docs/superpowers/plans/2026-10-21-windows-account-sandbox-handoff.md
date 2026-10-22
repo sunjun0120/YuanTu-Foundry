@@ -23,8 +23,8 @@
 | 2d 桌面设置、读取白名单、初始化标记                                                                                            | 完成，Electron 设置 smoke 通过                                      |
 | 2026-10-22 收尾：删除签名/受保护安装、统一初始化、标记就绪、去回退                                                             | 完成；真实账户 run `39728114611` 通过，后续 run `39729396999` 见 CI |
 | 2e 读根目录自动 refresh、设置页三态（计划 `2026-10-22-…-read-refresh.md`）                                                     | 完成；真实账户 run `39741279867`（`4d08d1a`）通过                   |
-| 加固 1：卸载前停进程、初始化/卸载互斥（计划 `2026-10-23-windows-sandbox-uninstall-lock.md`，分支 `windows-sandbox-hardening`） | 本地单测通过，真实账户验收待 CI                                     |
-| 私有桌面                                                                                                                       | **未做**（已知限制，见设计 §3.3 / §7.1）                            |
+| 加固 1：卸载前停进程、初始化/卸载互斥（计划 `2026-10-23-windows-sandbox-uninstall-lock.md`，分支 `windows-sandbox-hardening`） | 真实账户 run `39750365365` 通过                                     |
+| 加固 2：私有桌面（计划 `2026-10-23-windows-sandbox-private-desktop.md`，分支 `windows-sandbox-hardening`）                     | 本地 `broker --dev` 测试通过，真实账户验收待 CI                     |
 | 全量 `CI`（`jobs=all`）与 PR                                                                                                   | 待用户触发/同意，见文末                                             |
 
 真实账户验收只允许在一次性 GitHub Actions Windows runner 上进行；**不要在本机初始化或移除账户**。
@@ -71,7 +71,7 @@ agent-host（桌面用户）
 - 任务 2 真实账户：run `39728114611` 全绿。Rust `account-setup`/`account-uninstall` 真实验收、TS provider 验收、Electron 设置 smoke 都实际执行，0 skip。
 - 任务 3/4 真实账户：run `39729396999`（提交 `14596ef`）已触发；看 run 页面与原始日志确认标记写入/删除和设置 smoke。
 - 2e（`da65401`/`9f20fbb`/`84f35a4`，CI 修复 `f5889f2` 状态字段名 `readRoots`、`4d08d1a` 验收卸载检查）：真实账户 run `39741279867` 通过；全量 CI run `39741320435`（jobs=all）check/bench/coverage/native-macos/desktop-smoke 全部通过。本地 `cargo test` 70 pass / 0 fail。desktop-smoke 同一 run 通过，5 个 job 全绿。
-- 尚未完成：最终提交的全量 `CI`（`jobs=all`）需要用户手动触发；创建 PR 需用户同意；私有桌面未做。
+- 尚未完成：最终提交的全量 `CI`（`jobs=all`）需要用户手动触发；创建 PR 需用户同意。
 
 ## 约定与坑
 

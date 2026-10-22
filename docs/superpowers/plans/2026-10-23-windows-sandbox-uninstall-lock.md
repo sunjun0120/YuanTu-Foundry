@@ -113,11 +113,11 @@
 
 - Modify: `tests/account_acceptance.rs`、设计文档、交接说明
 
-- [ ] **Step 1：验收**：在第 7 步卸载前，用离线 broker 以 `exec` 启动一个不会自行退出的命令（`node -e "setInterval(()=>{},1000)"`），这次不等待（新增 `exec_spawn` 返回 `Child`）；然后 `account-uninstall`，断言：
+- [x] **Step 1：验收**：在第 7 步卸载前，用离线 broker 以 `exec` 启动一个不会自行退出的命令（`node -e "setInterval(()=>{},1000)"`），这次不等待（新增 `exec_spawn` 返回 `Child`）；然后 `account-uninstall`，断言：
   - 卸载成功；
   - 15 秒内该 `exec` 子进程退出（runner 被结束，管道断开）；
   - 卸载后 `account-status --verify` 报 `accounts-missing`（已有检查）。
-- [ ] **Step 2：文档**：设计 §4.1 写明卸载顺序与锁；§7 增加「卸载准备失败时恢复账户、保留 WFP」；交接说明加入本计划与 Codex 对照。
-- [ ] **Step 3：本地检查**：`cargo test --locked`、`npm run format:check`、`npm run docs:check`。
-- [ ] **Step 4：推送一次**，看 `Windows sandbox accounts` run；全绿后再手动触发 `CI jobs=all`。
-- [ ] **Step 5：提交**：`test(windows-sandbox): 卸载时仍有命令运行的真实账户验收`、`docs(windows-sandbox): 卸载顺序与互斥锁`。
+- [x] **Step 2：文档**：设计 §4.1 写明卸载顺序与锁；§7 增加「卸载准备失败时恢复账户、保留 WFP」；交接说明加入本计划与 Codex 对照。
+- [x] **Step 3：本地检查**：`cargo test --locked`、`npm run format:check`、`npm run docs:check`。
+- [x] **Step 4：推送一次**，看 `Windows sandbox accounts` run；全绿后再手动触发 `CI jobs=all`。
+- [x] **Step 5：提交**：`test(windows-sandbox): 卸载时仍有命令运行的真实账户验收`、`docs(windows-sandbox): 卸载顺序与互斥锁`。

@@ -34,7 +34,7 @@
 agent-host (桌面用户, Medium)
   ├─ spawn yuantu-sandbox.exe broker --account offline|online      (桌面用户, 常驻, 按需启动)
   │     └─ CreateProcessWithLogonW(YuanTuSandboxOffline|Online, LOGON_WITH_PROFILE)
-  │           → yuantu-sandbox.exe runner                          (沙箱账户, Medium；私有桌面尚未实现)
+  │           → yuantu-sandbox.exe runner                          (沙箱账户, Medium；命令在私有桌面上)
   │                 └─ 每条命令: 受限令牌 → CreateProcessAsUserW，在本命令的 Job 内创建
   └─ 每条命令 spawn yuantu-sandbox.exe exec                        (桌面用户, = SandboxPlan.executable)
         └─ 连 broker → 双向校验 → 交出 stdio 句柄 → 等待退出码 → 以同一退出码退出
@@ -62,7 +62,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 - 由 agent-host 在首次需要某账户时 spawn（每个 agent-host 进程、每个账户各一个），stdin 保持连接；stdin 关闭即视为宿主退出。
 - 启动顺序：
   1. 创建 runner 控制管道 `\\.\pipe\yuantu-sbx-<随机128位>`，`FILE_FLAG_FIRST_PIPE_INSTANCE`，`nMaxInstances=1`，DACL 只允许该沙箱账户 SID 连接、只允许桌面用户创建实例。
-  2. 从 DPAPI（CurrentUser）解密该账户密码，`CreateProcessWithLogonW(LOGON_WITH_PROFILE)` 拉起 `runner --control <管道名>`，`lpDesktop` 为空（沿用当前桌面；私有桌面见 §3.3，尚未实现），拿到 runner 进程完整句柄后立即清零内存中的密码。
+  2. 从 DPAPI（CurrentUser）解密该账户密码，`CreateProcessWithLogonW(LOGON_WITH_PROFILE)` 拉起 `runner --control <管道名>`，`lpDesktop` 为空（runner 自身留在当前桌面；命令所在的私有桌面见 §3.3），拿到 runner 进程完整句柄后立即清零内存中的密码。
   3. 接受连接后校验：`GetNamedPipeClientProcessId` 等于 runner PID，`ImpersonateNamedPipeClient` 得到的用户 SID 等于该沙箱账户 SID，且令牌不是受限令牌。任一不符则杀掉 runner、报错退出。
   4. 创建 exec 服务管道 `\\.\pipe\yuantu-sbx-broker-<桌面用户SID哈希>-<agent-host PID>-<account>`，`FIRST_PIPE_INSTANCE`，DACL 只允许桌面用户 SID。管道名通过 stdout 一行 JSON 报告给 agent-host，agent-host 再经 SandboxPlan 参数传给 exec。
 - 校验 exec：客户端令牌用户 SID == 桌面用户 SID，非受限令牌、完整性 ≥ Medium（沙箱子进程是沙箱账户且是受限令牌，连不上也冒充不了）。
@@ -73,7 +73,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 ### 3.3 runner
 
 - 启动后把自身进程对象 DACL 设为只允许 SYSTEM 和桌面用户（经 broker 传入的 SID），使沙箱子进程无法打开 runner 读内存或注入。
-- **私有桌面（已知未实现）**：runner 和命令目前与用户共享桌面，因此沙箱进程理论上可以通过 UI Automation、窗口消息或输入合成操作同一桌面上的窗口（包括审批界面）；它不能读取或改写文件、网络，也不能跨账户打开进程。私有桌面（`CreateDesktopW` + `lpDesktop`）可以补上这层 UI 隔离，但需要单独的 CI 验证，本次合并未做。
+- **私有桌面**：`CreateProcessWithLogonW` 启动的 runner 与调用者共享 logon SID，命令的受限令牌把它列为限制 SID，而用户桌面（`Default`）授予的正是这个 logon SID；在同一桌面上，沙箱命令可以枚举窗口、发消息、装钩子、合成输入（包括审批界面）。因此 broker 启动时 `CreateDesktopW` 创建 `YuanTuSandboxDesktop-<32 位十六进制>`，DACL 只给桌面用户的**用户 SID**完全访问（不用 logon SID，它与沙箱共享），给沙箱账户（`--dev` 时为当前用户）去掉 `WRITE_DAC`/`WRITE_OWNER`/`DELETE` 的参与访问；broker 持有句柄到退出。runner 参数 `--desktop NAME`，启动时 `OpenDesktopW` 校验存在（不回退 `Default`），每条命令 `lpDesktop = Winsta0\NAME`。runner 自身留在 `Default`：显式指定桌面时 `CreateProcessWithLogonW` 不再代为授予窗口站权限。参照 Codex `desktop.rs`。
 - 每条命令：
   1. 以 runner 自身令牌 `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED)`，**不降 Low 完整性级别**。限制 SID（顺序同 Codex `token.rs`）= {工作区能力 SID（仅读写模式）, 本命令 scratch 能力 SID, **令牌用户 SID（沙箱账户）**, logon SID, Everyone}。默认 DACL 替换为 `D:(A;;GA;;;<logon SID>)(A;;RC;;;OW)`（Codex 做法：同一账户的不同 runner/命令之间互不能打开对方的进程、线程与 IPC），并启用 `SeChangeNotifyPrivilege`。
   2. `CreateJobObjectW`（kill-on-close、禁止 breakaway），通过 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 在 Job 内创建；`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 只继承三个 std 句柄。
@@ -223,7 +223,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 - **不校验 helper 签名**：helper 按“主程序旁的固定路径”定位和信任，找不到就报错；不再校验 Authenticode、签名者或受保护安装目录。能替换该目录里 helper 的人，可以借用户点一次 UAC 获得管理员权限——这是与 Codex 一致、但在本仓库中明确记录的取舍。
 - **开发版与正式版同一流程**：不再有“只有签名正式版才能初始化”的限制；任何能运行 helper 的构建都可以请求 UAC。密码交换、DPAPI、卸载前先撤授权等边界保持不变。
 - **标记文件判定就绪**：如 §6.3 所述，外部删除账户或 WFP 过滤器不会立刻被发现；运行时错误必须可操作，诊断用 `--verify`。
-- **私有桌面未实现**：沙箱命令与用户共享桌面，UI 自动化/窗口消息不在隔离边界内；文件、网络、进程边界仍由令牌、ACL 和 WFP 负责。
+- **私有桌面只隔离 UI**：命令看不到、也操作不了用户桌面上的窗口；文件、网络、进程边界仍由令牌、ACL 和 WFP 负责。
 
 ## 8. 实施顺序与测试
 
