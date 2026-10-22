@@ -387,6 +387,26 @@ function powershellPath(): string {
   const root = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
   return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
+/**
+ * The environment for our own PowerShell helpers, with TEMP and TMP where `Add-Type` can compile.
+ *
+ * `Add-Type` compiles through csc, which fails with "The filename, directory name, or volume label syntax is
+ * incorrect" when the temp path has characters outside the ANSI code page: a CJK temp directory on an
+ * English-locale Windows. Setting TEMP inside the PowerShell process is too late, and an 8.3 short name does not
+ * help because the path is expanded back to its long form. So a helper whose temp path is not ASCII compiles in the
+ * nearest ancestor of that path whose name is ASCII: still the temp directory's owner's own tree, which already holds
+ * the launcher assembly. Only the helper's environment changes; a command keeps its own TEMP.
+ */
+function helperEnvironment(base: NodeJS.ProcessEnv = toolEnvironment()): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const name of ['TEMP', 'TMP']) {
+    let directory = env[name];
+    while (directory && /[^\x20-\x7e]/.test(directory) && path.dirname(directory) !== directory)
+      directory = path.dirname(directory);
+    env[name] = directory;
+  }
+  return env;
+}
 /** The environment the sandboxed command gets: the project's sanitised set, with temp pointed at its scratch. */
 function commandEnvironment(scratch: string, extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...toolEnvironment(), ...(extra ?? {}) };
@@ -898,7 +918,7 @@ async function journalOperation(
 ): Promise<void> {
   const result = await run(powershellPath(), launcherArgs(aclBootstrap), {
     env: {
-      ...toolEnvironment(),
+      ...helperEnvironment(),
       [ACL_VARIABLE]: aclSource(),
       [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid, ...preparation })),
     },
@@ -1026,6 +1046,7 @@ export function windowsSandboxAvailable(
     await journalOperation('validate-control', directory, '-', '-');
     const source = await writeLauncherSource(dll);
     const args = launcherArgs(bootstrap(dll, source));
+    const starter = helperEnvironment(toolEnvironment(env));
     const start = await run(powershell, args, {
       cwd: directory,
       env: starterEnvironment(
@@ -1034,7 +1055,7 @@ export function windowsSandboxAvailable(
           cwd: directory,
           env: commandEnvironment(directory),
         },
-        toolEnvironment(env),
+        starter,
       ),
     });
     if (start.code !== 0)
@@ -1048,7 +1069,7 @@ export function windowsSandboxAvailable(
           cwd: directory,
           env: commandEnvironment(directory),
         },
-        toolEnvironment(env),
+        starter,
       ),
     });
     const wrote = await stat(probe).then(
@@ -1070,7 +1091,7 @@ export function windowsSandboxAvailable(
             cwd: directory,
             env: commandEnvironment(directory),
           },
-          toolEnvironment(env),
+          starter,
         ),
       });
       retained = await stat(deleteProbe).then(
@@ -1143,7 +1164,7 @@ async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
       cwd: working,
       env: starterEnvironment(
         { command: windowsCommandLine(request), cwd: working, env, sids: [sid, scratchSid] },
-        toolEnvironment(),
+        helperEnvironment(),
       ),
       windowsVerbatimArguments: false,
       backend: 'windows',
