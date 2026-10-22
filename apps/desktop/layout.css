@@ -214,12 +214,12 @@ body {
 #chat-sidebar .session-row {
   margin-bottom: 3px;
 }
-/* Title and age share one line: the title takes the room and ellipsizes, the age sits at the right. */
+/* The age shares the menu's right edge and keeps its space when the menu replaces it. */
 #chat-sidebar .session-item {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 9px 30px 9px 12px;
+  padding: 9px 4px 9px 12px;
   color: var(--ink);
   border-radius: 7px;
 }
@@ -232,10 +232,20 @@ body {
 }
 #chat-sidebar .session-item small {
   flex-shrink: 0;
+  min-width: 22px;
   font-size: 11px;
   margin-top: 0;
   color: var(--muted);
+  text-align: right;
   white-space: nowrap;
+}
+#chat-sidebar .session-row.has-status .session-item {
+  padding-right: 30px;
+}
+#chat-sidebar .session-row:hover .session-item small,
+#chat-sidebar .session-row:focus-within .session-item small,
+#chat-sidebar .session-row:has(.session-more[aria-expanded='true']) .session-item small {
+  visibility: hidden;
 }
 #chat-sidebar .session-item.selected,
 #chat-sidebar .session-item:hover:enabled {

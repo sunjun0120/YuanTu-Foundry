@@ -117,10 +117,7 @@ export function setupPermissionSettings(
           )
         : id === 'auto'
           ? text('仅对检测到的风险操作请求批准', 'Only ask for operations detected as risky')
-          : text(
-              '可不受限制地访问互联网和你电脑上的任何文件',
-              'Unrestricted access to the internet and any file on this computer',
-            );
+          : text('不受限地访问互联网和本机所有文件', 'Unrestricted internet and local file access');
   /**
    * What the rung's sandbox does and does not stop, as the rung's tooltip.
    *
