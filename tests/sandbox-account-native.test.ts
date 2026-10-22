@@ -201,6 +201,33 @@ test(
       JSON.stringify(scratch),
     );
     assert.match(path.basename(scratch.temp), /^yuantu-sbx-/);
+    // A terminal, as terminal_open runs it: the plan inside a pseudo terminal. The command runs on the runner's own
+    // console and its output is relayed; handing exec's console handles over instead lost all of it.
+    const { spawn: spawnPty } = await import('@lydell/node-pty');
+    const terminalPlan = await windowsAccountSandboxProvider.prepare({
+      root: a,
+      cwd: a,
+      command: 'echo terminal-visible',
+      config: { mode: 'windows-account', image: '', network: 'denied' },
+      terminal: { columns: 100, rows: 30 },
+    });
+    try {
+      const screen = await new Promise<string>((resolve) => {
+        const terminal = spawnPty(terminalPlan.executable, terminalPlan.args, {
+          cwd: terminalPlan.cwd,
+          env: terminalPlan.env as Record<string, string>,
+          cols: 100,
+          rows: 30,
+        });
+        let text = '';
+        terminal.onData((chunk) => (text += chunk));
+        terminal.onExit(() => resolve(text));
+      });
+      if (!screen.includes('terminal-visible')) annotate('terminal output', JSON.stringify(screen));
+      assert.match(screen, /terminal-visible/);
+    } finally {
+      await windowsAccountSandboxProvider.cleanup(terminalPlan);
+    }
     // Offline: no connection; online: connects.
     const connect = (host: string) =>
       `"${process.execPath}" -e "const s=require('net').connect(443,'${host}');s.setTimeout(4000);s.on('connect',()=>{console.log('CONNECTED');s.destroy()});s.on('timeout',()=>{console.log('BLOCKED');s.destroy()});s.on('error',e=>console.log('BLOCKED '+e.code))"`;

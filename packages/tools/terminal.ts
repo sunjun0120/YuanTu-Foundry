@@ -237,6 +237,8 @@ export class TerminalSessions {
         path.relative(environment.identity.root, cwd) || '.',
         shell.args,
         context.signal,
+        undefined,
+        { columns, rows },
       );
       let child: PtyProcess;
       try {

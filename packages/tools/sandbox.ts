@@ -11,6 +11,7 @@ import {
   type SandboxPlan,
   type SandboxProvider,
   type SandboxRequest,
+  type TerminalSize,
 } from './sandbox-provider.ts';
 import { windowsSandboxProvider } from './sandbox-windows.ts';
 import { windowsAccountSandboxProvider } from './sandbox-account.ts';
@@ -81,6 +82,7 @@ export async function prepareSandbox(
   config?: SandboxConfig,
   category: SandboxCategory = 'command',
   env?: NodeJS.ProcessEnv,
+  terminal?: TerminalSize,
 ): Promise<SandboxPlan> {
   const resolved = config ?? resolveSandboxConfig(process.env, category);
   const policy = executionPolicy(resolved.mode, resolved);
@@ -93,6 +95,7 @@ export async function prepareSandbox(
     argv,
     config: resolved,
     env,
+    terminal,
   });
 }
 

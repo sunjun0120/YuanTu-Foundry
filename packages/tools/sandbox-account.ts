@@ -374,6 +374,10 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
       env,
       capabilities: request.config.files === 'read-only' ? [] : [capability],
       verbatim: command.verbatim,
+      // The runner's console of this size; exec relays it to the host's pseudo terminal and passes on resizes.
+      ...(request.terminal
+        ? { tty: { columns: request.terminal.columns, rows: request.terminal.rows } }
+        : {}),
     }),
     { flag: 'wx' },
   );

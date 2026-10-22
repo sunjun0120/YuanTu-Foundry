@@ -296,6 +296,8 @@ test(
     const capability = await capabilityFor(root);
     assert.deepEqual(request.capabilities, [capability]);
     assert.equal(request.verbatim, true);
+    // An ordinary command runs on the host's pipes: no terminal is requested.
+    assert.equal('tty' in request, false);
     assert.equal(request.cwd.toLowerCase(), path.join(root, 'src').toLowerCase());
     assert.deepEqual(starts, ['offline']);
     assert.ok(calls.some((args) => args[0] === 'grant' && args.includes(capability)));
@@ -308,6 +310,21 @@ test(
     });
     assert.deepEqual(JSON.parse(await readFile(read.args[4]!, 'utf8')).capabilities, []);
     assert.deepEqual(starts.sort(), ['offline', 'online']);
+
+    // A terminal asks the runner for a console of its size.
+    const terminal = await windowsAccountSandboxProvider.prepare({
+      root,
+      cwd: root,
+      command: 'cmd.exe',
+      argv: [],
+      config: { mode: 'windows-account', image: '', network: 'denied' },
+      terminal: { columns: 120, rows: 40 },
+    });
+    assert.deepEqual(JSON.parse(await readFile(terminal.args[4]!, 'utf8')).tty, {
+      columns: 120,
+      rows: 40,
+    });
+    await windowsAccountSandboxProvider.cleanup(terminal);
     // One grant per workspace per process.
     assert.equal(calls.filter((args) => args[0] === 'grant').length, 1);
 
