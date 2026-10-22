@@ -26,11 +26,11 @@
 
 **Interfaces:** Produces `pub fn dependencies(profile: &Path) -> Vec<PathBuf>`（含 `~/.ssh/config` 本身）。
 
-- [ ] 失败测试（临时 profile）：`IdentityFile ~/keys/id_ed25519` → `profile\keys\id_ed25519`；`Include config.d/*` 递归收集被包含文件里的 `CertificateFile`；`IdentityFile none` 忽略；`Include` 自引用不死循环；引号与 `key=value` 形式；无 config 时只返回 config 路径。
-- [ ] 实现并通过；提交 `feat(windows-sandbox): 解析 SSH 配置引用的文件`。
+- [x] 失败测试（临时 profile）：`IdentityFile ~/keys/id_ed25519` → `profile\keys\id_ed25519`；`Include config.d/*` 递归收集被包含文件里的 `CertificateFile`；`IdentityFile none` 忽略；`Include` 自引用不死循环；引号与 `key=value` 形式；无 config 时只返回 config 路径。
+- [x] 实现并通过；提交 `feat(windows-sandbox): 解析 SSH 配置引用的文件`。
 
 ### Task 2：接入可读根
 
-- [ ] 失败测试：`read_refresh` 中 PATH 指向的工具目录里放一个被 `IdentityFile` 引用的文件 → 该根进入 `skipped`（原因含 `SSH`）且不记录；已授予的根之后出现被引用文件 → 下一次 refresh 撤销；`grant_snapshot_locked` 对含依赖的用户路径返回 `"Path holds a file the SSH configuration uses"`。
-- [ ] 实现：`read_refresh::refresh_with` 在授予前过滤 `discover` 结果；`grant_snapshot_locked` 开头检查。
-- [ ] 通过、更新设计 §5.2、提交 `feat(windows-sandbox): SSH 配置引用的文件所在目录不授予沙箱读取`。
+- [x] 失败测试：`read_refresh` 中 PATH 指向的工具目录里放一个被 `IdentityFile` 引用的文件 → 该根进入 `skipped`（原因含 `SSH`）且不记录；已授予的根之后出现被引用文件 → 下一次 refresh 撤销；`grant_snapshot_locked` 对含依赖的用户路径返回 `"Path holds a file the SSH configuration uses"`。
+- [x] 实现：`read_refresh::refresh_with` 在授予前过滤 `discover` 结果；`grant_snapshot_locked` 开头检查。
+- [x] 通过、更新设计 §5.2、提交 `feat(windows-sandbox): SSH 配置引用的文件所在目录不授予沙箱读取`。
