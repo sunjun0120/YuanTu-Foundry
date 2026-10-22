@@ -200,6 +200,46 @@ fn commands_run_on_a_private_desktop_not_the_users_own() {
     );
 }
 
+fn with_tty(mut value: serde_json::Value, columns: u16, rows: u16) -> serde_json::Value {
+    value["tty"] = json!({ "columns": columns, "rows": rows });
+    value
+}
+
+#[test]
+fn a_tty_request_runs_on_a_pseudo_console_and_a_plain_one_on_pipes() {
+    let broker = broker();
+    let probe = env!("CARGO_BIN_EXE_console-probe");
+    let tty = exec(
+        &broker.pipe,
+        &with_tty(request(&[probe], r"C:\"), 100, 30),
+        "",
+    );
+    assert_eq!(tty.status.code(), Some(0), "{tty:?}");
+    assert!(
+        stdout(&tty).contains("console 100"),
+        "a TTY command did not see a 100-column console: {:?}",
+        stdout(&tty)
+    );
+    let plain = exec(&broker.pipe, &request(&[probe], r"C:\"), "");
+    assert_eq!(stdout(&plain), "redirected");
+}
+
+#[test]
+fn a_tty_command_output_reaches_exec() {
+    let broker = broker();
+    let echo = exec(
+        &broker.pipe,
+        &with_tty(
+            verbatim(request(&[&cmd(), "/c echo tty-hello"], r"C:\")),
+            80,
+            24,
+        ),
+        "",
+    );
+    assert_eq!(echo.status.code(), Some(0), "{echo:?}");
+    assert!(stdout(&echo).contains("tty-hello"), "{:?}", stdout(&echo));
+}
+
 #[test]
 fn echoes_and_reports_exit_codes() {
     let broker = broker();
