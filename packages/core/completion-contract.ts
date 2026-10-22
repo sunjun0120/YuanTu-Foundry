@@ -51,7 +51,15 @@ export function normalizeCompletionPath(value: unknown, label = 'path'): string 
   if (typeof value !== 'string' || !value.trim() || value.includes('\0'))
     throw new Error(`Invalid completion ${label}`);
   const input = value.trim();
-  if (path.isAbsolute(input) || /^[a-z][a-z0-9+.-]*:\/\//i.test(input) || /^[\\/]/.test(input))
+  // A contract is data, not a path on the machine that checks it: a Windows drive path is absolute (or
+  // drive-relative) on every platform, even where `path.isAbsolute` is POSIX and would call `C:\x` relative.
+  if (
+    path.posix.isAbsolute(input) ||
+    path.win32.isAbsolute(input) ||
+    /^[a-z]:/i.test(input) ||
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ||
+    /^[\\/]/.test(input)
+  )
     throw new Error(`Completion ${label} must be relative to the execution root: ${input}`);
   const normalized = path.posix.normalize(input.replace(/\\/g, '/'));
   if (normalized === '..' || normalized.startsWith('../'))

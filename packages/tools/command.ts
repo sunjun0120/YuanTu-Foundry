@@ -8,7 +8,12 @@ import { Workspace } from './files.ts';
 import { localExecutionEnvironment, executionPolicy } from './execution-environment.ts';
 import { resolveSandboxConfig } from './sandbox.ts';
 import { createOutputDecoder } from './output-decoder.ts';
-import { SANDBOX_CHILD_SPAWN_NOTE, sandboxChildSpawnBlocked } from './sandbox-launch-failure.ts';
+import {
+  SANDBOX_CHILD_SPAWN_NOTE,
+  WINDOWS_ACCOUNT_ACCESS_NOTE,
+  sandboxChildSpawnBlocked,
+  windowsAccountAccessDenied,
+} from './sandbox-launch-failure.ts';
 
 /**
  * How much command output is held in memory before collection stops. Well above the tool-result limit, so
@@ -228,6 +233,18 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
               !timedOut &&
               code !== 0 &&
               sandboxChildSpawnBlocked(`${stdout}\n${stderr}`);
+            // The account backend refuses anything outside the workspace and the discovered toolchain roots; a tool
+            // that runs into that names the settings page that adds the directory instead of looking broken.
+            const accessDenied =
+              plan.backend === 'windows-account' &&
+              !timedOut &&
+              code !== 0 &&
+              windowsAccountAccessDenied(`${stdout}\n${stderr}`);
+            const sandboxNote = childSpawnBlocked
+              ? SANDBOX_CHILD_SPAWN_NOTE
+              : accessDenied
+                ? WINDOWS_ACCOUNT_ACCESS_NOTE
+                : undefined;
             resolve({
               isError: timedOut || code !== 0,
               commandExecuted: true,
@@ -251,7 +268,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
                 output: truncated
                   ? `${output}\n[command output exceeded ${COMMAND_OUTPUT_LIMIT} characters]`
                   : output,
-                ...(childSpawnBlocked ? { sandboxNote: SANDBOX_CHILD_SPAWN_NOTE } : {}),
+                ...(sandboxNote ? { sandboxNote } : {}),
               }),
               // A non-zero exit is still a result with a shape, so it carries one: a card shows the exit code
               // and the streams for a failed command, which is exactly when somebody wants to read them. Only a
@@ -268,7 +285,7 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
                   truncated ||
                   shownStdout.length < stdout.length ||
                   shownStderr.length < stderr.length,
-                ...(childSpawnBlocked ? { sandboxNote: SANDBOX_CHILD_SPAWN_NOTE } : {}),
+                ...(sandboxNote ? { sandboxNote } : {}),
               }),
             });
           })().catch(reject);

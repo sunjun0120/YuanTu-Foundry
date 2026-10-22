@@ -130,7 +130,8 @@ test(
   },
   async (t) => {
     const { root } = await fixture(t);
-    const mode = process.platform === 'win32' ? 'windows' : 'seatbelt';
+    // `native` resolves to the account backend on Windows now; replace that provider, not the basic `windows` one.
+    const mode = process.platform === 'win32' ? 'windows-account' : 'seatbelt';
     const original = sandboxProvider(mode);
     const host = sandboxProvider('host');
     let started = 0,

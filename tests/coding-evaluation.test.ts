@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { tempRoot } from './temp-fixture.ts';
 
@@ -23,8 +24,17 @@ async function copySpillDependencies(root: string): Promise<void> {
       await readFile(path.resolve('packages/platform', name)),
     );
 }
+/**
+ * The example manifest, with its two source directories pointed at this checkout.
+ *
+ * The file is documentation and names one developer machine's Windows path, which is not absolute on Linux; the
+ * validator requires an absolute directory, so the tests substitute the repository root on whatever runs them.
+ */
 async function example() {
-  return JSON.parse(await readFile(new URL('manifest.example.json', harness), 'utf8'));
+  const manifest = JSON.parse(await readFile(new URL('manifest.example.json', harness), 'utf8'));
+  const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+  for (const key of ['runtimeSource', 'corpusSource']) manifest[key].directory = root;
+  return manifest;
 }
 
 test('manifest rejects unsafe, unknown and ambiguous configuration before execution', async () => {

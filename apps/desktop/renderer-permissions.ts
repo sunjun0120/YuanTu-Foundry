@@ -24,10 +24,9 @@ import {
  * target. DSH draws the same line, and it is what makes the control honest: "you are in the guarded preset" and
  * "you are somewhere we have no name for" are different answers.
  *
- * **A preset the launch environment forbids is disabled, with the reason on it.** The sandbox mode is pinned
- * when `YUANTU_SANDBOX` is set for the desktop process (`sandbox-settings-store.ts`), so a preset that writes a
- * different mode cannot be applied — and a control that offered it anyway would fail on click. Saying so before
- * the click is the only version of this that is not a lie.
+ * **The launch environment supplies the default, not a pin.** `YUANTU_SANDBOX` names where a new session starts
+ * (`sandbox-settings.ts`), and every session may move off it; the mode is applied per session rather than being a
+ * property the process refuses to change. A backend that cannot run says so before the choice is used.
  *
  * **The confirmation is the confirmation.** `unconfined` is the one preset that gives up isolation, so it goes
  * through the same acknowledge-the-risk dialog a full-access switch has always used, with the host sentence the
@@ -117,30 +116,31 @@ export function setupPermissionSettings(
           )
         : id === 'auto'
           ? text('仅对检测到的风险操作请求批准', 'Only ask for operations detected as risky')
-          : text(
-              '可不受限制地访问互联网和你电脑上的任何文件',
-              'Unrestricted access to the internet and any file on this computer',
-            );
+          : text('不受限地访问互联网和本机所有文件', 'Unrestricted internet and local file access');
   /**
    * What the rung's sandbox does and does not stop, as the rung's tooltip.
    *
-   * The names stay short (see `label`), but "请求批准" on Windows is a partial write boundary that leaves
-   * reads and the network open, and a person choosing it should be able to learn that without opening the README.
-   * A tooltip is the place that keeps the menu a choice while not letting the name promise more than the backend
-   * does. The platform is the renderer's own: the `native` mode resolves to the token backend on Windows and to
-   * Seatbelt on macOS.
+   * The names stay short (see `label`), but "请求批准" on Windows can mean either the account backend or the
+   * explicitly selected weaker restricted-token backend, and a person choosing it should be able to learn which
+   * without opening the README. The mode is read from the live view, so the text follows a switch.
    */
   const windowsHost = /Windows/i.test(navigator.userAgent);
-  const sandboxNote = (): string =>
-    windowsHost
-      ? text(
-          '命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。',
-          'Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network.',
-        )
-      : text(
-          '命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
-          'Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
-        );
+  const sandboxNote = (): string => {
+    if (!windowsHost)
+      return text(
+        '命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
+        'Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
+      );
+    if (view?.sandbox.mode === 'windows')
+      return text(
+        '命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。这是较弱的隔离模式。',
+        'Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network. This is the weaker isolation mode.',
+      );
+    return text(
+      '命令在专用低权限沙箱账户中运行：只能写入工作区，网络默认断开，读取受白名单限制。',
+      'Commands run as a dedicated low-privilege sandbox account: writes stay in the workspace, the network is off by default, and reads are limited to the allowlist.',
+    );
+  };
   const boundary = (id: PermissionPresetId): string =>
     id === 'observe'
       ? text(

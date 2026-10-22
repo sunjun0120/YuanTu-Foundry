@@ -1,7 +1,9 @@
 /** Run functional OS probes with the same standalone Node runtime used by the Host. */
 import { checkSandboxAvailability, parseSandboxMode } from '../../packages/tools/sandbox.ts';
+import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts';
 
 async function main(): Promise<void> {
+  await refreshAccountReadiness();
   const mode = parseSandboxMode(process.argv[2], 'sandbox probe mode');
   const availability = await checkSandboxAvailability(mode, process.env);
   process.stdout.write(JSON.stringify({ availability }));

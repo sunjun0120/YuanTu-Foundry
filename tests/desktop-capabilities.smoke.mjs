@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
-import { waitFor } from './desktop-smoke-support.mjs';
+import { choosePermissionPreset, waitFor } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 
 // ---- merged from capabilities.smoke.mjs ----
@@ -30,10 +30,6 @@ test(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     let calls = 0;
     let continueSteer;
-    let steerReady;
-    const steering = new Promise((resolve) => {
-      steerReady = resolve;
-    });
     const url = await httpFixture(t, (body, res) => {
       const call = calls++;
       if (call === 0) {
@@ -49,7 +45,6 @@ test(
       } else if (call === 1) {
         assert.match(JSON.stringify(body.messages), /不要写入，只解释/);
         continueSteer = () => sendFrames(res, frames('已解释'));
-        steerReady();
       } else {
         assert.match(JSON.stringify(body.messages.at(-1)), /最后列出检查清单/);
         sendFrames(res, frames('任务已按追加指令完成'));
@@ -100,18 +95,24 @@ test(
     });
     await page.locator('#prompt').fill('/');
     await page.getByRole('option', { name: /^review\b/ }).click();
+    await choosePermissionPreset(page, 'guarded');
     await page.locator('#prompt').fill('/skill:review 看图并修改');
     await page.locator('#send').click();
+    // Hold the write at its real approval boundary before steering the live run.
+    await page.getByRole('button', { name: '允许一次', exact: true }).waitFor();
+    assert.match(await page.locator('#approvals').innerText(), /write_file/);
+    assert.match(await page.locator('#approvals').innerText(), /no\.txt/);
     /**
      * The desktop has no steer control any more: the select that chose between steering and queueing is gone, and
      * a message typed while the run is live is queued for after the turn. The *runtime* still takes a steer, so
      * the test drives the command the removed control used to send — the path stays covered without the suite
      * pretending the interface offers it.
      */
-    await page.evaluate(() =>
+    const steered = await page.evaluate(() =>
       window.yuantu.invoke({ type: 'enqueue', mode: 'steer', prompt: '不要写入，只解释' }),
     );
-    await steering;
+    assert.equal(steered.ok, true, JSON.stringify(steered));
+    await waitFor(() => continueSteer !== undefined, 10_000);
     await page.locator('#prompt').fill('最后列出检查清单');
     await page.locator('#prompt').press('Enter');
     await page.waitForFunction(() =>

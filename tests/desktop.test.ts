@@ -23,6 +23,7 @@ import {
   permissionPreset,
   presetIdFor,
 } from '../apps/desktop/permission-presets.ts';
+import { choiceForPreset } from '../apps/desktop/session-choices.ts';
 
 // ---- merged from desktop.test.ts ----
 
@@ -380,11 +381,38 @@ test('a preset pairs a sandbox with an approval floor, and only the full-access 
 test('a pair no preset declares reads as custom rather than as the nearest preset', () => {
   for (const preset of PERMISSION_PRESETS)
     assert.equal(presetIdFor(preset.sandbox, preset.permission), preset.id);
+  // The explicit weaker Windows backend still reads as the same isolation rung.
+  assert.equal(presetIdFor('windows', 'ask'), 'guarded');
+  assert.equal(presetIdFor('windows', 'read-only'), 'observe');
   // The combination that motivated the feature: no isolation, but the approval floor still looks guarded.
   assert.equal(presetIdFor('host', 'ask'), null);
   assert.equal(presetIdFor('seatbelt', 'ask'), null);
   assert.equal(presetIdFor('native', 'full-access'), null);
   assert.throws(() => permissionPreset('trusted' as never), /Unknown permission preset: trusted/);
+});
+
+test('a preset keeps an explicitly selected windows backend', () => {
+  assert.deepEqual(choiceForPreset(permissionPreset('guarded'), 'windows'), {
+    sandbox: 'windows',
+    permission: 'ask',
+  });
+  assert.deepEqual(choiceForPreset(permissionPreset('guarded'), 'native'), {
+    sandbox: 'native',
+    permission: 'ask',
+  });
+  assert.deepEqual(choiceForPreset(permissionPreset('unconfined'), 'windows'), {
+    sandbox: 'host',
+    permission: 'full-access',
+  });
+  // A launch default of windows survives an unconfined -> guarded switch.
+  assert.deepEqual(choiceForPreset(permissionPreset('guarded'), 'host', 'windows'), {
+    sandbox: 'windows',
+    permission: 'ask',
+  });
+  assert.deepEqual(choiceForPreset(permissionPreset('guarded'), 'host', 'native'), {
+    sandbox: 'native',
+    permission: 'ask',
+  });
 });
 
 test('a preset command is validated, including the host acknowledgement it must not bypass', () => {

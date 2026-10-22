@@ -5,28 +5,20 @@ import path from 'node:path';
 
 const args = process.argv.slice(2);
 const positional = args.filter((arg) => !arg.startsWith('--'));
-const profiles = args.filter((arg) => arg.startsWith('--profile='));
 const arches = args.filter((arg) => arg.startsWith('--arch='));
 if (
   positional.length > 1 ||
-  profiles.length > 1 ||
   arches.length > 1 ||
-  args.some(
-    (arg) => arg.startsWith('--') && !arg.startsWith('--profile=') && !arg.startsWith('--arch='),
-  )
+  args.some((arg) => arg.startsWith('--') && !arg.startsWith('--arch='))
 )
-  throw new Error(
-    'Usage: write-release-manifest.mjs [directory] [--profile=standard|protected] [--arch=x64]',
-  );
-const profile = profiles[0]?.slice('--profile='.length) ?? 'standard';
+  throw new Error('Usage: write-release-manifest.mjs [directory] [--arch=x64]');
 const arch = arches[0]?.slice('--arch='.length) ?? 'x64';
-if (!['standard', 'protected'].includes(profile) || arch !== 'x64')
-  throw new Error('Unsupported installer profile or architecture');
+if (arch !== 'x64') throw new Error('Unsupported installer architecture');
 const directory = path.resolve(positional[0] || 'dist/release');
 const pkg = JSON.parse(
   await readFile(path.join(directory, 'win-unpacked/resources/app/package.json'), 'utf8'),
 );
-const artifact = `YuanTu-Agent-${pkg.version}-windows-${arch}-${profile === 'protected' ? 'protected-' : ''}setup.exe`;
+const artifact = `YuanTu-Agent-${pkg.version}-windows-${arch}-setup.exe`;
 const file = path.join(directory, artifact);
 const hash = createHash('sha256');
 for await (const chunk of createReadStream(file)) hash.update(chunk);

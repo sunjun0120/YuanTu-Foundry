@@ -8,6 +8,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
+import { choosePermissionPreset } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 /**
  * This suite asserts the product's own sandbox default, so it must not run on the isolation harness's override.
@@ -15,8 +16,11 @@ process.env.YUANTU_SESSION_TITLES = 'false';
  * The harness exports `YUANTU_SANDBOX=host` so portable fixtures never touch a machine-wide backend; a desktop
  * launched under it honestly reports its permission pair as "custom" (host + ask is no preset). Naming `native`
  * here is what the packaged app does when nothing is set, and `desktop.smoke.mjs` covers the overridden reading.
+ *
+ * Windows CI has no initialized sandbox accounts, so the native default (windows-account) refuses commands there.
+ * This suite selects the explicit weaker `windows` backend on Windows; every other platform keeps `native`.
  */
-process.env.YUANTU_SANDBOX = 'native';
+process.env.YUANTU_SANDBOX = process.platform === 'win32' ? 'windows' : 'native';
 import * as XLSX from 'xlsx';
 import { docxFixture, pdfFixture } from './attachment-fixtures.ts';
 
@@ -151,6 +155,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   await idle();
   await page.locator('#new-session').click();
   await idle();
+  await choosePermissionPreset(page, 'guarded');
   // A session that has delegated nothing shows no catalog: the trigger is a count of children, and a
   // "0 个子代理" pill would be a control with nothing behind it.
   assert.equal(await page.locator('#open-subagents').isVisible(), false);
@@ -466,7 +471,7 @@ test(
     );
     assert.equal(
       (await page.locator('#statistics-tokens').innerText()).trim(),
-      '110 tok · 缓存命中 80%',
+      '本会话累计 110 tok（含缓存读取） · 缓存命中 80%',
     );
     await mkdir(artifactPath('statistics'), { recursive: true });
     await page.evaluate(() => {
@@ -593,11 +598,11 @@ test(
     let page = await launch();
     assert.equal((await page.locator('#attach-image').innerText()).trim(), '+');
     await page.locator('#permission-trigger').click();
-    // Three rungs, not the approval modes that used to live here: the chip writes where a run executes and how
+    // Four presets: the chip writes where a run executes and how
     // much it may do without asking, as one choice.
-    assert.equal(await page.locator('#permission-menu [role=menuitemradio]').count(), 3);
+    assert.equal(await page.locator('#permission-menu [role=menuitemradio]').count(), 4);
     assert.equal(
-      await page.locator('#permission-menu [data-preset=guarded]').getAttribute('aria-checked'),
+      await page.locator('#permission-menu [data-preset=auto]').getAttribute('aria-checked'),
       'true',
     );
     await mkdir(artifactPath(''), { recursive: true });
@@ -1015,7 +1020,6 @@ test(
     await group.locator(':scope > summary').click();
     await page.locator('#live-reasoning > summary').click();
     releases[0]();
-    await page.getByRole('button', { name: '允许一次', exact: true }).click();
     await waitForPage(page, async () =>
       (await window.yuantu.invoke({ type: 'snapshot' })).state.session.tools.some(
         (call) => call.name === 'run_command',

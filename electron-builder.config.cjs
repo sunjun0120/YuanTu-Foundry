@@ -51,9 +51,6 @@ module.exports = {
         await import('./scripts/windows-runtime-product.mjs');
       await validatePackagedWindowsRuntime(
         require('node:path').resolve('.scratch/packaging/runtime'),
-        {
-          production: process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1',
-        },
       );
       return;
     }
@@ -82,9 +79,7 @@ module.exports = {
   afterPack: async (context) => {
     if (context.electronPlatformName !== 'win32') return;
     const { validateWindowsPackage } = await import('./scripts/check-windows-package.mjs');
-    await validateWindowsPackage(context.appOutDir, {
-      production: process.env.WINDOWS_SANDBOX_PROTECTED_RELEASE === '1',
-    });
+    await validateWindowsPackage(context.appOutDir);
   },
   mac: {
     target: ['dmg', 'zip'],

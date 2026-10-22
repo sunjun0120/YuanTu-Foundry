@@ -47,8 +47,32 @@ export function sandboxChildSpawnBlocked(output: string): boolean {
 
 /** The note appended to a Windows-sandboxed command that could not fork, for the model and the reader. */
 export const SANDBOX_CHILD_SPAWN_NOTE =
-  'The command ran but could not start its own child process: the Windows sandbox backend gives it a restricted ' +
-  'token whose child-process creation with inherited pipes is refused (Node reports spawn EPERM). This is the ' +
-  'execution environment, not the command — test runners that fork (node --test, vitest, jest) fail here. Run a ' +
-  'test file directly when it does not fork, or ask the user to switch the session to the “Full access” ' +
-  '(完全访问权限) preset.';
+  'The command ran but could not start its own child process: the manually selected `windows` backend gives it a ' +
+  'restricted token whose child-process creation with inherited pipes is refused (Node reports spawn EPERM). This ' +
+  'is the execution environment, not the command — test runners that fork (node --test, vitest, jest) fail here. ' +
+  'That backend has no separate account and weaker network isolation. Initialize sandbox accounts in Settings > ' +
+  'General, switch back to native (windows-account), and retry; or run a test file directly when it does not fork.';
+
+/**
+ * Whether a `windows-account` command's output reports a permission denial.
+ *
+ * The account may read the workspace, its own profile, and the toolchain directories refresh discovered from
+ * `PATH`; anything else under the user profile is refused, and a tool that runs into that says `EPERM`, `EACCES` or
+ * `Access is denied`. Matching only these ASCII forms is deliberate: a localized message arrives re-encoded, so it
+ * would not match a pattern written in the source language anyway. A `windows-account` command that merely *prints*
+ * one of them while handling an error of its own gets a note that is true (`the sandbox refuses paths outside its
+ * allowlist`) rather than a wrong verdict.
+ */
+export function windowsAccountAccessDenied(output: string): boolean {
+  return /\bEPERM\b|\bEACCES\b|access is denied|access denied|unauthorizedaccessexception/i.test(
+    output,
+  );
+}
+
+/** The note appended to a `windows-account` command that was refused a path, for the model and the reader. */
+export const WINDOWS_ACCOUNT_ACCESS_NOTE =
+  'The command was denied access to a path outside what the sandbox account may read: the `windows-account` ' +
+  'backend runs as a dedicated low-privilege local account that may read the workspace and the toolchain ' +
+  'directories discovered from PATH, and write inside the workspace only. This is the execution environment, not ' +
+  'the command. To let it read another toolchain directory under your user profile, add it in Settings > General > ' +
+  'Windows sandbox accounts > Advanced: directories the sandbox can read.';

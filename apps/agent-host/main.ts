@@ -2,6 +2,7 @@
 import type { RunResult, Task, TaskAttempt } from '../../packages/protocol/index.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { acquireHostLock } from '../../packages/platform/host-lock.ts';
+import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts';
 import { safeError } from '../shared/runtime.ts';
 import { createVerifier } from './approvals.ts';
 import { createBackgroundWake } from './background-wake.ts';
@@ -48,6 +49,8 @@ async function main(): Promise<void> {
 async function runHost(launch: Launch): Promise<void> {
   const { options, workspace } = launch;
   const services = await openHostServices(options, workspace);
+  // Before the first command: `native` on Windows uses the sandbox accounts only once they are known ready.
+  await refreshAccountReadiness();
   const ctx = createHostState(launch, services);
   ctx.carrier = new HostCarrier({
     listen: options.listen,

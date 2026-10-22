@@ -16,11 +16,26 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: 'all, or only desktop-smoke (no check/bench/coverage/native-macos)'
+        type: choice
+        options: [all, desktop-smoke]
+        default: all
+# Desktop-smoke-only runs: a manual run with jobs=desktop-smoke. A pull request and a manual jobs=all run execute
+# every job before anything reaches main.
 permissions:
   contents: read
+# A newer push to the same branch makes the older run's result moot, so it is cancelled rather than finished.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
+    # Skipped in a desktop-smoke-only run (see the note above `permissions`); bench, coverage and native-macos
+    # need it and are skipped with it.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.jobs == 'desktop-smoke') }}
     runs-on: ubuntu-latest
     # Linux runs the portable/host contract suite; product native backends target
     # Windows and macOS and must not silently fall back on this runner.
@@ -82,9 +97,19 @@ jobs:
       - run: npm ci
       - run: npm run coverage
 
+  # The Windows and macOS jobs are the slow ones. A feature-branch push runs only the Linux jobs; main, a pull
+  # request, or a manual run (workflow_dispatch on the branch) runs these too.
   desktop-smoke:
     needs: check
+    # Normally after a passing check (main, a pull request, or a manual run); in a desktop-smoke-only run, alone.
+    if: >-
+      !cancelled() && (
+      (needs.check.result == 'success' && (github.ref == 'refs/heads/main' || github.event_name != 'push')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.jobs == 'desktop-smoke'))
     runs-on: windows-latest
+    # A hung sandbox helper used to run the acceptance step into its per-test timeouts for ~20 minutes. The
+    # ceiling bounds that; it is set above a healthy run, whose full duration has not been measured yet.
+    timeout-minutes: 40
     continue-on-error: false
     env:
       # The UI suites launch real windows one after another; a single flaky assertion must not hide the rest.
@@ -101,18 +126,31 @@ jobs:
       - name: Windows platform regressions
         run: node scripts/run-tests.mjs tests/desktop-installation.test.ts tests/windows-install-safety.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
       - uses: dtolnay/rust-toolchain@stable
-      - name: Windows enhanced helper safety and refusal regressions
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/tools/windows-sandbox/native -> target
+      - name: Windows sandbox helper safety and refusal regressions
         run: |
           npm run build:windows-sandbox
-          cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml
-          node scripts/run-tests.mjs tests/sandbox-appcontainer.test.ts tests/sandbox-appcontainer-native.test.ts tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts tests/native-git-native.test.ts
+          cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml
+          node scripts/run-tests.mjs tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts tests/native-git-native.test.ts
       - run: npm run build
+      # Electron's lazy installation writes into node_modules, outside an isolated test worker's ownership.
+      - name: Prepare Electron before isolated desktop tests
+        run: node node_modules/electron/install.js
       - name: Windows desktop basic sandbox real acceptance without skips
         run: node scripts/check-windows-sandbox.mjs --desktop
-      - run: npm run smoke:desktop
+      # The runner has no initialized sandbox accounts, so `native` (windows-account) cannot run commands here.
+      # Smoke suites that do not name a backend use the explicit weaker `windows` backend; suites that set their
+      # own YUANTU_SANDBOX (host, native, ...) keep it.
+      - name: Desktop smoke on the basic Windows backend
+        run: npm run smoke:desktop
+        env:
+          YUANTU_SANDBOX: windows
 
   native-macos:
     needs: check
+    if: github.ref == 'refs/heads/main' || github.event_name != 'push'
     runs-on: macos-latest
     env:
       FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'

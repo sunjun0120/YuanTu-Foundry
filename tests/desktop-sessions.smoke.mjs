@@ -576,7 +576,7 @@ test(
       const el = document.querySelector('#conversation');
       return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     });
-    assert.equal(await page.locator('#jump-to-latest').isVisible(), false);
+    await page.locator('#jump-to-latest').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#messages .tool-call').first().getAttribute('open'), null);
     assert.equal(await page.locator('#messages .message-label').count(), 0);
     assert.equal(await page.locator('#live .message-label').count(), 0);
@@ -714,6 +714,15 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   page.setDefaultTimeout(15_000);
   await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
 
+  const contentSize = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    window.setContentSize(1100, 760);
+    return window.getContentSize();
+  });
+  await page.waitForFunction(
+    ([width, height]) => innerWidth === width && innerHeight === height,
+    contentSize,
+  );
   await page.locator('#open-workspace').click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'open');
   assert.equal(await page.locator('#workspace-panel').isVisible(), true);
@@ -721,11 +730,15 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await row('notes.txt').waitFor();
   const resizeHandle = page.locator('#workspace-resize');
   await resizeHandle.waitFor({ state: 'visible' });
+  // Start at the supported minimum so a narrow window still has room to grow.
+  await resizeHandle.focus();
+  await page.keyboard.press('Home');
   const initialWidth = (await page.locator('#workspace-panel').boundingBox()).width;
   const handleBounds = await resizeHandle.boundingBox();
-  await page.mouse.move(handleBounds.x + handleBounds.width / 2, 300);
+  const handleY = handleBounds.y + handleBounds.height / 2;
+  await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleY);
   await page.mouse.down();
-  await page.mouse.move(handleBounds.x - 100, 300, { steps: 8 });
+  await page.mouse.move(handleBounds.x - 100, handleY, { steps: 8 });
   await page.mouse.up();
   const draggedWidth = (await page.locator('#workspace-panel').boundingBox()).width;
   assert.ok(draggedWidth > initialWidth + 80, 'dragging left widens the sidebar');

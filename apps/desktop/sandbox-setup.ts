@@ -1,14 +1,29 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { appContainerRuntimeError } from '../../packages/tools/appcontainer-runtime.ts';
 import { toolEnvironment } from '../../packages/tools/environment.ts';
+import { parseAccountStatus } from '../../packages/tools/sandbox-account.ts';
 
-export type SandboxSetupCommand = { type: 'status' } | { type: 'initialize'; acknowledge: true };
+/**
+ * What the settings page asks for. A read root is added by picking a directory in the native dialog and removed by
+ * naming one the journal already lists as the user's own; nothing here accepts a path to grant blindly.
+ */
+export type SandboxSetupCommand =
+  | { type: 'status' }
+  | { type: 'verify' }
+  | { type: 'initialize'; acknowledge: true }
+  | { type: 'uninstall'; acknowledge: true }
+  | { type: 'read-add'; acknowledge: true }
+  | { type: 'read-remove'; path: string; acknowledge: true };
 export interface SandboxSetupView {
   supported: boolean;
   ready: boolean;
   installed: boolean;
-  reason: 'platform' | 'development' | 'runtime' | 'release' | null;
+  reason: 'platform' | 'unavailable' | null;
+  state?: 'uninitialized' | 'ready' | 'damaged';
+  problems?: string[];
+  details?: string[];
+  /** Every directory the sandbox may read, and who put it there: `auto` is refresh's, `user` is the settings page's. */
+  readRoots?: { path: string; source: 'auto' | 'user' }[];
 }
 export type SandboxSetupReply = { ok: true; view: SandboxSetupView } | { ok: false; error: string };
 /** Bound the UI's wait, without pretending a detached elevated initializer can be cancelled. */
@@ -35,34 +50,53 @@ export async function waitForSandboxInitialization(
 export function parseSandboxSetupCommand(input: unknown): SandboxSetupCommand {
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const value = input as Record<string, unknown>;
-    if (value.type === 'status' && Object.keys(value).length === 1) return { type: 'status' };
     if (
-      value.type === 'initialize' &&
+      value.type === 'read-remove' &&
+      value.acknowledge === true &&
+      typeof value.path === 'string' &&
+      value.path.trim().length > 0 &&
+      value.path.length <= 32768 &&
+      !value.path.includes('\0') &&
+      Object.keys(value).every((key) => ['type', 'path', 'acknowledge'].includes(key))
+    )
+      return { type: 'read-remove', path: value.path.trim(), acknowledge: true };
+    if (
+      value.type === 'read-add' &&
       value.acknowledge === true &&
       Object.keys(value).every((key) => key === 'type' || key === 'acknowledge')
     )
-      return { type: 'initialize', acknowledge: true };
+      return { type: 'read-add', acknowledge: true };
+    if (value.type === 'status' && Object.keys(value).length === 1) return { type: 'status' };
+    if (value.type === 'verify' && Object.keys(value).length === 1) return { type: 'verify' };
+    if (
+      (value.type === 'initialize' || value.type === 'uninstall') &&
+      value.acknowledge === true &&
+      Object.keys(value).every((key) => key === 'type' || key === 'acknowledge')
+    )
+      return { type: value.type, acknowledge: true };
   }
   throw new Error('Invalid sandbox initialization request');
 }
 export interface SandboxSetupOptions {
   platform: NodeJS.Platform;
-  packaged: boolean;
   helperPath: string;
-  nodePath: string;
   execute?: (file: string, args: string[], timeout: number) => Promise<{ stdout: string }>;
+  changed?: () => Promise<void>;
+  changing?: () => Promise<void>;
+  /** The native directory picker; without one, adding a read root is refused rather than guessed. */
+  chooseDirectory?: () => Promise<string | undefined>;
 }
-export class WindowsSandboxSetup {
+/** Account maintenance uses a captured helper and fixed operations; opening settings never requests UAC. */
+export class WindowsAccountSandboxSetup {
   private readonly options: SandboxSetupOptions;
   private readonly execute: NonNullable<SandboxSetupOptions['execute']>;
   private pending = false;
   constructor(options: SandboxSetupOptions) {
     this.options = { ...options };
-    const executeFile = promisify(execFile);
     this.execute =
       options.execute ??
       (async (file, args, timeout) => {
-        const result = await executeFile(file, args, {
+        const result = await promisify(execFile)(file, args, {
           windowsHide: true,
           encoding: 'utf8',
           maxBuffer: 65536,
@@ -72,99 +106,120 @@ export class WindowsSandboxSetup {
         return { stdout: result.stdout };
       });
   }
-  private async installed(): Promise<boolean> {
-    const reply: unknown = JSON.parse(
-      (await this.execute(this.options.helperPath, ['network-status'], 15000)).stdout,
-    );
-    if (
-      !reply ||
-      typeof reply !== 'object' ||
-      !('version' in reply) ||
-      reply.version !== 1 ||
-      !('profiles' in reply) ||
-      !Array.isArray(reply.profiles) ||
-      !reply.profiles.length ||
-      reply.profiles.length > 16
-    )
-      throw new Error('Invalid installed network policy status');
-    const names = new Set<string>();
-    const sids = new Set<string>();
-    for (const profile of reply.profiles) {
-      if (
-        !profile ||
-        typeof profile !== 'object' ||
-        typeof profile.name !== 'string' ||
-        !/^Yuantu\.Sandbox\.[0-9a-f-]{36}$/i.test(profile.name) ||
-        typeof profile.sid !== 'string' ||
-        !/^S-1-15-2-\d+(?:-\d+)*$/.test(profile.sid) ||
-        names.has(profile.name) ||
-        sids.has(profile.sid)
-      )
-        throw new Error('Invalid installed network policy identity');
-      names.add(profile.name);
-      sids.add(profile.sid);
-    }
-    return true;
-  }
   async status(): Promise<SandboxSetupView> {
-    const view: SandboxSetupView = {
+    return this.inspect(false);
+  }
+  /** The settings page's diagnostic check: live accounts, logon, WFP and read allowlist. */
+  async verify(): Promise<SandboxSetupView> {
+    return this.inspect(true);
+  }
+  private async inspect(live: boolean): Promise<SandboxSetupView> {
+    const base: SandboxSetupView = {
       supported: this.options.platform === 'win32',
       ready: false,
       installed: false,
       reason: null,
     };
-    if (!view.supported) return { ...view, reason: 'platform' };
-    if (!this.options.packaged) return { ...view, reason: 'development' };
+    if (!base.supported) return { ...base, reason: 'platform' };
     try {
-      const uv = (
-        await this.execute(this.options.nodePath, ['-p', 'process.versions.uv'], 10000)
-      ).stdout.trim();
-      // Identity is a setup prerequisite; version numbers cannot prove guest
-      // child-pipe compatibility. The provider probes that before execution.
-      if (appContainerRuntimeError(uv)) return { ...view, reason: 'runtime' };
-    } catch {
-      return { ...view, reason: 'runtime' };
-    }
-    try {
-      const reply: unknown = JSON.parse(
-        (await this.execute(this.options.helperPath, ['network-preflight'], 15000)).stdout,
+      const args = live ? ['account-status', '--verify'] : ['account-status'];
+      const status = parseAccountStatus(
+        (await this.execute(this.options.helperPath, args, live ? 30000 : 15000)).stdout,
       );
-      if (
-        !reply ||
-        typeof reply !== 'object' ||
-        !('version' in reply) ||
-        reply.version !== 1 ||
-        !('ready' in reply) ||
-        reply.ready !== true
-      )
-        throw new Error('Invalid initializer preflight');
+      const uninitialized =
+        status.problems.includes('accounts-missing') ||
+        (status.problems.includes('setup-marker-missing') &&
+          status.problems.includes('credentials-missing'));
+      return {
+        ...base,
+        ready: true,
+        installed: status.ready,
+        reason: null,
+        state: status.ready ? 'ready' : uninitialized ? 'uninitialized' : 'damaged',
+        problems: status.problems,
+        details: status.details,
+        readRoots: status.readRoots,
+      };
     } catch {
-      return { ...view, reason: 'release' };
+      return { ...base, reason: 'unavailable' };
     }
-    try {
-      view.installed = await this.installed();
-    } catch {
-      /* Missing/damaged policy is not success. */
-    }
-    return { ...view, ready: true };
   }
-  async initialize(): Promise<SandboxSetupView> {
-    if (this.pending) throw new Error('Sandbox initialization is already in progress');
+  private async mutate(
+    operation: 'account-setup' | 'account-uninstall',
+  ): Promise<SandboxSetupView> {
+    if (this.pending) throw new Error('Sandbox maintenance is already in progress');
     this.pending = true;
     try {
-      const view = await this.status();
-      if (!view.ready) throw new Error(`Sandbox initialization is unavailable: ${view.reason}`);
-      if (view.installed) return view;
-      // Only the verified native helper requests elevation, using its own fixed
-      // operation. Never build a shell command or pass renderer-selected paths.
-      // No timeout: killing the UAC parent does not cancel an elevated child.
-      await this.execute(this.options.helperPath, ['network-setup'], 0);
+      const before = await this.status();
+      if (!before.ready) throw new Error(`Sandbox maintenance is unavailable: ${before.reason}`);
+      await this.options.changing?.();
       try {
-        await this.installed();
-      } catch {
-        throw new Error('Initialization completed without a verified network policy status');
+        // Killing the UAC parent cannot cancel the elevated child: do not set a timeout.
+        await this.execute(this.options.helperPath, [operation], 0);
+      } finally {
+        // A cancelled/partly failed repair can also have changed accounts or passwords.
+        await this.options.changed?.();
       }
-      return { ...view, installed: true };
+      const after = await this.status();
+      if (
+        !after.ready ||
+        (operation === 'account-setup' ? !after.installed : after.state !== 'uninitialized')
+      )
+        throw new Error('Account maintenance completed without a verified status');
+      return after;
+    } finally {
+      this.pending = false;
+    }
+  }
+  initialize(): Promise<SandboxSetupView> {
+    return this.mutate('account-setup');
+  }
+  uninstall(): Promise<SandboxSetupView> {
+    return this.mutate('account-uninstall');
+  }
+  /**
+   * `read-add`: the path comes from the native directory picker, never from the renderer. A cancelled dialog answers
+   * the unchanged view and never starts the helper.
+   */
+  async addRead(): Promise<SandboxSetupView> {
+    if (this.pending) throw new Error('Sandbox maintenance is already in progress');
+    this.pending = true;
+    try {
+      const before = await this.status();
+      if (!before.ready || before.state === 'uninitialized')
+        throw new Error('Sandbox accounts must be ready before changing read access');
+      const chosen = await this.options.chooseDirectory?.();
+      if (!chosen) return before;
+      try {
+        await this.execute(this.options.helperPath, ['read-grant', '--root', chosen], 0);
+      } finally {
+        await this.options.changed?.();
+      }
+      return await this.status();
+    } finally {
+      this.pending = false;
+    }
+  }
+  /** `read-remove`: only a directory this page added, named by the list it was read from. */
+  async removeRead(path: string): Promise<SandboxSetupView> {
+    if (this.pending) throw new Error('Sandbox maintenance is already in progress');
+    this.pending = true;
+    try {
+      const before = await this.status();
+      if (!before.ready) throw new Error(`Sandbox maintenance is unavailable: ${before.reason}`);
+      const wanted = path.toLowerCase();
+      if (
+        !(before.readRoots ?? []).some(
+          (root) => root.source === 'user' && root.path.toLowerCase() === wanted,
+        )
+      )
+        throw new Error('Only a directory added in these settings can be removed');
+      try {
+        await this.execute(this.options.helperPath, ['read-ungrant', '--root', path], 0);
+      } finally {
+        await this.options.changed?.();
+      }
+      return await this.status();
     } finally {
       this.pending = false;
     }

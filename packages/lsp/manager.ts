@@ -52,7 +52,7 @@ export class LspManager {
 
   static enabled(): boolean {
     const mode = resolveSandboxConfig().mode;
-    return ['host', 'native', 'windows', 'seatbelt'].includes(mode);
+    return ['host', 'native', 'windows', 'windows-account', 'seatbelt'].includes(mode);
   }
   private assertEnabled(): void {
     if (!LspManager.enabled()) throw new Error('Language server backend unsupported');

@@ -284,6 +284,10 @@ export class CarrierService {
     await this.client.request('permission.update', { policy, ...(sessionId ? { sessionId } : {}) });
     this.permissionPolicies.set(sessionId ?? '', structuredClone(policy));
   }
+  /** Refresh the Host's account state after a fixed desktop maintenance operation. */
+  async refreshSandboxAccounts(): Promise<void> {
+    await this.client.request('sandbox.refresh', {});
+  }
   /**
    * Send one sandbox selection, and keep only what the Host confirmed.
    *

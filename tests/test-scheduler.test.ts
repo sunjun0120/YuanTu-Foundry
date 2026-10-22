@@ -25,7 +25,6 @@ test('source fingerprints include build locks, root packaging and CI configurati
   for (const file of [
     'build/windows-runtime.lock.json',
     'electron-builder.config.cjs',
-    'electron-builder.protected.config.cjs',
     '.github/workflows/ci.yml',
   ]) {
     await mkdir(path.dirname(path.join(root, file)), { recursive: true });

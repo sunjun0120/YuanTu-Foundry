@@ -98,8 +98,11 @@ if (mode === 'partial') {
   process.exit(2);
 }
 for (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');
-if (mode === 'oversized') process.stdout.write('x'.repeat(3 * 1024 * 1024));
-process.exit(events.length > 1 ? 0 : 1);
+// Exit only after the oversized event is flushed: on POSIX a piped stdout is asynchronous, and process.exit()
+// would drop most of the 3 MiB before the parser could see it exceed its bound.
+if (mode === 'oversized')
+  process.stdout.write('x'.repeat(3 * 1024 * 1024), () => process.exit(events.length > 1 ? 0 : 1));
+else process.exit(events.length > 1 ? 0 : 1);
 `;
 
 /** A real child process, started the way the tool layer would start one. */

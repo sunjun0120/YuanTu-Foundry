@@ -16,6 +16,7 @@ import {
   seatbeltCapabilities,
 } from '../packages/tools/execution-capabilities.ts';
 import type { ExecutionPolicy, FileEffect } from '../packages/protocol/execution.ts';
+import { nativeModes } from './native-platform.ts';
 
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-file-policy-'));
@@ -33,7 +34,7 @@ async function fixture(t: test.TestContext) {
 test('explicit read-only file policy prevents a real file write before approval in every backend', async (t) => {
   const { root, tools } = await fixture(t);
   let approvals = 0;
-  for (const mode of ['host', 'windows', 'seatbelt', 'native'] as const) {
+  for (const mode of ['host', 'windows', 'seatbelt', ...nativeModes] as const) {
     const file = `${mode}.txt`;
     const result = await tools.execute(
       { id: mode, name: 'write_file', arguments: { path: file, content: 'fixture' } },
@@ -56,7 +57,8 @@ test('explicit read-only file policy prevents a real file write before approval 
 test('container command restrictions leave approved workspace file edits available and denied edits have no effect', async (t) => {
   const { root, tools } = await fixture(t);
   let approvals = 0;
-  for (const mode of ['seatbelt', 'native'] as const) {
+  const modes = ['seatbelt', ...nativeModes] as const;
+  for (const mode of modes) {
     for (const allowed of [false, true]) {
       const file = `${mode}-${allowed}.txt`;
       const result = await tools.execute(
@@ -75,14 +77,15 @@ test('container command restrictions leave approved workspace file edits availab
       else await assert.rejects(readFile(path.join(root, file)), { code: 'ENOENT' });
     }
   }
-  assert.equal(approvals, 4);
+  // One denied and one allowed write per backend.
+  assert.equal(approvals, modes.length * 2);
 });
 
 test('the policy factory refuses values a backend would otherwise reinterpret', () => {
   // `host` and `windows` declare fixed capabilities and never read `files`, so without this check an unknown
   // value would travel into the policy the tools then run under. For the backends that do read it the
   // declaration check would reject it, but with a different message — the refusal has to be this one.
-  for (const mode of ['host', 'windows', 'seatbelt', 'native'] as const)
+  for (const mode of ['host', 'windows', 'windows-account', 'seatbelt', 'native'] as const)
     for (const files of ['bogus', 'read-write'] as unknown as FileEffect[])
       assert.throws(() => executionPolicy(mode, { files }), /invalid file policy/i);
   // The image arrives from configuration and is interpolated into what the sandbox runtime is asked to run,

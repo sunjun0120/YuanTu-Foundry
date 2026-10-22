@@ -1,0 +1,67 @@
+# Real acceptance of the Windows sandbox account backend (yuantu-sandbox.exe).
+#
+# Separate from ci.yml on purpose: it needs only Rust and Node, and must not wait on the unrelated `check` job.
+# The runner is a disposable elevated machine: the acceptance test creates the sandbox accounts, group, logon
+# rights and WFP filters, checks write/read/network confinement through them, and removes everything again.
+name: Windows sandbox accounts
+on:
+  push:
+    paths:
+      - 'packages/tools/windows-sandbox/native/**'
+      - 'packages/tools/sandbox-account*.ts'
+      - 'tests/sandbox-account-native.test.ts'
+      - '.github/workflows/windows-account-sandbox.yml'
+  pull_request:
+    paths:
+      - 'packages/tools/windows-sandbox/native/**'
+      - 'packages/tools/sandbox-account*.ts'
+      - 'tests/sandbox-account-native.test.ts'
+      - '.github/workflows/windows-account-sandbox.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/tools/windows-sandbox/native -> target
+      - name: Helper unit and execution-path tests
+        run: cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml
+      - name: Sandbox account real acceptance
+        env:
+          YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
+        run: cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml --test account_acceptance -- --nocapture
+      - run: npm ci
+      # The same backend through the TypeScript provider a Host uses (debug helper built by the steps above).
+      - name: Sandbox account provider acceptance
+        env:
+          FOUNDRY_TEST_WINDOWS_ACCOUNT_ACCEPTANCE: '1'
+        run: |
+          $result = & node scripts/run-tests.mjs tests/sandbox-account-native.test.ts
+          $exit = $LASTEXITCODE
+          $result | Write-Output
+          if ($exit -ne 0) {
+            $log = Get-ChildItem .scratch/test-logs/*sandbox-account-native*.log -ErrorAction SilentlyContinue | Select-Object -Last 1
+            if ($log) {
+              $detail = (Get-Content $log.FullName | Select-Object -Last 80) -join "`n"
+              $detail = $detail -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'
+              Write-Output "::error title=TS account acceptance::$detail"
+            }
+            throw "Account provider acceptance failed ($exit)"
+          }
+          if (($result -join "`n") -notmatch 'tests=1 pass=1 fail=0 skip=0') {
+            throw 'Account provider acceptance must run one test with no skips'
+          }
+      - run: npm run build:windows-sandbox
+      - run: npm run build
+      - name: Prepare Electron before isolated desktop tests
+        run: node node_modules/electron/install.js
+      - name: Account settings desktop smoke (no account maintenance)
+        run: node scripts/run-tests.mjs tests/windows-account-settings.smoke.mjs

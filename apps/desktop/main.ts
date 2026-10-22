@@ -6,12 +6,13 @@ import {
   type SandboxRecoveryReply,
 } from './sandbox-recovery.ts';
 import {
-  WindowsSandboxSetup,
+  WindowsAccountSandboxSetup,
   parseSandboxSetupCommand,
   waitForSandboxInitialization,
   type SandboxSetupReply,
   type SandboxSetupView,
 } from './sandbox-setup.ts';
+import { refreshAccountBackend } from '../../packages/tools/sandbox-account.ts';
 import { parseFilesCommand, type FilesReply } from './files-contract.ts';
 import { maintainWorkspace } from './workspace-maintenance.ts';
 import {
@@ -61,7 +62,7 @@ import {
   type PermissionPresetReply,
 } from './permission-presets.ts';
 import { runtimePaths, safeError, type MainContext } from './main-context.ts';
-import { SessionChoices, type SessionChoice } from './session-choices.ts';
+import { SessionChoices, choiceForPreset, type SessionChoice } from './session-choices.ts';
 import { DesktopBackups } from './main-backups.ts';
 import { mcpOAuthDirectory, registerMcpIpc } from './main-mcp.ts';
 import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
@@ -403,14 +404,26 @@ void app
       nodePath: runtime.nodePath,
       workerPath: path.join(__dirname, 'sandbox-probe-worker.cjs'),
     });
-    const sandboxSetup = new WindowsSandboxSetup({
+    const sandboxSetup = new WindowsAccountSandboxSetup({
       platform: process.platform,
-      packaged: app.isPackaged,
-      nodePath: runtime.nodePath,
-      helperPath: path.resolve(
-        __dirname,
-        '../packages/tools/windows-sandbox/yuantu-appcontainer.exe',
-      ),
+      helperPath: path.resolve(__dirname, '../packages/tools/windows-sandbox/yuantu-sandbox.exe'),
+      // A read root is chosen in the native picker and never typed into the page: the journal, not the renderer, is
+      // the list of what may be removed.
+      chooseDirectory: async () => {
+        if (!window) return undefined;
+        const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+        return picked.canceled ? undefined : picked.filePaths[0];
+      },
+      changing: async () => {
+        await refreshAccountBackend();
+        await service?.refreshSandboxAccounts();
+      },
+      changed: async () => {
+        await refreshAccountBackend();
+        await service?.refreshSandboxAccounts();
+        await sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
+        choices.push();
+      },
     });
     // Probe with standalone Node, not Electron's executable; remember each mode's answer.
     void sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
@@ -598,8 +611,15 @@ void app
           switching = true;
           try {
             await choices.following;
+            // `windows` is the operator's explicit weaker backend; a preset moves the approval half without
+            // silently upgrading it to the account backend, including after a host -> guarded switch.
+            const sandbox = choiceForPreset(
+              preset,
+              choices.view().sandbox.mode,
+              sandboxEnvironment.defaultMode,
+            ).sandbox;
             const choice: SessionChoice = {
-              sandbox: preset.sandbox,
+              sandbox,
               permission: preset.permission,
             };
             const sessionId = service?.snapshot.session.sessionId ?? undefined;
@@ -608,7 +628,7 @@ void app
             return {
               ok: true,
               view: choices.view(),
-              message: `Preset applied: ${preset.sandbox} + ${preset.permission}.`,
+              message: `Preset applied: ${sandbox} + ${preset.permission}.`,
             };
           } finally {
             switching = false;
@@ -652,10 +672,18 @@ void app
           const command = parseSandboxSetupCommand(input);
           if (quitting) throw new Error(mainText('desktop.quitting'));
           if (command.type === 'status') return { ok: true, view: await sandboxSetup.status() };
+          if (command.type === 'verify') return { ok: true, view: await sandboxSetup.verify() };
           if (switching || !service || service.busy) throw new Error(mainText('settingsMain.busy'));
           switching = true;
           try {
-            sandboxInitializing = sandboxSetup.initialize();
+            sandboxInitializing =
+              command.type === 'initialize'
+                ? sandboxSetup.initialize()
+                : command.type === 'uninstall'
+                  ? sandboxSetup.uninstall()
+                  : command.type === 'read-add'
+                    ? sandboxSetup.addRead()
+                    : sandboxSetup.removeRead(command.path);
             return { ok: true, view: await sandboxInitializing };
           } finally {
             sandboxInitializing = undefined;

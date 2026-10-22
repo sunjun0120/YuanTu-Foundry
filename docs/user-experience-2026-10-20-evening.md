@@ -506,22 +506,22 @@ Word 任务的 5 次确认：
 
 ## 截图
 
-![计划模式卡在“正在制定计划”](images/2026-10-20-evening/plan-mode-stuck.png)
+**计划模式卡在“正在制定计划”**
 
 计划运行已经结束，顶部是“准备就绪”，计划面板仍是“正在制定计划”，唯一出口是“放弃这份计划”。
 
-![Excel 预览：样式丢失、公式单元格空白](images/2026-10-20-evening/xlsx-preview.png)
+**Excel 预览：样式丢失、公式单元格空白**
 
 单元格没有边框/间距，`合计`、客户金额、`总计` 都是空白；文件本身有 `SUM`/`SUMIF` 公式。
 
-![Word 预览：英文标题和说明](images/2026-10-20-evening/docx-preview.png)
+**Word 预览：英文标题和说明**
 
 中文界面里的预览页是英文标题、英文说明，样式同样被 CSP 拦掉。
 
-![验收 needs_review：同一检查反复失败](images/2026-10-20-evening/acceptance-needs-review.png)
+**验收 needs_review：同一检查反复失败**
 
 代码已修好、直接测试 2/2 通过，完成卡仍显示"需要审查 / 已修复 1/3 轮"。
 
-![无模型首次启动](images/2026-10-20-evening/onboarding.png)
+**无模型首次启动**
 
 无模型时输入框禁用，中文引导明确，设置一键可达；这个路径没有问题。

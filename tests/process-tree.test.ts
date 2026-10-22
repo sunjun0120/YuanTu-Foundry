@@ -61,7 +61,8 @@ test('ending a live tree stops it', { timeout: 20_000 }, async () => {
     assert.ok(child.pid);
     await killTree(child.pid);
     await closed(child);
-    assert.notEqual(child.exitCode, null, 'the child has exited');
+    // A POSIX child ended by a signal reports `signalCode` and a null `exitCode`.
+    assert.ok(child.exitCode !== null || child.signalCode !== null, 'the child has exited');
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   }

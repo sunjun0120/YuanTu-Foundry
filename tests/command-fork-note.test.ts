@@ -18,8 +18,11 @@ import {
   sandboxProvider,
   type SandboxPlan,
 } from '../packages/tools/sandbox.ts';
-import { sandboxChildSpawnBlocked } from '../packages/tools/sandbox-launch-failure.ts';
-
+import {
+  WINDOWS_ACCOUNT_ACCESS_NOTE,
+  sandboxChildSpawnBlocked,
+  windowsAccountAccessDenied,
+} from '../packages/tools/sandbox-launch-failure.ts';
 const node = (script: string): SandboxPlan['args'] => ['-e', script];
 
 function planFor(root: string, backend: SandboxPlan['backend'], script: string): SandboxPlan {
@@ -103,4 +106,17 @@ test('the signature is narrow enough for a command that merely mentions EPERM', 
   // A report about a permission code, without a failed spawn, is not the sandbox refusing to fork.
   assert.equal(sandboxChildSpawnBlocked('tests failed: expected EPERM handling'), false);
   assert.equal(sandboxChildSpawnBlocked('write failed: EPERM'), false);
+});
+
+test('the account backend names the settings page when a command is refused a path', () => {
+  assert.equal(windowsAccountAccessDenied('Error: EPERM: operation not permitted'), true);
+  assert.equal(windowsAccountAccessDenied('EACCES: permission denied'), true);
+  assert.equal(windowsAccountAccessDenied('type: Access is denied.'), true);
+  assert.equal(
+    windowsAccountAccessDenied('System.UnauthorizedAccessException: Access to the path is denied'),
+    true,
+  );
+  assert.equal(windowsAccountAccessDenied('tests failed: expected EPERM handling'), true);
+  assert.equal(windowsAccountAccessDenied('2 passing'), false);
+  assert.match(WINDOWS_ACCOUNT_ACCESS_NOTE, /Advanced: directories the sandbox can read/);
 });

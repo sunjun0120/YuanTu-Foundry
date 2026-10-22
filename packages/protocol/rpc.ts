@@ -246,6 +246,10 @@ export interface HostMethods {
     params: { mode: SandboxMode; sessionId?: string; files?: FileEffect; network?: NetworkEffect };
     result: { mode: SandboxMode; files?: FileEffect; network?: NetworkEffect };
   };
+  'sandbox.refresh': {
+    params: Record<string, never>;
+    result: { refreshed: true };
+  };
   'resources.list': {
     params: Record<string, never>;
     result: { instructions: string[]; skills: SkillInfo[]; extensions: string[] };

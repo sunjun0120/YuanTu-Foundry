@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { toolEnvironment } from '../packages/tools/environment.ts';
-import { appContainerRuntimeError } from '../packages/tools/appcontainer-runtime.ts';
 
 export async function inspectWindowsRuntime(executable, source = process.env) {
   const env = toolEnvironment(source);
@@ -21,7 +20,7 @@ export async function inspectWindowsRuntime(executable, source = process.env) {
   return info;
 }
 
-export function assertWindowsRuntime(info, { enhanced = false } = {}) {
+export function assertWindowsRuntime(info) {
   if (
     info.platform !== 'win32' ||
     info.arch !== 'x64' ||
@@ -30,8 +29,4 @@ export function assertWindowsRuntime(info, { enhanced = false } = {}) {
     Number(info.nodeVersion.split('.')[0]) < 24
   )
     throw new Error('Windows x64 packaging requires standalone Windows x64 Node.js >=24');
-  if (enhanced) {
-    const reason = appContainerRuntimeError(info.uv);
-    if (reason) throw new Error(reason);
-  }
 }

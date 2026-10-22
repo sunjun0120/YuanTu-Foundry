@@ -13,6 +13,7 @@ import {
   type SandboxRequest,
 } from './sandbox-provider.ts';
 import { windowsSandboxProvider } from './sandbox-windows.ts';
+import { windowsAccountSandboxProvider } from './sandbox-account.ts';
 import { seatbeltSandboxProvider } from './sandbox-seatbelt.ts';
 import { nativeSandboxBackend } from './sandbox-mode.ts';
 import { executionPolicy, requireExecutionCapabilities } from './execution-policy.ts';
@@ -158,11 +159,12 @@ registerSandboxProvider({
   cleanup: async () => {},
 });
 registerSandboxProvider(windowsSandboxProvider);
+registerSandboxProvider(windowsAccountSandboxProvider);
 registerSandboxProvider(seatbeltSandboxProvider);
 registerSandboxProvider({
   mode: 'native',
   description:
-    'Native operating-system sandbox: Windows restricted token or macOS Seatbelt; unavailable policies fail closed.',
+    'Native operating-system sandbox: Windows sandbox accounts once initialized (otherwise the Windows restricted token), or macOS Seatbelt; unavailable policies fail closed.',
   capabilities: (config) =>
     sandboxProvider(nativeSandboxBackend()).capabilities?.(config) ?? HOST_CAPABILITIES,
   available: async (env) => {

@@ -587,16 +587,52 @@ test(
         attributeFilter: ['hidden'],
       });
     });
-    await page.locator('#open-background').hover();
-    await page.locator('#background-popover').waitFor({ state: 'visible' });
-    const triggerBounds = await page.locator('#open-background').boundingBox();
-    const popoverBounds = await page.locator('#background-popover').boundingBox();
-    assert.ok(triggerBounds && popoverBounds);
-    assert.ok(popoverBounds.width <= 340, `background list is too wide: ${popoverBounds.width}`);
-    assert.ok(
-      Math.abs(popoverBounds.x - triggerBounds.x) <= 2,
-      `background list should open below its header button (${popoverBounds.x} vs ${triggerBounds.x})`,
-    );
+    // Exercise both sides of the 1200px breakpoint: the compact panel aligns its right edge to the button.
+    // Read the actual content size because Windows display scaling can round setContentSize by a pixel.
+    for (const { width, alignment } of [
+      { width: 1232, alignment: 'left' },
+      { width: 900, alignment: 'right' },
+    ]) {
+      await page.locator('#chat-title').hover();
+      await page.locator('#background-popover').waitFor({ state: 'hidden' });
+      const contentSize = await app.evaluate(({ BrowserWindow }, width) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        window.setContentSize(width, 720);
+        return window.getContentSize();
+      }, width);
+      await page.waitForFunction(
+        ([width, height]) => innerWidth === width && innerHeight === height,
+        contentSize,
+      );
+      const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      assert.equal(viewport.width <= 1200, alignment === 'right');
+      await page.locator('#open-background').hover();
+      await page.locator('#background-popover').waitFor({ state: 'visible' });
+      const triggerBounds = await page.locator('#open-background').boundingBox();
+      const popoverBounds = await page.locator('#background-popover').boundingBox();
+      assert.ok(triggerBounds && popoverBounds);
+      const triggerEdge = triggerBounds.x + (alignment === 'right' ? triggerBounds.width : 0);
+      const popoverEdge = popoverBounds.x + (alignment === 'right' ? popoverBounds.width : 0);
+      const gap = popoverBounds.y - (triggerBounds.y + triggerBounds.height);
+      const geometry = JSON.stringify({ viewport, alignment, triggerBounds, popoverBounds });
+      t.diagnostic('background popover geometry: ' + geometry);
+      assert.ok(popoverBounds.width <= 340, `background list is too wide: ${geometry}`);
+      assert.ok(
+        Math.abs(popoverEdge - triggerEdge) <= 2,
+        `background list should align its ${alignment} edge with its header button: ${geometry}`,
+      );
+      assert.ok(
+        Math.abs(gap - 8) <= 2,
+        `background list should open below its button: ${geometry}`,
+      );
+      assert.ok(
+        popoverBounds.x >= 0 &&
+          popoverBounds.x + popoverBounds.width <= viewport.width &&
+          popoverBounds.y >= 0 &&
+          popoverBounds.y + popoverBounds.height <= viewport.height,
+        `background list should fit inside the viewport: ${geometry}`,
+      );
+    }
     const row = page.locator('#background-list .background-card').first();
     await row.waitFor();
     assert.match(await row.locator('.background-command').innerText(), /node wait\.cjs/);

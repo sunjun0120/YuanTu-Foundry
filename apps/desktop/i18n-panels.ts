@@ -214,39 +214,79 @@ export const panelMessages: Record<string, [string, string]> = {
     '调整聊天内容和操作界面的基础字号。',
     'Adjust the base size of chat and interface text.',
   ],
-  'sandboxSetup.title': ['Windows 增强隔离', 'Windows enhanced isolation'],
+  'sandboxSetup.title': ['Windows 沙箱账户', 'Windows sandbox accounts'],
+  'sandboxSetup.read.advanced': [
+    '高级：沙箱可读目录',
+    'Advanced: directories the sandbox can read',
+  ],
+  'sandboxSetup.read.auto': ['自动', 'Automatic'],
+  'sandboxSetup.read.choose': ['添加目录…', 'Add directory…'],
+  'sandboxSetup.read.removeItem': ['移除', 'Remove'],
+  'sandboxSetup.readyLine': ['✓ 沙箱账户已就绪', '✓ Sandbox accounts are ready'],
   'sandboxSetup.exitUnconfirmed': [
-    '初始化尚未结束，清理状态未确认。重新打开应用后请检查增强隔离状态。',
-    'Initialization is still pending and cleanup is unconfirmed. Check enhanced isolation status after reopening the app.',
+    '初始化尚未结束，清理状态未确认。重新打开应用后请检查沙箱账户状态。',
+    'Initialization is still pending and cleanup is unconfirmed. Check sandbox account status after reopening the app.',
   ],
   'sandboxSetup.note': [
-    '首次初始化需要 Windows 管理员确认。初始化后仍使用当前沙箱模式，增强模式需通过隔离验收后启用。',
-    'First initialization requires Windows administrator approval. Your current sandbox mode stays active; enhanced isolation requires further verification before activation.',
+    '初始化或修复需要一次管理员确认。就绪后，原生沙箱使用专用低权限账户；卸载后原生沙箱会拒绝执行，除非重新初始化，或手动改用较弱的 windows 模式（没有独立账户、网络隔离更弱，子进程可能 spawn EPERM）。',
+    'Setup or repair requires administrator approval. Once ready, the native sandbox uses dedicated low-privilege accounts. After uninstalling, the native sandbox refuses to run until you initialize again or manually select the weaker windows mode (no separate account, weaker network isolation, possible child-process spawn EPERM).',
   ],
   'sandboxSetup.initialize': ['管理员初始化', 'Initialize as administrator'],
-  'sandboxSetup.refresh': ['检查状态', 'Check status'],
+  'sandboxSetup.repair': ['修复沙箱账户', 'Repair sandbox accounts'],
+  'sandboxSetup.problem.read-allowlist-invalid': [
+    '读取白名单缺失、权限变更或包含不安全路径',
+    'Read allowlist is missing, changed or contains unsafe paths',
+  ],
+  'sandboxSetup.uninstall': ['卸载沙箱账户', 'Uninstall sandbox accounts'],
+  'sandboxSetup.damaged': ['沙箱账户需要修复：', 'Sandbox accounts need repair:'],
+  'sandboxSetup.problem.accounts-missing': ['缺少沙箱账户', 'Sandbox accounts are missing'],
+  'sandboxSetup.problem.group-missing': ['缺少沙箱用户组', 'Sandbox group is missing'],
+  'sandboxSetup.problem.group-membership': [
+    '沙箱用户组成员不正确',
+    'Sandbox group membership is invalid',
+  ],
+  'sandboxSetup.problem.credentials-missing': [
+    '缺少本用户的沙箱凭据',
+    'Sandbox credentials are missing for this user',
+  ],
+  'sandboxSetup.problem.credentials-invalid': [
+    '沙箱凭据无法解密或不匹配',
+    'Sandbox credentials cannot be decrypted or do not match',
+  ],
+  'sandboxSetup.problem.logon-failed': [
+    '沙箱账户密码或登录权限已变更',
+    'Sandbox account password or logon rights have changed',
+  ],
+  'sandboxSetup.problem.firewall-missing': [
+    '离线网络规则缺失或已损坏',
+    'Offline network rules are missing or damaged',
+  ],
+  'sandboxSetup.problem.seclogon-disabled': [
+    'Secondary Logon 服务不可用',
+    'Secondary Logon service is unavailable',
+  ],
+  'sandboxSetup.problem.setup-marker-missing': [
+    '缺少初始化标记，需要重新初始化',
+    'The setup marker is missing; initialize again',
+  ],
+  'sandboxSetup.problem.setup-marker-version': [
+    '初始化标记版本过旧，需要重新初始化',
+    'The setup marker version is outdated; initialize again',
+  ],
+  'sandboxSetup.problem.setup-marker-invalid': [
+    '初始化标记无效或与账户不一致',
+    'The setup marker is invalid or does not match the accounts',
+  ],
+  'sandboxSetup.unavailable': [
+    '无法读取沙箱账户状态，请确认应用目录中存在 yuantu-sandbox.exe。',
+    'Cannot read the sandbox account status; check that yuantu-sandbox.exe exists beside the application.',
+  ],
   'sandboxSetup.pending': [
     '正在处理，请完成 Windows 管理员确认…',
     'Working; complete the Windows administrator prompt…',
   ],
   'sandboxSetup.checking': ['正在检查初始化条件…', 'Checking initialization requirements…'],
-  'sandboxSetup.ready': ['可以进行首次初始化。', 'Ready for first initialization.'],
-  'sandboxSetup.installed': [
-    '网络规则已初始化；增强沙箱尚未启用。',
-    'Network rules initialized; enhanced sandbox is not activated.',
-  ],
-  'sandboxSetup.development': [
-    '开发版本不提供管理员初始化，请使用受保护目录中的签名安装版本。',
-    'Administrator initialization requires a signed release in a protected installation directory.',
-  ],
-  'sandboxSetup.runtime': [
-    '无法验证当前安装包的运行时，请修复安装或使用可信的签名版本。',
-    'The installed runtime could not be verified. Repair the installation or use a trusted signed release.',
-  ],
-  'sandboxSetup.release': [
-    '安装位置或发布签名未通过检查，无法进行管理员初始化。',
-    'Installation location or release signature verification failed; initialization is unavailable.',
-  ],
+  'sandboxSetup.ready': ['沙箱账户未初始化。', 'Sandbox accounts have not been initialized.'],
   'sandboxSetup.failed': [
     '初始化未完成或状态检查失败。请确认管理员提示并重新检查状态。',
     'Initialization did not complete or its status could not be verified. Check the administrator prompt and refresh the status.',

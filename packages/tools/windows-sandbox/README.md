@@ -1,6 +1,18 @@
-# Windows basic native sandbox
+# Windows native sandboxes
 
-`windows` (and `native` on Windows) uses a Low integrity, write-restricted token. Workspace-specific and per-command scratch SIDs grant writes. Ambient Low integrity paths writable by Everyone or the logon SID remain writable. Reads and network are unrestricted; strict process read-only and denied-network requests fail before execution. This is a partial write boundary.
+`native` always selects `windows-account` on Windows and fails closed until its dedicated accounts are initialized and verified. The basic `windows` backend is an explicit, manual choice for machines where account setup is impossible; it has no separate account, weaker network isolation and known child-process spawn EPERM failures. Settings > General > **Windows sandbox accounts** reports status and offers administrator setup, repair and uninstall. Setup refreshes the live Host without changing a session's permission preset. Development builds offer the same setup: it requests UAC only when the current process is not already elevated.
+
+The account backend ships as `yuantu-sandbox.exe`: a desktop-user broker starts an offline or online account runner, which creates commands inside kill-on-close Jobs. Standing workspace grants use the sandbox group and a per-workspace capability SID; read-only commands omit the capability. WFP filters deny the offline account network access. Credentials use CurrentUser DPAPI. The runner replaces profile, HOME, identity and scratch variables and strips desktop-user cache/config overrides. Setup runs in the calling process when it is already elevated; otherwise it raises UAC for the fixed `account-initialize` / `account-remove` operations.
+
+Setup grants group RX to safe PATH directories under the desktop user's real profile and `.gitconfig`. Settings can add or revoke an absolute read-only path. Sensitive directories and their ancestors, reparse points, hardlinks and trees larger than 100,000 objects are refused; unsafe default PATH entries remain inaccessible. Read grants are non-inheritable snapshots: newly installed tool files need reauthorization, and newly created secret directories receive no grant. `read-grants.json` records original DACLs and filesystem identities before mutation. Removal reopens recorded file IDs even after same-volume moves, revokes owned RX and preserves other trustees' changes. Identity or permission conflicts retain the recovery record. Read and workspace grants are revoked as the desktop user before fixed UAC account removal, even when UAC uses another administrator.
+
+For workspaces and toolchains under the desktop profile, ancestor directories receive only non-inheritable traverse and read-attributes rights. Node's path resolution can inspect those ancestors without listing them or reading files elsewhere in the profile. These separate grants are recorded in `traverse-grants.json` and revoked after workspace/read grants during uninstall.
+
+Real accounts are verified only on disposable GitHub Actions Windows runners in [the account workflow](../../../.github/workflows/windows-account-sandbox.yml). Local unit/development-runner tests never provision accounts. Packaging no longer verifies an Authenticode signature or requires a protected installation directory: the helper is trusted by its fixed location beside the application, and a missing helper is an error. The official Node runtime is still checked against the release key's signed checksums. Private desktops are deferred and ConPTY is out of scope.
+
+## Basic backend
+
+`windows` uses a Low integrity, write-restricted token. Workspace-specific and per-command scratch SIDs grant writes. Ambient Low integrity paths writable by Everyone or the logon SID remain writable. Reads and network are unrestricted; strict process read-only and denied-network requests fail before execution. This is a partial write boundary.
 
 The launcher starts the command suspended, assigns it to an unnamed Job Object with kill-on-close and no breakaway, then resumes it. On ordinary command exit it terminates remaining descendants and waits for the job's active process count to reach zero before returning. Killing the launcher closes the job handle and terminates its descendants. The provider marks the plan's process tree as contained.
 
@@ -12,4 +24,22 @@ The workspace root's `.git`, `.yuantu`, `.agents`, `.codex`, `.aws`, `.ssh`, and
 
 After the final workspace lease ends, existing objects recover their original security and newly created objects receive Medium integrity labels. Approved atomic file replacements can inherit the same effective Low mandatory label: recovery ignores only the mandatory-label ACE's inherited provenance bit when checking for conflicts. DACLs, label SIDs/policies, and all other inheritance flags must still match; genuine operator permission or integrity-level changes retain the journal and lock without partially restoring other objects. Cleanup of a forged or deserialized plan cannot release a Host-owned lease or delete an arbitrary path. The owning Host must terminate the process tree before cleaning its original plan.
 
-The administrator-initialized backend remains [implementation pending](ENHANCED-DESIGN.md). No account or firewall initialization is implemented or performed by the basic backend.
+The earlier SYSTEM-service design is retained as [historical reference](ENHANCED-DESIGN.md). The basic backend does not initialize accounts or firewall policy.
+
+## 本机开发测试
+
+本机只做构建和只读检查；真实建户/删户只在一次性 GitHub Actions Windows runner 上做（见 `.github/workflows/windows-account-sandbox.yml`）。不要在本机执行账户初始化或卸载，除非你明确要在这台机器上使用账户沙箱。
+
+1. 构建 helper：`npm run build:windows-sandbox`。它同时写入 `packages/tools/windows-sandbox/yuantu-sandbox.exe` 和 `dist/packages/tools/windows-sandbox/yuantu-sandbox.exe`；安装包和 `npm run build` 都从这里取。
+2. 启动开发版桌面：`npm run desktop`（会先构建）。打开设置 → 通用 → **Windows 沙箱账户**，点“管理员初始化”。未提权时会弹一次 UAC；从已经提权的终端启动时直接在本进程执行，不再弹 UAC。开发版和正式版走同一套流程。
+3. 初始化成功后，系统里会多出：
+   - 本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`，以及本地组 `YuanTuSandboxUsers`；
+   - 两个账户的交互登录权限、远程/网络登录拒绝，以及登录界面隐藏项；
+   - 离线账户的 WFP 过滤器（按该账户 SID 断网），必要时把 Secondary Logon 服务设为手动启动；
+   - `%USERPROFILE%\.yuantu\sandbox-state\windows-account\setup_marker.json`（版本、账户/组 SID、离线过滤配置）和 `credentials.json`（DPAPI 加密的密码）；
+   - 工作区授权、默认只读白名单，以及桌面 profile 下祖先目录的 traverse/read-attributes 授权记录。
+4. 卸载：在同一设置页点“卸载沙箱账户”。它会先删除 `setup_marker.json`，再以桌面用户身份撤销工作区/读取授权，最后删除账户、组、WFP 过滤器和凭据。确认已清理干净：
+   - `packages/tools/windows-sandbox/yuantu-sandbox.exe account-status --verify` 应报告 `accounts-missing`、`group-missing`、`firewall-missing`，`ready` 为 false；
+   - `net user YuanTuSandboxOffline`、`net user YuanTuSandboxOnline`、`net localgroup YuanTuSandboxUsers` 都应失败；
+   - 状态目录里没有 `setup_marker.json` 和 `credentials.json`，`read-grants.json` / `traverse-grants.json` 的 `grants` 为空。`account-status` 只看标记和凭据，清理后必须用 `--verify` 才能看到账户/WFP 的真实状态。
+5. 如果管理员初始化无法完成（UAC 被拒、策略不允许建本地账户或改防火墙），可以由用户手动选择较弱的 `windows` 模式：它没有独立账户、网络隔离更弱，并且已知子进程可能 `spawn EPERM`。它不是自动回退，`native` 不会自己切过去。

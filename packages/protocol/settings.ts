@@ -328,13 +328,13 @@ export const ENVIRONMENT = {
   YUANTU_WORKSPACE: { kind: 'string', description: '工作区目录' },
   YUANTU_SANDBOX: {
     kind: 'enum',
-    values: ['host', 'native', 'windows', 'seatbelt'],
+    values: ['host', 'native', 'windows', 'windows-account', 'seatbelt'],
     description:
       '命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值）',
   },
   YUANTU_SANDBOX_HOOK: {
     kind: 'enum',
-    values: ['host', 'native', 'windows', 'seatbelt'],
+    values: ['host', 'native', 'windows', 'windows-account', 'seatbelt'],
     description: '钩子用的沙箱后端（默认继承当前调用的执行策略）',
   },
   YUANTU_SANDBOX_FILES: {
@@ -356,6 +356,11 @@ export const ENVIRONMENT = {
   YUANTU_SANDBOX_TEST_LAUNCH_PAUSE_MS: {
     kind: 'string',
     description: '（测试）沙箱启动器创建命令后、恢复前暂停的毫秒数',
+  },
+  YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: {
+    kind: 'enum',
+    values: ['0', '1'],
+    description: '（测试）仅在可丢弃 GitHub Actions runner 启用原生账户真实验收',
   },
   YUANTU_SANDBOX_ACL_SOURCE: {
     kind: 'string',
