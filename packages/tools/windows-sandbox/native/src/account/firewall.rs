@@ -1,9 +1,8 @@
 //! WFP filters that block every IPv4/IPv6 connect, listen, accept, and port assignment by the offline sandbox
-//! account — any program it runs, including loopback. Kept apart from the AppContainer policy: its own
-//! provider, sublayer, and filter keys.
+//! account — any program it runs, including loopback.
 use crate::{
     Result,
-    network::{
+    wfp::{
         Descriptor, Engine, LAYERS, Transaction, WfpMemory, code, descriptor, engine,
         verify_security,
     },
@@ -22,7 +21,7 @@ const PROVIDER: GUID = GUID::from_u128(0x2f0c1a7e_83d4_4b1c_9e61_5559414e5501);
 const SUBLAYER: GUID = GUID::from_u128(0x6b9d3e52_1f7a_4c0e_a3b8_5559414e5501);
 const FWP_E_NOT_FOUND: [u32; 4] = [0x8032_0002, 0x8032_0003, 0x8032_0005, 0x8032_0007];
 
-/// One key per layer, in a range disjoint from the AppContainer filters (`0xbfe82791_…`).
+/// One key per layer.
 pub fn key(layer: usize) -> GUID {
     GUID::from_u128(0x7a1c0f3e_2b44_4c55_9d10_5559414e5500u128 + layer as u128)
 }
@@ -241,7 +240,7 @@ fn check(offline_sid: &str) -> std::result::Result<(), String> {
         {
             return Err(format!(
                 "condition descriptor differs: {}",
-                crate::network::security_text(blob.data as _).unwrap_or_default()
+                crate::wfp::security_text(blob.data as _).unwrap_or_default()
             ));
         }
     }
@@ -294,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_distinct_and_apart_from_the_appcontainer_range() {
+    fn keys_are_distinct() {
         let keys: Vec<u128> = (0..LAYERS.len())
             .map(|i| {
                 let k = key(i);
@@ -306,7 +305,6 @@ mod tests {
             .collect();
         let unique: std::collections::HashSet<_> = keys.iter().collect();
         assert_eq!(unique.len(), LAYERS.len());
-        assert!(keys.iter().all(|k| (k >> 96) as u32 != 0xbfe82791));
     }
 
     #[test]

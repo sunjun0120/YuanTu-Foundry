@@ -32,7 +32,6 @@ test('account setup distinguishes missing, damaged and ready without elevation',
       platform: 'win32',
       packaged: true,
       helperPath: 'C:\\protected\\yuantu-sandbox.exe',
-      nodePath: '',
       execute: async (_file, args) => {
         calls.push(args);
         return { stdout };
@@ -66,7 +65,6 @@ test('a damaged read allowlist can still be revoked through the settings service
     platform: 'win32',
     packaged: true,
     helperPath: 'fixed',
-    nodePath: '',
     execute: async (_file, args) => {
       calls.push(args);
       return { stdout: report(false, ['read-allowlist-invalid']) };
@@ -85,7 +83,6 @@ test('account setup verifies mutations, refreshes even on UAC failure and has no
     platform: 'win32',
     packaged: true,
     helperPath: 'C:\\protected\\yuantu-sandbox.exe',
-    nodePath: '',
     changed: async () => {
       refreshes++;
     },
@@ -107,7 +104,6 @@ test('account setup verifies mutations, refreshes even on UAC failure and has no
     platform: 'win32',
     packaged: true,
     helperPath: 'fixed',
-    nodePath: '',
     changed: async () => {
       refreshes++;
     },
@@ -127,7 +123,6 @@ test('account maintenance fails closed in development, invalid status and concur
       platform: 'win32',
       packaged: true,
       helperPath: 'fixed',
-      nodePath: '',
       ...options,
       execute: async () => {
         throw new Error('must not execute');
@@ -144,7 +139,6 @@ test('account maintenance fails closed in development, invalid status and concur
     platform: 'win32',
     packaged: true,
     helperPath: 'fixed',
-    nodePath: '',
     execute: async (_file, args) => {
       if (args[0] !== 'account-status') await pending;
       return { stdout: report() };

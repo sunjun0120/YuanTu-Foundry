@@ -29,36 +29,43 @@ async function moduleScript(name: string) {
   return import(url.href);
 }
 
-test('build profiles separate the diagnostic OpenSSL setting from production', async () => {
-  const { runtimeBuildArguments } = await moduleScript('build-windows-runtime.mjs');
-  assert.deepEqual(runtimeBuildArguments('diagnostic'), [
-    'release',
-    'x64',
-    'vs2022',
-    'clang-cl',
-    'openssl-no-asm',
-  ]);
-  assert.deepEqual(runtimeBuildArguments('production'), ['release', 'x64', 'vs2022', 'clang-cl']);
-  assert.throws(() => runtimeBuildArguments('unknown'), /profile/i);
-});
-
-test('candidate validation rejects changed binary, license and diagnostic release promotion', async (t) => {
+test('candidate validation rejects changed binary, license, non-official and unsigned production runtimes', async (t) => {
   const { validateRuntimeCandidate } = await moduleScript('windows-runtime-product.mjs');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-candidate-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const binary = 'test binary';
   const license = 'Node.js is licensed for use as follows:\ncomplete fixture\n';
   const provenance = {
+    profile: 'official',
     source: { signedChecksumsVerified: true },
-    build: { exitCode: 0, profile: 'diagnostic', opensslAssembly: false },
     binary: { sha256: digest(binary), licenseSHA256: digest(license) },
-    productionEnhancedAcceptance: null,
   };
+  const write = (value: object) =>
+    writeFile(path.join(directory, 'provenance.json'), JSON.stringify(value));
   await writeFile(path.join(directory, 'node.exe'), binary);
   await writeFile(path.join(directory, 'LICENSE'), license);
-  await writeFile(path.join(directory, 'provenance.json'), JSON.stringify(provenance));
+  await write(provenance);
   assert.equal((await validateRuntimeCandidate(directory)).sha256, digest(binary));
-  await assert.rejects(validateRuntimeCandidate(directory, { production: true }), /production/i);
+  await assert.rejects(
+    validateRuntimeCandidate(directory, { production: true }),
+    /release-signed/i,
+  );
+  await write({
+    ...provenance,
+    binary: { ...provenance.binary, upstreamSha256: 'a'.repeat(64), signerSha256: 'b'.repeat(64) },
+  });
+  assert.equal(
+    (await validateRuntimeCandidate(directory, { production: true })).profile,
+    'official',
+  );
+  for (const changed of [
+    { ...provenance, profile: 'diagnostic' },
+    { ...provenance, source: { signedChecksumsVerified: false } },
+  ]) {
+    await write(changed);
+    await assert.rejects(validateRuntimeCandidate(directory), /official/i);
+  }
+  await write(provenance);
   await writeFile(path.join(directory, 'node.exe'), 'tampered');
   await assert.rejects(validateRuntimeCandidate(directory), /binary.*hash/i);
   await writeFile(path.join(directory, 'node.exe'), binary);
@@ -66,13 +73,38 @@ test('candidate validation rejects changed binary, license and diagnostic releas
   await assert.rejects(validateRuntimeCandidate(directory), /license.*hash/i);
 });
 
+test('only the locked official release, before or after re-signing, is an official candidate', async () => {
+  const { assertOfficialCandidate, lock } = await moduleScript('fetch-windows-runtime.mjs');
+  const provenance = {
+    source: {
+      version: lock.nodeVersion,
+      sha256: lock.archive.sha256,
+      releaseSigner: lock.releaseSigner,
+    },
+    binary: { sha256: lock.executableSha256, licenseSHA256: lock.licenseSha256 },
+  };
+  assert.doesNotThrow(() => assertOfficialCandidate({ provenance }));
+  const signed = {
+    ...provenance,
+    binary: { ...provenance.binary, sha256: 'c'.repeat(64), upstreamSha256: lock.executableSha256 },
+  };
+  assert.doesNotThrow(() => assertOfficialCandidate({ provenance: signed }));
+  for (const changed of [
+    { ...provenance, source: { ...provenance.source, version: '24.0.0' } },
+    { ...provenance, source: { ...provenance.source, sha256: 'd'.repeat(64) } },
+    { ...provenance, source: { ...provenance.source, releaseSigner: 'E'.repeat(40) } },
+    { ...provenance, binary: { ...provenance.binary, sha256: 'e'.repeat(64) } },
+    { ...provenance, binary: { ...provenance.binary, licenseSHA256: 'f'.repeat(64) } },
+  ])
+    assert.throws(() => assertOfficialCandidate({ provenance: changed }), /locked official/i);
+});
 test('packaged runtime validation checks bytes and provenance, not only version strings', async (t) => {
   const { validatePackagedWindowsRuntime } = await moduleScript('windows-runtime-product.mjs');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-package-runtime-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const binary = 'binary',
     license = 'license',
-    provenance = '{"profile":"diagnostic"}';
+    provenance = '{"profile":"official"}';
   await mkdir(path.join(directory, 'runtime'));
   const runtime = path.join(directory, 'runtime');
   for (const [name, contents] of Object.entries({
@@ -84,11 +116,15 @@ test('packaged runtime validation checks bytes and provenance, not only version 
       licenseSha256: digest(license),
       provenanceSha256: digest(provenance),
       selection: 'candidate',
-      profile: 'diagnostic',
+      profile: 'official',
     }),
   }))
     await writeFile(path.join(runtime, name), contents);
   assert.equal((await validatePackagedWindowsRuntime(runtime)).selection, 'candidate');
+  assert.equal(
+    (await validatePackagedWindowsRuntime(runtime, { production: true })).profile,
+    'official',
+  );
   await writeFile(path.join(runtime, 'node.exe'), 'wrong binary with same version');
   await assert.rejects(validatePackagedWindowsRuntime(runtime), /node.exe.*hash/i);
   await writeFile(path.join(runtime, 'node.exe'), binary);
@@ -97,7 +133,7 @@ test('packaged runtime validation checks bytes and provenance, not only version 
 });
 
 test('source lock verification rejects modified cached archives before extraction', async (t) => {
-  const { verifyLockedFile } = await moduleScript('build-windows-runtime.mjs');
+  const { verifyLockedFile } = await moduleScript('fetch-windows-runtime.mjs');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-source-lock-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'archive');
@@ -119,8 +155,8 @@ test(
     const binary = await readFile(process.execPath);
     const license = 'Node.js is licensed for use as follows:\nlocal fixture license\n';
     const provenance = JSON.stringify({
+      profile: 'official',
       source: { signedChecksumsVerified: true },
-      build: { exitCode: 0, profile: 'diagnostic', opensslAssembly: false },
       binary: { sha256: digest(binary), licenseSHA256: digest(license) },
     });
     for (const [name, contents] of Object.entries({
@@ -145,7 +181,7 @@ test(
       directory: output,
     });
     assert.equal(manifest.selection, 'candidate');
-    assert.equal(manifest.profile, 'diagnostic');
+    assert.equal(manifest.profile, 'official');
     assert.equal(await readFile(path.join(output, 'provenance.json'), 'utf8'), provenance);
     assert.equal(await readFile(path.join(output, 'LICENSE.node'), 'utf8'), license);
     await writeFile(path.join(candidate, 'node.exe'), 'tampered');

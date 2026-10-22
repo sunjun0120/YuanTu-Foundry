@@ -29,7 +29,7 @@ use windows_sys::Win32::{
     Storage::FileSystem::{PIPE_ACCESS_DUPLEX, PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND},
     System::{JobObjects::*, Pipes::*, Threading::*},
 };
-use yuantu_appcontainer::account::{Account, credentials, password::Secret};
+use yuantu_sandbox::account::{Account, credentials, password::Secret};
 
 /// Exit code when the runner was lost; the host restarts the broker on demand.
 const RUNNER_LOST_EXIT: u32 = 3;

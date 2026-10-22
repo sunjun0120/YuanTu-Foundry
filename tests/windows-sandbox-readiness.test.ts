@@ -20,9 +20,7 @@ const runtime = { platform: 'win32', arch: 'x64', nodeVersion: '24.19.0', uv: '1
 test('Windows packaging validates runtime identity without a future libuv version gate', async () => {
   const { assertWindowsRuntime } = await script('windows-runtime.mjs');
   assert.doesNotThrow(() => assertWindowsRuntime({ ...runtime, uv: '1.52.1' }));
-  assert.doesNotThrow(() => assertWindowsRuntime(runtime, { enhanced: true }));
-  for (const uv of [undefined, 'unknown', '1.52'])
-    assert.throws(() => assertWindowsRuntime({ ...runtime, uv }, { enhanced: true }), /identity/i);
+  assert.doesNotThrow(() => assertWindowsRuntime({ ...runtime, uv: '2.0.0' }));
   for (const changed of [
     { platform: 'linux' },
     { arch: 'arm64' },
@@ -84,8 +82,6 @@ test('Windows runtime preparation records inspected runtime identity and protect
         .digest('hex'),
     );
     assert.equal(manifest.uvVersion, process.versions.uv);
-    assert.equal(manifest.enhancedCompatible, null);
-    assert.equal(manifest.enhancedCompatibilityChecked, false);
   }
 });
 
@@ -138,70 +134,16 @@ test('Windows acceptance refuses leftover leases and newly retained or changed A
   );
 });
 
-test('AppContainer pipe diagnostics require observed child exit and actual channel contents', async () => {
-  const { assessPipeScenario } = await script('check-windows-appcontainer-pipes.mjs');
-  const result = {
-    exitCode: 0,
-    cancelled: false,
-    stages: [{ stage: 'returned', status: 0, stdout: 'pipe-output' }],
-  };
-  assert.equal(assessPipeScenario('pipe-sync-output', result), true);
-  for (const invalid of [
-    { ...result, cancelled: true },
-    { ...result, exitCode: 1 },
-    { ...result, stages: [{ stage: 'before-spawn' }] },
-    { ...result, stages: [{ stage: 'returned', status: 1, stdout: 'pipe-output' }] },
-    { ...result, stages: [{ stage: 'returned', status: 0, stdout: '' }] },
-  ])
-    assert.equal(assessPipeScenario('pipe-sync-output', invalid), false);
-  assert.equal(assessPipeScenario('unknown', result), false);
-});
-
-test('AppContainer readiness separates initialization prerequisites from actual enforcement acceptance', async () => {
-  const { evaluateReadiness } = await script('check-windows-appcontainer.mjs');
-  const prerequisites = {
-    platform: 'win32',
-    runtime: { validated: true, compatible: null, uv: '1.52.1' },
-    signature: { valid: true, timestamped: true },
-    signedAssets: { validated: true },
-    preflight: { passed: true },
-    policy: { installed: true },
-    publicMode: false,
-    functionalAcceptance: false,
-  };
-  const report = evaluateReadiness(prerequisites);
-  assert.equal(report.canInitialize, true);
-  assert.equal(report.readyForAcceptance, true);
-  assert.equal(report.canEnable, false);
-  assert.deepEqual(report.blockers, ['runtime-capability', 'public-mode', 'functional-acceptance']);
-  const accepted = { ...prerequisites, publicMode: true, functionalAcceptance: true };
-  assert.equal(evaluateReadiness(accepted).canEnable, false);
-  assert.equal(
-    evaluateReadiness({ ...accepted, runtime: { ...accepted.runtime, compatible: true } })
-      .canEnable,
-    true,
-  );
-  const unavailable = evaluateReadiness({
-    ...prerequisites,
-    runtime: { validated: false, compatible: null },
-    signature: { valid: false },
-  });
-  assert.equal(unavailable.canInitialize, false);
-  assert.ok(unavailable.blockers.includes('runtime'));
-  assert.ok(unavailable.blockers.includes('helper-signature'));
-  for (const missing of [
-    { ...prerequisites, signature: { valid: true, timestamped: false } },
-    { ...prerequisites, signedAssets: { validated: false } },
-  ]) {
-    assert.equal(evaluateReadiness(missing).canInitialize, false);
-  }
-});
-
-test('enhanced packaging rejects unsigned, mismatched, overwritten and untimestamped helper assets', async () => {
-  const { assertPinnedHelperManifest } = await script('check-windows-appcontainer.mjs');
+test('protected packaging rejects unsigned, mismatched, overwritten and untimestamped helper assets', async () => {
+  const { assertPinnedHelperManifest } = await script('windows-helper-signature.mjs');
   const digest = 'a'.repeat(64);
   const signer = 'b'.repeat(64);
-  const manifest = { version: 1, helperSha256: digest, signerSha256: signer, timestamped: true };
+  const manifest = {
+    version: 1,
+    accountHelperSha256: digest,
+    signerSha256: signer,
+    timestamped: true,
+  };
   const signature = { valid: true, signerSha256: signer, timestamped: true };
   assert.doesNotThrow(() => assertPinnedHelperManifest(manifest, signature, digest));
   for (const [record, signed, hash] of [
@@ -210,57 +152,21 @@ test('enhanced packaging rejects unsigned, mismatched, overwritten and untimesta
     [manifest, signature, 'd'.repeat(64)],
     [{ ...manifest, timestamped: false }, signature, digest],
     [manifest, { ...signature, timestamped: false }, digest],
+    [{ ...manifest, accountHelperSha256: undefined }, signature, digest],
+    // A manifest from before the account executor pinned only the retired AppContainer helper.
+    [
+      { version: 1, helperSha256: digest, signerSha256: signer, timestamped: true },
+      signature,
+      digest,
+    ],
   ])
     assert.throws(() => assertPinnedHelperManifest(record, signed, hash), /signed helper/i);
 });
-
-test('account executor requires its own signed digest and cannot reuse the AppContainer digest', async () => {
-  const { assertPinnedHelperManifest } = await script('check-windows-appcontainer.mjs');
-  const signature = { valid: true, signerSha256: 'b'.repeat(64), timestamped: true };
-  const manifest = {
-    version: 1,
-    helperSha256: 'a'.repeat(64),
-    accountHelperSha256: 'c'.repeat(64),
-    signerSha256: 'b'.repeat(64),
-    timestamped: true,
-  };
-  assert.doesNotThrow(() =>
-    assertPinnedHelperManifest(manifest, signature, 'c'.repeat(64), 'yuantu-sandbox.exe'),
-  );
-  assert.throws(
-    () => assertPinnedHelperManifest(manifest, signature, 'a'.repeat(64), 'yuantu-sandbox.exe'),
-    /signed helper/i,
-  );
-  assert.throws(
-    () =>
-      assertPinnedHelperManifest(
-        { ...manifest, accountHelperSha256: undefined },
-        signature,
-        'c'.repeat(64),
-        'yuantu-sandbox.exe',
-      ),
-    /signed helper/i,
-  );
-  assert.throws(
-    () =>
-      assertPinnedHelperManifest(
-        manifest,
-        { ...signature, timestamped: false },
-        'c'.repeat(64),
-        'yuantu-sandbox.exe',
-      ),
-    /signed helper/i,
-  );
-});
-
 test('helper signing without an explicit certificate refuses before building or modifying assets', async () => {
   const helper = new URL('../scripts/sign-windows-sandbox.ps1', import.meta.url);
   assert.ok(existsSync(helper), 'Explicit-certificate signing workflow is missing');
   if (process.platform !== 'win32') return;
-  const binary = new URL(
-    '../packages/tools/windows-sandbox/yuantu-appcontainer.exe',
-    import.meta.url,
-  );
+  const binary = new URL('../packages/tools/windows-sandbox/yuantu-sandbox.exe', import.meta.url);
   const before = existsSync(binary) ? await readFile(binary) : undefined;
   await assert.rejects(
     promisify(execFile)('powershell.exe', [

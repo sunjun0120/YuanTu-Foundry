@@ -14,7 +14,7 @@ if (args.length) {
     throw new Error('Staged helper output must stay inside project scratch');
 }
 if (process.platform === 'win32') {
-  const crate = path.join(project, 'packages/tools/windows-sandbox/appcontainer');
+  const crate = path.join(project, 'packages/tools/windows-sandbox/native');
   const inheritedFlags = process.env.CARGO_ENCODED_RUSTFLAGS
     ? process.env.CARGO_ENCODED_RUSTFLAGS.split('\u001f')
     : (process.env.RUSTFLAGS ?? '').split(/\s+/).filter(Boolean);
@@ -36,20 +36,15 @@ if (process.platform === 'win32') {
   if (result.status !== 0)
     throw new Error(
       result.error?.message ??
-        'AppContainer helper compilation failed; inspect the Rust compiler diagnostics above',
+        'Sandbox helper compilation failed; inspect the Rust compiler diagnostics above',
     );
-  const source = path.join(crate, 'target/release/yuantu-appcontainer.exe');
+  const source = path.join(crate, 'target/release/yuantu-sandbox.exe');
   for (const destination of outputDirectory
     ? [outputDirectory]
     : ['packages/tools/windows-sandbox', 'dist/packages/tools/windows-sandbox']) {
     const directory = path.resolve(project, destination);
     await mkdir(directory, { recursive: true });
-    await copyFile(source, path.join(directory, 'yuantu-appcontainer.exe'));
-    // The sandbox account executor (exec/broker/runner and account maintenance) is built from the same crate.
-    await copyFile(
-      path.join(crate, 'target/release/yuantu-sandbox.exe'),
-      path.join(directory, 'yuantu-sandbox.exe'),
-    );
+    await copyFile(source, path.join(directory, 'yuantu-sandbox.exe'));
   }
-  console.log('Built native AppContainer helper (protocol 1) and sandbox account executor.');
+  console.log('Built the sandbox account executor (exec/broker/runner and account maintenance).');
 }

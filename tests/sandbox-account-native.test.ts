@@ -28,7 +28,7 @@ import { tempRoot } from './temp-fixture.ts';
 
 const helper = path.join(
   projectRoot,
-  'packages/tools/windows-sandbox/appcontainer/target/debug/yuantu-sandbox.exe',
+  'packages/tools/windows-sandbox/native/target/debug/yuantu-sandbox.exe',
 );
 const skip =
   process.platform !== 'win32'
@@ -137,7 +137,7 @@ test(
     // A forking test runner, through the shell like an acceptance check.
     const forks = path.join(
       projectRoot,
-      'packages/tools/windows-sandbox/appcontainer/tests/fixtures/forks',
+      'packages/tools/windows-sandbox/native/tests/fixtures/forks',
     );
     for (const name of ['a.test.cjs', 'b.test.cjs'])
       await import('node:fs/promises').then((fs) =>

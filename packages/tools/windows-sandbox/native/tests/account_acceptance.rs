@@ -466,7 +466,7 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let _ = std::fs::remove_file(&secret);
     let removed = run(&["account-remove", "--dev-direct"]);
     assert!(removed.status.success(), "{}", text(&removed));
-    let journal = yuantu_appcontainer::account::credentials::state_directory()
+    let journal = yuantu_sandbox::account::credentials::state_directory()
         .unwrap()
         .join("read-grants.json");
     let reads: Value = serde_json::from_slice(&std::fs::read(journal).unwrap()).unwrap();

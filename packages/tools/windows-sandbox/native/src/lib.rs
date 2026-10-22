@@ -1,7 +1,7 @@
-//! Shared by the AppContainer launcher and the sandbox account executor.
+//! Sandbox account provisioning, status and protected installation checks used by `yuantu-sandbox`.
 pub mod account;
 pub mod maintenance;
-pub mod network;
+pub(crate) mod wfp;
 
 use std::ptr::null_mut;
 use windows_sys::Win32::{
@@ -40,17 +40,6 @@ impl Drop for Sid {
             FreeSid(self.0);
         }
     }
-}
-pub fn profile_name(name: &str) -> Result<Vec<u16>> {
-    if !name.starts_with("Yuantu.Sandbox.")
-        || name.len() != 51
-        || !name[15..]
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() || b == b'-')
-    {
-        return Err("Profile identity must be a fresh Yuantu.Sandbox.UUID".into());
-    }
-    wide(name)
 }
 pub fn sid_text(sid: PSID) -> Result<String> {
     let mut text = null_mut();

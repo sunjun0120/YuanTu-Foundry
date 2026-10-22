@@ -37,9 +37,8 @@ if ($TestOnly) {
     $testDirectory = Join-Path $projectRoot '.scratch/windows-sandbox-test-signing'
     New-Item -ItemType Directory -Force -Path $testDirectory | Out-Null
     $assets = @(
-        @{ source = (Join-Path $projectRoot 'packages/tools/windows-sandbox/yuantu-appcontainer.exe'); name = 'yuantu-appcontainer.exe' },
         @{ source = (Join-Path $projectRoot 'packages/tools/windows-sandbox/yuantu-sandbox.exe'); name = 'yuantu-sandbox.exe' },
-        @{ source = (Join-Path $projectRoot '.scratch/windows-appcontainer-runtime/node-v24.19.0-libuv-2cadaa4/candidate-diagnostic/node.exe'); name = 'node.exe' }
+        @{ source = (Join-Path $projectRoot '.scratch/windows-runtime/node-v24.19.0-win-x64/node.exe'); name = 'node.exe' }
     )
     $results = @()
     foreach ($asset in $assets) {
@@ -76,7 +75,7 @@ try {
     [Environment]::SetEnvironmentVariable('YUANTU_WINDOWS_SANDBOX_SIGNER_SHA256', $oldSigner, 'Process')
 }
 $helperDigests = @{}
-foreach ($helperName in @('yuantu-appcontainer.exe', 'yuantu-sandbox.exe')) {
+foreach ($helperName in @('yuantu-sandbox.exe')) {
     $signedHelper = Join-Path $signingDirectory $helperName
     Copy-Item -LiteralPath (Join-Path $helperBuildDirectory $helperName) -Destination $signedHelper -Force
     $signArguments = @('sign', '/fd', 'SHA256', '/sha1', $CertificateThumbprint, '/s', 'My', '/tr', $timestampUri.AbsoluteUri, '/td', 'SHA256')
@@ -97,10 +96,11 @@ if ($RuntimeCandidateDirectory) {
     if (-not $runtimeDirectory.StartsWith(($projectRoot + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime signing must stay inside the project.' }
     $provenancePath = Join-Path $runtimeDirectory 'provenance.json'
     $runtimeProvenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
-    if ($runtimeProvenance.build.profile -ne 'production' -or $runtimeProvenance.build.opensslAssembly -ne $true -or $runtimeProvenance.build.exitCode -ne 0) { throw 'Only a successfully built production runtime may receive release signing.' }
+    if ($runtimeProvenance.profile -ne 'official' -or $runtimeProvenance.source.signedChecksumsVerified -ne $true) { throw 'Only a verified official Node runtime may receive release signing.' }
+    if ($runtimeProvenance.binary.upstreamSha256) { throw 'Runtime already carries release signing; prepare a fresh official candidate.' }
     $runtimeInput = Join-Path $runtimeDirectory 'node.exe'
-    $unsignedDigest = (Get-FileHash -LiteralPath $runtimeInput -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($unsignedDigest -ne $runtimeProvenance.binary.sha256) { throw 'Runtime changed before signing.' }
+    $upstreamDigest = (Get-FileHash -LiteralPath $runtimeInput -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($upstreamDigest -ne $runtimeProvenance.binary.sha256) { throw 'Runtime changed before signing.' }
     $signedRuntime = Join-Path $signingDirectory 'node.exe'
     Copy-Item -LiteralPath $runtimeInput -Destination $signedRuntime -Force
     $runtimeArguments = @('sign', '/fd', 'SHA256', '/sha1', $CertificateThumbprint, '/s', 'My', '/tr', $timestampUri.AbsoluteUri, '/td', 'SHA256')
@@ -112,18 +112,19 @@ if ($RuntimeCandidateDirectory) {
     $runtimeSignature = Get-AuthenticodeSignature -LiteralPath $signedRuntime
     if ($runtimeSignature.Status -ne 'Valid' -or -not $runtimeSignature.TimeStamperCertificate -or $runtimeSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) { throw 'Production Node needs the same trusted signer and timestamp.' }
     Copy-Item -LiteralPath $signedRuntime -Destination $runtimeInput -Force
-    $runtimeProvenance.binary | Add-Member -NotePropertyName unsignedSha256 -NotePropertyValue $unsignedDigest -Force
+    # Replaces the OpenJS Foundation signature with the pinned release signer; the upstream bytes stay recorded.
+    $runtimeProvenance.binary | Add-Member -NotePropertyName upstreamSha256 -NotePropertyValue $upstreamDigest -Force
     $runtimeProvenance.binary.sha256 = (Get-FileHash -LiteralPath $runtimeInput -Algorithm SHA256).Hash.ToLowerInvariant()
     $runtimeProvenance.binary | Add-Member -NotePropertyName authenticode -NotePropertyValue 'Valid' -Force
     $runtimeProvenance.binary | Add-Member -NotePropertyName signerSha256 -NotePropertyValue $signerDigest -Force
     $runtimeProvenance | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $provenancePath -Encoding utf8
 }
-foreach ($helperName in @('yuantu-appcontainer.exe', 'yuantu-sandbox.exe')) {
+foreach ($helperName in @('yuantu-sandbox.exe')) {
     $compiledHelper = Join-Path $projectRoot ('dist/packages/tools/windows-sandbox/' + $helperName)
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $compiledHelper) | Out-Null
     $signedHelper = Join-Path $signingDirectory $helperName
     Copy-Item -LiteralPath $signedHelper -Destination (Join-Path $projectRoot ('packages/tools/windows-sandbox/' + $helperName)) -Force
     Copy-Item -LiteralPath $signedHelper -Destination $compiledHelper -Force
 }
-@{ version = 1; signerSha256 = $signerDigest; helperSha256 = $helperDigests['yuantu-appcontainer.exe']; accountHelperSha256 = $helperDigests['yuantu-sandbox.exe']; timestamped = $true; signedAt = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $signingDirectory 'manifest.json')
-Write-Output 'Signed pinned helper prepared. This does not initialize WFP or enable AppContainer.'
+@{ version = 1; signerSha256 = $signerDigest; accountHelperSha256 = $helperDigests['yuantu-sandbox.exe']; timestamped = $true; signedAt = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $signingDirectory 'manifest.json')
+Write-Output 'Signed pinned helper prepared. This does not initialize sandbox accounts or WFP.'

@@ -108,7 +108,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yuantu-appcontainer"
+name = "yuantu-sandbox"
 version = "0.1.0"
 dependencies = [
  "serde",

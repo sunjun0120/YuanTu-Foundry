@@ -37,15 +37,15 @@ while ($pending.Count) {
 }
 $runtime = Join-Path $root 'resources/runtime'
 $manifest = Get-Content -LiteralPath (Join-Path $runtime 'runtime.json') -Raw | ConvertFrom-Json
-if ($manifest.profile -ne 'production' -or $manifest.selection -ne 'candidate') { throw 'Protected install requires the production candidate.' }
-$helper = Join-Path $root 'resources/app/dist/packages/tools/windows-sandbox/yuantu-appcontainer.exe'
+if ($manifest.profile -ne 'official' -or $manifest.selection -ne 'candidate') { throw 'Protected install requires the release-signed official runtime candidate.' }
+$helper = Join-Path $root 'resources/app/dist/packages/tools/windows-sandbox/yuantu-sandbox.exe'
 $compiledSigning = Get-Content -LiteralPath (Join-Path $root 'resources/app/dist/packages/tools/windows-sandbox/helper-signature.json') -Raw | ConvertFrom-Json
-if ($compiledSigning.helperSha256 -ne $manifest.signedHelper.helperSha256 -or $compiledSigning.signerSha256 -ne $ExpectedSignerSha256) { throw 'Installed signing assets differ from the pinned helper manifest.' }
+if ($compiledSigning.accountHelperSha256 -ne $manifest.signedHelper.accountHelperSha256 -or $compiledSigning.signerSha256 -ne $ExpectedSignerSha256) { throw 'Installed signing assets differ from the pinned helper manifest.' }
 foreach ($asset in @(
     @{ file = (Join-Path $runtime 'node.exe'); hash = $manifest.sha256 },
     @{ file = (Join-Path $runtime 'LICENSE.node'); hash = $manifest.licenseSha256 },
     @{ file = (Join-Path $runtime 'provenance.json'); hash = $manifest.provenanceSha256 },
-    @{ file = $helper; hash = $manifest.signedHelper.helperSha256 }
+    @{ file = $helper; hash = $manifest.signedHelper.accountHelperSha256 }
 )) {
     if ((Get-FileHash -LiteralPath $asset.file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.hash) { throw ('Installed asset hash changed: ' + $asset.file) }
 }
@@ -62,6 +62,6 @@ if ($Phase -ne 'installed') {
     throw 'Protected upgrade/uninstall remains blocked until multi-user descendant shutdown and crash-safe WFP lifecycle acceptance in a recoverable Windows environment.'
 }
 # The native check also verifies hardlinks, loader protection and pinned path handles.
-& $helper network-preflight
+& $helper install-preflight
 if ($LASTEXITCODE -ne 0) { throw 'Native protected-install preflight failed.' }
-Write-Output 'Protected installed assets and native preflight passed. No network policy changed.'
+Write-Output 'Protected installed assets and native preflight passed. No sandbox account or network policy changed.'

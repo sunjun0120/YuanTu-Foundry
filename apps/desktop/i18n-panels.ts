@@ -223,8 +223,8 @@ export const panelMessages: Record<string, [string, string]> = {
   'sandboxSetup.read.add': ['授予只读访问', 'Allow read access'],
   'sandboxSetup.read.remove': ['撤销只读访问', 'Revoke read access'],
   'sandboxSetup.exitUnconfirmed': [
-    '初始化尚未结束，清理状态未确认。重新打开应用后请检查增强隔离状态。',
-    'Initialization is still pending and cleanup is unconfirmed. Check enhanced isolation status after reopening the app.',
+    '初始化尚未结束，清理状态未确认。重新打开应用后请检查沙箱账户状态。',
+    'Initialization is still pending and cleanup is unconfirmed. Check sandbox account status after reopening the app.',
   ],
   'sandboxSetup.note': [
     '初始化或修复需要一次管理员确认。就绪后，原生沙箱会自动使用专用低权限账户；卸载后恢复基础隔离。',
@@ -282,10 +282,6 @@ export const panelMessages: Record<string, [string, string]> = {
   'sandboxSetup.development': [
     '开发版本不提供管理员初始化，请使用受保护目录中的签名安装版本。',
     'Administrator initialization requires a signed release in a protected installation directory.',
-  ],
-  'sandboxSetup.runtime': [
-    '无法验证当前安装包的运行时，请修复安装或使用可信的签名版本。',
-    'The installed runtime could not be verified. Repair the installation or use a trusted signed release.',
   ],
   'sandboxSetup.release': [
     '安装位置或发布签名未通过检查，无法进行管理员初始化。',

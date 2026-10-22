@@ -16,7 +16,7 @@ module.exports = {
     ...base.win,
     signExecutable: true,
     // These are signed before hashing; signing them again invalidates provenance.
-    signExts: ['!yuantu-appcontainer.exe', '!yuantu-sandbox.exe', '!node.exe'],
+    signExts: ['!yuantu-sandbox.exe', '!node.exe'],
     signtoolOptions: {
       certificateSha1: certificate,
       signingHashAlgorithms: ['sha256'],
@@ -25,7 +25,7 @@ module.exports = {
   },
   afterSign: async (context) => {
     const { validateWindowsPackage } = await import('./scripts/check-windows-package.mjs');
-    const { inspectHelperSignature } = await import('./scripts/check-windows-appcontainer.mjs');
+    const { inspectHelperSignature } = await import('./scripts/windows-helper-signature.mjs');
     const path = require('node:path');
     const report = await validateWindowsPackage(context.appOutDir, { production: true });
     const signature = await inspectHelperSignature(

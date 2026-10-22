@@ -4,16 +4,21 @@ import path from 'node:path';
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
+/**
+ * A runtime candidate is an official Node release proven against the release key's signed checksums.
+ * Production additionally requires our release re-signing, which records the upstream bytes it replaced.
+ */
 export async function validateRuntimeCandidate(directory, { production = false } = {}) {
   const provenanceBytes = await readFile(path.join(directory, 'provenance.json'));
-  const provenance = JSON.parse(provenanceBytes.toString('utf8').replace(/^\uFEFF/, ''));
-  if (provenance.source?.signedChecksumsVerified !== true || provenance.build?.exitCode !== 0)
-    throw new Error('Candidate needs verified source checksums and a successful build');
+  const provenance = JSON.parse(provenanceBytes.toString('utf8').replace(/^﻿/, ''));
+  if (provenance.profile !== 'official' || provenance.source?.signedChecksumsVerified !== true)
+    throw new Error('Candidate must be an official Node release with verified signed checksums');
   if (
     production &&
-    (provenance.build.profile !== 'production' || provenance.build.opensslAssembly !== true)
+    (!/^[a-f0-9]{64}$/.test(provenance.binary?.signerSha256 ?? '') ||
+      !/^[a-f0-9]{64}$/.test(provenance.binary?.upstreamSha256 ?? ''))
   )
-    throw new Error('Production packaging refuses a diagnostic or unqualified build profile');
+    throw new Error('Production packaging requires a release-signed official runtime');
   const binary = await readFile(path.join(directory, 'node.exe'));
   if (sha256(binary) !== provenance.binary?.sha256)
     throw new Error('Candidate binary hash differs from provenance');
@@ -27,9 +32,7 @@ export async function validateRuntimeCandidate(directory, { production = false }
     provenanceBytes,
     licenseBytes,
     sha256: sha256(binary),
-    profile:
-      provenance.build.profile ??
-      (provenance.build.opensslAssembly === false ? 'diagnostic' : 'unknown'),
+    profile: provenance.profile,
   };
 }
 
@@ -46,7 +49,7 @@ export async function validatePackagedWindowsRuntime(directory, { production = f
     )
       throw new Error(`Packaged ${name} hash differs from runtime manifest`);
   }
-  if (production && (manifest.selection !== 'candidate' || manifest.profile !== 'production'))
-    throw new Error('Protected production packaging requires a production candidate');
+  if (production && (manifest.selection !== 'candidate' || manifest.profile !== 'official'))
+    throw new Error('Protected production packaging requires the official runtime candidate');
   return manifest;
 }

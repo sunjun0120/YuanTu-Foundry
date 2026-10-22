@@ -18,7 +18,7 @@
 5. 进程树：取消、超时、agent-host 退出后，没有存活的沙箱进程。
 6. 日常使用不弹 UAC；只有初始化（和修复、卸载）需要管理员一次。
 
-非目标：交互式终端（ConPTY）仍走现有路径；AppContainer 原型保持不动；不做 SYSTEM 服务。
+非目标：交互式终端（ConPTY）仍走现有路径；不做 SYSTEM 服务。AppContainer 原型已于 2026-10-22 删除（与 Codex 一致，不用 AppContainer：开发工具链兼容性差，且账户后端已覆盖其隔离目标）。
 
 ## 2. 模式选择
 
@@ -41,7 +41,7 @@ agent-host (桌面用户, Medium)
 
 ### 3.1 原生二进制
 
-在现有 crate `packages/tools/windows-sandbox/appcontainer` 中新增第二个 bin `yuantu-sandbox`。`maintenance.rs`（固定操作 UAC 入口、安装位置校验）和 `network.rs`（WFP）移到 crate 的 `lib.rs` 供两个 bin 共用。子命令：
+crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppContainer 启动器后改名）只产出 bin `yuantu-sandbox`。`maintenance.rs`（签名钉扎、安装位置校验）和 `wfp.rs`（WFP 引擎、事务与安全描述符校验）在 crate 的 `lib.rs` 中。子命令：
 
 | 子命令               | 身份           | 作用                                                           |
 | -------------------- | -------------- | -------------------------------------------------------------- |
@@ -89,7 +89,7 @@ agent-host (桌面用户, Medium)
 
 ### 3.4 exec
 
-- 参数：`exec --broker <管道名> --request <私有请求文件>`。请求文件位于命令的宿主私有控制目录（沿用现有 AppContainer 后端的做法），内容为 JSON：`{version:1, argv[], cwd, env{}, workspaceRoot, scratch, files:'read-write'|'read-only', timeoutMs?}`，上限 1 MiB，读后删除。
+- 参数：`exec --broker <管道名> --request <私有请求文件>`。请求文件位于命令的宿主私有控制目录，内容为 JSON：`{version:1, argv[], cwd, env{}, workspaceRoot, scratch, files:'read-write'|'read-only', timeoutMs?}`，上限 1 MiB，读后删除。
 - 连接 broker 后校验服务端：`GetNamedPipeServerProcessId` → 打开进程令牌，用户 SID 必须等于自己的 SID，且镜像路径等于已安装的 `yuantu-sandbox.exe`。
 - 发送请求 + 自己的 PID + 三个 std 句柄值；等待 `{started, pid}`、`{exit, code}` 或 `{error, kind, message}`。
 - 以子进程退出码退出；broker 断开或出错时向 stderr 打印 `SANDBOX_LAUNCH_FAILED_PREFIX` 前缀的一行（复用 `sandbox-launch-failure.ts` 的识别）并以 `125` 退出。
@@ -111,7 +111,7 @@ agent-host (桌面用户, Medium)
 
 1. 创建或重设本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`：随机 32 字节密码、密码永不过期、用户不能改密码；属于 `Users` 组和新建的本地组 `YuanTuSandboxUsers`（不存在则创建；组内只允许这两个账户）。
 2. 登录权限：授予本地交互登录所需的权限（`CreateProcessWithLogonW` 使用交互登录类型）；`SeDenyRemoteInteractiveLogonRight`、`SeDenyNetworkLogonRight` 拒绝；在 `HKLM\...\Winlogon\SpecialAccounts\UserList` 中隐藏，不出现在登录界面。
-3. WFP：复用 `network.rs` 的 provider/sublayer/事务与安全描述符校验；过滤条件从 AppContainer 包 SID 改为 `FWPM_CONDITION_ALE_USER_ID`（离线账户 SID），覆盖 IPv4/IPv6 的 ALE connect、recv/accept、resource assignment（listen），包括回环。联网账户不加过滤。
+3. WFP：用 `wfp.rs` 的 provider/sublayer/事务与安全描述符校验；过滤条件为 `FWPM_CONDITION_ALE_USER_ID`（离线账户 SID），覆盖 IPv4/IPv6 的 ALE connect、recv/accept、resource assignment（listen），包括回环。联网账户不加过滤。
 4. Secondary Logon（seclogon）服务：若被禁用则设为手动启动。
 5. 返回两个账户 SID，供非提权部分写入状态文件。
 

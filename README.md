@@ -375,15 +375,15 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 `YUANTU_SANDBOX` 接受 `native`、`windows`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用受限令牌，macOS 使用 Seatbelt；其他系统明确拒绝。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
-文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径。因此 Windows 基础后端拒绝严格进程只读及断网请求。Windows AppContainer 增强后端已有未启用原型，兼容运行时、签名资产、受保护安装与真实隔离验收仍是前置条件；基础验收入口为 `npm.cmd run check:windows-sandbox`，后端边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)，增强就绪条件见 [就绪检查脚本](scripts/check-windows-appcontainer.mjs)。
+文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径。因此 Windows 基础后端拒绝严格进程只读及断网请求。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，WFP 断网，子进程可正常 fork）；沙箱账户就绪时 `native` 自动选它。基础验收入口为 `npm.cmd run check:windows-sandbox`，两个后端的边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
-Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复跑；AppContainer 管道能力通过 `npm.cmd run check:windows-appcontainer-pipes` 实际诊断，未通过时非零退出，不用版本号代替能力证据。管道诊断默认检查执行该脚本的 Node；检查独立候选时，需用候选 `node.exe` 执行 [管道检查脚本](scripts/check-windows-appcontainer-pipes.mjs)。
+Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复跑。
 
-独立 Windows Node 候选的源码、管道回移补丁与许可证身份由 [运行时来源锁](build/windows-runtime.lock.json) 固定，[构建脚本](scripts/build-windows-runtime.mjs) 区分 `diagnostic` 与 `production` profile。`npm.cmd run check:windows-runtime-source` 重验诊断候选来源，`npm.cmd run package:windows:candidate:dir` 打包诊断候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。诊断候选不能作为正式发行或增强隔离验收通过的依据。
+Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩包、`node.exe` 与许可证哈希及发布者 GPG 指纹由 [运行时锁](build/windows-runtime.lock.json) 固定。`npm.cmd run fetch:windows-runtime` 下载并以签名的 `SHASUMS256.txt.asc` 校验后生成候选（`.scratch/windows-runtime/node-v<版本>-win-x64`），`npm.cmd run check:windows-runtime-source` 重验已有候选，`npm.cmd run package:windows:candidate:dir` 打包该候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。
 
-`npm.cmd run package:windows:protected` 使用 [受保护安装配置](electron-builder.protected.config.cjs)：强制代码签名、按机器安装、固定安装目录，并在签名后核对运行时和签名者。此入口要求显式设置 `WINDOWS_SANDBOX_PROTECTED_RELEASE=1`、`WINDOWS_SIGN_CERTIFICATE_SHA1`、无凭据的 HTTPS `WINDOWS_SIGN_TIMESTAMP_URL`，以及指向已签名 production 候选的 `WINDOWS_SANDBOX_NODE_CANDIDATE`；签名辅助程序还需匹配固定签名清单。该配置是保留的发行门禁，不能因历史文档删除而移除；正式发行和增强隔离仍需完成目标平台安装、实际文件/网络隔离及 WFP 验收。
+`npm.cmd run package:windows:protected` 使用 [受保护安装配置](electron-builder.protected.config.cjs)：强制代码签名、按机器安装、固定安装目录，并在签名后核对运行时和签名者。此入口要求显式设置 `WINDOWS_SANDBOX_PROTECTED_RELEASE=1`、`WINDOWS_SIGN_CERTIFICATE_SHA1`、无凭据的 HTTPS `WINDOWS_SIGN_TIMESTAMP_URL`，以及指向官方运行时候选的 `WINDOWS_SANDBOX_NODE_CANDIDATE`。发布前用 `sign-windows-sandbox.ps1 -Sign -RuntimeCandidateDirectory <候选>` 以固定签名者重新签名 `node.exe`（替换 OpenJS Foundation 签名，来源记录保留上游哈希），签名辅助程序还需匹配固定签名清单。该配置是保留的发行门禁，不能因历史文档删除而移除；正式发行仍需完成目标平台安装与沙箱账户、WFP 的实际验收。
 
 全部原生 Git 工具与 stdio MCP 在非 `host` 模式仍明确拒绝：它们尚未接入原生进程启动器。远程 HTTP/SSE MCP、网页抓取和浏览器不受命令沙箱约束。显式 `host` 表示无操作系统隔离，命令可访问宿主其他位置和网络。macOS 取消按进程组执行，主动脱离进程组的子孙回收尚未解决；后台记录不会将其标为整棵进程树清理已确认。macOS 真机隔离与签名/公证验收仍需在 Mac 完成：打包走 `scripts/prepare-macos-package.mjs` 与 `npm run package:macos`，真机探针走 `npm run check:macos-sandbox`。
 
@@ -739,7 +739,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 287 个 | `tests/*.test.ts` |
+| 行为测试文件 | 285 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -769,7 +769,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它。查询会核对源文件清单、大小与 mtime，发现外部新增、删除、重命名或改写后刷新索引；可选完整哈希核对用于大小与 mtime 均未变化的改写。调用方可取消刷新等待，共享构建继续供后续查询使用。单文件超过 8 MiB、读取失败或清单扫描截断时，覆盖状态明确标为不完整；读取失败的文件会在后续查询重试。凭据与依赖目录同样不进入索引。
 - **符号分页绑定查询与来源版本**：将 `repo_map` 返回的 `nextCursor` 作为 `cursor`，保留同一 `query` 即可续页；索引与已启动语言服务器均支持分页。查询、来源版本变化或游标失效后会拒绝续页，应从第一页重新检索。
 - **快速搜索后端需要固定资产**：`literal` + 区分大小写可走固定版本的 ripgrep，仅使用 `build/search-assets.lock.json` 中已记录 SHA-256 且校验通过的二进制；打包时由 `scripts/copy-search-assets.mjs` 核验后放入应用资源。没有可用资产、或执行环境无法安全启动进程时，一律回退内置流式扫描，不回退 host 进程。
-- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝；AppContainer 原型尚未作为公开模式启用，初始化前置检查不能代替真实增强隔离验收。沙箱内启动的进程无法再创建需要继承管道的子进程——Node 的 `child_process` 会得到 `spawn EPERM`——所以 `node --test`、vitest、jest 一类会 fork 的测试运行器在默认模式下不可用；不 fork 的测试文件（直接 `node tests/x.test.mjs`）可以运行。需要这类工具时应切换到「完全权限」，或把这类命令交给主机环境执行。
+- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝。沙箱内启动的进程无法再创建需要继承管道的子进程——Node 的 `child_process` 会得到 `spawn EPERM`——所以 `node --test`、vitest、jest 一类会 fork 的测试运行器在基础后端下不可用；不 fork 的测试文件（直接 `node tests/x.test.mjs`）可以运行。需要这类工具时应在设置中初始化 Windows 沙箱账户（`windows-account` 后端没有这个限制），或切换到「完全权限」。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。

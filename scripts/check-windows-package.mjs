@@ -3,10 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, validatePackagedWindowsRuntime } from './windows-runtime-product.mjs';
 import { assertWindowsRuntime, inspectWindowsRuntime } from './windows-runtime.mjs';
-import {
-  assertPinnedHelperManifest,
-  inspectHelperSignature,
-} from './check-windows-appcontainer.mjs';
+import { assertPinnedHelperManifest, inspectHelperSignature } from './windows-helper-signature.mjs';
 
 const project = fileURLToPath(new URL('..', import.meta.url));
 export async function validateWindowsPackage(
@@ -45,12 +42,7 @@ export async function validateWindowsPackage(
     if (JSON.stringify(signingAsset) !== JSON.stringify(manifest.signedHelper))
       throw new Error('Packaged helper signing manifest was not preserved');
   }
-  for (const name of [
-    'yuantu-appcontainer.exe',
-    'yuantu-sandbox.exe',
-    'acl.ps1',
-    'appcontainer-acl.ps1',
-  ]) {
+  for (const name of ['yuantu-sandbox.exe', 'acl.ps1']) {
     const relative = `dist/packages/tools/windows-sandbox/${name}`;
     const packaged = path.join(resources, 'app', relative);
     const digest = sha256(await readFile(packaged));
@@ -62,7 +54,6 @@ export async function validateWindowsPackage(
         manifest.signedHelper,
         await inspectHelperSignature(packaged),
         digest,
-        name,
       );
   }
   await readFile(path.join(resources, 'app/dist/apps/agent-host/main.js'));

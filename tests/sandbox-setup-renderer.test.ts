@@ -115,13 +115,13 @@ test('unsupported platforms and browser bridges keep administrator controls hidd
   }
 });
 
-test('an unavailable runtime cannot enable the initialization button', async () => {
+test('an unverified release cannot enable the initialization button', async () => {
   const commands: SandboxSetupCommand[] = [];
   const fixture = await page(async (command) => {
     commands.push(command);
     return {
       ok: true,
-      view: { supported: true, ready: false, installed: false, reason: 'runtime' },
+      view: { supported: true, ready: false, installed: false, reason: 'release' },
     };
   });
   try {

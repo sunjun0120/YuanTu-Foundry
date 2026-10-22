@@ -1,18 +1,93 @@
-//! Fixed-operation UAC entry. Never elevate a script, shell, user-supplied path,
-//! source checkout, per-user installation, or unsigned development executable.
-use crate::{Handle, Result, network, sid_text, wide, win};
+//! Protected-installation checks for every elevated operation. Never elevate a script, shell,
+//! user-supplied path, source checkout, per-user installation, or unsigned development executable.
+use crate::{Handle, Result, sid_text, wide, win};
 use std::{
+    ffi::c_void,
     mem::size_of,
     path::Path,
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
     Foundation::*,
-    Security::{Authorization::*, *},
+    Security::{Authorization::*, Cryptography::*, WinTrust::*, *},
     Storage::FileSystem::*,
-    System::{Com::*, Threading::*},
-    UI::{Shell::*, WindowsAndMessaging::SW_HIDE},
 };
+
+/// No external executable or script can be invoked by an elevated operation.
+/// An unsigned development helper, or a helper without a compile-time publisher
+/// pin, is refused before any system policy can change.
+pub fn verify_release() -> Result<()> {
+    let expected = option_env!("YUANTU_WINDOWS_SANDBOX_SIGNER_SHA256").unwrap_or("");
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Administrator initialization requires a release helper with a pinned signer certificate".into());
+    }
+    let executable = std::env::current_exe().map_err(|_| "Cannot locate signed initializer")?;
+    let filename = wide(executable.to_str().ok_or("Invalid initializer path")?)?;
+    let mut file = WINTRUST_FILE_INFO {
+        cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: filename.as_ptr(),
+        ..Default::default()
+    };
+    let mut data = WINTRUST_DATA {
+        cbStruct: size_of::<WINTRUST_DATA>() as u32,
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WINTRUST_DATA_0 { pFile: &mut file },
+        dwStateAction: WTD_STATEACTION_VERIFY,
+        dwProvFlags: WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
+        ..Default::default()
+    };
+    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    let verified =
+        unsafe { WinVerifyTrust(null_mut(), &mut action, &mut data as *mut _ as *mut c_void) };
+    let result = (|| {
+        if verified != 0 {
+            return Err(format!(
+                "Initializer Authenticode verification failed: {verified:#x}"
+            ));
+        }
+        let provider = unsafe { WTHelperProvDataFromStateData(data.hWVTStateData) };
+        if provider.is_null() {
+            return Err("Initializer signature state is unavailable".into());
+        }
+        let signer = unsafe { WTHelperGetProvSignerFromChain(provider, 0, 0, 0) };
+        if signer.is_null() {
+            return Err("Initializer signer is unavailable".into());
+        }
+        let certificate = unsafe { WTHelperGetProvCertFromChain(signer, 0) };
+        if certificate.is_null() || unsafe { (*certificate).pCert.is_null() } {
+            return Err("Initializer signer certificate is unavailable".into());
+        }
+        let certificate = unsafe { &*(*certificate).pCert };
+        let mut digest = [0u8; 32];
+        let mut length = digest.len() as u32;
+        unsafe {
+            win(
+                CryptHashCertificate2(
+                    wide("SHA256")?.as_ptr(),
+                    0,
+                    null(),
+                    certificate.pbCertEncoded,
+                    certificate.cbCertEncoded,
+                    digest.as_mut_ptr(),
+                    &mut length,
+                ),
+                "Hash release signer certificate",
+            )?;
+        }
+        let actual: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        if length != 32 || !actual.eq_ignore_ascii_case(expected) {
+            return Err("Initializer publisher differs from the signed release pin".into());
+        }
+        Ok(())
+    })();
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    unsafe {
+        WinVerifyTrust(null_mut(), &mut action, &mut data as *mut _ as *mut c_void);
+    }
+    result
+}
 
 fn trusted(sid: PSID) -> Result<bool> {
     if sid.is_null() {
@@ -161,7 +236,7 @@ fn protected_handle(path: &Path, part: InstallationPart) -> Result<Handle> {
 
 pub fn preflight() -> Result<Vec<Handle>> {
     // Missing compile-time pin refuses before any shell/UAC operation.
-    network::verify_release()?;
+    verify_release()?;
     let executable =
         std::env::current_exe().map_err(|_| "Cannot locate initializer installation")?;
     // Only local drive paths. A network-share ACL is not a machine trust root.
@@ -190,75 +265,8 @@ pub fn preflight() -> Result<Vec<Handle>> {
         handles.push(protected_handle(path, part)?);
     }
     // Recheck the signature once path components and file are pinned.
-    network::verify_release()?;
+    verify_release()?;
     Ok(handles)
-}
-
-pub fn setup() -> Result<u32> {
-    let _installation = preflight()?;
-    let executable = std::env::current_exe().map_err(|_| "Cannot locate initializer")?;
-    let filename = wide(executable.to_str().ok_or("Invalid initializer path")?)?;
-    let directory = wide(
-        executable
-            .parent()
-            .and_then(Path::to_str)
-            .ok_or("Invalid initializer directory")?,
-    )?;
-    let verb = wide("runas")?;
-    let operation = wide("network-initialize")?;
-    let com = unsafe { CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) };
-    if com < 0 {
-        return Err(format!("Initialize maintenance shell: {com:#x}"));
-    }
-    struct Com;
-    impl Drop for Com {
-        fn drop(&mut self) {
-            unsafe {
-                CoUninitialize();
-            }
-        }
-    }
-    let _com = Com;
-    let mut execute = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
-        lpVerb: verb.as_ptr(),
-        lpFile: filename.as_ptr(),
-        lpParameters: operation.as_ptr(),
-        lpDirectory: directory.as_ptr(),
-        nShow: SW_HIDE,
-        ..Default::default()
-    };
-    unsafe {
-        win(
-            ShellExecuteExW(&mut execute),
-            "Administrator initialization was cancelled or failed",
-        )?;
-    }
-    if execute.hProcess.is_null() {
-        return Err("Initializer did not return a process handle".into());
-    }
-    let process = Handle(execute.hProcess);
-    if unsafe { WaitForSingleObject(process.0, INFINITE) } != WAIT_OBJECT_0 {
-        return Err(
-            "Administrator initialization completion is unknown; inspect policy status".into(),
-        );
-    }
-    let mut exit = 0;
-    unsafe {
-        win(
-            GetExitCodeProcess(process.0, &mut exit),
-            "Read initializer completion",
-        )?;
-    }
-    if exit != 0 {
-        return Err(format!(
-            "Administrator initialization failed with exit code {exit}; existing policy was not replaced"
-        ));
-    }
-    // Do not report success merely because the elevated process exited zero.
-    network::status()?;
-    Ok(0)
 }
 
 #[cfg(test)]
@@ -289,6 +297,13 @@ mod tests {
             LocalFree(sd);
         }
         result
+    }
+    #[test]
+    fn development_initializer_refuses_before_any_system_mutation() {
+        if option_env!("YUANTU_WINDOWS_SANDBOX_SIGNER_SHA256").is_none() {
+            assert!(verify_release().unwrap_err().contains("pinned signer"));
+            assert!(preflight().is_err());
+        }
     }
     #[test]
     fn system_owned_read_only_user_access_is_allowed() {
