@@ -18,6 +18,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# A newer push to the same branch makes the older run's result moot, so it is cancelled rather than finished.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -82,8 +86,11 @@ jobs:
       - run: npm ci
       - run: npm run coverage
 
+  # The Windows and macOS jobs are the slow ones. A feature-branch push runs only the Linux jobs; main, a pull
+  # request, or a manual run (workflow_dispatch on the branch) runs these too.
   desktop-smoke:
     needs: check
+    if: github.ref == 'refs/heads/main' || github.event_name != 'push'
     runs-on: windows-latest
     continue-on-error: false
     env:
@@ -113,6 +120,7 @@ jobs:
 
   native-macos:
     needs: check
+    if: github.ref == 'refs/heads/main' || github.event_name != 'push'
     runs-on: macos-latest
     env:
       FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
