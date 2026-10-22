@@ -3,6 +3,7 @@ export function installProcessProbe(
   config: object,
   violate: (rule: string, message: string) => never,
 ): void;
+export function windowsSandboxStateDirectory(root: string): string;
 export function readIsolationViolations(isolation: Isolation): Array<Record<string, unknown>>;
 export function settleProcesses(
   isolation: Isolation,

@@ -1,6 +1,9 @@
 param([Parameter(Mandatory=$true)][string]$Operation, [Parameter(Mandatory=$true)][string]$Root, [Parameter(Mandatory=$true)][string]$Journal, [string]$Sid, [string[]]$ControlRoots = @())
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# In-box modules only, by absolute path: auto-loading analyses every installed module first (see IN_BOX_MODULES).
+$PSModuleAutoLoadingPreference = 'None'
+foreach ($module in 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') { Import-Module -Name ($PSHOME + '\Modules\' + $module + '\' + $module + '.psd1') }
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Add-Type -TypeDefinition @'
 using System;
@@ -21,6 +24,7 @@ public static class YuantuAcl {
   [DllImport("advapi32.dll")] static extern uint SetSecurityInfo(SafeFileHandle h, int kind, uint flags, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertSecurityDescriptorToStringSecurityDescriptorW(IntPtr sd, uint revision, uint flags, out IntPtr text, out uint length);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint revision, out IntPtr sd, out uint length);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern bool SetKernelObjectSecurity(SafeFileHandle h, uint info, IntPtr sd);
   [DllImport("advapi32.dll")] static extern bool GetSecurityDescriptorDacl(IntPtr sd, out bool present, out IntPtr acl, out bool defaulted);
   [DllImport("advapi32.dll")] static extern bool GetSecurityDescriptorSacl(IntPtr sd, out bool present, out IntPtr acl, out bool defaulted);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
@@ -73,14 +77,52 @@ public static class YuantuAcl {
         if ((byte)ace.AceType == 0x11) ace.AceFlags &= ~AceFlags.Inherited;
       }
     }
+    // A legacy DACL (no auto-inherit flag) stores its inherited entries as plain explicit ACEs. Re-applying it with
+    // SetSecurityInfo during grant keeps those and adds the parent's inherited copies, while an object the Host
+    // atomically replaced carries only the inherited copies. An explicit ACE identical to an inherited ACE of the
+    // same DACL grants nothing more, so drop it before comparing; every other entry still has to match.
+    if (descriptor.DiscretionaryAcl != null) DropInheritedDuplicates(descriptor.DiscretionaryAcl);
     // .NET Framework's Access|Audit SDDL conversion omits mandatory-label ACEs. Compare the complete
     // binary descriptor so integrity SID/policy changes can never disappear from this check.
     var bytes = new byte[descriptor.BinaryLength];
     descriptor.GetBinaryForm(bytes, 0);
     return Convert.ToBase64String(bytes);
   }
+  static string AceKey(GenericAce ace) {
+    var copy = ace.Copy();
+    copy.AceFlags &= ~AceFlags.Inherited;
+    var bytes = new byte[copy.BinaryLength];
+    copy.GetBinaryForm(bytes, 0);
+    return Convert.ToBase64String(bytes);
+  }
+  /** Removes explicit ACEs that repeat an inherited ACE of the same ACL exactly. */
+  static void DropInheritedDuplicates(RawAcl acl) {
+    var inherited = new HashSet<string>(StringComparer.Ordinal);
+    foreach (GenericAce ace in acl) if ((ace.AceFlags & AceFlags.Inherited) != 0) inherited.Add(AceKey(ace));
+    for (int i = acl.Count - 1; i >= 0; i--)
+      if ((acl[i].AceFlags & AceFlags.Inherited) == 0 && inherited.Contains(AceKey(acl[i]))) acl.RemoveAce(i);
+  }
   public static bool RecoveryMatches(string expected, string actual) {
     return String.Equals(RecoveryDescriptor(expected), RecoveryDescriptor(actual), StringComparison.Ordinal);
+  }
+  public static void Restore(string path, string before) {
+    var recorded = new RawSecurityDescriptor(before);
+    if ((recorded.ControlFlags & (ControlFlags.DiscretionaryAclAutoInherited | ControlFlags.DiscretionaryAclProtected)) != 0) {
+      Apply(path, before);
+      return;
+    }
+    // A legacy DACL (neither auto-inherited nor protected) cannot go back through SetSecurityInfo: that re-derives
+    // inheritance and returns its stored entries as explicit ACEs plus inherited duplicates. Write the DACL as
+    // recorded instead. The kernel marks a DACL written that way over an auto-inherited one protected; setting the
+    // label afterwards through SetSecurityInfo clears that mark and leaves the recorded entries untouched.
+    IntPtr sd, sacl; uint length; bool present, defaulted;
+    if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(before, 1, out sd, out length)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      if(!SetKernelObjectSecurity(Handle(path), 4, sd)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Restore file security");
+      if(!GetSecurityDescriptorSacl(sd, out present, out sacl, out defaulted)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      uint code = SetSecurityInfo(Handle(path), 1, 0x10, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, sacl);
+      if(code != 0) throw new Win32Exception((int)code, "Restore file label");
+    } finally { LocalFree(sd); }
   }
   public static void Apply(string path, string sddl) {
     IntPtr sd, dacl, sacl; uint length; bool present, defaulted;
@@ -192,10 +234,13 @@ if ($Operation -eq 'validate-control') {
   # Check all original objects before restoring any of them. Concurrent operator ACL edits are never overwritten.
   foreach ($entry in $record.entries) {
     if (-not $entry.applied) { throw ('Incomplete ACL grant; reconcile original descriptors manually using journal: ' + $Journal) }
-    if ((Test-Path -LiteralPath $entry.path) -and $entry.applied -and (-not ([YuantuAcl]::RecoveryMatches([string]$entry.applied, [YuantuAcl]::Capture($entry.path))))) { throw ('ACL changed during sandbox execution; retained recovery journal: ' + $Journal) }
+    if (-not (Test-Path -LiteralPath $entry.path)) { continue }
+    $actual = [YuantuAcl]::Capture($entry.path)
+    # Name the object and both descriptors: an operator reconciling the journal needs to see what differs.
+    if (-not ([YuantuAcl]::RecoveryMatches([string]$entry.applied, $actual))) { throw ('ACL changed during sandbox execution; retained recovery journal: ' + $Journal + '; object: ' + $entry.path + '; expected: ' + $entry.applied + '; actual: ' + $actual) }
   }
   foreach ($entry in $record.entries) {
-    if (Test-Path -LiteralPath $entry.path) { [YuantuAcl]::Apply($entry.path, [string]$entry.before) }
+    if (Test-Path -LiteralPath $entry.path) { [YuantuAcl]::Restore($entry.path, [string]$entry.before) }
   }
   # Objects created during the lease have no previous label. Do not leave a new Low-integrity write surface.
   $originalPaths = @{}

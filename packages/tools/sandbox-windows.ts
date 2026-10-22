@@ -36,7 +36,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
-import { testResource } from '../platform/test-lifecycle.ts';
+import { testResource, testWindowsSandboxStateDirectory } from '../platform/test-lifecycle.ts';
 import { createOwnedFileLease } from './owned-file-lease.ts';
 import { EnvironmentBlockedError } from './environment-blocked.ts';
 import {
@@ -387,6 +387,26 @@ function powershellPath(): string {
   const root = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
   return path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
+/**
+ * The environment for our own PowerShell helpers, with TEMP and TMP where `Add-Type` can compile.
+ *
+ * `Add-Type` compiles through csc, which fails with "The filename, directory name, or volume label syntax is
+ * incorrect" when the temp path has characters outside the ANSI code page: a CJK temp directory on an
+ * English-locale Windows. Setting TEMP inside the PowerShell process is too late, and an 8.3 short name does not
+ * help because the path is expanded back to its long form. So a helper whose temp path is not ASCII compiles in the
+ * nearest ancestor of that path whose name is ASCII: still the temp directory's owner's own tree, which already holds
+ * the launcher assembly. Only the helper's environment changes; a command keeps its own TEMP.
+ */
+function helperEnvironment(base: NodeJS.ProcessEnv = toolEnvironment()): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const name of ['TEMP', 'TMP']) {
+    let directory = env[name];
+    while (directory && /[^\x20-\x7e]/.test(directory) && path.dirname(directory) !== directory)
+      directory = path.dirname(directory);
+    env[name] = directory;
+  }
+  return env;
+}
 /** The environment the sandboxed command gets: the project's sanitised set, with temp pointed at its scratch. */
 function commandEnvironment(scratch: string, extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...toolEnvironment(), ...(extra ?? {}) };
@@ -431,6 +451,7 @@ function powerShellLiteral(value: string): string {
 function bootstrap(dll: string, source: string): string {
   return [
     "$ErrorActionPreference = 'Stop'",
+    ...IN_BOX_MODULES,
     // Without this a non-interactive PowerShell writes progress records to stderr as CLIXML, which buries the
     // real error and makes every failure message start with a serialised object graph.
     '$ProgressPreference = "SilentlyContinue"',
@@ -479,6 +500,18 @@ function starterEnvironment(spec: Spec, base: NodeJS.ProcessEnv): NodeJS.Process
     ),
   };
 }
+/**
+ * The first lines of every helper program: load the in-box modules it uses from `$PSHOME`, and nothing else.
+ *
+ * Left to auto-loading, the first cmdlet a process calls makes PowerShell analyse every module on PSModulePath,
+ * which always includes Program Files: on a machine with many modules installed (GitHub's Windows runner) that
+ * cost 12 to 40 seconds per helper process, and a sandboxed command needs several. Explicit imports by absolute path
+ * also mean a module someone installed cannot stand in for a cmdlet these security helpers rely on.
+ */
+const IN_BOX_MODULES = [
+  "$PSModuleAutoLoadingPreference = 'None'",
+  "foreach ($module in 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security') { Import-Module -Name ($PSHOME + '\\Modules\\' + $module + '\\' + $module + '.psd1') }",
+];
 /** The `-EncodedCommand` argument: UTF-16LE base64 of the bootstrap, so no shell ever parses it. */
 function launcherArgs(program: string): string[] {
   return [
@@ -639,6 +672,7 @@ const aclSource = (): string =>
 const ACL_VARIABLE = 'YUANTU_SANDBOX_ACL_SOURCE';
 const aclBootstrap = [
   "$ErrorActionPreference = 'Stop'",
+  ...IN_BOX_MODULES,
   "$ProgressPreference = 'SilentlyContinue'",
   `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:${SPEC_VARIABLE})))`,
   `$bytes = [Convert]::FromBase64String($env:${ACL_VARIABLE})`,
@@ -700,9 +734,15 @@ async function acquireProcessLease(state: string): Promise<() => Promise<void>> 
     await lease.closing;
   };
 }
-/** Account-derived, so it stays independent of TEMP/USERPROFILE and MSIX AppData virtualization. */
+/**
+ * Account-derived, so it stays independent of TEMP/USERPROFILE and MSIX AppData virtualization. Only the in-process
+ * test preload can substitute a per-file directory; no environment variable or workspace file reaches this.
+ */
 export function windowsSandboxStateDirectory(): string {
-  return path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows');
+  return (
+    testWindowsSandboxStateDirectory() ??
+    path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows')
+  );
 }
 const OWNER_LOCK = 'workspace-owner.lock';
 /**
@@ -892,7 +932,7 @@ async function journalOperation(
 ): Promise<void> {
   const result = await run(powershellPath(), launcherArgs(aclBootstrap), {
     env: {
-      ...toolEnvironment(),
+      ...helperEnvironment(),
       [ACL_VARIABLE]: aclSource(),
       [SPEC_VARIABLE]: encode(JSON.stringify({ operation, root, journal, sid, ...preparation })),
     },
@@ -1020,6 +1060,7 @@ export function windowsSandboxAvailable(
     await journalOperation('validate-control', directory, '-', '-');
     const source = await writeLauncherSource(dll);
     const args = launcherArgs(bootstrap(dll, source));
+    const starter = helperEnvironment(toolEnvironment(env));
     const start = await run(powershell, args, {
       cwd: directory,
       env: starterEnvironment(
@@ -1028,7 +1069,7 @@ export function windowsSandboxAvailable(
           cwd: directory,
           env: commandEnvironment(directory),
         },
-        toolEnvironment(env),
+        starter,
       ),
     });
     if (start.code !== 0)
@@ -1042,7 +1083,7 @@ export function windowsSandboxAvailable(
           cwd: directory,
           env: commandEnvironment(directory),
         },
-        toolEnvironment(env),
+        starter,
       ),
     });
     const wrote = await stat(probe).then(
@@ -1064,7 +1105,7 @@ export function windowsSandboxAvailable(
             cwd: directory,
             env: commandEnvironment(directory),
           },
-          toolEnvironment(env),
+          starter,
         ),
       });
       retained = await stat(deleteProbe).then(
@@ -1137,7 +1178,7 @@ async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
       cwd: working,
       env: starterEnvironment(
         { command: windowsCommandLine(request), cwd: working, env, sids: [sid, scratchSid] },
-        toolEnvironment(),
+        helperEnvironment(),
       ),
       windowsVerbatimArguments: false,
       backend: 'windows',

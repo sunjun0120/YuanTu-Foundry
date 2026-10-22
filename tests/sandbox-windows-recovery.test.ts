@@ -101,25 +101,32 @@ test(
   },
 );
 
+/** Runs `script` with the helper's own `YuantuAcl` type loaded, so fixtures use the exact primitives under test. */
+async function withYuantuAcl(script: string) {
+  const source = await readFile(helper, 'utf8');
+  const declarations = source.slice(
+    source.indexOf('$ErrorActionPreference'),
+    source.indexOf('function Safe-Tree'),
+  );
+  return run(powershell, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-EncodedCommand',
+    Buffer.from(`${declarations}\n${script}`, 'utf16le').toString('base64'),
+  ]);
+}
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
 test('recovery refuses an operator change to the mandatory integrity level', windows, async (t) => {
   const { root, journal, operation } = await fixture(t);
   const file = path.join(root, 'operator-label.txt');
   await writeFile(file, 'keep');
   await operation('grant');
   const rootBefore = aclEvidence((await run('icacls.exe', [root])).stdout);
-  const source = await readFile(helper, 'utf8');
-  const declarations = source.slice(
-    source.indexOf('$ErrorActionPreference'),
-    source.indexOf('function Safe-Tree'),
+  const fileLiteral = literal(file);
+  const native = await withYuantuAcl(
+    `$descriptor = [Security.AccessControl.RawSecurityDescriptor]::new([YuantuAcl]::Capture(${fileLiteral})); [YuantuAcl]::Apply(${fileLiteral}, $descriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::Access) + 'S:(ML;;NW;;;ME)'); [YuantuAcl]::Capture(${fileLiteral})`,
   );
-  const fileLiteral = `'${file.replaceAll("'", "''")}'`;
-  const changeLabel = `${declarations}\n$descriptor = [Security.AccessControl.RawSecurityDescriptor]::new([YuantuAcl]::Capture(${fileLiteral})); [YuantuAcl]::Apply(${fileLiteral}, $descriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::Access) + 'S:(ML;;NW;;;ME)'); [YuantuAcl]::Capture(${fileLiteral})`;
-  const native = await run(powershell, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-EncodedCommand',
-    Buffer.from(changeLabel, 'utf16le').toString('base64'),
-  ]);
   assert.match(native.stdout, /S:.*;;;ME\)/, 'fixture changed the real mandatory-label SID');
   const operatorLabel = aclEvidence((await run('icacls.exe', [file])).stdout);
   assert.match(operatorLabel, /Medium Mandatory Level/, 'fixture must actually change the label');
@@ -127,4 +134,56 @@ test('recovery refuses an operator change to the mandatory integrity level', win
   assert.ok(await stat(journal));
   assert.equal(aclEvidence((await run('icacls.exe', [file])).stdout), operatorLabel);
   assert.equal(aclEvidence((await run('icacls.exe', [root])).stdout), rootBefore);
+});
+
+// A DACL without the auto-inherit flag stores the entries it inherited as plain explicit ACEs; GitHub's Windows
+// runner profile is like that. Grant re-applies it and gains the parent's inherited copies of the same entries,
+// and a Host atomic replacement carries only the inherited copies. These are that runner's descriptors.
+const sandbox = 'S-1-5-21-4195478302-1640033086-4225024992-801695889';
+const inheritedOnly = `D:AI(A;ID;0x1301bf;;;${sandbox})(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)`;
+const legacyApplied = `D:AI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)(A;ID;0x1301bf;;;${sandbox})(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;LA)S:AI(ML;;NW;;;LW)`;
+
+test(
+  'recovery accepts an atomic replacement of a legacy DACL and still sees real changes',
+  windows,
+  async () => {
+    const matches = async (expected: string, actual: string) =>
+      (
+        await withYuantuAcl(`[YuantuAcl]::RecoveryMatches('${expected}', '${actual}')`)
+      ).stdout.trim();
+    assert.equal(await matches(legacyApplied, `${inheritedOnly}S:AI(ML;ID;NW;;;LW)`), 'True');
+    assert.equal(
+      await matches(legacyApplied, `D:AI(A;;FA;;;WD)${inheritedOnly.slice(5)}S:AI(ML;ID;NW;;;LW)`),
+      'False',
+      'an added explicit entry is still a change',
+    );
+    assert.equal(
+      await matches(
+        legacyApplied,
+        `D:AI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)(A;ID;FA;;;SY)S:AI(ML;;NW;;;LW)`,
+      ),
+      'False',
+      'a lost inherited grant is still a change',
+    );
+  },
+);
+
+test('recovery writes a legacy DACL back exactly as recorded', windows, async (t) => {
+  const { root, journal, operation } = await fixture(t);
+  const file = path.join(root, 'legacy.txt');
+  await writeFile(file, 'before');
+  await operation('grant');
+  // Record the file as the legacy runner profile does: every entry it inherits, stored explicitly and without AI.
+  const record = JSON.parse((await readFile(journal, 'utf8')).replace(/^﻿/, '')) as {
+    entries: { path: string; before: string }[];
+  };
+  const entry = record.entries.find((candidate) => candidate.path === file)!;
+  entry.before = entry.before.replace(/^D:AI/, 'D:').replaceAll(';ID;', ';;');
+  await writeFile(journal, JSON.stringify(record));
+  await operation('restore');
+  const restored = (await withYuantuAcl(`[YuantuAcl]::Capture(${literal(file)})`)).stdout.trim();
+  // SetSecurityInfo would return these entries as explicit ACEs plus inherited duplicates, or mark them protected.
+  assert.equal(restored.split('S:')[0], entry.before);
+  assert.doesNotMatch(restored, /\(ML;/, 'no integrity label is left behind');
+  assert.doesNotMatch(restored, new RegExp(workspaceSandboxSid(root)), 'the grant is gone');
 });
