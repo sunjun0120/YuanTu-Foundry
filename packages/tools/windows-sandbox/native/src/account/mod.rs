@@ -10,6 +10,7 @@ pub mod read_refresh;
 pub mod read_roots;
 pub mod setup_lock;
 pub mod setup_marker;
+pub mod ssh_config;
 pub mod status;
 pub mod users;
 
