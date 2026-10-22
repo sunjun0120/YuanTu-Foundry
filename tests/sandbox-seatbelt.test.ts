@@ -30,6 +30,9 @@ test('profile separates workspace write effects from private scratch and network
   const readonly = seatbeltProfile({ ...base, files: 'read-only', network: 'denied' });
   assert.match(readonly, /\(deny default\)/);
   assert.doesNotMatch(readonly, /\(allow file-read\*\)/);
+  // macOS 26 startup needs the root listing; that must stay a literal, never a subtree grant.
+  assert.match(readonly, /\(allow file-read-data \(literal "\/"\)\)/);
+  assert.doesNotMatch(readonly, /\(subpath "\/"\)/);
   assert.doesNotMatch(readonly, /\(allow network\*/);
   assert.doesNotMatch(readonly, /\(allow file-write\* \(subpath "\/work\/project"\)/);
   assert.match(readonly, /\(allow file-write\* \(require-all \(subpath "\/private\/tmp\/call"\)/);
