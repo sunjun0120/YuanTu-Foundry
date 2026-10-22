@@ -118,6 +118,17 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 4. Secondary Logon（seclogon）服务：若被禁用则设为手动启动。
 5. 返回两个账户 SID，供非提权部分写入凭据和初始化标记。
 
+初始化与卸载的提权部分都在机器级互斥锁 `Global\YuanTuSandboxSetup`（只允许 SYSTEM 与管理员打开，等待 30 秒）内执行，两次运行的账户、组和 WFP 改动不会交错；持有者崩溃视为释放。
+
+卸载的提权部分按以下顺序，任何一步之前都不移除保护：
+
+1. 禁用存在的沙箱账户（`UF_ACCOUNTDISABLE`），阻止新的登录；
+2. 结束这两个账户的全部进程（快照后从进程令牌复核 SID，防 PID 复用），并等它们的登录会话全部退出，上限 10 秒；
+3. 删除离线账户的 WFP 过滤；
+4. 删除账户、登录权限、隐藏项与组。
+
+第 1–2 步失败时恢复账户原标志并返回错误，WFP 与账户保持原样。初始化遇到已存在但被禁用的账户（中断的卸载）会重新启用。参照 Codex `setup_mutex.rs`、`uninstall_windows/processes.rs`（不含它为 SYSTEM 清理服务保留的登录）。
+
 ### 4.2 用户入口（`account-setup` / `account-uninstall`）
 
 1. 生成两个密码。当前进程**已经提权**时，直接在本进程执行 §4.1 和 §4.2 的收尾；否则创建交接管道（`FIRST_PIPE_INSTANCE`，DACL：当前用户 + Administrators），用 `ShellExecuteExW(runas)` 以固定参数 `account-initialize --handoff <管道名>` 提权，密码只经管道传输，从不落盘、不进命令行。两条路径共用“建户 → 保存凭据 → 默认读取授权 → 写标记”的同一段代码。
@@ -201,6 +212,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 | 凭据解密失败或 logon 失败（密码被外部改动）              | 标记“需要修复”，提示重新初始化（会重设密码）                                                           |
 | 标记仍有效但账户/WFP 被外部删除                          | 命令失败时提示去设置页修复或重新初始化；`account-status --verify` 给出真实问题码                       |
 | runner 启动失败（seclogon 停止、密码失效等）             | exec 输出 launch-failed 前缀行，退出 125；错误提示去设置页修复或重新初始化                             |
+| 卸载时沙箱账户仍有进程或登录会话未在期限内退出           | 卸载失败，恢复账户标志，WFP 与账户保留；提示稍后重试                                                   |
 | runner 崩溃                                              | 进行中命令 `runner-lost`；下次请求重启 runner                                                          |
 | 工作区租约冲突                                           | 沿用现有提示（另一个 Host 持有租约等），在审批前检查                                                   |
 | ACL 恢复冲突                                             | 沿用现有日志保留与 `sandbox-recover`                                                                   |
