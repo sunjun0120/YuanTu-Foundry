@@ -22,8 +22,11 @@ use windows_sys::Win32::{
 use yuantu_sandbox::account::{
     Account, credentials, firewall, grants,
     password::{self, Secret},
-    read_refresh, setup_marker, status, users,
+    read_refresh, setup_lock, setup_marker, status, users,
 };
+
+/// How long an elevated setup or uninstall waits for another one to finish before giving up.
+const SETUP_LOCK_TIMEOUT_MS: u32 = 30_000;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,6 +110,7 @@ fn require_elevated() -> Result<()> {
 
 /// Accounts, group, rights, sign-in hiding, Secondary Logon, then the offline account's network filters.
 fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> {
+    let _lock = setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS)?;
     let sids = users::provision(passwords)?;
     let offline = sids
         .iter()
@@ -118,6 +122,7 @@ fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> 
 }
 
 fn remove_everything() -> Result<()> {
+    let _lock = setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS)?;
     firewall::remove_filters()?;
     users::remove()
 }

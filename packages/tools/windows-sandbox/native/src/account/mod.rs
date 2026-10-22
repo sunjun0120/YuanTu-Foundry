@@ -7,6 +7,7 @@ pub mod grants;
 pub mod password;
 pub mod read_refresh;
 pub mod read_roots;
+pub mod setup_lock;
 pub mod setup_marker;
 pub mod status;
 pub mod users;
