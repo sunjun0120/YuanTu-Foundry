@@ -26,6 +26,7 @@ pub struct Status {
     /// SID of the sandbox group, the trustee of every workspace grant.
     pub group: Option<String>,
     /// Directories a sandboxed command may read, and who added them: the settings page lists these.
+    #[serde(rename = "readRoots")]
     pub read_roots: Vec<grants::reads::ReadRootView>,
 }
 
@@ -274,5 +275,21 @@ mod tests {
         assert!(!report.ready);
         assert!(report.problems.contains(&"accounts-missing"));
         serde_json::to_string(&report).unwrap();
+    }
+
+    #[test]
+    fn the_status_names_its_read_roots_the_way_the_host_parses_them() {
+        let report = Status {
+            version: 1,
+            ready: false,
+            problems: Vec::new(),
+            details: Vec::new(),
+            accounts: Vec::new(),
+            group: None,
+            read_roots: Vec::new(),
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json.get("readRoots").is_some(), "{json}");
+        assert!(json.get("read_roots").is_none(), "{json}");
     }
 }
