@@ -29,6 +29,9 @@ jobs:
         with:
           node-version: '24'
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/tools/windows-sandbox/appcontainer -> target
       - name: Helper unit and execution-path tests
         run: cargo test --locked --manifest-path packages/tools/windows-sandbox/appcontainer/Cargo.toml
       - name: Sandbox account real acceptance

@@ -92,6 +92,9 @@ jobs:
     needs: check
     if: github.ref == 'refs/heads/main' || github.event_name != 'push'
     runs-on: windows-latest
+    # A hung sandbox helper used to run the acceptance step into its per-test timeouts for ~20 minutes. The
+    # ceiling bounds that; it is set above a healthy run, whose full duration has not been measured yet.
+    timeout-minutes: 40
     continue-on-error: false
     env:
       # The UI suites launch real windows one after another; a single flaky assertion must not hide the rest.
@@ -108,6 +111,9 @@ jobs:
       - name: Windows platform regressions
         run: node scripts/run-tests.mjs tests/desktop-installation.test.ts tests/windows-install-safety.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/tools/windows-sandbox/appcontainer -> target
       - name: Windows enhanced helper safety and refusal regressions
         run: |
           npm run build:windows-sandbox
