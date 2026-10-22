@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
+import { choosePermissionPreset } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 
@@ -414,7 +415,6 @@ test(
       description: 'create approved.txt',
       trigger: { kind: 'interval', enabled: true, everyMinutes: 60 },
     });
-    store.scheduleImmediateRun(session.id, task.id);
     store.close();
     let requests = 0;
     const url = await httpFixture(t, (_body, res) => {
@@ -457,6 +457,12 @@ test(
     });
     const page = await app.firstWindow();
     page.setDefaultTimeout(20000);
+    await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await choosePermissionPreset(page, 'guarded');
+    // Schedule only after the session's approval policy is in force.
+    const scheduled = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+    scheduled.scheduleImmediateRun(session.id, task.id);
+    scheduled.close();
     const card = page.locator('.task-card').first();
     await card.waitFor();
     const deadline = Date.now() + 20000;

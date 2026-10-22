@@ -8,6 +8,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
+import { choosePermissionPreset } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 /**
  * This suite asserts the product's own sandbox default, so it must not run on the isolation harness's override.
@@ -151,6 +152,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   await idle();
   await page.locator('#new-session').click();
   await idle();
+  await choosePermissionPreset(page, 'guarded');
   // A session that has delegated nothing shows no catalog: the trigger is a count of children, and a
   // "0 个子代理" pill would be a control with nothing behind it.
   assert.equal(await page.locator('#open-subagents').isVisible(), false);
@@ -466,7 +468,7 @@ test(
     );
     assert.equal(
       (await page.locator('#statistics-tokens').innerText()).trim(),
-      '110 tok · 缓存命中 80%',
+      '本会话累计 110 tok（含缓存读取） · 缓存命中 80%',
     );
     await mkdir(artifactPath('statistics'), { recursive: true });
     await page.evaluate(() => {
@@ -593,11 +595,11 @@ test(
     let page = await launch();
     assert.equal((await page.locator('#attach-image').innerText()).trim(), '+');
     await page.locator('#permission-trigger').click();
-    // Three rungs, not the approval modes that used to live here: the chip writes where a run executes and how
+    // Four presets: the chip writes where a run executes and how
     // much it may do without asking, as one choice.
-    assert.equal(await page.locator('#permission-menu [role=menuitemradio]').count(), 3);
+    assert.equal(await page.locator('#permission-menu [role=menuitemradio]').count(), 4);
     assert.equal(
-      await page.locator('#permission-menu [data-preset=guarded]').getAttribute('aria-checked'),
+      await page.locator('#permission-menu [data-preset=auto]').getAttribute('aria-checked'),
       'true',
     );
     await mkdir(artifactPath(''), { recursive: true });
@@ -1015,7 +1017,6 @@ test(
     await group.locator(':scope > summary').click();
     await page.locator('#live-reasoning > summary').click();
     releases[0]();
-    await page.getByRole('button', { name: '允许一次', exact: true }).click();
     await waitForPage(page, async () =>
       (await window.yuantu.invoke({ type: 'snapshot' })).state.session.tools.some(
         (call) => call.name === 'run_command',

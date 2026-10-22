@@ -31,6 +31,18 @@ export function verificationNudge(body) {
   return last?.role === 'user' && messageText(last.content).includes('no verification checks yet');
 }
 
+/** Approval-specific fixtures choose guarded explicitly instead of relying on the auto default. */
+export async function choosePermissionPreset(page, preset) {
+  await page.locator('#permission-trigger').click();
+  await page.locator(`#permission-menu [data-preset="${preset}"]`).click();
+  await page.waitForFunction(
+    (value) =>
+      document.querySelector('#permission-mode').value === value &&
+      !document.querySelector('#permission-mode').disabled,
+    preset,
+  );
+}
+
 /** Polls `check` every 100 ms until it is truthy, failing after `ms`. */
 export async function waitFor(check, ms = 15000) {
   const end = Date.now() + ms;

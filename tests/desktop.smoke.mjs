@@ -9,7 +9,12 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { artifactPath, verificationNudge, waitFor } from './desktop-smoke-support.mjs';
+import {
+  artifactPath,
+  verificationNudge,
+  waitFor,
+  choosePermissionPreset,
+} from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
@@ -83,7 +88,6 @@ test(
     );
     await page.locator('#prompt').fill('Verify the output file');
     await page.locator('#send').click();
-    await page.getByRole('button', { name: '允许一次', exact: true }).click();
     await page.waitForFunction(() =>
       document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
     );
@@ -256,7 +260,6 @@ test(
     const firstCardNode = await first.elementHandle();
     await page.locator('#prompt').fill('THIRD_QUESTION');
     await page.locator('#send').click();
-    await page.getByRole('button', { name: '允许一次', exact: true }).click();
     await page.waitForFunction(
       async () =>
         (await window.yuantu.invoke({ type: 'snapshot' })).state.session.running &&
@@ -355,6 +358,7 @@ test(
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await choosePermissionPreset(page, 'guarded');
     await page.locator('#prompt').fill('run the background fixture');
     await page.locator('#send').click();
     await page.getByRole('button', { name: '允许一次', exact: true }).waitFor();
@@ -533,9 +537,7 @@ require(${JSON.stringify(entry)});
         /Timed out|Timeout/,
         'an asynchronous false condition must keep waiting until the deadline',
       );
-      await page.waitForFunction(
-        () => document.querySelector('#permission-mode').value === 'guarded',
-      );
+      await page.waitForFunction(() => document.querySelector('#permission-mode').value === 'auto');
       assert.doesNotMatch(
         await readFile(errors, 'utf8'),
         /could not apply the session sandbox|Agent Host is not ready/,
@@ -566,13 +568,13 @@ test(
     const url = await httpFixture(t, (body, res) => {
       calls++;
       const last = body.messages.at(-1);
-      const prompt =
+      const texts =
         typeof last.content === 'string'
-          ? last.content
-          : last.content
-              .filter((block) => block.type === 'text')
-              .map((block) => block.text)
-              .join('');
+          ? [last.content]
+          : last.content.filter((block) => block.type === 'text').map((block) => block.text);
+      const prompt = texts.findLast((text) =>
+        ['读取项目', '创建文件', '拒绝写入', '取消写入'].includes(text),
+      );
       if (prompt === '读取项目') {
         sendFrames(
           res,
@@ -696,6 +698,7 @@ test(
     };
     const audit = async () =>
       page.evaluate(async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.audit);
+    await choosePermissionPreset(page, 'guarded');
     await send('读取项目');
     await page.getByText('处理完成。项目内容已核对。', { exact: true }).waitFor();
     await idle();
@@ -831,6 +834,7 @@ test(
     );
     await page.locator(`[data-session-id="${original}"]`).click();
     await page.locator('#messages').getByText('读取项目', { exact: true }).waitFor();
+    await choosePermissionPreset(page, 'guarded');
     await send('取消写入');
     await page.getByRole('button', { name: '允许一次' }).waitFor();
     await app.close();
@@ -930,6 +934,7 @@ test(
     const page = await app.firstWindow();
     page.setDefaultTimeout(12000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
+    await choosePermissionPreset(page, 'guarded');
     await page.locator('#prompt').fill('修改 count');
     await page.locator('#send').click();
     await page.locator('.approval .diff-added').waitFor();
