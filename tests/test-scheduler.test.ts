@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { acquireResourceLease } from '../scripts/test-resource-lease.mjs';
 import { readFileReport } from '../scripts/test-report-merge.mjs';
+import { lastReportedCase } from '../scripts/test-scheduler.mjs';
 import { sourceFingerprint } from '../scripts/test-source-fingerprint.mjs';
 import { projectRoot } from './process-fixture.ts';
 import {
@@ -97,6 +98,28 @@ test('reports reject missing terminal markers, truncated JSON and foreign file s
   const result = await readFileReport(target, file, root);
   assert.equal(result.problem, undefined);
   assert.equal(result.zeroTestFiles, 1, 'a genuinely filtered empty file is legal');
+});
+
+test('watchdog diagnostics preserve the case reported before termination even when its name is a file path', async (t) => {
+  const root = await directory(t),
+    file = path.join(root, '真实🙂 case.test.ts'),
+    timings = path.join(root, 'report.ndjson');
+  const reported = { kind: 'case', file, name: file, status: 'passed', durationMs: 5 };
+  const snapshot = JSON.stringify(reported) + '\n';
+  // Ending a worker can append a synthetic file failure after the watchdog has fired.
+  await writeFile(
+    timings,
+    snapshot + JSON.stringify({ ...reported, status: 'failed', durationMs: 1500 }) + '\n',
+  );
+  assert.deepEqual(await lastReportedCase(timings, Buffer.byteLength(snapshot)), reported);
+  assert.equal(await lastReportedCase(timings, 0), undefined);
+  assert.equal(await lastReportedCase(path.join(root, 'not-created.ndjson'), 0), undefined);
+  const unfinished = '{"kind":"case","name":"未完成🙂';
+  await writeFile(timings, snapshot + unfinished + '"}\n');
+  assert.deepEqual(
+    await lastReportedCase(timings, Buffer.byteLength(snapshot + unfinished) - 1),
+    reported,
+  );
 });
 
 test('machine resource lease excludes another process and an aborted waiter does not remove the owner', async (t) => {
