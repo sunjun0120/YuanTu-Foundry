@@ -266,8 +266,12 @@ function attach(next: CarrierService): CarrierService {
       window.webContents.send('yuantu:subagent-delta', delta);
   });
   // Usage and activity change once a second during a model call; sending them on their own channel keeps
-  // that from serialising the session (images included) across IPC every time the numbers move.
+  // that from serialising the session (images included) across IPC every time the numbers move. A state still
+  // waiting to go out is sent first, as for the other channels: the window replaces its whole state with each
+  // push, so a batched push taken before this delta and sent after it would put the old activity back — a run
+  // whose request was already out then read "preparing the request" until the model's first token arrived.
   unsubscribeStatisticsDelta = next.subscribeStatisticsDelta((delta) => {
+    flushState();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:statistics-delta', delta);
   });

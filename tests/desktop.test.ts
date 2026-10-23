@@ -660,3 +660,19 @@ test('the audit window is compared by reference and not serialized', () => {
   assert.deepEqual(sender.diff(snapshot(audit)).sections, {});
   assert.ok(sender.diff(snapshot(Object.freeze([{ seq: 1 }, { seq: 2 }]))).sections.audit);
 });
+
+test('every delta channel sends a waiting state before its own frame', async () => {
+  // The window replaces its whole state with each push, and pushes are batched to the next tick. A delta sent
+  // ahead of a push taken before it is then undone by that push: a statistics delta that skipped this put
+  // "preparing the request" back on screen while the model was already answering
+  // (`tests/desktop-language.smoke.mjs`, "a stalled title allows the reply").
+  const source = await readFile(path.resolve('apps/desktop/main.ts'), 'utf8');
+  const channels = [...source.matchAll(/next\.(subscribe\w*Delta)\(\(delta\) => \{\n([^\n]*)\n/g)];
+  assert.deepEqual(channels.map(([, name]) => name).sort(), [
+    'subscribeDelta',
+    'subscribeStatisticsDelta',
+    'subscribeSubAgentDelta',
+  ]);
+  for (const [, name, first] of channels)
+    assert.match(first!, /^\s*flushState\(\);$/, `${name} flushes the batched state first`);
+});
