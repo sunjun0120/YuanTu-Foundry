@@ -34,6 +34,8 @@ async function mapFiles(items, action) {
 const productionRoots = new Set(['apps', 'packages', 'tests', 'scripts']);
 const excludedDirectories =
   /(^|\/)(?:node_modules|dist|\.git|\.scratch|\.yuantu|\.codex|\.agents|\.aws|__pycache__)(\/|$)/i;
+// This crate's Cargo output is a build cache, not a frozen input. Source modules named `target` stay included.
+const rustBuildDirectories = /^packages\/tools\/windows-sandbox\/native\/target(?:\/|$)/i;
 /**
  * Credential *data* is excluded; a source module that happens to be named
  * `credentials.ts` is product code and must stay in the snapshot. The former
@@ -45,7 +47,8 @@ const excludedDirectories =
  */
 const excludedFiles =
   /(?:^|\/)(?:\.env(?:\..*)?|credentials(?:\.json|\.ya?ml|\.txt)|\.evaluation-dependencies\.json|.*\.(?:sqlite|db|pem|key|pfx|p12))$/i;
-const excluded = (p) => excludedDirectories.test(p) || excludedFiles.test(p);
+const excluded = (p) =>
+  excludedDirectories.test(p) || rustBuildDirectories.test(p) || excludedFiles.test(p);
 const permitted = (p) =>
   !excluded(p) &&
   (productionRoots.has(p.split('/')[0]) ||

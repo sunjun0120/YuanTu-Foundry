@@ -8,6 +8,7 @@ const [id, directory] = process.argv.slice(2);
 const checks = [];
 const temporary = await mkdtemp(path.join(tmpdir(), 'coding-oracle-'));
 const load = (relative) => import(pathToFileURL(path.join(directory, relative)).href);
+let settleSpillTrims;
 async function check(id, action) {
   try {
     await action();
@@ -22,7 +23,9 @@ async function check(id, action) {
 }
 try {
   if (['E01', 'E05', 'E07', 'E09', 'E10'].includes(id)) {
-    const { spillOutput, spillResult } = await load('packages/tools/spill.ts');
+    const spillModule = await load('packages/tools/spill.ts');
+    const { spillOutput, spillResult } = spillModule;
+    settleSpillTrims = spillModule.settleSpillTrims;
     const spill = (content, sessionId = 's', retentionLimit) =>
       spillOutput({
         workspace: temporary,
@@ -64,14 +67,35 @@ try {
     });
     await check('default-retention-50', async () => {
       for (let n = 0; n < 53; n++) spill(String(n), 'default');
+      await settleSpillTrims?.();
       assert.equal((await readdir(path.join(temporary, '.yuantu/spill/default'))).length, 50);
     });
     if (['E05', 'E09', 'E10'].includes(id)) {
       await check('retention-2-is-session-scoped', async () => {
         const other = spill('other', 'other', 1);
         for (let n = 0; n < 3; n++) spill(String(n), 'two', 2);
+        await settleSpillTrims?.();
         assert.equal((await readdir(path.join(temporary, '.yuantu/spill/two'))).length, 2);
         assert.equal(await readFile(path.join(temporary, other.path), 'utf8'), 'other');
+      });
+      await check('retention-latest-request-per-session', async () => {
+        for (const [session, limits] of [
+          ['increase', [1, 3, 3]],
+          ['decrease', [3, 3, 1]],
+          ['reset-default', [1, 1, undefined]],
+        ])
+          for (const limit of limits) spill('pending', session, limit);
+        await settleSpillTrims?.();
+        for (const [session, expected] of [
+          ['increase', 3],
+          ['decrease', 1],
+          ['reset-default', 3],
+        ])
+          assert.equal(
+            (await readdir(path.join(temporary, '.yuantu/spill', session))).length,
+            expected,
+            session,
+          );
       });
       await check('retention-valid-boundaries', async () => {
         assert.ok(spill('one', 'one', 1));
@@ -92,6 +116,7 @@ try {
           await utimes(path.join(dir, name), 1_500_000_000, 1_500_000_000);
         }
         spill('newest', 'order', 2);
+        await settleSpillTrims?.();
         const retained = await readdir(dir);
         assert.equal(retained.length, 2);
         assert.ok(retained.includes('😀.txt'));
@@ -393,6 +418,7 @@ try {
 } catch (error) {
   checks.push({ id: 'oracle-load-or-execution', passed: false, evidence: String(error) });
 } finally {
+  await settleSpillTrims?.();
   await rm(temporary, { recursive: true, force: true });
 }
 console.log(
