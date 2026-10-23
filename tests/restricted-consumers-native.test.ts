@@ -33,7 +33,7 @@ test(
     const script = path.join(root, 'repl.cjs');
     await writeFile(
       script,
-      `const fs=require('fs');console.log('READY',process.stdin.isTTY,process.stdout.isTTY);fs.writeFileSync('inside.txt','inside');try{fs.writeFileSync(${JSON.stringify(path.join(outside, 'denied.txt'))},'outside');console.log('OUTSIDE_WRITTEN')}catch{console.log('OUTSIDE_DENIED')}process.on('SIGINT',()=>console.log('INTERRUPTED'));process.stdin.on('data',b=>{const s=String(b).trim();console.log('INPUT',s);if(s==='exit')process.exit(0)});`,
+      `const fs=require('fs');console.log('READY',process.stdin.isTTY,process.stdout.isTTY);fs.writeFileSync('inside.txt','inside');try{fs.writeFileSync(${JSON.stringify(path.join(outside, 'denied.txt'))},'outside');console.log('OUTSIDE_WRITTEN')}catch{console.log('OUTSIDE_DENIED')}process.on('SIGINT',()=>console.log('INTERRUPTED'));process.stdin.on('data',b=>{fs.appendFileSync('input-chunks.jsonl',JSON.stringify(String(b))+'\\n');const s=String(b).trim();console.log('INPUT',s);if(s==='exit')process.exit(0)});`,
     );
     const manager = new TerminalSessions(root);
     own(root, () => manager.closeAllAndWait());
@@ -55,7 +55,15 @@ test(
     assert.equal(await readFile(path.join(root, 'inside.txt'), 'utf8'), 'inside');
     assert.equal(await exists(path.join(outside, 'denied.txt')), false);
     await call('terminal_send', { id, input: 'ping' });
-    await waitUntil(async () => (await output()).includes('INPUT ping'));
+    await waitUntil(async () => (await output()).includes('INPUT ping')).catch(async (cause) => {
+      throw new Error(
+        JSON.stringify({
+          terminal: await output(),
+          input: await readFile(path.join(root, 'input-chunks.jsonl'), 'utf8').catch(() => null),
+        }),
+        { cause },
+      );
+    });
     await call('terminal_signal', { id, signal: 'SIGINT' });
     await waitUntil(async () => (await output()).includes('INTERRUPTED'));
     const switched = await tools.execute(
