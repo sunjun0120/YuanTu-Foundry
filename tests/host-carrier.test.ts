@@ -168,6 +168,10 @@ test('a Host that only listens is a real Host: the same dispatch answers on it',
   await client.start();
   const invariants = await client.request('invariants.list', {});
   assert.ok(invariants.invariants.length > 0, 'the process registered its invariants');
+  const health = await client.request('host.health', {});
+  assert.ok(health.eventLoop, 'the Host watches its event loop');
+  assert.equal(health.activeRuns, 0);
+  assert.ok(health.maxActiveRuns >= 1);
   await assert.rejects(client.request('session.rename', { sessionId: 'nope', title: 'x' }));
 });
 

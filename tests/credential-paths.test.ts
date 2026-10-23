@@ -172,7 +172,7 @@ test('listing, search and repository outlines omit credential files and director
   assert.equal(searched.isError, false);
   assert.ok(!searched.content.includes(marker), 'search must not expose credential contents');
   assert.deepEqual(
-    buildRepoMap(root).files.map((file) => file.path),
+    (await buildRepoMap(root)).files.map((file) => file.path),
     ['safe.ts'],
   );
 });

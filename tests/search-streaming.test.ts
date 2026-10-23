@@ -386,6 +386,25 @@ test('range reads reuse an unchanged index with fractional timestamps, but inval
   assert.notEqual(cachedLineIndex(file), index, 'a fractional mtime change invalidates the index');
 });
 
+test('reading the head of a file again reuses its verified index instead of rescanning it', async (t) => {
+  const root = await workspaceFor(t, { 'head.txt': 'one\ntwo\nthree\n' });
+  const file = path.join(root, 'head.txt');
+  const access = await accessFor(root);
+  clearLineIndexCache();
+  await readRange(access, 'head.txt', 1, 1, context().signal);
+  const index = cachedLineIndex(file);
+  assert.ok(index);
+  const again = await readRange(access, 'head.txt', 1, 2, context().signal);
+  assert.equal(again.text, 'one\ntwo');
+  assert.equal(again.totalLines, 3);
+  assert.equal(again.endsWithNewline, true);
+  assert.equal(
+    cachedLineIndex(file),
+    index,
+    'a line-1 read with a valid index must not rebuild it',
+  );
+});
+
 test('the bytes on disk are unchanged by reading them', async (t) => {
   const root = await workspaceFor(t, { 'stable.txt': 'ünïcödé\nsecond\n' });
   const before = await readFile(path.join(root, 'stable.txt'));

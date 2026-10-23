@@ -635,3 +635,32 @@ test('a hooks module loaded by the host drives session, prompt and stop hooks', 
   assert.equal(names[2]!.status, 'completed');
   assert.equal(names[3]!.reason, 'delete');
 });
+
+test('stop hooks run while the tools they may need are still open', async (t) => {
+  let closed = false;
+  let sawClosed: boolean | undefined;
+  const hooks = new HookRegistry();
+  hooks.register({
+    stop: () => {
+      sawClosed = closed;
+      return undefined;
+    },
+  });
+  const { agent, session, tools } = await fixture(
+    t,
+    {
+      async complete() {
+        return reply('Done');
+      },
+    },
+    hooks,
+  );
+  // Stands in for a browser, MCP or language-server connection the registry releases when the run ends.
+  tools.onClose(async () => {
+    closed = true;
+  });
+  const result = await agent.run({ sessionId: session.id, prompt: 'hello' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(sawClosed, false, 'the stop hook ran after the tool resources were released');
+  assert.equal(closed, true, 'the resources are still released once the hooks are done');
+});

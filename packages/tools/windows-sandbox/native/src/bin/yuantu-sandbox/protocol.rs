@@ -21,6 +21,31 @@ pub struct Request {
     /// which `cmd.exe /d /s /c "..."` needs because cmd does not recognise quoted built-ins.
     #[serde(default)]
     pub verbatim: bool,
+    /// A terminal of this size: the command runs on a pseudo console the runner creates, instead of on the pipes
+    /// the host passed. Absent for every ordinary command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tty: Option<Size>,
+}
+
+/// Columns and rows of a terminal.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Size {
+    pub columns: u16,
+    pub rows: u16,
+}
+
+/// The largest terminal accepted, in either direction.
+pub const MAX_TERMINAL: u16 = 1000;
+
+impl Size {
+    pub fn validate(self) -> Result<()> {
+        if (1..=MAX_TERMINAL).contains(&self.columns) && (1..=MAX_TERMINAL).contains(&self.rows) {
+            Ok(())
+        } else {
+            Err("Invalid terminal size".into())
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -45,6 +70,11 @@ pub enum ToRunner {
     },
     Cancel {
         id: u64,
+    },
+    /// The host's terminal changed size; meaningful only for a TTY command.
+    Resize {
+        id: u64,
+        size: Size,
     },
 }
 
@@ -75,6 +105,8 @@ pub enum ToBroker {
         stdout: u64,
         stderr: u64,
     },
+    /// Sent by exec after `Spawn`, whenever its own console changes size.
+    Resize { size: Size },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -138,6 +170,9 @@ pub fn validate(request: &Request) -> Result<()> {
     {
         return Err("Invalid capability SID".into());
     }
+    if let Some(size) = request.tty {
+        size.validate()?;
+    }
     Ok(())
 }
 
@@ -157,12 +192,56 @@ mod tests {
             env: BTreeMap::from([("PATH".into(), r"C:\Windows".into())]),
             capabilities: vec!["S-1-5-21-1-2-3-4".into()],
             verbatim: false,
+            tty: None,
         }
+    }
+
+    #[test]
+    fn resize_messages_carry_only_a_size() {
+        let size = Size {
+            columns: 130,
+            rows: 30,
+        };
+        let text = r#"{"type":"resize","size":{"columns":130,"rows":30}}"#;
+        assert!(
+            matches!(serde_json::from_str::<ToBroker>(text).unwrap(), ToBroker::Resize { size: got } if got == size)
+        );
+        let text = r#"{"type":"resize","id":7,"size":{"columns":130,"rows":30}}"#;
+        assert!(
+            matches!(serde_json::from_str::<ToRunner>(text).unwrap(), ToRunner::Resize { id: 7, size: got } if got == size)
+        );
+        assert!(
+            serde_json::from_str::<ToBroker>(
+                r#"{"type":"resize","size":{"columns":1,"rows":1},"id":7}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn accepts_a_valid_request() {
         validate(&request()).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_size_is_optional_and_bounded() {
+        let mut terminal = request();
+        terminal.tty = Some(Size {
+            columns: 120,
+            rows: 40,
+        });
+        validate(&terminal).unwrap();
+        for (columns, rows) in [
+            (0, 24),
+            (80, 0),
+            (MAX_TERMINAL + 1, 24),
+            (80, MAX_TERMINAL + 1),
+        ] {
+            terminal.tty = Some(Size { columns, rows });
+            assert!(validate(&terminal).is_err(), "{columns}x{rows}");
+        }
+        let text = r#"{"version":1,"argv":[],"cwd":"C:\\","env":{},"capabilities":[],"tty":{"columns":80,"rows":24,"x":1}}"#;
+        assert!(serde_json::from_str::<Request>(text).is_err());
     }
 
     #[test]

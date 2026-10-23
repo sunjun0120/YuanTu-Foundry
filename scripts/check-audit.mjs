@@ -6,17 +6,29 @@
  * dependent package, and a gate that is red for a known, weighed reason is a gate people learn to skip. Each such
  * advisory is listed below with why it is tolerated, so the list itself is the record of that decision, and an
  * entry that no longer appears in the report is reported as stale so the exemption cannot outlive its reason.
+ *
+ * Each exemption also carries a review date. An advisory that is still reported is still a risk somebody decided
+ * to carry, and the reasons behind it (no upstream fix, a code path not reached) change without the report
+ * noticing; past the date the gate fails until someone has looked again and moved the date or removed the entry.
  */
 import { execSync } from 'node:child_process';
 
 const ACCEPTED = new Map([
   [
     'GHSA-5p2g-fcmc-qvqq',
-    'image-size via pptxgenjs: only 2.x is patched and pptxgenjs depends on the 1.x API; PPTX output embeds no images',
+    {
+      reason:
+        'image-size via pptxgenjs: only 2.x is patched and pptxgenjs depends on the 1.x API; PPTX output embeds no images',
+      reviewBy: '2027-01-31',
+    },
   ],
   [
     'GHSA-w3rx-r6r6-pgpr',
-    'image-size via pptxgenjs: same as above; the ICNS parser is only reached for embedded images',
+    {
+      reason:
+        'image-size via pptxgenjs: same as above; the ICNS parser is only reached for embedded images',
+      reviewBy: '2027-01-31',
+    },
   ],
 ]);
 
@@ -60,9 +72,15 @@ for (const [name, entry] of Object.entries(report.vulnerabilities ?? {})) {
     problems.push(`${name}: ${via.severity} ${id} ${via.title}`);
   }
 }
-for (const id of ACCEPTED.keys())
+const today = new Date().toISOString().slice(0, 10);
+for (const [id, { reviewBy }] of ACCEPTED) {
   if (!seen.has(id))
     problems.push(`${id} is accepted but no longer reported; remove it from the list`);
+  else if (today > reviewBy)
+    problems.push(
+      `${id} was accepted until ${reviewBy}; review the reason, then move the date or fix it`,
+    );
+}
 
 if (problems.length) {
   console.error('audit:check failed:\n' + problems.map((line) => `  - ${line}`).join('\n'));

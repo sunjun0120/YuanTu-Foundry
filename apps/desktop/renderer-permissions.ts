@@ -6,6 +6,7 @@ import {
   type PermissionPresetId,
   type PermissionPresetView,
 } from './permission-presets.ts';
+import type { SandboxMode } from './sandbox-settings.ts';
 
 /**
  * The composer's permission chip: **one** choice that moves both security knobs.
@@ -29,13 +30,15 @@ import {
  * property the process refuses to change. A backend that cannot run says so before the choice is used.
  *
  * **The confirmation is the confirmation.** `unconfined` is the one preset that gives up isolation, so it goes
- * through the same acknowledge-the-risk dialog a full-access switch has always used, with the host sentence the
+ * through the same confirm-the-risk dialog a full-access switch has always used, with the host sentence the
  * deleted form used to carry. No preset is a way around it: the main process re-checks the same rule.
  */
 export function setupPermissionSettings(
   onBusy: (busy: boolean) => void,
   /** Whether the desktop can accept a change yet; the rungs are locked until it can. */
   isReady: () => boolean,
+  /** The sandbox mode of the session on screen, for the setup prompt that only a sandboxed session needs. */
+  onSandboxMode: (mode: SandboxMode | undefined) => void = () => {},
 ): {
   updateBusy(): void;
   refresh(): void;
@@ -53,9 +56,7 @@ export function setupPermissionSettings(
   const trigger = byId<HTMLButtonElement>('permission-trigger');
   const menu = byId('permission-menu');
   const select = byId<HTMLSelectElement>('permission-mode');
-  const environment = byId('permission-environment');
   const dialog = byId<HTMLDialogElement>('full-access-dialog');
-  const acknowledge = byId<HTMLInputElement>('full-access-acknowledge');
   const enable = byId<HTMLButtonElement>('full-access-enable');
   let view: PermissionPresetView | undefined;
   let pending = true;
@@ -186,9 +187,17 @@ export function setupPermissionSettings(
   function render(): void {
     const id = current();
     const locked = pending || !isReady() || unreadable;
+    // The restricted-token backend is no rung, but it is one the person chose by name: say that name, not "custom".
+    const weak = !unreadable && view?.sandbox.mode === 'windows';
     trigger.replaceChildren(
       icon(id),
-      document.createTextNode(unreadable ? text('权限未读取', 'Permissions unknown') : label(id)),
+      document.createTextNode(
+        unreadable
+          ? text('权限未读取', 'Permissions unknown')
+          : weak
+            ? text('较弱沙箱', 'Weaker sandbox')
+            : label(id),
+      ),
     );
     trigger.dataset.preset = unreadable ? 'unknown' : id;
     trigger.title = unreadable
@@ -196,9 +205,15 @@ export function setupPermissionSettings(
           '未能读取当前会话的权限设置，点击重试。',
           "This session's permissions could not be read. Click to try again.",
         )
-      : id === CUSTOM_PRESET
-        ? ''
-        : boundary(id);
+      : weak
+        ? sandboxNote() +
+          text(
+            ' 选择任一选项即切回账户沙箱。',
+            ' Choose any option to return to the account sandbox.',
+          )
+        : id === CUSTOM_PRESET
+          ? ''
+          : boundary(id);
     select.value = id;
     /**
      * Nothing is disabled but a control that cannot move yet. The launch environment used to *pin* the mode, so
@@ -212,8 +227,25 @@ export function setupPermissionSettings(
       item.querySelector('.permission-check')!.textContent = checked ? '✓' : '';
       item.disabled = locked;
     }
-    if (customReading) customReading.hidden = id !== CUSTOM_PRESET;
-    drawEnvironment();
+    if (customReading) {
+      customReading.hidden = id !== CUSTOM_PRESET;
+      // A backend the person picked by name and that cannot run here is worth the one sentence that says so.
+      const broken = weak ? view?.sandbox.availability : null;
+      // The backend's own text can carry a whole PowerShell error record: the line gets its start, the tooltip all.
+      customReading.title = broken ?? '';
+      customReading.textContent = broken
+        ? text(
+            '较弱沙箱在这台电脑上无法运行：',
+            'The weaker sandbox cannot run on this computer: ',
+          ) + (broken.length > 160 ? `${broken.slice(0, 160)}…` : broken)
+        : weak
+          ? text(
+              '当前：较弱沙箱（受限令牌）。读取和网络不受限制。',
+              'Current: weaker sandbox (restricted token). Reads and the network are not confined.',
+            )
+          : label(CUSTOM_PRESET);
+    }
+    onSandboxMode(unreadable ? undefined : view?.sandbox.mode);
     select.disabled = locked;
     // Still clickable when unreadable: the click is the retry (see the trigger's listener).
     trigger.disabled = pending || !isReady();
@@ -264,12 +296,11 @@ export function setupPermissionSettings(
         return button;
       }),
       /**
-       * The current reading when no preset matches, and a line only when there is something wrong.
+       * The current reading when no preset matches. `custom` is text rather than a control because it has no
+       * target to click.
        *
-       * `custom` is text rather than a control because it has no target to click. The environment gets a line
-       * only when the backend behind the rung answered that it cannot run: the rung's name already says what the
-       * choice is, and "which program would confine it" is a detail of that choice, not a second choice — the
-       * settings page this replaced was the place that made it look like one.
+       * Whether the backend can run is not said here: the rung's name says what the choice is, and a sandbox that
+       * still needs setting up is offered above the composer (`renderer-sandbox-setup.ts`), where it can be done.
        */
       (() => {
         const footer = document.createElement('div');
@@ -279,53 +310,59 @@ export function setupPermissionSettings(
         reading.id = 'permission-custom';
         reading.textContent = label(CUSTOM_PRESET);
         customReading = reading;
-        footer.append(reading, environment);
+        footer.append(reading);
         return footer;
       })(),
     );
     /**
-     * The rung that gives up isolation, announced the way a risk is announced: what changes, and when to choose
-     * it. The paragraph is the whole reason this dialog exists — the checkbox is what makes it an acknowledgement
-     * rather than a notification.
+     * The rung that gives up isolation, announced the way Codex announces it: what the agent may now do without
+     * asking, spelled out as files, commands and network, then the risks that follow. 确认 is the acknowledgement:
+     * no checkbox in front of it, and 取消 holds the focus so Enter alone never gives up the sandbox.
      */
-    byId('full-access-title').textContent = text('确认启用完全访问权限？', 'Enable full access?');
+    byId('full-access-title').textContent = text('要开启完全访问权限吗？', 'Enable full access?');
     byId('full-access-description').textContent = text(
-      '启用完全访问权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-      'With full access the agent skips most confirmation steps and can act directly — sensitive operations, file changes, external commands. Use it only when you trust the current task.',
+      '智能体将能够在未经你许可的情况下，在这台计算机上的任何位置运行命令、使用互联网，以及创建和编辑文件。这包括但不限于：',
+      'The agent will be able to run commands anywhere on this computer, use the internet, and create and edit files, without asking for your permission. This includes, but is not limited to:',
     );
-    byId('full-access-acknowledge-label').textContent = text(
-      '我已了解风险，并愿意继续',
-      'I understand the risks and want to continue',
+    const risks: Record<string, [string, string, string, string]> = {
+      files: [
+        '文件和文件夹',
+        'Files and folders',
+        '读取、创建、修改、上传或删除此计算机上任意位置的文件',
+        'Read, create, change, upload or delete files anywhere on this computer',
+      ],
+      commands: [
+        '终端命令',
+        'Terminal commands',
+        '运行命令、安装软件和更改系统设置，不在沙箱中隔离',
+        'Run commands, install software and change system settings, outside any sandbox',
+      ],
+      network: [
+        '互联网',
+        'Internet',
+        '访问网站、下载内容并向外部发送数据',
+        'Visit websites, download content and send data out',
+      ],
+    };
+    for (const item of dialog.querySelectorAll<HTMLElement>('[data-risk]')) {
+      const [zhName, enName, zhLine, enLine] = risks[item.dataset.risk!]!;
+      item.querySelector('strong')!.textContent = text(zhName, enName);
+      item.querySelector('small')!.textContent = text(zhLine, enLine);
+    }
+    byId('full-access-risk').textContent = text(
+      '这会带来敏感数据丢失或泄露、提示注入等风险。你可以随时在权限菜单中切回其他模式。',
+      'This brings risks such as losing or leaking sensitive data and prompt injection. You can switch back from the permissions menu at any time.',
     );
     byId('full-access-close').setAttribute('aria-label', text('关闭', 'Close'));
     byId('full-access-cancel').textContent = text('取消', 'Cancel');
-    enable.textContent = text('启用完全访问权限', 'Enable full access');
+    enable.textContent = text('确认', 'Confirm');
     render();
-  }
-  /**
-   * The one line the menu may add under the rungs: why the backend behind the current one cannot run here.
-   *
-   * It says nothing when there is nothing wrong — not the backend's name, not the image, not "no OS isolation" —
-   * because those are details of a choice already made, and a menu that explains itself under every option is a
-   * menu read instead of used. A backend that *cannot* run is different: that is the one fact that changes what
-   * the choice will do, and it is worth a sentence. `null` covers both "nobody has asked yet" and "it answered
-   * yes", so the line never claims a backend was found.
-   */
-  function drawEnvironment(): void {
-    if (!view) return;
-    const availability = view.sandbox.availability;
-    environment.hidden = !availability;
-    environment.textContent = availability
-      ? text('沙箱不可用：', 'Sandbox unavailable: ') + availability
-      : '';
   }
   function updateBusy(): void {
     render();
   }
   function closeConfirmation(): void {
     confirming = undefined;
-    acknowledge.checked = false;
-    enable.disabled = true;
     if (dialog.open) dialog.close();
     render();
     trigger.focus();
@@ -365,10 +402,8 @@ export function setupPermissionSettings(
     }
     if (next === 'unconfined') {
       confirming = next;
-      acknowledge.checked = false;
-      enable.disabled = true;
       dialog.showModal();
-      acknowledge.focus();
+      byId('full-access-cancel').focus();
       return;
     }
     void apply(next, false);
@@ -418,9 +453,6 @@ export function setupPermissionSettings(
   select.addEventListener('change', () => {
     if (isPermissionPresetId(select.value)) choose(select.value);
   });
-  acknowledge.addEventListener('change', () => {
-    enable.disabled = !acknowledge.checked || pending;
-  });
   byId('full-access-cancel').addEventListener('click', closeConfirmation);
   // The × in the corner is the same act as 取消: withdraw the question, change nothing. Escape does it too
   // (`cancel` below), so the dialog has one meaning for every way out.
@@ -431,7 +463,7 @@ export function setupPermissionSettings(
   });
   byId<HTMLFormElement>('full-access-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!acknowledge.checked || pending || !confirming) return;
+    if (pending || !confirming) return;
     const preset = confirming;
     dialog.close();
     confirming = undefined;

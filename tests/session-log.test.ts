@@ -44,13 +44,7 @@ const eventTypes = (store: SessionStore, sessionId: string): string[] =>
   store.events(sessionId).map((event) => event.type);
 
 test('a real run records its transcript as events, and all three views agree', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-log-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-log-');
   const session = store.create(root);
   let turn = 0;
   const agent = new Agent({
@@ -150,13 +144,7 @@ test('the log survives a reopen and is not duplicated by it', async (t) => {
 });
 
 test('an event this build cannot interpret stops every derived answer, not just the transcript', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-log-unknown-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-log-unknown-');
   const session = store.create(root);
   store.append(session.id, { role: 'user', content: 'first' });
 
@@ -325,13 +313,7 @@ test('a damaged row is skipped rather than bricking every session in the databas
 });
 
 test('settling an interrupted run records the uncertainty inside the same log', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-log-interrupted-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-log-interrupted-');
   const session = store.create(root);
   const runId = store.beginRun(session.id);
   store.append(session.id, {

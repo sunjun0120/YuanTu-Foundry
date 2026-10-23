@@ -97,14 +97,16 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
     error = 'Resident sub-agent settlement failed; usage or completion may be incomplete';
     code = undefined;
   }
-  try {
-    if (agent.ownsToolResources !== false) await tools.close();
-  } catch {
-    status = 'failed';
-    error = 'Tool resource cleanup failed; an external process may still be running';
-    code = 'tool-cleanup';
-  }
-  // Stop hooks may annotate the answer or touch source files. They must settle before the final fingerprint.
+  /**
+   * Stop hooks may annotate the answer or touch source files. They must settle before the final fingerprint — and
+   * before the tool resources close.
+   *
+   * They used to run after `tools.close()`, which had already shut the browser, MCP servers and language servers a
+   * hook might reasonably use, and — for a registry that owns its hooks — closed the hook registry itself, which
+   * releases the bridge an embedded or CLI host's hooks are reached through. A hook that "may touch source files"
+   * could find nothing left to touch them with. A cleanup failure still fails the run below; the hooks see the
+   * status the run ended with, before cleanup had a chance to change it.
+   */
   try {
     const stopped = await underExecutionPolicy(agent.executionPolicy?.(), () =>
       tools.extensions.stop(
@@ -129,6 +131,13 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
         .join('\n')}`;
   } catch {
     /* The final fingerprint still checks any effects a failed observer already produced. */
+  }
+  try {
+    if (agent.ownsToolResources !== false) await tools.close();
+  } catch {
+    status = 'failed';
+    error = 'Tool resource cleanup failed; an external process may still be running';
+    code = 'tool-cleanup';
   }
   if (status === 'completed') {
     const stale = await completion.settleFinalInputs();

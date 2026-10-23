@@ -9,10 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { Agent } from '../packages/core/agent.ts';
+import { Agent, type AgentOptions } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { settlementNotices, settlementNoticeText } from '../packages/core/settlements.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -20,6 +17,7 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { toolCall as call } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const SUBAGENT_MARK = 'You are a sub-agent delegated by a parent agent';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,21 +35,21 @@ const report = (summary: string): ModelResponse =>
 const isChild = (request: ModelRequest) => request.system.includes(SUBAGENT_MARK);
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settlement-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-settlement-');
   const residency = new SubAgentResidency();
-  t.after(async () => {
-    residency.disposeAll();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => residency.disposeAll());
   const session = store.create(root);
   return { root, store, residency, session };
 }
 /** The system prompt of the run's first request, which is where a settlement notice is delivered. */
 const noticeIn = (requests: ModelRequest[]): string =>
   requests.map((request) => request.system).find((system) => system.includes('have settled')) ?? '';
-function parentAgent(store: SessionStore, residency: SubAgentResidency, provider: Provider): Agent {
+function parentAgent(
+  store: SessionStore,
+  residency: SubAgentResidency,
+  provider: Provider,
+  onEvent?: AgentOptions['onEvent'],
+): Agent {
   return new Agent({
     store,
     provider,
@@ -60,6 +58,7 @@ function parentAgent(store: SessionStore, residency: SubAgentResidency, provider
     subagents: { enabled: true },
     subagentResidency: residency,
     childTools: () => new ToolRegistry(),
+    ...(onEvent ? { onEvent } : {}),
   });
 }
 
@@ -128,18 +127,29 @@ test('a child that finished after its run is announced to the parent and can be 
 
 test('the notice repeats until the outcome is collected, then stops', async (t) => {
   const { store, residency, session } = await fixture(t);
+  let finishChild!: () => void;
+  const childFinished = new Promise<void>((resolve) => {
+    finishChild = resolve;
+  });
   const first: Provider = {
     async complete(request) {
       if (isChild(request)) return report('Sweep complete');
-      if (request.messages.some((message) => message.role === 'tool')) return reply('Delegated.');
+      if (request.messages.some((message) => message.role === 'tool')) {
+        await childFinished;
+        return reply('Delegated.');
+      }
       return call('d1', 'delegate_task', { wait: false, tasks: [{ objective: 'Sweep' }] });
     },
   };
-  await parentAgent(store, residency, first).run({
+  const started = await parentAgent(store, residency, first, (event) => {
+    if (event.type === 'subagent.finished') finishChild();
+  }).run({
     sessionId: session.id,
     prompt: 'Delegate a sweep',
   });
+  assert.equal(started.status, 'completed', started.error);
   assert.equal(settlementNotices(store, session.id).length, 1);
+  assert.equal(settlementNotices(store, session.id)[0]!.status, 'completed');
 
   // A run that is told but ignores it must be told again: a single announcement that is missed leaves the
   // work unread, which is the state the notice exists to prevent.
@@ -170,7 +180,7 @@ test('the notice repeats until the outcome is collected, then stops', async (t) 
     .map((message) => String(message.content))
     .join('\n');
   assert.match(result, /Sweep complete/);
-  assert.match(result, /cancelled/);
+  assert.match(result, /completed/);
   assert.deepEqual(settlementNotices(store, session.id), []);
 
   const after: ModelRequest[] = [];
@@ -186,9 +196,14 @@ test('the notice repeats until the outcome is collected, then stops', async (t) 
 test('a cancelled child is named and can be resumed instead of the work being done twice', async (t) => {
   const { store, residency, session } = await fixture(t);
   let childTurns = 0;
+  let enterChild!: () => void;
+  const childEntered = new Promise<void>((resolve) => {
+    enterChild = resolve;
+  });
   const provider: Provider = {
     async complete(request) {
       if (isChild(request)) {
+        request.signal.throwIfAborted();
         childTurns++;
         if (childTurns > 1) return reply('carried on and finished the sweep');
         // Never finishes: the parent's run end has to stop it.
@@ -196,13 +211,23 @@ test('a cancelled child is named and can be resumed instead of the work being do
           request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
             once: true,
           });
+          enterChild();
         });
       }
-      if (request.messages.some((message) => message.role === 'tool')) return reply('Delegated.');
+      if (request.messages.some((message) => message.role === 'tool')) {
+        await childEntered;
+        return reply('Delegated.');
+      }
       return call('d1', 'delegate_task', { wait: false, tasks: [{ objective: 'Slow sweep' }] });
     },
   };
-  await parentAgent(store, residency, provider).run({ sessionId: session.id, prompt: 'Start it' });
+  const started = await parentAgent(store, residency, provider).run({
+    sessionId: session.id,
+    prompt: 'Start it',
+  });
+  assert.equal(started.status, 'completed', started.error);
+  assert.equal(childTurns, 1, 'the cancelled turn reached the child provider');
+  assert.equal(settlementNotices(store, session.id)[0]?.status, 'cancelled');
   const child = residency.list()[0]!;
   assert.equal(child.status, 'idle', 'the child survives the run that started it');
 

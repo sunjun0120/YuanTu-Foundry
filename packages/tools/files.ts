@@ -138,6 +138,21 @@ export function workspaceAccess(workspace: Workspace): WorkspaceAccess {
     isExcluded: (relative) => isExcludedRelative(relative),
   };
 }
+/**
+ * Whether Windows opens `segment` as a device rather than a file in its directory.
+ *
+ * `NUL`, `CON`, `COM1` and the rest name a device in every directory, with any extension and with trailing dots
+ * or spaces. `lstat` and `realpath` report them as missing, so `resolve(…, allowNew)` used to take one for a new
+ * file in the workspace, and a write went to the device instead: a write boundary that did not hold, and on
+ * `CON` or a serial port one that could block.
+ */
+export function isWindowsDeviceName(segment: string): boolean {
+  const stem = segment
+    .replace(/[. ]+$/, '')
+    .split('.')[0]!
+    .trimEnd();
+  return /^(?:con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[0-9¹²³])$/i.test(stem);
+}
 export class Workspace {
   root: string;
   constructor(root: string) {
@@ -158,6 +173,8 @@ export class Workspace {
       target = path.resolve(root, input);
     if (!inside(root, target)) throw new Error('Path is outside workspace');
     const parts = path.relative(root, target).split(path.sep).filter(Boolean);
+    if (process.platform === 'win32' && parts.some(isWindowsDeviceName))
+      throw new Error('Windows device names are not workspace files');
     // Spilled tool output lives under `.yuantu/spill`, which reads may reach — the model has to be able to
     // page through output that did not fit in a result. Nothing else under `.yuantu` opens up, and `allowSpill`
     // is only ever passed by a read.

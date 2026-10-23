@@ -63,6 +63,8 @@ export interface RequestHandlerOptions {
   send: (data: unknown) => void;
   /** Request ids being served, so a client that reuses one is refused rather than answered twice. */
   requestIds: Set<string>;
+  /** The method each served request asked for, so a stalled event loop can say what it was serving. */
+  requestMethods?: Map<string, string>;
 }
 
 /**
@@ -92,6 +94,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       options.requestIds.add(id);
       registered = true;
       if (typeof request.method !== 'string') throw new Error('method must be a string');
+      options.requestMethods?.set(id, request.method);
       const params = request.params ?? {};
       if (!params || typeof params !== 'object' || Array.isArray(params))
         throw new Error('params must be an object');
@@ -109,7 +112,10 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         },
       });
     } finally {
-      if (id && registered) options.requestIds.delete(id);
+      if (id && registered) {
+        options.requestIds.delete(id);
+        options.requestMethods?.delete(id);
+      }
     }
   };
 }

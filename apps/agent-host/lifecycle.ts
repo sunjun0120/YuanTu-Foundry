@@ -6,6 +6,7 @@ import { safeError } from '../shared/runtime.ts';
 import { settleInteraction } from './approvals.ts';
 import type { HostContext } from './state.ts';
 import { cancelSessionTitles } from './session-title.ts';
+import { startIdleReclaim } from './space-reclaim.ts';
 
 /** The one resident release started by shutdown, observed immediately and awaited before store close. */
 const residentCleanup = new WeakMap<HostContext, Promise<void>>();
@@ -25,6 +26,7 @@ export function createShutdown(ctx: HostContext): () => void {
     if (ctx.closing) return;
     ctx.closing = true;
     ctx.stopObservingBackground();
+    ctx.loopHealth?.stop();
     ctx.scheduler.stop();
     cancelSessionTitles(ctx);
     for (const run of ctx.active.values()) run.controller.abort();
@@ -97,6 +99,8 @@ export async function serveHost(ctx: HostContext): Promise<void> {
   let residentFailed = false;
   /** Idle sub-agents past their TTL are unloaded on a timer, not only when the next run starts. */
   let reaper: ReturnType<typeof setInterval> | undefined;
+  /** Free database pages go back to the disk while nothing runs (`./space-reclaim.ts`). */
+  let stopReclaim: (() => void) | undefined;
   const release = async (action: () => unknown): Promise<void> => {
     try {
       await action();
@@ -122,6 +126,7 @@ export async function serveHost(ctx: HostContext): Promise<void> {
       }
     }, RESIDENCY_DEFAULTS.reapIntervalMs);
     reaper.unref();
+    stopReclaim = startIdleReclaim(ctx);
     for await (const line of input) {
       if (ctx.closing) break;
       if (!line.trim()) continue;
@@ -148,6 +153,7 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     // minutes-long in-flight request could not be stopped from the console at all.
     removeSignals();
     clearInterval(reaper);
+    stopReclaim?.();
     await release(shutdown);
     await Promise.allSettled([...ctx.tasks]);
     // Every answer is written now, including those of the runs the shutdown aborted; a socket peer gets them

@@ -71,6 +71,27 @@ export interface RunDefaults {
   maxModelRetries: number;
   questionTimeoutMs: number;
   /**
+   * A run's total budget: rounds, wall-clock milliseconds and model tokens (input + output, every round). `0`
+   * turns that one off.
+   *
+   * A backstop rather than a size for the task. The round loop deliberately has no round count of its own (see
+   * `packages/core/agent.ts`), and the goal's budget only counts the rounds a goal asked for; nothing bounded an
+   * ordinary run that kept calling tools — a background wake or an unattended task with nobody to press Stop
+   * could spend for as long as the endpoint answered. The defaults are generous enough that interactive work
+   * does not meet them. The token count is cumulative, so it grows with rounds × context: it is the cap on what
+   * a runaway run can bill, not a measure of work done. A run that reaches one ends `limited`, at a round
+   * boundary, with every finished tool result already recorded.
+   *
+   * Rounds are off by default (`0`), and that is the same decision the loop's comment records: a default of 256
+   * rounds used to cut long migrations off half-way, which is why it was removed, and a long task that keeps
+   * changing the project is exactly the run a round count gets wrong. The wall clock and the tokens bound a
+   * runaway without guessing how many steps a task needs; the round count stays available to an operator who wants
+   * one (`tests/failure-codes.test.ts` holds the 300-round run that must still finish).
+   */
+  maxRunRounds: number;
+  maxRunMs: number;
+  maxRunTokens: number;
+  /**
    * How many sibling tool calls from one assistant message may be in flight at once.
    *
    * Only calls whose tool promises it (`Tool.isConcurrencySafe`) are ever overlapped, so this bounds a
@@ -164,6 +185,9 @@ export const RUN_DEFAULTS = Object.freeze({
    */
   maxModelRetries: 5,
   questionTimeoutMs: 120_000,
+  maxRunRounds: 0,
+  maxRunMs: 2 * 60 * 60 * 1000,
+  maxRunTokens: 20_000_000,
   /**
    * Eight: the tools that opt in are local file, git and session reads, and a model exploring a codebase asks
    * for several at once — five to eight reads or searches in one message is common, and with four the second
@@ -314,6 +338,21 @@ export const ENVIRONMENT = {
     kind: 'number',
     range: [1_000, 3_600_000],
     description: '模型向用户提问的等待超时（毫秒）',
+  },
+  YUANTU_MAX_RUN_ROUNDS: {
+    kind: 'number',
+    range: [0, 100_000],
+    description: '单次运行最多的模型轮次（0 = 不限；默认不限，失控由时长与 token 上限兜底）',
+  },
+  YUANTU_MAX_RUN_MS: {
+    kind: 'number',
+    range: [0, 86_400_000],
+    description: '单次运行的墙钟上限（毫秒，0 = 不限；默认 2 小时）',
+  },
+  YUANTU_MAX_RUN_TOKENS: {
+    kind: 'number',
+    range: [0, 1_000_000_000],
+    description: '单次运行累计消耗的模型 token 上限（输入 + 输出，0 = 不限；默认 2000 万）',
   },
   YUANTU_TOOL_TIMEOUT_MS: {
     kind: 'number',
@@ -552,6 +591,11 @@ export const ENVIRONMENT = {
     range: [1, 8],
     description: '同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行）',
   },
+  YUANTU_HOST_STALL_MS: {
+    kind: 'number',
+    range: [20, 60_000],
+    description: 'Host 事件循环被同步工作占住多久（毫秒）记为一次卡顿并写入 stderr（默认 200）',
+  },
   YUANTU_LIBREOFFICE_PATH: {
     kind: 'string',
     description: '可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com）',
@@ -766,6 +810,14 @@ export function assertEnvironment(env: NodeJS.ProcessEnv = process.env): void {
  * is a longer conversation. The run's *round* count is not here either, because a run has no round cap: the
  * rounds nobody asked for are counted by the goal that asked for them.
  */
+/** Limits for which `0` is a deliberate policy: none kept, never retried, or that budget turned off. */
+const ZERO_ALLOWED = new Set([
+  'toolResultKeepRecent',
+  'maxModelRetries',
+  'maxRunRounds',
+  'maxRunMs',
+  'maxRunTokens',
+]);
 export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefaults {
   const resolved: RunDefaults = {
     maxContextChars: options.maxContextChars ?? RUN_DEFAULTS.maxContextChars,
@@ -781,6 +833,9 @@ export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefault
     streamIdleTimeoutMs: options.streamIdleTimeoutMs ?? RUN_DEFAULTS.streamIdleTimeoutMs,
     maxModelRetries: options.maxModelRetries ?? RUN_DEFAULTS.maxModelRetries,
     questionTimeoutMs: options.questionTimeoutMs ?? RUN_DEFAULTS.questionTimeoutMs,
+    maxRunRounds: options.maxRunRounds ?? RUN_DEFAULTS.maxRunRounds,
+    maxRunMs: options.maxRunMs ?? RUN_DEFAULTS.maxRunMs,
+    maxRunTokens: options.maxRunTokens ?? RUN_DEFAULTS.maxRunTokens,
     maxParallelToolCalls: options.maxParallelToolCalls ?? RUN_DEFAULTS.maxParallelToolCalls,
     invariantTimeoutMs: options.invariantTimeoutMs ?? RUN_DEFAULTS.invariantTimeoutMs,
     hookTimeoutMs: options.hookTimeoutMs ?? RUN_DEFAULTS.hookTimeoutMs,
@@ -805,7 +860,7 @@ export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefault
   for (const [name, value] of Object.entries(resolved)) {
     // `requestTimeoutMs` is absent unless an operator asked for one, and an absent limit is not a bad value.
     if (value === undefined) continue;
-    const floor = name === 'toolResultKeepRecent' || name === 'maxModelRetries' ? 0 : 1;
+    const floor = ZERO_ALLOWED.has(name) ? 0 : 1;
     if (!Number.isSafeInteger(value) || value < floor) throw new Error(`Invalid ${name}`);
   }
   assertPrunePolicyFits({

@@ -1,4 +1,4 @@
-import { parseSandboxMode } from '../../packages/tools/sandbox-mode.ts';
+import { appSandboxMode } from '../../packages/tools/sandbox-mode.ts';
 import type { SandboxMode } from '../../packages/tools/sandbox.ts';
 
 /**
@@ -34,7 +34,7 @@ export function parseSandboxSettingsCommand(input: unknown): SandboxSettingsComm
     throw new Error('Invalid sandbox settings request');
   const value = input as Record<string, unknown>;
   if (value.type !== 'set') throw new Error('Invalid sandbox settings request');
-  parseSandboxMode(value.mode);
+  const mode = appSandboxMode(value.mode);
   if (
     value.type !== 'set' ||
     Object.keys(value).some((key) => !['type', 'mode', 'acknowledgeHost'].includes(key)) ||
@@ -45,7 +45,7 @@ export function parseSandboxSettingsCommand(input: unknown): SandboxSettingsComm
     throw new Error('Confirm that host commands have no operating-system isolation');
   return {
     type: 'set',
-    mode: value.mode as SandboxMode,
+    mode,
     ...(value.acknowledgeHost !== undefined
       ? { acknowledgeHost: value.acknowledgeHost as boolean }
       : {}),
@@ -61,5 +61,5 @@ export function parseSandboxSettingsCommand(input: unknown): SandboxSettingsComm
  */
 export function defaultSandboxMode(env: NodeJS.ProcessEnv = process.env): SandboxMode {
   const value = env.YUANTU_SANDBOX;
-  return parseSandboxMode(value ?? 'native', 'YUANTU_SANDBOX');
+  return appSandboxMode(value ?? 'native', 'YUANTU_SANDBOX');
 }

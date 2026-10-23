@@ -2,11 +2,12 @@
 //!
 //! `account-setup` / `account-uninstall` are the user-facing entries. When the current process is already
 //! elevated they run in-process; otherwise they elevate this same executable for one fixed operation
-//! (`account-initialize --handoff PIPE` / `account-remove --elevated`). The passwords travel from the unelevated
+//! (`account-initialize --handoff PIPE` / `account-remove --handoff PIPE`). The passwords travel from the unelevated
 //! side over a pipe only it and Administrators can open, so they never touch a command line or disk in clear, and
 //! DPAPI protects them for the desktop user — not for whichever administrator approved UAC.
 use crate::{
     frame::{read_frame, write_frame},
+    maintenance_handoff,
     pipe::{PipeIo, accept, client_pid, connect, random_suffix, server},
     win::{Handle, Result, current_token, current_user, wide, win},
 };
@@ -22,14 +23,33 @@ use windows_sys::Win32::{
 use yuantu_sandbox::account::{
     Account, credentials, firewall, grants,
     password::{self, Secret},
-    read_refresh, setup_marker, status, users,
+    processes, read_refresh, setup_lock, setup_marker, status, users,
 };
+
+/// How long an elevated setup or uninstall waits for another one to finish before giving up.
+const SETUP_LOCK_TIMEOUT_MS: u32 = 30_000;
+/// How long uninstall waits for the sandbox accounts' processes and logons to end.
+const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RefreshRequest {
     version: u32,
     env: BTreeMap<String, String>,
+    /// The command's workspace root: its reserved names are protected first.
+    #[serde(default)]
+    root: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RefreshOutput {
+    #[serde(flatten)]
+    report: read_refresh::RefreshReport,
+    /// Reserved paths this run had to deny; already denied ones are not listed.
+    protected: Vec<String>,
+    /// Why the read roots could not be refreshed. The command still runs: it only lacks those roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,13 +71,6 @@ struct HandoffRequest {
 struct HandoffSid {
     account: Account,
     sid: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-enum HandoffReply {
-    Provisioned { version: u32, sids: Vec<HandoffSid> },
-    Failed { version: u32, message: String },
 }
 
 pub fn print_status() -> Result<u32> {
@@ -106,7 +119,10 @@ fn require_elevated() -> Result<()> {
 }
 
 /// Accounts, group, rights, sign-in hiding, Secondary Logon, then the offline account's network filters.
-fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> {
+fn provision(
+    _lock: &setup_lock::SetupLock,
+    passwords: &[(Account, Secret)],
+) -> Result<Vec<(Account, String)>> {
     let sids = users::provision(passwords)?;
     let offline = sids
         .iter()
@@ -117,7 +133,20 @@ fn provision(passwords: &[(Account, Secret)]) -> Result<Vec<(Account, String)>> 
     Ok(sids)
 }
 
-fn remove_everything() -> Result<()> {
+/// Stops the sandbox before taking its protections away: accounts disabled, their processes ended and their logons
+/// gone, and only then the offline account's network filters and the accounts themselves. Removing the filters
+/// first would put a still-running offline command on the network.
+fn remove_everything(_lock: &setup_lock::SetupLock) -> Result<()> {
+    let disabled = users::disable()?;
+    if let Err(error) = processes::stop(&disabled.sids(), STOP_DEADLINE) {
+        // The filters and accounts are still in place, so restoring the flags returns to a safe, working sandbox.
+        return Err(match disabled.restore() {
+            Ok(()) => error,
+            Err(restore) => {
+                format!("{error}; restoring the sandbox accounts also failed: {restore}")
+            }
+        });
+    }
     firewall::remove_filters()?;
     users::remove()
 }
@@ -159,6 +188,11 @@ fn finish_initialization(
     passwords: Vec<(Account, Secret)>,
     sids: &[(Account, String)],
 ) -> Result<u32> {
+    for (account, password) in &passwords {
+        if let Err(error) = create_profile(*account, password) {
+            eprintln!("Profile for {} not created ahead: {error}", account.name());
+        }
+    }
     store(passwords, sids)?;
     let group = group_sid()?;
     // A root that cannot be granted must not fail initialization: the workspace grant is what commands need, and
@@ -185,6 +219,43 @@ fn finish_initialization(
     Ok(0)
 }
 
+/// Signs the account in once with its profile, so Windows creates the profile now rather than on the first command.
+/// A first `LOGON_WITH_PROFILE` builds the whole profile directory and registry hive, which on a busy machine
+/// outlasts the Host's broker start timeout; real acceptance saw a first offline command time out that way.
+/// Failure is reported, not fatal: the first command then only pays that cost itself.
+fn create_profile(account: Account, password: &Secret) -> Result<()> {
+    let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let image = wide(&format!(r"{system}\System32\cmd.exe"))?;
+    let mut command = wide("cmd.exe /d /c exit 0")?;
+    let directory = wide(&format!(r"{system}\System32"))?;
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = size_of::<STARTUPINFOW>() as u32;
+    let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    win(
+        unsafe {
+            CreateProcessWithLogonW(
+                wide(account.name())?.as_ptr(),
+                wide(".")?.as_ptr(),
+                wide(password.expose())?.as_ptr(),
+                LOGON_WITH_PROFILE,
+                image.as_ptr(),
+                command.as_mut_ptr(),
+                CREATE_NO_WINDOW,
+                null(),
+                directory.as_ptr(),
+                &startup,
+                &mut info,
+            )
+        },
+        "Sign the sandbox account in",
+    )?;
+    let (process, _thread) = (Handle(info.hProcess), Handle(info.hThread));
+    if unsafe { WaitForSingleObject(process.0, 120_000) } != WAIT_OBJECT_0 {
+        return Err("The first sign-in did not finish in time".into());
+    }
+    Ok(())
+}
+
 /// The current process environment, as the refresh request carries it.
 fn environment() -> BTreeMap<String, String> {
     std::env::vars_os()
@@ -192,16 +263,37 @@ fn environment() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// `read-refresh --env FILE`: authorize the toolchain roots one environment names. Never elevates.
+/// `read-refresh --env FILE`: before a command, protect its workspace's reserved names, then authorize the toolchain
+/// roots its environment names. Never elevates. Only a failed protection fails the run, so the Host can refuse the
+/// command; a failed refresh is reported in the output and the command runs without those roots.
 pub fn read_refresh(file: &str) -> Result<u32> {
     let request = refresh_request(file)?;
     if request.version != 1 {
         return Err("Unsupported read refresh request".into());
     }
-    let report = read_refresh::refresh(&request.env, &group_sid()?)?;
+    let group = group_sid()?;
+    let protected = match &request.root {
+        Some(root) => grants::protect(root, &group)?,
+        None => Vec::new(),
+    };
+    let (report, error) = match read_refresh::refresh(&request.env, &group) {
+        Ok(report) => (report, None),
+        Err(error) => (
+            read_refresh::RefreshReport {
+                version: 1,
+                ..Default::default()
+            },
+            Some(error),
+        ),
+    };
+    let output = RefreshOutput {
+        report,
+        protected,
+        error,
+    };
     println!(
         "{}",
-        serde_json::to_string(&report).map_err(|_| "Serialize read refresh")?
+        serde_json::to_string(&output).map_err(|_| "Serialize read refresh")?
     );
     Ok(0)
 }
@@ -237,29 +329,38 @@ pub fn initialize_handoff(pipe: &str) -> Result<u32> {
         .into_iter()
         .map(|entry| (entry.account, Secret::new(entry.password)))
         .collect();
-    let reply = match provision(&passwords) {
-        Ok(sids) => HandoffReply::Provisioned {
-            version: 1,
-            sids: sids
+    maintenance_handoff::serve(
+        &mut PipeIo(&channel),
+        || setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS),
+        |lock| {
+            Ok(provision(lock, &passwords)?
                 .into_iter()
                 .map(|(account, sid)| HandoffSid { account, sid })
-                .collect(),
+                .collect::<Vec<_>>())
         },
-        Err(message) => HandoffReply::Failed {
-            version: 1,
-            message,
-        },
-    };
-    let failed = matches!(reply, HandoffReply::Failed { .. });
-    write_frame(&mut PipeIo(&channel), &reply).map_err(|_| "Send handoff reply failed")?;
-    Ok(if failed { 1 } else { 0 })
+    )
 }
 
 /// Elevated half of `account-uninstall`.
 pub fn remove_elevated() -> Result<u32> {
     require_elevated()?;
-    remove_everything()?;
+    let lock = setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS)?;
+    remove_everything(&lock)?;
     Ok(0)
+}
+
+/// Holds the same lease for removal, including desktop-owned ACL and credential cleanup.
+pub fn remove_handoff(pipe: &str) -> Result<u32> {
+    require_elevated()?;
+    if !pipe.starts_with(r"\\.\pipe\yuantu-sbx-handoff-") {
+        return Err("Invalid handoff pipe".into());
+    }
+    let channel = connect(pipe, FILE_GENERIC_READ | FILE_GENERIC_WRITE)?;
+    maintenance_handoff::serve(
+        &mut PipeIo(&channel),
+        || setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS),
+        remove_everything,
+    )
 }
 
 struct ComApartment;
@@ -328,15 +429,8 @@ fn wait_success(process: &Handle) -> Result<()> {
     Ok(())
 }
 
-/// `account-setup`: user-facing initialization; UAC only when the current process is not elevated.
-pub fn setup() -> Result<u32> {
-    // A failed or cancelled re-initialization must not leave an old marker claiming readiness.
-    setup_marker::remove()?;
-    let passwords = generate_all()?;
-    if elevated()? {
-        let sids = provision(&passwords)?;
-        return finish_initialization(passwords, &sids);
-    }
+/// Starts the fixed elevated half, verifies its PID, and waits for it only after the user's completion reply.
+fn with_elevated_handoff<T>(command: &str, run: impl FnOnce(&Handle) -> Result<T>) -> Result<T> {
     let name = format!(r"\\.\pipe\yuantu-sbx-handoff-{}", random_suffix()?);
     let channel = server(
         &name,
@@ -345,51 +439,75 @@ pub fn setup() -> Result<u32> {
         true,
         1,
     )?;
-    let process = elevate(&format!("account-initialize --handoff {name}"))?;
+    let process = elevate(&format!("{command} --handoff {name}"))?;
     accept(&channel)?;
     if client_pid(&channel)? != unsafe { GetProcessId(process.0) } {
-        return Err("A process other than the elevated initializer opened the handoff pipe".into());
+        return Err("A process other than the elevated maintainer opened the handoff pipe".into());
     }
-    let request = HandoffRequest {
-        version: 1,
-        passwords: passwords
-            .iter()
-            .map(|(account, secret)| HandoffPassword {
-                account: *account,
-                password: secret.expose().to_string(),
-            })
-            .collect(),
-    };
-    write_frame(&mut PipeIo(&channel), &request).map_err(|_| "Send handoff request failed")?;
-    drop(request);
-    let reply: HandoffReply =
-        read_frame(&mut PipeIo(&channel)).map_err(|_| "The elevated initializer did not reply")?;
-    let sids = match reply {
-        HandoffReply::Provisioned { version: 1, sids } => sids
-            .into_iter()
-            .map(|entry| (entry.account, entry.sid))
-            .collect::<Vec<_>>(),
-        HandoffReply::Failed { message, .. } => return Err(message),
-        _ => return Err("Unsupported handoff reply".into()),
-    };
-    wait_success(&process)?;
-    finish_initialization(passwords, &sids)
+    let result = run(&channel);
+    // An early user-side failure must close the pipe before waiting, so the helper can release its lock.
+    drop(channel);
+    let exited = wait_success(&process);
+    let value = result?;
+    exited?;
+    Ok(value)
+}
+
+/// `account-setup`: every mutation, including desktop-owned state, is covered by the same setup lock.
+pub fn setup() -> Result<u32> {
+    let passwords = generate_all()?;
+    if elevated()? {
+        let lock = setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS)?;
+        setup_marker::remove()?;
+        let sids = provision(&lock, &passwords)?;
+        return finish_initialization(passwords, &sids);
+    }
+    with_elevated_handoff("account-initialize", |channel| {
+        let request = HandoffRequest {
+            version: 1,
+            passwords: passwords
+                .iter()
+                .map(|(account, secret)| HandoffPassword {
+                    account: *account,
+                    password: secret.expose().to_string(),
+                })
+                .collect(),
+        };
+        write_frame(&mut PipeIo(channel), &request).map_err(|_| "Send handoff request failed")?;
+        drop(request);
+        maintenance_handoff::run(
+            &mut PipeIo(channel),
+            setup_marker::remove,
+            |sids: Vec<HandoffSid>| {
+                let sids = sids
+                    .into_iter()
+                    .map(|entry| (entry.account, entry.sid))
+                    .collect::<Vec<_>>();
+                finish_initialization(passwords, &sids)
+            },
+        )
+    })
 }
 
 /// `account-uninstall`: user-facing removal; UAC only when the current process is not elevated.
 pub fn uninstall() -> Result<u32> {
-    // Remove the marker first: an interrupted uninstall must be judged not ready.
-    setup_marker::remove()?;
-    remove_user_grants()?;
-    if elevated()? {
-        remove_everything()?;
+    let prepare = || {
+        setup_marker::remove()?;
+        remove_user_grants()
+    };
+    let finish = |()| {
         credentials::remove()?;
-        return print_status();
+        print_status()
+    };
+    if elevated()? {
+        let lock = setup_lock::acquire(SETUP_LOCK_TIMEOUT_MS)?;
+        prepare()?;
+        remove_everything(&lock)?;
+        return finish(());
     }
-    let process = elevate("account-remove --elevated")?;
-    wait_success(&process)?;
-    credentials::remove()?;
-    print_status()
+    with_elevated_handoff("account-remove", |channel| {
+        maintenance_handoff::run(&mut PipeIo(channel), prepare, finish)
+    })
 }
 
 fn group_sid() -> Result<String> {
@@ -437,8 +555,8 @@ mod tests {
                 .is_err()
         );
         assert!(
-            serde_json::from_str::<HandoffReply>(
-                r#"{"type":"provisioned","version":1,"sids":[],"x":1}"#
+            serde_json::from_str::<HandoffSid>(
+                r#"{"account":"offline","sid":"S-1-5-21-1-2-3-4","x":1}"#
             )
             .is_err()
         );

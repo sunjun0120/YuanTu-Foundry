@@ -1,4 +1,4 @@
-import { readdirSync, readSync, openSync, closeSync, statSync, lstatSync } from 'node:fs';
+import { lstat, open, readdir, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Tool, ToolContext } from '../protocol/index.ts';
@@ -200,27 +200,23 @@ function isIgnored(name: string): boolean {
   );
 }
 /** Reads at most `MAX_READ_BYTES` from a regular file, returning '' for anything unreadable. */
-function readHead(file: string): string | null {
-  let descriptor: number | undefined;
+async function readHead(file: string): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    const stats = statSync(file);
+    const stats = await stat(file);
     if (!stats.isFile() || stats.size > MAX_FILE_BYTES) return null;
-    descriptor = openSync(file, 'r');
+    handle = await open(file, 'r');
     const buffer = Buffer.allocUnsafe(Math.min(MAX_READ_BYTES, Math.max(1, stats.size)));
-    const read = readSync(descriptor, buffer, 0, buffer.length, 0);
-    const text = buffer.subarray(0, read).toString('utf8');
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const text = buffer.subarray(0, bytesRead).toString('utf8');
     // A NUL byte means binary (or UTF-16); skip it rather than outline mojibake.
     return text.includes('\0') ? null : text;
   } catch {
     return null;
   } finally {
-    if (descriptor !== undefined) {
-      try {
-        closeSync(descriptor);
-      } catch {
-        /* Nothing useful to do if the descriptor is already gone. */
-      }
-    }
+    await handle?.close().catch(() => {
+      /* Nothing useful to do if the descriptor is already gone. */
+    });
   }
 }
 function outline(text: string, rules: OutlineRule[], limit: number): RepoSymbol[] {
@@ -241,9 +237,16 @@ function outline(text: string, rules: OutlineRule[], limit: number): RepoSymbol[
  * Walks the workspace and outlines every supported source file, sorted by path so the same tree always
  * produces the same map. Symlinks are not followed: a link out of the workspace would outline files
  * the agent is not allowed to read.
+ *
+ * Asynchronous because it runs at the start of every run on the Host's one thread: hundreds of directory reads and
+ * file heads done synchronously paused every other session for as long as the disk took. The I/O now waits on
+ * libuv's pool and the thread only does the per-entry bookkeeping between them.
  */
-export function buildRepoMap(root: string, options: RepoMapOptions = {}): RepoMap {
-  return outlineRepoFiles(scanRepoFiles(root, options.maxFiles ?? DEFAULT_MAX_FILES), options);
+export async function buildRepoMap(root: string, options: RepoMapOptions = {}): Promise<RepoMap> {
+  return await outlineRepoFiles(
+    await scanRepoFiles(root, options.maxFiles ?? DEFAULT_MAX_FILES),
+    options,
+  );
 }
 
 interface RepoScan {
@@ -253,14 +256,14 @@ interface RepoScan {
 }
 
 /** The cache and builder inspect the same bounded set of source files, without reading their contents. */
-function scanRepoFiles(root: string, maxFiles: number): RepoScan {
+async function scanRepoFiles(root: string, maxFiles: number): Promise<RepoScan> {
   const files: RepoScan['files'] = [];
   const fingerprint = createHash('sha256');
   const maxDirectories = Math.max(DEFAULT_MAX_FILES, maxFiles) * 4;
   let directories = 0;
   let stopped = false;
   let truncated = false;
-  const walk = (directory: string, relative: string, depth: number): void => {
+  const walk = async (directory: string, relative: string, depth: number): Promise<void> => {
     if (stopped) return;
     // Empty or unsupported-only trees must not make a per-round freshness check unbounded.
     if (depth > 64 || directories >= maxDirectories) {
@@ -271,7 +274,7 @@ function scanRepoFiles(root: string, maxFiles: number): RepoScan {
     directories++;
     let entries;
     try {
-      entries = readdirSync(directory, { withFileTypes: true });
+      entries = await readdir(directory, { withFileTypes: true });
     } catch {
       return;
     }
@@ -281,7 +284,7 @@ function scanRepoFiles(root: string, maxFiles: number): RepoScan {
       const child = path.join(directory, entry.name);
       const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        walk(child, childRelative, depth + 1);
+        await walk(child, childRelative, depth + 1);
         continue;
       }
       if (!entry.isFile()) continue;
@@ -293,7 +296,7 @@ function scanRepoFiles(root: string, maxFiles: number): RepoScan {
         return;
       }
       try {
-        const stats = lstatSync(child);
+        const stats = await lstat(child);
         if (!stats.isFile()) continue;
         fingerprint.update(
           JSON.stringify([
@@ -311,19 +314,26 @@ function scanRepoFiles(root: string, maxFiles: number): RepoScan {
       files.push({ absolute: child, relative: childRelative, rules });
     }
   };
-  walk(root, '', 0);
+  await walk(root, '', 0);
   fingerprint.update(String(truncated));
   return { files, key: fingerprint.digest('hex'), truncated };
 }
 
-function outlineRepoFiles(scan: RepoScan, options: RepoMapOptions = {}): RepoMap {
+/** File heads read at once; enough to keep the pool busy without opening hundreds of descriptors together. */
+const READ_CONCURRENCY = 16;
+
+async function outlineRepoFiles(scan: RepoScan, options: RepoMapOptions = {}): Promise<RepoMap> {
   const perFile = options.symbolsPerFile ?? DEFAULT_SYMBOLS_PER_FILE;
   const files: RepoFile[] = [];
-  for (const file of scan.files) {
-    const head = readHead(file.absolute);
-    if (head === null) continue;
-    const symbols = outline(head, file.rules, perFile);
-    if (symbols.length) files.push({ path: file.relative, symbols });
+  for (let start = 0; start < scan.files.length; start += READ_CONCURRENCY) {
+    const batch = scan.files.slice(start, start + READ_CONCURRENCY);
+    const heads = await Promise.all(batch.map((file) => readHead(file.absolute)));
+    batch.forEach((file, index) => {
+      const head = heads[index];
+      if (head === null || head === undefined) return;
+      const symbols = outline(head, file.rules, perFile);
+      if (symbols.length) files.push({ path: file.relative, symbols });
+    });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, scannedFiles: scan.files.length, truncated: scan.truncated };
@@ -370,12 +380,15 @@ const cache = new Map<string, { key: string; map: RepoMap; budgetChars: number; 
 export function repoMapEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.YUANTU_REPO_MAP !== 'off';
 }
-export function repoMapContext(root: string, budgetChars = REPO_MAP_PROMPT_BUDGET): string {
+export async function repoMapContext(
+  root: string,
+  budgetChars = REPO_MAP_PROMPT_BUDGET,
+): Promise<string> {
   if (!repoMapEnabled()) return '';
-  const scan = scanRepoFiles(root, DEFAULT_MAX_FILES);
+  const scan = await scanRepoFiles(root, DEFAULT_MAX_FILES);
   const cached = cache.get(root);
   if (cached && cached.key === scan.key && cached.budgetChars === budgetChars) return cached.text;
-  const map = cached?.key === scan.key ? cached.map : outlineRepoFiles(scan);
+  const map = cached?.key === scan.key ? cached.map : await outlineRepoFiles(scan);
   const text = formatRepoMap(map, budgetChars);
   cache.set(root, { key: scan.key, map, budgetChars, text });
   return text;
@@ -454,7 +467,7 @@ export function repoMapTools(
         const limit =
           typeof args.limit === 'number' && Number.isSafeInteger(args.limit) ? args.limit : 60;
         if (!query) {
-          const text = formatRepoMap(buildRepoMap(root), 8_000);
+          const text = formatRepoMap(await buildRepoMap(root), 8_000);
           /**
            * The bounded map keeps its own limits, and now says which ones they are.
            *
@@ -616,8 +629,8 @@ export function repoMapTools(
           };
         }
         const lowered = query.toLowerCase();
-        const matches = buildRepoMap(root)
-          .files.flatMap((file) =>
+        const matches = (await buildRepoMap(root)).files
+          .flatMap((file) =>
             file.symbols
               .filter((symbol) => symbol.name.toLowerCase().includes(lowered))
               .map((symbol) => `${file.path}:${symbol.line} ${symbol.kind} ${symbol.name}`),

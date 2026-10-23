@@ -34,7 +34,7 @@ export function setupPlanPanel(actions: {
   isOperating(): boolean;
   /** Whether the gate's buttons are refused: the session is running, or a command of this window is. */
   isBusy(): boolean;
-  select(command: CarrierCommand): void;
+  select(command: CarrierCommand): Promise<unknown>;
   setError(message: string | null): void;
 }): { render(plan: Plan | null): void } {
   let planKey = '';

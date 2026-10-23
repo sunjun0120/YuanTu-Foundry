@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import {
@@ -152,14 +151,9 @@ test('a refused durable completion cannot emit a completed card', async (t) => {
 });
 
 test('a provider with a child in another store reports unsupported settlement instead of success', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-foreign-child-'));
-  const store = new SessionStore(path.join(root, 'parent.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-foreign-child-', 'parent.sqlite');
   const foreign = new SessionStore(path.join(root, 'foreign.sqlite'));
-  t.after(async () => {
-    store.close();
-    foreign.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => foreign.close());
   const session = store.create(root);
   const child = foreign.create(root);
   let starts = 0;
@@ -762,9 +756,14 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
   const residency = new SubAgentResidency();
   t.after(() => residency.disposeAll());
   let childTurns = 0;
+  let enterChild!: () => void;
+  const childEntered = new Promise<void>((resolve) => {
+    enterChild = resolve;
+  });
   const provider: Provider = {
     async complete(request) {
       if (isChild(request)) {
+        request.signal.throwIfAborted();
         childTurns++;
         if (childTurns > 1) return reply('second turn answer');
         // The first turn never finishes on its own: the parent's run end has to stop it.
@@ -772,12 +771,15 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
           request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
             once: true,
           });
+          enterChild();
         });
       }
-      if (request.messages.some((message) => message.role === 'tool'))
+      if (request.messages.some((message) => message.role === 'tool')) {
+        await childEntered;
         return request.messages.some((message) => message.content.includes('second turn answer'))
           ? reply('Done')
           : reply('Done');
+      }
       return toolCall('delegate-1', 'delegate_task', {
         tasks: [{ objective: 'Slow work' }],
         wait: false,
@@ -799,6 +801,13 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
     prompt: 'Start slow work in the background',
   });
   assert.equal(first.status, 'completed', first.error);
+  assert.equal(childTurns, 1, 'the cancelled turn reached the child provider');
+  assert.ok(
+    store
+      .events(session.id)
+      .some((event) => event.type === 'subagent.finished' && event.data.status === 'cancelled'),
+    'the in-flight child is durably recorded as cancelled',
+  );
   assert.equal(
     residency.list().length,
     1,

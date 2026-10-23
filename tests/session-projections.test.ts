@@ -267,13 +267,7 @@ test('the messages projection is the transcript a session read returns', async (
 });
 
 test('the statistics projection equals what the runs table implies', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-projection-stats-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-projection-stats-');
   const session = store.create(root);
   let turn = 0;
   const agent = new Agent({
@@ -304,13 +298,7 @@ test('the statistics projection equals what the runs table implies', async (t) =
 });
 
 test('a compaction contributes the tokens it cost, and the table agrees', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-projection-compact-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-projection-compact-');
   const session = store.create(root);
   store.append(session.id, { role: 'user', content: 'first' });
   store.append(session.id, { role: 'assistant', content: 'answer', toolCalls: [] });
@@ -665,13 +653,7 @@ test('the cards a reader sees are the latest finished run, plus children left in
 });
 
 test('a fresh database never creates the assignment table', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cards-fresh-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { db: file } = await storeFixture(t, 'yuantu-cards-fresh-');
   const reader = new DatabaseSync(file);
   const tables = reader
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='subagent_assignments'")

@@ -24,7 +24,7 @@ import type {
   JobSnapshot,
 } from '../packages/protocol/jobs.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
-import { tempRoot } from './temp-fixture.ts';
+import { storeFixture, tempRoot } from './temp-fixture.ts';
 
 const snapshot = (over: Partial<JobSnapshot> & { id: string; kind: JobKind }): JobSnapshot => ({
   sessionId: 'session-a',
@@ -203,14 +203,9 @@ test('pre-aborted subagent output refuses without waiting or taking delivery', a
 
 for (const failure of ['cursor', 'messages', 'statistics'] as const) {
   test(`failed subagent output at ${failure} preserves the unread settlement until retry`, async (t) => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-job-delivery-'));
-    const store = new SessionStore(path.join(directory, 'sessions.sqlite'));
+    const { root: directory, store, cleanup } = await storeFixture(t, 'yuantu-job-delivery-');
     const residency = new SubAgentResidency();
-    t.after(async () => {
-      await residency.disposeAll();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
-    });
+    cleanup(() => residency.disposeAll());
     const parent = store.create(directory);
     const child = store.create(directory);
     store.recordEvent(parent.id, 'subagent.assigned', {
@@ -450,14 +445,9 @@ test('command jobs are read and stopped through the unified surface, in their ow
 });
 
 test('subagent output reads the window it returns, with the cursors the joined text had', async (t) => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'yuantu-job-window-'));
-  const store = new SessionStore(path.join(directory, 'sessions.sqlite'));
+  const { root: directory, store, cleanup } = await storeFixture(t, 'yuantu-job-window-');
   const residency = new SubAgentResidency();
-  t.after(async () => {
-    await residency.disposeAll();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
-  });
+  cleanup(() => residency.disposeAll());
   const parent = store.create(directory);
   const child = store.create(directory);
   store.recordEvent(parent.id, 'subagent.assigned', {

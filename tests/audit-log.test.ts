@@ -31,6 +31,7 @@ import type {
 } from '../packages/protocol/index.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { reply, scriptedProvider } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
 
@@ -48,12 +49,7 @@ const writeFrame = (file: string, id = 'call-write') => ({
   input: { path: file, content: '写好了' },
 });
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-audit-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-audit-', 'session.sqlite');
   const events: AgentEvent[] = [];
   return { root, store, tools: createTools(root), session: store.create(root), events };
 }

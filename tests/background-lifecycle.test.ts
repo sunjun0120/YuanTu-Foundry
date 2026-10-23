@@ -10,15 +10,9 @@ import { setBackgroundPolicy, backgroundState } from '../packages/core/backgroun
 import { listeningHost, connectClient, connectSocket } from './listening-host-fixture.ts';
 import { socketTransport } from '../packages/client/host-transport.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
+import { until } from './wait-fixture.ts';
 
 const policy = { mode: 'auto' as const, paused: false, maxWakeups: 2, maxRunMs: 10000 };
-async function until(check: () => boolean | Promise<boolean>, ms = 10000) {
-  const end = Date.now() + ms;
-  while (!(await check())) {
-    if (Date.now() > end) throw Error('condition timed out');
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
 function fakeController() {
   const listeners = new Set<(e: AgentEvent) => void>(),
     requests: { method: string; params: unknown }[] = [];

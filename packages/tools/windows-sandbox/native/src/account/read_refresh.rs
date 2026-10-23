@@ -1,6 +1,7 @@
 //! `read-refresh`: the automatic read roots, granted before the first sandboxed command of a Host process.
 //!
-//! The desktop side calls this once per environment (see `ensureReadRefresh` in `sandbox-account.ts`), unelevated:
+//! The desktop side calls this before each command, sharing identical refreshes that are still running
+//! (see `ensureReadRefresh` in `sandbox-account.ts`), unelevated:
 //! roots are discovered from `PATH` and the toolchain variables, each new root gets one inheritable
 //! `YuanTuSandboxUsers` RX ACE plus explicit denials on the credential files inside it, and a root that is no
 //! longer discovered is revoked: uninstalling a toolchain shrinks the allowlist by itself.
@@ -10,7 +11,7 @@
 use super::{
     credentials,
     grants::reads::{self, Mode, Source},
-    read_roots,
+    read_roots, ssh_config,
 };
 use serde::Serialize;
 use std::{
@@ -45,7 +46,7 @@ pub(crate) fn refresh_with(
     profile: &Path,
     journal_path: &Path,
 ) -> crate::Result<RefreshReport> {
-    let discovered = read_roots::discover(env, profile);
+    let mut discovered = read_roots::discover(env, profile);
     let _lock = reads::journal_lock(journal_path)?;
     let mut journal = reads::load(journal_path)?;
     let mut report = RefreshReport {
@@ -53,6 +54,16 @@ pub(crate) fn refresh_with(
         roots: Vec::new(),
         skipped: Vec::new(),
     };
+    // 0. A root holding a key, certificate or known-hosts file the SSH config names counts as not discovered: it is
+    //    never granted, and one granted earlier is revoked with the stale roots below.
+    let ssh = ssh_config::dependencies(profile);
+    discovered.retain(|root| {
+        let holds = ssh_config::holds_dependency(root, profile, &ssh);
+        if holds {
+            report.skip(root, "Holds a file the SSH configuration uses".into());
+        }
+        !holds
+    });
     // 1. Grant every discovered root, and re-run the credential guard on the ones already granted: a token file
     //    created since the last refresh must be denied too.
     for root in &discovered {
@@ -237,6 +248,88 @@ mod tests {
         let report = fixture.refresh();
         assert!(report.roots.is_empty());
         assert!(report.skipped.is_empty());
+        assert!(fixture.journal().grants.is_empty());
+    }
+
+    #[test]
+    fn a_root_holding_a_file_the_ssh_config_uses_is_never_granted_and_is_revoked_once_it_does() {
+        let mut fixture = Fixture::new("ssh");
+        if !reads::may_change_dacl(&fixture.profile) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let tools = fixture.tools();
+        fixture.env.insert("PATH".into(), display(&tools));
+        assert_eq!(fixture.refresh().roots, vec![display(&tools)]);
+        // A key later kept in the granted root, and named by the SSH config, takes the root away.
+        std::fs::write(tools.join("deploy_key"), "PRIVATE").unwrap();
+        std::fs::create_dir_all(fixture.profile.join(".ssh")).unwrap();
+        std::fs::write(
+            fixture.profile.join(r".ssh\config"),
+            "Host deploy\n  IdentityFile ~/Tools/deploy_key\n",
+        )
+        .unwrap();
+        let report = fixture.refresh();
+        assert!(report.roots.is_empty(), "{:?}", report.roots);
+        assert_eq!(report.skipped.len(), 1, "{:?}", report.skipped);
+        assert!(
+            report.skipped[0].reason.contains("SSH"),
+            "{:?}",
+            report.skipped
+        );
+        assert!(fixture.journal().grants.is_empty());
+    }
+
+    #[test]
+    fn an_ssh_dependency_with_parent_components_revokes_the_automatic_root() {
+        let mut fixture = Fixture::new("ssh-parent");
+        assert!(reads::may_change_dacl(&fixture.profile));
+        let tools = fixture.tools();
+        fixture.env.insert("PATH".into(), display(&tools));
+        assert_eq!(fixture.refresh().roots, vec![display(&tools)]);
+        std::fs::write(tools.join("deploy_key"), "PRIVATE").unwrap();
+        std::fs::create_dir_all(fixture.profile.join(".ssh")).unwrap();
+        std::fs::write(
+            fixture.profile.join(".ssh/config"),
+            "IdentityFile ~/.ssh/../Tools/deploy_key\n",
+        )
+        .unwrap();
+        let report = fixture.refresh();
+        assert!(report.roots.is_empty(), "{report:?}");
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|entry| entry.reason.contains("SSH"))
+        );
+        assert!(fixture.journal().grants.is_empty());
+    }
+
+    #[test]
+    fn an_ssh_dependency_excludes_sibling_tool_directories_in_the_same_profile_child() {
+        let mut fixture = Fixture::new("ssh-sibling");
+        assert!(reads::may_change_dacl(&fixture.profile));
+        let tools = fixture.tools();
+        std::fs::create_dir_all(tools.join("bin")).unwrap();
+        std::fs::create_dir_all(tools.join("keys")).unwrap();
+        std::fs::write(tools.join("keys/deploy_key"), "PRIVATE").unwrap();
+        std::fs::create_dir_all(fixture.profile.join(".ssh")).unwrap();
+        std::fs::write(
+            fixture.profile.join(".ssh/config"),
+            "IdentityFile ~/Tools/keys/deploy_key\n",
+        )
+        .unwrap();
+        fixture
+            .env
+            .insert("PATH".into(), display(&tools.join("bin")));
+        let report = fixture.refresh();
+        assert!(report.roots.is_empty(), "{report:?}");
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|entry| entry.reason.contains("SSH"))
+        );
         assert!(fixture.journal().grants.is_empty());
     }
 

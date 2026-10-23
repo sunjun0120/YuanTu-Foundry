@@ -6,17 +6,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { excludeRuntimeState } from '../packages/workspaces/runtime-exclude.ts';
 import { tempRoot } from './temp-fixture.ts';
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-};
+import { git } from './git-fixture.ts';
 
 /** The test runner switches the exclusion off for every Host and CLI it starts; these cases switch it back on. */
 const ENABLED = { env: { ...process.env, YUANTU_GIT_EXCLUDE: '1' } };
@@ -28,10 +22,6 @@ test('YUANTU_GIT_EXCLUDE=0 leaves the repository untouched', async (t) => {
   assert.equal(await excludeRuntimeState(root, { env: { YUANTU_GIT_EXCLUDE: '0' } }), false);
   assert.ok(untracked(root).includes('.yuantu/sessions.sqlite'));
 });
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 /** What `git status` reports as untracked, one path per entry. */
 function untracked(cwd: string): string[] {

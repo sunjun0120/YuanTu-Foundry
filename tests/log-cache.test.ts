@@ -9,8 +9,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -48,13 +46,7 @@ test('a read after a write sees the write, and repeated reads reuse one fold', a
 });
 
 test('a write from another connection is visible to a store that already folded the log', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-foreign-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const reader = new SessionStore(file);
-  t.after(async () => {
-    reader.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store: reader } = await storeFixture(t, 'yuantu-cache-foreign-');
   const session = reader.create(root);
   reader.append(session.id, { role: 'user', content: 'mine' });
   const cold = reader.messages(session.id);
@@ -125,13 +117,7 @@ test('a message that cannot be written is refused by the append, not by a later 
 });
 
 test('an uncommitted append is visible inside its own transaction, not before it commits', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-transaction-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-cache-transaction-');
   const session = store.create(root);
   const runId = store.beginRun(session.id);
   store.append(session.id, {
@@ -184,15 +170,9 @@ const journalOf = (store: SessionStore): JournalProbe =>
   (store as unknown as { journal: JournalProbe }).journal;
 
 test('another connection’s commit is caught up by reading its tail, not by refolding the log', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-tail-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const reader = new SessionStore(file);
+  const { root, db: file, store: reader, cleanup } = await storeFixture(t, 'yuantu-cache-tail-');
   const writer = new SessionStore(file);
-  t.after(async () => {
-    writer.close();
-    reader.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => writer.close());
   const session = reader.create(root);
   for (let index = 0; index < 20; index++)
     reader.append(session.id, { role: 'user', content: `mine ${index}` });
@@ -221,13 +201,7 @@ test('another connection’s commit is caught up by reading its tail, not by ref
 });
 
 test('a session another connection deleted is dropped from the fold, not served from it', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-cache-foreign-delete-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const reader = new SessionStore(file);
-  t.after(async () => {
-    reader.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store: reader } = await storeFixture(t, 'yuantu-cache-foreign-delete-');
   const session = reader.create(root);
   reader.append(session.id, { role: 'user', content: 'doomed' });
   assert.deepEqual(transcript(reader.messages(session.id)), ['doomed']);

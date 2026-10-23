@@ -966,7 +966,7 @@ new ResizeObserver(() => {
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
 setupGeneralSettings();
-setupSandboxInitialization();
+const sandboxInitialization = setupSandboxInitialization();
 modelSettings = setupModelSettings(
   () =>
     Boolean(
@@ -998,5 +998,6 @@ permissionSettings = setupPermissionSettings(
   // The chip is drawn by the main process's own answer, which arrives before the Host can accept a change: the
   // rungs stay locked until the desktop says it is ready, instead of a click failing with a startup message.
   () => Boolean(state?.ready),
+  (mode) => sandboxInitialization.setMode(mode),
 );
 void invoke({ type: 'snapshot' }).then(render);

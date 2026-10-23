@@ -8,6 +8,7 @@
  * the files are read-only), and what command line. See docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md.
  */
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -160,7 +161,12 @@ async function readiness(): Promise<string | null> {
   if (process.platform !== 'win32')
     return 'The Windows sandbox account backend only runs on Windows';
   const current = status ? await status.catch(() => undefined) : await refreshAccountReadiness();
-  if (!current) return 'The Windows sandbox account helper is unavailable';
+  if (!current)
+    return existsSync(configuration.helper)
+      ? 'The Windows sandbox helper in this installation did not answer its status check; ' +
+          'reinstall YuanTu to run sandboxed commands'
+      : `The Windows sandbox helper is missing from this installation (${configuration.helper}); ` +
+          'reinstall YuanTu to run sandboxed commands';
   if (current.ready) return null;
   const state = current.problems.includes('setup-marker-missing')
     ? 'The Windows sandbox accounts have not been initialized'
@@ -168,9 +174,8 @@ async function readiness(): Promise<string | null> {
       ? 'The Windows sandbox setup marker is from an older version and needs to be repaired'
       : `The Windows sandbox accounts are not ready (${current.problems.join(', ')})`;
   return (
-    `${state}. Open Settings > General > Windows sandbox accounts to initialize or repair them. ` +
-    'If administrator initialization is impossible, select the weaker "windows" sandbox mode manually: it has ' +
-    'no separate account, weaker network isolation, and known child-process spawn EPERM failures.'
+    `${state}. Set them up from the Windows sandbox prompt above the message box. ` +
+    'Sandboxed commands remain blocked until initialization or repair succeeds.'
   );
 }
 
@@ -261,27 +266,42 @@ const REFRESH_ENVIRONMENT = [
   'USERPROFILE',
 ] as const;
 
-const readRefreshes = new Map<string, Promise<void>>();
+/** What the helper's `read-refresh` reports; only `error` is read here. */
+export interface ReadRefreshResult {
+  /** Why the read roots could not be refreshed. The command still runs, without them. */
+  error?: string;
+}
+
+const readRefreshes = new Map<string, Promise<ReadRefreshResult>>();
 
 /**
- * Authorizes the toolchain roots this environment names, once per environment per process.
+ * Before each command: protects the reserved names of the workspace `root` (a `.git` made since the last command,
+ * a worktree's `.git` file), then authorizes the toolchain roots. Only identical refreshes that are still running
+ * are shared.
  *
- * The helper decides what those roots are; this side only decides *when* to ask. A different `PATH` (a version
- * manager switching toolchains) asks again, and a failed refresh is forgotten so the next command retries.
+ * Refresh can revoke another environment's automatic roots, so a completed refresh cannot answer a later request:
+ * switching A to B and back to A must ask the helper again. Both success and failure discard their own entry.
+ * A rejection means the reserved names could not be protected; a failed refresh of the read roots is `error`.
  */
-export async function ensureReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
-  const values = REFRESH_ENVIRONMENT.map((name) => env[name] ?? '');
+export async function ensureReadRefresh(
+  env: NodeJS.ProcessEnv,
+  root?: string,
+): Promise<ReadRefreshResult> {
+  const values = [...REFRESH_ENVIRONMENT.map((name) => env[name] ?? ''), root ?? ''];
   const key = createHash('sha256').update(JSON.stringify(values)).digest('hex');
   let pending = readRefreshes.get(key);
   if (!pending) {
-    pending = runReadRefresh(env);
-    readRefreshes.set(key, pending);
-    pending.catch(() => readRefreshes.delete(key));
+    const created = runReadRefresh(env, root).finally(() => {
+      // Maintenance may have cleared the map and started a newer refresh for the same environment.
+      if (readRefreshes.get(key) === created) readRefreshes.delete(key);
+    });
+    readRefreshes.set(key, created);
+    pending = created;
   }
-  await pending;
+  return pending;
 }
 
-async function runReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
+async function runReadRefresh(env: NodeJS.ProcessEnv, root?: string): Promise<ReadRefreshResult> {
   const requested: Record<string, string> = {};
   for (const name of REFRESH_ENVIRONMENT) {
     const value = env[name];
@@ -290,9 +310,18 @@ async function runReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
   const requests = path.join(configuration.state, 'requests');
   await mkdir(requests, { recursive: true });
   const file = path.join(requests, `${randomBytes(16).toString('hex')}.json`);
-  await writeFile(file, JSON.stringify({ version: 1, env: requested }), { flag: 'wx' });
+  await writeFile(file, JSON.stringify({ version: 1, env: requested, ...(root ? { root } : {}) }), {
+    flag: 'wx',
+  });
   try {
-    await configuration.run(configuration.helper, ['read-refresh', '--env', file]);
+    const output = await configuration.run(configuration.helper, ['read-refresh', '--env', file]);
+    let error: unknown;
+    try {
+      error = (JSON.parse(output) as ReadRefreshResult | null)?.error;
+    } catch {
+      /* An unreadable report says nothing about the read roots; the reserved names were protected. */
+    }
+    return typeof error === 'string' ? { error } : {};
   } finally {
     // The helper deletes the request once it has read it; a helper that never started must not leave it behind.
     await rm(file, { force: true });
@@ -341,15 +370,22 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   );
   // Even a read-only command needs the grant: the group's ACE is what lets the account read the workspace.
   await ensureGrant(root, capability);
-  // The toolchains this environment names are authorized once per process, before the first command runs. A failure
-  // must not stop the command: the workspace grant above is all it needs, and a missing read root shows up as the
-  // tool not being found rather than as a launch failure.
-  await ensureReadRefresh(env).catch((failure: unknown) => {
+  // Before each command the workspace's reserved names are protected and the toolchains this environment names are
+  // refreshed; identical concurrent requests share it. Protection failing stops the command: a reserved directory a
+  // sandboxed command could still write must not sit beside the next one. A failed read-root refresh does not: the
+  // workspace grant above is all a command needs, and a missing read root shows up as the tool not being found.
+  let refreshed: ReadRefreshResult;
+  try {
+    refreshed = await ensureReadRefresh(env, root);
+  } catch (failure) {
+    const message = failure instanceof Error ? failure.message : String(failure);
+    throw new Error(`The workspace's protected directories could not be secured (${message}).`);
+  }
+  if (refreshed.error)
     console.error(
       'sandbox account: the automatic read roots could not be refreshed',
-      failure instanceof Error ? failure.message : failure,
+      refreshed.error,
     );
-  });
   const account: SandboxAccount = request.config.network === 'denied' ? 'offline' : 'online';
   let pipe: string;
   try {
@@ -357,8 +393,8 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   } catch (failure) {
     const message = failure instanceof Error ? failure.message : String(failure);
     throw new Error(
-      `The Windows sandbox account runner could not start (${message}). Open Settings > General > ` +
-        'Windows sandbox accounts to repair or reinitialize the accounts.',
+      `The Windows sandbox account runner could not start (${message}). If restarting YuanTu does not help, ` +
+        'uninstall the accounts in Settings > General > Windows sandbox accounts and set them up again.',
     );
   }
   const command = accountCommand(request, env);
@@ -374,6 +410,10 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
       env,
       capabilities: request.config.files === 'read-only' ? [] : [capability],
       verbatim: command.verbatim,
+      // The runner's console of this size; exec relays it to the host's pseudo terminal and passes on resizes.
+      ...(request.terminal
+        ? { tty: { columns: request.terminal.columns, rows: request.terminal.rows } }
+        : {}),
     }),
     { flag: 'wx' },
   );

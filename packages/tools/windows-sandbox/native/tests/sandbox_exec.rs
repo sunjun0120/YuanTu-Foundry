@@ -3,6 +3,7 @@
 //! confinement — that needs a real sandbox account (plan 2b acceptance).
 #![cfg(all(windows, debug_assertions))]
 use serde_json::json;
+use std::os::windows::process::CommandExt;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
@@ -55,12 +56,17 @@ impl Drop for Broker {
 }
 
 fn broker() -> Broker {
+    broker_with_flags(0)
+}
+
+fn broker_with_flags(flags: u32) -> Broker {
     // The dev runner inherits this environment and makes per-command scratch under its TEMP; point it at the
     // test target directory so the tests do not depend on the machine's TEMP being writable.
     let temp = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runner-temp");
     std::fs::create_dir_all(&temp).unwrap();
     let mut child = Command::new(EXE)
         .args(["broker", "--dev"])
+        .creation_flags(flags)
         .env("TEMP", &temp)
         .env("TMP", &temp)
         .stdin(Stdio::piped())
@@ -182,6 +188,95 @@ fn long_running(broker: &Broker, node: &str) -> (Child, Watch) {
         .unwrap();
     let pid: u32 = line.trim().parse().unwrap();
     (child, Watch::new(pid))
+}
+
+#[test]
+fn commands_run_on_a_private_desktop_not_the_users_own() {
+    let broker = broker();
+    let probe = exec(
+        &broker.pipe,
+        &request(&[env!("CARGO_BIN_EXE_desktop-probe")], r"C:\"),
+        "",
+    );
+    assert_eq!(probe.status.code(), Some(0), "{probe:?}");
+    let desktop = stdout(&probe);
+    assert!(
+        desktop.starts_with("YuanTuSandboxDesktop-"),
+        "the command ran on {desktop:?}"
+    );
+}
+
+fn with_tty(mut value: serde_json::Value, columns: u16, rows: u16) -> serde_json::Value {
+    value["tty"] = json!({ "columns": columns, "rows": rows });
+    value
+}
+
+#[test]
+fn a_tty_request_runs_on_a_pseudo_console_and_a_plain_one_on_pipes() {
+    let broker = broker();
+    let probe = env!("CARGO_BIN_EXE_console-probe");
+    let tty = exec(
+        &broker.pipe,
+        &with_tty(request(&[probe], r"C:\"), 100, 30),
+        "",
+    );
+    assert_eq!(tty.status.code(), Some(0), "{tty:?}");
+    assert!(
+        stdout(&tty).contains("console 100"),
+        "a TTY command did not see a 100-column console: {:?}",
+        stdout(&tty)
+    );
+    let plain = exec(&broker.pipe, &request(&[probe], r"C:\"), "");
+    assert_eq!(stdout(&plain), "redirected");
+}
+
+#[test]
+fn a_tty_command_output_reaches_exec() {
+    let broker = broker();
+    let echo = exec(
+        &broker.pipe,
+        &with_tty(
+            verbatim(request(&[&cmd(), "/c echo tty-hello"], r"C:\")),
+            80,
+            24,
+        ),
+        "",
+    );
+    assert_eq!(echo.status.code(), Some(0), "{echo:?}");
+    assert!(stdout(&echo).contains("tty-hello"), "{:?}", stdout(&echo));
+}
+
+#[test]
+fn a_tty_command_does_not_inherit_ignored_ctrl_c_from_its_runner() {
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+    let node = require_node!();
+    let broker = broker_with_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    let script = "process.on('SIGINT',()=>process.exit(0));console.log('INTERRUPT_READY');setTimeout(()=>process.exit(2),4000);";
+    let mut child = exec_command(
+        &broker.pipe,
+        &with_tty(request(&[&node, "-e", script], r"C:\"), 80, 24),
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut transcript = String::new();
+    while !transcript.contains("INTERRUPT_READY") {
+        assert_ne!(
+            reader.read_line(&mut transcript).unwrap(),
+            0,
+            "{transcript}"
+        );
+    }
+    child.stdin.as_mut().unwrap().write_all(b"\x03").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "Ctrl+C was ignored: {output:?}"
+    );
 }
 
 #[test]

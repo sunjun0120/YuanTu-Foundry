@@ -6,7 +6,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -25,20 +24,7 @@ import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 import { runCli } from './process-fixture.ts';
 import { storeFixture, tempRoot } from './temp-fixture.ts';
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
+import { git } from './git-fixture.ts';
 
 /** A pid nothing is running as: far above any pid a test machine hands out. */
 const DEAD_PID = 2_147_000_000;

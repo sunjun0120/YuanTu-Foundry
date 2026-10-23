@@ -52,6 +52,16 @@ export interface SandboxRequest {
   config: SandboxConfig;
   /** Trusted consumer configuration, never guest-controlled process flags. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Set when the plan will run inside a pseudo terminal (`terminal_open`). A backend whose command does not inherit
+   * the terminal directly — the Windows account runner, on another console and desktop — gives the command a
+   * terminal of its own of this size. Other backends ignore it.
+   */
+  terminal?: TerminalSize;
+}
+export interface TerminalSize {
+  columns: number;
+  rows: number;
 }
 export interface SandboxProvider {
   mode: SandboxMode;

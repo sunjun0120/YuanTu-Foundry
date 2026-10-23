@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { readdir, rm, stat } from 'node:fs/promises';
+import { lstatSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstat, readdir, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import type { SpilledOutput } from '../protocol/index.ts';
@@ -178,17 +178,52 @@ export async function sweepSpills(input: {
   return result;
 }
 /** Keep the newest `MAX_SPILL_FILES_PER_SESSION` files. Not being able to trim is not a reason to fail. */
-function trimSpills(directory: string): void {
+function lstatOrNull(file: string) {
   try {
-    const files = readdirSync(directory)
-      .filter((name) => name.endsWith('.txt'))
-      .map((name) => ({ name, at: statSync(path.join(directory, name)).mtimeMs }))
-      .sort((a, b) => b.at - a.at);
+    return lstatSync(file);
+  } catch {
+    return null;
+  }
+}
+/**
+ * Trims in flight, per directory, and the directories that spilled again while theirs ran.
+ *
+ * The trim used to run synchronously after every spill — a `readdir` and fifty `lstat`s on the Host's event
+ * loop, inside the tool pipeline's result stage. It is housekeeping, so it runs in the background instead: one at
+ * a time per directory, and a spill that lands while one is running asks for one more pass rather than a second
+ * concurrent one.
+ */
+const trimming = new Map<string, Promise<void>>();
+const trimAgain = new Set<string>();
+function trimSpills(directory: string): void {
+  if (trimming.has(directory)) {
+    trimAgain.add(directory);
+    return;
+  }
+  const run = (async () => {
+    do {
+      trimAgain.delete(directory);
+      await trimOnce(directory);
+    } while (trimAgain.has(directory));
+  })().finally(() => trimming.delete(directory));
+  trimming.set(directory, run);
+}
+async function trimOnce(directory: string): Promise<void> {
+  try {
+    const names = (await readdir(directory)).filter((name) => name.endsWith('.txt'));
+    const files = await Promise.all(
+      names.map(async (name) => ({ name, at: (await lstat(path.join(directory, name))).mtimeMs })),
+    );
+    files.sort((a, b) => b.at - a.at);
     for (const file of files.slice(MAX_SPILL_FILES_PER_SESSION))
-      unlinkSync(path.join(directory, file.name));
+      await rm(path.join(directory, file.name), { force: true });
   } catch {
     /* Trimming is housekeeping. */
   }
+}
+/** Resolves once every trim started so far has finished; for callers that need to observe the result. */
+export async function settleSpillTrims(): Promise<void> {
+  while (trimming.size) await Promise.all(trimming.values());
 }
 /**
  * Put the full text of a result somewhere the model can read it back, at a path derived from the result.
@@ -210,19 +245,26 @@ export function spillResult(input: {
   const file = path.join(directory, `shortened-${digest.slice(0, 16)}.txt`);
   const text = input.content;
   const bytes = Buffer.byteLength(text, 'utf8');
-  try {
-    if (statSync(file).size === bytes) return describe(input.workspace, file, text, bytes);
-  } catch {
-    /* Not there yet, or unreadable: writing it is the answer either way. */
-  }
   ensureRuntimeDirectory(directory, { mode: DIRECTORY_MODE });
+  // `lstat`, not `stat`: a link planted under this name must not be measured, let alone reused.
+  const existing = lstatOrNull(file);
+  if (existing?.isFile() && existing.size === bytes)
+    return describe(input.workspace, file, text, bytes);
   /**
-   * `w`, not `wx`: this name is the message's identity, so rewriting an existing file is the intended repair
-   * when the projection's output changed, and the early return above is what keeps the common case from
-   * touching the disk at all. `mode` only applies to a file this call creates, which is exactly the case that
-   * needs it — an older spill keeps whatever it was created with.
+   * Rewriting under this name is the intended repair when the projection's output changed — the name is the
+   * message's identity — and the early return above keeps the common case off the disk. It used to be a plain
+   * `w` write, which follows a link already sitting at the name and writes wherever it points. The text goes to a
+   * fresh `wx` file instead and is renamed over the name: a rename replaces a link rather than following it, and
+   * the result is a new 0600 file even where an older spill had other permissions.
    */
-  writeFileSync(file, text, { encoding: 'utf8', mode: FILE_MODE });
+  const stage = `${file}.${randomUUID().slice(0, 8)}.tmp`;
+  writeFileSync(stage, text, { encoding: 'utf8', flag: 'wx', mode: FILE_MODE });
+  try {
+    renameSync(stage, file);
+  } catch (error) {
+    rmSync(stage, { force: true });
+    throw error;
+  }
   trimSpills(directory);
   return describe(input.workspace, file, text, bytes);
 }

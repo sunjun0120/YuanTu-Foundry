@@ -373,13 +373,13 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 桌面运行中也可以切换权限预设，新的选择立即作用于尚未执行的工具。等待授权的调用按新权限允许或拒绝，开始执行前再次核对执行环境；下一轮模型请求同步更新工具列表与环境说明。已经启动的命令、后台进程、终端和语言服务器保留创建时的执行环境。
 
-`YUANTU_SANDBOX` 接受 `native`、`windows`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。Windows 的 `windows` 是显式选择的受限令牌后端，不会由 `native` 自动回退。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
+`YUANTU_SANDBOX` 接受 `native`、`windows-account`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。应用命令及 hook 启动配置中的旧 `windows` 会迁到 `native`，隔离预设不再保留旧后端；底层受限令牌 provider 仅用于显式兼容性检查。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
 文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端（`windows`）使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径，因此拒绝严格进程只读及断网请求。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，WFP 断网，子进程可正常 fork）；`native` 在 Windows 上始终选择它，未初始化或标记版本不对时拒绝执行并提示去设置页初始化/修复，**不会自动回退**到 `windows`。基础验收入口为 `npm.cmd run check:windows-sandbox`，两个后端的边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
-Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复跑。
+Windows 账户主流程通过 `npm.cmd run check:windows-sandbox`、桌面闭环通过 `npm.cmd run check:windows-desktop-sandbox` 验证。两者只在已初始化账户的 GitHub 托管 Windows runner 上运行，要求 `FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS=1`，由 workflow 负责初始化及始终清理；本机不执行账户维护。旧后端专属验收通过 `npm.cmd run check:windows-legacy-sandbox` 单独运行，不属于默认主流程。
 
 Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩包、`node.exe` 与许可证哈希及发布者 GPG 指纹由 [运行时锁](build/windows-runtime.lock.json) 固定。`npm.cmd run fetch:windows-runtime` 下载并以签名的 `SHASUMS256.txt.asc` 校验后生成候选（`.scratch/windows-runtime/node-v<版本>-win-x64`），`npm.cmd run check:windows-runtime-source` 重验已有候选，`npm.cmd run package:windows:candidate:dir` 打包该候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。
 
@@ -565,7 +565,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 | 域         | 方法                                                                                                                                                                                                       |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`sandbox.refresh`、`permission.update`、`invariants.list`                                                                                                     |
+| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`sandbox.refresh`、`permission.update`、`invariants.list`、`host.health`                                                                                      |
 | 会话       | `session.create`、`session.list`、`session.rename`、`session.archive`、`session.delete`、`session.recover`、`session.get`、`session.audit`、`session.events`                                               |
 | 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                                            |
 | 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                                     |
@@ -627,7 +627,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 78 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 82 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -651,6 +651,9 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_MAX_PARALLEL_TOOLS` | `1–32` | 一条助手消息里可同时运行的工具调用上限（1 = 严格串行；只对声明了并行安全的工具生效） |
 | `YUANTU_EARLY_TOOL_START` | `0` / `1` | 模型仍在输出时，提前执行参数已完整的只读工具调用（默认关闭；只对声明了 earlyStart 的纯读取工具生效，结果仍按模型顺序落盘） |
 | `YUANTU_QUESTION_TIMEOUT_MS` | `1000–3600000` | 模型向用户提问的等待超时（毫秒） |
+| `YUANTU_MAX_RUN_ROUNDS` | `0–100000` | 单次运行最多的模型轮次（0 = 不限；默认不限，失控由时长与 token 上限兜底） |
+| `YUANTU_MAX_RUN_MS` | `0–86400000` | 单次运行的墙钟上限（毫秒，0 = 不限；默认 2 小时） |
+| `YUANTU_MAX_RUN_TOKENS` | `0–1000000000` | 单次运行累计消耗的模型 token 上限（输入 + 输出，0 = 不限；默认 2000 万） |
 | `YUANTU_TOOL_TIMEOUT_MS` | `0–3600000` | 单次工具调用的墙钟上限（毫秒，0 = 不设上限） |
 | `YUANTU_INVARIANT_TIMEOUT_MS` | `100–600000` | 单条运行时不变量检查的超时（毫秒） |
 | `YUANTU_WORKSPACE` | `string` | 工作区目录 |
@@ -705,6 +708,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SESSION_TITLES` | `0` / `1` | 是否用一次模型调用为会话生成标题（默认开启） |
 | `YUANTU_WORKFLOW_INTERVAL_MS` | `1000–86400000` | 调度器两次查看之间的最长间隔（到期时刻会直接唤醒它；这里是上限与兜底） |
 | `YUANTU_HOST_MAX_RUNS` | `1–8` | 同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行） |
+| `YUANTU_HOST_STALL_MS` | `20–60000` | Host 事件循环被同步工作占住多久（毫秒）记为一次卡顿并写入 stderr（默认 200） |
 | `YUANTU_LIBREOFFICE_PATH` | `string` | 可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com） |
 | `YUANTU_NODE_PATH` | `string` | （测试）子进程使用的 node 路径 |
 | `YUANTU_QA_DIR` | `string` | （测试）QA 产物目录 |
@@ -738,11 +742,11 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 285 个 | `tests/*.test.ts` |
+| 行为测试文件 | 293 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 62 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| Host JSON-RPC 方法 | 63 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->
@@ -768,7 +772,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它。查询会核对源文件清单、大小与 mtime，发现外部新增、删除、重命名或改写后刷新索引；可选完整哈希核对用于大小与 mtime 均未变化的改写。调用方可取消刷新等待，共享构建继续供后续查询使用。单文件超过 8 MiB、读取失败或清单扫描截断时，覆盖状态明确标为不完整；读取失败的文件会在后续查询重试。凭据与依赖目录同样不进入索引。
 - **符号分页绑定查询与来源版本**：将 `repo_map` 返回的 `nextCursor` 作为 `cursor`，保留同一 `query` 即可续页；索引与已启动语言服务器均支持分页。查询、来源版本变化或游标失效后会拒绝续页，应从第一页重新检索。
 - **快速搜索后端需要固定资产**：`literal` + 区分大小写可走固定版本的 ripgrep，仅使用 `build/search-assets.lock.json` 中已记录 SHA-256 且校验通过的二进制；打包时由 `scripts/copy-search-assets.mjs` 核验后放入应用资源。没有可用资产、或执行环境无法安全启动进程时，一律回退内置流式扫描，不回退 host 进程。
-- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝。沙箱内启动的进程无法再创建需要继承管道的子进程——Node 的 `child_process` 会得到 `spawn EPERM`——所以 `node --test`、vitest、jest 一类会 fork 的测试运行器在基础后端下不可用；不 fork 的测试文件（直接 `node tests/x.test.mjs`）可以运行。需要这类工具时应初始化 Windows 沙箱账户并使用 `native`（`windows-account` 后端没有这个限制）；如果管理员初始化无法完成，可由用户手动选择较弱的 `windows`，而不是等待自动回退。
+- **旧 Windows 基础沙箱仅保留兼容性检查**：它是部分写入边界，读取与网络不受限，也有子进程 `spawn EPERM` 限制。应用及主流程 CI 使用 `native` 对应的账户后端，支持正常 fork、严格只读及按账户断网；初始化无法完成时拒绝执行并提示修复。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
@@ -809,7 +813,7 @@ npm.cmd run docs:generate   # 重写 README 的生成事实块
 
 覆盖率入口同样使用隔离调度器，将各 worker 的原始 V8 报告保留至本次独有的覆盖率产物目录，再由 Node 24 自带的覆盖率合并实现按源码范围聚合。全套阈值仍为行 90%、分支 75%、函数 85%，不会逐文件套用全套阈值，也不会把同一源码重复计入分母；没有原始报告或合并失败均拒绝通过。合并器依赖 Node 24 的内部覆盖率 API，升级 Node 主版本时需先核对该接口。
 
-`npm test` 默认把新测试放进隔离并行池：每文件独立 Node 进程、tmp/home/state/cache/artifacts，cwd 保持仓库根且只读；监听使用 loopback 与端口 0。禁止 `process.chdir` 和写出当前 worker 私有根。文件头 `// @test-serial resource: reason` 只用于真实共享机器资源（windows-sandbox、machine-lease、real-pty、desktop-ui、os-credentials），并行池完全结束后才独占执行串行组；标签不关闭私有文件和端口约束。`test:partitioned` 是默认行为的兼容入口；`test:serial` 使用同一隔离契约。`--parallel-concurrency` 与 `--concurrency` 等价，`--plan` 不执行测试。探针违规、报告缺失和清理失败均使运行失败。普通状态通过 `YUANTU_STATE_DIR` 隔离，单项显式覆盖仍优先；原生 Windows 安全控制目录保持真实机器边界。被中断的运行若留下机器资源租约，下一次运行会核对 owner 进程：进程已不存在时按 token 校验后回收，进程仍存活（或无法确认）时继续等待而不是删除别人的租约。测试日志说明 Node 探针覆盖与外部进程夹具路径约束的区别，此工程隔离不提供恶意代码的操作系统级隔离。
+`npm test` 默认把新测试放进隔离并行池：每文件独立 Node 进程、tmp/home/state/cache/artifacts，cwd 保持仓库根且只读；监听使用 loopback 与端口 0。禁止 `process.chdir` 和写出当前 worker 私有根。文件头 `// @test-serial resource: reason` 只用于真实共享机器资源（windows-sandbox、machine-lease、real-pty、desktop-ui、os-credentials），并行池完全结束后才独占执行串行组；跨进程时每种资源各有一份租约（锁目录下的 `<资源>.lock`），按名称排序依次获取、取不全则退还已取得的，所以只用不同资源的两次运行可以同时进行；标签不关闭私有文件和端口约束。`test:partitioned` 是默认行为的兼容入口；`test:serial` 使用同一隔离契约。`--parallel-concurrency` 与 `--concurrency` 等价，`--plan` 不执行测试。探针违规、报告缺失和清理失败均使运行失败。普通状态通过 `YUANTU_STATE_DIR` 隔离，单项显式覆盖仍优先；原生 Windows 安全控制目录保持真实机器边界。被中断的运行若留下机器资源租约，下一次运行会核对 owner 进程：进程已不存在时按 token 校验后回收，进程仍存活（或无法确认）时继续等待而不是删除别人的租约。测试日志说明 Node 探针覆盖与外部进程夹具路径约束的区别，此工程隔离不提供恶意代码的操作系统级隔离。
 
 成功且完整的全量运行会将每文件耗时原子保存到 `.scratch/cache`，按操作系统、架构和 Node 主版本区分；覆盖率使用单独记录。后续全量并行运行按历史耗时降序派发，未测量文件优先探索，等耗时按文件名排序；没有历史时按文件名排序。`--order=name` 可固定文件名顺序，`--duration-history=path` 可指定记录文件。显式文件选择、名称过滤与串行模式保留既有派发方式；失败、取消、不完整或过滤运行不更新历史。耗时记录只影响派发顺序，不改变资源分组、隔离或通过标准。
 

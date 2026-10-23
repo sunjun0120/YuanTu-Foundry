@@ -264,7 +264,11 @@ function cleanEnvironment(): NodeJS.ProcessEnv {
 async function execute(validation: Validation, ctx: ToolContext): Promise<ToolResult> {
   if (resolveSandboxConfig().mode !== 'host') {
     const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
-    const windows = resolveSandboxConfig().mode === 'windows';
+    const mode = resolveSandboxConfig().mode;
+    const windows =
+      mode === 'windows' ||
+      mode === 'windows-account' ||
+      (mode === 'native' && process.platform === 'win32');
     // npm is a .cmd shim, so fixed script invocations need cmd's resolution. Other Windows
     // validations use native argv, preserving literal test names without shell interpolation.
     const npm = windows && validation.command === 'npm';

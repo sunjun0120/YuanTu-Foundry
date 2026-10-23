@@ -1,26 +1,20 @@
 // Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { runCli } from './process-fixture.ts';
 import { pausedSkip } from './product-scope-skip.ts';
 import type { FileChange } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-audit-storage-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
+  const { root, db: file, store, cleanup } = await storeFixture(t, 'yuantu-audit-storage-');
   const other = new SessionStore(file);
   const db = new DatabaseSync(file);
-  t.after(async () => {
+  cleanup(async () => {
     other.close();
-    store.close();
     db.close();
-    await rm(root, { recursive: true, force: true });
   });
   return { root, file, store, other, db, session: store.create(root) };
 }

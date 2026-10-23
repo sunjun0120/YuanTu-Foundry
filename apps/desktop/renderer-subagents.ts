@@ -237,7 +237,7 @@ export function setupSubAgents(
     processHistory.open = false;
     viewerKey = '';
     storedAssistantCount = -1;
-    send({
+    void send({
       type: 'subagentTranscript',
       subagentId: view.id,
       childSessionId: view.childSessionId,
@@ -614,7 +614,7 @@ export function setupSubAgents(
   function leaveChild(): void {
     if (page === null) return;
     page = null;
-    send({ type: 'closeSubagentTranscript' });
+    void send({ type: 'closeSubagentTranscript' });
     paintPage();
     // Back where the reader was: the page scrolled to its own top on the way in, and the conversation they
     // left is not the same place.

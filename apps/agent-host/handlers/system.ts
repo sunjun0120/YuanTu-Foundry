@@ -68,6 +68,7 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
        * restriction that is not in force (see `CarrierService.applySelection`).
        */
       'execution-policy-files-network-v1',
+      'host-health-v1',
     ],
   }),
   'runtime.ready': async (ctx, params) => {
@@ -75,6 +76,15 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
     ctx.automaticReady = true;
     ctx.queueWake();
     return { ready: true };
+  },
+  /** How the one JS thread every session shares is doing, and the recent stalls with what was running then. */
+  'host.health': async (ctx, params) => {
+    if (Object.keys(params).length) throw new Error('Invalid host health parameters');
+    return {
+      eventLoop: ctx.loopHealth?.snapshot() ?? null,
+      activeRuns: ctx.active.size,
+      maxActiveRuns: ctx.maxActiveRuns,
+    };
   },
   /**
    * With a session, the violations that session's last reporting run left; without one, the Host's most recent.

@@ -23,10 +23,22 @@ pub fn discover(env: &BTreeMap<String, String>, profile: &Path) -> Vec<PathBuf> 
         .unwrap_or_default();
     let mut candidates: Vec<PathBuf> = Vec::new();
     // 1. PATH entries under the profile: the toolchain the user's shell already finds.
-    candidates.extend(path.iter().filter(|directory| under(&key(directory), &key(home))).cloned());
+    candidates.extend(
+        path.iter()
+            .filter(|directory| under(&key(directory), &key(home)))
+            .cloned(),
+    );
     // 2. Toolchains whose executables live in `bin`, and whose own root holds credentials: grant only `bin`.
-    candidates.push(variable(env, "CARGO_HOME").unwrap_or_else(|| home.join(".cargo")).join("bin"));
-    candidates.push(variable(env, "GOPATH").unwrap_or_else(|| home.join("go")).join("bin"));
+    candidates.push(
+        variable(env, "CARGO_HOME")
+            .unwrap_or_else(|| home.join(".cargo"))
+            .join("bin"),
+    );
+    candidates.push(
+        variable(env, "GOPATH")
+            .unwrap_or_else(|| home.join("go"))
+            .join("bin"),
+    );
     candidates.push(home.join(".bun").join("bin"));
     candidates.push(home.join(".deno").join("bin"));
     // 3. Self-contained roots: the toolchain is the directory, and its layout is not a credential store.
@@ -42,7 +54,10 @@ pub fn discover(env: &BTreeMap<String, String>, profile: &Path) -> Vec<PathBuf> 
     if let Ok(entries) = std::fs::read_dir(local.join("Programs")) {
         for entry in entries.flatten() {
             let installed = entry.path();
-            if path.iter().any(|directory| under(&key(directory), &key(&installed))) {
+            if path
+                .iter()
+                .any(|directory| under(&key(directory), &key(&installed)))
+            {
                 candidates.push(installed);
             }
         }
@@ -144,10 +159,14 @@ mod tests {
         let outside = fixture.outside("Elsewhere");
         fixture.env.insert(
             "PATH".into(),
-            std::env::join_paths([inside.clone(), outside, PathBuf::from(r"C:\Windows\System32")])
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
+            std::env::join_paths([
+                inside.clone(),
+                outside,
+                PathBuf::from(r"C:\Windows\System32"),
+            ])
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
         );
         let roots = fixture.discover();
         assert!(roots.contains(&inside));
@@ -197,22 +216,83 @@ mod tests {
     #[test]
     fn the_environment_moves_every_root_it_names() {
         let mut fixture = Fixture::new("env");
-        for directory in [r"tools\bin", r"tools\cargo\bin", r"tools\rustup", r"tools\nvm", r"tools\pnpm", r"tools\scoop\shims", r"tools\scoop\apps"] {
+        for directory in [
+            r"tools\bin",
+            r"tools\cargo\bin",
+            r"tools\rustup",
+            r"tools\nvm",
+            r"tools\pnpm",
+            r"tools\scoop\shims",
+            r"tools\scoop\apps",
+        ] {
             fixture.dir(directory);
         }
         // Windows stores these names in whatever case the writer used: `Path` is the usual spelling of `PATH`, and
         // the environment itself is case-insensitive.
-        fixture.env.insert("Path".into(), fixture.profile.join(r"tools\bin").to_string_lossy().into_owned());
-        fixture.env.insert("CARGO_HOME".into(), fixture.profile.join(r"tools\cargo").to_string_lossy().into_owned());
-        fixture.env.insert("RUSTUP_HOME".into(), fixture.profile.join(r"tools\rustup").to_string_lossy().into_owned());
-        fixture.env.insert("NVM_HOME".into(), fixture.profile.join(r"tools\nvm").to_string_lossy().into_owned());
-        fixture.env.insert("PNPM_HOME".into(), fixture.profile.join(r"tools\pnpm").to_string_lossy().into_owned());
-        fixture.env.insert("SCOOP".into(), fixture.profile.join(r"tools\scoop").to_string_lossy().into_owned());
+        fixture.env.insert(
+            "Path".into(),
+            fixture
+                .profile
+                .join(r"tools\bin")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        fixture.env.insert(
+            "CARGO_HOME".into(),
+            fixture
+                .profile
+                .join(r"tools\cargo")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        fixture.env.insert(
+            "RUSTUP_HOME".into(),
+            fixture
+                .profile
+                .join(r"tools\rustup")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        fixture.env.insert(
+            "NVM_HOME".into(),
+            fixture
+                .profile
+                .join(r"tools\nvm")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        fixture.env.insert(
+            "PNPM_HOME".into(),
+            fixture
+                .profile
+                .join(r"tools\pnpm")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        fixture.env.insert(
+            "SCOOP".into(),
+            fixture
+                .profile
+                .join(r"tools\scoop")
+                .to_string_lossy()
+                .into_owned(),
+        );
         // A symlink outside the profile is not ours to grant; neither is an empty NVM_SYMLINK.
-        fixture.env.insert("NVM_SYMLINK".into(), fixture.outside("nodejs").to_string_lossy().into_owned());
+        fixture.env.insert(
+            "NVM_SYMLINK".into(),
+            fixture.outside("nodejs").to_string_lossy().into_owned(),
+        );
         fixture.env.insert("GOPATH".into(), String::new());
         let roots = fixture.discover();
-        for directory in [r"tools\bin", r"tools\cargo\bin", r"tools\rustup", r"tools\nvm", r"tools\pnpm", r"tools\scoop\shims", r"tools\scoop\apps"] {
+        for directory in [
+            r"tools\bin",
+            r"tools\cargo\bin",
+            r"tools\rustup",
+            r"tools\nvm",
+            r"tools\pnpm",
+            r"tools\scoop\shims",
+            r"tools\scoop\apps",
+        ] {
             assert!(fixture.has(&roots, directory), "{directory}: {roots:?}");
         }
         assert_eq!(roots.len(), 7, "{roots:?}");

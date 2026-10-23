@@ -6,6 +6,7 @@ import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts
 import { safeError } from '../shared/runtime.ts';
 import { createVerifier } from './approvals.ts';
 import { createBackgroundWake } from './background-wake.ts';
+import { DEFAULT_STALL_THRESHOLD_MS, EventLoopMonitor } from './event-loop-health.ts';
 import { HostCarrier } from './carrier.ts';
 import { resolveLaunch } from './cli.ts';
 import { createDispatcher, createRequestHandler } from './dispatch.ts';
@@ -52,6 +53,18 @@ async function runHost(launch: Launch): Promise<void> {
   // Before the first command: `native` on Windows uses the sandbox accounts only once they are known ready.
   await refreshAccountReadiness();
   const ctx = createHostState(launch, services);
+  const requestMethods = new Map<string, string>();
+  ctx.loopHealth = new EventLoopMonitor({
+    thresholdMs:
+      (parseSetting(process.env, 'YUANTU_HOST_STALL_MS') as number | undefined) ??
+      DEFAULT_STALL_THRESHOLD_MS,
+    activity: () => ({
+      sessions: [...ctx.active.keys()],
+      operations: ctx.manualOperations.size,
+      requests: [...requestMethods.values()],
+    }),
+  });
+  ctx.loopHealth.start();
   ctx.carrier = new HostCarrier({
     listen: options.listen,
     authToken: parseSetting(process.env, 'YUANTU_HOST_TOKEN') as string | undefined,
@@ -119,6 +132,7 @@ async function runHost(launch: Launch): Promise<void> {
     dispatch: ctx.dispatch,
     send: (data) => ctx.carrier.send(data),
     requestIds: ctx.requestIds,
+    requestMethods,
   });
   await serveHost(ctx);
 }

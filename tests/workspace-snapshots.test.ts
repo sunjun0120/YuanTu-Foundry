@@ -22,6 +22,7 @@ import {
 } from '../packages/workspaces/snapshot.ts';
 import { repositoryIdentity } from '../packages/workspaces/git.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { GIT_ENV, git } from './git-fixture.ts';
 
 /**
  * Freezing a working directory into a baseline.
@@ -30,20 +31,6 @@ import { tempRoot } from './temp-fixture.ts';
  * bytes*, that the user's own repository was not touched while producing it, and that an input this version cannot
  * reproduce is refused by name instead of being frozen approximately.
  */
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 /**
  * A repository with one commit, plus the store a manager would use.

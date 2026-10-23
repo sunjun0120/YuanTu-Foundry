@@ -7,7 +7,17 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { ensureRuntimeDirectory } from '../packages/platform/runtime-directory.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -62,3 +72,51 @@ test('an ordinary runtime directory is created level by level', async (t) => {
   // Idempotent: a second call over the directories it made is not an error.
   ensureRuntimeDirectory(target);
 });
+
+test('a session store refuses a database file or sidecar that is a link', async (t) => {
+  const base = await tempRoot(t, 'yuantu-runtime-file-link-');
+  const workspace = path.join(base, 'workspace');
+  const outside = path.join(base, 'outside.sqlite');
+  mkdirSync(path.join(workspace, '.yuantu'), { recursive: true });
+  writeFileSync(outside, '');
+  for (const name of ['sessions.sqlite', 'sessions.sqlite-wal']) {
+    const link = path.join(workspace, '.yuantu', name);
+    try {
+      symlinkSync(outside, link, 'file');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return t.skip('no symlink privilege');
+      throw error;
+    }
+    assert.throws(
+      () => new SessionStore(path.join(workspace, '.yuantu', 'sessions.sqlite')),
+      /Runtime file cannot be a symbolic link/,
+    );
+    rmSync(link);
+  }
+  assert.equal(readFileSync(outside, 'utf8'), '');
+});
+
+test(
+  'the session database and its runtime directory are private to the user',
+  { skip: process.platform === 'win32' && 'Windows has no mode bits; the workspace ACL applies' },
+  async (t) => {
+    const workspace = await tempRoot(t, 'yuantu-runtime-private-');
+    const runtime = path.join(workspace, '.yuantu');
+    const file = path.join(runtime, 'sessions.sqlite');
+    const mode = (target: string) => statSync(target).mode & 0o777;
+
+    const store = new SessionStore(file);
+    store.create(workspace);
+    assert.equal(mode(runtime), 0o700);
+    assert.equal(mode(file), 0o600);
+    if (existsSync(`${file}-wal`)) assert.equal(mode(`${file}-wal`), 0o600);
+    store.close();
+
+    // State from an older build, created with the umask's defaults, is narrowed when it is opened again.
+    chmodSync(runtime, 0o755);
+    chmodSync(file, 0o644);
+    new SessionStore(file).close();
+    assert.equal(mode(runtime), 0o700);
+    assert.equal(mode(file), 0o600);
+  },
+);

@@ -1,8 +1,8 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import {
@@ -24,6 +24,7 @@ import {
 } from '../packages/tools/sandbox-account-broker.ts';
 import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 const windowsOnly = process.platform !== 'win32' && 'the account backend only runs on Windows';
@@ -110,7 +111,7 @@ test('the helper status is accepted only in exactly its own shape', () => {
     assert.throws(() => parseAccountStatus(broken), broken);
 });
 
-test('the automatic read roots are refreshed once per environment and retried after a failure', async (t) => {
+test('read refresh retries failures and does not reuse a completed refresh', async (t) => {
   const state = await tempRoot(t, 'yuantu-account-refresh-');
   const calls: string[][] = [];
   let failures = 1;
@@ -128,60 +129,145 @@ test('the automatic read roots are refreshed once per environment and retried af
   await assert.rejects(ensureReadRefresh(env), /refresh refused/);
   await ensureReadRefresh(env);
   await ensureReadRefresh({ ...env });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.deepEqual(calls[0]![0], 'read-refresh');
   assert.equal(calls[0]![1], '--env');
   // A new PATH names other toolchains: that is a different question and is asked again.
   await ensureReadRefresh({ ...env, PATH: 'C:\\two' });
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   // The request file carries only the values discovery reads, and is gone afterwards.
   const file = calls[0]![2]!;
   assert.ok(file.startsWith(path.join(state, 'requests')));
   await assert.rejects(stat(file), { code: 'ENOENT' });
-  // Maintenance forgets the cache: the next command refreshes again.
+  // Maintenance leaves the next command free to refresh as well.
   await refreshAccountBackend();
   await ensureReadRefresh(env);
-  assert.equal(calls.filter((args) => args[0] === 'read-refresh').length, 4);
+  assert.equal(calls.filter((args) => args[0] === 'read-refresh').length, 5);
 });
 
-test('a failed refresh never stops a command', { skip: windowsOnly }, async (t) => {
+test('returning from environment B to A refreshes the automatic read roots again', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-switch-');
+  const environments: string[] = [];
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    run: async (_helper, args) => {
+      assert.equal(args[0], 'read-refresh');
+      const request = JSON.parse(await readFile(args[2]!, 'utf8'));
+      environments.push(request.env.PATH);
+      return JSON.stringify({ version: 1, roots: [request.env.PATH], skipped: [] });
+    },
+  });
+  await ensureReadRefresh({ PATH: 'C:\\one' });
+  await ensureReadRefresh({ PATH: 'C:\\two' });
+  await ensureReadRefresh({ PATH: 'C:\\one' });
+  assert.deepEqual(environments, ['C:\\one', 'C:\\two', 'C:\\one']);
+});
+
+test('concurrent identical environments share only the refresh that is still running', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-concurrent-');
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let calls = 0;
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    run: async (_helper, args) => {
+      assert.equal(args[0], 'read-refresh');
+      calls++;
+      markStarted();
+      await waiting;
+      return '{"version":1,"roots":[],"skipped":[]}';
+    },
+  });
+  const env = { PATH: 'C:\\one' };
+  const pending = Promise.all([ensureReadRefresh(env), ensureReadRefresh({ ...env })]);
+  await started;
+  assert.equal(calls, 1);
+  release();
+  await pending;
+  assert.equal(calls, 1);
+  await ensureReadRefresh(env);
+  assert.equal(calls, 2, 'a later command must not reuse the completed refresh');
+});
+
+// A broker announcement without a child process: the point here is the refresh, and a confined CI runner may
+// refuse to spawn one at all.
+const announcing: BrokerLauncher = () => {
+  const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  const [stdin, stdout, stderr] = [new PassThrough(), new PassThrough(), new PassThrough()];
+  Object.assign(child, {
+    stdin,
+    stdout,
+    stderr,
+    unref: () => {},
+    kill: () => true,
+  });
+  setImmediate(() => stdout.write(`${JSON.stringify({ version: 1, pipe: PIPE })}\n`));
+  return child as unknown as ChildProcess;
+};
+
+/** Prepares one command with `refresh` answering the helper's `read-refresh`; returns the requests it was sent. */
+async function prepareWithRefresh(
+  t: TestContext,
+  refresh: () => string,
+): Promise<{ prepared: Promise<SandboxPlan>; requests: { root?: string }[]; root: string }> {
   const state = await tempRoot(t, 'yuantu-account-refresh-fail-');
-  // A broker announcement without a child process: the point here is the refresh, and a confined CI runner may
-  // refuse to spawn one at all.
-  const announcing: BrokerLauncher = () => {
-    const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
-    const [stdin, stdout, stderr] = [new PassThrough(), new PassThrough(), new PassThrough()];
-    Object.assign(child, {
-      stdin,
-      stdout,
-      stderr,
-      unref: () => {},
-      kill: () => true,
-    });
-    setImmediate(() => stdout.write(`${JSON.stringify({ version: 1, pipe: PIPE })}\n`));
-    return child as unknown as ChildProcess;
-  };
+  const requests: { root?: string }[] = [];
   configureAccountBackend({
     helper: 'C:\\fake\\yuantu-sandbox.exe',
     state,
     run: async (_helper, args) => {
       if (args[0] === 'account-status') return status(true);
-      if (args[0] === 'read-refresh') throw new Error('refresh refused');
+      if (args[0] === 'read-refresh') {
+        requests.push(JSON.parse(await readFile(args[2]!, 'utf8')));
+        return refresh();
+      }
       if (args[0] === 'grant') return '{}';
       throw new Error(`unexpected helper call ${args.join(' ')}`);
     },
     launch: announcing,
   });
   t.after(stopBrokers);
-  const root = await tempRoot(t, 'yuantu-account-ws-');
-  const plan = await windowsAccountSandboxProvider.prepare({
+  const root = await realpath(await tempRoot(t, 'yuantu-account-ws-'));
+  const prepared = windowsAccountSandboxProvider.prepare({
     root,
     cwd: root,
     command: 'echo hi',
     config: { mode: 'windows-account', image: '' },
   });
-  assert.equal(plan.args[0], 'exec');
+  return { prepared, requests, root };
+}
+
+test('a failed read-root refresh never stops a command', { skip: windowsOnly }, async (t) => {
+  const { prepared, requests, root } = await prepareWithRefresh(t, () =>
+    JSON.stringify({ version: 1, roots: [], skipped: [], protected: [], error: 'refresh refused' }),
+  );
+  assert.equal((await prepared).args[0], 'exec');
+  // The request names the command's workspace, so its reserved names are protected first.
+  assert.equal(requests[0]?.root, root);
 });
+
+test(
+  'a workspace whose reserved names cannot be protected runs no command',
+  { skip: windowsOnly },
+  async (t) => {
+    const { prepared } = await prepareWithRefresh(t, () => {
+      throw new Error('.git cannot be protected');
+    });
+    await assert.rejects(
+      prepared,
+      /protected directories could not be secured.*\.git cannot be protected/,
+    );
+  },
+);
 
 test('a broker announcement must name one of its own pipes', () => {
   assert.equal(parseBrokerAnnouncement(JSON.stringify({ version: 1, pipe: PIPE })), PIPE);
@@ -232,7 +318,9 @@ test(
     await backend(t, false);
     await refreshAccountReadiness();
     assert.equal(nativeSandboxBackend('win32'), 'windows-account');
-    assert.match((await windowsAccountSandboxProvider.available()) ?? '', /accounts-missing/);
+    const unavailable = (await windowsAccountSandboxProvider.available()) ?? '';
+    assert.match(unavailable, /accounts-missing/);
+    assert.doesNotMatch(unavailable, /select the weaker|mode manually/);
     await backend(t, true);
     await refreshAccountReadiness();
     assert.equal(nativeSandboxBackend('win32'), 'windows-account');
@@ -296,6 +384,8 @@ test(
     const capability = await capabilityFor(root);
     assert.deepEqual(request.capabilities, [capability]);
     assert.equal(request.verbatim, true);
+    // An ordinary command runs on the host's pipes: no terminal is requested.
+    assert.equal('tty' in request, false);
     assert.equal(request.cwd.toLowerCase(), path.join(root, 'src').toLowerCase());
     assert.deepEqual(starts, ['offline']);
     assert.ok(calls.some((args) => args[0] === 'grant' && args.includes(capability)));
@@ -308,6 +398,21 @@ test(
     });
     assert.deepEqual(JSON.parse(await readFile(read.args[4]!, 'utf8')).capabilities, []);
     assert.deepEqual(starts.sort(), ['offline', 'online']);
+
+    // A terminal asks the runner for a console of its size.
+    const terminal = await windowsAccountSandboxProvider.prepare({
+      root,
+      cwd: root,
+      command: 'cmd.exe',
+      argv: [],
+      config: { mode: 'windows-account', image: '', network: 'denied' },
+      terminal: { columns: 120, rows: 40 },
+    });
+    assert.deepEqual(JSON.parse(await readFile(terminal.args[4]!, 'utf8')).tty, {
+      columns: 120,
+      rows: 40,
+    });
+    await windowsAccountSandboxProvider.cleanup(terminal);
     // One grant per workspace per process.
     assert.equal(calls.filter((args) => args[0] === 'grant').length, 1);
 

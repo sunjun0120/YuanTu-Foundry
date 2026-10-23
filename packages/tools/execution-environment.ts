@@ -12,6 +12,7 @@ import {
   markSandboxStarted,
 } from './sandbox.ts';
 import type { ExecutionPolicy, ExecutionCapabilities } from '../protocol/execution.ts';
+import type { TerminalSize } from './sandbox-provider.ts';
 import { snapshotExecutionPolicy, requireExecutionCapabilities } from './execution-policy.ts';
 export {
   executionPolicy,
@@ -30,6 +31,7 @@ export async function localExecutionEnvironment(root: string, policy: ExecutionP
     argv?: readonly string[],
     signal?: AbortSignal,
     env?: NodeJS.ProcessEnv,
+    terminal?: TerminalSize,
   ) => {
     signal?.throwIfAborted();
     requireExecutionCapabilities(fixed, {});
@@ -53,6 +55,7 @@ export async function localExecutionEnvironment(root: string, policy: ExecutionP
       },
       'command',
       env,
+      terminal,
     );
     if (signal?.aborted) {
       await cleanupSandbox(plan);

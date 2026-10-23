@@ -12,6 +12,7 @@ import { contextTail, surfaceAt } from '../packages/protocol/context.ts';
 import { contextMessageSize } from '../packages/protocol/images.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { isSummaryRequest } from './summary-request.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 // ---- a compaction is a surface replacement recorded in the log ----
 //
@@ -34,13 +35,7 @@ async function fixture(t: test.TestContext): Promise<{
   file: string;
   store: SessionStore;
 }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-surface-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-surface-');
   return { root, file, store };
 }
 /** A compaction runs when the window is too small for the history; the summary is whatever the provider says. */

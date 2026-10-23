@@ -4,12 +4,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixture } from './program-process-fixture.ts';
+import { useAccountTests, windowsAccountTests } from './windows-account-fixture.ts';
+
+useAccountTests();
 
 test(
   'a Windows program uses the selected backend and RPC writes still require approval',
-  { skip: process.platform !== 'win32' && 'needs Windows' },
+  windowsAccountTests,
   async (t) => {
-    const { tools, context, root } = await fixture(t, 'windows', { escaped: true });
+    const { tools, context, root } = await fixture(t, 'windows-account', { escaped: true });
     let approvals = 0;
     const chosen = {
       ...context,

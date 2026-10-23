@@ -11,6 +11,7 @@ import {
   type SandboxPlan,
   type SandboxProvider,
   type SandboxRequest,
+  type TerminalSize,
 } from './sandbox-provider.ts';
 import { windowsSandboxProvider } from './sandbox-windows.ts';
 import { windowsAccountSandboxProvider } from './sandbox-account.ts';
@@ -81,6 +82,7 @@ export async function prepareSandbox(
   config?: SandboxConfig,
   category: SandboxCategory = 'command',
   env?: NodeJS.ProcessEnv,
+  terminal?: TerminalSize,
 ): Promise<SandboxPlan> {
   const resolved = config ?? resolveSandboxConfig(process.env, category);
   const policy = executionPolicy(resolved.mode, resolved);
@@ -93,6 +95,7 @@ export async function prepareSandbox(
     argv,
     config: resolved,
     env,
+    terminal,
   });
 }
 
@@ -164,7 +167,7 @@ registerSandboxProvider(seatbeltSandboxProvider);
 registerSandboxProvider({
   mode: 'native',
   description:
-    'Native operating-system sandbox: Windows sandbox accounts once initialized (otherwise the Windows restricted token), or macOS Seatbelt; unavailable policies fail closed.',
+    'Native operating-system sandbox: Windows sandbox accounts or macOS Seatbelt; initialization and policy failures stop execution without fallback.',
   capabilities: (config) =>
     sandboxProvider(nativeSandboxBackend()).capabilities?.(config) ?? HOST_CAPABILITIES,
   available: async (env) => {

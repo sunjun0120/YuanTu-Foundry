@@ -114,6 +114,7 @@ jobs:
     env:
       # The UI suites launch real windows one after another; a single flaky assertion must not hide the rest.
       FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
+      FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -121,8 +122,6 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - name: Windows basic sandbox real acceptance without skips
-        run: npm run check:windows-sandbox
       - name: Windows platform regressions
         run: node scripts/run-tests.mjs tests/desktop-installation.test.ts tests/windows-install-safety.test.ts tests/native-sandbox-bundle.test.ts tests/desktop-sandbox-probe.test.ts
       - uses: dtolnay/rust-toolchain@stable
@@ -133,20 +132,26 @@ jobs:
         run: |
           npm run build:windows-sandbox
           cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml
-          node scripts/run-tests.mjs tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts tests/native-git-native.test.ts
+          node scripts/run-tests.mjs tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts
       - run: npm run build
       # Electron's lazy installation writes into node_modules, outside an isolated test worker's ownership.
       - name: Prepare Electron before isolated desktop tests
         run: node node_modules/electron/install.js
-      - name: Windows desktop basic sandbox real acceptance without skips
+      - name: Initialize sandbox accounts on the disposable Actions runner
+        id: account-setup
+        run: node scripts/windows-account-ci.mjs setup
+      - name: Windows account backend journeys without skips
+        run: npm run check:windows-sandbox
+      - name: Windows desktop account sandbox real acceptance without skips
         run: node scripts/check-windows-sandbox.mjs --desktop
-      # The runner has no initialized sandbox accounts, so `native` (windows-account) cannot run commands here.
-      # Smoke suites that do not name a backend use the explicit weaker `windows` backend; suites that set their
-      # own YUANTU_SANDBOX (host, native, ...) keep it.
-      - name: Desktop smoke on the basic Windows backend
+      # Product-default suites explicitly select native; portable UI fixtures retain their isolated host setup.
+      - name: Desktop smoke with initialized Windows sandbox accounts
         run: npm run smoke:desktop
         env:
-          YUANTU_SANDBOX: windows
+          YUANTU_SANDBOX: native
+      - name: Remove sandbox accounts and recorded grants even after a failed setup or test
+        if: always() && steps.account-setup.outcome != 'skipped' && steps.account-setup.outcome != ''
+        run: node scripts/windows-account-ci.mjs cleanup
 
   native-macos:
     needs: check

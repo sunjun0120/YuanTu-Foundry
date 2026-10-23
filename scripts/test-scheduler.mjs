@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
+import { constants, statSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, copyFile, cp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -49,10 +49,14 @@ export const DEFAULT_FILE_TIMEOUT_MS = 15 * 60 * 1000;
 /** The watchdog's own grace period between ending the tree and giving up on its `close` event. */
 const WATCHDOG_CLOSE_GRACE_MS = 15_000;
 
-/** The last case the reporter wrote for a file, or undefined when it wrote none. */
-async function lastReportedCase(timings) {
+/** The last complete case within the report prefix captured before the worker was ended. */
+export async function lastReportedCase(timings, byteLimit) {
   try {
-    const lines = (await readFile(timings, 'utf8')).trimEnd().split('\n');
+    const snapshot = (await readFile(timings)).subarray(0, byteLimit);
+    // A reporter write may still be in flight at the cutoff. Only newline-terminated records were complete.
+    const complete = snapshot.subarray(0, snapshot.lastIndexOf(0x0a) + 1).toString('utf8');
+    if (!complete) return undefined;
+    const lines = complete.trimEnd().split('\n');
     for (let index = lines.length - 1; index >= 0; index--) {
       const row = JSON.parse(lines[index]);
       if (row.kind === 'case' && typeof row.name === 'string') return row;
@@ -95,7 +99,8 @@ export async function runSchedule({
   };
   signal.addEventListener('abort', cancel);
   async function runFile(file, phase) {
-    let isolation;
+    let isolation,
+      timeoutReportBytes = 0;
     const start = performance.now();
     const result = {
       file,
@@ -173,6 +178,13 @@ export async function runSchedule({
         };
         const watchdog = setTimeout(() => {
           result.timedOut = true;
+          // Killing the worker can append Node's synthetic file failure. Freeze the report prefix first,
+          // without awaiting diagnostic I/O in the termination path or treating path-like names as synthetic.
+          try {
+            timeoutReportBytes = statSync(timings).size;
+          } catch {
+            /* No report yet; termination must still proceed. */
+          }
           console.error(
             `Test file timed out after ${Math.round(result.timeoutMs / 1000)}s: ${file} — ending its process tree`,
           );
@@ -192,7 +204,7 @@ export async function runSchedule({
       });
       result.report = await readFileReport(timings, file, root);
       if (result.timedOut) {
-        const last = await lastReportedCase(timings);
+        const last = await lastReportedCase(timings, timeoutReportBytes);
         const where = last
           ? `last reported case "${last.name}" (${Math.round(Number(last.durationMs) || 0)} ms)`
           : 'no case had reported a result';

@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { acquireResourceLease } from '../scripts/test-resource-lease.mjs';
 import { readFileReport } from '../scripts/test-report-merge.mjs';
+import { lastReportedCase } from '../scripts/test-scheduler.mjs';
 import { sourceFingerprint } from '../scripts/test-source-fingerprint.mjs';
 import { projectRoot } from './process-fixture.ts';
 import {
@@ -99,10 +100,32 @@ test('reports reject missing terminal markers, truncated JSON and foreign file s
   assert.equal(result.zeroTestFiles, 1, 'a genuinely filtered empty file is legal');
 });
 
+test('watchdog diagnostics preserve the case reported before termination even when its name is a file path', async (t) => {
+  const root = await directory(t),
+    file = path.join(root, '真实🙂 case.test.ts'),
+    timings = path.join(root, 'report.ndjson');
+  const reported = { kind: 'case', file, name: file, status: 'passed', durationMs: 5 };
+  const snapshot = JSON.stringify(reported) + '\n';
+  // Ending a worker can append a synthetic file failure after the watchdog has fired.
+  await writeFile(
+    timings,
+    snapshot + JSON.stringify({ ...reported, status: 'failed', durationMs: 1500 }) + '\n',
+  );
+  assert.deepEqual(await lastReportedCase(timings, Buffer.byteLength(snapshot)), reported);
+  assert.equal(await lastReportedCase(timings, 0), undefined);
+  assert.equal(await lastReportedCase(path.join(root, 'not-created.ndjson'), 0), undefined);
+  const unfinished = '{"kind":"case","name":"未完成🙂';
+  await writeFile(timings, snapshot + unfinished + '"}\n');
+  assert.deepEqual(
+    await lastReportedCase(timings, Buffer.byteLength(snapshot + unfinished) - 1),
+    reported,
+  );
+});
+
 test('machine resource lease excludes another process and an aborted waiter does not remove the owner', async (t) => {
   const root = await directory(t);
   const release = await acquireResourceLease(root, ['machine-lease']);
-  const original = await readFile(path.join(root, 'machine-resources.lock'), 'utf8');
+  const original = await readFile(path.join(root, 'machine-lease.lock'), 'utf8');
   const module = pathToFileURL(path.join(projectRoot, 'scripts/test-resource-lease.mjs')).href;
   const source = `import{acquireResourceLease}from ${JSON.stringify(module)};try{await acquireResourceLease(${JSON.stringify(root)},['machine-lease'],{timeoutMs:150});process.exitCode=2}catch(e){console.log(e.message)}`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', source], {
@@ -125,15 +148,39 @@ test('machine resource lease excludes another process and an aborted waiter does
   const abort = new AbortController();
   abort.abort();
   await assert.rejects(acquireResourceLease(root, ['machine-lease'], { signal: abort.signal }));
-  assert.equal(await readFile(path.join(root, 'machine-resources.lock'), 'utf8'), original);
+  assert.equal(await readFile(path.join(root, 'machine-lease.lock'), 'utf8'), original);
   release();
   const next = await acquireResourceLease(root, ['machine-lease']);
   next();
 });
 
+test('different machine resources are leased independently; a shared one still excludes', async (t) => {
+  const root = await directory(t);
+  const desktop = await acquireResourceLease(root, ['desktop-ui']);
+  // Another resource is not held up by the desktop window.
+  const sandbox = await acquireResourceLease(root, ['windows-sandbox'], { timeoutMs: 150 });
+  // A set that overlaps a held resource waits for it, and gives back what it already took when it times out.
+  await assert.rejects(
+    acquireResourceLease(root, ['real-pty', 'desktop-ui'], { timeoutMs: 150 }),
+    /Timed out waiting for machine resource lease: .*desktop-ui\.lock/,
+  );
+  await assert.rejects(readFile(path.join(root, 'real-pty.lock')), { code: 'ENOENT' });
+  desktop();
+  sandbox();
+  const both = await acquireResourceLease(root, ['windows-sandbox', 'desktop-ui', 'desktop-ui']);
+  for (const resource of ['desktop-ui', 'windows-sandbox'])
+    assert.equal(
+      JSON.parse(await readFile(path.join(root, `${resource}.lock`), 'utf8')).resource,
+      resource,
+    );
+  both();
+  for (const resource of ['desktop-ui', 'windows-sandbox'])
+    await assert.rejects(readFile(path.join(root, `${resource}.lock`)), { code: 'ENOENT' });
+});
+
 test('unknown machine resource ownership is refused without deleting the lock', async (t) => {
   const root = await directory(t),
-    file = path.join(root, 'machine-resources.lock');
+    file = path.join(root, 'machine-lease.lock');
   await writeFile(file, 'not a lease');
   await assert.rejects(acquireResourceLease(root, ['machine-lease']), /unknown ownership/);
   assert.equal(await readFile(file, 'utf8'), 'not a lease');

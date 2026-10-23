@@ -196,6 +196,10 @@ export interface AgentOptions {
   maxModelRetries?: number;
   /** How many sibling tool calls from one assistant message may be in flight at once. */
   maxParallelToolCalls?: number;
+  /** A run's total budget, `0` = that one off (see `RunDefaults.maxRunRounds`). */
+  maxRunRounds?: number;
+  maxRunMs?: number;
+  maxRunTokens?: number;
   /**
    * Start a read the model has finished writing while the rest of its turn is still streaming.
    *

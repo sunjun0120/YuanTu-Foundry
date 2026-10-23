@@ -105,6 +105,34 @@ test('cancelling one running session leaves the other session running', async (t
   assert.equal((await second).status, 'completed');
 });
 
+test('a Host with every run slot busy still answers its control plane promptly', async (t) => {
+  const { client, ids, markers, endpoint } = await sessions(t, 3);
+  const first = client.run(ids[0]!, `First ${markers[0]}`);
+  const second = client.run(ids[1]!, `Second ${markers[1]}`);
+  await endpoint.waitFor(2);
+  // Every session shares one thread: these answer only if neither run is holding it.
+  const timed = async <T>(request: Promise<T>): Promise<T> => {
+    const started = performance.now();
+    const result = await request;
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2000, `control request took ${Math.round(elapsed)}ms`);
+    return result;
+  };
+  const health = (await timed(client.request('host.health', {}))) as {
+    activeRuns: number;
+    eventLoop: unknown;
+  };
+  assert.equal(health.activeRuns, 2);
+  assert.ok(health.eventLoop);
+  await timed(client.request('session.rename', { sessionId: ids[2]!, title: 'Renamed meanwhile' }));
+  assert.deepEqual(await timed(client.request('run.cancel', { sessionId: ids[0]! })), {
+    cancelled: true,
+  });
+  assert.equal((await first).status, 'cancelled');
+  endpoint.release(markers[1]!);
+  assert.equal((await second).status, 'completed');
+});
+
 test('a full Host refuses a third session explicitly and admits it once a slot frees', async (t) => {
   const { client, ids, markers, endpoint } = await sessions(t, 3);
   const first = client.run(ids[0]!, `First ${markers[0]}`);

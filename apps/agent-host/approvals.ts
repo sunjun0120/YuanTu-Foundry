@@ -149,6 +149,7 @@ export function createRunApprover(options: RunApproverOptions): Approver {
       };
       approvals.set(approvalId, {
         sessionId,
+        runId: options.runId(),
         approval: structuredClone(approval),
         resolve: finish,
       });
@@ -208,7 +209,13 @@ export function createRunQuestioner(options: RunQuestionerOptions): Questioner {
         () => finish({ answered: false, answers: [], timedOut: true, reason: 'timeout' }),
         questionTimeoutMs,
       );
-      questions.set(questionId, { resolve: finish, timer });
+      questions.set(questionId, {
+        sessionId,
+        runId: options.runId(),
+        request: structuredClone(request),
+        resolve: finish,
+        timer,
+      });
       signal.addEventListener('abort', abort, { once: true });
       options.send({
         event: {

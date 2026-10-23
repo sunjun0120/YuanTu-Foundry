@@ -8,6 +8,8 @@ import { createTools } from '../packages/catalog/index.ts';
 import { toolEnvironment, workerExecArgv } from '../packages/tools/environment.ts';
 import { projectRoot } from './process-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
+import { accountCommand } from '../packages/tools/sandbox-account.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,6 +35,51 @@ const call = (name: string, args: Record<string, unknown>) => ({
   name,
   arguments: args,
 });
+
+for (const mode of ['windows-account', 'native'] as const)
+  test(
+    `Windows ${mode} validation runs npm using cmd syntax`,
+    { skip: process.platform !== 'win32' && 'needs Windows cmd/npm executables' },
+    async (t) => {
+      const { root, tools } = await fixture(t);
+      const previous = process.env.YUANTU_SANDBOX;
+      const original = sandboxProvider(mode);
+      t.after(async () => {
+        await tools.close();
+        registerSandboxProvider(original);
+        if (previous === undefined) delete process.env.YUANTU_SANDBOX;
+        else process.env.YUANTU_SANDBOX = previous;
+      });
+      // Exercise command construction with the real cmd/npm executables, without local account maintenance.
+      registerSandboxProvider({
+        ...original,
+        available: async () => null,
+        async prepare(request) {
+          const { argv, verbatim } = accountCommand(request);
+          return {
+            executable: argv[0]!,
+            args: argv.slice(1),
+            cwd: request.cwd,
+            env: toolEnvironment(),
+            windowsVerbatimArguments: verbatim,
+          };
+        },
+        cleanup: async () => {},
+      });
+      process.env.YUANTU_SANDBOX = mode;
+      await writeFile(
+        path.join(root, 'package.json'),
+        JSON.stringify({ scripts: { test: 'node proof.cjs' } }),
+      );
+      await writeFile(
+        path.join(root, 'proof.cjs'),
+        "require('node:fs').writeFileSync('proof.txt','executed');",
+      );
+      const result = await tools.execute(call('run_validation', { id: 'npm:test' }), ctx());
+      assert.equal(result.isError, false, result.content);
+      assert.equal(await readFile(path.join(root, 'proof.txt'), 'utf8'), 'executed');
+    },
+  );
 
 test('child environment is explicitly allowlisted and worker flags are sanitized', () => {
   const env = toolEnvironment({

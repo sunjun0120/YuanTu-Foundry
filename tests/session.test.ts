@@ -1,24 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { CarrierService } from '../packages/carrier/service.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
-import { tempRoot } from './temp-fixture.ts';
+import { storeFixture, tempRoot } from './temp-fixture.ts';
 
 // ---- merged from session-management.test.ts ----
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-session-management-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-session-management-');
   return { root, file, store };
 }
 test('session titles and literal message search persist across reopen and old database migration', async (t) => {

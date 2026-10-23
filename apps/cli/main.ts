@@ -28,6 +28,17 @@ async function main(): Promise<void> {
   // ...and the command sandbox is chosen before anything reads it, so the default is this platform's real
   // backend rather than "no isolation" (see `applySandboxDefaults`).
   applySandboxDefaults();
+  // Said once at start rather than discovered at the first command: this platform has no native backend, and
+  // the default stays fail-closed until the user chooses host themselves.
+  if (
+    process.env.YUANTU_SANDBOX === 'native' &&
+    process.platform !== 'win32' &&
+    process.platform !== 'darwin'
+  )
+    process.stderr.write(
+      `Note: no native command sandbox on ${process.platform}; commands will be refused. ` +
+        'Set YUANTU_SANDBOX=host to run them without OS isolation.\n',
+    );
   const { positionals, options } = parseArgs(process.argv.slice(2));
   if (options.help || !positionals.length) {
     process.stdout.write(HELP);

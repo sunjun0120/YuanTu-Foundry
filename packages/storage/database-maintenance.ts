@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { restrictToOwner } from '../platform/runtime-directory.ts';
 
 export interface DatabasePolicy {
   application: string;
@@ -282,6 +283,22 @@ function pendingRestore(file: string): RestoreJournal | undefined {
   return journal.phase === 'completed' || journal.phase === 'rolled-back' ? undefined : journal;
 }
 /** Every SessionStore participates, so an offline replacement cannot race another cooperating Host. */
+/**
+ * Whether another live process has this database open, by the tokens `registerDatabase` leaves.
+ *
+ * The same evidence `assertOffline` reads, without its refusal and without its cleanup: tokens of this process are
+ * not "another" (a second store in one process is ours to coordinate), and a token whose process is gone is left
+ * for `assertOffline` to remove.
+ */
+export function sharedWithOtherProcess(file: string): boolean {
+  if (file === ':memory:') return false;
+  const directory = `${identity(file)}.users`;
+  if (!existsSync(directory)) return false;
+  return readdirSync(directory).some((name) => {
+    const pid = Number(name.split('-')[0]);
+    return !Number.isSafeInteger(pid) || pid <= 0 || (pid !== process.pid && alive(pid));
+  });
+}
 export function registerDatabase(file: string): () => void {
   if (file === ':memory:') return () => {};
   const canonical = identity(file);
@@ -386,11 +403,14 @@ function createBackup(
   )
     throw new Error('Invalid backup directory');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  // `mode` above only applies to a directory this call creates; a backup is the whole transcript again.
+  restrictToOwner(directory, 0o700);
   const destination = path.join(directory, `${Date.now()}-${randomUUID()}.sqlite`);
   const stage = `${destination}.tmp`;
   let published = false;
   try {
     db.prepare('VACUUM main INTO ?').run(stage);
+    restrictToOwner(stage, 0o600);
     const inspection = inspectDatabase(stage, policy);
     assertCopyAdmitted(inspection.bytes, admission, directory, source);
     syncFile(stage);

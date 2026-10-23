@@ -16,6 +16,7 @@ import {
   type HostContext,
 } from '../state.ts';
 import type { Handler } from '../dispatch.ts';
+import { reclaimSpace } from '../space-reclaim.ts';
 
 /** A change to one session's own rows: only that session has to be idle. */
 const assertSessionIdle = (ctx: HostContext, sessionId: string, busy: string) =>
@@ -209,6 +210,8 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
         // and its log intact rather than half-deleted.
         signal.throwIfAborted();
         ctx.store.delete(id);
+        // A delete is what frees pages; the first batch goes back now, the idle timer takes the rest.
+        reclaimSpace(ctx);
         for (const [resultId, repositoryRoot] of results)
           await removeResultArtifacts(repositoryRoot, resultId).catch((error: unknown) =>
             process.stderr.write(

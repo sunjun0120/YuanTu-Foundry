@@ -35,6 +35,7 @@ import { storeFixture } from './temp-fixture.ts';
 
 // ---- the fold ----
 import { reply, toolCall } from './provider-fixture.ts';
+import { until } from './wait-fixture.ts';
 
 const event = (type: string, data: Record<string, unknown>, seq: number): SessionEvent => ({
   seq,
@@ -549,14 +550,6 @@ const toolResults = (store: SessionStore, sessionId: string): string[] =>
     .messages(sessionId)
     .filter((message) => message.role === 'tool')
     .map((message) => String(message.content));
-/** Polls until a condition holds, so a background turn is observed however fast the fake provider is. */
-async function until(condition: () => boolean, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error('Timed out waiting for a condition');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
 async function fixture(t: test.TestContext) {
   const { root, store } = await storeFixture(t, 'yuantu-inbox-');
   return { root, store };

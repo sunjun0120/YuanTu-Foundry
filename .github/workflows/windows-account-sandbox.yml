@@ -8,14 +8,42 @@ on:
   push:
     paths:
       - 'packages/tools/windows-sandbox/native/**'
-      - 'packages/tools/sandbox-account*.ts'
+      - 'packages/tools/sandbox*.ts'
       - 'tests/sandbox-account-native.test.ts'
+      - 'tests/*native.test.ts'
+      - 'tests/*program-process*.test.ts'
+      - 'tests/*fixture.ts'
+      - 'tests/windows-sandbox-*'
+      - 'tests/windows-account*'
+      - 'tests/agent.smoke.mjs'
+      - 'tests/desktop.smoke.mjs'
+      - 'scripts/*windows*sandbox*.mjs'
+      - 'scripts/windows-account-ci.mjs'
+      - 'apps/shared/runtime.ts'
+      - 'apps/desktop/sandbox-settings.ts'
+      - 'apps/desktop/session-choices.ts'
+      - 'apps/desktop/permission-presets.ts'
+      - '.github/workflows/ci.yml'
       - '.github/workflows/windows-account-sandbox.yml'
   pull_request:
     paths:
       - 'packages/tools/windows-sandbox/native/**'
-      - 'packages/tools/sandbox-account*.ts'
+      - 'packages/tools/sandbox*.ts'
       - 'tests/sandbox-account-native.test.ts'
+      - 'tests/*native.test.ts'
+      - 'tests/*program-process*.test.ts'
+      - 'tests/*fixture.ts'
+      - 'tests/windows-sandbox-*'
+      - 'tests/windows-account*'
+      - 'tests/agent.smoke.mjs'
+      - 'tests/desktop.smoke.mjs'
+      - 'scripts/*windows*sandbox*.mjs'
+      - 'scripts/windows-account-ci.mjs'
+      - 'apps/shared/runtime.ts'
+      - 'apps/desktop/sandbox-settings.ts'
+      - 'apps/desktop/session-choices.ts'
+      - 'apps/desktop/permission-presets.ts'
+      - '.github/workflows/ci.yml'
       - '.github/workflows/windows-account-sandbox.yml'
   workflow_dispatch:
 permissions:
@@ -23,6 +51,8 @@ permissions:
 jobs:
   acceptance:
     runs-on: windows-latest
+    env:
+      FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -65,3 +95,14 @@ jobs:
         run: node node_modules/electron/install.js
       - name: Account settings desktop smoke (no account maintenance)
         run: node scripts/run-tests.mjs tests/windows-account-settings.smoke.mjs
+      # The self-contained Rust/TS acceptance above removes its accounts. Initialize once more for real apps.
+      - name: Initialize accounts for Host, tools and desktop journeys
+        id: account-setup
+        run: node scripts/windows-account-ci.mjs setup
+      - name: Account backend journeys without skips
+        run: npm run check:windows-sandbox
+      - name: Desktop account journey without skips
+        run: node scripts/check-windows-sandbox.mjs --desktop
+      - name: Remove sandbox accounts and recorded grants even after a failed setup or test
+        if: always() && steps.account-setup.outcome != 'skipped' && steps.account-setup.outcome != ''
+        run: node scripts/windows-account-ci.mjs cleanup

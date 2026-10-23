@@ -110,6 +110,23 @@ pub fn server_pid(pipe: &Handle) -> Result<u32> {
 }
 
 /// Whether the other end has gone. Only for a pipe no other thread is reading.
+/// Whether a read would return at once: lets one thread both wait for replies and send on a synchronous pipe,
+/// where a blocked read would hold up every write.
+pub fn has_data(pipe: &Handle) -> bool {
+    let mut available = 0;
+    unsafe {
+        PeekNamedPipe(
+            pipe.0,
+            null_mut(),
+            0,
+            null_mut(),
+            &mut available,
+            null_mut(),
+        ) != 0
+            && available > 0
+    }
+}
+
 pub fn peer_disconnected(pipe: &Handle) -> bool {
     let mut available = 0;
     if unsafe {

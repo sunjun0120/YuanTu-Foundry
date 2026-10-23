@@ -11,9 +11,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { prepareContext } from '../packages/core/context.ts';
 import { estimateInputTokens } from '../packages/core/budget.ts';
@@ -24,6 +21,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { isSummaryRequest } from './summary-request.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const reply = (text = 'Done', inputTokens = 10): ModelResponse => ({
   text,
@@ -45,12 +43,7 @@ function transcript(turns: number, chars = 4000): Message[] {
 async function store(
   t: test.TestContext,
 ): Promise<{ root: string; store: SessionStore; id: string }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-forecast-'));
-  const database = new SessionStore(path.join(root, 'sessions.sqlite'));
-  t.after(async () => {
-    database.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store: database } = await storeFixture(t, 'yuantu-forecast-');
   return { root, store: database, id: database.create(root).id };
 }
 

@@ -1,4 +1,5 @@
 // @test-serial desktop-ui: Launches real Electron windows.
+// @test-serial windows-sandbox: Live permission switching uses initialized sandbox accounts on Windows CI.
 // Turn cards, permission presets and the session sandbox, the core chat flow, and Markdown and diff review.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -333,7 +334,7 @@ test(
       ...process.env,
       YUANTU_WORKSPACE: root,
       YUANTU_NODE_PATH: process.execPath,
-      YUANTU_SANDBOX: process.platform === 'win32' ? 'windows' : 'native',
+      YUANTU_SANDBOX: 'native',
       YUANTU_PROTOCOL: 'anthropic',
       YUANTU_BASE_URL: url,
       YUANTU_MODEL: 'fixture',
@@ -365,7 +366,6 @@ test(
     assert.match(await page.locator('#approvals').innerText(), /start_command/);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
     await page.locator('#full-access-enable').click();
     await page.getByText('LIVE_PERMISSION_DONE', { exact: true }).waitFor();
     await waitForPage(page, async () => {
@@ -718,7 +718,6 @@ test(
      * about *writes* while staying confined; that rung is gone, and the chip says three things now.)
      */
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
     await page.locator('#full-access-enable').click();
     await idle();
     assert.match(await readFile(path.join(root, 'approved.txt'), 'utf8'), /来自桌面审批/);

@@ -14,29 +14,23 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 import type { Provider } from '../packages/protocol/index.ts';
 import { reply, toolCall as call, scriptedProvider } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const AT = '2026-01-01T00:00:00.000Z';
 
 const OBJECTIVE = 'Produce the marker';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-completion-recovery-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-completion-recovery-');
   const tools = createTools(root);
-  t.after(async () => {
-    await tools.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => tools.close());
   return { root, store, tools, session: store.create(root) };
 }
 

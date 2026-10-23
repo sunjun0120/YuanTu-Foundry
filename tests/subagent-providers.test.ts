@@ -18,15 +18,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { AgentEvent, Provider, RunResult } from '../packages/protocol/index.ts';
 import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
 import type { SubAgentProvider } from '../packages/core/subagent-providers.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(
   t: test.TestContext,
@@ -34,13 +31,8 @@ async function fixture(
   subagentProviders: readonly SubAgentProvider[],
   extra: { deploymentPersona?: string } = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-providers-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store } = await storeFixture(t, 'yuantu-providers-');
   const tools = createTools(root);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
   const session = store.create(root);
   const events: AgentEvent[] = [];
   const agent = new Agent({

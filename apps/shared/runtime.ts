@@ -1,4 +1,5 @@
 import { resolveSandboxConfig } from '../../packages/tools/sandbox.ts';
+import { appSandboxMode } from '../../packages/tools/sandbox-mode.ts';
 import {
   executionPolicy as callExecutionPolicy,
   withExecutionPolicy,
@@ -16,7 +17,7 @@ import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
 import type { WorkspaceMode } from '../../packages/protocol/workspaces.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { createProvider, readConfig } from '../../packages/providers/index.ts';
-import { AdaptiveConcurrency, gatedProvider } from '../../packages/providers/rate-gate.ts';
+import { endpointGate, gatedProvider } from '../../packages/providers/rate-gate.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
 import {
   declaredRoutes,
@@ -64,7 +65,7 @@ export function executionEnvironment(): string {
     const backend =
       mode === 'native'
         ? process.platform === 'win32'
-          ? 'windows'
+          ? 'windows-account'
           : process.platform === 'darwin'
             ? 'seatbelt'
             : 'unavailable'
@@ -72,9 +73,11 @@ export function executionEnvironment(): string {
     return (
       (backend === 'windows'
         ? 'Command environment: Windows native restricted-token sandbox, real workspace and private scratch. Filesystem enforcement is partial; reads and network are unconfined. Required unsupported policies fail closed. A process started in this sandbox cannot start its own child processes that need inherited pipes (Node `child_process` reports `spawn EPERM`), so test runners such as `node --test`, vitest and jest fail here while the same command works outside the sandbox; run a test file directly when it does not fork, and say so plainly when a task needs child processes instead of retrying the same command.'
-        : backend === 'seatbelt'
-          ? 'Command environment: macOS native Seatbelt sandbox, /bin/sh, real workspace and private scratch. File and network access follow the selected policy. Unsupported policies fail closed.'
-          : 'Command environment: native sandbox unavailable on this platform; command execution must fail closed.') +
+        : backend === 'windows-account'
+          ? 'Command environment: Windows sandbox account, real workspace and private scratch. Workspace capabilities confine writes; file and network access follow the selected policy. Child processes and forking test runners are supported. Account initialization is required; unavailable isolation fails closed.'
+          : backend === 'seatbelt'
+            ? 'Command environment: macOS native Seatbelt sandbox, /bin/sh, real workspace and private scratch. File and network access follow the selected policy. Unsupported policies fail closed.'
+            : 'Command environment: native sandbox unavailable on this platform; command execution must fail closed.') +
       web
     );
   }
@@ -83,7 +86,9 @@ export function executionEnvironment(): string {
 
 /** Shipped apps select native isolation; an unavailable backend never selects host implicitly. */
 export function applySandboxDefaults(env: NodeJS.ProcessEnv = process.env): void {
-  env.YUANTU_SANDBOX ??= 'native';
+  env.YUANTU_SANDBOX = appSandboxMode(env.YUANTU_SANDBOX ?? 'native', 'YUANTU_SANDBOX');
+  if (env.YUANTU_SANDBOX_HOOK !== undefined)
+    env.YUANTU_SANDBOX_HOOK = appSandboxMode(env.YUANTU_SANDBOX_HOOK, 'YUANTU_SANDBOX_HOOK');
 }
 export function resolveWorkspace(input: string): string {
   const root = realpathSync(path.resolve(input));
@@ -290,10 +295,11 @@ export async function createAgent(
 ): Promise<Agent> {
   const config = readConfig();
   /**
-   * One rate gate for this runtime's requests to the endpoint, shared by the run and every child it delegates to,
-   * so a 429 slows the whole burst down rather than each run retrying on its own (`../../packages/providers/rate-gate.ts`).
+   * The process's rate gate for this endpoint, shared by this run, every child it delegates to and every other
+   * session's run against the same endpoint and key, so a 429 slows the whole burst down rather than each run
+   * retrying on its own (`../../packages/providers/rate-gate.ts`).
    */
-  const gate = new AdaptiveConcurrency();
+  const gate = endpointGate(config);
   const provider = gatedProvider(createProvider(config), gate);
   const capacityFor = await resolveConnectionCapacities(options, config, signal);
   const capacity = capacityFor(config.model);
@@ -413,6 +419,9 @@ export async function createAgent(
     requestTimeoutMs: options.requestTimeoutMs,
     maxModelRetries: options.maxModelRetries,
     maxParallelToolCalls: options.maxParallelToolCalls,
+    maxRunRounds: options.maxRunRounds,
+    maxRunMs: options.maxRunMs,
+    maxRunTokens: options.maxRunTokens,
     // Opt-in: reads overlap the rest of the model's turn (see `AgentOptions.earlyToolStarts`).
     earlyToolStarts: parseSetting(process.env, 'YUANTU_EARLY_TOOL_START') === true,
     toolResultKeepRecent: options.toolResultKeepRecent,

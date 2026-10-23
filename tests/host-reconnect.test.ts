@@ -24,19 +24,14 @@ import { auditEntries, foldMessages } from '../packages/storage/events.ts';
 import type { Message } from '../packages/protocol/index.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
 /** An owner pid that cannot exist, which is how a test says "the process that started this run is gone". */
 const DEAD_PID = 2_147_483_647;
 
 async function store_(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reconnect-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-reconnect-');
   return { root, file, store, session: store.create(root) };
 }
 /** Forge a dead owner for a run, which is the only way to write the state a crash leaves behind. */
@@ -440,4 +435,117 @@ test('a database written by a newer build is refused with the version named', as
   assert.match(String(failure), new RegExp(`is v${newer}, written by a newer build`));
   assert.match(String(failure), /back up \.yuantu\/sessions\.sqlite/);
   assert.equal(client.status, 'failed');
+});
+
+test('a client that missed the approval frame gets it from the queue answer and can still answer it', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reconnect-pending-'));
+  const cleanups: (() => Promise<unknown>)[] = [];
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup();
+    await rm(root, { recursive: true, force: true });
+  });
+  let turns = 0;
+  const url = await httpFixture(t, (_body, res) => {
+    if (turns++ === 0) {
+      sendFrames(
+        res,
+        frames('', [
+          { id: 'call-write', name: 'write_file', input: { path: 'later.txt', content: 'x' } },
+        ]),
+      );
+      return;
+    }
+    sendFrames(res, frames('Written.'));
+  });
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath,
+    workspace: root,
+    db: path.join(root, 'sessions.sqlite'),
+    env: {
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_API_KEY: 'reconnect-fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_BASE_URL: url,
+    },
+  });
+  cleanups.push(() => client.stop());
+  let asked: string | undefined;
+  client.subscribe((event) => {
+    if (event.type === 'approval.required') asked = String(event.data.approvalId);
+  });
+  await client.start();
+  const session = await client.request('session.create', {});
+  const running = client.run(session.id, 'Write the file.');
+  for (let i = 0; i < 400 && !asked; i++) await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(asked, 'the run must reach the approval prompt');
+
+  // What a second window, or a client after a reconnect, asks when it opens the session.
+  const inbox = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(inbox.running, true);
+  assert.deepEqual(
+    inbox.pending?.approvals.map((item) => [item.id, item.approval.toolCall.id]),
+    [[asked, 'call-write']],
+  );
+  assert.deepEqual(inbox.pending?.questions, []);
+
+  await client.request('approval.respond', {
+    approvalId: inbox.pending!.approvals[0]!.id,
+    allow: true,
+  });
+  await running;
+  const after = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(after.running, false);
+  assert.equal(after.pending, undefined);
+});
+
+test('an aborted request stops being waited for, and the Host answers the next one normally', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-request-abort-'));
+  const cleanups: (() => Promise<unknown>)[] = [];
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup();
+    await rm(root, { recursive: true, force: true });
+  });
+  const url = await httpFixture(t, (_body, res) => sendFrames(res, frames('Unused.')));
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath,
+    workspace: root,
+    db: path.join(root, 'sessions.sqlite'),
+    env: {
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_API_KEY: 'abort-fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_BASE_URL: url,
+    },
+  });
+  cleanups.push(() => client.stop());
+  await client.start();
+  const session = await client.request('session.create', {});
+
+  const aborted = new AbortController();
+  aborted.abort();
+  await assert.rejects(
+    client.request('session.get', { sessionId: session.id }, { signal: aborted.signal }),
+    { name: 'AbortError' },
+  );
+  // Abandoned after it was sent: its answer arrives later and must not settle anything else.
+  const midway = new AbortController();
+  const abandoned = client.request(
+    'session.get',
+    { sessionId: session.id },
+    { signal: midway.signal },
+  );
+  midway.abort();
+  await assert.rejects(abandoned, { name: 'AbortError' });
+
+  const inbox = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(inbox.running, false);
+  // The cursor an opening read needs, in the same answer, so it does not have to ask `session.events` for it.
+  const events = await client.request('session.events', { sessionId: session.id, limit: 1 });
+  assert.equal(inbox.latestSeq, events.latestSeq);
 });

@@ -52,6 +52,8 @@ const INCREMENTAL_TAIL = 100;
 import type {
   MessageDelta,
   OtherRun,
+  PendingApproval,
+  PendingQuestion,
   SessionSnapshot,
   StatisticsDelta,
   SubAgentDelta,
@@ -83,6 +85,22 @@ function frozenCopy<T extends object>(cache: WeakMap<T, T>, value: T): T {
   }
   return frozen;
 }
+/**
+ * `client`, with every request it makes tied to `signal`, for helpers that take a client and know nothing about
+ * cancellation. Everything else on the client is the client's own.
+ */
+function scopedClient(client: AgentHostClient, signal: AbortSignal): AgentHostClient {
+  return new Proxy(client, {
+    get(target, property) {
+      if (property === 'request')
+        return (method: Parameters<AgentHostClient['request']>[0], params: never) =>
+          target.request(method, params, { signal });
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 export class SessionController {
   private client: AgentHostClient;
   private statisticsBase = emptyStatistics();
@@ -382,6 +400,7 @@ export class SessionController {
   private async history(
     sessionId: string,
     incremental = false,
+    client: AgentHostClient = this.client,
   ): Promise<{
     messages: Message[];
     statistics: SessionStatistics;
@@ -398,7 +417,7 @@ export class SessionController {
         ? this.committed.end
         : null;
     if (known !== null && base !== undefined) {
-      const page = await readDisplayHistory(this.client, sessionId, Infinity, 0, {
+      const page = await readDisplayHistory(client, sessionId, Infinity, 0, {
         tail: INCREMENTAL_TAIL,
       });
       const start = page.startOffset;
@@ -423,7 +442,7 @@ export class SessionController {
         };
     }
     const tail = Math.max(100, this.state.sessionId === sessionId ? this.state.messages.length : 0);
-    const history = await readDisplayHistory(this.client, sessionId, Infinity, 0, { tail });
+    const history = await readDisplayHistory(client, sessionId, Infinity, 0, { tail });
     return {
       messages: history.messages,
       statistics: history.statistics ?? emptyStatistics(),
@@ -502,57 +521,114 @@ export class SessionController {
    * named by the session info is the fallback. That fallback is deliberately the *only* other source: a Host
    * that cannot say which run is running does not licence this client to apply whichever run's frame arrives.
    */
-  private async runSnapshot(sessionId: string): Promise<{
+  private async runSnapshot(
+    sessionId: string,
+    client: AgentHostClient = this.client,
+  ): Promise<{
     running: boolean;
     items: QueuedInput[];
     runId: string | null;
     /** Whether the Host answered the question at all; a Host that predates it cannot. */
     answered: boolean;
+    /** What the live run waits on, when the Host says; `null` from a Host that predates the field. */
+    pending: { approvals: PendingApproval[]; questions: PendingQuestion[] } | null;
+    /** Where the log stood when the Host answered, when it says (see `noteCursor`). */
+    latestSeq?: number;
   }> {
     let reply: unknown;
     try {
-      reply = await this.client.request('run.queue.get', { sessionId });
-    } catch {
+      reply = await client.request('run.queue.get', { sessionId });
+    } catch (error) {
+      // A read that was overtaken is over; it must not carry on as though the Host had no answer.
+      if (error instanceof Error && error.name === 'AbortError') throw error;
       // No answer at all: nothing is known about a live run from this question, and the session info decides.
-      return { running: false, items: [], runId: null, answered: false };
+      return { running: false, items: [], runId: null, answered: false, pending: null };
     }
     // A reply that is not the answer's shape is no answer: a Host that will not say what it holds cannot be read
     // as holding nothing, and it certainly cannot be read as naming a run.
     if (!reply || typeof reply !== 'object')
-      return { running: false, items: [], runId: null, answered: false };
-    const answer = reply as { running?: unknown; items?: unknown; runId?: unknown };
+      return { running: false, items: [], runId: null, answered: false, pending: null };
+    const answer = reply as {
+      running?: unknown;
+      items?: unknown;
+      runId?: unknown;
+      pending?: { approvals?: unknown; questions?: unknown };
+      latestSeq?: unknown;
+    };
     const runId = typeof answer.runId === 'string' && answer.runId ? answer.runId : null;
     return {
       running: answer.running === true,
       items: Array.isArray(answer.items) ? (answer.items as QueuedInput[]) : [],
       runId,
       answered: true,
+      pending:
+        answer.pending &&
+        typeof answer.pending === 'object' &&
+        Array.isArray(answer.pending.approvals) &&
+        Array.isArray(answer.pending.questions)
+          ? {
+              approvals: structuredClone(answer.pending.approvals as PendingApproval[]),
+              questions: structuredClone(answer.pending.questions as PendingQuestion[]),
+            }
+          : null,
+      ...(Number.isSafeInteger(answer.latestSeq) ? { latestSeq: Number(answer.latestSeq) } : {}),
     };
   }
+  /**
+   * Read a session from the Host, abandoning whatever read was in flight before it.
+   *
+   * Opening session B while A is still loading used to leave A's questions running to completion, one after the
+   * other, while B's waited behind them. The previous read is aborted here — its requests stop being waited for
+   * — and an aborted read ends quietly: it was overtaken, which `staleRead` already treats as a normal ending.
+   */
   private async read(sessionId: string): Promise<void> {
     const generation = ++this.loadGeneration;
+    this.readAbort?.abort();
+    const abort = new AbortController();
+    this.readAbort = abort;
+    try {
+      await this.readSession(sessionId, generation, scopedClient(this.client, abort.signal));
+    } catch (error) {
+      if (this.staleRead(generation)) return;
+      throw error;
+    } finally {
+      if (this.readAbort === abort) this.readAbort = undefined;
+    }
+  }
+  /** The read in flight, so the next one can abandon it. */
+  private readAbort: AbortController | undefined;
+  private async readSession(
+    sessionId: string,
+    generation: number,
+    client: AgentHostClient,
+  ): Promise<void> {
     this.olderLoad = null;
-    const { messages, statistics, historyStart, activeRun } = await this.history(sessionId);
-    if (this.staleRead(generation)) return;
-    // The plan lives outside the message history, so it is fetched separately: a plan proposed in an
-    // earlier run is still the plan awaiting a decision after a reload.
-    const plan = await readPlan(this.client, sessionId);
-    if (this.staleRead(generation)) return;
-    // Sub-agent cards are rebuilt from the stored run result: their events are progress, not history,
-    // and nothing about a child survives in the parent's transcript but its report.
-    const subagents = await readSubAgents(this.client, sessionId);
-    if (this.staleRead(generation)) return;
-    // The checklist is session state, not run state: it is written during a run but it is still the plan the
-    // model is following after that run ends, so a reload has to bring it back.
-    const checklist = await readTodos(this.client, sessionId);
-    if (this.staleRead(generation)) return;
-    // The deliverables and the goal are session state in the same sense the checklist is: written during a run,
-    // still true after it ends, and restored on reload from the log rather than from the run's result.
-    const deliverables = await readDeliverables(this.client, sessionId);
-    if (this.staleRead(generation)) return;
-    const goal = await readGoal(this.client, sessionId);
-    if (this.staleRead(generation)) return;
-    const completion = await readCompletion(this.client, sessionId);
+    /**
+     * Everything but the live run, asked at once.
+     *
+     * These used to be asked one after another — seven round trips before the session appeared — although none
+     * of them depends on another's answer. The plan lives outside the message history (a plan proposed in an
+     * earlier run is still awaiting a decision after a reload); sub-agent cards are rebuilt from the stored run
+     * result; the checklist, deliverables, goal and completion are session state, written during a run but still
+     * true after it ends, so a reload has to bring them back from the log.
+     */
+    const [
+      { messages, statistics, historyStart, activeRun },
+      plan,
+      subagents,
+      checklist,
+      deliverables,
+      goal,
+      completion,
+    ] = await Promise.all([
+      this.history(sessionId, false, client),
+      readPlan(client, sessionId),
+      readSubAgents(client, sessionId),
+      readTodos(client, sessionId),
+      readDeliverables(client, sessionId),
+      readGoal(client, sessionId),
+      readCompletion(client, sessionId),
+    ]);
     if (this.staleRead(generation)) return;
     /**
      * The live run is read *last*, after every other query has been answered.
@@ -561,7 +637,7 @@ export class SessionController {
      * so the identity this client adopts is the one the Host holds now rather than the one it held when the
      * transcript was fetched.
      */
-    const snapshot = await this.runSnapshot(sessionId);
+    const snapshot = await this.runSnapshot(sessionId, client);
     if (this.staleRead(generation)) return;
     /**
      * A run that ended, or began, while those queries were in flight.
@@ -586,19 +662,29 @@ export class SessionController {
     const moved = seenRun !== liveRun || (running && liveRun === null);
     let transcript = { messages, statistics, historyStart };
     if (moved) {
-      const reread = await this.history(sessionId);
+      const reread = await this.history(sessionId, false, client);
       if (this.staleRead(generation)) return;
       transcript = reread;
     }
     this.runId = liveRun;
     this.stateRevision++;
-    // A run this client was following in the background is on screen again: what it is waiting on comes with it.
+    /**
+     * What the run is waiting on a person for.
+     *
+     * The Host's answer is the source when it gives one: approvals and questions otherwise reach a client only as
+     * live frames, so a client that opened the session after they were asked — a second window, a reconnect —
+     * used to show a running session with nothing to answer while the wait ran out into a denial. A run this
+     * client was following in the background is the fallback for a Host that predates the field.
+     */
     const followed = this.others.get(sessionId);
     this.others.delete(sessionId);
-    const pending =
-      running && followed && followed.runId === liveRun
-        ? followed
-        : { approvals: [], questions: [] };
+    const pending = !running
+      ? { approvals: [], questions: [] }
+      : snapshot.pending
+        ? snapshot.pending
+        : followed && followed.runId === liveRun
+          ? followed
+          : { approvals: [], questions: [] };
     this.state = {
       queue: structuredClone(snapshot.items),
       compacting: false,
@@ -640,8 +726,12 @@ export class SessionController {
      */
     if (running) this.statisticsBase = structuredClone(transcript.statistics);
     // A re-read ends level with the log, and saying so is what keeps the check in `catchUp` honest: a client
-    // that only ever watched frames would consider itself behind after every reload, and re-read forever.
-    await this.noteCursor(sessionId);
+    // that only ever watched frames would consider itself behind after every reload, and re-read forever. The
+    // queue answer carries the position when the Host says it, which saves asking `session.events` for it; it was
+    // read after everything but a moved run's re-read, so at worst it is behind and the next check re-reads.
+    if (snapshot.latestSeq !== undefined && this.canResume())
+      this.client.noteCursor(sessionId, snapshot.latestSeq);
+    else await this.noteCursor(sessionId);
   }
   /**
    * Whether the Host behind this client can answer a question about where the log stands.

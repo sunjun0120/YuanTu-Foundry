@@ -159,6 +159,19 @@ fn scratch() -> PathBuf {
 }
 
 fn exec(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: bool) -> Output {
+    exec_spawn(pipe, argv, cwd, capabilities, verbatim)
+        .wait_with_output()
+        .unwrap()
+}
+
+/// `exec` without waiting: the command keeps running in the sandbox while the test does something else.
+fn exec_spawn(
+    pipe: &str,
+    argv: &[&str],
+    cwd: &Path,
+    capabilities: &[&str],
+    verbatim: bool,
+) -> Child {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let file = scratch().join(format!(
         "request-{}.json",
@@ -183,7 +196,7 @@ fn exec(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: 
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(b"").unwrap();
-    child.wait_with_output().unwrap()
+    child
 }
 
 fn cmd() -> String {
@@ -225,9 +238,7 @@ fn on_path(program: &str) -> Option<PathBuf> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .next()
-        .map(|line| PathBuf::from(line.trim()))
+    text.lines().next().map(|line| PathBuf::from(line.trim()))
 }
 
 fn inside(path: &Path, profile: &Path) -> bool {
@@ -238,13 +249,22 @@ fn inside(path: &Path, profile: &Path) -> bool {
 
 /// Authorizes the automatic read roots for an environment: the same call the Host makes before its first command.
 fn read_refresh(prepend: &Path) -> Output {
+    read_refresh_for(prepend, None)
+}
+
+/// The same refresh as the Host sends it before a command in `root`: that workspace's reserved names first.
+fn read_refresh_for(prepend: &Path, root: Option<&Path>) -> Output {
     let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     // `vars()` spells it `Path`; the request carries one `PATH`, so drop the original spelling first.
     env.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
     let path = std::env::var("PATH").unwrap_or_default();
     env.insert("PATH".into(), format!("{};{path}", prepend.display()));
     let file = scratch().join("refresh.json");
-    std::fs::write(&file, json!({ "version": 1, "env": env }).to_string()).unwrap();
+    let mut request = json!({ "version": 1, "env": env });
+    if let Some(root) = root {
+        request["root"] = json!(root);
+    }
+    std::fs::write(&file, request.to_string()).unwrap();
     Command::new(EXE)
         .args(["read-refresh", "--env"])
         .arg(&file)
@@ -294,6 +314,20 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     let report = status();
     assert_eq!(report["ready"], json!(true), "{report}");
     let group = report["group"].as_str().expect("group SID").to_string();
+    // Setup signs each account in once, so the first command does not have to build a profile.
+    for entry in report["accounts"].as_array().expect("accounts") {
+        let sid = entry["sid"].as_str().expect("account SID");
+        let key = format!(r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}");
+        let listed = Command::new("reg")
+            .args(["query", &key, "/v", "ProfileImagePath"])
+            .output()
+            .unwrap();
+        assert!(
+            listed.status.success(),
+            "no profile was created for {sid} during setup: {}",
+            text(&listed)
+        );
+    }
     let roots: Vec<String> = report["readRoots"]
         .as_array()
         .expect("read roots")
@@ -332,6 +366,20 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     std::fs::write(&secret, "desktop-user-only").unwrap();
 
     let offline = broker("offline");
+
+    // Commands run on the broker's private desktop, never on the user's own (`Default`) where the approval UI is.
+    let probe = exec(
+        &offline.pipe,
+        &[env!("CARGO_BIN_EXE_desktop-probe")],
+        &a,
+        &[&cap_a],
+        false,
+    );
+    assert!(
+        text(&probe).trim().starts_with("YuanTuSandboxDesktop-"),
+        "a sandbox account command ran on another desktop: {}",
+        text(&probe)
+    );
 
     // 3. The automatic read roots, with no manual grant at all: a toolchain directory refresh discovered from
     //    `PATH`, a file created after the refresh (inheritance), and a credential file the next refresh denies.
@@ -391,6 +439,52 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
         wrote.status.success() && a.join("own.txt").exists(),
         "{}",
         text(&wrote)
+    );
+    // A reserved directory a sandboxed command creates after the grant: the next command's refresh denies it, and
+    // owning it does not let the account take the denial back, on the directory or on a file it made inside.
+    let made = shell(
+        &offline.pipe,
+        "mkdir A\\.agents && echo first> A\\.agents\\one.txt",
+        &root,
+        &[&cap_a],
+    );
+    assert!(made.status.success(), "{}", text(&made));
+    let refreshed = read_refresh_for(&automatic, Some(&a));
+    assert!(refreshed.status.success(), "{}", text(&refreshed));
+    assert!(
+        text(&refreshed).contains(".agents"),
+        "the refresh did not protect the new reserved directory: {}",
+        text(&refreshed)
+    );
+    let _ = shell(
+        &offline.pipe,
+        "echo x> A\\.agents\\two.txt",
+        &root,
+        &[&cap_a],
+    );
+    assert!(!a.join(".agents").join("two.txt").exists());
+    for line in [
+        "icacls A\\.agents /grant *S-1-1-0:(OI)(CI)F",
+        "icacls A\\.agents\\one.txt /inheritance:r /grant *S-1-1-0:F",
+    ] {
+        let changed = shell(&offline.pipe, line, &root, &[&cap_a]);
+        assert!(
+            !changed.status.success(),
+            "the sandbox rewrote a reserved DACL with `{line}`: {}",
+            text(&changed)
+        );
+    }
+    let _ = shell(
+        &offline.pipe,
+        "echo x>> A\\.agents\\one.txt",
+        &root,
+        &[&cap_a],
+    );
+    assert_eq!(
+        std::fs::read_to_string(a.join(".agents").join("one.txt"))
+            .unwrap()
+            .trim(),
+        "first"
     );
     let crossed = shell(&offline.pipe, "echo x> B\\foreign.txt", &root, &[&cap_a]);
     assert!(!b.join("foreign.txt").exists(), "{}", text(&crossed));
@@ -582,10 +676,36 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
     drop(online);
 
     // 7. Removal leaves nothing behind: no journal entry, no group ACE on an automatic root, a user path or the
-    //    profile ancestors that only carried traverse, and both journals empty.
+    //    profile ancestors that only carried traverse, and both journals empty. An offline command is still running
+    //    when uninstall starts: uninstall must end it before the network filters go, not leave it running online.
     let _ = std::fs::remove_file(&secret);
+    let offline = broker("offline");
+    let mut running = exec_spawn(
+        &offline.pipe,
+        &[&node, "-e", "setInterval(()=>{},1000)"],
+        &a,
+        &[&cap_a],
+        false,
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert!(
+        running.try_wait().unwrap().is_none(),
+        "the long-running sandbox command ended before uninstall started"
+    );
     let removed = run(&["account-uninstall"]);
     assert!(removed.status.success(), "{}", text(&removed));
+    let stopped = (0..150).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        running.try_wait().unwrap().is_some()
+    });
+    if !stopped {
+        let _ = running.kill();
+    }
+    assert!(
+        stopped,
+        "the sandbox command was still running after uninstall"
+    );
+    drop(offline);
     let state = yuantu_sandbox::account::credentials::state_directory().unwrap();
     let reads: Value =
         serde_json::from_slice(&std::fs::read(state.join("read-grants.json")).unwrap()).unwrap();

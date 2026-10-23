@@ -760,28 +760,21 @@ textarea {
   flex: 0 0 16px;
 }
 /**
- * The two quiet lines the menu may add under the rungs, separated from them by a rule.
- *
- * `#permission-custom` is the current reading when the pair is not one of the three (nothing to click: it has no
- * target). `#permission-environment` is shown only when the backend behind the current rung answered that it
- * cannot run — a detail of the choice, not a second choice, so it gets no line at all when it is fine. The
- * wrapper carries no chrome of its own, so an empty menu foot is not a stray rule.
+ * The quiet line the menu may add under the rungs, separated from them by a rule: `#permission-custom` is the
+ * current reading when the pair is not one of the three (nothing to click: it has no target). The wrapper carries
+ * no chrome of its own, so an empty menu foot is not a stray rule.
  */
 .permission-environment {
   margin: 0;
   padding: 0;
 }
-#permission-custom,
-#permission-environment {
+#permission-custom {
   margin: 6px 2px 0;
   padding: 8px 8px 2px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
-}
-#permission-environment {
-  color: #985346;
 }
 .message-document {
   margin-top: 10px;

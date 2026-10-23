@@ -1,32 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { createResidentMessageTool } from '../packages/core/run-residency.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelResponse, Provider, Usage } from '../packages/protocol/index.ts';
-
-async function until(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error('Timed out waiting for the child handoff');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
+import { storeFixture } from './temp-fixture.ts';
+import { until } from './wait-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-child-usage-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-child-usage-');
   const residency = new SubAgentResidency();
-  t.after(async () => {
-    await residency.disposeAll();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => residency.disposeAll());
   const session = store.create(root);
   const measured: Usage = {
     inputTokens: 0,

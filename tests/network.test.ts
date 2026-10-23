@@ -64,6 +64,33 @@ test('htmlToText drops scripts and styles, decodes entities and keeps block stru
   assert.ok(text.includes('- two'));
 });
 
+test('htmlToText keeps the old output rules for comments, unclosed tags and stray brackets', () => {
+  assert.equal(htmlToText('a<!-- x -->b<br/>c<hr>d').text, 'a b\nc\nd');
+  assert.equal(htmlToText('<P>one</P ><DIV>two</div>').text, 'one\ntwo');
+  // An unclosed discarded element drops only its opening tag; the rest stays readable.
+  assert.equal(htmlToText('keep<script>tail').text, 'keep tail');
+  assert.equal(htmlToText('<script>a</script>mid<script>b</SCRIPT >end').text, 'mid end');
+  // A `<` with no `>` after it is text, and an unclosed comment is stripped like a tag.
+  assert.equal(htmlToText('1 < 2 and more').text, '1 < 2 and more');
+  // A stray `<` before a script does not swallow the script's opening tag.
+  assert.equal(htmlToText('1 < 2 <script>hidden</script> end').text, '1 < 2 end');
+  assert.equal(htmlToText('shown<!-- hidden> after').text, 'shown after');
+  assert.equal(htmlToText('<title>T</title><title>U</title>').title, 'T');
+  assert.equal(htmlToText('<title>never closed').title, '');
+});
+
+test('htmlToText stays linear on 2MB of unclosed tags', () => {
+  // These used to take quadratic time: a 1MB page of unclosed `<script>` held the Host for 16 seconds.
+  for (const unit of ['<script>', '<!--', '<title>', '<li', '<svg x', '<', '<!--a>', '<<']) {
+    // The `>` at the end gives every opening something to scan towards.
+    const html = unit.repeat(Math.floor(2_000_000 / unit.length)) + '>';
+    const started = performance.now();
+    htmlToText(html);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1_000, `${unit} took ${elapsed.toFixed(0)}ms`);
+  }
+});
+
 test('parseDuckDuckGo extracts titles, decoded redirect links and snippets', () => {
   const html = `
     <div class="result"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs&amp;rut=abc">Example <b>Docs</b></a>
@@ -306,7 +333,7 @@ test('web and browser tools require external or write approval through the regis
  * Regression: the guard used to be a three-entry literal hostname set with `redirect: 'follow'`,
  * so a DNS alias, a numeric IP encoding or a single 302 all reached the metadata endpoint.
  */
-test('the network guard refuses metadata, private and link-local addresses in every encoding', () => {
+test('the network guard refuses metadata, private and link-local addresses in every encoding', async () => {
   const refused = [
     '169.254.169.254',
     '10.0.0.1',
@@ -352,18 +379,18 @@ test('the network guard refuses metadata, private and link-local addresses in ev
     'http://[fd00:ec2::254]/',
   ];
   for (const input of hostile) {
-    assert.rejects(assertPublicUrl(new URL(input), {}), `expected ${input} to be refused`);
+    await assert.rejects(assertPublicUrl(new URL(input), {}), `expected ${input} to be refused`);
   }
   // The opt-in lifts the range checks but never the metadata addresses or names.
-  assert.rejects(
+  await assert.rejects(
     assertPublicUrl(new URL('http://169.254.169.254/'), { YUANTU_ALLOW_PRIVATE_NETWORK: '1' }),
   );
-  assert.rejects(
+  await assert.rejects(
     assertPublicUrl(new URL('http://metadata.google.internal/'), {
       YUANTU_ALLOW_PRIVATE_NETWORK: '1',
     }),
   );
-  assert.rejects(
+  await assert.rejects(
     assertPublicUrl(new URL('http://[fd00:ec2::254]/'), { YUANTU_ALLOW_PRIVATE_NETWORK: '1' }),
   );
 });

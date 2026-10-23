@@ -387,7 +387,6 @@ test(
      */
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
     await page.locator('#full-access-enable').click();
     await step(
       'the full-access preset to apply',

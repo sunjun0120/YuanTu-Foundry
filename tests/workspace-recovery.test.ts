@@ -11,6 +11,7 @@ import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
 import { openHostServices } from '../apps/agent-host/services.ts';
 import type { Options } from '../apps/shared/args.ts';
+import { git } from './git-fixture.ts';
 
 /**
  * Surviving a restart.
@@ -21,20 +22,6 @@ import type { Options } from '../apps/shared/args.ts';
  * session works in, that a directory which is no longer the one recorded is *refused* rather than silently adopted,
  * and that an archived workspace can be rebuilt without changing its identity.
  */
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 /**
  * A repository plus every store opened over it.

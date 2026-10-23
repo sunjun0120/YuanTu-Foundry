@@ -31,15 +31,68 @@ public static class YuantuAcl {
   static readonly Dictionary<string, SafeFileHandle> pinned = new Dictionary<string, SafeFileHandle>(StringComparer.OrdinalIgnoreCase);
   // Do not follow links, and omit FILE_SHARE_DELETE while security changes are in flight.
   public static void Pin(string path) { Pin(path, 0xE0000); }
+  // Validation only reads descriptors: READ_CONTROL keeps the object pinned without asking for WRITE_OWNER, which an
+  // unelevated owner does not hold outside its profile (an inherited Authenticated Users ACE grants no WO).
+  public static void PinRead(string path) { Pin(path, 0x20000); }
   static void Pin(string path, uint access) {
     if (pinned.ContainsKey(path)) return;
     SafeFileHandle handle = CreateFileW(path, access, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
-    if(handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Pin workspace security object");
-    FileInformation info;
-    if(!GetFileInformationByHandle(handle, out info)) { int error = Marshal.GetLastWin32Error(); handle.Dispose(); throw new Win32Exception(error); }
-    if((info.Attributes & 0x400) != 0) { handle.Dispose(); throw new InvalidOperationException("Windows sandbox refuses reparse points in ACL trees"); }
-    if((info.Attributes & 0x10) == 0 && info.Links > 1) { handle.Dispose(); throw new InvalidOperationException("Windows sandbox refuses hardlinks in ACL trees"); }
+    if(handle.IsInvalid) {
+      int error = Marshal.GetLastWin32Error();
+      if(error != 5 || (access & 0x80000) == 0) throw new Win32Exception(error, "Pin workspace security object");
+      handle = PinAsOwner(path, access, error);
+    }
+    try { Inspect(handle); } catch { handle.Dispose(); throw; }
     pinned.Add(path, handle);
+  }
+  static void Inspect(SafeFileHandle handle) {
+    FileInformation info;
+    if(!GetFileInformationByHandle(handle, out info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    if((info.Attributes & 0x400) != 0) throw new InvalidOperationException("Windows sandbox refuses reparse points in ACL trees");
+    if((info.Attributes & 0x10) == 0 && info.Links > 1) throw new InvalidOperationException("Windows sandbox refuses hardlinks in ACL trees");
+  }
+  // Descriptors as they were before PinAsOwner added its ACE: what a grant journals and a restore puts back.
+  static readonly Dictionary<string, string> originals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+  /**
+   * Labels need WRITE_OWNER, which an unelevated owner lacks wherever its DACL comes from an inherited Authenticated
+   * Users ACE (any volume outside the profile, or a TEMP moved there). The owner always holds WRITE_DAC, so it grants
+   * itself WRITE_OWNER on this one object, after the link checks and with the original descriptor kept for the journal.
+   */
+  static SafeFileHandle PinAsOwner(string path, uint access, int denied) {
+    using (SafeFileHandle owner = CreateFileW(path, 0x60000, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero)) {
+      if(owner.IsInvalid) throw new Win32Exception(denied, "Pin workspace security object");
+      Inspect(owner);
+      string before = Describe(owner);
+      // One explicit, non-inheritable ACE, every other ACE byte for byte as it was: the object classes'
+      // canonicalization would drop a directory's inheritance flags, and SetSecurityInfo would then propagate that
+      // loss to every child. SetKernelObjectSecurity writes this one DACL and propagates nothing.
+      var raw = new RawSecurityDescriptor(before);
+      RawAcl acl = raw.DiscretionaryAcl;
+      if(acl == null) throw new Win32Exception(denied, "Pin workspace security object");
+      int at = 0;
+      while(at < acl.Count) {
+        var ace = acl[at] as QualifiedAce;
+        if(ace == null || (ace.AceFlags & AceFlags.Inherited) != 0 || ace.AceQualifier != AceQualifier.AccessDenied) break;
+        at++;
+      }
+      acl.InsertAce(at, new CommonAce(AceFlags.None, AceQualifier.AccessAllowed, 0x80000, System.Security.Principal.WindowsIdentity.GetCurrent().User, false, null));
+      raw.DiscretionaryAcl = acl;
+      IntPtr sd; uint length;
+      if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(raw.GetSddlForm(AccessControlSections.Access), 1, out sd, out length)) throw new Win32Exception(Marshal.GetLastWin32Error());
+      try {
+        if(!SetKernelObjectSecurity(owner, 4, sd)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Grant the owner WRITE_OWNER");
+      } finally { LocalFree(sd); }
+      originals[path] = before;
+    }
+    SafeFileHandle handle = CreateFileW(path, access, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+    if(handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Pin workspace security object");
+    return handle;
+  }
+  /** The descriptor to journal as `before`: the one PinAsOwner found, else the current one. */
+  public static string Original(string path) {
+    Pin(path);
+    string before;
+    return originals.TryGetValue(path, out before) ? before : Capture(path);
   }
   static SafeFileHandle Handle(string path) { Pin(path); return pinned[path]; }
   public static void Unpin(string path) {
@@ -59,9 +112,10 @@ public static class YuantuAcl {
         throw new InvalidOperationException("Low integrity launcher cache is unsafe; execution refused");
     }
   }
-  public static string Capture(string path) {
+  public static string Capture(string path) { return Describe(Handle(path)); }
+  static string Describe(SafeFileHandle handle) {
     IntPtr owner, group, dacl, sacl, sd, text = IntPtr.Zero; uint length;
-    uint code = GetSecurityInfo(Handle(path), 1, 0x14, out owner, out group, out dacl, out sacl, out sd);
+    uint code = GetSecurityInfo(handle, 1, 0x14, out owner, out group, out dacl, out sacl, out sd);
     if(code != 0) throw new Win32Exception((int)code, "Capture file security");
     try {
       if(!ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, 0x14, out text, out length)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -139,12 +193,12 @@ public static class YuantuAcl {
 }
 '@
 
-function Safe-Tree {
+function Safe-Tree([switch]$ReadOnly) {
   $items = @((Get-Item -LiteralPath $Root -Force)) + @(Get-ChildItem -LiteralPath $Root -Force -Recurse)
   if ($items.Count -gt 100000) { throw 'Windows sandbox ACL tree exceeds 100000 objects' }
   foreach ($item in $items) {
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Windows sandbox refuses reparse points in ACL trees: $($item.FullName)" }
-    [YuantuAcl]::Pin($item.FullName)
+    if ($ReadOnly) { [YuantuAcl]::PinRead($item.FullName) } else { [YuantuAcl]::Pin($item.FullName) }
   }
   return $items
 }
@@ -176,7 +230,7 @@ if ($Operation -eq 'validate-control') {
       $directory = [IO.Directory]::GetParent($parent)
       $parent = if ($directory) { $directory.FullName } else { $null }
     }
-    foreach ($item in (Safe-Tree)) { [YuantuAcl]::RequireMediumControl($item.FullName) }
+    foreach ($item in (Safe-Tree -ReadOnly)) { [YuantuAcl]::RequireMediumControl($item.FullName) }
   }
 } elseif ($Operation -eq 'grant') {
   if (Test-Path -LiteralPath $Journal) { throw 'Unrecovered Windows sandbox ACL journal exists' }
@@ -190,7 +244,8 @@ if ($Operation -eq 'validate-control') {
     }
   }
   $items = Safe-Tree
-  $entries = @($items | ForEach-Object { @{ path=$_.FullName; before=[YuantuAcl]::Capture($_.FullName) } })
+  # `Original`: a WRITE_OWNER ACE the owner granted itself while pinning is not part of what restore puts back.
+  $entries = @($items | ForEach-Object { @{ path=$_.FullName; before=[YuantuAcl]::Original($_.FullName) } })
   # Flush a recovery record BEFORE the first security descriptor mutation.
   $json = @{ root=$Root; sid=$Sid; entries=$entries; createdProtected=$createdProtected } | ConvertTo-Json -Depth 5
   $stream = [IO.File]::Open($Journal, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -247,7 +302,7 @@ if ($Operation -eq 'validate-control') {
   foreach ($entry in $record.entries) { $originalPaths[$entry.path] = $true }
   foreach ($item in $currentItems) {
     if (-not $originalPaths.ContainsKey($item.FullName)) {
-      $raw = [Security.AccessControl.RawSecurityDescriptor]::new([YuantuAcl]::Capture($item.FullName))
+      $raw = [Security.AccessControl.RawSecurityDescriptor]::new([YuantuAcl]::Original($item.FullName))
       $access = $raw.GetSddlForm([Security.AccessControl.AccessControlSections]::Access)
       $label = if ($item.PSIsContainer) { 'S:(ML;OICI;NW;;;ME)' } else { 'S:(ML;;NW;;;ME)' }
       [YuantuAcl]::Apply($item.FullName, $access + $label)

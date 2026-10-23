@@ -267,15 +267,31 @@ async function applySpillRetentionReference(workspace) {
       workspace.directory,
       spill,
       'function trimSpills(directory: string): void {',
-      'function trimSpills(directory: string, retentionLimit = MAX_SPILL_FILES_PER_SESSION): void {',
+      'function trimSpills(directory: string, retentionLimit = MAX_SPILL_FILES_PER_SESSION): void {\n  trimLimits.set(directory, retentionLimit);',
     ),
   );
   records.push(
     await exactReplace(
       workspace.directory,
       spill,
-      '      .sort((a, b) => b.at - a.at);',
-      '      .sort((a, b) => b.at - a.at || compareCodePoints(b.name, a.name));',
+      'const trimAgain = new Set<string>();',
+      'const trimAgain = new Set<string>();\nconst trimLimits = new Map<string, number>();',
+    ),
+  );
+  records.push(
+    await exactReplace(
+      workspace.directory,
+      spill,
+      '  })().finally(() => trimming.delete(directory));',
+      '  })().finally(() => {\n    trimming.delete(directory);\n    trimLimits.delete(directory);\n  });',
+    ),
+  );
+  records.push(
+    await exactReplace(
+      workspace.directory,
+      spill,
+      '    files.sort((a, b) => b.at - a.at);',
+      '    files.sort((a, b) => b.at - a.at || compareCodePoints(b.name, a.name));',
     ),
   );
   records.push(
@@ -283,7 +299,7 @@ async function applySpillRetentionReference(workspace) {
       workspace.directory,
       spill,
       'files.slice(MAX_SPILL_FILES_PER_SESSION)',
-      'files.slice(retentionLimit)',
+      'files.slice(trimLimits.get(directory) ?? MAX_SPILL_FILES_PER_SESSION)',
     ),
   );
   await writeFile(

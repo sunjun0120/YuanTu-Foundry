@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'node:http';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { tempRoot } from './temp-fixture.ts';
 
@@ -117,6 +117,51 @@ test('freezing copies production files with stable hashes and refuses reuse, mis
   );
   const linked = path.join(source, 'packages', 'outside');
   await symlink(root, linked, 'junction');
+  await assert.rejects(captureSourceManifest(source), /link/i);
+});
+
+test('production manifests omit Rust build caches while preserving target source modules', async (t) => {
+  const { captureSourceManifest, freezeInputs, assertFrozen } = await moduleFor('materialize.mjs');
+  const root = await temporary(t);
+  const source = path.join(root, 'source');
+  const native = 'packages/tools/windows-sandbox/native';
+  const kept = [
+    'apps/target/index.ts',
+    'packages/target/index.ts',
+    `${native}/Cargo.lock`,
+    `${native}/Cargo.toml`,
+    `${native}/src/main.rs`,
+    `${native}/src/target/mod.rs`,
+  ];
+  const cached = `${native}/target/debug/incremental/cache.bin`;
+  for (const relative of [...kept, cached]) {
+    await mkdir(path.dirname(path.join(source, relative)), { recursive: true });
+    await writeFile(path.join(source, relative), relative);
+  }
+  const original = await captureSourceManifest(source);
+  assert.deepEqual(
+    original.files.map((file: any) => file.path),
+    kept,
+  );
+  await writeFile(path.join(source, cached), 'rebuilt object bytes');
+  await writeFile(path.join(source, native, 'target/debug/helper.exe'), 'compiled helper');
+  assert.equal((await captureSourceManifest(source)).hash, original.hash);
+  const spec = { kind: 'snapshot', directory: source, manifestSha256: original.hash };
+  const frozen = await freezeInputs({
+    runtimeSource: spec,
+    corpusSource: spec,
+    outputDirectory: path.join(root, 'frozen'),
+  });
+  await assert.rejects(readFile(path.join(frozen.runtimeDirectory, cached)), { code: 'ENOENT' });
+  await assert.rejects(readFile(path.join(frozen.corpusDirectory, cached)), { code: 'ENOENT' });
+  await writeFile(
+    path.join(frozen.runtimeDirectory, native, 'src/main.rs'),
+    'tampered frozen source',
+  );
+  await assert.rejects(assertFrozen(frozen), /tamper/i);
+  await writeFile(path.join(source, native, 'src/main.rs'), 'changed source');
+  assert.notEqual((await captureSourceManifest(source)).hash, original.hash);
+  await symlink(source, path.join(source, native, 'src/linked'), 'junction');
   await assert.rejects(captureSourceManifest(source), /link/i);
 });
 
@@ -296,7 +341,7 @@ test('external oracle detects byte-cap regression and cannot trust a rewritten p
     workspace,
     path.join(root, 'evidence-original'),
   );
-  assert.equal(baseline.passed, true);
+  assert.equal(baseline.passed, true, JSON.stringify(baseline.checks));
   await prepareCase(getCase('E01'), workspace);
   const degraded = await executeOracle(
     getCase('E01'),
@@ -306,10 +351,12 @@ test('external oracle detects byte-cap regression and cannot trust a rewritten p
   assert.equal(degraded.passed, false);
   assert.ok(degraded.checks.some((check: any) => !check.passed && check.id.includes('byte')));
   await applyReference(getCase('E01'), workspace);
-  assert.equal(
-    (await executeOracle(getCase('E01'), workspace, path.join(root, 'evidence-reference'))).passed,
-    true,
+  const reference = await executeOracle(
+    getCase('E01'),
+    workspace,
+    path.join(root, 'evidence-reference'),
   );
+  assert.equal(reference.passed, true, JSON.stringify(reference.checks));
 });
 
 test('test process accounting rejects empty, skipped, missing-assertion and timed-out acceptance', async () => {
@@ -1028,7 +1075,41 @@ test('E09 retention oracle and reference preserve the full E05 behavioral contra
   );
   await applyReference(getCase('E09'), workspace);
   const reference = await executeOracle(getCase('E09'), workspace, path.join(root, 'reference'));
-  assert.equal(reference.passed, true);
+  assert.equal(reference.passed, true, JSON.stringify(reference.checks));
+});
+
+test('retention reference uses the last in-flight limit independently for each session', async (t) => {
+  const { getCase, applyReference } = await moduleFor('cases.mjs');
+  const root = await temporary(t);
+  await mkdir(path.join(root, 'packages/tools'), { recursive: true });
+  await copySpillDependencies(root);
+  await writeFile(path.join(root, 'package.json'), '{"type":"module"}');
+  const file = path.join(root, 'packages/tools/spill.ts');
+  await writeFile(file, await readFile(path.resolve('packages/tools/spill.ts')));
+  await applyReference(getCase('E05'), { directory: root });
+  const { spillOutput, settleSpillTrims } = await import(pathToFileURL(file).href);
+  const sessions = [
+    { id: 'increase', limits: [1, 3, 3], expected: 3 },
+    { id: 'decrease', limits: [3, 3, 1], expected: 1 },
+    { id: 'default', limits: [1, 1, undefined], expected: 3 },
+  ];
+  // Every write lands before any asynchronous trim can settle, including across different sessions.
+  for (const session of sessions)
+    for (const retentionLimit of session.limits)
+      spillOutput({
+        workspace: root,
+        sessionId: session.id,
+        tool: 'tool',
+        content: 'x',
+        retentionLimit,
+      });
+  await settleSpillTrims();
+  for (const session of sessions)
+    assert.equal(
+      (await readdir(path.join(root, '.yuantu/spill', session.id))).length,
+      session.expected,
+      session.id,
+    );
 });
 
 test('E09 owned workload records its parent and child, stops markers, and refuses replay and tampering', async (t) => {

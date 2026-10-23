@@ -34,7 +34,7 @@ import {
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { mkdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
 import type {
@@ -57,6 +57,7 @@ import { carrierErrorReply } from './carrier-errors.ts';
 import { UiSettingsStore } from './ui-settings-store.ts';
 import { PermissionSettingsStore } from './permission-settings-store.ts';
 import {
+  DEFAULT_PRESET,
   parsePermissionPresetCommand,
   permissionPreset,
   type PermissionPresetReply,
@@ -326,6 +327,9 @@ app.on('before-quit', (event) => {
   })();
 });
 app.on('window-all-closed', () => app.quit());
+app.on('activate', () => {
+  if (window && !window.isDestroyed()) window.show();
+});
 
 void app
   .whenReady()
@@ -404,9 +408,20 @@ void app
       nodePath: runtime.nodePath,
       workerPath: path.join(__dirname, 'sandbox-probe-worker.cjs'),
     });
+    const sandboxHelper = path.resolve(
+      __dirname,
+      '../packages/tools/windows-sandbox/yuantu-sandbox.exe',
+    );
+    // A missing helper is a broken installation, not a setting: the window stays silent about it, the log says
+    // so once, and a sandboxed command that is refused names the reinstall.
+    if (process.platform === 'win32' && !existsSync(sandboxHelper))
+      console.error(
+        'desktop: the Windows sandbox helper is missing; reinstall YuanTu',
+        sandboxHelper,
+      );
     const sandboxSetup = new WindowsAccountSandboxSetup({
       platform: process.platform,
-      helperPath: path.resolve(__dirname, '../packages/tools/windows-sandbox/yuantu-sandbox.exe'),
+      helperPath: sandboxHelper,
       // A read root is chosen in the native picker and never typed into the page: the journal, not the renderer, is
       // the list of what may be removed.
       chooseDirectory: async () => {
@@ -458,6 +473,13 @@ void app
     if (restored?.maximized) window.maximize();
     window.on('close', (event) => {
       saveWindowState();
+      // macOS keeps an app alive with its window closed: the red button hides the window and running work goes
+      // on, the Dock icon brings it back, and Cmd+Q is the quit (its `before-quit` has already set `quitting`).
+      if (process.platform === 'darwin' && !quitting && !quitAllowed) {
+        event.preventDefault();
+        window?.hide();
+        return;
+      }
       if (!quitAllowed) {
         event.preventDefault();
         app.quit();
@@ -606,18 +628,38 @@ void app
             }
             return { ok: true, view: choices.view() };
           }
+          if (command.type === 'weak-sandbox') {
+            if (process.platform !== 'win32')
+              throw new Error('The weaker sandbox is only available on Windows');
+            assertPresetChangeAllowed();
+            switching = true;
+            try {
+              await choices.following;
+              const sessionId = service?.snapshot.session.sessionId ?? undefined;
+              const permission = choices.chosen(sessionId).permission;
+              // Leaving full access for a sandbox is not a reason to keep full access's approval floor.
+              const choice: SessionChoice = {
+                sandbox: 'windows',
+                permission:
+                  permission === 'full-access'
+                    ? permissionPreset(DEFAULT_PRESET).permission
+                    : permission,
+              };
+              await choices.apply(choice, sessionId);
+              if (sessionId) choices.remember(sessionId, choice);
+              choices.weakDefault = true;
+              choices.push();
+              return { ok: true, view: choices.view() };
+            } finally {
+              switching = false;
+            }
+          }
           const preset = permissionPreset(command.preset);
           assertPresetChangeAllowed();
           switching = true;
           try {
             await choices.following;
-            // `windows` is the operator's explicit weaker backend; a preset moves the approval half without
-            // silently upgrading it to the account backend, including after a host -> guarded switch.
-            const sandbox = choiceForPreset(
-              preset,
-              choices.view().sandbox.mode,
-              sandboxEnvironment.defaultMode,
-            ).sandbox;
+            const sandbox = choiceForPreset(preset).sandbox;
             const choice: SessionChoice = {
               sandbox,
               permission: preset.permission,
@@ -625,6 +667,8 @@ void app
             const sessionId = service?.snapshot.session.sessionId ?? undefined;
             await choices.apply(choice, sessionId);
             if (sessionId) choices.remember(sessionId, choice);
+            // Choosing a preset is choosing the account sandbox again, for the sessions that follow too.
+            choices.weakDefault = false;
             return {
               ok: true,
               view: choices.view(),

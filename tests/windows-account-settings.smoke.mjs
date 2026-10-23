@@ -1,4 +1,4 @@
-// @test-serial desktop-ui: Opens the real Electron settings page; never requests account initialization.
+// @test-serial desktop-ui: Opens the real Electron window; never requests account initialization.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -7,7 +7,7 @@ import electronPath from 'electron';
 import { tempRoot } from './temp-fixture.ts';
 
 test(
-  'account settings are translated and an uninitialized install can request setup',
+  'sandbox accounts are offered above the composer and never drawn in settings',
   { timeout: 60000 },
   async (t) => {
     let app;
@@ -17,7 +17,7 @@ test(
       ...process.env,
       YUANTU_NODE_PATH: process.execPath,
       YUANTU_WORKSPACE: root,
-      YUANTU_SANDBOX: 'host',
+      YUANTU_SANDBOX: 'native',
       YUANTU_SESSION_TITLES: 'false',
       YUANTU_API_KEY: '',
       OPENAI_API_KEY: '',
@@ -36,41 +36,46 @@ test(
     const page = await app.firstWindow();
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
-    await page.locator('#open-settings').click();
-    await page.locator('#general-settings').click();
+    const prompt = page.locator('#sandbox-prompt');
+    // The accounts have no settings section in any state: setup lives above the composer, removal in the uninstaller.
+    const settingsMentionsSandbox = async () => {
+      await page.locator('#open-settings').click();
+      await page.locator('#general-settings').click();
+      return page.evaluate(() =>
+        /沙箱|sandbox/i.test(
+          document.querySelector('#general-settings-content')?.textContent ?? '',
+        ),
+      );
+    };
     if (process.platform !== 'win32') {
-      assert.equal(await page.locator('#sandbox-setup-section').isHidden(), true);
+      assert.equal(await prompt.isHidden(), true);
+      assert.equal(await settingsMentionsSandbox(), false);
       return;
     }
-    await page.locator('#sandbox-setup-section').waitFor({ state: 'visible' });
-    await page.waitForFunction(
-      () =>
-        /未初始化|无法读取/.test(
-          document.querySelector('#sandbox-setup-feedback')?.textContent ?? '',
-        ),
-      undefined,
-      { timeout: 15000 },
-    );
-    // Initialization is offered on an unpackaged development build too; clicking it would ask for UAC, which
-    // this smoke never does. Uninstall and the read-root list stay hidden until accounts exist.
-    assert.equal(await page.locator('#sandbox-setup-initialize').isDisabled(), false);
-    assert.equal(await page.locator('#sandbox-setup-uninstall').isHidden(), true);
-    assert.equal(await page.locator('#sandbox-read-advanced').isHidden(), true);
-    assert.match(await page.locator('#sandbox-setup-feedback').innerText(), /未初始化|无法读取/);
-    await page.locator('#ui-language').selectOption('en-US');
-    await page.waitForFunction(
-      () =>
-        document.querySelector('#sandbox-setup-title').textContent === 'Windows sandbox accounts',
-    );
-    assert.match(
-      await page.locator('#sandbox-setup-feedback').innerText(),
-      /not been initialized|cannot read/i,
-    );
-    assert.equal(
-      await page.locator('#sandbox-setup-initialize').innerText(),
-      'Initialize as administrator',
-    );
-    const bounds = await page.locator('#sandbox-setup-section').boundingBox();
-    assert.ok(bounds && bounds.width > 200 && bounds.height > 100);
+    // Ask the main process what the window should be drawing, then check that it draws exactly that.
+    const view = await page.evaluate(async () => {
+      const reply = await window.yuantu.sandboxSetup({ type: 'status' });
+      return reply.ok ? reply.view : undefined;
+    });
+    if (view?.state !== 'uninitialized' && view?.state !== 'damaged' && view?.state !== 'ready') {
+      // A missing or unreadable helper is an installation problem: neither surface mentions it.
+      await page.waitForTimeout(1000);
+      assert.equal(await prompt.isHidden(), true);
+      assert.equal(await settingsMentionsSandbox(), false);
+      return;
+    }
+    if (view.state !== 'ready') {
+      // Setup is offered above the composer; clicking it would ask for UAC, which this smoke never does.
+      await prompt.waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#sandbox-prompt-initialize').isDisabled(), false);
+      await page.locator('#sandbox-prompt-dismiss').click();
+      assert.equal(await prompt.isHidden(), true);
+      assert.equal(await settingsMentionsSandbox(), false);
+      return;
+    }
+    // Ready accounts: nothing to ask and nothing to manage.
+    await page.waitForTimeout(1000);
+    assert.equal(await prompt.isHidden(), true);
+    assert.equal(await settingsMentionsSandbox(), false);
   },
 );

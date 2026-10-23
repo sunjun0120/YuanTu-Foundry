@@ -1,5 +1,6 @@
 //! Starts one command inside its own kill-on-close Job, with only its three stdio handles inherited.
 use crate::{
+    desktop::OpenedDesktop,
     protocol::Request,
     win::{Handle, Result, process_token, wide, win},
 };
@@ -8,12 +9,19 @@ use std::{
     ffi::c_void,
     mem::{size_of, zeroed},
     ptr::{null, null_mut},
+    sync::Mutex,
+    thread::JoinHandle,
 };
 use windows_sys::Win32::{
     Foundation::*,
     Security::*,
     Storage::FileSystem::*,
-    System::{JobObjects::*, Threading::*},
+    System::{
+        Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole},
+        JobObjects::*,
+        Pipes::CreatePipe,
+        Threading::*,
+    },
 };
 
 /// Quotes one argument the way `CommandLineToArgvW` and the MSVC runtime split it back.
@@ -191,11 +199,167 @@ pub struct Running {
     pub pid: u32,
     process: Handle,
     job: Handle,
+    console: Option<Console>,
+}
+
+/// The pseudo console a TTY request runs on, and the thread that carries its output back to exec. Input is carried
+/// by a detached thread that ends when exec closes its side.
+struct Console {
+    handle: Mutex<Option<HPCON>>,
+    output: Mutex<Option<JoinHandle<()>>>,
+    /// The console's input pipe, held open until the console closes: conhost treats a broken input pipe as the
+    /// console closing and ends the command with STATUS_CONTROL_C_EXIT, even when exec merely had no input.
+    input: Mutex<Option<Handle>>,
+}
+
+impl Console {
+    /// `input` and `output` are exec's pipes as this process holds them. The console starts at `size`.
+    fn open(size: crate::protocol::Size, input: Handle, output: Handle) -> Result<Console> {
+        let (console_input, input_write) = pipe()?;
+        let (output_read, console_output) = pipe()?;
+        let mut handle: HPCON = 0;
+        let created = unsafe {
+            CreatePseudoConsole(
+                coord(size),
+                console_input.0,
+                console_output.0,
+                0,
+                &mut handle,
+            )
+        };
+        if created < 0 {
+            return Err(format!("Create pseudo console: {created:#x}"));
+        }
+        // The console holds its own copies of these two ends.
+        drop((console_input, console_output));
+        let mut held = null_mut();
+        win(
+            unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    input_write.0,
+                    GetCurrentProcess(),
+                    &mut held,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            },
+            "Hold pseudo console input",
+        )?;
+        let held = Handle(held);
+        std::thread::spawn(move || pump(&input, &input_write));
+        let output = std::thread::spawn(move || pump(&output_read, &output));
+        Ok(Console {
+            handle: Mutex::new(Some(handle)),
+            output: Mutex::new(Some(output)),
+            input: Mutex::new(Some(held)),
+        })
+    }
+
+    fn handle(&self) -> Option<HPCON> {
+        *self
+            .handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Closes the console, which flushes what the command wrote and ends the output stream, then waits until
+    /// every byte has reached exec.
+    fn finish(&self) {
+        if let Some(handle) = self
+            .handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            unsafe { ClosePseudoConsole(handle) };
+        }
+        drop(
+            self.input
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take(),
+        );
+        if let Some(output) = self
+            .output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            let _ = output.join();
+        }
+    }
+}
+
+impl Drop for Console {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+fn coord(size: crate::protocol::Size) -> COORD {
+    COORD {
+        X: size.columns as i16,
+        Y: size.rows as i16,
+    }
+}
+
+pub(crate) fn pipe() -> Result<(Handle, Handle)> {
+    let (mut read, mut write) = (null_mut(), null_mut());
+    win(
+        unsafe { CreatePipe(&mut read, &mut write, null(), 0) },
+        "Create pseudo console pipe",
+    )?;
+    Ok((Handle(read), Handle(write)))
+}
+
+/// Copies bytes from `from` to `to` until either side ends.
+pub(crate) fn pump(from: &Handle, to: &Handle) {
+    let mut buffer = [0u8; 8192];
+    loop {
+        let mut read = 0;
+        let ok = unsafe {
+            ReadFile(
+                from.0,
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                &mut read,
+                null_mut(),
+            )
+        };
+        if ok == 0 || read == 0 {
+            return;
+        }
+        let mut sent = 0;
+        while sent < read {
+            let mut written = 0;
+            let ok = unsafe {
+                WriteFile(
+                    to.0,
+                    buffer[sent as usize..].as_ptr(),
+                    read - sent,
+                    &mut written,
+                    null_mut(),
+                )
+            };
+            if ok == 0 || written == 0 {
+                return;
+            }
+            sent += written;
+        }
+    }
 }
 
 /// Creates the command suspended, already inside its Job, verifies the kernel gave it a restricted token,
 /// and only then resumes it.
-pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Running> {
+/// Starts `request` under `token`, on `desktop` when given (the runner always gives the broker's private desktop).
+pub fn start(
+    token: &Handle,
+    request: &Request,
+    stdio: [HANDLE; 3],
+    desktop: Option<&OpenedDesktop>,
+) -> Result<Running> {
     let handles = [
         inheritable(stdio[0])?,
         inheritable(stdio[1])?,
@@ -219,8 +383,18 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
         },
         "Set command Job limits",
     )?;
-    let inherited: Vec<HANDLE> = handles.iter().map(|h| h.0).collect();
     let job_list = [job.0];
+    // A TTY request hands exec's stdin and stdout to the console's two streams; the console merges stderr itself,
+    // and the command inherits nothing.
+    let [stdin, stdout, stderr] = handles;
+    let (console, stdio) = match request.tty {
+        Some(size) => {
+            drop(stderr);
+            (Some(Console::open(size, stdin, stdout)?), None)
+        }
+        None => (None, Some([stdin, stdout, stderr])),
+    };
+    let inherited: Vec<HANDLE> = stdio.iter().flatten().map(|h| h.0).collect();
     let mut length = 0;
     unsafe {
         InitializeProcThreadAttributeList(null_mut(), 2, 0, &mut length);
@@ -231,20 +405,37 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
         unsafe { InitializeProcThreadAttributeList(list, 2, 0, &mut length) },
         "Initialize process attributes",
     )?;
-    win(
-        unsafe {
-            UpdateProcThreadAttribute(
-                list,
-                0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                inherited.as_ptr() as *const c_void,
-                inherited.len() * size_of::<HANDLE>(),
-                null_mut(),
-                null(),
-            )
-        },
-        "Set inherited stdio list",
-    )?;
+    match console.as_ref().and_then(Console::handle) {
+        // The attribute value is the console handle itself, not a pointer to it.
+        Some(handle) => win(
+            unsafe {
+                UpdateProcThreadAttribute(
+                    list,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                    handle as *const c_void,
+                    size_of::<HPCON>(),
+                    null_mut(),
+                    null(),
+                )
+            },
+            "Attach pseudo console",
+        )?,
+        None => win(
+            unsafe {
+                UpdateProcThreadAttribute(
+                    list,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                    inherited.as_ptr() as *const c_void,
+                    inherited.len() * size_of::<HANDLE>(),
+                    null_mut(),
+                    null(),
+                )
+            },
+            "Set inherited stdio list",
+        )?,
+    }
     win(
         unsafe {
             UpdateProcThreadAttribute(
@@ -261,16 +452,34 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
     )?;
     let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    // On a console the standard handles are deliberately invalid, as Codex does: the command must find the console,
+    // never a handle this process happens to hold.
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startup.StartupInfo.hStdInput = handles[0].0;
-    startup.StartupInfo.hStdOutput = handles[1].0;
-    startup.StartupInfo.hStdError = handles[2].0;
+    (
+        startup.StartupInfo.hStdInput,
+        startup.StartupInfo.hStdOutput,
+        startup.StartupInfo.hStdError,
+    ) = match &stdio {
+        Some(stdio) => (stdio[0].0, stdio[1].0, stdio[2].0),
+        None => (
+            INVALID_HANDLE_VALUE,
+            INVALID_HANDLE_VALUE,
+            INVALID_HANDLE_VALUE,
+        ),
+    };
     startup.lpAttributeList = list;
+    startup.StartupInfo.lpDesktop = desktop.map_or(null_mut(), |desktop| desktop.startup_name());
     let image = wide(&request.argv[0])?;
     let mut command = wide(&command_line(&request.argv, request.verbatim))?;
     let cwd = wide(&request.cwd)?;
     let environment = environment_block(&request.env)?;
     let mut info: PROCESS_INFORMATION = unsafe { zeroed() };
+    // A console command needs a console, so CREATE_NO_WINDOW (which suppresses one) applies to piped commands only.
+    let window = if console.is_some() {
+        0
+    } else {
+        CREATE_NO_WINDOW
+    };
     win(
         unsafe {
             CreateProcessAsUserW(
@@ -279,11 +488,11 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
                 command.as_mut_ptr(),
                 null(),
                 null(),
-                1,
+                stdio.is_some() as i32,
                 CREATE_SUSPENDED
                     | CREATE_UNICODE_ENVIRONMENT
                     | EXTENDED_STARTUPINFO_PRESENT
-                    | CREATE_NO_WINDOW,
+                    | window,
                 environment.as_ptr() as *const c_void,
                 cwd.as_ptr(),
                 &startup.StartupInfo,
@@ -298,6 +507,7 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
         pid: info.dwProcessId,
         process,
         job,
+        console,
     };
     // Do not infer confinement from CreateProcess success: check the token the kernel actually assigned.
     let restricted = process_token(running.process.0)
@@ -315,6 +525,18 @@ pub fn start(token: &Handle, request: &Request, stdio: [HANDLE; 3]) -> Result<Ru
 }
 
 impl Running {
+    /// Resizes a TTY command's console. A piped command has none, and the request is ignored.
+    pub fn resize(&self, size: crate::protocol::Size) -> Result<()> {
+        let Some(handle) = self.console.as_ref().and_then(Console::handle) else {
+            return Ok(());
+        };
+        let result = unsafe { ResizePseudoConsole(handle, coord(size)) };
+        if result < 0 {
+            return Err(format!("Resize pseudo console: {result:#x}"));
+        }
+        Ok(())
+    }
+
     /// Terminates the whole tree. Safe to call from another thread while `wait` runs.
     pub fn cancel(&self) {
         unsafe {
@@ -347,6 +569,10 @@ impl Running {
                     "Query command Job",
                 )?;
                 if accounting.ActiveProcesses == 0 {
+                    // Everything the command wrote to its console reaches exec before the exit is reported.
+                    if let Some(console) = &self.console {
+                        console.finish();
+                    }
                     return Ok(code);
                 }
                 Sleep(10);
@@ -451,6 +677,7 @@ mod tests {
             env: system_env(),
             capabilities: vec!["S-1-5-21-11-22-33-44".into()],
             verbatim: true,
+            tty: None,
         }
     }
 
@@ -468,6 +695,7 @@ mod tests {
             &token,
             &cmd(&["/c", "exit", "7"]),
             [null_mut(), out.0, out.0],
+            None,
         )
         .unwrap();
         assert_eq!(running.wait().unwrap(), 7);
@@ -478,7 +706,7 @@ mod tests {
         let token = restricted_token(&["S-1-5-21-11-22-33-44".into()]).unwrap();
         let (_, out) = pipe();
         let request = cmd(&["/c", "ping", "-n", "30", "127.0.0.1"]);
-        let running = start(&token, &request, [null_mut(), out.0, out.0]).unwrap();
+        let running = start(&token, &request, [null_mut(), out.0, out.0], None).unwrap();
         let started = std::time::Instant::now();
         running.cancel();
         running.wait().unwrap();

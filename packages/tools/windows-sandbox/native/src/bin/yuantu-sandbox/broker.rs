@@ -5,8 +5,9 @@
 //! every command) and ends the broker. If the runner dies, pending commands get `runner-lost` and the broker
 //! exits non-zero so the host starts a fresh one for the next command.
 use crate::{
+    desktop::PrivateDesktop,
     frame::{read_frame, write_frame},
-    pipe::{PipeIo, accept, client_pid, peer_disconnected, random_suffix, server},
+    pipe::{PipeIo, accept, client_pid, has_data, peer_disconnected, random_suffix, server},
     protocol::{ErrorKind, FromBroker, FromRunner, ToBroker, ToRunner, validate},
     win::{Handle, Result, current_user, open_process, process_token, token_user, wide, win},
 };
@@ -62,6 +63,8 @@ pub fn run(launch: Launch) -> Result<u32> {
             (sid, Some((account, secret)))
         }
     };
+    // Held until the broker exits: every command of this runner starts on it.
+    let desktop = PrivateDesktop::create(&runner_sid)?;
     let control = random_suffix()?;
     let control_sddl = format!("D:P(A;;GA;;;{runner_sid})(A;;GA;;;{me})");
     let down = server(
@@ -78,7 +81,7 @@ pub fn run(launch: Launch) -> Result<u32> {
         true,
         1,
     )?;
-    let (process, job) = start_runner(&control, &me, logon)?;
+    let (process, job) = start_runner(&control, &me, desktop.name(), logon)?;
     let pid = unsafe { GetProcessId(process.0) };
     accept(&down)?;
     accept(&up)?;
@@ -144,6 +147,7 @@ pub fn run(launch: Launch) -> Result<u32> {
 fn start_runner(
     control: &str,
     owner: &str,
+    desktop: &str,
     logon: Option<(Account, Secret)>,
 ) -> Result<(Handle, Handle)> {
     let job = Handle(unsafe { CreateJobObjectW(null(), null()) });
@@ -166,7 +170,7 @@ fn start_runner(
     let image = std::env::current_exe().map_err(|_| "Locate sandbox executable")?;
     let image = image.to_string_lossy().into_owned();
     let mut command = wide(&format!(
-        "\"{image}\" runner --control {control} --owner {owner}"
+        "\"{image}\" runner --control {control} --owner {owner} --desktop {desktop}"
     ))?;
     let image = wide(&image)?;
     let mut startup: STARTUPINFOW = unsafe { zeroed() };
@@ -306,14 +310,14 @@ fn serve_exec(runner: &Runner, me: &str, pipe: Handle) -> Result<()> {
             return Ok(());
         }
     };
-    let ToBroker::Spawn {
-        request,
-        stdin,
-        stdout,
-        stderr,
-    } = match read_frame(&mut PipeIo(&pipe)) {
-        Ok(message) => message,
-        Err(_) => {
+    let (request, stdin, stdout, stderr) = match read_frame(&mut PipeIo(&pipe)) {
+        Ok(ToBroker::Spawn {
+            request,
+            stdin,
+            stdout,
+            stderr,
+        }) => (request, stdin, stdout, stderr),
+        _ => {
             refuse(ErrorKind::InvalidRequest, "Invalid sandbox request".into());
             return Ok(());
         }
@@ -364,6 +368,16 @@ fn serve_exec(runner: &Runner, me: &str, pipe: Handle) -> Result<()> {
                 return Ok(());
             }
             Err(RecvTimeoutError::Timeout) => {
+                // A terminal resize from exec: only a size is accepted, and only for this command.
+                while has_data(&pipe) {
+                    match read_frame::<_, ToBroker>(&mut PipeIo(&pipe)) {
+                        Ok(ToBroker::Resize { size }) if size.validate().is_ok() => {
+                            let down = runner.down.lock().unwrap();
+                            let _ = write_frame(&mut PipeIo(&down), &ToRunner::Resize { id, size });
+                        }
+                        _ => break,
+                    }
+                }
                 // exec was killed (host cancel or timeout): stop the command's whole tree.
                 if !cancelled && peer_disconnected(&pipe) {
                     cancelled = true;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile, rm, symlink, utimes } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, symlink, truncate, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverSkills, expandSkill } from '../packages/resources/skills.ts';
 import { createTools } from '../packages/catalog/index.ts';
@@ -322,6 +322,24 @@ test('rejects non-files and malformed UTF-8 instruction sources', async (t) => {
   assert.throws(() => loadInstructions(root), /UTF-8/i);
 });
 
+test('a huge instruction file is read only up to its budget', async (t) => {
+  const root = await fixture(t);
+  const file = path.join(root, 'AGENTS.md');
+  // 2GB of sparse file: reading it whole would exceed a Buffer, so this only passes if the read is bounded.
+  // The budget ends in the middle of a three-byte character, and the bytes past it are NULs the loader refuses.
+  const prefix = Buffer.from('x'.repeat(32 * 1024 - 1) + '中', 'utf8');
+  await writeFile(file, prefix);
+  await truncate(file, 2 * 1024 ** 3);
+
+  const result = loadInstructions(root);
+
+  assert.deepEqual(result.omissions, [
+    { file: 'AGENTS.md', kind: 'truncated', keptBytes: 32 * 1024 - 1 },
+  ]);
+  assert.match(result.text, /AGENTS\.md was cut after 32767 bytes/);
+  assert.doesNotMatch(result.text, /�/);
+});
+
 // ---- merged from repo-map.test.ts ----
 
 async function fixture2(t: test.TestContext) {
@@ -358,7 +376,7 @@ const context = (): ToolContext => ({
 
 test('repo map outlines each language and skips ignored, unsupported and linked paths', async (t) => {
   const root = await fixture2(t);
-  const map = buildRepoMap(root);
+  const map = await buildRepoMap(root);
   const paths = map.files.map((file) => file.path);
   assert.deepEqual(paths, ['src/app.ts', 'src/util.py']);
   const typescript = map.files.find((file) => file.path === 'src/app.ts')!;
@@ -379,7 +397,7 @@ test('repo map outlines each language and skips ignored, unsupported and linked 
   await writeFile(path.join(outside, 'escaped.ts'), 'export class Escaped {}\n');
   await symlink(outside, path.join(root, 'linked')).catch(() => undefined);
   assert.equal(
-    buildRepoMap(root).files.some((file) => file.path.startsWith('linked/')),
+    (await buildRepoMap(root)).files.some((file) => file.path.startsWith('linked/')),
     false,
   );
 });
@@ -391,7 +409,7 @@ test('repo map output degrades within its budget instead of overflowing', async 
       path.join(root, `module-${i}.ts`),
       Array.from({ length: 8 }, (_, n) => `export function handler${i}_${n}(): void {}`).join('\n'),
     );
-  const map = buildRepoMap(root);
+  const map = await buildRepoMap(root);
   assert.equal(map.files.length, 40);
 
   // Roomy budget keeps the symbols.
@@ -417,7 +435,7 @@ test('repo map keeps file and head limits when gathering deeply nested sources',
     'export class Head {}\n' + '// padding\n'.repeat(4_000) + '\nexport class BeyondHead {}\n',
   );
   await writeFile(path.join(nested, 'b.ts'), 'export class Second {}\n');
-  const limited = buildRepoMap(root, { maxFiles: 1 });
+  const limited = await buildRepoMap(root, { maxFiles: 1 });
   assert.equal(limited.scannedFiles, 1);
   assert.equal(limited.truncated, true);
   assert.deepEqual(
@@ -428,8 +446,8 @@ test('repo map keeps file and head limits when gathering deeply nested sources',
     limited.files[0]!.symbols.map((symbol) => symbol.name),
     ['Head'],
   );
-  assert.match(repoMapContext(root), /class Second/);
-  assert.doesNotMatch(repoMapContext(root), /BeyondHead/);
+  assert.match(await repoMapContext(root), /class Second/);
+  assert.doesNotMatch(await repoMapContext(root), /BeyondHead/);
 });
 
 test('prompt outline excludes credentials and linked source directories', async (t) => {
@@ -445,29 +463,48 @@ test('prompt outline excludes credentials and linked source directories', async 
   await mkdir(path.join(root, '.aws'));
   await writeFile(path.join(root, '.aws', 'private.ts'), 'export class Private {}\n');
   resetRepoMapCache();
-  const first = repoMapContext(root);
+  const first = await repoMapContext(root);
   assert.match(first, /class Server/);
   assert.doesNotMatch(first, /Escaped|Credential|Private/);
   await writeFile(path.join(outside, 'escaped.ts'), 'export class ChangedOutside {}\n');
-  assert.equal(repoMapContext(root), first);
+  assert.equal(await repoMapContext(root), first);
+});
+
+test('building the prompt outline leaves the event loop free for other sessions', async (t) => {
+  const root = await tempRoot(t, 'yuantu-repo-map-yield-');
+  for (let index = 0; index < 20; index++) {
+    await mkdir(path.join(root, `pkg${index}`));
+    await writeFile(path.join(root, `pkg${index}`, 'mod.ts'), `export class Mod${index} {}\n`);
+  }
+  resetRepoMapCache();
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 0);
+  try {
+    const outline = await repoMapContext(root);
+    assert.match(outline, /class Mod19/);
+  } finally {
+    clearInterval(timer);
+  }
+  // A synchronous scan would run start to finish without letting a single timer fire.
+  assert.ok(ticks > 0, 'timers ran while the workspace was being scanned');
 });
 
 test('prompt outline is cached against a tree fingerprint and can be disabled', async (t) => {
   const root = await fixture2(t);
   resetRepoMapCache();
-  const first = repoMapContext(root);
+  const first = await repoMapContext(root);
   assert.match(first, /src\/app\.ts/);
-  assert.equal(repoMapContext(root), first, 'an unchanged tree reuses the cached outline');
+  assert.equal(await repoMapContext(root), first, 'an unchanged tree reuses the cached outline');
   // A new file changes the fingerprint, so the cache refreshes without an explicit reset.
   await writeFile(path.join(root, 'src', 'added.ts'), 'export class Added {}\n');
-  const second = repoMapContext(root);
+  const second = await repoMapContext(root);
   assert.notEqual(second, first);
   assert.match(second, /src\/added\.ts/);
 
   const previous = process.env.YUANTU_REPO_MAP;
   process.env.YUANTU_REPO_MAP = 'off';
   try {
-    assert.equal(repoMapContext(root), '', 'YUANTU_REPO_MAP=off disables the prompt section');
+    assert.equal(await repoMapContext(root), '', 'YUANTU_REPO_MAP=off disables the prompt section');
   } finally {
     if (previous === undefined) delete process.env.YUANTU_REPO_MAP;
     else process.env.YUANTU_REPO_MAP = previous;
@@ -482,11 +519,11 @@ test('prompt outline refreshes an existing deeply nested source declaration', as
   await writeFile(source, 'export function Before() {}\n');
   await utimes(source, 1_000, 1_000);
   resetRepoMapCache();
-  assert.match(repoMapContext(root), /function Before/);
+  assert.match(await repoMapContext(root), /function Before/);
 
   await writeFile(source, 'export function After_() {}\n');
   await utimes(source, 2_000, 2_000);
-  const refreshed = repoMapContext(root);
+  const refreshed = await repoMapContext(root);
   assert.match(refreshed, /src\/a\/b\/c\/value\.ts: function After_/);
   assert.doesNotMatch(refreshed, /function Before/);
 });
@@ -501,11 +538,11 @@ test('prompt outline notices edits even when the newest workspace mtime is uncha
   await writeFile(source, 'export function Before() {}\n');
   await utimes(source, 1_000, 1_000);
   resetRepoMapCache();
-  assert.match(repoMapContext(root), /function Before/);
+  assert.match(await repoMapContext(root), /function Before/);
 
   await writeFile(source, 'export function After_() {}\n');
   await utimes(source, 2_000, 2_000);
-  const refreshed = repoMapContext(root);
+  const refreshed = await repoMapContext(root);
   assert.match(refreshed, /function After_/);
   assert.doesNotMatch(refreshed, /function Before/);
 });
@@ -521,7 +558,8 @@ for (const budgets of [
       Array.from({ length: 12 }, (_, index) => `export function Function_${index}() {}`).join('\n'),
     );
     resetRepoMapCache();
-    const outputs = budgets.map((budget) => repoMapContext(root, budget));
+    const outputs: string[] = [];
+    for (const budget of budgets) outputs.push(await repoMapContext(root, budget));
     const tight = outputs[budgets.indexOf(80)]!;
     const roomy = outputs[budgets.indexOf(4_000)]!;
     assert.ok(tight.length <= 80 + 80, `expected a bounded outline, got ${tight.length}`);

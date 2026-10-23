@@ -31,7 +31,7 @@ import { nextCalendarRun, latestCalendarRun } from '../packages/formats/calendar
 /** Han characters, for the cases that assert which language a generated string is in. */
 const HAN = /\p{Script=Han}/u;
 import type { AcceptanceSpec } from '../packages/core/acceptance.ts';
-import { tempRoot } from './temp-fixture.ts';
+import { storeFixture, tempRoot } from './temp-fixture.ts';
 
 // ---- merged from task-spec.test.ts ----
 
@@ -719,13 +719,7 @@ test('the scheduler aims at the next due moment instead of polling on a fixed in
    * 09:00:01 started at 09:00:30 at the earliest, and the process woke 2,880 times a day to find nothing. The
    * policy is asserted directly because it is the whole change — three answers, in the order they are asked.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-scheduler-clock-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-scheduler-clock-');
   const session = store.create(root);
   const task = store.createTask(session.id, {
     title: 'Scheduled workflow',

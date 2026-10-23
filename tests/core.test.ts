@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -419,18 +418,27 @@ test('abort propagates to provider and session is unlocked', async (t) => {
 
 test('concurrent run is rejected without corrupting the first run', async (t) => {
   let finish!: (response: ModelResponse) => void;
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
   const provider: Provider = {
     complete: () =>
       new Promise((resolve) => {
         finish = resolve;
+        enter();
       }),
   };
   const { session, agent, store } = await fixture(t, provider);
   const first = agent.run({ sessionId: session.id, prompt: 'one' });
   await assert.rejects(agent.run({ sessionId: session.id, prompt: 'two' }), /already running/i);
+  await entered;
   finish(reply());
-  await first;
-  assert.equal(typedUserMessages(store.messages(session.id)).length, 1);
+  assert.equal((await first).status, 'completed');
+  assert.deepEqual(
+    typedUserMessages(store.messages(session.id)).map((message) => message.content),
+    ['one'],
+  );
 });
 
 test('cancelled approval resolves every pending call without side effects', async (t) => {
@@ -998,12 +1006,7 @@ async function setup(
   provider: Provider,
   approve: Approver = async () => true,
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-queue-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-queue-', 'session.sqlite');
   const session = store.create(root);
   const events: AgentEvent[] = [];
   const tools = createTools(root);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ModelRequest, ModelResponse, Provider } from '../protocol/index.ts';
 import { RunFailure } from '../protocol/failure.ts';
 
@@ -101,4 +102,31 @@ export function gatedProvider(provider: Provider, gate: AdaptiveConcurrency): Pr
   gated.complete = (request: ModelRequest): Promise<ModelResponse> =>
     gate.run(() => provider.complete(request), request.signal);
   return gated;
+}
+
+const endpointGates = new Map<string, AdaptiveConcurrency>();
+/**
+ * The process's one gate for an endpoint and credential.
+ *
+ * The gate used to be built inside each run's `createAgent`, which made it a gate per run: two sessions talking to
+ * the same endpoint each probed and backed off on their own, and the endpoint still saw their sum — the shared
+ * back-off the gate exists for only held within one run and its children. Keying by protocol, base URL and a
+ * fingerprint of the key gives every run of the process that hits the same quota the same gate, while a second
+ * endpoint or a second account (a separate quota) keeps its own. The model is not part of the key: endpoints
+ * commonly meter per key, and sharing errs towards backing off together. Never removed: a gate is a few counters,
+ * and the set of endpoints a process talks to is small.
+ */
+export function endpointGate(endpoint: {
+  protocol?: string;
+  baseUrl?: string;
+  apiKey: string;
+}): AdaptiveConcurrency {
+  const key = [
+    endpoint.protocol ?? '',
+    endpoint.baseUrl ?? '',
+    createHash('sha256').update(endpoint.apiKey).digest('hex').slice(0, 16),
+  ].join('\u0000');
+  let gate = endpointGates.get(key);
+  if (!gate) endpointGates.set(key, (gate = new AdaptiveConcurrency()));
+  return gate;
 }

@@ -107,11 +107,108 @@ fn ensure_user(account: Account, password: &Secret) -> Result<()> {
             },
             "Reset sandbox account password",
         )
+        .and_then(|()| {
+            // An uninstall interrupted after `disable` leaves the account unable to sign in; setup re-enables it.
+            match flags(account.name())? {
+                Some(flags) if flags & UF_ACCOUNTDISABLE != 0 => {
+                    set_flags(account.name(), flags & !UF_ACCOUNTDISABLE)
+                }
+                _ => Ok(()),
+            }
+        })
     } else {
         net(status, "Create sandbox account")
     };
     secret.iter_mut().for_each(|c| *c = 0);
     result
+}
+
+/// An account's `usri1_flags`, or `None` when it does not exist. Reading needs no elevation.
+fn flags(name: &str) -> Result<Option<u32>> {
+    let mut buffer = null_mut();
+    let status = unsafe { NetUserGetInfo(null(), wide(name)?.as_ptr(), 1, &mut buffer) };
+    if status == NERR_USER_NOT_FOUND {
+        return Ok(None);
+    }
+    net(status, "Read sandbox account settings")?;
+    let flags = unsafe { (*(buffer as *const USER_INFO_1)).usri1_flags };
+    unsafe { NetApiBufferFree(buffer as *const c_void) };
+    Ok(Some(flags))
+}
+
+fn set_flags(name: &str, flags: u32) -> Result<()> {
+    let info = USER_INFO_1008 {
+        usri1008_flags: flags,
+    };
+    let status = unsafe {
+        NetUserSetInfo(
+            null(),
+            wide(name)?.as_ptr(),
+            1008,
+            &info as *const _ as *const u8,
+            null_mut(),
+        )
+    };
+    net(status, "Change sandbox account settings")
+}
+
+/// Sandbox accounts that `disable` turned off, with the flags each had before.
+pub struct DisabledAccounts {
+    accounts: Vec<(Account, String, u32)>,
+}
+
+impl DisabledAccounts {
+    pub fn sids(&self) -> Vec<String> {
+        self.accounts
+            .iter()
+            .map(|(_, sid, _)| sid.clone())
+            .collect()
+    }
+
+    /// Puts back the flags `disable` changed. An account deleted since then is not an error.
+    pub fn restore(&self) -> Result<()> {
+        let mut errors = Vec::new();
+        for (account, _, original) in &self.accounts {
+            match flags(account.name()) {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    if let Err(error) = set_flags(account.name(), *original) {
+                        errors.push(error);
+                    }
+                }
+                Err(error) => errors.push(error),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+}
+
+/// Disables every existing sandbox account so no new logon can start while uninstall stops the running ones.
+/// A failure part way puts the accounts already changed back as they were.
+pub fn disable() -> Result<DisabledAccounts> {
+    let mut disabled = DisabledAccounts {
+        accounts: Vec::new(),
+    };
+    for account in Account::ALL {
+        let Some(original) = flags(account.name())? else {
+            continue;
+        };
+        let Some(sid) = lookup_sid(account.name())? else {
+            continue;
+        };
+        if let Err(error) = set_flags(account.name(), original | UF_ACCOUNTDISABLE) {
+            return Err(match disabled.restore() {
+                Ok(()) => error,
+                Err(restore) => format!("{error}; restoring the other account failed: {restore}"),
+            });
+        }
+        disabled.accounts.push((account, sid, original));
+    }
+    Ok(disabled)
 }
 
 /// The SIDs currently in the sandbox group, or `None` when the group does not exist.
@@ -498,6 +595,25 @@ mod tests {
     #[test]
     fn unknown_accounts_have_no_sid() {
         assert_eq!(lookup_sid("YuanTuSandboxDoesNotExist").unwrap(), None);
+    }
+
+    #[test]
+    fn a_missing_account_has_no_flags() {
+        assert_eq!(flags("YuanTuSandboxDoesNotExist").unwrap(), None);
+    }
+
+    #[test]
+    fn disabling_without_sandbox_accounts_changes_nothing() {
+        if Account::ALL
+            .iter()
+            .any(|account| lookup_sid(account.name()).unwrap().is_some())
+        {
+            eprintln!("sandbox accounts exist on this machine; skipping");
+            return;
+        }
+        let disabled = disable().unwrap();
+        assert!(disabled.sids().is_empty());
+        disabled.restore().unwrap();
     }
 
     #[test]

@@ -1448,7 +1448,7 @@ test('live statistics events reach client subscribers instead of being filtered 
 
 interface ScriptedHost {
   client: AgentHostClient;
-  requests: { method: string; params: Record<string, unknown> }[];
+  requests: { method: string; params: Record<string, unknown>; signal?: AbortSignal }[];
   /** Deliver one frame the way the transport would. */
   emit: (event: {
     type: string;
@@ -1464,7 +1464,12 @@ function scriptedHost(
     /** What `session.get` says the session's active run is: the only identity an old Host offers. */
     activeRun?: string | null | ((call: number) => string | null);
     /** Answers `run.queue.get`, per call, so a test can change the answer mid-read. */
-    inbox?: (call: number) => { running: boolean; items: unknown[]; runId?: string };
+    inbox?: (call: number) => {
+      running: boolean;
+      items: unknown[];
+      runId?: string;
+      pending?: { approvals: unknown[]; questions: unknown[] };
+    };
     /** Methods this Host does not have, as one that predates them answers. */
     missing?: string[];
     /** Hold one request open, so a test can make a second read overtake the first. */
@@ -1472,7 +1477,7 @@ function scriptedHost(
   } = {},
 ): ScriptedHost {
   const listeners = new Set<(event: AgentEvent) => void>();
-  const requests: { method: string; params: Record<string, unknown> }[] = [];
+  const requests: { method: string; params: Record<string, unknown>; signal?: AbortSignal }[] = [];
   let inboxCalls = 0;
   let historyCalls = 0;
   const client = {
@@ -1485,14 +1490,19 @@ function scriptedHost(
       return () => listeners.delete(listener);
     },
     subscribeStatus: () => () => {},
-    async request(method: string, params: Record<string, unknown>) {
+    async request(
+      method: string,
+      params: Record<string, unknown>,
+      requestOptions: { signal?: AbortSignal } = {},
+    ) {
       // The call index is counted before anything can hold the request: a held request still owns its place in
       // the sequence, and a later one must not be handed the same number.
       const call =
         method === 'session.get' ? historyCalls++ : method === 'run.queue.get' ? inboxCalls++ : 0;
       const held = options.before?.(method, call);
       if (held) await held;
-      requests.push({ method, params });
+      requestOptions.signal?.throwIfAborted();
+      requests.push({ method, params, signal: requestOptions.signal });
       if (options.missing?.includes(method)) throw new Error(`${method} is not available`);
       if (method === 'session.get') {
         const messages =
@@ -1518,9 +1528,12 @@ function scriptedHost(
       if (method === 'run.queue.get') {
         const answer = options.inbox?.(call) ?? { running: false, items: [] };
         // An old Host answers the queue question without naming the run it holds: the field simply is not there.
-        return answer.runId === undefined
-          ? { running: answer.running, items: answer.items }
-          : { running: answer.running, items: answer.items, runId: answer.runId };
+        return {
+          running: answer.running,
+          items: answer.items,
+          ...(answer.runId === undefined ? {} : { runId: answer.runId }),
+          ...(answer.pending === undefined ? {} : { pending: answer.pending }),
+        };
       }
       if (method === 'plan.get') return null;
       if (method === 'subagents.list') return [];
@@ -1929,4 +1942,95 @@ test('a session read while a run is live restores the run, its queue and its fra
     ['first', 'second', 'third'],
     'the frames of the run it adopted are in the transcript',
   );
+});
+
+test('a session opened mid-run shows the approvals and questions its run is already waiting on', async () => {
+  const approval = {
+    kind: 'command',
+    summary: 'run tests',
+    toolCall: { id: 'call-1', name: 'run_command', arguments: { command: 'npm test' } },
+  };
+  const request = { callId: 'call-2', questions: [{ question: 'Which branch?', options: [] }] };
+  // This client never saw `approval.required` or `question.required`: they were asked before it opened the session.
+  const host = scriptedHost({
+    activeRun: 'run-A',
+    inbox: () => ({
+      running: true,
+      items: [],
+      runId: 'run-A',
+      pending: { approvals: [{ id: 'ap-1', approval }], questions: [{ id: 'q-1', request }] },
+    }),
+  });
+  const controller = new SessionController(host.client);
+  await controller.load('session-1');
+  assert.deepEqual(
+    controller.snapshot.approvals.map((item) => item.id),
+    ['ap-1'],
+  );
+  assert.deepEqual(
+    controller.snapshot.questions.map((item) => item.id),
+    ['q-1'],
+  );
+  // The restored entries settle the way live ones do: the call finishing takes both cards away.
+  host.emit({
+    type: 'tool.finished',
+    data: { callId: 'call-1', result: { isError: false, content: '' } },
+  });
+  assert.deepEqual(controller.snapshot.approvals, []);
+});
+
+test('opening a session asks for its views at once, not one after another', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const host = scriptedHost({
+    before: (method) => {
+      if (method === 'run.queue.get' || method === 'session.events') return undefined;
+      peak = Math.max(peak, ++inFlight);
+      // Hold every view until all of them have been asked, then let them answer together.
+      if (peak >= 7) release();
+      return gate.then(() => {
+        inFlight--;
+      });
+    },
+  });
+  const controller = new SessionController(host.client);
+  const loading = controller.load('session-1');
+  const timeout = setTimeout(release, 1_000);
+  await loading;
+  clearTimeout(timeout);
+  // The transcript and the six session views; read one after another, `peak` would be 1.
+  assert.equal(peak, 7);
+  assert.equal(host.requests.at(-1)?.method, 'run.queue.get');
+});
+
+test('a newer read abandons the one still in flight instead of waiting it out', async (t) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const host = scriptedHost({
+    // The second read's history request hangs, as a slow Host would leave it.
+    before: (method, call) => (method === 'session.get' && call === 1 ? held : undefined),
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  const signals: AbortSignal[] = [];
+  const original = host.client.request.bind(host.client);
+  (host.client as { request: typeof original }).request = ((method, params, options) => {
+    if (options?.signal && !signals.includes(options.signal)) signals.push(options.signal);
+    return original(method, params, options);
+  }) as typeof original;
+  const overtaken = controller.load('session-1');
+  await new Promise((resolve) => setImmediate(resolve));
+  // A catch-up read starts while the first is still waiting on the Host.
+  await controller.catchUp();
+  // Each read ties its requests to its own signal, and the newer read aborted the older one's.
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0]!.aborted, true);
+  assert.equal(signals[1]!.aborted, false);
+  release();
+  // The overtaken load ends quietly rather than failing with the abort.
+  await overtaken;
+  assert.equal(controller.snapshot.sessionId, 'session-1');
 });

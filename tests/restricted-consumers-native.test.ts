@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { useAccountTests } from './windows-account-fixture.ts';
 import { LspClient } from '../packages/lsp/client.ts';
 import { pathToUri } from '../packages/lsp/protocol.ts';
 import {
@@ -21,6 +22,8 @@ import {
   workspace,
 } from './restricted-consumers-fixture.ts';
 
+useAccountTests();
+
 test(
   'a restricted terminal handles input and Ctrl+C, confines writes and joins close',
   windows,
@@ -30,7 +33,7 @@ test(
     const script = path.join(root, 'repl.cjs');
     await writeFile(
       script,
-      `const fs=require('fs');console.log('READY',process.stdin.isTTY,process.stdout.isTTY);fs.writeFileSync('inside.txt','inside');try{fs.writeFileSync(${JSON.stringify(path.join(outside, 'denied.txt'))},'outside');console.log('OUTSIDE_WRITTEN')}catch{console.log('OUTSIDE_DENIED')}process.on('SIGINT',()=>console.log('INTERRUPTED'));process.stdin.on('data',b=>{const s=String(b).trim();console.log('INPUT',s);if(s==='exit')process.exit(0)});`,
+      `const fs=require('fs');console.log('READY',process.stdin.isTTY,process.stdout.isTTY);fs.writeFileSync('inside.txt','inside');try{fs.writeFileSync(${JSON.stringify(path.join(outside, 'denied.txt'))},'outside');console.log('OUTSIDE_WRITTEN')}catch{console.log('OUTSIDE_DENIED')}process.on('SIGINT',()=>{fs.writeFileSync('interrupted.txt','received');console.log('INTERRUPTED')});process.stdin.on('data',b=>{fs.appendFileSync('input-chunks.jsonl',JSON.stringify(String(b))+'\\n');const s=String(b).trim();console.log('INPUT',s);if(s==='exit')process.exit(0)});`,
     );
     const manager = new TerminalSessions(root);
     own(root, () => manager.closeAllAndWait());
@@ -46,15 +49,38 @@ test(
     };
     const opened = await call('terminal_open', { command: process.execPath, args: [script] });
     const id = /Terminal (\S+) started/.exec(opened.content)![1]!;
-    const output = async () => visible((await manager.read(id, 's', 0)).snapshot.output);
-    await waitUntil(async () => (await output()).includes('OUTSIDE_DENIED'));
+    let cursor = 0;
+    let transcript = '';
+    const output = async () => {
+      for (;;) {
+        const { snapshot } = await manager.read(id, 's', cursor);
+        transcript += snapshot.output;
+        cursor = snapshot.nextCursor;
+        if (!snapshot.output) return visible(transcript);
+      }
+    };
+    const waitForOutput = async (marker: string) => {
+      await waitUntil(async () => (await output()).includes(marker)).catch(async (cause) => {
+        throw new Error(
+          JSON.stringify({
+            marker,
+            terminal: await output(),
+            input: await readFile(path.join(root, 'input-chunks.jsonl'), 'utf8').catch(() => null),
+            interrupted: await exists(path.join(root, 'interrupted.txt')),
+            state: manager.list('s'),
+          }),
+          { cause },
+        );
+      });
+    };
+    await waitForOutput('OUTSIDE_DENIED');
     assert.match(await output(), /READY true true/);
     assert.equal(await readFile(path.join(root, 'inside.txt'), 'utf8'), 'inside');
     assert.equal(await exists(path.join(outside, 'denied.txt')), false);
     await call('terminal_send', { id, input: 'ping' });
-    await waitUntil(async () => (await output()).includes('INPUT ping'));
+    await waitForOutput('INPUT ping');
     await call('terminal_signal', { id, signal: 'SIGINT' });
-    await waitUntil(async () => (await output()).includes('INTERRUPTED'));
+    await waitForOutput('INTERRUPTED');
     const switched = await tools.execute(
       { id: 'switch', name: 'terminal_send', arguments: { id, input: 'exit' } },
       context('host'),
@@ -74,12 +100,14 @@ test(
     const root = await workspace(t);
     const marker = path.join(root, 'lifecycle'),
       cancel = path.join(root, 'cancel');
-    await withExecutionPolicy(executionPolicy('windows'), async () => {
+    const localFixture = path.join(root, 'lsp-fixture.ts');
+    await writeFile(localFixture, await readFile(fixture));
+    await withExecutionPolicy(executionPolicy('windows-account'), async () => {
       const client = new LspClient(
         {
           language: 'fake',
           command: process.execPath,
-          args: [fixture, '--never-answer'],
+          args: [localFixture, '--never-answer'],
           extensions: ['.fake'],
           env: { FAKE_LSP_LIFECYCLE_MARKER: marker, FAKE_LSP_CANCEL_MARKER: cancel },
         },
@@ -133,12 +161,14 @@ for (const flag of ['--reject-on-start', '--malformed-output'])
   test('restricted LSP cleans up ' + flag, windows, async (t) => {
     const root = await workspace(t);
     const marker = path.join(root, 'lifecycle');
-    await withExecutionPolicy(executionPolicy('windows'), async () => {
+    const localFixture = path.join(root, 'lsp-fixture.ts');
+    await writeFile(localFixture, await readFile(fixture));
+    await withExecutionPolicy(executionPolicy('windows-account'), async () => {
       const client = new LspClient(
         {
           language: 'fake',
           command: process.execPath,
-          args: [fixture, flag],
+          args: [localFixture, flag],
           extensions: ['.fake'],
           env: { FAKE_LSP_LIFECYCLE_MARKER: marker },
         },

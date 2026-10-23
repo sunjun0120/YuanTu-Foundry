@@ -15,6 +15,7 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
 import { spawnedCarrier } from '../packages/carrier/index.ts';
 import { projectRoot } from './process-fixture.ts';
 import { nativeSkip } from './native-platform.ts';
+import { git } from './git-fixture.ts';
 
 /**
  * A workspace whose session is gone.
@@ -26,20 +27,6 @@ import { nativeSkip } from './native-platform.ts';
  * belongs to, and it has to be *addressable by its own id* for the operations that preserve, remove and rebuild it
  * — without ever becoming addressable for a workspace whose session is alive, or for another project's.
  */
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 /** A committed repository, which is the precondition of every managed workspace. */
 async function repository(t: test.TestContext, content = 'a\n'): Promise<string> {

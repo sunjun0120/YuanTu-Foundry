@@ -5,7 +5,26 @@ import {
 import { validateImages } from '../../../packages/protocol/images.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
+import type { HostContext } from '../state.ts';
 import { startRun } from '../run-start.ts';
+
+/**
+ * The approvals and questions the session's live run is waiting on, for a client that was not there when they
+ * were asked. Scoped to the run named by the session, so an entry a finished run left behind is never offered.
+ */
+function pendingInteractions(ctx: HostContext, sessionId: string) {
+  const runId = ctx.store.get(sessionId).activeRun;
+  const live = (entry: { sessionId: string; runId: string }) =>
+    entry.sessionId === sessionId && (!runId || entry.runId === runId);
+  return {
+    approvals: [...ctx.approvals]
+      .filter(([, entry]) => live(entry))
+      .map(([id, entry]) => ({ id, approval: structuredClone(entry.approval) })),
+    questions: [...ctx.questions]
+      .filter(([, entry]) => live(entry))
+      .map(([id, entry]) => ({ id, request: structuredClone(entry.request) })),
+  };
+}
 
 /**
  * The input a running session may still accept, and the two ways one ends.
@@ -43,8 +62,18 @@ export const runHandlers: Readonly<Record<string, Handler>> = {
     // With no run holding the session there is no agent either, and the answer comes from the log: what
     // nobody ever delivered. Asking the store directly is what lets a reopened session show that at all.
     return agent
-      ? { ...agent.inboxOf(sessionId), ...identity }
-      : { running: false, items: ctx.store.pendingInputs(sessionId), ...identity };
+      ? {
+          ...agent.inboxOf(sessionId),
+          ...identity,
+          pending: pendingInteractions(ctx, sessionId),
+          latestSeq: ctx.store.lastSeq(sessionId),
+        }
+      : {
+          running: false,
+          items: ctx.store.pendingInputs(sessionId),
+          ...identity,
+          latestSeq: ctx.store.lastSeq(sessionId),
+        };
   },
   'run.queue.clear': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');

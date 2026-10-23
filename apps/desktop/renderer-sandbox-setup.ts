@@ -1,98 +1,73 @@
 import { t, onLocaleChange } from './i18n.ts';
 import type { SandboxSetupCommand, SandboxSetupView } from './sandbox-setup.ts';
+import type { SandboxMode } from './sandbox-settings.ts';
 
-/** Read-only checks on opening; only a deliberate button click requests UAC. */
-export function setupSandboxInitialization(): void {
+/**
+ * The Windows sandbox accounts, drawn only while they need something from the person.
+ *
+ * Accounts that still need setting up (or repairing) are one prompt above the composer, offered once per launch:
+ * dismissing it leaves the backend as it is, and switching the session back onto the sandbox offers it again.
+ * Ready accounts are not drawn anywhere: there is nothing to manage, and the uninstaller removes them. A helper that
+ * cannot answer is an installation problem, not a choice the person can make, so the prompt says nothing about it;
+ * the main process logs it and a sandboxed command names it when it is refused.
+ *
+ * Read-only checks on opening; only a deliberate button click requests UAC.
+ */
+export function setupSandboxInitialization(): { setMode(mode: SandboxMode | undefined): void } {
+  const quiet = { setMode() {} };
   const api = window.yuantu.sandboxSetup;
-  if (!api) return;
-  const section = document.getElementById('sandbox-setup-section');
-  const title = document.getElementById('sandbox-setup-title');
-  const note = document.getElementById('sandbox-setup-note');
-  const feedback = document.getElementById('sandbox-setup-feedback');
+  if (!api) return quiet;
+  const prompt = document.getElementById('sandbox-prompt');
+  const promptTitle = document.getElementById('sandbox-prompt-title');
+  const promptNote = document.getElementById('sandbox-prompt-note');
+  const promptFeedback = document.getElementById('sandbox-prompt-feedback');
   const initialize = document.getElementById(
-    'sandbox-setup-initialize',
+    'sandbox-prompt-initialize',
   ) as HTMLButtonElement | null;
-  const uninstall = document.getElementById('sandbox-setup-uninstall') as HTMLButtonElement | null;
-  const advanced = document.getElementById('sandbox-read-advanced') as HTMLDetailsElement | null;
-  const advancedTitle = document.getElementById('sandbox-read-advanced-title');
-  const roots = document.getElementById('sandbox-read-roots');
-  const add = document.getElementById('sandbox-read-add') as HTMLButtonElement | null;
-  if (!section || !title || !note || !feedback || !initialize) return;
+  const dismiss = document.getElementById('sandbox-prompt-dismiss') as HTMLButtonElement | null;
+  const weaker = document.getElementById('sandbox-prompt-weak') as HTMLButtonElement | null;
+  if (!prompt || !promptTitle || !promptNote || !initialize) return quiet;
   let view: SandboxSetupView | undefined;
   let pending = false;
   let error = '';
   let diagnosed = false;
+  let dismissed = false;
+  /** Whether the session on screen runs commands through the account backend; unknown counts as yes. */
+  let needed = true;
   let operation: SandboxSetupCommand['type'] = 'status';
-
-  /** The advanced list: automatic roots are read-only, the user's own each get a remove button. */
-  const drawRoots = () => {
-    if (!advanced) return;
-    // There is nothing to manage before the accounts exist, and a damaged backend cannot answer for the journal.
-    advanced.hidden = view?.state !== 'ready';
-    if (advancedTitle) advancedTitle.textContent = t('sandboxSetup.read.advanced');
-    if (add) {
-      add.textContent = t('sandboxSetup.read.choose');
-      add.disabled = pending;
-    }
-    if (!roots) return;
-    const items = (view?.readRoots ?? []).map((root) => {
-      const item = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = root.path;
-      item.append(label);
-      if (root.source === 'auto') {
-        const badge = document.createElement('small');
-        badge.textContent = t('sandboxSetup.read.auto');
-        item.append(badge);
-      } else {
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.textContent = t('sandboxSetup.read.removeItem');
-        remove.disabled = pending;
-        remove.addEventListener('click', () => {
-          void request({ type: 'read-remove', path: root.path, acknowledge: true });
-        });
-        item.append(remove);
-      }
-      return item;
-    });
-    roots.replaceChildren(...items);
-  };
 
   const draw = () => {
     const state = view?.state;
-    title.textContent = t('sandboxSetup.title');
-    note.textContent = t('sandboxSetup.note');
-    // The long explanation belongs to the uninitialized state; elsewhere the status line says it in one row.
-    note.hidden = !view?.ready || state !== 'uninitialized';
-    feedback.classList.toggle('error', Boolean(error));
-    feedback.textContent = pending
-      ? t(
-          operation === 'status' || operation === 'verify'
-            ? 'sandboxSetup.checking'
-            : 'sandboxSetup.pending',
-        )
-      : error ||
-        (state === 'damaged'
-          ? `${t('sandboxSetup.damaged')} ${(view?.problems ?? []).map((problem) => t(`sandboxSetup.problem.${problem}`)).join('；')}${view?.details?.length ? ` (${view.details.join('; ')})` : ''}`
-          : state === 'ready'
-            ? t('sandboxSetup.readyLine')
-            : view?.ready
-              ? t('sandboxSetup.ready')
-              : view?.reason && view.reason !== 'platform'
-                ? t(`sandboxSetup.${view.reason}`)
-                : '');
+    const missing = state === 'uninitialized' || state === 'damaged';
+    // Composer: setup or repair, while the session needs it and the person has not set it aside.
+    prompt.hidden = !(missing && needed && !dismissed) && !(pending && operation === 'initialize');
+    promptTitle.textContent = t(
+      state === 'damaged' ? 'sandboxSetup.prompt.repairTitle' : 'sandboxSetup.prompt.title',
+    );
+    promptNote.textContent =
+      state === 'damaged'
+        ? `${t('sandboxSetup.damaged')} ${(view?.problems ?? []).map((problem) => t(`sandboxSetup.problem.${problem}`)).join('；')}`
+        : t('sandboxSetup.note');
+    promptNote.title = state === 'damaged' ? (view?.details ?? []).join('; ') : '';
+    if (promptFeedback) {
+      const text =
+        pending && operation === 'initialize' ? t('sandboxSetup.pending') : missing ? error : '';
+      promptFeedback.hidden = !text;
+      promptFeedback.textContent = text;
+    }
     initialize.textContent = t(
       state === 'damaged' ? 'sandboxSetup.repair' : 'sandboxSetup.initialize',
     );
-    initialize.hidden = state === 'ready';
-    initialize.disabled = pending || !view?.ready || state === 'ready';
-    if (uninstall) {
-      uninstall.textContent = t('sandboxSetup.uninstall');
-      uninstall.hidden = state !== 'ready' && state !== 'damaged';
-      uninstall.disabled = pending || !view?.ready || state === 'uninitialized';
+    initialize.disabled = pending;
+    if (dismiss) {
+      dismiss.textContent = t('sandboxSetup.prompt.dismiss');
+      dismiss.disabled = pending;
     }
-    drawRoots();
+    if (weaker) {
+      weaker.textContent = t('sandboxSetup.prompt.weak');
+      weaker.title = t('sandboxSetup.prompt.weakNote');
+      weaker.disabled = pending;
+    }
   };
 
   const request = async (command: SandboxSetupCommand) => {
@@ -105,7 +80,6 @@ export function setupSandboxInitialization(): void {
       const reply = await api(command);
       if (!reply.ok) throw new Error(reply.error);
       view = reply.view;
-      section.hidden = !view.supported;
     } catch (failure) {
       // A dropped IPC/UAC failure releases controls for retry. A failed initial
       // status cannot accidentally enable the initialization button.
@@ -125,11 +99,44 @@ export function setupSandboxInitialization(): void {
     'click',
     () => void request({ type: 'initialize', acknowledge: true }),
   );
-  uninstall?.addEventListener(
-    'click',
-    () => void request({ type: 'uninstall', acknowledge: true }),
-  );
-  add?.addEventListener('click', () => void request({ type: 'read-add', acknowledge: true }));
+  /**
+   * The restricted-token backend, for a machine where administrator approval is not available. It is the person's
+   * choice, made after reading what it does not confine; the main process switches the session and the permission
+   * chip then names it (which also hides this prompt: that session no longer needs the accounts).
+   */
+  weaker?.addEventListener('click', () => {
+    if (pending || !window.confirm(t('sandboxSetup.prompt.weakConfirm'))) return;
+    pending = true;
+    error = '';
+    operation = 'status';
+    draw();
+    void window.yuantu
+      .presets({ type: 'weak-sandbox', acknowledgeWeak: true })
+      .then((reply) => {
+        if (!reply.ok) throw new Error(reply.error);
+      })
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : t('sandboxSetup.failed');
+      })
+      .finally(() => {
+        pending = false;
+        draw();
+      });
+  });
+  dismiss?.addEventListener('click', () => {
+    dismissed = true;
+    error = '';
+    draw();
+  });
   onLocaleChange(draw);
   void request({ type: 'status' });
+  return {
+    setMode(mode) {
+      const next = mode === undefined || mode === 'native' || mode === 'windows-account';
+      // Moving back onto the sandbox is the moment it is needed again.
+      if (next && !needed) dismissed = false;
+      needed = next;
+      draw();
+    },
+  };
 }

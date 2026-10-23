@@ -854,7 +854,7 @@ test('desktop sandbox host selection requires explicit acknowledgement', () => {
 test('the launch environment names the mode a new session starts in, and nothing else', () => {
   assert.equal(defaultSandboxMode({}), 'native', 'a desktop that was told nothing starts confined');
   assert.equal(defaultSandboxMode({ YUANTU_SANDBOX: 'host' }), 'host');
-  assert.equal(defaultSandboxMode({ YUANTU_SANDBOX: 'windows' }), 'windows');
+  assert.equal(defaultSandboxMode({ YUANTU_SANDBOX: 'windows' }), 'native');
   assert.throws(() => defaultSandboxMode({ YUANTU_SANDBOX: 'other' }), /YUANTU_SANDBOX/);
   /**
    * The environment is a default, not a lock: the desktop used to refuse every write while it was set, which

@@ -1,6 +1,7 @@
 //! The runner: started by its broker as the sandbox account, it creates each command under the restricted
 //! token. Commands run concurrently; the broker multiplexes them by id.
 use crate::{
+    desktop,
     frame::{read_frame, write_frame},
     pipe::{PipeIo, connect},
     protocol::{ErrorKind, FromRunner, ToRunner, validate},
@@ -15,7 +16,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC},
-    System::Threading::*,
+    System::{Console::SetConsoleCtrlHandler, Threading::*},
 };
 
 type Writer = Arc<Mutex<Handle>>;
@@ -57,8 +58,16 @@ fn remove_stale_scratch() {
     }
 }
 
-pub fn run(control: &str, owner: &str) -> Result<u32> {
+pub fn run(control: &str, owner: &str, desktop: &str) -> Result<u32> {
+    // Account logon and detached process groups can start with Ctrl+C ignored. The flag is inherited by
+    // commands even when they attach to a fresh pseudo console, so reset it before creating any children.
+    crate::win::win(
+        unsafe { SetConsoleCtrlHandler(None, 0) },
+        "Reset command Ctrl+C handling",
+    )?;
     protect_self(owner)?;
+    // The broker's private desktop; a missing one stops the runner rather than putting commands on `Default`.
+    let desktop = desktop::open(desktop)?;
     remove_stale_scratch();
     let down = connect(
         &format!(r"\\.\pipe\yuantu-sbx-{control}-down"),
@@ -108,8 +117,14 @@ pub fn run(control: &str, owner: &str) -> Result<u32> {
                     &|name| std::env::var(name).ok(),
                     &scratch.to_string_lossy(),
                 );
-                let started = restricted_token(&request.capabilities)
-                    .and_then(|token| start(&token, &request, stdio.each_ref().map(|h| h.0)));
+                let started = restricted_token(&request.capabilities).and_then(|token| {
+                    start(
+                        &token,
+                        &request,
+                        stdio.each_ref().map(|h| h.0),
+                        Some(&desktop),
+                    )
+                });
                 drop(stdio);
                 let command = match started {
                     Ok(command) => Arc::new(command),
@@ -143,6 +158,11 @@ pub fn run(control: &str, owner: &str) -> Result<u32> {
             ToRunner::Cancel { id } => {
                 if let Some(command) = running.lock().unwrap().get(&id) {
                     command.cancel();
+                }
+            }
+            ToRunner::Resize { id, size } => {
+                if let Some(command) = running.lock().unwrap().get(&id) {
+                    let _ = command.resize(size);
                 }
             }
         }

@@ -35,13 +35,7 @@ const contents = (messages: readonly Message[]): string[] =>
   messages.map((message) => String(message.content));
 
 test('a read sees the appends that are still buffered, and its own flush writes them', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-batch-read-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-batch-read-');
   const session = store.create(root);
   store.append(session.id, { role: 'user', content: 'first' });
   store.append(session.id, { role: 'assistant', content: 'second', toolCalls: [] });
@@ -55,13 +49,7 @@ test('a read sees the appends that are still buffered, and its own flush writes 
 });
 
 test('a batch is invisible to another process until it is flushed, and complete after', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-batch-flush-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-batch-flush-');
   const session = store.create(root);
   for (const index of [1, 2, 3])
     store.append(session.id, { role: 'user', content: `buffered ${index}` });
@@ -116,13 +104,7 @@ test('a store that closes writes what it was given', async () => {
 });
 
 test('deleting a session drops the appends it had not written', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-batch-delete-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-batch-delete-');
   const session = store.create(root);
   store.append(session.id, { role: 'user', content: 'never written' });
   store.delete(session.id);
@@ -133,13 +115,7 @@ test('deleting a session drops the appends it had not written', async (t) => {
 });
 
 test('the message naming a tool call is durable before the tool runs', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-batch-barrier-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-batch-barrier-');
   const session = store.create(root);
   let turn = 0;
   const seen: string[][] = [];

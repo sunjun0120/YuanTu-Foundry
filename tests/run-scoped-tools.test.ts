@@ -1,15 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { sessionQueryTools } from '../packages/core/session-query.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { RUN_SCOPED_TOOLS, ToolRegistry } from '../packages/tools/registry.ts';
 import type { Disposer } from '../packages/tools/dispatch.ts';
 import type { ModelResponse, Provider, Tool } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * What a delegated child must not inherit.
@@ -49,14 +46,9 @@ class RecordingRegistry extends ToolRegistry {
 }
 
 test('a run installs its own tools, and a child copy inherits none of them', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-run-scoped-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-run-scoped-');
   const residency = new SubAgentResidency();
-  t.after(async () => {
-    await residency.disposeAll();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => residency.disposeAll());
   const session = store.create(root);
   const provider: Provider = {
     async complete(): Promise<ModelResponse> {

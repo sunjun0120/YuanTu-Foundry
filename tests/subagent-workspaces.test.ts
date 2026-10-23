@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +13,7 @@ import { isRuntimeContext } from '../packages/protocol/context.ts';
 
 /** The task text this run was given, without the runtime's own skill announcement. */
 import { toolCall as callTool } from './provider-fixture.ts';
+import { git } from './git-fixture.ts';
 const taskPrompt = (messages: readonly { role: string; content: string }[]): string =>
   messages
     .filter((message) => message.role === 'user' && !isRuntimeContext(message.content))
@@ -28,20 +28,6 @@ const taskPrompt = (messages: readonly { role: string; content: string }[]): str
  * delegator's own directory keeps whatever it had. Everything else here (which mode shares, what a fork inherits,
  * how a refusal is reported) follows from that.
  */
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,

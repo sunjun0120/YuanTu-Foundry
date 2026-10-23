@@ -13,6 +13,11 @@ const primitives = (globalThis[key] ??= Object.fromEntries(
   ]),
 ));
 const { mkdirSync, writeFileSync, readFileSync, unlinkSync, linkSync } = primitives;
+/**
+ * One lock file per machine resource, so runs that need different resources (a desktop window, the Windows sandbox
+ * ACLs) proceed side by side. Every caller takes its resources in the same sorted order, which is what keeps two runs
+ * holding overlapping sets from deadlocking; a run that cannot get them all gives back the ones it got.
+ */
 export async function acquireResourceLease(
   directory,
   resources,
@@ -21,15 +26,39 @@ export async function acquireResourceLease(
   if (!resources.length) return () => {};
   mkdirSync(directory, { recursive: true });
   const token = randomUUID();
-  // One gate for all real machine resources prevents deadlocks across differing resource sets.
-  const file = path.join(directory, 'machine-resources.lock');
-  const candidate = path.join(directory, `${process.pid}-${token}.pending`);
+  const deadline = Date.now() + timeoutMs;
+  const releases = [];
+  try {
+    for (const resource of [...new Set(resources)].sort())
+      releases.push(await acquireOne(directory, resource, token, deadline, signal));
+  } catch (error) {
+    releaseAll(releases);
+    throw error;
+  }
+  return () => releaseAll(releases);
+}
+
+/** Releases in reverse order and reports the first failure only after every lease had its chance to go. */
+function releaseAll(releases) {
+  let failure;
+  for (const release of releases.splice(0).reverse()) {
+    try {
+      release();
+    } catch (error) {
+      failure ??= error;
+    }
+  }
+  if (failure) throw failure;
+}
+
+async function acquireOne(directory, resource, token, deadline, signal) {
+  const file = path.join(directory, `${resource}.lock`);
+  const candidate = path.join(directory, `${process.pid}-${token}-${resource}.pending`);
   // Publish a fully written lease atomically: contenders can never observe an empty owner file.
-  writeFileSync(candidate, JSON.stringify({ token, pid: process.pid, resources }), {
+  writeFileSync(candidate, JSON.stringify({ token, pid: process.pid, resource }), {
     flag: 'wx',
     mode: 0o600,
   });
-  const deadline = Date.now() + timeoutMs;
   try {
     for (;;) {
       signal?.throwIfAborted();

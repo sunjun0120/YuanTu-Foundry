@@ -33,12 +33,14 @@
     "build:windows-sandbox": "node scripts/build-windows-sandbox.mjs",
     "check:macos-sandbox": "node scripts/check-macos-sandbox.mjs",
     "check:windows-sandbox": "node scripts/check-windows-sandbox.mjs",
+    "check:windows-legacy-sandbox": "node scripts/check-windows-legacy-sandbox.mjs",
     "check:windows-desktop-sandbox": "npm run build && node scripts/check-windows-sandbox.mjs --desktop",
     "desktop": "npm run build && node scripts/start-desktop.mjs",
     "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-capabilities.smoke.mjs tests/desktop-launcher.smoke.mjs tests/desktop-sessions.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/backups.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs tests/workspace-ui.smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check . --log-level warn",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test": "node scripts/run-tests.mjs",
     "test:serial": "node scripts/run-tests.mjs --schedule=serial",
     "test:partitioned": "node scripts/run-tests.mjs --schedule=partitioned",
@@ -57,7 +59,7 @@
     "i18n:check": "node scripts/check-i18n.mjs",
     "audit:check": "node scripts/check-audit.mjs",
     "smoke:client": "node scripts/run-tests.mjs tests/compiled-client.smoke.mjs",
-    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run cycles:check && npm run layers:check && npm run i18n:check && npm run typecheck && npm run test:isolation:check && npm test && npm run build && npm run smoke:client",
+    "check": "npm run format:check && npm run docs:check && npm run references:check && npm run cycles:check && npm run layers:check && npm run i18n:check && npm run typecheck && npm run lint && npm run test:isolation:check && npm test && npm run build && npm run smoke:client",
     "check:changed": "node scripts/check-changed.mjs",
     "check:related": "node scripts/check-related.mjs",
     "check:full": "npm run check",
@@ -86,9 +88,11 @@
     "electron": "^43.5.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
     "highlight.js": "^11.12.0",
     "marked": "^18.0.13",
     "playwright": "^1.63.0",
-    "prettier": "^3.9.6"
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.71.0"
   }
 }
