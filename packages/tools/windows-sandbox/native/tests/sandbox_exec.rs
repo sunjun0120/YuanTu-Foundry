@@ -3,6 +3,7 @@
 //! confinement — that needs a real sandbox account (plan 2b acceptance).
 #![cfg(all(windows, debug_assertions))]
 use serde_json::json;
+use std::os::windows::process::CommandExt;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
@@ -55,12 +56,17 @@ impl Drop for Broker {
 }
 
 fn broker() -> Broker {
+    broker_with_flags(0)
+}
+
+fn broker_with_flags(flags: u32) -> Broker {
     // The dev runner inherits this environment and makes per-command scratch under its TEMP; point it at the
     // test target directory so the tests do not depend on the machine's TEMP being writable.
     let temp = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runner-temp");
     std::fs::create_dir_all(&temp).unwrap();
     let mut child = Command::new(EXE)
         .args(["broker", "--dev"])
+        .creation_flags(flags)
         .env("TEMP", &temp)
         .env("TMP", &temp)
         .stdin(Stdio::piped())
@@ -238,6 +244,39 @@ fn a_tty_command_output_reaches_exec() {
     );
     assert_eq!(echo.status.code(), Some(0), "{echo:?}");
     assert!(stdout(&echo).contains("tty-hello"), "{:?}", stdout(&echo));
+}
+
+#[test]
+fn a_tty_command_does_not_inherit_ignored_ctrl_c_from_its_runner() {
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+    let node = require_node!();
+    let broker = broker_with_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    let script = "process.on('SIGINT',()=>process.exit(0));console.log('INTERRUPT_READY');setTimeout(()=>process.exit(2),4000);";
+    let mut child = exec_command(
+        &broker.pipe,
+        &with_tty(request(&[&node, "-e", script], r"C:\"), 80, 24),
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut transcript = String::new();
+    while !transcript.contains("INTERRUPT_READY") {
+        assert_ne!(
+            reader.read_line(&mut transcript).unwrap(),
+            0,
+            "{transcript}"
+        );
+    }
+    child.stdin.as_mut().unwrap().write_all(b"\x03").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "Ctrl+C was ignored: {output:?}"
+    );
 }
 
 #[test]

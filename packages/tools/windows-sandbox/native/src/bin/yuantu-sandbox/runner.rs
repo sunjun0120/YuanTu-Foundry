@@ -16,7 +16,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Storage::FileSystem::{FILE_GENERIC_READ, FILE_GENERIC_WRITE, READ_CONTROL, WRITE_DAC},
-    System::Threading::*,
+    System::{Console::SetConsoleCtrlHandler, Threading::*},
 };
 
 type Writer = Arc<Mutex<Handle>>;
@@ -59,6 +59,12 @@ fn remove_stale_scratch() {
 }
 
 pub fn run(control: &str, owner: &str, desktop: &str) -> Result<u32> {
+    // Account logon and detached process groups can start with Ctrl+C ignored. The flag is inherited by
+    // commands even when they attach to a fresh pseudo console, so reset it before creating any children.
+    crate::win::win(
+        unsafe { SetConsoleCtrlHandler(None, 0) },
+        "Reset command Ctrl+C handling",
+    )?;
     protect_self(owner)?;
     // The broker's private desktop; a missing one stops the runner rather than putting commands on `Default`.
     let desktop = desktop::open(desktop)?;
