@@ -418,18 +418,27 @@ test('abort propagates to provider and session is unlocked', async (t) => {
 
 test('concurrent run is rejected without corrupting the first run', async (t) => {
   let finish!: (response: ModelResponse) => void;
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
   const provider: Provider = {
     complete: () =>
       new Promise((resolve) => {
         finish = resolve;
+        enter();
       }),
   };
   const { session, agent, store } = await fixture(t, provider);
   const first = agent.run({ sessionId: session.id, prompt: 'one' });
   await assert.rejects(agent.run({ sessionId: session.id, prompt: 'two' }), /already running/i);
+  await entered;
   finish(reply());
-  await first;
-  assert.equal(typedUserMessages(store.messages(session.id)).length, 1);
+  assert.equal((await first).status, 'completed');
+  assert.deepEqual(
+    typedUserMessages(store.messages(session.id)).map((message) => message.content),
+    ['one'],
+  );
 });
 
 test('cancelled approval resolves every pending call without side effects', async (t) => {

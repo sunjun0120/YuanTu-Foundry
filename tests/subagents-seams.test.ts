@@ -756,9 +756,14 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
   const residency = new SubAgentResidency();
   t.after(() => residency.disposeAll());
   let childTurns = 0;
+  let enterChild!: () => void;
+  const childEntered = new Promise<void>((resolve) => {
+    enterChild = resolve;
+  });
   const provider: Provider = {
     async complete(request) {
       if (isChild(request)) {
+        request.signal.throwIfAborted();
         childTurns++;
         if (childTurns > 1) return reply('second turn answer');
         // The first turn never finishes on its own: the parent's run end has to stop it.
@@ -766,12 +771,15 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
           request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
             once: true,
           });
+          enterChild();
         });
       }
-      if (request.messages.some((message) => message.role === 'tool'))
+      if (request.messages.some((message) => message.role === 'tool')) {
+        await childEntered;
         return request.messages.some((message) => message.content.includes('second turn answer'))
           ? reply('Done')
           : reply('Done');
+      }
       return toolCall('delegate-1', 'delegate_task', {
         tasks: [{ objective: 'Slow work' }],
         wait: false,
@@ -793,6 +801,13 @@ test('a parent run ending cancels the turn in flight but keeps the child reachab
     prompt: 'Start slow work in the background',
   });
   assert.equal(first.status, 'completed', first.error);
+  assert.equal(childTurns, 1, 'the cancelled turn reached the child provider');
+  assert.ok(
+    store
+      .events(session.id)
+      .some((event) => event.type === 'subagent.finished' && event.data.status === 'cancelled'),
+    'the in-flight child is durably recorded as cancelled',
+  );
   assert.equal(
     residency.list().length,
     1,
