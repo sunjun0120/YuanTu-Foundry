@@ -30,6 +30,7 @@ import {
   workspaceSandboxSid,
 } from '../packages/tools/sandbox-windows.ts';
 import { applySandboxDefaults } from '../apps/shared/runtime.ts';
+import { labelLowIntegrity } from './windows-label-fixture.ts';
 
 const config = { mode: 'windows' as const, image: 'node:24-bookworm-slim' };
 /** Runs a prepared plan and resolves with its exit code and captured output. */
@@ -99,7 +100,7 @@ test(
     await mkdir(workspace);
     await mkdir(temporary);
     await promisify(execFile)('icacls.exe', [temporary, '/grant', '*S-1-1-0:(OI)(CI)M', '/Q']);
-    await promisify(execFile)('icacls.exe', [temporary, '/setintegritylevel', '(OI)(CI)L', '/Q']);
+    await labelLowIntegrity(temporary);
     const previousTemp = process.env.TEMP,
       previousTmp = process.env.TMP;
     let plan: Awaited<ReturnType<typeof prepareSandbox>> | undefined;
@@ -764,7 +765,7 @@ test(
     await mkdir(workspace);
     await mkdir(ambient);
     await promisify(execFile)('icacls.exe', [ambient, '/grant', '*S-1-1-0:(OI)(CI)M', '/Q']);
-    await promisify(execFile)('icacls.exe', [ambient, '/setintegritylevel', '(OI)(CI)L', '/Q']);
+    await labelLowIntegrity(ambient);
     const file = path.join(ambient, 'outside.txt');
     const plan = await prepareSandbox(
       workspace,
