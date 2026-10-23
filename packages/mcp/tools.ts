@@ -269,9 +269,8 @@ class Connection {
        *
        * Connections now outlive a run (`../catalog/resource-pool.ts`), and a stdio server that exited or an HTTP
        * stream that closed between two turns used to be noticed only by the next request — which failed, and only
-       * then let the one after it reconnect. Claude Code leaves a dropped stdio server for a person to reconnect by
-       * hand; here the connection simply opens again on demand, with the same handshake bounds and failure backoff
-       * as the first time.
+       * then let the one after it reconnect. Now the connection simply opens again on demand, with the same
+       * handshake bounds and failure backoff as the first time.
        */
       client.onclose = () => {
         if (this.client === client) this.client = undefined;

@@ -950,7 +950,7 @@ export class WorkspaceManager {
        *
        * Its removal record then names the baseline itself — restoring it rebuilds the same files either way — and no
        * second snapshot of the same tree is frozen, stored and kept until somebody purges it. This is the common case
-       * for a child that only read, and the one Claude Code also cleans up without asking.
+       * for a child that only read.
        */
       const baseline =
         binding.snapshotId !== null ? this.store.workspaceSnapshot(binding.snapshotId) : null;

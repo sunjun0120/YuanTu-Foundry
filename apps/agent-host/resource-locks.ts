@@ -3,8 +3,8 @@
  *
  * A key names one resource — a session, an execution directory, a workspace binding, or the Host itself — and a
  * claim takes it either `shared` or `exclusive`. Two claims on the same key conflict unless both are shared; claims
- * on different keys never do. That is the whole rule, and it is the same one Codex applies to tool calls within a
- * turn (readers together, a writer alone), lifted to the Host's own operations.
+ * on different keys never do. That is the whole rule — the one tool calls within a turn follow (readers together, a
+ * writer alone), lifted to the Host's own operations.
  *
  * Acquiring is all-or-nothing and never waits. The Host's protocol has always refused a busy request rather than
  * queueing it, and a caller that gets every key at once or none cannot deadlock, so no ordering between keys is

@@ -109,7 +109,7 @@ export class LspManager {
    *
    * A manager now lives for a whole session, so a server that exits — an out-of-memory kill, a crash on one file —
    * would otherwise stay dead for the rest of it, and every request would answer "not running" until the model
-   * thought to start it again. Claude Code restarts a crashed server with a bounded count; so does this. A restart
+   * thought to start it again, so a crashed server is restarted, a bounded number of times. A restart
    * reuses the approval the first start had only while the execution policy is the one it was approved under —
    * after a policy change the crashed server is left for an explicit `lsp_start`.
    */

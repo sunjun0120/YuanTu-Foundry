@@ -14,9 +14,8 @@ import { BrowserSession } from '../tools/browser.ts';
  *
  * A tool registry is built for every run, and these used to be built with it and closed with it: every user turn
  * restarted its language servers and lost what they had indexed, every turn's browser started logged out with no
- * tabs, and every MCP server was handshaked again. Claude Code and Codex both keep them for the life of the session
- * rather than the turn, and that is the rule here, with two additions neither has by default: an idle timeout, so a
- * session left open does not hold a rust-analyzer's memory all day, and a cap on live browsers.
+ * tabs, and every MCP server was handshaked again. They now live for the session rather than the turn, with an
+ * idle timeout, so a session left open does not hold a rust-analyzer's memory all day, and a cap on live browsers.
  *
  * The unit is the session, never the process: a language server runs under the execution policy of the session
  * that started it, a browser holds that session's logins, and an MCP connection carries that session's

@@ -1,26 +1,17 @@
 /**
  * The system prompt as **named, ordered sections** instead of one concatenation.
  *
- * The prompt a run sends (`composeSystem` in `packages/core/agent.ts`) was one expression of fourteen
- * `+`-joined fragments. That shape has three costs, and naming the sections is what removes them:
+ * Naming the sections answers three questions an assembled string cannot:
  *
- * 1. **Where does a new fragment go?** A tool's guidance, a mode's notice, a deployment's persona — each one had
- *    to be spliced into the middle of a 3,000-line file, and the only way to check the result was to run a model
- *    round and read the prompt that came out. A section carries its own `order`, so the answer is a number at the
- *    registration site.
- * 2. **Who wrote this line?** An assembled string cannot say which fragment produced which paragraph. A
- *    {@link PromptTrace} names every section, its position, and what it contributed, which is what makes "the
- *    prompt says something I did not expect" answerable without bisecting the code.
+ * 1. **Where does a new fragment go?** A section carries its stage and its own `order`, so the answer is a number
+ *    at the registration site.
+ * 2. **Who wrote this line?** A {@link PromptTrace} names every section, its position, and what it contributed, so
+ *    "the prompt says something I did not expect" is answerable without bisecting the code.
  * 3. **What can override what?** A child agent shares its parent's composition but must not inherit the parent's
- *    *role*: the role paragraph is exactly the part that has to differ, and today it is appended after the
- *    parent's rather than replacing it. {@link PromptSection.replaces} is that statement, and
- *    {@link PromptAssembly.shadowed} is the record that it happened.
+ *    *role*. {@link PromptSection.replaces} is that statement, and the trace records that it happened.
  *
- * Scope here is one section shadowing another **within a single assembly**, which is what a delegated child
- * needs. It is deliberately not DSH's scoped service registry: that design lets a plugin register a section for
- * a whole agent subtree and have the nearest registration win, which is the right shape when composition is
- * owned by a plugin runtime rather than by the run. Adopting the shadowing *rule* now, and the registry that
- * would need it later, keeps this change reviewable and the prompt byte-identical.
+ * Shadowing works **within a single assembly**, which is what a delegated child needs; there is no registry that
+ * lets a section apply to a whole agent subtree.
  */
 
 /** Where a section belongs in the assembled prompt. Declared as a closed set so the order has one owner. */
