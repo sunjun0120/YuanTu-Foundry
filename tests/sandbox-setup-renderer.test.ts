@@ -6,6 +6,7 @@ import type {
   SandboxSetupReply,
   SandboxSetupView,
 } from '../apps/desktop/sandbox-setup.ts';
+import type { PermissionPresetCommand } from '../apps/desktop/permission-presets.ts';
 
 class Node {
   hidden = true;
@@ -30,16 +31,25 @@ class Node {
     if (!this.disabled) await this.handlers.get('click')?.();
   }
 }
-async function page(api?: (command: SandboxSetupCommand) => Promise<SandboxSetupReply>) {
+async function page(
+  api?: (command: SandboxSetupCommand) => Promise<SandboxSetupReply>,
+  extra: {
+    presets?: (command: PermissionPresetCommand) => Promise<unknown>;
+    confirm?: () => boolean;
+  } = {},
+) {
   const beforeWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const beforeDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const ids = new Map<string, Node>();
   ids.set('sandbox-prompt', new Node());
-  for (const part of ['title', 'note', 'feedback', 'initialize', 'dismiss'])
+  for (const part of ['title', 'note', 'feedback', 'initialize', 'dismiss', 'weak'])
     ids.set(`sandbox-prompt-${part}`, new Node());
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { yuantu: { sandboxSetup: api } },
+    value: {
+      yuantu: { sandboxSetup: api, presets: extra.presets },
+      confirm: extra.confirm ?? (() => false),
+    },
   });
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
@@ -210,5 +220,34 @@ test('unsupported platforms, browser bridges and a missing helper show nothing',
     } finally {
       fixture.restore();
     }
+  }
+});
+
+test('the weaker sandbox switches the session only after the person confirms', async () => {
+  const sent: PermissionPresetCommand[] = [];
+  let confirmed = false;
+  const fixture = await page(async () => ({ ok: true, view: uninitialized }), {
+    presets: async (command) => {
+      sent.push(command);
+      return { ok: true };
+    },
+    confirm: () => confirmed,
+  });
+  try {
+    assert.match(fixture.prompt('weak').textContent, /较弱沙箱/);
+    await fixture.prompt('weak').click();
+    assert.deepEqual(sent, [], 'a declined confirmation changes nothing');
+    confirmed = true;
+    await fixture.prompt('weak').click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(sent, [{ type: 'weak-sandbox', acknowledgeWeak: true }]);
+    // The session is now on the restricted token and no longer needs the accounts.
+    fixture.control.setMode('windows');
+    assert.equal(fixture.prompt().hidden, true);
+    // Choosing a preset again moves back onto the account sandbox, which asks for setup again.
+    fixture.control.setMode('native');
+    assert.equal(fixture.prompt().hidden, false);
+  } finally {
+    fixture.restore();
   }
 });

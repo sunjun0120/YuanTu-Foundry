@@ -88,3 +88,13 @@ test('a failure before the sandbox moved leaves nothing to undo and nothing unkn
   assert.equal(choices.unknown, false);
   assert.equal(choices.view().current, 'guarded');
 });
+
+test('the weaker sandbox is a new session default only after the person chose it', async () => {
+  const { choices } = harness();
+  assert.equal(choices.view().sandbox.mode, 'native');
+  choices.weakDefault = true;
+  assert.equal(choices.chosen('fresh').sandbox, 'windows');
+  assert.equal(choices.view().current, null, 'the restricted token is no preset');
+  choices.weakDefault = false;
+  assert.equal(choices.chosen('fresh').sandbox, 'native');
+});

@@ -57,6 +57,7 @@ import { carrierErrorReply } from './carrier-errors.ts';
 import { UiSettingsStore } from './ui-settings-store.ts';
 import { PermissionSettingsStore } from './permission-settings-store.ts';
 import {
+  DEFAULT_PRESET,
   parsePermissionPresetCommand,
   permissionPreset,
   type PermissionPresetReply,
@@ -627,6 +628,32 @@ void app
             }
             return { ok: true, view: choices.view() };
           }
+          if (command.type === 'weak-sandbox') {
+            if (process.platform !== 'win32')
+              throw new Error('The weaker sandbox is only available on Windows');
+            assertPresetChangeAllowed();
+            switching = true;
+            try {
+              await choices.following;
+              const sessionId = service?.snapshot.session.sessionId ?? undefined;
+              const permission = choices.chosen(sessionId).permission;
+              // Leaving full access for a sandbox is not a reason to keep full access's approval floor.
+              const choice: SessionChoice = {
+                sandbox: 'windows',
+                permission:
+                  permission === 'full-access'
+                    ? permissionPreset(DEFAULT_PRESET).permission
+                    : permission,
+              };
+              await choices.apply(choice, sessionId);
+              if (sessionId) choices.remember(sessionId, choice);
+              choices.weakDefault = true;
+              choices.push();
+              return { ok: true, view: choices.view() };
+            } finally {
+              switching = false;
+            }
+          }
           const preset = permissionPreset(command.preset);
           assertPresetChangeAllowed();
           switching = true;
@@ -640,6 +667,8 @@ void app
             const sessionId = service?.snapshot.session.sessionId ?? undefined;
             await choices.apply(choice, sessionId);
             if (sessionId) choices.remember(sessionId, choice);
+            // Choosing a preset is choosing the account sandbox again, for the sessions that follow too.
+            choices.weakDefault = false;
             return {
               ok: true,
               view: choices.view(),

@@ -188,9 +188,17 @@ export function setupPermissionSettings(
   function render(): void {
     const id = current();
     const locked = pending || !isReady() || unreadable;
+    // The restricted-token backend is no rung, but it is one the person chose by name: say that name, not "custom".
+    const weak = !unreadable && view?.sandbox.mode === 'windows';
     trigger.replaceChildren(
       icon(id),
-      document.createTextNode(unreadable ? text('权限未读取', 'Permissions unknown') : label(id)),
+      document.createTextNode(
+        unreadable
+          ? text('权限未读取', 'Permissions unknown')
+          : weak
+            ? text('较弱沙箱', 'Weaker sandbox')
+            : label(id),
+      ),
     );
     trigger.dataset.preset = unreadable ? 'unknown' : id;
     trigger.title = unreadable
@@ -198,9 +206,15 @@ export function setupPermissionSettings(
           '未能读取当前会话的权限设置，点击重试。',
           "This session's permissions could not be read. Click to try again.",
         )
-      : id === CUSTOM_PRESET
-        ? ''
-        : boundary(id);
+      : weak
+        ? sandboxNote() +
+          text(
+            ' 选择任一选项即切回账户沙箱。',
+            ' Choose any option to return to the account sandbox.',
+          )
+        : id === CUSTOM_PRESET
+          ? ''
+          : boundary(id);
     select.value = id;
     /**
      * Nothing is disabled but a control that cannot move yet. The launch environment used to *pin* the mode, so
@@ -214,7 +228,24 @@ export function setupPermissionSettings(
       item.querySelector('.permission-check')!.textContent = checked ? '✓' : '';
       item.disabled = locked;
     }
-    if (customReading) customReading.hidden = id !== CUSTOM_PRESET;
+    if (customReading) {
+      customReading.hidden = id !== CUSTOM_PRESET;
+      // A backend the person picked by name and that cannot run here is worth the one sentence that says so.
+      const broken = weak ? view?.sandbox.availability : null;
+      // The backend's own text can carry a whole PowerShell error record: the line gets its start, the tooltip all.
+      customReading.title = broken ?? '';
+      customReading.textContent = broken
+        ? text(
+            '较弱沙箱在这台电脑上无法运行：',
+            'The weaker sandbox cannot run on this computer: ',
+          ) + (broken.length > 160 ? `${broken.slice(0, 160)}…` : broken)
+        : weak
+          ? text(
+              '当前：较弱沙箱（受限令牌）。读取和网络不受限制。',
+              'Current: weaker sandbox (restricted token). Reads and the network are not confined.',
+            )
+          : label(CUSTOM_PRESET);
+    }
     onSandboxMode(unreadable ? undefined : view?.sandbox.mode);
     select.disabled = locked;
     // Still clickable when unreadable: the click is the retry (see the trigger's listener).

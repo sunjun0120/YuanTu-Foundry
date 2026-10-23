@@ -25,6 +25,7 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
     'sandbox-prompt-initialize',
   ) as HTMLButtonElement | null;
   const dismiss = document.getElementById('sandbox-prompt-dismiss') as HTMLButtonElement | null;
+  const weaker = document.getElementById('sandbox-prompt-weak') as HTMLButtonElement | null;
   if (!prompt || !promptTitle || !promptNote || !initialize) return quiet;
   let view: SandboxSetupView | undefined;
   let pending = false;
@@ -62,6 +63,11 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
       dismiss.textContent = t('sandboxSetup.prompt.dismiss');
       dismiss.disabled = pending;
     }
+    if (weaker) {
+      weaker.textContent = t('sandboxSetup.prompt.weak');
+      weaker.title = t('sandboxSetup.prompt.weakNote');
+      weaker.disabled = pending;
+    }
   };
 
   const request = async (command: SandboxSetupCommand) => {
@@ -93,6 +99,30 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
     'click',
     () => void request({ type: 'initialize', acknowledge: true }),
   );
+  /**
+   * The restricted-token backend, for a machine where administrator approval is not available. It is the person's
+   * choice, made after reading what it does not confine; the main process switches the session and the permission
+   * chip then names it (which also hides this prompt: that session no longer needs the accounts).
+   */
+  weaker?.addEventListener('click', () => {
+    if (pending || !window.confirm(t('sandboxSetup.prompt.weakConfirm'))) return;
+    pending = true;
+    error = '';
+    operation = 'status';
+    draw();
+    void window.yuantu
+      .presets({ type: 'weak-sandbox', acknowledgeWeak: true })
+      .then((reply) => {
+        if (!reply.ok) throw new Error(reply.error);
+      })
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : t('sandboxSetup.failed');
+      })
+      .finally(() => {
+        pending = false;
+        draw();
+      });
+  });
   dismiss?.addEventListener('click', () => {
     dismissed = true;
     error = '';

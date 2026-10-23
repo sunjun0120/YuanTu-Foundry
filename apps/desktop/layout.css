@@ -903,10 +903,20 @@ body[data-page='background'] {
   color: var(--muted);
   border: 1px solid var(--line);
 }
+#chat-page .sandbox-prompt-actions button.link {
+  padding: 5px 4px;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 @media (max-width: 640px) {
   #chat-page .sandbox-prompt {
     flex-direction: column;
     align-items: stretch;
+  }
+  #chat-page .sandbox-prompt-actions {
+    flex-wrap: wrap;
   }
 }
 #chat-page .todos-panel > summary {

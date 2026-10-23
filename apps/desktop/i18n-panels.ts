@@ -270,6 +270,18 @@ export const panelMessages: Record<string, [string, string]> = {
   'sandboxSetup.prompt.title': ['设置 Windows 沙箱', 'Set up the Windows sandbox'],
   'sandboxSetup.prompt.repairTitle': ['修复 Windows 沙箱', 'Repair the Windows sandbox'],
   'sandboxSetup.prompt.dismiss': ['以后再说', 'Not now'],
+  'sandboxSetup.prompt.weak': [
+    '无管理员权限？使用较弱沙箱',
+    'No administrator? Use a weaker sandbox',
+  ],
+  'sandboxSetup.prompt.weakNote': [
+    '以你的账户降权运行命令，不需要管理员确认，但隔离明显更弱。',
+    'Runs commands under a restricted token of your own account. No administrator approval, but much weaker isolation.',
+  ],
+  'sandboxSetup.prompt.weakConfirm': [
+    '使用较弱沙箱（受限令牌）？\n\n命令将以你的账户降权运行，不需要管理员确认，但：\n· 可以读取你能读取的所有文件（包括密钥和配置）；\n· 可以访问网络；\n· 写入只部分限制在工作区。\n\n本次启动中新建的会话也会使用它，在权限菜单中选择任一选项即可切回账户沙箱。',
+    'Use the weaker sandbox (restricted token)?\n\nCommands will run under a restricted token of your own account, with no administrator approval, but they:\n· can read every file you can read (keys and configuration included);\n· can reach the network;\n· are only partly confined to the workspace when writing.\n\nNew sessions in this launch use it too; choose any option in the permissions menu to return to the account sandbox.',
+  ],
   'sandboxSetup.pending': [
     '正在处理，请完成 Windows 管理员确认…',
     'Working; complete the Windows administrator prompt…',
