@@ -1,8 +1,8 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import {
@@ -24,6 +24,7 @@ import {
 } from '../packages/tools/sandbox-account-broker.ts';
 import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 const windowsOnly = process.platform !== 'win32' && 'the account backend only runs on Windows';
@@ -197,44 +198,76 @@ test('concurrent identical environments share only the refresh that is still run
   assert.equal(calls, 2, 'a later command must not reuse the completed refresh');
 });
 
-test('a failed refresh never stops a command', { skip: windowsOnly }, async (t) => {
+// A broker announcement without a child process: the point here is the refresh, and a confined CI runner may
+// refuse to spawn one at all.
+const announcing: BrokerLauncher = () => {
+  const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  const [stdin, stdout, stderr] = [new PassThrough(), new PassThrough(), new PassThrough()];
+  Object.assign(child, {
+    stdin,
+    stdout,
+    stderr,
+    unref: () => {},
+    kill: () => true,
+  });
+  setImmediate(() => stdout.write(`${JSON.stringify({ version: 1, pipe: PIPE })}\n`));
+  return child as unknown as ChildProcess;
+};
+
+/** Prepares one command with `refresh` answering the helper's `read-refresh`; returns the requests it was sent. */
+async function prepareWithRefresh(
+  t: TestContext,
+  refresh: () => string,
+): Promise<{ prepared: Promise<SandboxPlan>; requests: { root?: string }[]; root: string }> {
   const state = await tempRoot(t, 'yuantu-account-refresh-fail-');
-  // A broker announcement without a child process: the point here is the refresh, and a confined CI runner may
-  // refuse to spawn one at all.
-  const announcing: BrokerLauncher = () => {
-    const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
-    const [stdin, stdout, stderr] = [new PassThrough(), new PassThrough(), new PassThrough()];
-    Object.assign(child, {
-      stdin,
-      stdout,
-      stderr,
-      unref: () => {},
-      kill: () => true,
-    });
-    setImmediate(() => stdout.write(`${JSON.stringify({ version: 1, pipe: PIPE })}\n`));
-    return child as unknown as ChildProcess;
-  };
+  const requests: { root?: string }[] = [];
   configureAccountBackend({
     helper: 'C:\\fake\\yuantu-sandbox.exe',
     state,
     run: async (_helper, args) => {
       if (args[0] === 'account-status') return status(true);
-      if (args[0] === 'read-refresh') throw new Error('refresh refused');
+      if (args[0] === 'read-refresh') {
+        requests.push(JSON.parse(await readFile(args[2]!, 'utf8')));
+        return refresh();
+      }
       if (args[0] === 'grant') return '{}';
       throw new Error(`unexpected helper call ${args.join(' ')}`);
     },
     launch: announcing,
   });
   t.after(stopBrokers);
-  const root = await tempRoot(t, 'yuantu-account-ws-');
-  const plan = await windowsAccountSandboxProvider.prepare({
+  const root = await realpath(await tempRoot(t, 'yuantu-account-ws-'));
+  const prepared = windowsAccountSandboxProvider.prepare({
     root,
     cwd: root,
     command: 'echo hi',
     config: { mode: 'windows-account', image: '' },
   });
-  assert.equal(plan.args[0], 'exec');
+  return { prepared, requests, root };
+}
+
+test('a failed read-root refresh never stops a command', { skip: windowsOnly }, async (t) => {
+  const { prepared, requests, root } = await prepareWithRefresh(t, () =>
+    JSON.stringify({ version: 1, roots: [], skipped: [], protected: [], error: 'refresh refused' }),
+  );
+  assert.equal((await prepared).args[0], 'exec');
+  // The request names the command's workspace, so its reserved names are protected first.
+  assert.equal(requests[0]?.root, root);
 });
+
+test(
+  'a workspace whose reserved names cannot be protected runs no command',
+  { skip: windowsOnly },
+  async (t) => {
+    const { prepared } = await prepareWithRefresh(t, () => {
+      throw new Error('.git cannot be protected');
+    });
+    await assert.rejects(
+      prepared,
+      /protected directories could not be secured.*\.git cannot be protected/,
+    );
+  },
+);
 
 test('a broker announcement must name one of its own pipes', () => {
   assert.equal(parseBrokerAnnouncement(JSON.stringify({ version: 1, pipe: PIPE })), PIPE);
