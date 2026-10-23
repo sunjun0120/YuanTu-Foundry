@@ -43,7 +43,7 @@ kind: 'project-readme'
 
 ## 快速开始
 
-当前交付目标是 Windows/macOS 本地 Electron 客户端与命令行（`npm run dev -- …`，打包后为 `yuantu-agent`）。桌面里的 MCP 服务管理与备份页面暂时停用，范围开关见 [product-scope.ts](packages/protocol/product-scope.ts)；桌面内部的 Agent Host、客户端协议与现有 MCP 工具调用继续保留。Web 桥、SDK 与 ACP 入口已移出主干，最后的源码保留在本地分支 `archive/web-sdk-acp`。
+当前交付目标是 Windows/macOS 本地 Electron 客户端与命令行（`npm run dev -- …`，打包后为 `yuantu-agent`）。桌面里的 MCP 服务管理与备份页面暂时停用，范围开关见 [product-scope.ts](packages/protocol/product-scope.ts)；桌面内部的 Agent Host、客户端协议与现有 MCP 工具调用继续保留。Web 桥、SDK 与 ACP 入口已移出主干。
 
 需要 Node.js 24 或更新版本。Windows 使用 PowerShell：
 
