@@ -283,6 +283,22 @@ function pendingRestore(file: string): RestoreJournal | undefined {
   return journal.phase === 'completed' || journal.phase === 'rolled-back' ? undefined : journal;
 }
 /** Every SessionStore participates, so an offline replacement cannot race another cooperating Host. */
+/**
+ * Whether another live process has this database open, by the tokens `registerDatabase` leaves.
+ *
+ * The same evidence `assertOffline` reads, without its refusal and without its cleanup: tokens of this process are
+ * not "another" (a second store in one process is ours to coordinate), and a token whose process is gone is left
+ * for `assertOffline` to remove.
+ */
+export function sharedWithOtherProcess(file: string): boolean {
+  if (file === ':memory:') return false;
+  const directory = `${identity(file)}.users`;
+  if (!existsSync(directory)) return false;
+  return readdirSync(directory).some((name) => {
+    const pid = Number(name.split('-')[0]);
+    return !Number.isSafeInteger(pid) || pid <= 0 || (pid !== process.pid && alive(pid));
+  });
+}
 export function registerDatabase(file: string): () => void {
   if (file === ':memory:') return () => {};
   const canonical = identity(file);

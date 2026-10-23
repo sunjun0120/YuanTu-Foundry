@@ -44,7 +44,12 @@ import type {
   WorkspaceSnapshot,
   WorkspaceState,
 } from '../protocol/workspaces.ts';
-import { initializeDatabase, registerDatabase, type BackupPolicy } from './database-maintenance.ts';
+import {
+  initializeDatabase,
+  registerDatabase,
+  sharedWithOtherProcess,
+  type BackupPolicy,
+} from './database-maintenance.ts';
 import { type PendingSessionInput, type SessionEvent, type SessionEventType } from './events.ts';
 import type { TurnTiming } from './projections.ts';
 import { BUILT_IN_SESSION_PROJECTIONS, SessionProjectionRegistry } from './projections.ts';
@@ -123,6 +128,10 @@ export type {
   TaskUpdate,
 } from './session-schema.ts';
 
+/** `PRAGMA auto_vacuum` reports 2 for INCREMENTAL. */
+const INCREMENTAL_AUTO_VACUUM = 2;
+/** Pages one reclaim pass frees at most; see `SessionStore.reclaimFreePages`. */
+export const RECLAIM_BATCH_PAGES = 1024;
 /**
  * Check the database's directory and fixed file names before anything is opened (see `secureDatabaseFiles`).
  *
@@ -227,7 +236,10 @@ export class SessionStore implements PlanRepository {
       );
       this.journal = this.parts.journal;
       for (const projection of BUILT_IN_SESSION_PROJECTIONS) this.projections.register(projection);
-      initializeDatabase(file, () => this.parts.schema.initialize(file, options));
+      initializeDatabase(file, () => {
+        this.parts.schema.initialize(file, options);
+        this.enableIncrementalVacuum();
+      });
     } catch (error) {
       try {
         this.db?.close();
@@ -730,6 +742,50 @@ export class SessionStore implements PlanRepository {
   /** Remove a session and its whole lineage; a sub-agent session never outlives its parent. */
   delete(id: string): void {
     this.parts.lifecycle.delete(id);
+  }
+  /**
+   * Put the database in `auto_vacuum=INCREMENTAL`, once, so space freed by deletes can be given back while it is open.
+   *
+   * SQLite never shrinks a file on its own: a deleted session's pages go on a free list and the file keeps its
+   * historical peak. A workspace measured during the audit held 14 MB of sessions in a 58 MB file. The only way back
+   * was `db-compact`, an offline maintainer command nobody runs. The mode can only change through a full `VACUUM`,
+   * which needs the database to itself, so it happens here — at open, under the initialization gate, after the
+   * schema — and only when no other process has the file open. It is best effort: a database it cannot convert
+   * this time works exactly as before and is tried again at the next open. On that measured file it took 250 ms;
+   * a brand-new database is converted before it holds anything.
+   */
+  private enableIncrementalVacuum(): void {
+    if (this.file === ':memory:' || this.autoVacuumMode() === INCREMENTAL_AUTO_VACUUM) return;
+    if (sharedWithOtherProcess(this.file)) return;
+    try {
+      this.db.exec('PRAGMA auto_vacuum=INCREMENTAL');
+      this.db.exec('VACUUM');
+    } catch (error) {
+      console.error(`[storage] could not enable incremental vacuum: ${(error as Error).message}`);
+    }
+  }
+  private autoVacuumMode(): number {
+    return Number(this.db.prepare('PRAGMA auto_vacuum').get()?.auto_vacuum ?? 0);
+  }
+  /**
+   * Give up to `maxPages` free pages back to the file system, and say how many went.
+   *
+   * Bounded because it runs on the Host's one thread: a batch of 1024 pages (4 MB) measured about 30 ms. The Host
+   * calls it after a delete and again while idle, so a large delete is reclaimed over a few passes instead of in one
+   * stall. Nothing happens in a database that is not in incremental mode, or inside an open transaction, which
+   * `incremental_vacuum` would otherwise join.
+   */
+  reclaimFreePages(maxPages = RECLAIM_BATCH_PAGES): number {
+    if (this.file === ':memory:' || this.db.isTransaction) return 0;
+    if (this.autoVacuumMode() !== INCREMENTAL_AUTO_VACUUM) return 0;
+    const before = this.freePages();
+    if (before === 0) return 0;
+    this.db.prepare(`PRAGMA incremental_vacuum(${Math.max(1, Math.floor(maxPages))})`).all();
+    return before - this.freePages();
+  }
+  /** Pages on the free list: space the file holds that no record uses. */
+  freePages(): number {
+    return Number(this.db.prepare('PRAGMA freelist_count').get()?.freelist_count ?? 0);
   }
   /** The session and its delegated descendants: exactly the sessions `delete(id)` removes. */
   sessionTree(id: string): string[] {
