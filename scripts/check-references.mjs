@@ -29,6 +29,9 @@
  *   user's files, and their absence from a clone is not a defect.
  * - URLs, site-absolute paths, and `path:line` suffixes.
  *
+ * `README.md` additionally may not point into `docs/` at all, whether the target exists or not: the README has to
+ * stand on its own, and the documents under `docs/` are free to be deleted without a README edit to go with them.
+ *
  * `ALLOWED_MISSING` is empty, and it is meant to stay that way: a reference to something that is not there is
  * either a typo or a deletion nobody finished, and both want fixing rather than listing. An entry here would
  * need a sentence saying why the reference has to stay.
@@ -52,6 +55,8 @@ const OWNED_DIRECTORIES = [
 /** Records, not descriptions: excluded from the backticked-path scan (see the header). */
 const HISTORICAL = [/^docs[\\/](?:capability-comparison|validation)-/];
 const ALLOWED_MISSING = new Set([]);
+/** The README stands on its own: nothing in it may point into `docs/` (see the header). */
+const intoDocs = (file) => /^docs(?:\/|$)/.test(path.posix.normalize(file));
 
 const problems = [];
 const textCache = new Map();
@@ -132,6 +137,10 @@ async function checkLink(file, raw, at) {
   const filePart = hash === -1 ? target : target.slice(0, hash);
   const fragment = hash === -1 ? '' : target.slice(hash + 1);
   const targetFile = filePart ? path.posix.join(path.posix.dirname(file), filePart) : file;
+  if (file === 'README.md' && intoDocs(targetFile)) {
+    problems.push(`${at}: README.md must not link into docs/ (${target})`);
+    return;
+  }
   if (filePart && !(await exists(path.join(root, targetFile)))) {
     problems.push(`${at}: the link target ${target} does not exist`);
     return;
@@ -184,7 +193,12 @@ async function check() {
       if (source.kind === 'markdown') {
         for (const target of [...lines[index].matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)])
           await checkLink(source.file, target[1], at);
-        if (living) for (const token of backticked(lines[index])) await checkPath(token, at);
+        for (const token of backticked(lines[index])) {
+          const value = repoPath(token);
+          if (source.file === 'README.md' && value && intoDocs(value))
+            problems.push(`${at}: README.md must not reference docs/ (\`${token}\`)`);
+          else if (living) await checkPath(token, at);
+        }
       } else {
         for (const word of words(lines[index])) await checkPath(word, at);
       }
