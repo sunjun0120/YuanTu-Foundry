@@ -1,13 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { prepareContext } from '../packages/core/context.ts';
 import { contextMessageSize } from '../packages/protocol/images.ts';
 import { shortenMessages } from '../packages/core/shrink.ts';
 import { forecastRequest } from '../packages/core/forecast.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { Message, ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from '../packages/core/agent.ts';
@@ -15,14 +11,10 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 import { isSummaryRequest } from './summary-request.ts';
 import { TokenCalibration } from '../packages/core/calibration.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-summary-performance-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-summary-performance-', 'session.sqlite');
   const session = store.create(root);
   for (let index = 0; index < 6; index++) {
     store.append(session.id, { role: 'user', content: `Turn ${index}: ` + 'detail '.repeat(600) });

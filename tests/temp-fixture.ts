@@ -26,16 +26,28 @@ export async function tempRoot(t: TestContext, prefix = 'yuantu-test-'): Promise
  *
  * `session` is created on first read, so a test that destructures only `{ root, store }` leaves the store
  * empty — tests that count sessions see exactly the ones they made.
+ *
+ * `cleanup` registers teardown that has to finish while the store is still open and the directory still exists
+ * (a Host, a tool registry, another connection to the same file). Those run first, in the order given, in the
+ * same hook — a separate `t.after` would run only after the directory is gone.
  */
 export async function storeFixture(
   t: TestContext,
   prefix = 'yuantu-test-',
   file = 'sessions.sqlite',
-): Promise<{ root: string; db: string; store: SessionStore; readonly session: Session }> {
+): Promise<{
+  root: string;
+  db: string;
+  store: SessionStore;
+  readonly session: Session;
+  cleanup: (step: () => unknown) => void;
+}> {
   const root = await mkdtemp(path.join(tmpdir(), prefix));
   const db = path.join(root, file);
   const store = new SessionStore(db);
+  const steps: (() => unknown)[] = [];
   t.after(async () => {
+    for (const step of steps) await step();
     store.close();
     await rm(root, { recursive: true, force: true });
   });
@@ -47,5 +59,6 @@ export async function storeFixture(
     get session() {
       return (session ??= store.create(root));
     },
+    cleanup: (step) => void steps.push(step),
   };
 }

@@ -9,9 +9,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { settlementNotices, settlementNoticeText } from '../packages/core/settlements.ts';
@@ -20,6 +17,7 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';
 import { toolCall as call } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const SUBAGENT_MARK = 'You are a sub-agent delegated by a parent agent';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,14 +35,9 @@ const report = (summary: string): ModelResponse =>
 const isChild = (request: ModelRequest) => request.system.includes(SUBAGENT_MARK);
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settlement-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-settlement-');
   const residency = new SubAgentResidency();
-  t.after(async () => {
-    residency.disposeAll();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => residency.disposeAll());
   const session = store.create(root);
   return { root, store, residency, session };
 }

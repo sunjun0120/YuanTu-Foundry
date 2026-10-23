@@ -5,19 +5,14 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { compiledSchemaCount, ToolRegistry } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { AgentEvent, ModelResponse } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 for (const limit of [1, 4]) {
   test(`actual tool intervals show concurrency ${limit} and keep result order`, async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tool-performance-'));
-    const store = new SessionStore(path.join(root, 'session.sqlite'));
-    t.after(async () => {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    });
+    const { root, store } = await storeFixture(t, 'yuantu-tool-performance-', 'session.sqlite');
     const session = store.create(root);
     const tools = new ToolRegistry();
     const intervals = new Map<string, { startedAt: number; finishedAt: number }>();
@@ -155,12 +150,7 @@ test('denied approval produces no execution interval and diagnostic failures can
 });
 
 test('a timeout retry marks result timing incomplete until older attempts actually finish', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tool-overlap-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-tool-overlap-', 'session.sqlite');
   const session = store.create(root);
   const tools = new ToolRegistry();
   let bodies = 0;

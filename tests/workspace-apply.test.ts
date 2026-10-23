@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +13,7 @@ import {
 import { workspaceResultTools } from '../packages/tools/workspaces.ts';
 import { reconcilePendingFileChanges, undoFileChange } from '../packages/tools/file-undo.ts';
 import type { FileChange, FileSnapshot, Tool, ToolContext } from '../packages/protocol/index.ts';
+import { git } from './git-fixture.ts';
 
 /**
  * Taking delivery of a child's work.
@@ -23,20 +23,6 @@ import type { FileChange, FileSnapshot, Tool, ToolContext } from '../packages/pr
  * the same request twice writes once. Each of those is a different way an import could silently stop being the thing
  * that was approved, which is why each has its own case.
  */
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 interface Prepared {
   store: SessionStore;

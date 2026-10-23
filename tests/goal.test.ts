@@ -9,11 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { goalTools } from '../packages/tools/goal.ts';
 import { goalProjection } from '../packages/storage/projections.ts';
@@ -31,6 +27,7 @@ import type { Goal } from '../packages/protocol/goals.ts';
 import { RUN_SCOPED_TOOLS } from '../packages/tools/registry.ts';
 import type { AgentEvent, Provider, Tool, ToolContext } from '../packages/protocol/index.ts';
 import { reply, toolCall } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const AT = '2026-01-01T00:00:00.000Z';
 const goal = (over: Partial<Goal> = {}): Goal => ({
@@ -39,14 +36,9 @@ const goal = (over: Partial<Goal> = {}): Goal => ({
 });
 
 test('goal notices follow every result in the assistant tool batch', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-goal-batch-'));
-  const store = new SessionStore(path.join(root, 'sessions.db'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-goal-batch-', 'sessions.db');
   const tools = createTools(root);
-  t.after(async () => {
-    await tools.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => tools.close());
   const session = store.create(root);
   let rounds = 0;
   const agent = new Agent({
@@ -290,12 +282,7 @@ test('the tools write through the seam, and the fold reads back what they wrote'
   }
 });
 test('a run declares a goal, the next run is told about it and costs it one round', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-goal-run-'));
-  const store = new SessionStore(path.join(root, 'sessions.db'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-goal-run-', 'sessions.db');
   const session = store.create(root);
   const events: AgentEvent[] = [];
   /**
@@ -391,12 +378,7 @@ test('a run declares a goal, the next run is told about it and costs it one roun
   assert.equal(store.goal(session.id)?.roundsStarted, 2, 'a closed goal is not admitted to again');
 });
 test('the goal tools are run-scoped, and only a run that owns the session gets them', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-goal-scope-'));
-  const store = new SessionStore(path.join(root, 'sessions.db'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-goal-scope-', 'sessions.db');
   const session = store.create(root);
   const names = new Set<string>();
   const offered: string[][] = [];

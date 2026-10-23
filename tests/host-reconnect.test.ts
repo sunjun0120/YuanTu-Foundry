@@ -24,19 +24,14 @@ import { auditEntries, foldMessages } from '../packages/storage/events.ts';
 import type { Message } from '../packages/protocol/index.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
 /** An owner pid that cannot exist, which is how a test says "the process that started this run is gone". */
 const DEAD_PID = 2_147_483_647;
 
 async function store_(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reconnect-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db: file, store } = await storeFixture(t, 'yuantu-reconnect-');
   return { root, file, store, session: store.create(root) };
 }
 /** Forge a dead owner for a run, which is the only way to write the state a crash leaves behind. */

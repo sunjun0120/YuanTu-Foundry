@@ -1,10 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { AnthropicProvider } from '../packages/providers/anthropic.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
@@ -18,6 +14,7 @@ import type {
 } from '../packages/protocol/index.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { isSummaryRequest } from './summary-request.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 // ---- the adapters have to name the overflow, because it is the only place the name exists ----
 //
@@ -32,12 +29,7 @@ const reply = (text = 'Finished'): ModelResponse => ({
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-overflow-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-overflow-', 'session.sqlite');
   const events: AgentEvent[] = [];
   return { root, store, session: store.create(root), events };
 }

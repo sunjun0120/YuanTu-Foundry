@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -12,7 +12,7 @@ import { HookRegistry } from '../packages/tools/hooks.ts';
 import { SPILL_DIRECTORY, removeSpills, sweepSpills } from '../packages/tools/spill.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { ImageAttachment } from '../packages/protocol/index.ts';
-import { tempRoot } from './temp-fixture.ts';
+import { storeFixture, tempRoot } from './temp-fixture.ts';
 
 /**
  * What a deleted session leaves behind: nothing it alone owned, and nothing anybody else still needs.
@@ -38,15 +38,9 @@ const hashOf = (attachment: ImageAttachment): string =>
   createHash('sha256').update(Buffer.from(attachment.data, 'base64')).digest('hex');
 
 async function hostFixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-delete-cleanup-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
+  const { root, db: file, store, cleanup } = await storeFixture(t, 'yuantu-delete-cleanup-');
   const hooks = new HookRegistry();
-  t.after(async () => {
-    await hooks.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => hooks.close());
   const ctx = createHostState(
     {
       options: { json: false, allowWrite: false, allowCommand: false, help: false },

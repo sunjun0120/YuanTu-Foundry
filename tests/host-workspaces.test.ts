@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +13,7 @@ import { PermissionPolicy } from '../packages/core/permissions.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 import { HookRegistry } from '../packages/tools/registry.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
+import { git } from './git-fixture.ts';
 
 /**
  * The workspace RPC surface.
@@ -24,20 +24,6 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
  * handler uses. The second is that a query must *answer* rather than throw when the thing it describes is broken:
  * "this directory is gone" is the state of a workspace, not an error in asking about it.
  */
-
-const GIT_ENV: NodeJS.ProcessEnv = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@example.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@example.com',
-};
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim();
-}
 
 interface Harness {
   ctx: HostContext;

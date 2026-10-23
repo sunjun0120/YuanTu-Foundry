@@ -19,6 +19,7 @@ import { presentedSchema } from '../packages/tools/presented-schema.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
 import { toolCall as call } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({
   text,
@@ -338,14 +339,9 @@ test('an edit reports the region it produced, numbered and bounded', () => {
 });
 
 test('edit_file returns the edited region so the model need not read the file back', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-edit-snippet-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-edit-snippet-');
   const tools = createTools(root);
-  t.after(async () => {
-    store.close();
-    await tools.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => tools.close());
   await writeFile(path.join(root, 'calc.js'), 'export function add(a, b) {\n  return a - b;\n}\n');
   const session = store.create(root);
   let step = 0;

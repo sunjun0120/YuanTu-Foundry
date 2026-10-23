@@ -1,25 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from '../packages/core/agent.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { AgentEvent, ModelResponse } from '../packages/protocol/index.ts';
 import { isSummaryRequest } from './summary-request.ts';
 import { addStatistics, emptyStatistics } from '../packages/protocol/statistics.ts';
 import { createRunEmit, type RunEmission } from '../packages/core/run-emit.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-performance-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-performance-', 'session.sqlite');
   return { store, session: store.create(root) };
 }
 

@@ -11,6 +11,7 @@ import {
   backgroundAuthority,
 } from '../packages/core/background-deliveries.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { until } from './wait-fixture.ts';
 
 test('a cold automatic wake retains its read-only authority after a permission update', async (t) => {
   const url = await httpFixture(t, (_body, response) => sendFrames(response, frames('done')));
@@ -55,14 +56,6 @@ test('a cold automatic wake retains its read-only authority after a permission u
     store.close();
   }
 });
-
-async function until(check: () => Promise<boolean>, ms = 5000) {
-  const end = Date.now() + ms;
-  while (!(await check())) {
-    if (Date.now() > end) throw Error('condition timed out');
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 test('cold completed records notify by default, opt-in wakes once and streams in an idle controller', async (t) => {
   let requests = 0;

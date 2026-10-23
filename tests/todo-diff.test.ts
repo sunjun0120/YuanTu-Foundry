@@ -15,6 +15,7 @@ import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { describeTodoChange, isEmptyTodoChange, todoDiff } from '../packages/protocol/todos.ts';
 import type { TodoItem } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 const item = (id: string, content = id, status: TodoItem['status'] = 'pending'): TodoItem => ({
   id,
@@ -22,12 +23,7 @@ const item = (id: string, content = id, status: TodoItem['status'] = 'pending'):
   status,
 });
 async function fixture(t: test.TestContext): Promise<{ store: SessionStore; root: string }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-todo-diff-'));
-  const store = new SessionStore(path.join(root, 'sessions.db'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-todo-diff-', 'sessions.db');
   return { store, root };
 }
 

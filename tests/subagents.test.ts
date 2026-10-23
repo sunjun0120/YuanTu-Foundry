@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import {
@@ -18,7 +17,6 @@ import {
   SubAgentProviderRegistry,
   inProcessProvider,
 } from '../packages/core/subagent-providers.ts';
-import { SessionStore } from '../packages/storage/sqlite.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { createTools } from '../packages/catalog/index.ts';
@@ -28,6 +26,8 @@ import type {
   ModelResponse,
   Provider,
 } from '../packages/protocol/index.ts';
+import { storeFixture } from './temp-fixture.ts';
+import { until } from './wait-fixture.ts';
 
 /** Messages a person or a task produced, without the runtime's skill announcement. */
 const typedMessages = <T extends { content: string }>(messages: readonly T[]): T[] =>
@@ -58,14 +58,6 @@ const collect = (id: string): ModelResponse => ({
   usage: { inputTokens: 10, outputTokens: 5 },
 });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/** Waits for a condition the test cannot await directly (a child that has only just been started). */
-async function until(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error('the condition was never met');
-    await sleep(5);
-  }
-}
 /** A provider whose child runs until it is told to stop, collecting the signal it was handed. */
 function parkedProvider(childSignals: AbortSignal[]): SubAgentProviderRegistry {
   const providers = new SubAgentProviderRegistry();
@@ -138,13 +130,8 @@ async function fixture(
   provider: Provider,
   extra: { subagents?: SubAgentOptions } & Record<string, unknown> = {},
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-subagents-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store } = await storeFixture(t, 'yuantu-subagents-');
   const tools = createTools(root);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
   const session = store.create(root);
   const events: AgentEvent[] = [];
   const { subagents, ...rest } = extra;

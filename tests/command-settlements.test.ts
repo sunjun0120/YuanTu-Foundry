@@ -9,9 +9,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { commandJournal, commandRecords } from '../packages/core/command-jobs.ts';
@@ -28,6 +27,7 @@ import type {
 
 /** Printed at the end of the output, so "the tail survived" is a claim about the *end* of what it said. */
 import { toolCall as call } from './provider-fixture.ts';
+import { storeFixture } from './temp-fixture.ts';
 const MARKER = 'SECRET-OUTPUT-42';
 const reply = (text: string): ModelResponse => ({
   text,
@@ -69,15 +69,10 @@ async function settled(store: SessionStore, sessionId: string, id: string) {
   throw new Error('the command never settled');
 }
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-command-settlement-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-command-settlement-');
   const manager = new BackgroundCommands(root);
   const session = store.create(root);
-  t.after(async () => {
-    await manager.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => manager.close());
   // Two commands: one that finishes at once and prints a marker, one that keeps running until it is stopped.
   await writeFile(
     path.join(root, 'build.cjs'),

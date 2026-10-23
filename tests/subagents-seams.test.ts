@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import {
@@ -152,14 +151,9 @@ test('a refused durable completion cannot emit a completed card', async (t) => {
 });
 
 test('a provider with a child in another store reports unsupported settlement instead of success', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-foreign-child-'));
-  const store = new SessionStore(path.join(root, 'parent.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-foreign-child-', 'parent.sqlite');
   const foreign = new SessionStore(path.join(root, 'foreign.sqlite'));
-  t.after(async () => {
-    store.close();
-    foreign.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => foreign.close());
   const session = store.create(root);
   const child = foreign.create(root);
   let starts = 0;

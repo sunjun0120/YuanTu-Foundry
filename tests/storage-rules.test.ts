@@ -19,6 +19,7 @@ import {
 } from '../packages/storage/session-blobs.ts';
 import type { Message, TaskStep, TaskStepStatus } from '../packages/protocol/index.ts';
 import { ftsDisplayText, ftsIndexText } from '../packages/formats/fts-text.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 /**
  * The storage layer's pure rules, tested without a database.
@@ -244,20 +245,10 @@ test('a persisted task revision always moves forward even when the clock does no
  * it was never going to show, and the bounds are refused by name rather than clamped.
  */
 test('audit pages are filtered by the query and refuse a cursor they cannot honour', async (t) => {
-  const { SessionStore } = await import('../packages/storage/sqlite.ts');
-  const { mkdtemp, rm } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const path = await import('node:path');
   const { DatabaseSync } = await import('node:sqlite');
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-audit-rules-'));
-  const file = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(file);
+  const { root, db: file, store, cleanup } = await storeFixture(t, 'yuantu-audit-rules-');
   const db = new DatabaseSync(file);
-  t.after(async () => {
-    db.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => db.close());
   const session = store.create(root);
   store.recordEvent(session.id, 'approval.required', { id: 'first' });
   const firstSeq = store.lastSeq(session.id);

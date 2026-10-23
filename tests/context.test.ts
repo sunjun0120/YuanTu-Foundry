@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { tmpdir } from 'node:os';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
@@ -26,6 +24,7 @@ import { estimateInputTokens, estimateMessageTokens } from '../packages/core/bud
 import { isSummaryBody, isSummaryRequest } from './summary-request.ts';
 import { readConfig } from '../packages/providers/index.ts';
 import { summaryProviderFor } from '../apps/shared/runtime.ts';
+import { storeFixture } from './temp-fixture.ts';
 
 // ---- merged from context-budget.test.ts ----
 
@@ -40,12 +39,7 @@ const reply = (inputTokens = 5, outputTokens = 3): ModelResponse => ({
   usage: { inputTokens, outputTokens },
 });
 async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-budget-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-budget-', 'session.sqlite');
   return { store, session: store.create(root) };
 }
 
@@ -662,13 +656,7 @@ const reply2 = (text: string): ModelResponse => ({
  * window cannot hold.
  */
 async function setup(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-summary-'));
-  const db = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(db);
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, db, store } = await storeFixture(t, 'yuantu-summary-');
   const session = store.create(root);
   store.append(session.id, {
     role: 'user',
@@ -1094,15 +1082,9 @@ test('compaction replays the opaque provider continuation instead of rewriting t
 // ---- merged from manual-compaction.test.ts ----
 
 test('manual compaction merges new conversation with the prior summary before advancing coverage', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-manual-compact-'));
-  const db = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(db);
+  const { root, db, store, cleanup } = await storeFixture(t, 'yuantu-manual-compact-');
   let client: AgentHostClient | undefined;
-  t.after(async () => {
-    await client?.stop();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => client?.stop());
   const session = store.create(root);
   store.append(session.id, { role: 'user', content: 'Keep the blue theme.' });
   store.append(session.id, { role: 'assistant', content: 'I will keep it blue.', toolCalls: [] });
@@ -1285,15 +1267,9 @@ test('manual compaction merges new conversation with the prior summary before ad
 });
 
 test('run.cancel stops manual compaction without committing a summary and frees the next operation', async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-compact-cancel-'));
-  const db = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(db);
+  const { root, db, store, cleanup } = await storeFixture(t, 'yuantu-compact-cancel-');
   let client: AgentHostClient | undefined;
-  t.after(async () => {
-    await client?.stop();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => client?.stop());
   const session = store.create(root);
   const other = store.create(root);
   store.append(session.id, { role: 'user', content: 'Keep the blue theme.' });
@@ -1366,15 +1342,9 @@ test('manual compaction refuses rather than replay a request envelope it does no
    * not the one being sent. A session with no recorded envelope — one seeded before this build existed, or whose
    * prompt was recorded truncated — is therefore told so instead of being charged for that request.
    */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-compact-no-envelope-'));
-  const db = path.join(root, 'sessions.sqlite');
-  const store = new SessionStore(db);
+  const { root, db, store, cleanup } = await storeFixture(t, 'yuantu-compact-no-envelope-');
   let client: AgentHostClient | undefined;
-  t.after(async () => {
-    await client?.stop();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => client?.stop());
   const session = store.create(root);
   store.append(session.id, { role: 'user', content: 'Keep the blue theme.' });
   store.append(session.id, { role: 'assistant', content: 'I will keep it blue.', toolCalls: [] });
@@ -1739,12 +1709,7 @@ test('the correction scales only the byte-derived part of the estimate', () => {
 });
 
 async function fixture2(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-calibration-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-calibration-', 'session.sqlite');
   return { store, session: store.create(root) };
 }
 

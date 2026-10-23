@@ -1,8 +1,7 @@
 import test from 'node:test';
-import { tempRoot } from './temp-fixture.ts';
+import { storeFixture, tempRoot } from './temp-fixture.ts';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHostState } from '../apps/agent-host/state.ts';
 import type { HostServices } from '../apps/agent-host/services.ts';
@@ -15,14 +14,9 @@ import { loadHookDeclarations } from '../packages/resources/hook-config.ts';
 import { hookTrustFile, trustWorkspaceHooks } from '../packages/resources/hook-trust.ts';
 
 async function state(t: test.TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-lifecycle-policy-'));
-  const store = new SessionStore(path.join(root, 'sessions.sqlite'));
+  const { root, store, cleanup } = await storeFixture(t, 'yuantu-lifecycle-policy-');
   const hooks = new HookRegistry();
-  t.after(async () => {
-    await hooks.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  cleanup(() => hooks.close());
   const seen: { kind: string; readOnly: boolean | undefined }[] = [];
   hooks.register({
     sessionStart: (context) => {

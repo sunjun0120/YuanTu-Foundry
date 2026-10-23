@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -998,12 +997,7 @@ async function setup(
   provider: Provider,
   approve: Approver = async () => true,
 ) {
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-queue-'));
-  const store = new SessionStore(path.join(root, 'session.sqlite'));
-  t.after(async () => {
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
+  const { root, store } = await storeFixture(t, 'yuantu-queue-', 'session.sqlite');
   const session = store.create(root);
   const events: AgentEvent[] = [];
   const tools = createTools(root);
