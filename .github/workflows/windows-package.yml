@@ -14,7 +14,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
       - run: npm test
+        env:
+          FOUNDRY_TEST_CONTINUE_ON_FAILURE: '1'
       - run: npm run package:windows
       - name: Install in isolated directory
         shell: pwsh
