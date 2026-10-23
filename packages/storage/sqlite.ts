@@ -1,8 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { closeSync, constants, openSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
+import {
+  assertRuntimeFile,
+  ensureRuntimeDirectory,
+  PRIVATE_DIRECTORY_MODE,
+  PRIVATE_FILE_MODE,
+  RUNTIME_DIRECTORY_NAME,
+  restrictToOwner,
+} from '../platform/runtime-directory.ts';
 import { canonicalKey } from '../platform/workspace-paths.ts';
 import type { Surface, SurfaceOp } from '../protocol/context.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
@@ -117,6 +124,41 @@ export type {
 } from './session-schema.ts';
 
 /**
+ * Check the database's directory and fixed file names before anything is opened (see `secureDatabaseFiles`).
+ *
+ * The database holds whole transcripts — command output, file contents, sometimes secrets — and used to be created
+ * with the umask's defaults (0644 in a 0755 directory), readable by every local user, while the spill files beside
+ * it were already 0600. And SQLite opens by name, which follows a link: a `.yuantu/sessions.sqlite` or `-wal` shipped
+ * as a link would have put the session database outside the workspace. So the fixed names are refused unless they
+ * are missing or regular files, a new database is created 0600 without following a link (SQLite then gives its
+ * `-wal`/`-shm` the database's own mode), an existing one is narrowed to 0600, and `.yuantu` itself to 0700. A
+ * `--db` elsewhere keeps its directory's permissions: that directory is the caller's, not runtime state.
+ */
+function prepareDatabaseFiles(file: string): void {
+  const directory = ensureRuntimeDirectory(path.dirname(file), { mode: PRIVATE_DIRECTORY_MODE });
+  if (path.basename(directory) === RUNTIME_DIRECTORY_NAME)
+    restrictToOwner(directory, PRIVATE_DIRECTORY_MODE);
+  const sidecars = ['-wal', '-shm', '-journal'].map((suffix) => `${file}${suffix}`);
+  for (const target of [file, ...sidecars]) assertRuntimeFile(target);
+}
+/** The second half, once `registerDatabase` has ruled out an interrupted restore that a new file would confuse. */
+function secureDatabaseFiles(file: string): void {
+  const sidecars = ['-wal', '-shm', '-journal'].map((suffix) => `${file}${suffix}`);
+  try {
+    closeSync(
+      openSync(
+        file,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
+        PRIVATE_FILE_MODE,
+      ),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  for (const target of [file, ...sidecars]) restrictToOwner(target, PRIVATE_FILE_MODE);
+}
+
+/**
  * The storage layer's single entry point: one connection, and every session operation as a method.
  *
  * The work lives in the `session-*.ts` collaborators, built over this connection by `createSessionStoreParts`
@@ -174,10 +216,11 @@ export class SessionStore implements PlanRepository {
   private ownerName: string | undefined;
   constructor(file: string, options: { backupRetention?: BackupPolicy } = {}) {
     // A database under `<workspace>/.yuantu` must not follow a link out of the workspace.
-    if (file !== ':memory:') ensureRuntimeDirectory(path.dirname(path.resolve(file)));
+    if (file !== ':memory:') prepareDatabaseFiles(path.resolve(file));
     this.file = file === ':memory:' ? file : path.resolve(file);
     this.releaseDatabase = registerDatabase(file);
     try {
+      if (file !== ':memory:') secureDatabaseFiles(this.file);
       this.db = new DatabaseSync(file);
       this.parts = createSessionStoreParts(this.db, this.projections, this, (fn) =>
         this.transaction(fn),

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile, rm, symlink, utimes } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, symlink, truncate, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverSkills, expandSkill } from '../packages/resources/skills.ts';
 import { createTools } from '../packages/catalog/index.ts';
@@ -320,6 +320,24 @@ test('rejects non-files and malformed UTF-8 instruction sources', async (t) => {
 
   await writeFile(path.join(root, 'AGENTS.md'), Buffer.from([0xc3, 0x28]));
   assert.throws(() => loadInstructions(root), /UTF-8/i);
+});
+
+test('a huge instruction file is read only up to its budget', async (t) => {
+  const root = await fixture(t);
+  const file = path.join(root, 'AGENTS.md');
+  // 2GB of sparse file: reading it whole would exceed a Buffer, so this only passes if the read is bounded.
+  // The budget ends in the middle of a three-byte character, and the bytes past it are NULs the loader refuses.
+  const prefix = Buffer.from('x'.repeat(32 * 1024 - 1) + '中', 'utf8');
+  await writeFile(file, prefix);
+  await truncate(file, 2 * 1024 ** 3);
+
+  const result = loadInstructions(root);
+
+  assert.deepEqual(result.omissions, [
+    { file: 'AGENTS.md', kind: 'truncated', keptBytes: 32 * 1024 - 1 },
+  ]);
+  assert.match(result.text, /AGENTS\.md was cut after 32767 bytes/);
+  assert.doesNotMatch(result.text, /�/);
 });
 
 // ---- merged from repo-map.test.ts ----

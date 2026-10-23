@@ -59,22 +59,166 @@ export function decodeEntities(text: string): string {
     return ENTITIES[name] ?? match;
   });
 }
+const DISCARDED_ELEMENTS = new Set([
+  'script',
+  'style',
+  'noscript',
+  'template',
+  'svg',
+  'head',
+  'iframe',
+]);
+const BLOCK_ELEMENTS = new Set([
+  'p',
+  'div',
+  'section',
+  'article',
+  'header',
+  'footer',
+  'li',
+  'tr',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'blockquote',
+  'pre',
+  'table',
+  'ul',
+  'ol',
+  'nav',
+  'main',
+  'aside',
+  'form',
+  'figure',
+  'dl',
+  'dt',
+  'dd',
+]);
+
+/**
+ * Find `</name>` (case-insensitive, optional whitespace before `>`) at or after `from`, or -1.
+ *
+ * `missing` remembers the earliest position a search for each name already failed from: no closing tag exists
+ * after it, so a later search from further on fails too and is answered without scanning. Without it a page of
+ * unclosed `<script>` tags rescans the rest of the document once per tag — the quadratic case this replaces.
+ */
+function findClosing(
+  html: string,
+  name: string,
+  from: number,
+  missing: Map<string, number>,
+): { start: number; end: number } | undefined {
+  const failed = missing.get(name);
+  if (failed !== undefined && from >= failed) return undefined;
+  const pattern = new RegExp(`</${name}\\s*>`, 'gi');
+  pattern.lastIndex = from;
+  const match = pattern.exec(html);
+  if (!match) {
+    missing.set(name, Math.min(from, failed ?? from));
+    return undefined;
+  }
+  return { start: match.index, end: match.index + match[0].length };
+}
+
+function extractTitle(html: string, missing: Map<string, number>): string {
+  const open = /<title/i.exec(html);
+  if (!open) return '';
+  const tagEnd = html.indexOf('>', open.index);
+  if (tagEnd < 0) return '';
+  const close = findClosing(html, 'title', tagEnd + 1, missing);
+  return close ? html.slice(tagEnd + 1, close.start) : '';
+}
+
+/**
+ * Strip markup in one forward pass.
+ *
+ * This used to be a chain of lazy regular expressions, and every one of them rescanned to the end of the
+ * document for each unclosed opening it met: a 1MB page of `<script>` took sixteen seconds on the Host's event
+ * loop, stalling every session. The scanner keeps the same output rules — discarded elements vanish with their
+ * content, `<br>`/`<hr>` and the end of a block become a line break, `<li>` becomes a bullet, any other tag
+ * becomes a space, and a `<` with no `>` anywhere after it is left as text — while never scanning a stretch twice.
+ */
+function stripMarkup(html: string, missing: Map<string, number>): string {
+  const out: string[] = [];
+  const tagName = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)/y;
+  // The next `>` and the next `-->` found so far. Both only move forward, so remembering them keeps a page of
+  // `<` with one `>` at the very end, or of `<!--` with no `-->`, from rescanning the rest once per opening.
+  let nextGt = -1;
+  let commentEndFailedFrom = Infinity;
+  let index = 0;
+  while (index < html.length) {
+    const open = html.indexOf('<', index);
+    if (open < 0) break;
+    out.push(html.slice(index, open));
+    // An unclosed comment falls through and is stripped like any other tag, up to the next `>`.
+    let comment = -1;
+    if (html.startsWith('<!--', open) && open + 4 < commentEndFailedFrom) {
+      comment = html.indexOf('-->', open + 4);
+      if (comment < 0) commentEndFailedFrom = open + 4;
+    }
+    if (comment >= 0) {
+      out.push(' ');
+      index = comment + 3;
+      continue;
+    }
+    if (nextGt !== -2 && nextGt <= open) {
+      nextGt = html.indexOf('>', open + 1);
+      if (nextGt < 0) nextGt = -2;
+    }
+    const tagEnd = nextGt;
+    // No `>` after this `<` means none after any later `<` either: the rest is text.
+    if (tagEnd < 0) {
+      index = open;
+      break;
+    }
+    /**
+     * A tag cannot contain `<`. A stray one in the text (`1 < 2 <script>…`) used to run to the `>` of the next
+     * real tag and swallow it, so a script after it was never recognised and its body came out as text. The
+     * stray `<` is text up to the next `<`, which is then read as the tag it is.
+     */
+    const nested = html.indexOf('<', open + 1);
+    if (nested >= 0 && nested < tagEnd) {
+      out.push(html.slice(open, nested));
+      index = nested;
+      continue;
+    }
+    tagName.lastIndex = open;
+    const named = tagName.exec(html);
+    const closing = named?.[1] === '/';
+    const name = named?.[2]?.toLowerCase();
+    index = tagEnd + 1;
+    if (!name) {
+      out.push(' ');
+    } else if (!closing && DISCARDED_ELEMENTS.has(name)) {
+      const close = findClosing(html, name, index, missing);
+      out.push(' ');
+      // Unclosed, the opening tag alone is dropped and what follows it stays readable text.
+      if (close) index = close.end;
+    } else if (!closing && (name === 'br' || name === 'hr')) {
+      out.push('\n');
+    } else if (closing && BLOCK_ELEMENTS.has(name)) {
+      out.push('\n');
+    } else if (!closing && name === 'li') {
+      out.push('\n- ');
+    } else {
+      out.push(' ');
+    }
+  }
+  out.push(html.slice(index));
+  return out.join('');
+}
+
 /** Strip markup down to readable text; scripts, styles and templates are discarded. */
 export function htmlToText(html: string): { title: string; text: string } {
-  const title = decodeEntities(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '')
+  const missing = new Map<string, number>();
+  const title = decodeEntities(extractTitle(html, missing))
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 500);
-  const body = html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style|noscript|template|svg|head|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
-    .replace(
-      /<\/(p|div|section|article|header|footer|li|tr|h[1-6]|blockquote|pre|table|ul|ol|nav|main|aside|form|figure|dl|dt|dd)\s*>/gi,
-      '\n',
-    )
-    .replace(/<li\b[^>]*>/gi, '\n- ')
-    .replace(/<[^>]*>/g, ' ');
+  const body = stripMarkup(html, missing);
   return {
     title,
     text: decodeEntities(body)

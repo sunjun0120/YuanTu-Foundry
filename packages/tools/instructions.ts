@@ -1,5 +1,14 @@
 import path from 'node:path';
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from 'node:fs';
 
 const names = ['AGENTS.override.md', 'AGENTS.md', 'CLAUDE.md'] as const;
 
@@ -91,6 +100,45 @@ function prefixBytes(text: string, budget: number): { text: string; bytes: numbe
   return { text: cut, bytes: Buffer.byteLength(cut, 'utf8') };
 }
 
+/**
+ * At most `limit` bytes from the start of `file`, and the file's whole size.
+ *
+ * The budget used to be applied after `readFileSync`, so it decided how much was rendered but not how much was
+ * read: a multi-gigabyte `AGENTS.md` in a cloned repository was loaded whole on every run. No file can render more
+ * than `limit` bytes, so nothing past it is read. A prefix that ends inside a multi-byte character loses that
+ * partial character rather than failing the strict UTF-8 decode; the rest of an oversized file is never
+ * validated, because it never reaches the prompt.
+ */
+function readPrefix(file: string, limit: number): { bytes: Buffer; size: number } {
+  // `lstat` already refused a link; `O_NOFOLLOW` closes the window between that check and this open where it exists.
+  const descriptor = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const size = fstatSync(descriptor).size;
+    const buffer = Buffer.alloc(Math.min(size, limit));
+    let filled = 0;
+    while (filled < buffer.length) {
+      const read = readSync(descriptor, buffer, filled, buffer.length - filled, filled);
+      if (read === 0) break;
+      filled += read;
+    }
+    const bytes = buffer.subarray(0, filled);
+    return { bytes: filled < size ? withoutPartialCharacter(bytes) : bytes, size };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** Drop a UTF-8 sequence cut off at the end of `bytes`; a complete or malformed tail is left for the decoder. */
+function withoutPartialCharacter(bytes: Buffer): Buffer {
+  for (let back = 1; back <= 3 && back <= bytes.length; back++) {
+    const byte = bytes[bytes.length - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+    return length > back ? bytes.subarray(0, bytes.length - back) : bytes;
+  }
+  return bytes;
+}
+
 /** What the budget left out, said in the text the model reads rather than only in a log nobody opens. */
 function budgetNotice(omissions: readonly InstructionOmission[]): string {
   const described = omissions.map((entry) =>
@@ -118,7 +166,7 @@ export function loadInstructions(workspace: string, target = workspace): LoadedI
     current = path.join(current, part);
     directories.push(current);
   }
-  const selected: { contents: string; file: string; name: string }[] = [];
+  const selected: { contents: string; size: number; file: string; name: string }[] = [];
   for (const candidateDirectory of directories) {
     const name = names.find((candidate) => existsSync(path.join(candidateDirectory, candidate)));
     if (!name) continue;
@@ -128,7 +176,7 @@ export function loadInstructions(workspace: string, target = workspace): LoadedI
     if (!stat.isFile()) throw new Error(`Instruction source must be a regular file: ${name}`);
     if (!inside(realpathSync(root), realpathSync(absolute)))
       throw new Error(`Instruction source is outside workspace: ${name}`);
-    const bytes = readFileSync(absolute);
+    const { bytes, size } = readPrefix(absolute, INSTRUCTION_FILE_BYTES);
     let contents: string;
     try {
       contents = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -138,6 +186,7 @@ export function loadInstructions(workspace: string, target = workspace): LoadedI
     if (contents.includes('\0')) throw new Error('Instruction source must be UTF-8 text');
     selected.push({
       contents,
+      size,
       file: path.relative(root, absolute).split(path.sep).join('/'),
       name,
     });
@@ -166,7 +215,7 @@ export function loadInstructions(workspace: string, target = workspace): LoadedI
     const cut = prefixBytes(candidate.contents, allowance);
     rendered.set(index, cut.text);
     remaining -= cut.bytes;
-    if (cut.bytes < Buffer.byteLength(candidate.contents, 'utf8'))
+    if (cut.bytes < candidate.size)
       omissions.push({ file: candidate.file, kind: 'truncated', keptBytes: cut.bytes });
   }
   // The notice is written in the order a reader meets the files, not in the order the budget was spent.

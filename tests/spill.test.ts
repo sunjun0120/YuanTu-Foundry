@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -581,3 +582,32 @@ for (const count of [1000, 3000]) {
     assert.ok(!spilled.includes('[output truncated]'), 'the capture itself was not cut');
   });
 }
+
+test('a link planted at a spill name is replaced, never written through', async (t) => {
+  const root = await tempRoot(t, 'yuantu-spill-link-');
+  const input = {
+    workspace: root,
+    sessionId: 'link-session',
+    key: 'call-1',
+    content: 'secret output',
+  };
+  // Learn the name the projection writes to, then put a link there that points outside the workspace.
+  const file = path.resolve(root, spillResult(input)!.path);
+  const outside = path.join(await tempRoot(t, 'yuantu-spill-outside-'), 'victim.txt');
+  await writeFile(outside, 'untouched');
+  await rm(file);
+  try {
+    await symlink(outside, file, 'file');
+  } catch (error) {
+    // Unprivileged Windows cannot create file symlinks; there is nothing to plant then.
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return t.skip('no symlink privilege');
+    throw error;
+  }
+
+  // Same size as the victim, so a `stat` that followed the link would have taken it for the spill.
+  const result = spillResult({ ...input, content: 'X'.repeat('untouched'.length) })!;
+  assert.equal(result.bytes, 'untouched'.length);
+  assert.equal(await readFile(outside, 'utf8'), 'untouched');
+  assert.equal((await lstat(file)).isSymbolicLink(), false);
+  assert.equal(await readFile(file, 'utf8'), 'X'.repeat('untouched'.length));
+});

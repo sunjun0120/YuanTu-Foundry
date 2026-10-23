@@ -64,6 +64,33 @@ test('htmlToText drops scripts and styles, decodes entities and keeps block stru
   assert.ok(text.includes('- two'));
 });
 
+test('htmlToText keeps the old output rules for comments, unclosed tags and stray brackets', () => {
+  assert.equal(htmlToText('a<!-- x -->b<br/>c<hr>d').text, 'a b\nc\nd');
+  assert.equal(htmlToText('<P>one</P ><DIV>two</div>').text, 'one\ntwo');
+  // An unclosed discarded element drops only its opening tag; the rest stays readable.
+  assert.equal(htmlToText('keep<script>tail').text, 'keep tail');
+  assert.equal(htmlToText('<script>a</script>mid<script>b</SCRIPT >end').text, 'mid end');
+  // A `<` with no `>` after it is text, and an unclosed comment is stripped like a tag.
+  assert.equal(htmlToText('1 < 2 and more').text, '1 < 2 and more');
+  // A stray `<` before a script does not swallow the script's opening tag.
+  assert.equal(htmlToText('1 < 2 <script>hidden</script> end').text, '1 < 2 end');
+  assert.equal(htmlToText('shown<!-- hidden> after').text, 'shown after');
+  assert.equal(htmlToText('<title>T</title><title>U</title>').title, 'T');
+  assert.equal(htmlToText('<title>never closed').title, '');
+});
+
+test('htmlToText stays linear on 2MB of unclosed tags', () => {
+  // These used to take quadratic time: a 1MB page of unclosed `<script>` held the Host for 16 seconds.
+  for (const unit of ['<script>', '<!--', '<title>', '<li', '<svg x', '<', '<!--a>', '<<']) {
+    // The `>` at the end gives every opening something to scan towards.
+    const html = unit.repeat(Math.floor(2_000_000 / unit.length)) + '>';
+    const started = performance.now();
+    htmlToText(html);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1_000, `${unit} took ${elapsed.toFixed(0)}ms`);
+  }
+});
+
 test('parseDuckDuckGo extracts titles, decoded redirect links and snippets', () => {
   const html = `
     <div class="result"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs&amp;rut=abc">Example <b>Docs</b></a>

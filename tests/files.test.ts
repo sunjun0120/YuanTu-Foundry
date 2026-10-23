@@ -17,7 +17,7 @@ import { createTools } from '../packages/catalog/index.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { reconcilePendingFileChanges, undoFileChange } from '../packages/tools/file-undo.ts';
 import { writeAll, atomicWriteFile } from '../packages/platform/write-all.ts';
-import { Workspace } from '../packages/tools/files.ts';
+import { isWindowsDeviceName, Workspace } from '../packages/tools/files.ts';
 import type { FileChange, FileSnapshot, ToolContext } from '../packages/protocol/index.ts';
 import { fileHandlers } from '../apps/agent-host/handlers/files.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
@@ -687,3 +687,32 @@ test('case insensitive literal search agrees with escaped regex independent of l
   assert.equal(invalid.isError, true);
   assert.match(invalid.content, /Invalid regular expression/);
 });
+
+test('Windows device names are recognised with any case, extension or trailing dots', () => {
+  for (const name of [
+    'NUL',
+    'nul',
+    'CON.txt',
+    'com1',
+    'LPT9.log',
+    'AUX. ',
+    'prn.tar.gz',
+    'COM¹',
+    'CONIN$',
+  ])
+    assert.equal(isWindowsDeviceName(name), true, name);
+  for (const name of ['null', 'console', 'COM10', 'LPT', 'aux-file.txt', 'my.nul', '.con'])
+    assert.equal(isWindowsDeviceName(name), false, name);
+});
+
+test(
+  'a write cannot reach a Windows device through a workspace path',
+  { skip: process.platform !== 'win32' && 'device names are only devices on Windows' },
+  async (t) => {
+    const root = await tempRoot(t, 'yuantu-device-names-');
+    const workspace = new Workspace(root);
+    for (const name of ['NUL', 'CON.txt', 'COM1', 'sub/aux.md'])
+      await assert.rejects(workspace.resolve(name, true), /device names/i, name);
+    assert.equal(path.basename(await workspace.resolve('null.txt', true)), 'null.txt');
+  },
+);

@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { restrictToOwner } from '../platform/runtime-directory.ts';
 
 export interface DatabasePolicy {
   application: string;
@@ -386,11 +387,14 @@ function createBackup(
   )
     throw new Error('Invalid backup directory');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  // `mode` above only applies to a directory this call creates; a backup is the whole transcript again.
+  restrictToOwner(directory, 0o700);
   const destination = path.join(directory, `${Date.now()}-${randomUUID()}.sqlite`);
   const stage = `${destination}.tmp`;
   let published = false;
   try {
     db.prepare('VACUUM main INTO ?').run(stage);
+    restrictToOwner(stage, 0o600);
     const inspection = inspectDatabase(stage, policy);
     assertCopyAdmitted(inspection.bytes, admission, directory, source);
     syncFile(stage);

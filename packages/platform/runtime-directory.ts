@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isWithin } from './workspace-paths.ts';
 
@@ -74,4 +74,40 @@ function lstatOrNull(target: string) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
+}
+
+/** Owner-only permissions for runtime state: the same pair the spill files and the credential store use. */
+export const PRIVATE_DIRECTORY_MODE = 0o700;
+export const PRIVATE_FILE_MODE = 0o600;
+
+/**
+ * Narrow an existing path to `mode` where the platform has mode bits.
+ *
+ * `mode` at creation only applies to a path created by that call, so state written by an older build keeps
+ * whatever the umask gave it (0755/0644 typically, readable by every local user). Tightening on open repairs it.
+ * Windows ignores mode bits; there the workspace's inherited ACL decides, and it is left alone because the
+ * sandbox backend manages ACLs under the workspace itself. A missing path is not an error.
+ */
+export function restrictToOwner(target: string, mode: number): void {
+  if (process.platform === 'win32') return;
+  try {
+    chmodSync(target, mode);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+/**
+ * Refuse a fixed runtime file name that is already something other than a regular file.
+ *
+ * `ensureRuntimeDirectory` checks the directories, but a file with a fixed name — `sessions.sqlite`, its WAL —
+ * is opened by name, and opening follows a link: a repository that ships `.yuantu/sessions.sqlite` as a link
+ * would put the session database wherever it points. A missing file is fine; whoever opens it next creates it.
+ */
+export function assertRuntimeFile(file: string): void {
+  const stat = lstatOrNull(file);
+  if (!stat) return;
+  if (stat.isSymbolicLink())
+    throw new Error(`Runtime file cannot be a symbolic link or junction: ${file}`);
+  if (!stat.isFile()) throw new Error(`Runtime file is not a regular file: ${file}`);
 }
