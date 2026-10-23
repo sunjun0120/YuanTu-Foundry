@@ -74,7 +74,10 @@ Use this when the user wants a report, proposal, letter, handout, workbook or sl
   approval and leaves nothing behind, and the user can open the file in the app's built-in preview. Every
   office_preview writes a file the user must approve and that you would then have to delete.
 - Use office_preview when the user asks for a preview file. An .html output works everywhere; a .pdf output
-  needs Microsoft Office or LibreOffice on this machine; if neither is available, say so and offer HTML.
+  needs Microsoft Office or LibreOffice on this machine; if neither is available, say so and offer HTML. An
+  Excel HTML preview shows the data, not the exact layout.
+- Before handing the file over, call verify_file_delivery on its final workspace path and report the verified
+  path, or say that verification was not possible.
 - Hand the file to the user with present, and tell them what is in it and anything left for them to fill in.
 `;
 

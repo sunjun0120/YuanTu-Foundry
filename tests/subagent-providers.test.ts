@@ -316,7 +316,7 @@ test('a task persona replaces the deployment persona for that child alone, and k
   // The identity paragraph is the one that carries how to use tools and when to verify a deliverable: losing it
   // is silent, which is why it is asserted by content rather than by a section name.
   assert.match(system, /You are YuanTu, a coding agent/);
-  assert.match(system, /Use tools to inspect the workspace before editing/);
+  assert.match(system, /Read a file before editing it/);
   // The role is still the role, in its own additive slot.
   assert.match(system, /You are read-only/);
 });
