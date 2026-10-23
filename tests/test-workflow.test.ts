@@ -113,7 +113,7 @@ test(
     });
     assert.equal(await closed, 1, stderr);
     assert.equal(requested, true, stdout);
-    await assert.rejects(readFile(path.join(locks, 'machine-resources.lock')), { code: 'ENOENT' });
+    await assert.rejects(readFile(path.join(locks, 'machine-lease.lock')), { code: 'ENOENT' });
   },
 );
 
