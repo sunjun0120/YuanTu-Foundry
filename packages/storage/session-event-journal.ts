@@ -14,6 +14,7 @@ import {
 } from './events.ts';
 import { sessionTitle, storedMessage, type QueuedBlob } from './session-blobs.ts';
 import type { Session } from './session-schema.ts';
+import { cachedStatement } from './statement-cache.ts';
 import {
   APPEND_BATCH_LIMIT,
   frozen,
@@ -184,8 +185,10 @@ export class SessionEventJournal {
   messagesFromTable(sessionId: string, offset = 0): Message[] {
     this.port.get(sessionId);
     this.flush(sessionId);
-    return this.port.db
-      .prepare('SELECT body FROM messages WHERE session_id=? ORDER BY seq LIMIT -1 OFFSET ?')
+    return cachedStatement(
+      this.port.db,
+      'SELECT body FROM messages WHERE session_id=? ORDER BY seq LIMIT -1 OFFSET ?',
+    )
       .all(sessionId, offset)
       .map((row) => this.hydrateMessage(JSON.parse(String(row.body))) as Message);
   }
@@ -193,9 +196,10 @@ export class SessionEventJournal {
   messageRowCount(sessionId: string): number {
     this.port.get(sessionId);
     this.flush(sessionId);
-    const row = this.port.db
-      .prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?')
-      .get(sessionId);
+    const row = cachedStatement(
+      this.port.db,
+      'SELECT COUNT(*) AS count FROM messages WHERE session_id=?',
+    ).get(sessionId);
     return Number(row?.count ?? 0);
   }
 
@@ -267,12 +271,12 @@ export class SessionEventJournal {
     limit?: number,
     types?: readonly string[],
   ): SessionEvent[] {
-    return this.port.db
-      .prepare(
-        `SELECT seq,session_id AS sessionId,type,data,at FROM session_events WHERE session_id=? AND seq>?${
-          types ? ` AND type IN (${types.map(() => '?').join(',')})` : ''
-        } ORDER BY seq${limit === undefined ? '' : ' LIMIT ?'}`,
-      )
+    return cachedStatement(
+      this.port.db,
+      `SELECT seq,session_id AS sessionId,type,data,at FROM session_events WHERE session_id=? AND seq>?${
+        types ? ` AND type IN (${types.map(() => '?').join(',')})` : ''
+      } ORDER BY seq${limit === undefined ? '' : ' LIMIT ?'}`,
+    )
       .all(id, afterSeq, ...(types ?? []), ...(limit === undefined ? [] : [limit]))
       .map((row) => ({
         seq: Number(row.seq),
@@ -293,9 +297,10 @@ export class SessionEventJournal {
    */
   private hydrateImage(value: unknown): unknown {
     if (!isImageReference(value)) return value;
-    const row = this.port.db
-      .prepare('SELECT mime_type AS mimeType,bytes FROM attachment_blobs WHERE hash=?')
-      .get(value.hash);
+    const row = cachedStatement(
+      this.port.db,
+      'SELECT mime_type AS mimeType,bytes FROM attachment_blobs WHERE hash=?',
+    ).get(value.hash);
     if (!row) throw new Error(`Attachment ${value.hash} is missing from the session database`);
     const data = Buffer.from(row.bytes as Uint8Array).toString('base64');
     const reference = value as unknown as Record<string, unknown>;
@@ -338,11 +343,11 @@ export class SessionEventJournal {
    */
   pendingInputs(id: string): PendingSessionInput[] {
     this.flush(id);
-    const rows = this.port.db
-      .prepare(
-        `SELECT seq,session_id AS sessionId,type,data,at FROM session_events
+    const rows = cachedStatement(
+      this.port.db,
+      `SELECT seq,session_id AS sessionId,type,data,at FROM session_events
          WHERE session_id=? AND type IN ('input.queued','input.consumed','input.discarded') ORDER BY seq`,
-      )
+    )
       .all(id)
       .map((row) => ({
         seq: Number(row.seq),
@@ -449,7 +454,7 @@ export class SessionEventJournal {
     // Sampled before the read, as `logOf` does: a commit that lands during it makes this entry stale next time.
     const dataVersion = this.dataVersion();
     try {
-      if (!this.port.db.prepare('SELECT 1 FROM sessions WHERE id=?').get(id)) {
+      if (!cachedStatement(this.port.db, 'SELECT 1 FROM sessions WHERE id=?').get(id)) {
         this.logCache.delete(id);
         return undefined;
       }
@@ -491,7 +496,7 @@ export class SessionEventJournal {
    * connection commits and leaves it alone when this one does.
    */
   private dataVersion(): number {
-    return Number(this.port.db.prepare('PRAGMA data_version').get()?.data_version ?? 0);
+    return Number(cachedStatement(this.port.db, 'PRAGMA data_version').get()?.data_version ?? 0);
   }
 
   /**
@@ -515,8 +520,10 @@ export class SessionEventJournal {
     const cached = this.transactionDepth === 0 ? this.cachedLog(id) : undefined;
     if (cached) return cached.log.at(-1)?.seq ?? 0;
     const seq = Number(
-      this.port.db.prepare('SELECT MAX(seq) AS seq FROM session_events WHERE session_id=?').get(id)
-        ?.seq ?? 0,
+      cachedStatement(
+        this.port.db,
+        'SELECT MAX(seq) AS seq FROM session_events WHERE session_id=?',
+      ).get(id)?.seq ?? 0,
     );
     return seq;
   }
@@ -531,11 +538,10 @@ export class SessionEventJournal {
    * the `(session_id, seq)` index serves.
    */
   newestPayload(id: string, type: SessionEventType): Record<string, unknown> | undefined {
-    const row = this.port.db
-      .prepare(
-        'SELECT data FROM session_events WHERE session_id=? AND type=? ORDER BY seq DESC LIMIT 1',
-      )
-      .get(id, type);
+    const row = cachedStatement(
+      this.port.db,
+      'SELECT data FROM session_events WHERE session_id=? AND type=? ORDER BY seq DESC LIMIT 1',
+    ).get(id, type);
     if (!row) return undefined;
     const data: unknown = JSON.parse(String(row.data));
     return data && typeof data === 'object' && !Array.isArray(data)
@@ -560,9 +566,10 @@ export class SessionEventJournal {
     // A fact never overtakes the appends it is ordered against, so buffered messages go first.
     if (this.transactionDepth === 0) this.flush(id);
     const at = new Date().toISOString();
-    const written = this.port.db
-      .prepare('INSERT INTO session_events(session_id,type,data,at) VALUES(?,?,?,?)')
-      .run(id, type, JSON.stringify(stored), at);
+    const written = cachedStatement(
+      this.port.db,
+      'INSERT INTO session_events(session_id,type,data,at) VALUES(?,?,?,?)',
+    ).run(id, type, JSON.stringify(stored), at);
     const event: SessionEvent = {
       seq: Number(written.lastInsertRowid),
       sessionId: id,
@@ -693,13 +700,18 @@ export class SessionEventJournal {
   }
 
   private writeMessages(id: string, batch: readonly QueuedMessage[]): void {
-    const insert = this.port.db.prepare(
+    const insert = cachedStatement(
+      this.port.db,
       'INSERT INTO messages(session_id,body,search_text) VALUES(?,?,?)',
     );
-    const insertBlob = this.port.db.prepare(
+    const insertBlob = cachedStatement(
+      this.port.db,
       'INSERT OR IGNORE INTO attachment_blobs(hash,mime_type,bytes,size,created_at) VALUES(?,?,?,?,?)',
     );
-    const retitle = this.port.db.prepare("UPDATE sessions SET title=? WHERE id=? AND title=''");
+    const retitle = cachedStatement(
+      this.port.db,
+      "UPDATE sessions SET title=? WHERE id=? AND title=''",
+    );
     for (const queued of batch) {
       // Inside the same transaction as the row that names them: a message cannot be durable while the bytes
       // it refers to are not, and a rolled-back batch leaves no blob behind either.

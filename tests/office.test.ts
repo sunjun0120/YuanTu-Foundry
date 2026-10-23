@@ -24,6 +24,8 @@ import { MAX_DOCUMENT_BLOCKS, MAX_TABLE_COLUMNS } from '../packages/office/docum
 import { MAX_SLIDE_TABLE_ROWS } from '../packages/office/presentation.ts';
 import { deliveryTool } from '../packages/tools/delivery.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { inspectOffice } from '../packages/office/inspect.ts';
+import { inspectInWorker } from '../packages/office/inspect-runner.ts';
 
 // ---- merged from office.test.ts ----
 
@@ -1253,4 +1255,38 @@ test('an office_create approval shows the words the document will hold', async (
   ]);
   assert.equal(change.added, 7);
   assert.equal(change.truncated, false);
+});
+
+test('Office inspection runs in a worker, with the same answer, a time limit and cancellation', async (t) => {
+  const root = await tempRoot(t, 'yuantu-office-worker-');
+  const file = path.join(root, 'book.xlsx');
+  await runSpreadsheetOperation({
+    operation: 'create',
+    format: 'xlsx',
+    outputPath: file,
+    sheets: [
+      {
+        name: 'Summary',
+        rows: [
+          ['Metric', 'Value'],
+          ['A', 1],
+        ],
+      },
+    ],
+  });
+  const live = new AbortController();
+  // The same reader, in a thread the Host's event loop does not wait on.
+  assert.equal(await inspectInWorker(file, 'xlsx', live.signal), await inspectOffice(file, 'xlsx'));
+  // A parser that does not finish in time is stopped, and the call fails rather than the Host stalling.
+  await assert.rejects(inspectInWorker(file, 'xlsx', live.signal, { timeoutMs: 1 }), /timed out/);
+  const cancelled = new AbortController();
+  const pending = inspectInWorker(file, 'xlsx', cancelled.signal);
+  cancelled.abort(new Error('stopped by the run'));
+  await assert.rejects(pending, /stopped by the run/);
+  // A file the reader refuses comes back as this call's error, from inside the worker.
+  await writeFile(path.join(root, 'empty.docx'), '');
+  await assert.rejects(
+    inspectInWorker(path.join(root, 'empty.docx'), 'docx', live.signal),
+    /1 byte to 20 MB/,
+  );
 });

@@ -505,3 +505,52 @@ test('a client that missed the approval frame gets it from the queue answer and 
   assert.equal(after.running, false);
   assert.equal(after.pending, undefined);
 });
+
+test('an aborted request stops being waited for, and the Host answers the next one normally', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-request-abort-'));
+  const cleanups: (() => Promise<unknown>)[] = [];
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup();
+    await rm(root, { recursive: true, force: true });
+  });
+  const url = await httpFixture(t, (_body, res) => sendFrames(res, frames('Unused.')));
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath,
+    workspace: root,
+    db: path.join(root, 'sessions.sqlite'),
+    env: {
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_API_KEY: 'abort-fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_BASE_URL: url,
+    },
+  });
+  cleanups.push(() => client.stop());
+  await client.start();
+  const session = await client.request('session.create', {});
+
+  const aborted = new AbortController();
+  aborted.abort();
+  await assert.rejects(
+    client.request('session.get', { sessionId: session.id }, { signal: aborted.signal }),
+    { name: 'AbortError' },
+  );
+  // Abandoned after it was sent: its answer arrives later and must not settle anything else.
+  const midway = new AbortController();
+  const abandoned = client.request(
+    'session.get',
+    { sessionId: session.id },
+    { signal: midway.signal },
+  );
+  midway.abort();
+  await assert.rejects(abandoned, { name: 'AbortError' });
+
+  const inbox = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(inbox.running, false);
+  // The cursor an opening read needs, in the same answer, so it does not have to ask `session.events` for it.
+  const events = await client.request('session.events', { sessionId: session.id, limit: 1 });
+  assert.equal(inbox.latestSeq, events.latestSeq);
+});

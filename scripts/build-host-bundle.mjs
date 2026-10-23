@@ -43,6 +43,23 @@ await build({
   external: ['@lydell/node-pty', '@napi-rs/keyring', 'playwright', 'playwright-core', 'typescript'],
   logLevel: 'warning',
 });
+// Office inspection runs in its own worker (`packages/office/inspect-runner.ts`), which looks for this bundle beside
+// the Host's before falling back to the tsc output. Bundled for the same reason the Host is: a worker starts per
+// inspection, and resolving mammoth and SheetJS across `node_modules` each time is most of that start.
+await build({
+  entryPoints: ['packages/office/inspect-worker.ts'],
+  outfile: path.join(path.dirname(output), 'office-inspect-worker.js'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node24',
+  banner: {
+    js:
+      "import{createRequire as __yuantuCreateRequire}from'node:module';" +
+      'const require=__yuantuCreateRequire(import.meta.url);',
+  },
+  logLevel: 'warning',
+});
 const { size } = await stat(output);
 // Office automation resolves `automation.ps1` beside its own module. Inlined into this bundle, that module's directory
 // is `dist/packages/tools/`, so the script has to be here too or every Word/PowerPoint PDF preview from the desktop

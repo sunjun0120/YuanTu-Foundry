@@ -338,6 +338,8 @@ export interface HostMethods {
         approvals: { id: string; approval: Approval }[];
         questions: { id: string; request: QuestionRequest }[];
       };
+      /** The session log's newest seq when this was answered, so an opening read needs no separate cursor probe. */
+      latestSeq?: number;
     };
   };
   'run.queue.clear': { params: { sessionId: string }; result: { cleared: true } };

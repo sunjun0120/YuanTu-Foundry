@@ -66,11 +66,13 @@ export const runHandlers: Readonly<Record<string, Handler>> = {
           ...agent.inboxOf(sessionId),
           ...identity,
           pending: pendingInteractions(ctx, sessionId),
+          latestSeq: ctx.store.lastSeq(sessionId),
         }
       : {
           running: false,
           items: ctx.store.pendingInputs(sessionId),
           ...identity,
+          latestSeq: ctx.store.lastSeq(sessionId),
         };
   },
   'run.queue.clear': async (ctx, params) => {

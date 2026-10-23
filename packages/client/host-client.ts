@@ -470,22 +470,34 @@ export class AgentHostClient {
       ? { ...result, error: this.redact(result.error) }
       : result;
   }
+  /**
+   * Ask the Host one question.
+   *
+   * `signal` lets a caller stop waiting: the request is rejected with the signal's reason and its pending entry is
+   * dropped, so the answer, when it arrives, is ignored like a timed-out one. It does not stop the Host — a
+   * handler is a synchronous store read that has usually finished by the time anyone could cancel it — so this is
+   * for a reader whose question no longer matters, such as a session read overtaken by opening another session.
+   */
   request<M extends HostMethod>(
     method: M,
     params: HostMethods[M]['params'],
+    options: { signal?: AbortSignal } = {},
   ): Promise<HostMethods[M]['result']> {
     if (this.currentStatus !== 'ready') return Promise.reject(new Error('Agent Host is not ready'));
     return this.invoke(
       method,
       params,
       HOST_LONG_REQUESTS.has(method) ? 0 : (this.options.requestTimeoutMs ?? 10_000),
+      options.signal,
     );
   }
   private invoke<M extends HostMethod>(
     method: M,
     params: HostMethods[M]['params'],
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<HostMethods[M]['result']> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     const transport = this.transport;
     if (!transport?.writable) return Promise.reject(new Error('Agent Host is disconnected'));
     const id = randomUUID(),
@@ -493,12 +505,22 @@ export class AgentHostClient {
     if (Buffer.byteLength(line) > MAX_INPUT_BYTES)
       return Promise.reject(new Error('Host request exceeds 16MB limit'));
     return new Promise((resolve, reject) => {
+      const abort = () => {
+        if (this.pending.take(id)) reject(signal!.reason);
+      };
       const entry: HostPendingRequest = {
         method,
-        resolve: (value) => resolve(value as HostMethods[M]['result']),
-        reject,
+        resolve: (value) => {
+          signal?.removeEventListener('abort', abort);
+          resolve(value as HostMethods[M]['result']);
+        },
+        reject: (error) => {
+          signal?.removeEventListener('abort', abort);
+          reject(error);
+        },
       };
       this.pending.add(id, entry, timeoutMs);
+      signal?.addEventListener('abort', abort, { once: true });
       // A refused write (`false`) is backpressure, not failure: the transport buffers. A write that really
       // fails surfaces on the transport's error channel and settles every pending entry, this one included.
       try {

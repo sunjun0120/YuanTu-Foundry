@@ -320,30 +320,36 @@ test('reopening a session rebuilds the sub-agent cards from the stored run', asy
   // which run it is — without that, the frames of that run arrive carrying an id the client never adopted and
   // every one of them is dropped as somebody else's. It stays exactly one call: a load asks once, and the
   // re-read the client performs when the run moved during the load is a `session.get`, not a second snapshot.
-  assert.deepEqual(client.requests, [
-    'session.get',
-    'plan.get',
-    'subagents.list',
-    /**
-     * Where each child worked, and what it produced.
-     *
-     * Two calls, not one per child: the results are a *session* query (`workspace.results`) and the binding is a
-     * query about one session (`workspaces.get`), so this is one call for the whole panel plus one per card. They
-     * are here in the list rather than tolerated as extra because a restored card has to be able to say "this
-     * child's work is somewhere else and has not been imported" — without them the panel can only show that a
-     * child ran, which is the one thing a person cannot act on.
-     */
-    'workspace.results',
-    'workspaces.get',
-    'workspaces.get',
-    'todos.get',
-    'deliverables.get',
-    'goal.get',
-    // The completion contract is session state in the same sense the goal is: written during a run, still the
-    // verdict afterwards, and read back from the log rather than from a result a reopened window never saw.
-    'completion.current',
-    'run.queue.get',
-  ]);
+  // The views are asked at once, so their order is the network's; what is fixed is the set, and that the live
+  // run is asked last (see `SessionController.readSession`).
+  assert.equal(client.requests.at(-1), 'run.queue.get');
+  assert.deepEqual(
+    [...client.requests].sort(),
+    [
+      'session.get',
+      'plan.get',
+      'subagents.list',
+      /**
+       * Where each child worked, and what it produced.
+       *
+       * Two calls, not one per child: the results are a *session* query (`workspace.results`) and the binding is a
+       * query about one session (`workspaces.get`), so this is one call for the whole panel plus one per card. They
+       * are here in the list rather than tolerated as extra because a restored card has to be able to say "this
+       * child's work is somewhere else and has not been imported" — without them the panel can only show that a
+       * child ran, which is the one thing a person cannot act on.
+       */
+      'workspace.results',
+      'workspaces.get',
+      'workspaces.get',
+      'todos.get',
+      'deliverables.get',
+      'goal.get',
+      // The completion contract is session state in the same sense the goal is: written during a run, still the
+      // verdict afterwards, and read back from the log rather than from a result a reopened window never saw.
+      'completion.current',
+      'run.queue.get',
+    ].sort(),
+  );
   assert.deepEqual(
     session.snapshot.subagents.map((view) => [
       view.id,
