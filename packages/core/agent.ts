@@ -1,4 +1,4 @@
-import type { FailureCode, RunFailure } from '../protocol/failure.ts';
+import { type FailureCode, RunFailure } from '../protocol/failure.ts';
 import type {
   Approver,
   FileChange,
@@ -73,6 +73,20 @@ let messageCounter = 0;
  * still compressed immediately; only the early, threshold-driven attempt waits.
  */
 const COMPACTION_RETRY_ROUNDS = 3;
+
+/** Which of a run's total budgets is spent, said the way the run's error reads; `undefined` while none is. */
+export function runBudgetExhausted(
+  limits: { maxRunRounds: number; maxRunMs: number; maxRunTokens: number },
+  spent: { rounds: number; elapsedMs: number; tokens: number },
+): string | undefined {
+  if (limits.maxRunRounds > 0 && spent.rounds >= limits.maxRunRounds)
+    return `The run reached its budget of ${limits.maxRunRounds} model rounds`;
+  if (limits.maxRunMs > 0 && spent.elapsedMs >= limits.maxRunMs)
+    return `The run reached its budget of ${Math.round(limits.maxRunMs / 60_000)} minutes`;
+  if (limits.maxRunTokens > 0 && spent.tokens >= limits.maxRunTokens)
+    return `The run reached its budget of ${limits.maxRunTokens} model tokens`;
+  return undefined;
+}
 
 export class Agent {
   private options: AgentOptions;
@@ -669,8 +683,21 @@ export class Agent {
          */
         /** The first round that may again start a threshold compaction after one failed (see `COMPACTION_RETRY_ROUNDS`). */
         let compactionRetryRound = 0;
+        const loopStartedAt = Date.now();
         for (let round = 0; ; round++) {
           signal.throwIfAborted();
+          /**
+           * The run's total budget, checked where a round begins: every tool result of the round before is already
+           * recorded, so stopping here leaves nothing half done. This is the backstop the comment above leaves
+           * room for — not a guess at the task's size, but the ceiling an operator set on what one run may spend
+           * when nobody is watching it (`RunDefaults.maxRunRounds`; `0` turns a budget off).
+           */
+          const exhausted = runBudgetExhausted(limits, {
+            rounds: round,
+            elapsedMs: Date.now() - loopStartedAt,
+            tokens: usage.inputTokens + usage.outputTokens,
+          });
+          if (exhausted) throw new RunFailure('run-budget', exhausted);
           /**
            * A policy switched between rounds takes effect here, and the round is rebuilt around it.
            *

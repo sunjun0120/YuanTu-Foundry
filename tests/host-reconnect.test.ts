@@ -441,3 +441,67 @@ test('a database written by a newer build is refused with the version named', as
   assert.match(String(failure), /back up \.yuantu\/sessions\.sqlite/);
   assert.equal(client.status, 'failed');
 });
+
+test('a client that missed the approval frame gets it from the queue answer and can still answer it', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-reconnect-pending-'));
+  const cleanups: (() => Promise<unknown>)[] = [];
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup();
+    await rm(root, { recursive: true, force: true });
+  });
+  let turns = 0;
+  const url = await httpFixture(t, (_body, res) => {
+    if (turns++ === 0) {
+      sendFrames(
+        res,
+        frames('', [
+          { id: 'call-write', name: 'write_file', input: { path: 'later.txt', content: 'x' } },
+        ]),
+      );
+      return;
+    }
+    sendFrames(res, frames('Written.'));
+  });
+  const client = new AgentHostClient({
+    nodePath: process.execPath,
+    hostPath,
+    workspace: root,
+    db: path.join(root, 'sessions.sqlite'),
+    env: {
+      YUANTU_PROTOCOL: 'anthropic',
+      YUANTU_API_KEY: 'reconnect-fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_SESSION_TITLES: '0',
+      YUANTU_BASE_URL: url,
+    },
+  });
+  cleanups.push(() => client.stop());
+  let asked: string | undefined;
+  client.subscribe((event) => {
+    if (event.type === 'approval.required') asked = String(event.data.approvalId);
+  });
+  await client.start();
+  const session = await client.request('session.create', {});
+  const running = client.run(session.id, 'Write the file.');
+  for (let i = 0; i < 400 && !asked; i++) await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(asked, 'the run must reach the approval prompt');
+
+  // What a second window, or a client after a reconnect, asks when it opens the session.
+  const inbox = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(inbox.running, true);
+  assert.deepEqual(
+    inbox.pending?.approvals.map((item) => [item.id, item.approval.toolCall.id]),
+    [[asked, 'call-write']],
+  );
+  assert.deepEqual(inbox.pending?.questions, []);
+
+  await client.request('approval.respond', {
+    approvalId: inbox.pending!.approvals[0]!.id,
+    allow: true,
+  });
+  await running;
+  const after = await client.request('run.queue.get', { sessionId: session.id });
+  assert.equal(after.running, false);
+  assert.equal(after.pending, undefined);
+});

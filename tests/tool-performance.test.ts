@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { ToolRegistry } from '../packages/tools/registry.ts';
+import { compiledSchemaCount, ToolRegistry } from '../packages/tools/registry.ts';
+import { createTools } from '../packages/catalog/index.ts';
 import type { AgentEvent, ModelResponse } from '../packages/protocol/index.ts';
 
 for (const limit of [1, 4]) {
@@ -232,4 +233,46 @@ test('a timeout retry marks result timing incomplete until older attempts actual
     2,
   );
   assert.equal(timing.finishedAttempts, 1, 'the previously emitted result snapshot is immutable');
+});
+
+test('a second tool catalog reuses the compiled schemas instead of compiling them again', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-tool-schemas-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const first = createTools(root, undefined, 'standalone');
+  await first.close();
+  const compiled = compiledSchemaCount();
+  // Every run builds a catalog; the schemas are the tools' own, so the second build compiles nothing.
+  const second = createTools(root, undefined, 'standalone');
+  await second.close();
+  assert.equal(compiledSchemaCount(), compiled);
+});
+
+test('registries sharing compiled schemas keep each tool its own schema, even under one $id', () => {
+  const probe = (field: string) => ({
+    name: 'probe',
+    description: 'Schema probe',
+    inputSchema: {
+      $id: 'urn:yuantu:test:shared-id',
+      type: 'object',
+      properties: { [field]: { type: 'string' } },
+      required: [field],
+      additionalProperties: false,
+    },
+    isConcurrencySafe: () => true,
+    async execute() {
+      return { isError: false, content: 'ok' };
+    },
+  });
+  const left = new ToolRegistry();
+  const right = new ToolRegistry();
+  left.register(probe('left'));
+  // A per-registry Ajv accepted this; a shared one must not start refusing a reused `$id`.
+  right.register(probe('right'));
+  // A call that fails its schema is never run in parallel, so the mode shows which schema each registry applies.
+  const mode = (registry: ToolRegistry, args: Record<string, unknown>) =>
+    registry.executionMode({ id: 'c', name: 'probe', arguments: args });
+  assert.equal(mode(left, { left: 'x' }), 'parallel');
+  assert.equal(mode(left, { right: 'x' }), 'exclusive');
+  assert.equal(mode(right, { right: 'x' }), 'parallel');
+  assert.equal(mode(right, { left: 'x' }), 'exclusive');
 });

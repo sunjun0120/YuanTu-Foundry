@@ -25,6 +25,9 @@ Options:
   --max-output-tokens <n>    Per-request output limit (default: ${RUN_DEFAULTS.maxOutputTokens})
   --request-timeout-ms <n>   Optional total model request timeout; active streams use idle timeout
   --max-parallel-tools <n>   Sibling tool calls running at once, 1 = strictly serial (default: ${RUN_DEFAULTS.maxParallelToolCalls}; only tools that promise it overlap)
+  --max-run-rounds <n>       Model rounds one run may take, 0 = no cap (default: ${RUN_DEFAULTS.maxRunRounds})
+  --max-run-ms <n>           Wall clock one run may take, 0 = no cap (default: ${RUN_DEFAULTS.maxRunMs / 3_600_000}h)
+  --max-run-tokens <n>       Model tokens (input + output, all rounds) one run may use, 0 = no cap (default: ${RUN_DEFAULTS.maxRunTokens})
   --no-subagents             Disable sub-agent delegation (also YUANTU_SUBAGENTS=off)
   --subagent-concurrency <n> Sub-agents running at once, 1-16 (capped at ${SUBAGENT_CEILINGS.maxConcurrency}; default: ${SUBAGENT_DEFAULTS.maxConcurrency})
   --subagent-timeout-ms <n>  Stop a sub-agent after this long with no progress; 0 = no watchdog (default: ${Math.round(SUBAGENT_DEFAULTS.timeoutMs / 1000)}s)

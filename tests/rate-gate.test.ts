@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AdaptiveConcurrency, gatedProvider } from '../packages/providers/rate-gate.ts';
+import {
+  AdaptiveConcurrency,
+  endpointGate,
+  gatedProvider,
+} from '../packages/providers/rate-gate.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 import type { ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
 
@@ -116,4 +120,16 @@ test('a gated provider keeps the provider it wraps and passes requests through t
   assert.ok(provider instanceof Fake);
   const result = await provider.complete({ signal: new AbortController().signal } as ModelRequest);
   assert.equal(result.text, 'fake');
+});
+
+test('runs against one endpoint and key share one gate; another endpoint or key gets its own', () => {
+  const endpoint = { protocol: 'openai', baseUrl: 'https://gate.test/v1', apiKey: 'key-a' };
+  // Two sessions build their runs separately; a 429 seen by one must slow the other.
+  assert.equal(endpointGate({ ...endpoint }), endpointGate({ ...endpoint }));
+  assert.notEqual(endpointGate(endpoint), endpointGate({ ...endpoint, apiKey: 'key-b' }));
+  assert.notEqual(
+    endpointGate(endpoint),
+    endpointGate({ ...endpoint, baseUrl: 'https://other.test/v1' }),
+  );
+  assert.notEqual(endpointGate(endpoint), endpointGate({ ...endpoint, protocol: 'anthropic' }));
 });

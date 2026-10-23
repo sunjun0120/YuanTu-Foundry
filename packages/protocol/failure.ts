@@ -47,7 +47,9 @@ export type FailureCode =
   /** The endpoint answered with something that is not the stream this protocol speaks. */
   | 'no-stream'
   /** A tool could not be cleaned up, so an external process may still be running. */
-  | 'tool-cleanup';
+  | 'tool-cleanup'
+  /** The run reached its own total budget: rounds, wall clock or tokens (`RunDefaults.maxRunRounds`). */
+  | 'run-budget';
 export interface FailureOptions {
   cause?: unknown;
   retryAfterMs?: number;
@@ -151,11 +153,14 @@ export function failureCodeOf(value: unknown): FailureCode | undefined {
  *
  * `limited` is not a softer `failed`: it is the answer to a different question. A conversation the model will
  * not accept and a truncated output both mean the task needs to be smaller — retrying the same run changes
- * nothing. A run that ran out of *rounds* is not on this list, because a run has no round cap to run out of.
+ * nothing. A run that spent its total budget is the same kind of answer: it stopped because of a ceiling the
+ * operator set, not because something broke, and what it did so far is recorded.
  */
 export function statusForFailure(code: FailureCode | undefined): 'limited' | 'failed' | undefined {
   if (!code) return undefined;
-  return code === 'context-window-exceeded' || code === 'output-limit' ? 'limited' : 'failed';
+  return code === 'context-window-exceeded' || code === 'output-limit' || code === 'run-budget'
+    ? 'limited'
+    : 'failed';
 }
 /**
  * The code an unsuccessful HTTP response has, before anything reads its body.

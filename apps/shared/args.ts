@@ -32,6 +32,10 @@ export interface Options {
   maxParallelToolCalls?: number;
   /** How long the Host waits for an answer to `ask_user_question` before settling it unanswered. */
   questionTimeoutMs?: number;
+  /** A run's total budget, `0` = that one off (see `RunDefaults.maxRunRounds`). */
+  maxRunRounds?: number;
+  maxRunMs?: number;
+  maxRunTokens?: number;
   /** Sub-agent delegation is on by default; `--no-subagents` or YUANTU_SUBAGENTS=off disables it. */
   subagents?: boolean;
   /** Maximum sub-agents running at once. Clamped to the runtime ceiling of 3. */
@@ -101,6 +105,9 @@ const NUMBERS = [
   ['YUANTU_REQUEST_TIMEOUT_MS', 'requestTimeoutMs'],
   ['YUANTU_MAX_PARALLEL_TOOLS', 'maxParallelToolCalls'],
   ['YUANTU_QUESTION_TIMEOUT_MS', 'questionTimeoutMs'],
+  ['YUANTU_MAX_RUN_ROUNDS', 'maxRunRounds'],
+  ['YUANTU_MAX_RUN_MS', 'maxRunMs'],
+  ['YUANTU_MAX_RUN_TOKENS', 'maxRunTokens'],
   ['YUANTU_SUBAGENT_CONCURRENCY', 'subagentConcurrency'],
   ['YUANTU_SUBAGENT_TIMEOUT_MS', 'subagentTimeoutMs'],
   ['YUANTU_FORK_TRANSCRIPT_CHARS', 'forkTranscriptChars'],
@@ -223,6 +230,9 @@ export function parseArgs(
     | 'maxModelRetries'
     | 'maxParallelToolCalls'
     | 'questionTimeoutMs'
+    | 'maxRunRounds'
+    | 'maxRunMs'
+    | 'maxRunTokens'
     | 'subagentConcurrency'
     | 'subagentTimeoutMs'
     | 'forkTranscriptChars'
@@ -242,6 +252,9 @@ export function parseArgs(
     '--max-retries': 'maxModelRetries',
     '--max-parallel-tools': 'maxParallelToolCalls',
     '--question-timeout-ms': 'questionTimeoutMs',
+    '--max-run-rounds': 'maxRunRounds',
+    '--max-run-ms': 'maxRunMs',
+    '--max-run-tokens': 'maxRunTokens',
     '--subagent-concurrency': 'subagentConcurrency',
     '--subagent-timeout-ms': 'subagentTimeoutMs',
     '--fork-transcript-chars': 'forkTranscriptChars',

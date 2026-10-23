@@ -33,6 +33,7 @@ const RETRYABLE: Record<FailureCode, boolean> = {
   'empty-response': true,
   unsupported: false,
   'tool-cleanup': false,
+  'run-budget': false,
   'context-window-exceeded': false,
   'output-limit': false,
   'content-filtered': false,

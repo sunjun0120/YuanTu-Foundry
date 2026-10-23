@@ -17,7 +17,7 @@ import { WorkspaceResultsService } from '../../packages/workspaces/results.ts';
 import type { WorkspaceMode } from '../../packages/protocol/workspaces.ts';
 import type { HookRegistry } from '../../packages/tools/hooks.ts';
 import { createProvider, readConfig } from '../../packages/providers/index.ts';
-import { AdaptiveConcurrency, gatedProvider } from '../../packages/providers/rate-gate.ts';
+import { endpointGate, gatedProvider } from '../../packages/providers/rate-gate.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
 import {
   declaredRoutes,
@@ -295,10 +295,11 @@ export async function createAgent(
 ): Promise<Agent> {
   const config = readConfig();
   /**
-   * One rate gate for this runtime's requests to the endpoint, shared by the run and every child it delegates to,
-   * so a 429 slows the whole burst down rather than each run retrying on its own (`../../packages/providers/rate-gate.ts`).
+   * The process's rate gate for this endpoint, shared by this run, every child it delegates to and every other
+   * session's run against the same endpoint and key, so a 429 slows the whole burst down rather than each run
+   * retrying on its own (`../../packages/providers/rate-gate.ts`).
    */
-  const gate = new AdaptiveConcurrency();
+  const gate = endpointGate(config);
   const provider = gatedProvider(createProvider(config), gate);
   const capacityFor = await resolveConnectionCapacities(options, config, signal);
   const capacity = capacityFor(config.model);
@@ -418,6 +419,9 @@ export async function createAgent(
     requestTimeoutMs: options.requestTimeoutMs,
     maxModelRetries: options.maxModelRetries,
     maxParallelToolCalls: options.maxParallelToolCalls,
+    maxRunRounds: options.maxRunRounds,
+    maxRunMs: options.maxRunMs,
+    maxRunTokens: options.maxRunTokens,
     // Opt-in: reads overlap the rest of the model's turn (see `AgentOptions.earlyToolStarts`).
     earlyToolStarts: parseSetting(process.env, 'YUANTU_EARLY_TOOL_START') === true,
     toolResultKeepRecent: options.toolResultKeepRecent,

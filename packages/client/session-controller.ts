@@ -52,6 +52,8 @@ const INCREMENTAL_TAIL = 100;
 import type {
   MessageDelta,
   OtherRun,
+  PendingApproval,
+  PendingQuestion,
   SessionSnapshot,
   StatisticsDelta,
   SubAgentDelta,
@@ -508,25 +510,42 @@ export class SessionController {
     runId: string | null;
     /** Whether the Host answered the question at all; a Host that predates it cannot. */
     answered: boolean;
+    /** What the live run waits on, when the Host says; `null` from a Host that predates the field. */
+    pending: { approvals: PendingApproval[]; questions: PendingQuestion[] } | null;
   }> {
     let reply: unknown;
     try {
       reply = await this.client.request('run.queue.get', { sessionId });
     } catch {
       // No answer at all: nothing is known about a live run from this question, and the session info decides.
-      return { running: false, items: [], runId: null, answered: false };
+      return { running: false, items: [], runId: null, answered: false, pending: null };
     }
     // A reply that is not the answer's shape is no answer: a Host that will not say what it holds cannot be read
     // as holding nothing, and it certainly cannot be read as naming a run.
     if (!reply || typeof reply !== 'object')
-      return { running: false, items: [], runId: null, answered: false };
-    const answer = reply as { running?: unknown; items?: unknown; runId?: unknown };
+      return { running: false, items: [], runId: null, answered: false, pending: null };
+    const answer = reply as {
+      running?: unknown;
+      items?: unknown;
+      runId?: unknown;
+      pending?: { approvals?: unknown; questions?: unknown };
+    };
     const runId = typeof answer.runId === 'string' && answer.runId ? answer.runId : null;
     return {
       running: answer.running === true,
       items: Array.isArray(answer.items) ? (answer.items as QueuedInput[]) : [],
       runId,
       answered: true,
+      pending:
+        answer.pending &&
+        typeof answer.pending === 'object' &&
+        Array.isArray(answer.pending.approvals) &&
+        Array.isArray(answer.pending.questions)
+          ? {
+              approvals: structuredClone(answer.pending.approvals as PendingApproval[]),
+              questions: structuredClone(answer.pending.questions as PendingQuestion[]),
+            }
+          : null,
     };
   }
   private async read(sessionId: string): Promise<void> {
@@ -592,13 +611,23 @@ export class SessionController {
     }
     this.runId = liveRun;
     this.stateRevision++;
-    // A run this client was following in the background is on screen again: what it is waiting on comes with it.
+    /**
+     * What the run is waiting on a person for.
+     *
+     * The Host's answer is the source when it gives one: approvals and questions otherwise reach a client only as
+     * live frames, so a client that opened the session after they were asked — a second window, a reconnect —
+     * used to show a running session with nothing to answer while the wait ran out into a denial. A run this
+     * client was following in the background is the fallback for a Host that predates the field.
+     */
     const followed = this.others.get(sessionId);
     this.others.delete(sessionId);
-    const pending =
-      running && followed && followed.runId === liveRun
-        ? followed
-        : { approvals: [], questions: [] };
+    const pending = !running
+      ? { approvals: [], questions: [] }
+      : snapshot.pending
+        ? snapshot.pending
+        : followed && followed.runId === liveRun
+          ? followed
+          : { approvals: [], questions: [] };
     this.state = {
       queue: structuredClone(snapshot.items),
       compacting: false,

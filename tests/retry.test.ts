@@ -96,6 +96,8 @@ test('what may be re-sent and what may not, one decision per code', () => {
     'tool-cleanup': false,
     // The endpoint's own policy stopped the turn: the same conversation is filtered again.
     'content-filtered': false,
+    // The run's own total budget: re-sending is more of what the budget refused.
+    'run-budget': false,
   };
   for (const [code, yes] of Object.entries(expected))
     assert.equal(retryable(code as FailureCode), yes, code);

@@ -1,4 +1,11 @@
-import type { Message, RunResult, SessionInfo, UserInput } from './index.ts';
+import type {
+  Approval,
+  Message,
+  QuestionRequest,
+  RunResult,
+  SessionInfo,
+  UserInput,
+} from './index.ts';
 import type { PermissionPolicySource } from './permissions.ts';
 import type { InputMode, QueuedInput } from './inputs.ts';
 import type { SkillInfo } from './skills.ts';
@@ -315,7 +322,23 @@ export interface HostMethods {
      * It is optional because a Host that predates the field answers without it — the client then falls back to
      * the `activeRun` of the session info it reads anyway.
      */
-    result: { running: boolean; items: QueuedInput[]; runId?: string };
+    result: {
+      running: boolean;
+      items: QueuedInput[];
+      runId?: string;
+      /**
+       * What the live run is waiting on a person for.
+       *
+       * Approvals and questions reach a client only as live frames, so one that opened the session after they
+       * were asked — a second window, a reconnected Host link — saw the run as running with nothing to answer, and
+       * the wait ran out into a denial or a timeout. Present only while a run holds the session; a Host that
+       * predates the field omits it.
+       */
+      pending?: {
+        approvals: { id: string; approval: Approval }[];
+        questions: { id: string; request: QuestionRequest }[];
+      };
+    };
   };
   'run.queue.clear': { params: { sessionId: string }; result: { cleared: true } };
   'host.info': { params: { protocolVersions?: number[]; authToken?: string }; result: HostInfo };

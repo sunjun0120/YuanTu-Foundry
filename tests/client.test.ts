@@ -1464,7 +1464,12 @@ function scriptedHost(
     /** What `session.get` says the session's active run is: the only identity an old Host offers. */
     activeRun?: string | null | ((call: number) => string | null);
     /** Answers `run.queue.get`, per call, so a test can change the answer mid-read. */
-    inbox?: (call: number) => { running: boolean; items: unknown[]; runId?: string };
+    inbox?: (call: number) => {
+      running: boolean;
+      items: unknown[];
+      runId?: string;
+      pending?: { approvals: unknown[]; questions: unknown[] };
+    };
     /** Methods this Host does not have, as one that predates them answers. */
     missing?: string[];
     /** Hold one request open, so a test can make a second read overtake the first. */
@@ -1518,9 +1523,12 @@ function scriptedHost(
       if (method === 'run.queue.get') {
         const answer = options.inbox?.(call) ?? { running: false, items: [] };
         // An old Host answers the queue question without naming the run it holds: the field simply is not there.
-        return answer.runId === undefined
-          ? { running: answer.running, items: answer.items }
-          : { running: answer.running, items: answer.items, runId: answer.runId };
+        return {
+          running: answer.running,
+          items: answer.items,
+          ...(answer.runId === undefined ? {} : { runId: answer.runId }),
+          ...(answer.pending === undefined ? {} : { pending: answer.pending }),
+        };
       }
       if (method === 'plan.get') return null;
       if (method === 'subagents.list') return [];
@@ -1929,4 +1937,39 @@ test('a session read while a run is live restores the run, its queue and its fra
     ['first', 'second', 'third'],
     'the frames of the run it adopted are in the transcript',
   );
+});
+
+test('a session opened mid-run shows the approvals and questions its run is already waiting on', async () => {
+  const approval = {
+    kind: 'command',
+    summary: 'run tests',
+    toolCall: { id: 'call-1', name: 'run_command', arguments: { command: 'npm test' } },
+  };
+  const request = { callId: 'call-2', questions: [{ question: 'Which branch?', options: [] }] };
+  // This client never saw `approval.required` or `question.required`: they were asked before it opened the session.
+  const host = scriptedHost({
+    activeRun: 'run-A',
+    inbox: () => ({
+      running: true,
+      items: [],
+      runId: 'run-A',
+      pending: { approvals: [{ id: 'ap-1', approval }], questions: [{ id: 'q-1', request }] },
+    }),
+  });
+  const controller = new SessionController(host.client);
+  await controller.load('session-1');
+  assert.deepEqual(
+    controller.snapshot.approvals.map((item) => item.id),
+    ['ap-1'],
+  );
+  assert.deepEqual(
+    controller.snapshot.questions.map((item) => item.id),
+    ['q-1'],
+  );
+  // The restored entries settle the way live ones do: the call finishing takes both cards away.
+  host.emit({
+    type: 'tool.finished',
+    data: { callId: 'call-1', result: { isError: false, content: '' } },
+  });
+  assert.deepEqual(controller.snapshot.approvals, []);
 });

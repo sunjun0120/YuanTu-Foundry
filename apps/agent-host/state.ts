@@ -9,6 +9,7 @@ import type {
   ApprovalDecisionSource,
   Approver,
   QuestionOutcome,
+  QuestionRequest,
   RunResult,
 } from '../../packages/protocol/index.ts';
 import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
@@ -50,12 +51,18 @@ export interface ManualOperation {
 export interface PendingApproval {
   /** The session whose run is waiting, so a policy change re-decides only that session's approvals. */
   sessionId: string;
+  /** The run that asked, so a client opening the session mid-run is shown only that run's approvals. */
+  runId: string;
   approval: Approval;
   resolve: (allow: boolean) => void;
 }
 
 /** A question the run is waiting on, with the timer that settles it unanswered. */
 export interface PendingQuestion {
+  /** Who asked and what, so a client that opens the session mid-run can show the question (`run.queue.get`). */
+  sessionId: string;
+  runId: string;
+  request: QuestionRequest;
   resolve: (outcome: QuestionOutcome) => void;
   timer: ReturnType<typeof setTimeout>;
 }

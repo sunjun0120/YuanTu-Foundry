@@ -60,6 +60,44 @@ export type {
   BeforeToolOutcome,
   PostExecuteOutcome,
 } from '../protocol/tool-hooks.ts';
+/**
+ * One schema compiler for the process, and the validators it has already built.
+ *
+ * Every run builds a fresh registry (`createTools`), and each registry used to own an Ajv instance and compile all
+ * of its tools' schemas again: about 130ms of the ~170ms a 63-tool catalog took, paid on every message the user
+ * sent. The schemas are the same every time — they are part of the tool's definition, not of the run — so a
+ * validator is reused across registries, keyed by the schema's JSON text so a factory that builds a fresh object
+ * per run still hits. Validation is synchronous and `errors` is read right after the call, so one validator
+ * shared between registries never mixes two calls' errors.
+ *
+ * `addUsedSchema: false` keeps a schema's `$id` out of the shared instance, so two tools from different servers
+ * that happen to use one `$id` cannot collide across registries. The map is bounded because MCP servers bring
+ * schemas this process has never seen; an evicted schema is also removed from Ajv's own cache.
+ */
+const schemaValidator = new Ajv({ allErrors: true, strict: true, addUsedSchema: false });
+const compiledSchemas = new Map<
+  string,
+  { schema: Tool['inputSchema']; validate: ValidateFunction }
+>();
+const MAX_COMPILED_SCHEMAS = 1024;
+function compileSchema(schema: Tool['inputSchema']): ValidateFunction {
+  const key = JSON.stringify(schema);
+  const cached = compiledSchemas.get(key);
+  if (cached) return cached.validate;
+  const validate = schemaValidator.compile(schema);
+  if (compiledSchemas.size >= MAX_COMPILED_SCHEMAS) {
+    const [oldestKey, oldest] = compiledSchemas.entries().next().value!;
+    compiledSchemas.delete(oldestKey);
+    schemaValidator.removeSchema(oldest.schema);
+  }
+  compiledSchemas.set(key, { schema, validate });
+  return validate;
+}
+/** How many distinct schemas the process has compiled and kept; for tests that pin the cache's behaviour. */
+export function compiledSchemaCount(): number {
+  return compiledSchemas.size;
+}
+
 export class ToolRegistry {
   /**
    * The jobs this registry's session owns.
@@ -180,7 +218,6 @@ export class ToolRegistry {
     if (results.some((result) => result.status === 'rejected') || hookFailures.length)
       throw new Error('Tool resource cleanup failed');
   }
-  private ajv = new Ajv({ allErrors: true, strict: true });
   /**
    * Compiles a tool into an entry, refusing a `isConcurrencySafe` that is not a function.
    *
@@ -193,7 +230,7 @@ export class ToolRegistry {
   private compile(tool: Tool): { tool: Tool; validate: ValidateFunction } {
     if (tool.isConcurrencySafe !== undefined && typeof tool.isConcurrencySafe !== 'function')
       throw new Error(`Tool ${tool.name}: isConcurrencySafe must be a function when declared`);
-    return { tool, validate: this.ajv.compile(tool.inputSchema) };
+    return { tool, validate: compileSchema(tool.inputSchema) };
   }
   register(tool: Tool): Disposer {
     if (this.entries.has(tool.name)) throw new Error(`Duplicate tool: ${tool.name}`);
@@ -563,7 +600,7 @@ export class ToolRegistry {
         return materialize(
           errorResult(
             invalidArgumentsMessage(
-              this.ajv.errorsText(entry.validate.errors),
+              schemaValidator.errorsText(entry.validate.errors),
               entry.tool.inputSchema.properties,
               additional === true,
             ),
