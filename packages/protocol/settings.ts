@@ -81,6 +81,12 @@ export interface RunDefaults {
    * does not meet them. The token count is cumulative, so it grows with rounds × context: it is the cap on what
    * a runaway run can bill, not a measure of work done. A run that reaches one ends `limited`, at a round
    * boundary, with every finished tool result already recorded.
+   *
+   * Rounds are off by default (`0`), and that is the same decision the loop's comment records: a default of 256
+   * rounds used to cut long migrations off half-way, which is why it was removed, and a long task that keeps
+   * changing the project is exactly the run a round count gets wrong. The wall clock and the tokens bound a
+   * runaway without guessing how many steps a task needs; the round count stays available to an operator who wants
+   * one (`tests/failure-codes.test.ts` holds the 300-round run that must still finish).
    */
   maxRunRounds: number;
   maxRunMs: number;
@@ -179,7 +185,7 @@ export const RUN_DEFAULTS = Object.freeze({
    */
   maxModelRetries: 5,
   questionTimeoutMs: 120_000,
-  maxRunRounds: 200,
+  maxRunRounds: 0,
   maxRunMs: 2 * 60 * 60 * 1000,
   maxRunTokens: 20_000_000,
   /**
@@ -336,7 +342,7 @@ export const ENVIRONMENT = {
   YUANTU_MAX_RUN_ROUNDS: {
     kind: 'number',
     range: [0, 100_000],
-    description: '单次运行最多的模型轮次（0 = 不限；默认 200）',
+    description: '单次运行最多的模型轮次（0 = 不限；默认不限，失控由时长与 token 上限兜底）',
   },
   YUANTU_MAX_RUN_MS: {
     kind: 'number',

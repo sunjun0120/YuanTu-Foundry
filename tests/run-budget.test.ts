@@ -13,7 +13,11 @@ import type { AgentOptions } from '../packages/core/agent-options.ts';
 import type { ModelResponse } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';
 
-async function loopingRun(t: test.TestContext, budget: Partial<AgentOptions>) {
+async function loopingRun(
+  t: test.TestContext,
+  budget: Partial<AgentOptions>,
+  shape: { tokensPerRound?: number } = {},
+) {
   const { store, session } = await storeFixture(t, 'yuantu-run-budget-');
   const tools = new ToolRegistry();
   let executed = 0;
@@ -36,11 +40,12 @@ async function loopingRun(t: test.TestContext, budget: Partial<AgentOptions>) {
     provider: {
       async complete(): Promise<ModelResponse> {
         requests++;
+        const input = (shape.tokensPerRound ?? 1_010) - 10;
         return {
           text: '',
           finishReason: 'tool_calls',
           toolCalls: [{ id: `call-${requests}`, name: 'probe', arguments: {} }],
-          usage: { inputTokens: 1_000, outputTokens: 10 },
+          usage: { inputTokens: input, outputTokens: 10 },
         };
       },
     },
@@ -68,7 +73,7 @@ test('the token budget counts every round, input and output', async (t) => {
 test('budgets default on, generous, and zero turns one off', () => {
   assert.deepEqual(
     [RUN_DEFAULTS.maxRunRounds, RUN_DEFAULTS.maxRunMs, RUN_DEFAULTS.maxRunTokens],
-    [200, 7_200_000, 20_000_000],
+    [0, 7_200_000, 20_000_000],
   );
   const off = resolveRunLimits({ maxRunRounds: 0, maxRunMs: 0, maxRunTokens: 0 });
   assert.equal(runBudgetExhausted(off, { rounds: 1e6, elapsedMs: 1e9, tokens: 1e12 }), undefined);
@@ -78,4 +83,14 @@ test('budgets default on, generous, and zero turns one off', () => {
     /120 minutes/,
   );
   assert.throws(() => resolveRunLimits({ maxRunRounds: -1 }), /Invalid maxRunRounds/);
+});
+
+test('with the default budget, a runaway run is stopped by its tokens rather than a round count', async (t) => {
+  // The other half — a long run that keeps changing the project is not cut by rounds — is the 300-round run in
+  // `tests/failure-codes.test.ts`, which runs with these same defaults.
+  // A run that bills 6M tokens a round meets the default 20M budget at the start of its fourth round.
+  const runaway = await loopingRun(t, {}, { tokensPerRound: 6_000_000 });
+  assert.equal(runaway.result.status, 'limited', runaway.result.error);
+  assert.match(runaway.result.error ?? '', /20000000 model tokens/);
+  assert.equal(runaway.requests, 4);
 });
