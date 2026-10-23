@@ -218,7 +218,7 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 
 - [x] 阶段 0：`fetch-dataset.py`、`select-subset.mjs`、`subset-v1.json`、`repos.mjs` + 离线测试
 - [x] 阶段 1：`schema.ts`、`manifest.example.json`、`prompt.mjs`、`adapter.mjs`、`run.mjs`、`predictions.mjs` + 离线测试
-- [ ] 阶段 2：`swe-bench-eval.yml`、`ingest.mjs`、`report.mjs` + 离线测试；`benchmarks/swe-bench/README.md`
+- [x] 阶段 2 工装：`swe-bench-eval.yml`、`ingest.mjs`、`report.mjs` + 离线测试；`benchmarks/swe-bench/README.md`（真实验收另列）
 - [ ] 向用户确认 §3.2 四项，给出冒烟成本估算
 - [ ] 冒烟批次（两个版本 × 5 题）报告
 - [ ] 用户批准后：全量批次（两个版本 × 50 题）对比报告
@@ -244,4 +244,13 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 - 独立只读审查发现并修复补丁通用脱敏失真、宿主 Git clean filter 执行入口、官方证据绑定不足；另补全共享组件、平台/Node 和实际依赖内容哈希。补丁保留原字节，显式凭据命中即拒绝写出；日志继续脱敏。两个版本一致禁用辅助模型标题，防止其请求绕过解题统计。
 - 生成端 9 项离线测试通过；与阶段 2 工装共同进行的最终 `npm run check` 通过：2982 passed、40 skipped、0 failed；构建和 compiled-client 冒烟 3/3 通过。完整 SWE 文件 16/16，通过时间约 37 秒。前两次完整检查的进程清理异常与既有收件箱竞态均保留失败日志，未将失败当通过。
 - 收件箱用例原来只等子会话登记，没有等子代理进入预定挂起状态，导致测试更正偶尔走新 turn 路径。仅修复两处测试前提，断言和超时不变，独立提交 `babd45f`；15/15 回归通过。
-- 本阶段实现提交哈希在阶段 2 记录时补入。真实冒烟已获授权，验收报告尚待实际生成及官方 Docker 判定；当前无通过率结论。
+- 本阶段实现提交 `637a1c9`。真实冒烟已获授权，验收报告尚待实际生成及官方 Docker 判定；当前无通过率结论。
+
+### 2026-10-23：阶段 2 离线工装
+
+- 固定官方 `swebench==5.0.2`，下载并核对官方 wheel SHA-256，使用临时最小 Python CLI 环境实际执行 `swebench eval --help`。该版没有旧 `cache_level/clean` 参数，日志为 `logs/run_evaluation`，汇总为 `<model>.<run_id>.json`，因此新增 Node 验收编排器逐题 `-j 1` 调用官方 CLI、逐题清理未使用镜像、保留各题官方汇总原件并合并 `results.json`。
+- 手动工作流只在专用 GitHub-hosted Linux runner 上验收现成预测，不接收模型密钥，不进入日常 CI。数据源 revision 与每题记录哈希和生成端完全一致。首次手动触发要求工作流先位于默认分支；发布到共享 `main` 仍须取得用户对具体提交的批准。
+- 导入绑定预测、子集、revision、逐题官方汇总原件/hash、报告分类及实际 `patch.diff`，拒绝空预测的 resolved/unresolved。报告保留 error 分母、Wilson 区间、配对表、精确 McNemar、指标分布与每题证据；配置不同拒绝比较，保存记录可逐字节重生成。
+- 阶段 2 专属 7 项断言/子用例及生成端 9 项共 16/16 通过；完整门禁使用最终待提交代码树统一验证，`npm run check` 退出 0（2982 passed、40 skipped、0 failed，构建与客户端冒烟 3/3 通过）。分阶段提交仅改变 index/历史，未在两次提交之间改动已验证的实现。
+- 工装提交哈希在真实冒烟记录中补入。模型冒烟已开始：先旧版 5 题，再新版 5 题，全部串行；未运行全量。官方 Docker 和真实通过率仍待实际验收，不能用离线测试代替。
+- 临时 Python 帮助环境与 wheel 解包目录已清理，保留实际 `--help`、失败/通过检查日志及批次证据。工装完成、真实解题结果和排行榜可比性分别报告。

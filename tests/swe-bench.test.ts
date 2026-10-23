@@ -606,3 +606,318 @@ test('SWE comparison identity includes shared implementation and actual runtime 
     ],
   );
 });
+
+test('SWE statistical reports use Wilson intervals and exact paired McNemar tests', async () => {
+  const { wilson, exactMcNemar, summarize, compareBatches } = await moduleFor('report.mjs');
+  assert.equal(typeof wilson, 'function');
+  assert.ok(Math.abs(wilson(0, 50).upper - 0.0713475991) < 1e-8);
+  assert.equal(wilson(0, 50).lower, 0);
+  assert.ok(Math.abs(wilson(25, 50).lower - 0.3664451432) < 1e-8);
+  assert.equal(wilson(0, 0), null);
+  for (const [b, c, p] of [
+    [0, 0, 1],
+    [1, 0, 1],
+    [5, 0, 0.0625],
+    [8, 0, 0.0078125],
+    [1, 9, 0.021484375],
+  ])
+    assert.equal(exactMcNemar(b, c), p);
+  const comparison = {
+    model: 'fixture',
+    promptCache: 'auto',
+    subsetHash: 'a',
+    instances: ['o__r-1', 'o__r-2', 'o__r-3', 'o__r-4'],
+  };
+  const manifest = { comparison, configHash: 'same', instances: comparison.instances };
+  const make = (resolved: number[]) =>
+    comparison.instances.map((id, i) => ({
+      instanceId: id,
+      configHash: 'same',
+      runtime: 'a',
+      status: 'generated',
+      failureClass: null,
+      rounds: i + 1,
+      tokens: { inputTokens: 20, outputTokens: 10, complete: true },
+      durationMs: 100 + i,
+      patch: { bytes: i ? 3 : 0, files: i ? 1 : 0, changedTests: i === 1 },
+      evaluation: { status: resolved.includes(i) ? 'resolved' : i === 3 ? 'error' : 'unresolved' },
+    }));
+  const a = make([0, 1]),
+    b = make([0, 2]);
+  const paired = compareBatches({ manifest, rows: a }, { manifest, rows: b });
+  assert.deepEqual(paired.table, { bothResolved: 1, onlyA: 1, onlyB: 1, neitherResolved: 1 });
+  assert.equal(paired.pValue, 1);
+  const summary = summarize(a, manifest);
+  assert.equal(summary.total, 4);
+  assert.equal(summary.resolved, 2);
+  assert.equal(summary.error, 1);
+  assert.equal(summary.graded, 3);
+  assert.equal(summary.passRate, 0.5);
+  assert.equal(summary.emptyPatches, 1);
+  assert.equal(summary.changedTests, 1);
+  assert.equal(summary.rounds.median, 2.5);
+  assert.throws(
+    () =>
+      compareBatches(
+        { manifest, rows: a },
+        { manifest: { ...manifest, configHash: 'different' }, rows: b },
+      ),
+    /config/i,
+  );
+  assert.throws(() => summarize([a[0], a[0]], manifest), /instance/i);
+  assert.throws(() => summarize(a.slice(1), manifest), /instance/i);
+});
+
+test('SWE ingestion binds official evidence to exact predictions and keeps ungraded errors in denominator', async (t) => {
+  const { ingestBatch } = await moduleFor('ingest.mjs');
+  const { hash } = await moduleFor('../coding-evaluation/materialize.mjs');
+  assert.equal(typeof ingestBatch, 'function');
+  const root = await tempRoot(t, 'yuantu-swe-ingest-');
+  const batch = path.join(root, 'batch'),
+    evaluation = path.join(root, 'evaluation');
+  await mkdir(batch);
+  await mkdir(evaluation);
+  const ids = ['fixture__source-1', 'fixture__source-2', 'fixture__source-3'];
+  const modelName = 'yuantu@aaaaaaa+fixture';
+  const predictions = ids.map((id) => ({
+    instance_id: id,
+    model_name_or_path: modelName,
+    model_patch: 'patch',
+  }));
+  const predictionsBytes = predictions.map((r) => JSON.stringify(r)).join('\n') + '\n';
+  await writeFile(path.join(batch, 'predictions.jsonl'), predictionsBytes);
+  const manifest = {
+    instances: ids,
+    configHash: 'config',
+    subset: { sha256: 'subset' },
+    comparison: { datasetRevision: 'revision' },
+  };
+  await writeFile(path.join(batch, 'manifest.resolved.json'), JSON.stringify(manifest));
+  await writeFile(
+    path.join(batch, 'results.jsonl'),
+    ids
+      .map((id) => JSON.stringify({ instanceId: id, configHash: 'config', patch: { bytes: 5 } }))
+      .join('\n') + '\n',
+  );
+  const source = {
+    predictionsSha256: hash(predictionsBytes),
+    subsetHash: 'subset',
+    datasetRevision: 'revision',
+    runId: 'fixture',
+    evaluatorVersion: '5.0.2',
+    instanceIds: ids,
+  };
+  await writeFile(path.join(evaluation, 'evaluation-source.json'), JSON.stringify(source));
+  await writeFile(
+    path.join(evaluation, 'results.json'),
+    JSON.stringify({
+      resolved_ids: [ids[0]],
+      unresolved_ids: [ids[1]],
+      error_ids: [ids[2]],
+      empty_patch_ids: [],
+      failure_reasons: { [ids[2]!]: 'container startup failure' },
+    }),
+  );
+  for (const [i, resolved] of [
+    [0, true],
+    [1, false],
+  ] as const) {
+    const dir = path.join(evaluation, 'logs/run_evaluation/fixture', modelName, ids[i]!);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'report.json'), JSON.stringify({ [ids[i]!]: { resolved } }));
+    await writeFile(path.join(dir, 'patch.diff'), 'patch');
+  }
+  const officialSummaries: {
+    instanceId: string;
+    path: string;
+    sha256: string;
+    exitCode: number;
+  }[] = [];
+  for (const [i, id] of ids.entries()) {
+    const file = path.join('parts', id, 'official.json');
+    const bytes = JSON.stringify({
+      resolved_ids: i === 0 ? [id] : [],
+      unresolved_ids: i === 1 ? [id] : [],
+      error_ids: i === 2 ? [id] : [],
+      empty_patch_ids: [],
+    });
+    await mkdir(path.dirname(path.join(evaluation, file)), { recursive: true });
+    await writeFile(path.join(evaluation, file), bytes);
+    officialSummaries.push({ instanceId: id, path: file, sha256: hash(bytes), exitCode: 0 });
+  }
+  const baselineSummary = JSON.parse(await readFile(path.join(evaluation, 'results.json'), 'utf8'));
+  baselineSummary.official_summaries = officialSummaries;
+  await writeFile(path.join(evaluation, 'results.json'), JSON.stringify(baselineSummary));
+  const rows = await ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation });
+  assert.deepEqual(
+    rows.map((r: any) => r.evaluation.status),
+    ['resolved', 'unresolved', 'error'],
+  );
+  assert.equal(rows[2].evaluation.reason, 'container startup failure');
+  assert.equal(rows[0].evaluation.reportSha256.length, 64);
+  const original = await readFile(path.join(batch, 'results.evaluated.jsonl'), 'utf8');
+  await ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation });
+  assert.equal(await readFile(path.join(batch, 'results.evaluated.jsonl'), 'utf8'), original);
+  await t.test('rejects a modified official summary original', async () => {
+    const file = path.join(evaluation, officialSummaries[0]!.path);
+    const originalBytes = await readFile(file);
+    await writeFile(file, '{}');
+    try {
+      await assert.rejects(
+        ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation }),
+        /summary|hash/i,
+      );
+    } finally {
+      await writeFile(file, originalBytes);
+    }
+  });
+  await t.test('rejects a report for a different patch', async () => {
+    const file = path.join(
+      evaluation,
+      'logs/run_evaluation/fixture',
+      modelName,
+      ids[0]!,
+      'patch.diff',
+    );
+    await writeFile(file, 'different patch');
+    try {
+      await assert.rejects(
+        ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation }),
+        /patch/i,
+      );
+    } finally {
+      await writeFile(file, 'patch');
+    }
+  });
+  await t.test('an empty prediction cannot be graded resolved', async () => {
+    const modified = predictions.map((p, i) => ({ ...p, model_patch: i ? p.model_patch : '' }));
+    const bytes = modified.map((p) => JSON.stringify(p)).join('\n') + '\n';
+    await writeFile(path.join(batch, 'predictions.jsonl'), bytes);
+    await writeFile(
+      path.join(evaluation, 'evaluation-source.json'),
+      JSON.stringify({ ...source, predictionsSha256: hash(bytes) }),
+    );
+    try {
+      await assert.rejects(
+        ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation }),
+        /empty|patch/i,
+      );
+    } finally {
+      await writeFile(path.join(batch, 'predictions.jsonl'), predictionsBytes);
+      await writeFile(path.join(evaluation, 'evaluation-source.json'), JSON.stringify(source));
+    }
+  });
+  await writeFile(
+    path.join(evaluation, 'evaluation-source.json'),
+    JSON.stringify({ ...source, predictionsSha256: 'wrong' }),
+  );
+  await assert.rejects(
+    ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation }),
+    /prediction/i,
+  );
+  await writeFile(path.join(evaluation, 'evaluation-source.json'), JSON.stringify(source));
+  await writeFile(
+    path.join(evaluation, 'results.json'),
+    JSON.stringify({
+      resolved_ids: [ids[0]],
+      unresolved_ids: [ids[0]],
+      error_ids: [],
+      empty_patch_ids: [],
+    }),
+  );
+  await assert.rejects(
+    ingestBatch({ batchDirectory: batch, evaluationDirectory: evaluation }),
+    /conflict/i,
+  );
+});
+
+test('SWE evaluator invocation matches pinned v5 CLI and rejects unbound dataset rows', async () => {
+  const { evaluationArguments, validateEvaluationInputs } = await moduleFor('evaluate.mjs');
+  assert.equal(typeof evaluationArguments, 'function');
+  assert.deepEqual(
+    evaluationArguments({
+      dataset: '/data.jsonl',
+      predictions: '/predictions.jsonl',
+      runId: 'fixture',
+      instanceId: 'o__r-1',
+      reportDirectory: '/reports',
+    }),
+    [
+      'eval',
+      '/data.jsonl',
+      '-p',
+      '/predictions.jsonl',
+      '--run-id',
+      'fixture',
+      '-i',
+      'o__r-1',
+      '-j',
+      '1',
+      '--report-dir',
+      '/reports',
+    ],
+  );
+  const { recordHash } = await moduleFor('select-subset.mjs');
+  const record = fakeRecords()[0]!;
+  const subset = {
+    revision: 'a'.repeat(40),
+    instances: [{ instance_id: record.instance_id, sha256: recordHash(record) }],
+  };
+  const preds = [
+    { instance_id: record.instance_id, model_name_or_path: 'fixture', model_patch: 'patch' },
+  ];
+  assert.equal(validateEvaluationInputs(preds, [record], subset).length, 1);
+  assert.throws(
+    () => validateEvaluationInputs([...preds, ...preds], [record], subset),
+    /duplicate/i,
+  );
+  assert.throws(
+    () => validateEvaluationInputs(preds, [{ ...record, problem_statement: 'changed' }], subset),
+    /hash/i,
+  );
+  assert.throws(
+    () => validateEvaluationInputs([{ ...preds[0], model_patch: undefined }], [record], subset),
+    /patch/i,
+  );
+});
+
+test('SWE saved reports regenerate byte-identically and estimate token thresholds from observations', async (t) => {
+  const { writeReport } = await moduleFor('report.mjs');
+  const root = await tempRoot(t, 'yuantu-swe-report-');
+  const manifest = {
+    batchId: 'fixture',
+    configHash: 'same',
+    instances: ['o__r-1', 'o__r-2'],
+    comparison: { model: 'fixture', promptCache: 'auto' },
+  };
+  const rows = manifest.instances.map((id, i) => ({
+    instanceId: id,
+    runtime: 'a',
+    configHash: 'same',
+    live: true,
+    rounds: i + 1,
+    durationMs: 100,
+    tokens: { inputTokens: 20, outputTokens: 10, cachedInputTokens: 0, complete: true },
+    patch: { bytes: 10, changedTests: false },
+    evaluation: {
+      status: i ? 'unresolved' : 'resolved',
+      reason: null,
+      report: 'logs/report.json',
+      reportSha256: 'hash',
+    },
+  }));
+  await writeFile(path.join(root, 'manifest.resolved.json'), JSON.stringify(manifest));
+  await writeFile(
+    path.join(root, 'results.evaluated.jsonl'),
+    rows.map((r) => JSON.stringify(r)).join('\n') + '\n',
+  );
+  const first = await writeReport({ batchDirectory: root });
+  const report = await readFile(path.join(root, 'report.md'), 'utf8');
+  const summary = await readFile(path.join(root, 'summary.json'), 'utf8');
+  assert.equal(first.summary.suggestedMaxKnownTokensPerSample, 90);
+  await writeReport({ batchDirectory: root });
+  assert.equal(await readFile(path.join(root, 'report.md'), 'utf8'), report);
+  assert.equal(await readFile(path.join(root, 'summary.json'), 'utf8'), summary);
+  assert.ok(report.includes('logs/report.json'));
+  assert.ok(report.includes('no-commands'));
+});

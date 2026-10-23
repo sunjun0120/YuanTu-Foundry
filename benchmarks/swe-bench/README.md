@@ -2,7 +2,7 @@
 
 本目录把 YuanTu Agent Host 的补丁交给官方 SWE-bench 验收器。冻结子集包含 50 题，另有 5 题冒烟集；它不是排行榜成绩，也不表示真实模型已经通过。
 
-当前完成数据准备与 Host 生成工装，并通过本机环回假模型链路验证；没有真实模型成绩，官方验收端尚待实现。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL。
+当前完成数据准备、Host 生成工装、官方验收工作流与报告，并通过本机环回假模型和手写官方结果验证；尚无真实模型通过率或 Docker 验收结论。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL。
 
 ## 冻结的数据
 
@@ -56,3 +56,29 @@ live 必须先获用户对模型、端点、冒烟预算、验收位置和缓存
 批次目录包含 `manifest.resolved.json`（端点 URL 置 null）、`frozen/inputs.json`、`results.jsonl`、官方格式的 `predictions.jsonl`、`batch.json`、`work/<id>/` 和 `evidence/<id>/`。证据包含权限策略与应答器源码哈希、补丁、事件、取消与清理确认。SQLite 与私有 HOME 只保留本地，不上传或随报告交付。输出目录不可复用；错误批次保留证据，用新 ID 运行。
 
 比较身份同时绑定提示模板、全部生成工装及复用组件的源码、Node/平台/架构、子集和实际复制的依赖内容回执。批次 ID、输入文件所在路径、批准尝试次数和运行时版本不参与解题配置比较；其他生成设置必须一致。
+
+## 官方验收与报告
+
+只在手动触发的 [swe-bench-eval.yml](../../.github/workflows/swe-bench-eval.yml) 中执行官方 Docker 验收，不进入日常 CI。本地 [evaluate.mjs](evaluate.mjs) 入口会拒绝非 GitHub-hosted Linux 环境。
+
+工作流输入 `predictions` 为仓库内预测文件路径；若设置 `artifact_run_id`，则它是该运行中的 artifact 名，内部须包含 `predictions.jsonl`。`run_id` 是名称前缀，实际附加 Actions run ID 和 attempt，防止官方按旧 run ID 复用历史判定。工作流不接收模型密钥，只验收既有补丁。
+
+首次启用手动工作流需要文件位于默认分支，这是 [GitHub 的触发规则](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。将工装发布到共享默认分支须先确认具体提交；仅在功能分支上写完工作流不代表已经可以触发官方验收。
+
+固定官方 `swebench==5.0.2` 和下载库 `datasets==5.1.0`，按子集的固定 revision 下载数据并逐题核验记录哈希。该发行版实际 `swebench eval --help` 没有旧版 `--cache_level/--clean`；因此使用 `-j 1` 逐题验收，并在题目之间清理未使用镜像。镜像清理仅发生在本任务专用的临时 runner。runner 磁盘或 Docker 问题保留为 error，不能据此判模型失败。
+
+5.0.2 的实际日志为 `logs/run_evaluation/<run_id>/<model>/<instance>/`，汇总文件名为 `<model>.<run_id>.json`，与当前部分在线文档不同。[evaluate.mjs](evaluate.mjs) 保留每题官方汇总原件，另合并 `results.json`，同时记录预测哈希、数据 revision、子集哈希、CLI 帮助哈希及全部原件哈希。上传的 artifact 只含官方验收目录，不含 Host 数据库或私有 HOME。
+
+下载 artifact 后，将其根目录作为 `--evaluation`：
+
+```powershell
+node benchmarks/swe-bench/ingest.mjs --batch=.scratch/swe-bench/<batchId> --evaluation=.scratch/swe-bench/<batchId>/evaluation
+node benchmarks/swe-bench/report.mjs --batch=.scratch/swe-bench/<batchId>
+node benchmarks/swe-bench/report.mjs --batch=.scratch/swe-bench/<beforeBatch> --compare=.scratch/swe-bench/<afterBatch> --out=.scratch/swe-bench/<comparisonId>
+```
+
+导入核对预测、子集、revision、每题官方汇总原件哈希与分类；已判定题还须核对官方 `patch.diff` 与预测逐字节一致，空预测不能拥有 resolved/unresolved 判定。写入 `results.evaluated.jsonl`，保留原生成记录。报告可离线反复生成，全部计划题保留在分母，`resolved + unresolved` 单列为实际判定数，error 单列原因。
+
+报告含 Wilson 95% 区间、轮数/token/耗时的中位数及最小/最大值、配对 2×2 表与精确 McNemar 检验。不同模型、缓存模式、子集或其他生成配置拒绝配对。n=50 下差异小于约 10 个百分点通常不显著；每版本仅一次，没有重复采样。
+
+本机阶段是 no-commands，只用于两版本对比，不与排行榜直接比较。冒烟后以实际 token 更新 50 题 × 2 版本成本估算和观察阈值建议；没有单价则不编造金额。是否运行全量，以及后续容器内生成，分别需要确认。

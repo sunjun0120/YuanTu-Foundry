@@ -1,0 +1,90 @@
+name: SWE-bench official evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      predictions:
+        description: 'Repository path to predictions.jsonl, or artifact name when artifact_run_id is set'
+        required: true
+        type: string
+      artifact_run_id:
+        description: 'Optional source Actions run id for a predictions artifact (must contain predictions.jsonl)'
+        required: false
+        type: string
+      run_id:
+        description: 'Evaluation name prefix; the Actions run id and attempt are appended to prevent stale verdict reuse'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      EVALUATION_RUN_ID: ${{ inputs.run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+      HF_HOME: ${{ github.workspace }}/.scratch/swe-bench/hf-cache
+      HF_HUB_DISABLE_XET: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk on the disposable runner
+        shell: bash
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          docker image prune --all --force
+          df -h /
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned official evaluator
+        run: python -m pip install swebench==5.0.2 datasets==5.1.0
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.artifact_run_id != '' }}
+        with:
+          name: ${{ inputs.predictions }}
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: .scratch/swe-incoming
+      - name: Resolve predictions and pin dataset revision
+        id: inputs
+        env:
+          INPUT_PREDICTIONS: ${{ inputs.predictions }}
+          INPUT_ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+        run: |
+          node --input-type=module <<'NODE'
+          import path from 'node:path';
+          import { appendFile, readFile, realpath } from 'node:fs/promises';
+          const root = await realpath(process.cwd());
+          const input = process.env.INPUT_ARTIFACT_RUN_ID ? '.scratch/swe-incoming/predictions.jsonl' : process.env.INPUT_PREDICTIONS;
+          if (!input || /[\x00-\x1f]/.test(input)) throw new Error('Invalid predictions path');
+          const file = await realpath(path.resolve(input));
+          const relative = path.relative(root, file);
+          if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Predictions must be inside checkout');
+          const subset = JSON.parse(await readFile('benchmarks/swe-bench/subset-v1.json', 'utf8'));
+          await appendFile(process.env.GITHUB_OUTPUT, `predictions=${file}\nrevision=${subset.revision}\n`);
+          NODE
+      - name: Fetch frozen Verified test data
+        env:
+          DATASET_REVISION: ${{ steps.inputs.outputs.revision }}
+        run: python benchmarks/swe-bench/fetch-dataset.py --revision "$DATASET_REVISION" --out .scratch/swe-bench/dataset.jsonl
+      - name: Official evaluation, one instance per image cleanup
+        env:
+          PREDICTIONS_PATH: ${{ steps.inputs.outputs.predictions }}
+        # Verified against the actual swebench==5.0.2 `swebench eval --help`.
+        # v5 removed --cache_level/--clean; evaluate.mjs runs -j 1 and prunes unused images between tasks.
+        # The pinned release writes logs/run_evaluation and a model.run.json summary, unlike current docs.
+        run: node benchmarks/swe-bench/evaluate.mjs --predictions="$PREDICTIONS_PATH" --dataset=.scratch/swe-bench/dataset.jsonl --subset=benchmarks/swe-bench/subset-v1.json --run-id="$EVALUATION_RUN_ID" --out=.scratch/swe-bench/evaluation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swe-bench-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .scratch/swe-bench/evaluation/
+          include-hidden-files: false
+          if-no-files-found: warn
+          retention-days: 30
