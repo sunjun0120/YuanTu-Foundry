@@ -184,7 +184,7 @@ export class TerminalSessions {
       context.executionPolicy ?? currentExecutionPolicy() ?? executionPolicy(config.mode, config),
     );
     const mode = policy.mode;
-    if (!['host', 'native', 'windows', 'seatbelt'].includes(mode))
+    if (!['host', 'native', 'windows', 'windows-account', 'seatbelt'].includes(mode))
       throw new Error(
         `Terminals run a shell on the host, which would be a way around the ${mode} sandbox this run's commands are confined to. Use run_command or start_command instead, or set YUANTU_SANDBOX=host to run unconfined.`,
       );

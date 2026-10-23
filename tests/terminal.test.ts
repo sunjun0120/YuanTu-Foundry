@@ -472,21 +472,22 @@ test('the number of live terminals is capped, and a closed one frees a slot', as
   await call('terminal_close', { id: opened[0]! });
   assert.match(await call('terminal_open', {}), /started/);
 });
-test('terminal_open refuses an unavailable native backend before PTY spawn', async (t) => {
-  const { fail } = await setup(t);
-  const previous = process.env.YUANTU_SANDBOX;
-  process.env.YUANTU_SANDBOX = 'seatbelt';
-  const original = sandboxProvider('seatbelt');
-  registerSandboxProvider({ ...original, available: async () => 'fixture backend unavailable' });
-  t.after(() => {
-    registerSandboxProvider(original);
-    if (previous === undefined) delete process.env.YUANTU_SANDBOX;
-    else process.env.YUANTU_SANDBOX = previous;
+for (const mode of ['seatbelt', 'windows-account'] as const)
+  test(`terminal_open checks ${mode} availability before PTY spawn`, async (t) => {
+    const { fail } = await setup(t);
+    const previous = process.env.YUANTU_SANDBOX;
+    process.env.YUANTU_SANDBOX = mode;
+    const original = sandboxProvider(mode);
+    registerSandboxProvider({ ...original, available: async () => 'fixture backend unavailable' });
+    t.after(() => {
+      registerSandboxProvider(original);
+      if (previous === undefined) delete process.env.YUANTU_SANDBOX;
+      else process.env.YUANTU_SANDBOX = previous;
+    });
+    assert.match(await fail('terminal_open', {}), /fixture backend unavailable/);
+    // Nothing was launched: the refusal happens before the manager reaches a provider.
+    assert.equal(spawned.length, 0);
   });
-  assert.match(await fail('terminal_open', {}), /fixture backend unavailable/);
-  // Nothing was launched: the refusal happens before the manager reaches a provider.
-  assert.equal(spawned.length, 0);
-});
 
 test('concurrent terminal opens cannot exceed the live process limit', async (t) => {
   const { tools, ctx, terminals } = await setup(t);

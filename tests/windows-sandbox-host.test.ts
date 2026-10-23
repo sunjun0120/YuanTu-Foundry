@@ -1,7 +1,7 @@
 // @test-serial windows-sandbox: Runs actual Windows Host commands through the sandbox account.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { execFile } from 'node:child_process';
@@ -69,6 +69,7 @@ test(
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
     const host = await listeningHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
+    await mkdir(path.join(host.root, '.codex'), { recursive: true });
     const script = path.join(host.root, 'probe.cjs');
     const report = path.join(host.root, 'probe-result.json');
     await writeFile(
