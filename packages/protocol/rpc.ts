@@ -123,6 +123,27 @@ export interface HostMethods {
       violations: import('./invariants.ts').InvariantViolation[];
     };
   };
+  /** The Host process's own health: how blocked its shared event loop has been, and its run slots. */
+  'host.health': {
+    params: Record<string, never>;
+    result: {
+      /** Null when the Host was built without a loop monitor. */
+      eventLoop: {
+        delay: { p50: number; p99: number; max: number; mean: number };
+        utilization: number;
+        thresholdMs: number;
+        stalls: {
+          at: string;
+          durationMs: number;
+          sessions: string[];
+          operations: number;
+          requests: string[];
+        }[];
+      } | null;
+      activeRuns: number;
+      maxActiveRuns: number;
+    };
+  };
   'background.list': {
     params: { sessionId?: string };
     result: BackgroundJobSnapshot[];

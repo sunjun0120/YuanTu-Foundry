@@ -565,7 +565,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 | 域         | 方法                                                                                                                                                                                                       |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`sandbox.refresh`、`permission.update`、`invariants.list`                                                                                                     |
+| 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`sandbox.refresh`、`permission.update`、`invariants.list`、`host.health`                                                                                      |
 | 会话       | `session.create`、`session.list`、`session.rename`、`session.archive`、`session.delete`、`session.recover`、`session.get`、`session.audit`、`session.events`                                               |
 | 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                                            |
 | 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                                     |
@@ -627,7 +627,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 78 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 79 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -705,6 +705,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SESSION_TITLES` | `0` / `1` | 是否用一次模型调用为会话生成标题（默认开启） |
 | `YUANTU_WORKFLOW_INTERVAL_MS` | `1000–86400000` | 调度器两次查看之间的最长间隔（到期时刻会直接唤醒它；这里是上限与兜底） |
 | `YUANTU_HOST_MAX_RUNS` | `1–8` | 同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行） |
+| `YUANTU_HOST_STALL_MS` | `20–60000` | Host 事件循环被同步工作占住多久（毫秒）记为一次卡顿并写入 stderr（默认 200） |
 | `YUANTU_LIBREOFFICE_PATH` | `string` | 可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com） |
 | `YUANTU_NODE_PATH` | `string` | （测试）子进程使用的 node 路径 |
 | `YUANTU_QA_DIR` | `string` | （测试）QA 产物目录 |
@@ -738,11 +739,11 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 286 个 | `tests/*.test.ts` |
+| 行为测试文件 | 287 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 62 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| Host JSON-RPC 方法 | 63 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->

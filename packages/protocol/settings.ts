@@ -552,6 +552,11 @@ export const ENVIRONMENT = {
     range: [1, 8],
     description: '同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行）',
   },
+  YUANTU_HOST_STALL_MS: {
+    kind: 'number',
+    range: [20, 60_000],
+    description: 'Host 事件循环被同步工作占住多久（毫秒）记为一次卡顿并写入 stderr（默认 200）',
+  },
   YUANTU_LIBREOFFICE_PATH: {
     kind: 'string',
     description: '可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com）',

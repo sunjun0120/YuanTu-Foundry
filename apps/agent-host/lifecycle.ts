@@ -25,6 +25,7 @@ export function createShutdown(ctx: HostContext): () => void {
     if (ctx.closing) return;
     ctx.closing = true;
     ctx.stopObservingBackground();
+    ctx.loopHealth?.stop();
     ctx.scheduler.stop();
     cancelSessionTitles(ctx);
     for (const run of ctx.active.values()) run.controller.abort();

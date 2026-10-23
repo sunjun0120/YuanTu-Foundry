@@ -48,7 +48,7 @@ export interface RunAnnouncements {
   /** Admit this run as one round of the session's goal and announce it, when there is a goal. */
   admitGoal(): void;
   /** Announce every snapshot the visible conversation does not already hold. */
-  snapshots(round: number): void;
+  snapshots(round: number): Promise<void>;
 }
 export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnnouncements {
   const { store, sessionId, workspace, emit, task, completion } = options;
@@ -77,7 +77,7 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
     }
     goal(admitted);
   };
-  const snapshots = (round: number): void => {
+  const snapshots = async (round: number): Promise<void> => {
     const surface = store.contextSurface(sessionId);
     const messages = store.messages(sessionId).slice(surface?.coveredMessages ?? 0);
     const announce = (source: RuntimeSnapshotSource, body: string): void => {
@@ -135,10 +135,10 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
      * Every edit that adds or removes a symbol changes the outline, so re-announcing it per round appended a whole
      * new copy after most write rounds of a long coding run — stale copies the model kept paying to read. Within a
      * run the model made those changes itself and has `repo_map` for a fresh view; a compaction that swallowed the
-     * last copy still gets one again. Skipping it also skips the synchronous workspace scan.
+     * last copy still gets one again. Skipping it also skips the workspace scan.
      */
     if (round > 0 && lastRuntimeSnapshot(messages, 'workspace-outline') !== undefined) return;
-    const outline = repoMapContext(workspace);
+    const outline = await repoMapContext(workspace);
     announce(
       'workspace-outline',
       outline

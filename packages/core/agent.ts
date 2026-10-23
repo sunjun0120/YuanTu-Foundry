@@ -546,7 +546,7 @@ export class Agent {
           completion,
         });
         if (ownWork) announcements.admitGoal();
-        announcements.snapshots(0);
+        await announcements.snapshots(0);
         /**
          * The system prompt, assembled from named, ordered sections (`./prompt-sections.ts`), with the trace kept so
          * a caller can ask what the prompt it just sent was made of. Rebuilt only when the run's state changes it.
@@ -739,7 +739,7 @@ export class Agent {
           const { cacheKeyOf } = roundAim;
           // The state the round is about to be asked about, before the round's own injections: a policy note is a
           // message to the model, while a snapshot is the world it is being asked about.
-          announcements.snapshots(round);
+          await announcements.snapshots(round);
           if (preStep.inject.length)
             injectContext(store, input.sessionId, emit, preStep.inject.join('\n\n'), {
               source: 'pre-step',

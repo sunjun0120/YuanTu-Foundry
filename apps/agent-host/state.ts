@@ -18,6 +18,7 @@ import type { TaskEvent } from '../../packages/protocol/task-trigger.ts';
 import type { HostLaunch } from './cli.ts';
 import type { HostCarrier } from './carrier.ts';
 import type { TaskScheduler } from './scheduler.ts';
+import type { EventLoopMonitor } from './event-loop-health.ts';
 import type { HostServices } from './services.ts';
 import { canonicalKey } from '../../packages/platform/workspace-paths.ts';
 import { ResourceLocks, type Lease, type LockClaim, type LockMode } from './resource-locks.ts';
@@ -195,6 +196,8 @@ export interface HostContext {
   currentAuthority: (sessionId: string) => BackgroundAuthority;
   /** Stop watching the store's events; called once, on the way down. */
   stopObservingBackground: () => void;
+  /** Watches the one JS thread every session shares; absent in contexts built without a process (tests). */
+  loopHealth?: EventLoopMonitor;
   /**
    * The approver verification commands use.
    *
