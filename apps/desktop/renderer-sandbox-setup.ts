@@ -3,13 +3,13 @@ import type { SandboxSetupCommand, SandboxSetupView } from './sandbox-setup.ts';
 import type { SandboxMode } from './sandbox-settings.ts';
 
 /**
- * The Windows sandbox accounts, drawn where they matter and nowhere else.
+ * The Windows sandbox accounts, drawn only while they need something from the person.
  *
  * Accounts that still need setting up (or repairing) are one prompt above the composer, offered once per launch:
  * dismissing it leaves the backend as it is, and switching the session back onto the sandbox offers it again.
- * Ready accounts are a settings section (read roots, uninstall). A helper that cannot answer is an installation
- * problem, not a choice the person can make, so neither surface says anything about it; the main process logs it
- * and a sandboxed command names it when it is refused.
+ * Ready accounts are not drawn anywhere: there is nothing to manage, and the uninstaller removes them. A helper that
+ * cannot answer is an installation problem, not a choice the person can make, so the prompt says nothing about it;
+ * the main process logs it and a sandboxed command names it when it is refused.
  *
  * Read-only checks on opening; only a deliberate button click requests UAC.
  */
@@ -17,14 +17,6 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
   const quiet = { setMode() {} };
   const api = window.yuantu.sandboxSetup;
   if (!api) return quiet;
-  const section = document.getElementById('sandbox-setup-section');
-  const title = document.getElementById('sandbox-setup-title');
-  const feedback = document.getElementById('sandbox-setup-feedback');
-  const uninstall = document.getElementById('sandbox-setup-uninstall') as HTMLButtonElement | null;
-  const advanced = document.getElementById('sandbox-read-advanced') as HTMLDetailsElement | null;
-  const advancedTitle = document.getElementById('sandbox-read-advanced-title');
-  const roots = document.getElementById('sandbox-read-roots');
-  const add = document.getElementById('sandbox-read-add') as HTMLButtonElement | null;
   const prompt = document.getElementById('sandbox-prompt');
   const promptTitle = document.getElementById('sandbox-prompt-title');
   const promptNote = document.getElementById('sandbox-prompt-note');
@@ -33,8 +25,7 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
     'sandbox-prompt-initialize',
   ) as HTMLButtonElement | null;
   const dismiss = document.getElementById('sandbox-prompt-dismiss') as HTMLButtonElement | null;
-  if (!section || !title || !feedback || !prompt || !promptTitle || !promptNote || !initialize)
-    return quiet;
+  if (!prompt || !promptTitle || !promptNote || !initialize) return quiet;
   let view: SandboxSetupView | undefined;
   let pending = false;
   let error = '';
@@ -44,61 +35,9 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
   let needed = true;
   let operation: SandboxSetupCommand['type'] = 'status';
 
-  /** The advanced list: automatic roots are read-only, the user's own each get a remove button. */
-  const drawRoots = () => {
-    if (!advanced) return;
-    if (advancedTitle) advancedTitle.textContent = t('sandboxSetup.read.advanced');
-    if (add) {
-      add.textContent = t('sandboxSetup.read.choose');
-      add.disabled = pending;
-    }
-    if (!roots) return;
-    const items = (view?.readRoots ?? []).map((root) => {
-      const item = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = root.path;
-      item.append(label);
-      if (root.source === 'auto') {
-        const badge = document.createElement('small');
-        badge.textContent = t('sandboxSetup.read.auto');
-        item.append(badge);
-      } else {
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.textContent = t('sandboxSetup.read.removeItem');
-        remove.disabled = pending;
-        remove.addEventListener('click', () => {
-          void request({ type: 'read-remove', path: root.path, acknowledge: true });
-        });
-        item.append(remove);
-      }
-      return item;
-    });
-    roots.replaceChildren(...items);
-  };
-
-  const pendingText = () =>
-    t(
-      operation === 'status' || operation === 'verify'
-        ? 'sandboxSetup.checking'
-        : 'sandboxSetup.pending',
-    );
-
   const draw = () => {
     const state = view?.state;
-    const ready = state === 'ready';
     const missing = state === 'uninitialized' || state === 'damaged';
-    // Settings: only accounts that exist have anything to manage.
-    section.hidden = !ready;
-    title.textContent = t('sandboxSetup.title');
-    feedback.classList.toggle('error', Boolean(error) && ready);
-    feedback.textContent =
-      pending && ready ? pendingText() : (ready && error) || t('sandboxSetup.readyLine');
-    if (uninstall) {
-      uninstall.textContent = t('sandboxSetup.uninstall');
-      uninstall.disabled = pending;
-    }
-    drawRoots();
     // Composer: setup or repair, while the session needs it and the person has not set it aside.
     prompt.hidden = !(missing && needed && !dismissed) && !(pending && operation === 'initialize');
     promptTitle.textContent = t(
@@ -110,7 +49,8 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
         : t('sandboxSetup.note');
     promptNote.title = state === 'damaged' ? (view?.details ?? []).join('; ') : '';
     if (promptFeedback) {
-      const text = pending && operation === 'initialize' ? pendingText() : missing ? error : '';
+      const text =
+        pending && operation === 'initialize' ? t('sandboxSetup.pending') : missing ? error : '';
       promptFeedback.hidden = !text;
       promptFeedback.textContent = text;
     }
@@ -133,10 +73,7 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
     try {
       const reply = await api(command);
       if (!reply.ok) throw new Error(reply.error);
-      const before = view?.state;
       view = reply.view;
-      // Uninstalling from settings is a fresh need for setup, not one the person already declined.
-      if (before === 'ready' && view.state !== 'ready') dismissed = false;
     } catch (failure) {
       // A dropped IPC/UAC failure releases controls for retry. A failed initial
       // status cannot accidentally enable the initialization button.
@@ -161,11 +98,6 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
     error = '';
     draw();
   });
-  uninstall?.addEventListener(
-    'click',
-    () => void request({ type: 'uninstall', acknowledge: true }),
-  );
-  add?.addEventListener('click', () => void request({ type: 'read-add', acknowledge: true }));
   onLocaleChange(draw);
   void request({ type: 'status' });
   return {

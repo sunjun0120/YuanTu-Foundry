@@ -214,15 +214,6 @@ export const panelMessages: Record<string, [string, string]> = {
     '调整聊天内容和操作界面的基础字号。',
     'Adjust the base size of chat and interface text.',
   ],
-  'sandboxSetup.title': ['Windows 沙箱账户', 'Windows sandbox accounts'],
-  'sandboxSetup.read.advanced': [
-    '高级：沙箱可读目录',
-    'Advanced: directories the sandbox can read',
-  ],
-  'sandboxSetup.read.auto': ['自动', 'Automatic'],
-  'sandboxSetup.read.choose': ['添加目录…', 'Add directory…'],
-  'sandboxSetup.read.removeItem': ['移除', 'Remove'],
-  'sandboxSetup.readyLine': ['✓ 沙箱账户已就绪', '✓ Sandbox accounts are ready'],
   'sandboxSetup.exitUnconfirmed': [
     '初始化尚未结束，清理状态未确认。重新打开应用后请检查沙箱账户状态。',
     'Initialization is still pending and cleanup is unconfirmed. Check sandbox account status after reopening the app.',
@@ -237,7 +228,6 @@ export const panelMessages: Record<string, [string, string]> = {
     '读取白名单缺失、权限变更或包含不安全路径',
     'Read allowlist is missing, changed or contains unsafe paths',
   ],
-  'sandboxSetup.uninstall': ['卸载沙箱账户', 'Uninstall sandbox accounts'],
   'sandboxSetup.damaged': ['沙箱账户需要修复：', 'Sandbox accounts need repair:'],
   'sandboxSetup.problem.accounts-missing': ['缺少沙箱账户', 'Sandbox accounts are missing'],
   'sandboxSetup.problem.group-missing': ['缺少沙箱用户组', 'Sandbox group is missing'],
@@ -284,7 +274,6 @@ export const panelMessages: Record<string, [string, string]> = {
     '正在处理，请完成 Windows 管理员确认…',
     'Working; complete the Windows administrator prompt…',
   ],
-  'sandboxSetup.checking': ['正在检查初始化条件…', 'Checking initialization requirements…'],
   'sandboxSetup.failed': [
     '初始化未完成或状态检查失败。请确认管理员提示并重新检查状态。',
     'Initialization did not complete or its status could not be verified. Check the administrator prompt and refresh the status.',

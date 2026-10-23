@@ -142,7 +142,7 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 
 ### 4.3 桌面端
 
-- `apps/desktop/sandbox-setup.ts` 提供账户后端的 status/verify/initialize/uninstall，以及读根目录的添加与移除；渲染层只显示三类状态：未初始化（一句说明 + 初始化按钮）、就绪（一行状态 + 卸载文字按钮，其下默认折叠的「高级：沙箱可读目录」，自动项只读、用户项逐项可移除、「添加目录…」）、损坏（问题列表 + 修复按钮，进入该状态时自动取一次 `--verify` 的诊断详情）。「添加目录…」由主进程弹系统目录选择框，取消则原样返回视图、不调用 helper。
+- `apps/desktop/sandbox-setup.ts` 提供账户后端的 status/verify/initialize/uninstall，以及读根目录的添加与移除；渲染层只在输入框上方显示一次性提示，且只在两类状态出现：未初始化（一句说明 + 立即设置）、损坏（问题列表 + 立即修复，进入该状态时自动取一次 `--verify` 的诊断详情）。就绪后不在任何地方显示，设置页没有沙箱区块（参照 Codex：设置一次后只做静默刷新）；账户、WFP 与授权由 NSIS 卸载器的 `customUnInstall`（`build/installer.nsh`）在删除文件前调用 `yuantu-sandbox.exe account-uninstall` 清理，升级（`isUpdated`）时跳过。读根目录的添加/移除命令仍保留在主进程，但当前没有界面入口。
 - 开发版和正式版走同一流程：初始化/修复按钮触发一次 UAC；已经提权时直接执行，不再弹 UAC。没有超时（杀掉 UAC 父进程无法取消提权子进程）。
 - 卸载后 `native` 会拒绝执行，直到重新初始化。
 

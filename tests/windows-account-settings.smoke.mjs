@@ -7,7 +7,7 @@ import electronPath from 'electron';
 import { tempRoot } from './temp-fixture.ts';
 
 test(
-  'sandbox accounts are offered above the composer and managed in settings once ready',
+  'sandbox accounts are offered above the composer and never drawn in settings',
   { timeout: 60000 },
   async (t) => {
     let app;
@@ -37,12 +37,19 @@ test(
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const prompt = page.locator('#sandbox-prompt');
-    const section = page.locator('#sandbox-setup-section');
-    if (process.platform !== 'win32') {
-      assert.equal(await prompt.isHidden(), true);
+    // The accounts have no settings section in any state: setup lives above the composer, removal in the uninstaller.
+    const settingsMentionsSandbox = async () => {
       await page.locator('#open-settings').click();
       await page.locator('#general-settings').click();
-      assert.equal(await section.isHidden(), true);
+      return page.evaluate(() =>
+        /沙箱|sandbox/i.test(
+          document.querySelector('#general-settings-content')?.textContent ?? '',
+        ),
+      );
+    };
+    if (process.platform !== 'win32') {
+      assert.equal(await prompt.isHidden(), true);
+      assert.equal(await settingsMentionsSandbox(), false);
       return;
     }
     // Ask the main process what the window should be drawing, then check that it draws exactly that.
@@ -54,9 +61,7 @@ test(
       // A missing or unreadable helper is an installation problem: neither surface mentions it.
       await page.waitForTimeout(1000);
       assert.equal(await prompt.isHidden(), true);
-      await page.locator('#open-settings').click();
-      await page.locator('#general-settings').click();
-      assert.equal(await section.isHidden(), true);
+      assert.equal(await settingsMentionsSandbox(), false);
       return;
     }
     if (view.state !== 'ready') {
@@ -65,23 +70,12 @@ test(
       assert.equal(await page.locator('#sandbox-prompt-initialize').isDisabled(), false);
       await page.locator('#sandbox-prompt-dismiss').click();
       assert.equal(await prompt.isHidden(), true);
-      await page.locator('#open-settings').click();
-      await page.locator('#general-settings').click();
-      assert.equal(await section.isHidden(), true);
+      assert.equal(await settingsMentionsSandbox(), false);
       return;
     }
-    // Ready accounts: the settings section manages them, in the chosen language.
-    await page.locator('#open-settings').click();
-    await page.locator('#general-settings').click();
-    await section.waitFor({ state: 'visible' });
-    await page.locator('#ui-language').selectOption('en-US');
-    await page.waitForFunction(
-      () =>
-        document.querySelector('#sandbox-setup-title').textContent === 'Windows sandbox accounts',
-    );
-    assert.equal(
-      await page.locator('#sandbox-setup-uninstall').innerText(),
-      'Uninstall sandbox accounts',
-    );
+    // Ready accounts: nothing to ask and nothing to manage.
+    await page.waitForTimeout(1000);
+    assert.equal(await prompt.isHidden(), true);
+    assert.equal(await settingsMentionsSandbox(), false);
   },
 );

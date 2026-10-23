@@ -104,6 +104,8 @@ module.exports = {
   nsis: {
     installerIcon: 'build/icon.ico',
     uninstallerIcon: 'build/icon.ico',
+    // Removes the Windows sandbox accounts on uninstall (not on update); the app has no other place to remove them.
+    include: 'build/installer.nsh',
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,

@@ -30,18 +30,10 @@ class Node {
     if (!this.disabled) await this.handlers.get('click')?.();
   }
 }
-/** Every button the advanced list drew, in order. */
-function listButtons(list: Node): Node[] {
-  return list.children.flatMap((item) => item.children.filter((child) => child.tag === 'button'));
-}
 async function page(api?: (command: SandboxSetupCommand) => Promise<SandboxSetupReply>) {
   const beforeWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const beforeDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const ids = new Map<string, Node>();
-  for (const part of ['section', 'title', 'feedback', 'uninstall'])
-    ids.set(`sandbox-setup-${part}`, new Node());
-  for (const part of ['advanced', 'advanced-title', 'roots', 'add'])
-    ids.set(`sandbox-read-${part}`, new Node());
   ids.set('sandbox-prompt', new Node());
   for (const part of ['title', 'note', 'feedback', 'initialize', 'dismiss'])
     ids.set(`sandbox-prompt-${part}`, new Node());
@@ -65,8 +57,6 @@ async function page(api?: (command: SandboxSetupCommand) => Promise<SandboxSetup
   await new Promise<void>((resolve) => setImmediate(resolve));
   return {
     control,
-    node: (part: string) => ids.get(`sandbox-setup-${part}`)!,
-    read: (part: string) => ids.get(`sandbox-read-${part}`)!,
     prompt: (part?: string) => ids.get(part ? `sandbox-prompt-${part}` : 'sandbox-prompt')!,
     restore() {
       if (beforeWindow) Object.defineProperty(globalThis, 'window', beforeWindow);
@@ -76,14 +66,14 @@ async function page(api?: (command: SandboxSetupCommand) => Promise<SandboxSetup
     },
   };
 }
-const ready = (readRoots: SandboxSetupView['readRoots']): SandboxSetupView => ({
+const ready: SandboxSetupView = {
   supported: true,
   ready: true,
   installed: true,
   reason: null,
   state: 'ready',
-  readRoots,
-});
+  readRoots: [{ path: 'C:\Users\Alice\.cargo\bin', source: 'auto' }],
+};
 
 const uninitialized: SandboxSetupView = {
   supported: true,
@@ -94,41 +84,21 @@ const uninitialized: SandboxSetupView = {
   readRoots: [],
 };
 
-test('ready accounts are a settings section and no composer prompt', async () => {
+test('ready accounts draw nothing: no prompt and nothing to send', async () => {
   const commands: SandboxSetupCommand[] = [];
   const fixture = await page(async (command) => {
     commands.push(command);
-    return {
-      ok: true,
-      view: ready([
-        { path: 'C:\Users\Alice\.cargo\bin', source: 'auto' },
-        { path: 'D:\Tools', source: 'user' },
-      ]),
-    };
+    return { ok: true, view: ready };
   });
   try {
     assert.deepEqual(commands, [{ type: 'status' }]);
-    assert.equal(fixture.node('section').hidden, false);
     assert.equal(fixture.prompt().hidden, true);
-    assert.match(fixture.node('feedback').textContent, /就绪|ready/i);
-    assert.equal(fixture.node('uninstall').disabled, false);
-    assert.equal(fixture.read('roots').children.length, 2);
-    // Only the user's own root can be removed; the automatic one is marked as such.
-    const buttons = listButtons(fixture.read('roots'));
-    assert.equal(buttons.length, 1);
-    assert.equal(buttons[0]!.textContent, '移除');
-    await buttons[0]!.click();
-    assert.deepEqual(commands[1], {
-      type: 'read-remove',
-      path: 'D:\Tools',
-      acknowledge: true,
-    });
   } finally {
     fixture.restore();
   }
 });
 
-test('uninitialized accounts are offered above the composer, not in settings', async () => {
+test('uninitialized accounts are offered above the composer', async () => {
   const commands: SandboxSetupCommand[] = [];
   const fixture = await page(async (command) => {
     commands.push(command);
@@ -136,7 +106,6 @@ test('uninitialized accounts are offered above the composer, not in settings', a
   });
   try {
     assert.deepEqual(commands, [{ type: 'status' }]);
-    assert.equal(fixture.node('section').hidden, true);
     assert.equal(fixture.prompt().hidden, false);
     assert.equal(fixture.prompt('title').textContent, '设置 Windows 沙箱');
     assert.equal(fixture.prompt('initialize').disabled, false);
@@ -193,42 +162,9 @@ test('a damaged installation asks for the live diagnostic once and offers repair
   });
   try {
     assert.deepEqual(commands, [{ type: 'status' }, { type: 'verify' }]);
-    assert.equal(fixture.node('section').hidden, true);
     assert.equal(fixture.prompt().hidden, false);
     assert.match(fixture.prompt('note').textContent, /密码|password/i);
     assert.equal(fixture.prompt('initialize').textContent, '立即修复');
-  } finally {
-    fixture.restore();
-  }
-});
-
-test('the add button asks the main process to pick a directory', async () => {
-  const commands: SandboxSetupCommand[] = [];
-  const fixture = await page(async (command) => {
-    commands.push(command);
-    return { ok: true, view: ready([]) };
-  });
-  try {
-    const add = fixture.read('add');
-    assert.equal(add.disabled, false);
-    assert.equal(add.textContent, '添加目录…');
-    await add.click();
-    assert.deepEqual(commands[1], { type: 'read-add', acknowledge: true });
-  } finally {
-    fixture.restore();
-  }
-});
-
-test('uninstalling from settings brings the setup prompt back', async () => {
-  let installed = true;
-  const fixture = await page(async (command) => {
-    if (command.type === 'uninstall') installed = false;
-    return { ok: true, view: installed ? ready([]) : uninitialized };
-  });
-  try {
-    await fixture.node('uninstall').click();
-    assert.equal(fixture.node('section').hidden, true);
-    assert.equal(fixture.prompt().hidden, false);
   } finally {
     fixture.restore();
   }
@@ -270,7 +206,6 @@ test('unsupported platforms, browser bridges and a missing helper show nothing',
   ]) {
     const fixture = await page(api);
     try {
-      assert.equal(fixture.node('section').hidden, true);
       assert.equal(fixture.prompt().hidden, true);
     } finally {
       fixture.restore();
