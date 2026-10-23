@@ -153,7 +153,9 @@ crate `packages/tools/windows-sandbox/native`（原 `appcontainer`，删除 AppC
 - **常驻授权（同 Codex，2c 修订）**：工作区首次使用时，由原生 `yuantu-sandbox grant` 给根目录加两条可继承 ACE：`YuanTuSandboxUsers` 组（Modify）、该工作区能力 SID（Modify），保留到卸载或 `ungrant`，记录在 `grants.json`。不做逐命令/逐会话的日志化恢复：只有持有该工作区能力 SID 的受限令牌（仅 runner 会造）能通过第二次访问检查，常驻 ACE 对其他进程无效。也因此不与旧后端共用 `acl.ps1` 的租约与日志。离线与联网账户同属该组，共用同一份授权。
 - **不变量：除沙箱账户自己的 profile 外，任何路径都不出现直接授予沙箱账户 SID 的 ACE。** `account-status --verify` 检查工作区与读白名单中没有违反该不变量的 ACE。
 - scratch：runner 在沙箱账户自己的 `%TEMP%` 下按命令创建、命令结束删除；该目录属于沙箱账户自己的 profile，无需能力 SID。
-- 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）中已存在者，对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE。
+- 保留路径（`.git`、`.yuantu`、`.agents`、`.codex`、`.aws`、`.ssh`、`.gnupg`）中已存在者，对 `YuanTuSandboxUsers` 组加显式拒绝写入 ACE：目录可继承，文件（worktree 的 `.git` 文件）只加在自身。工作区根与保留路径都以不跟随 reparse 点的句柄打开，经 `SetSecurityInfo` 写入：沙箱命令即使在检查后把保留目录改名、换成 junction，ACL 也只落在检查过的对象上，不会落到 junction 目标；是 junction 的保留名直接跳过。
+- **每条命令前复查保留路径**：Host 每条命令前的 `read-refresh` 请求带上工作区根，helper 先保护保留路径再刷新读根。组的拒绝已排在所有 allow 之前的对象只读取、不改写；新出现的（会话中 `git init`、用户新建的 `.ssh`）当次补上。保护失败时 helper 失败、Host 拒绝运行命令；读根刷新失败只写进报告的 `error`，命令照常运行。剩余窗口与 Codex 相同：同一条命令里先建 `.git` 再写 hooks 无法阻止。
+- **沙箱自己建的保留目录仍可保护**：沙箱账户是它新建对象的所有者，默认隐含 `WRITE_DAC`，可以撤掉事后补上的拒绝；在只给 `Authenticated Users` Modify 的数据盘上，桌面用户对这些对象又没有 `WRITE_DAC`。所以根目录再加三条可继承 ACE：组拒绝 `WRITE_DAC | WRITE_OWNER`（显式，排在所有继承来的 allow 之前，含 CREATOR OWNER 派生的那条）；`OWNER RIGHTS`（S-1-3-4）授 `READ_CONTROL | WRITE_DAC`，把所有者的隐含权限变成一条普通 ACE、排在上面的拒绝之后，对非沙箱所有者行为不变；桌面用户授 `READ_CONTROL | WRITE_DAC`，让 helper 能改沙箱建的对象。沙箱命令创建对象时自带受保护 DACL（不继承这些 ACE）、helper 又改不了且未被拒绝的，视为不可保护，命令不运行。卸载撤回组、能力 SID 与 `OWNER RIGHTS` 的显式 ACE（含拒绝，`REVOKE_ACCESS` 只删 allow，所以按 trustee 逐条过滤）；桌面用户那条保留，因为它可能已与用户原有 ACE 合并，且在用户自己的工作区上不多给任何权限。
 - 已知弱点（同 Codex）：限制列表含 Everyone，所以“Everyone 可写”的目录仍然可写。初始化与 `account-status --verify` 扫描工作区祖先、读白名单、`PATH` 目录中 Everyone 可写的位置并给出警告（对应 Codex `audit_everyone_writable`）。
 
 ### 5.2 读根目录
