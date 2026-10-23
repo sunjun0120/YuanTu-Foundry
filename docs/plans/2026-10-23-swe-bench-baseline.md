@@ -217,7 +217,7 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 ## 11. 交付清单
 
 - [x] 阶段 0：`fetch-dataset.py`、`select-subset.mjs`、`subset-v1.json`、`repos.mjs` + 离线测试
-- [ ] 阶段 1：`schema.ts`、`manifest.example.json`、`prompt.mjs`、`adapter.mjs`、`run.mjs`、`predictions.mjs` + 离线测试
+- [x] 阶段 1：`schema.ts`、`manifest.example.json`、`prompt.mjs`、`adapter.mjs`、`run.mjs`、`predictions.mjs` + 离线测试
 - [ ] 阶段 2：`swe-bench-eval.yml`、`ingest.mjs`、`report.mjs` + 离线测试；`benchmarks/swe-bench/README.md`
 - [ ] 向用户确认 §3.2 四项，给出冒烟成本估算
 - [ ] 冒烟批次（两个版本 × 5 题）报告
@@ -233,5 +233,15 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 - 固定 HF revision `78f471bf655a3137b2e8a75af1501690ec009ec3`，使用临时虚拟环境内的 `datasets==5.1.0` 导出 500 条原始记录；选出覆盖 12 个仓库的 50 题和覆盖 5 个仓库的 5 题冒烟集。完整数据重复抽样与提交文件逐字节一致。
 - 5 题均已物化到各自 `base_commit`，HEAD 与干净状态校验通过；不执行被测仓库代码。发现共享 clone 丢失部分克隆的 promisor 配置，改用计划允许的 detached worktree，回归先失败后通过。
 - 离线测试 2/2；`npm run check` 通过：完整测试 2968 passed、40 skipped、0 failed，构建与 compiled-client 冒烟通过。账户沙箱跳过不代表真实账户验收通过。README 自动事实块同步行为测试文件数量。
-- 提交：本执行记录随阶段 0 实现提交；提交哈希在下一阶段记录时补入，避免自引用提交哈希。
+- 提交：`abd6277`（按用户要求变基至 `main@8729bc0` 后；原提交 `1c8cde0`）。
 - 下载虚拟环境、HF 缓存及失败副本已清理；固定 JSONL、仓库缓存、5 个干净工作副本和检查日志保留在 `.scratch/swe-bench/` 及本任务日志中。未调用真实模型。阶段 1 待执行；真实请求仍等待 §3.2 的模型、预算、验收位置与缓存配置确认。
+
+### 2026-10-23：阶段 1
+
+- 完成严格 manifest/CLI、冻结运行时、私有依赖、Host 驱动、no-commands 权限、补丁与官方预测格式；原 coding-evaluation 工装仅导出 `freezeSource`。没有修改产品代码。
+- 用户确认模型 `DeepSeek-V4.1-Flash-1017`，凭据仅经 `YUANTU_API_KEY`，不设金额上限；先运行两个版本各 5 题，沿用已确认的 OpenAI 协议。采用建议的 GitHub Actions 验收与 `promptCache=auto`；全量仍需冒烟后单独确认。端点只读 `/models` 核验返回 200 且存在指定模型，不落入报告。
+- 两个冻结提交的最终 dry-run 各有 5 条 `blocked/offline-not-executed`、请求数 0、退出码 0；比较配置哈希相同，运行时哈希分别固定，依赖内容回执相同。
+- 独立只读审查发现并修复补丁通用脱敏失真、宿主 Git clean filter 执行入口、官方证据绑定不足；另补全共享组件、平台/Node 和实际依赖内容哈希。补丁保留原字节，显式凭据命中即拒绝写出；日志继续脱敏。两个版本一致禁用辅助模型标题，防止其请求绕过解题统计。
+- 生成端 9 项离线测试通过；与阶段 2 工装共同进行的最终 `npm run check` 通过：2982 passed、40 skipped、0 failed；构建和 compiled-client 冒烟 3/3 通过。完整 SWE 文件 16/16，通过时间约 37 秒。前两次完整检查的进程清理异常与既有收件箱竞态均保留失败日志，未将失败当通过。
+- 收件箱用例原来只等子会话登记，没有等子代理进入预定挂起状态，导致测试更正偶尔走新 turn 路径。仅修复两处测试前提，断言和超时不变，独立提交 `babd45f`；15/15 回归通过。
+- 本阶段实现提交哈希在阶段 2 记录时补入。真实冒烟已获授权，验收报告尚待实际生成及官方 Docker 判定；当前无通过率结论。

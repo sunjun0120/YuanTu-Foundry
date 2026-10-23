@@ -4,12 +4,69 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
+export function gitEnvironment(source = process.env) {
+  const env = {};
+  for (const key of [
+    'PATH',
+    'Path',
+    'SystemRoot',
+    'SYSTEMROOT',
+    'WINDIR',
+    'ComSpec',
+    'COMSPEC',
+    'PATHEXT',
+    'TEMP',
+    'TMP',
+    'TMPDIR',
+    'LANG',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'NO_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+    'no_proxy',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+  ])
+    if (source[key]) env[key] = source[key];
+  return {
+    ...env,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_ATTR_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    GCM_INTERACTIVE: 'Never',
+    LC_ALL: 'C',
+  };
+}
 export async function git(directory, args) {
   return (
     await exec(
       'git',
-      ['-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', '-c', 'core.hooksPath=', ...args],
-      { cwd: directory, windowsHide: true, maxBuffer: 64_000_000 },
+      [
+        '--no-pager',
+        '-c',
+        'core.autocrlf=false',
+        '-c',
+        'core.longpaths=true',
+        '-c',
+        'core.hooksPath=',
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.attributesFile=',
+        '-c',
+        'diff.external=',
+        '-c',
+        'credential.helper=',
+        '-c',
+        'protocol.ext.allow=never',
+        ...args,
+      ],
+      { cwd: directory, env: gitEnvironment(), windowsHide: true, maxBuffer: 64_000_000 },
     )
   ).stdout;
 }

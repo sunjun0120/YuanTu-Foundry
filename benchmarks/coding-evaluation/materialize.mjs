@@ -185,7 +185,7 @@ export async function linkFiles(source, target, files) {
   }
   return { linked: true, reason: null };
 }
-async function freezeSource(spec, target) {
+export async function freezeSource(spec, target) {
   if (!path.isAbsolute(spec.directory)) throw new Error('Source directory must be absolute');
   if (spec.kind === 'snapshot') {
     const before = await captureSourceManifest(spec.directory);

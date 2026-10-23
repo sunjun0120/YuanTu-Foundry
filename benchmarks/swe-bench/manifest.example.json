@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "batchId": "swe-smoke-after-v1",
+  "runtime": {
+    "kind": "commit",
+    "revision": "ec08343e147b46417ffe11d3249deb6b5a408184"
+  },
+  "subset": {
+    "path": "benchmarks/swe-bench/subset-v1.json",
+    "sha256": "b1fa435a7b863a4e264cd23f048f13f9d14bbda639ec15bc6401d1896256d775"
+  },
+  "datasetPath": ".scratch/swe-bench/dataset/78f471bf655a3137b2e8a75af1501690ec009ec3.jsonl",
+  "model": "REPLACE_WITH_APPROVED_MODEL",
+  "protocol": "openai",
+  "endpointId": "approved-provider",
+  "endpointUrl": "https://provider.example.invalid/v1",
+  "maxContextTokens": 128000,
+  "maxOutputTokens": 8192,
+  "promptCache": "auto",
+  "executionMode": "no-commands",
+  "instanceTimeoutMs": 1200000,
+  "requestTimeoutMs": 120000,
+  "streamIdleTimeoutMs": 30000,
+  "maxObservedRequestsPerSample": 100,
+  "maxKnownTokensPerSample": 2000000,
+  "approvedLiveBudget": {
+    "authorized": false,
+    "maxAttempts": 0
+  }
+}
