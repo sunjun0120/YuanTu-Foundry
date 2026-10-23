@@ -134,7 +134,7 @@ export function setupMessages(options: {
     const feedback = node('span', '', 'user-copy-feedback');
     feedback.setAttribute('role', 'status');
     let reset: ReturnType<typeof setTimeout> | undefined;
-    copy.addEventListener('click', async () => {
+    const copyContent = async (): Promise<void> => {
       copy.disabled = true;
       clearTimeout(reset);
       try {
@@ -148,7 +148,8 @@ export function setupMessages(options: {
           feedback.textContent = '';
         }, 1600);
       }
-    });
+    };
+    copy.addEventListener('click', () => void copyContent());
     const actions = node('span', '', 'user-message-actions');
     actions.append(feedback, copy);
     return actions;

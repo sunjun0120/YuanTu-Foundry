@@ -8,6 +8,7 @@ import type { CommandJournal, JobProducer, JobSnapshot } from '../protocol/jobs.
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { Workspace } from './files.ts';
 import { killTree } from './process.ts';
+import { OutputRing } from './output-ring.ts';
 import { toolEnvironment } from './environment.ts';
 import { snapshotExecutionPolicy } from './execution-policy.ts';
 import type { ExecutionPolicy } from '../protocol/execution.ts';
@@ -33,9 +34,7 @@ interface Job {
   status: string;
   pid?: number;
   exitCode: number | null;
-  output: string;
-  total: number;
-  offset: number;
+  output: OutputRing;
   done: Promise<void>;
   cleanupFailed: boolean;
   processClosed?: boolean;
@@ -99,14 +98,14 @@ export class BackgroundCommands {
       cleanupConfirmed: !job.cleanupFailed && job.plan.processTree !== 'process-group',
       exitCode: job.exitCode,
       finishedAt: job.finishedAt ?? new Date().toISOString(),
-      output: job.output.slice(-SETTLED_TAIL),
-      outputChars: job.total,
+      output: job.output.tail(SETTLED_TAIL),
+      outputChars: job.output.total,
     });
   }
   private snapshot(job: Job, cursor = 0) {
-    if (cursor > job.total) throw new Error('Invalid output cursor');
-    const start = Math.max(cursor, job.offset),
-      output = job.output.slice(start - job.offset, start - job.offset + 3000);
+    if (cursor > job.output.total) throw new Error('Invalid output cursor');
+    const start = Math.max(cursor, job.output.offset),
+      output = job.output.read(start, 3000);
     return {
       id: job.id,
       sessionId: job.scope,
@@ -119,13 +118,13 @@ export class BackgroundCommands {
       exitCode: job.exitCode,
       output,
       nextCursor: start + output.length,
-      truncated: cursor < job.offset,
+      truncated: cursor < job.output.offset,
     };
   }
   list(scope?: string) {
     return [...this.jobs.values()]
       .filter((job) => scope === undefined || job.scope === scope)
-      .map((job) => this.snapshot(job, job.total));
+      .map((job) => this.snapshot(job, job.output.total));
   }
   /**
    * This manager as a job producer, so commands answer `job_list` / `job_output` / `job_kill` through the
@@ -167,7 +166,7 @@ export class BackgroundCommands {
   async stopById(id: string, scope: string) {
     const job = this.get(id, scope);
     await this.stop(job);
-    return this.snapshot(job, job.total);
+    return this.snapshot(job, job.output.total);
   }
   clear(scope?: string): number {
     let cleared = 0;
@@ -244,9 +243,7 @@ export class BackgroundCommands {
       worker,
       status: 'starting',
       exitCode: null,
-      output: '',
-      total: 0,
-      offset: 0,
+      output: new OutputRing(65536),
       done: new Promise<void>((resolve) => {
         ended = resolve;
       }),
@@ -288,13 +285,8 @@ export class BackgroundCommands {
         ready();
       }
       if (msg.type === 'output') {
-        if (msg.dropped) {
-          job.output = '';
-          job.offset = job.total + msg.dropped;
-        }
-        job.total += msg.dropped + msg.text.length;
-        job.output = (job.output + msg.text).slice(-65536);
-        job.offset = job.total - job.output.length;
+        if (msg.dropped) job.output.skip(msg.dropped);
+        job.output.push(msg.text);
       }
       if (msg.type === 'exit') {
         job.finalStatus = msg.failed ? 'failed' : msg.stopped ? 'cancelled' : 'completed';

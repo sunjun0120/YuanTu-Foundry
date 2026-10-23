@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { lstatSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
-import { readdir, rm, stat } from 'node:fs/promises';
+import { lstatSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstat, readdir, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { ensureRuntimeDirectory } from '../platform/runtime-directory.ts';
 import type { SpilledOutput } from '../protocol/index.ts';
@@ -185,17 +185,45 @@ function lstatOrNull(file: string) {
     return null;
   }
 }
+/**
+ * Trims in flight, per directory, and the directories that spilled again while theirs ran.
+ *
+ * The trim used to run synchronously after every spill — a `readdir` and fifty `lstat`s on the Host's event
+ * loop, inside the tool pipeline's result stage. It is housekeeping, so it runs in the background instead: one at
+ * a time per directory, and a spill that lands while one is running asks for one more pass rather than a second
+ * concurrent one.
+ */
+const trimming = new Map<string, Promise<void>>();
+const trimAgain = new Set<string>();
 function trimSpills(directory: string): void {
+  if (trimming.has(directory)) {
+    trimAgain.add(directory);
+    return;
+  }
+  const run = (async () => {
+    do {
+      trimAgain.delete(directory);
+      await trimOnce(directory);
+    } while (trimAgain.has(directory));
+  })().finally(() => trimming.delete(directory));
+  trimming.set(directory, run);
+}
+async function trimOnce(directory: string): Promise<void> {
   try {
-    const files = readdirSync(directory)
-      .filter((name) => name.endsWith('.txt'))
-      .map((name) => ({ name, at: lstatSync(path.join(directory, name)).mtimeMs }))
-      .sort((a, b) => b.at - a.at);
+    const names = (await readdir(directory)).filter((name) => name.endsWith('.txt'));
+    const files = await Promise.all(
+      names.map(async (name) => ({ name, at: (await lstat(path.join(directory, name))).mtimeMs })),
+    );
+    files.sort((a, b) => b.at - a.at);
     for (const file of files.slice(MAX_SPILL_FILES_PER_SESSION))
-      unlinkSync(path.join(directory, file.name));
+      await rm(path.join(directory, file.name), { force: true });
   } catch {
     /* Trimming is housekeeping. */
   }
+}
+/** Resolves once every trim started so far has finished; for callers that need to observe the result. */
+export async function settleSpillTrims(): Promise<void> {
+  while (trimming.size) await Promise.all(trimming.values());
 }
 /**
  * Put the full text of a result somewhere the model can read it back, at a path derived from the result.

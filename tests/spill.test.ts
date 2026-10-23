@@ -27,7 +27,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, MAX_TOOL_OUTPUT, bounded } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/catalog/index.ts';
-import { SPILL_DIRECTORY, spillOutput, spillResult } from '../packages/tools/spill.ts';
+import {
+  SPILL_DIRECTORY,
+  settleSpillTrims,
+  spillOutput,
+  spillResult,
+} from '../packages/tools/spill.ts';
 import { Agent } from '../packages/core/agent.ts';
 import type { Message, ToolContext } from '../packages/protocol/index.ts';
 import { tempRoot, storeFixture } from './temp-fixture.ts';
@@ -468,6 +473,7 @@ test('a session keeps only the newest spills', async (t) => {
     content: 'newest',
   })!;
   assert.ok(spilled);
+  await settleSpillTrims();
   const remaining = (await readdir(directory)).filter((name) => name.endsWith('.txt')).sort();
   // A directory left to grow is a tool that can fill a disk one output at a time.
   assert.equal(remaining.length, 50, `kept ${remaining.length} files`);

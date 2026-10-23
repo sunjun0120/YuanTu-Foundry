@@ -79,14 +79,14 @@ test('a stored key is written 0600 in a 0700 directory and replaces the file ato
   const env = at(dir);
   const file = saveCredential('anthropic', 'sk-ant-one', env);
   assert.equal(file, credentialsPath(env));
-  await saveCredential('openai', 'sk-openai-two', env);
+  saveCredential('openai', 'sk-openai-two', env);
   // Both keys, one file: writing one protocol keeps the other, which is the whole difference between a credential
   // store and a last-write-wins file.
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), {
     anthropic: 'sk-ant-one',
     openai: 'sk-openai-two',
   });
-  await saveCredential('anthropic', 'sk-ant-three', env);
+  saveCredential('anthropic', 'sk-ant-three', env);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), {
     anthropic: 'sk-ant-three',
     openai: 'sk-openai-two',

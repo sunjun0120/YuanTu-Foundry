@@ -147,7 +147,7 @@ export function setupGeneralSettings(): { show(): void } {
   for (const control of [language, appearance, fontSize, notifications])
     control.addEventListener('change', () => {
       apply(current());
-      return save();
+      void save();
     });
   byId('general-settings').addEventListener('click', show);
   byId<HTMLFormElement>('general-settings-form').addEventListener('submit', (event) => {

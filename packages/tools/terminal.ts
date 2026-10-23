@@ -15,6 +15,7 @@ import {
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 import { bounded, failure } from './registry.ts';
 import type { Tool, ToolContext } from '../protocol/index.ts';
+import { OutputRing } from './output-ring.ts';
 
 /**
  * Terminals: the one kind of work a command runner cannot express.
@@ -88,9 +89,7 @@ interface Terminal {
   stoppingSignal?: string;
   status: 'running' | 'exited';
   exitCode: number | null;
-  output: string;
-  total: number;
-  offset: number;
+  output: OutputRing;
   /** Resolved whenever something a reader might want to see happened: new output, or an exit. */
   listeners: Set<() => void>;
 }
@@ -129,12 +128,10 @@ export class TerminalSessions {
     return terminal;
   }
   private snapshot(terminal: Terminal, cursor = 0): TerminalSnapshot {
-    if (cursor > terminal.total) throw new Error('Invalid output cursor');
-    const start = Math.max(cursor, terminal.offset);
-    const output = terminal.output.slice(
-      start - terminal.offset,
-      start - terminal.offset + READ_CHARS,
-    );
+    const ring = terminal.output;
+    if (cursor > ring.total) throw new Error('Invalid output cursor');
+    const start = Math.max(cursor, ring.offset);
+    const output = ring.read(start, READ_CHARS);
     return {
       id: terminal.id,
       sessionId: terminal.scope,
@@ -146,13 +143,13 @@ export class TerminalSessions {
       exitCode: terminal.exitCode,
       output,
       nextCursor: start + output.length,
-      truncated: cursor < terminal.offset,
+      truncated: cursor < ring.offset,
     };
   }
   list(scope?: string): TerminalSnapshot[] {
     return [...this.terms.values()]
       .filter((terminal) => scope === undefined || terminal.scope === scope)
-      .map((terminal) => this.snapshot(terminal, terminal.total));
+      .map((terminal) => this.snapshot(terminal, terminal.output.total));
   }
   /**
    * Start a terminal.
@@ -275,16 +272,12 @@ export class TerminalSessions {
         closed,
         status: 'running',
         exitCode: null,
-        output: '',
-        total: 0,
-        offset: 0,
+        output: new OutputRing(RING_CHARS),
         listeners: new Set(),
       };
       this.terms.set(terminal.id, terminal);
       child.onData((chunk) => {
-        terminal.total += chunk.length;
-        terminal.output = (terminal.output + chunk).slice(-RING_CHARS);
-        terminal.offset = terminal.total - terminal.output.length;
+        terminal.output.push(chunk);
         this.wake(terminal);
       });
       child.onExit(({ exitCode }) => {
@@ -334,7 +327,7 @@ export class TerminalSessions {
     const newline = process.platform === 'win32' ? '\r' : '\n';
     const text = enter && !/[\r\n]$/.test(input) ? input + newline : input;
     terminal.process.write(text);
-    return this.snapshot(terminal, terminal.total);
+    return this.snapshot(terminal, terminal.output.total);
   }
   /**
    * Interrupt or end what the terminal is running.
@@ -357,14 +350,14 @@ export class TerminalSessions {
       throw new Error(`Terminal already exited (code ${terminal.exitCode ?? 'unknown'})`);
     if (signal === 'SIGINT') terminal.process.write('\x03');
     else this.beginStop(terminal, signal);
-    return this.snapshot(terminal, terminal.total);
+    return this.snapshot(terminal, terminal.output.total);
   }
   /** Close a terminal and everything it started. Idempotent: closing an exited terminal is a no-op. */
   close(id: string, scope: string): TerminalSnapshot {
     const terminal = this.get(id, scope);
     if (terminal.status === 'running') this.beginStop(terminal);
     this.wake(terminal);
-    return this.snapshot(terminal, terminal.total);
+    return this.snapshot(terminal, terminal.output.total);
   }
   /** Every terminal of a scope, or all of them when the host is shutting down. */
   closeAll(scope?: string): number {
@@ -436,7 +429,7 @@ export class TerminalSessions {
     this.close(id, scope);
     const terminal = this.get(id, scope);
     await this.join(terminal);
-    return this.snapshot(terminal, terminal.total);
+    return this.snapshot(terminal, terminal.output.total);
   }
   async closeAllAndWait(scope?: string): Promise<number> {
     if (scope === undefined) this.closing = true;
@@ -478,7 +471,8 @@ export class TerminalSessions {
     waitMs: number,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    if (waitMs <= 0 || terminal.status !== 'running' || terminal.total > cursor) return false;
+    if (waitMs <= 0 || terminal.status !== 'running' || terminal.output.total > cursor)
+      return false;
     if (signal?.aborted) return false;
     return new Promise<boolean>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -686,7 +680,7 @@ export class TerminalSessions {
           // The backend must acknowledge delivery (or reject it); a graceful request does
           // not also wait for terminal.closed, since the program may ignore the signal.
           else if (signal === 'SIGTERM') await terminal.stopping;
-          const snapshot = this.snapshot(terminal, terminal.total);
+          const snapshot = this.snapshot(terminal, terminal.output.total);
           // A signal is a request, and a backend that cannot deliver one has to be reported as such: the
           // terminal was ended either way, so saying "Sent SIGTERM" would describe an effect nobody observed.
           return {

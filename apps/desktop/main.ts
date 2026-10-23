@@ -326,6 +326,9 @@ app.on('before-quit', (event) => {
   })();
 });
 app.on('window-all-closed', () => app.quit());
+app.on('activate', () => {
+  if (window && !window.isDestroyed()) window.show();
+});
 
 void app
   .whenReady()
@@ -458,6 +461,13 @@ void app
     if (restored?.maximized) window.maximize();
     window.on('close', (event) => {
       saveWindowState();
+      // macOS keeps an app alive with its window closed: the red button hides the window and running work goes
+      // on, the Dock icon brings it back, and Cmd+Q is the quit (its `before-quit` has already set `quitting`).
+      if (process.platform === 'darwin' && !quitting && !quitAllowed) {
+        event.preventDefault();
+        window?.hide();
+        return;
+      }
       if (!quitAllowed) {
         event.preventDefault();
         app.quit();

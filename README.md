@@ -627,7 +627,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 79 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 82 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -651,6 +651,9 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_MAX_PARALLEL_TOOLS` | `1–32` | 一条助手消息里可同时运行的工具调用上限（1 = 严格串行；只对声明了并行安全的工具生效） |
 | `YUANTU_EARLY_TOOL_START` | `0` / `1` | 模型仍在输出时，提前执行参数已完整的只读工具调用（默认关闭；只对声明了 earlyStart 的纯读取工具生效，结果仍按模型顺序落盘） |
 | `YUANTU_QUESTION_TIMEOUT_MS` | `1000–3600000` | 模型向用户提问的等待超时（毫秒） |
+| `YUANTU_MAX_RUN_ROUNDS` | `0–100000` | 单次运行最多的模型轮次（0 = 不限；默认不限，失控由时长与 token 上限兜底） |
+| `YUANTU_MAX_RUN_MS` | `0–86400000` | 单次运行的墙钟上限（毫秒，0 = 不限；默认 2 小时） |
+| `YUANTU_MAX_RUN_TOKENS` | `0–1000000000` | 单次运行累计消耗的模型 token 上限（输入 + 输出，0 = 不限；默认 2000 万） |
 | `YUANTU_TOOL_TIMEOUT_MS` | `0–3600000` | 单次工具调用的墙钟上限（毫秒，0 = 不设上限） |
 | `YUANTU_INVARIANT_TIMEOUT_MS` | `100–600000` | 单条运行时不变量检查的超时（毫秒） |
 | `YUANTU_WORKSPACE` | `string` | 工作区目录 |
@@ -739,7 +742,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 287 个 | `tests/*.test.ts` |
+| 行为测试文件 | 292 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

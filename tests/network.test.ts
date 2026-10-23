@@ -333,7 +333,7 @@ test('web and browser tools require external or write approval through the regis
  * Regression: the guard used to be a three-entry literal hostname set with `redirect: 'follow'`,
  * so a DNS alias, a numeric IP encoding or a single 302 all reached the metadata endpoint.
  */
-test('the network guard refuses metadata, private and link-local addresses in every encoding', () => {
+test('the network guard refuses metadata, private and link-local addresses in every encoding', async () => {
   const refused = [
     '169.254.169.254',
     '10.0.0.1',
@@ -379,18 +379,18 @@ test('the network guard refuses metadata, private and link-local addresses in ev
     'http://[fd00:ec2::254]/',
   ];
   for (const input of hostile) {
-    assert.rejects(assertPublicUrl(new URL(input), {}), `expected ${input} to be refused`);
+    await assert.rejects(assertPublicUrl(new URL(input), {}), `expected ${input} to be refused`);
   }
   // The opt-in lifts the range checks but never the metadata addresses or names.
-  assert.rejects(
+  await assert.rejects(
     assertPublicUrl(new URL('http://169.254.169.254/'), { YUANTU_ALLOW_PRIVATE_NETWORK: '1' }),
   );
-  assert.rejects(
+  await assert.rejects(
     assertPublicUrl(new URL('http://metadata.google.internal/'), {
       YUANTU_ALLOW_PRIVATE_NETWORK: '1',
     }),
   );
-  assert.rejects(
+  await assert.rejects(
     assertPublicUrl(new URL('http://[fd00:ec2::254]/'), { YUANTU_ALLOW_PRIVATE_NETWORK: '1' }),
   );
 });

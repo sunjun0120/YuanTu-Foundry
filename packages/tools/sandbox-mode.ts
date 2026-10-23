@@ -30,5 +30,8 @@ export function nativeSandboxBackend(
 ): 'windows-account' | 'seatbelt' {
   if (platform === 'win32') return 'windows-account';
   if (platform === 'darwin') return 'seatbelt';
-  throw new Error(`Native sandbox is unavailable on ${platform}; no host fallback is allowed`);
+  throw new Error(
+    `Native sandbox is unavailable on ${platform}; no host fallback is allowed. ` +
+      'To run commands without OS isolation, start with YUANTU_SANDBOX=host explicitly.',
+  );
 }

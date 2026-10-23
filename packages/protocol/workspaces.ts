@@ -266,7 +266,6 @@ const MAX_ID = 200;
 export function workspaceId(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > MAX_ID)
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid workspace identifier');
-  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f/\\]/.test(value))
     throw new WorkspaceFailure('WORKSPACE_INTEGRITY', 'Invalid workspace identifier');
   return value;

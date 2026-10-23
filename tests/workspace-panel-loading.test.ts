@@ -309,7 +309,7 @@ test('a rejected directory read is shown, and the directory can be read again', 
   host.directories.set('', ['src/']);
   host.deferred = true;
   open(t, page, host);
-  page.toggle.fire('click');
+  void page.toggle.fire('click');
   await flush();
   assert.equal(host.requests.length, 1, 'opening the panel asks for the root');
   host.requests[0]!.reject(new Error('IPC 通道中断'));
@@ -327,7 +327,7 @@ test('a rejected directory read is shown, and the directory can be read again', 
   );
   // Retry, the way a person would: the refresh button re-reads every open directory.
   host.deferred = false;
-  page.refresh.fire('click');
+  void page.refresh.fire('click');
   await flush();
   assert.match(textOf(page.tree), /src/, 'the retry shows what is there');
   assert.doesNotMatch(textOf(page.tree), /IPC 通道中断/, 'and the failure is gone');
@@ -338,7 +338,7 @@ test('a refusal and a rejection are reported through the same note', async (t) =
   const host = new FakeHost();
   host.refusals.set('', '目录不可读');
   open(t, page, host);
-  page.toggle.fire('click');
+  void page.toggle.fire('click');
   await flush();
   // The refusal path is the one that always worked; the rejection above is drawn in exactly the same place, so
   // the two failure shapes cannot be told apart by where they appear.
@@ -352,16 +352,16 @@ test('an older answer for the same directory cannot overwrite a newer one', asyn
   host.directories.set('sub', ['stale.txt']);
   host.deferred = true;
   open(t, page, host);
-  page.toggle.fire('click');
+  void page.toggle.fire('click');
   await flush();
   host.requests[0]!.resolve(host.replyFor(''));
   await flush();
   // Expand, collapse, expand again while the first read is still unanswered: two requests for one directory.
-  entryButton(page.tree, 'sub').fire('click');
+  void entryButton(page.tree, 'sub').fire('click');
   await flush();
-  entryButton(page.tree, 'sub').fire('click');
+  void entryButton(page.tree, 'sub').fire('click');
   await flush();
-  entryButton(page.tree, 'sub').fire('click');
+  void entryButton(page.tree, 'sub').fire('click');
   await flush();
   assert.deepEqual(
     host.requests.map((request) => request.path),
@@ -390,13 +390,13 @@ test('answers for two directories may arrive in any order', async (t) => {
   host.directories.set('b', ['b1.txt']);
   host.deferred = true;
   open(t, page, host);
-  page.toggle.fire('click');
+  void page.toggle.fire('click');
   await flush();
   host.requests[0]!.resolve(host.replyFor(''));
   await flush();
-  entryButton(page.tree, 'a').fire('click');
+  void entryButton(page.tree, 'a').fire('click');
   await flush();
-  entryButton(page.tree, 'b').fire('click');
+  void entryButton(page.tree, 'b').fire('click');
   await flush();
   // B answers before A, which is the ordinary case for two Host round trips; each is written under its own path.
   host.requests[2]!.resolve(host.replyFor('b'));
@@ -417,7 +417,7 @@ test('being told the same workspace again neither re-reads nor clears the tree',
   const host = new FakeHost();
   host.directories.set('', ['a.txt']);
   const view = open(t, page, host);
-  page.toggle.fire('click');
+  void page.toggle.fire('click');
   await flush();
   assert.equal(host.requests.length, 1);
   assert.match(textOf(page.tree), /a\.txt/);
@@ -433,10 +433,10 @@ test('an answer that arrives after a refresh or a workspace change is dropped', 
   host.directories.set('', ['before.txt']);
   host.deferred = true;
   const view = open(t, page, host);
-  page.toggle.fire('click');
+  void page.toggle.fire('click');
   await flush();
   // A refresh invalidates the round: the answer that was in flight describes a tree that is being replaced.
-  page.refresh.fire('click');
+  void page.refresh.fire('click');
   await flush();
   host.requests[0]!.resolve(host.replyFor(''));
   await flush();
