@@ -56,8 +56,14 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
     names: ['browser_open', 'browser_click', 'browser_fill', 'browser_screenshot', 'browser_close'],
   },
   {
-    hint: 'Word/Excel/PowerPoint files',
-    names: ['office_inspect', 'office_preview', 'office_create', 'office_edit'],
+    hint: 'Word/Excel/PowerPoint files and file delivery checks',
+    names: [
+      'office_inspect',
+      'office_preview',
+      'office_create',
+      'office_edit',
+      'verify_file_delivery',
+    ],
   },
   { hint: 'knowledge base indexing', names: ['index_document', 'remove_indexed_document'] },
   { hint: 'web', names: ['web_search', 'web_fetch'] },
@@ -73,8 +79,16 @@ export const DEFERRED_GROUPS: readonly { hint: string; names: readonly string[] 
     ],
   },
   {
-    hint: 'git branches and worktrees',
-    names: ['git_branches', 'git_worktrees', 'git_worktree_create'],
+    hint: 'git branches, worktrees, staging and commits',
+    names: ['git_branches', 'git_worktrees', 'git_worktree_create', 'git_stage', 'git_commit'],
+  },
+  /**
+   * The rarer file operations. `edit_file` and `write_file` cover almost every change, so a patch, a multi-edit,
+   * a delete or a move pays one load round instead of four schemas on every request.
+   */
+  {
+    hint: 'more file operations (unified-diff patch, multi-edit, delete, move)',
+    names: ['apply_patch', 'batch_edit', 'delete_file', 'move_file'],
   },
   // Manifest-driven validation and stdin to a managed command: `run_command` covers the common case of both.
   { hint: 'project validation', names: ['discover_validations', 'run_validation'] },

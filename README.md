@@ -707,8 +707,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | --- | --- | --- |
 | 工具（空工作区，全部） | 68 个 / 36.2 KB | `createTools().specs()` |
 | 工具（只读运行） | 35 个 / 17.1 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 31 个 / 17.1 KB | `specs({ loaded: new Set() })`（默认 `YUANTU_TOOL_MODE=deferred`） |
-| 工具（折叠为 `run_code`） | 1 个 / 10.4 KB | `specs()`（`YUANTU_TOOL_MODE=ptc`） |
+| 工具（默认按需加载，首个请求） | 24 个 / 14.3 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
