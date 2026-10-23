@@ -55,9 +55,7 @@ async function runHost(launch: Launch): Promise<void> {
   const ctx = createHostState(launch, services);
   const requestMethods = new Map<string, string>();
   ctx.loopHealth = new EventLoopMonitor({
-    thresholdMs:
-      (parseSetting(process.env, 'YUANTU_HOST_STALL_MS') as number | undefined) ??
-      DEFAULT_STALL_THRESHOLD_MS,
+    thresholdMs: DEFAULT_STALL_THRESHOLD_MS,
     activity: () => ({
       sessions: [...ctx.active.keys()],
       operations: ctx.manualOperations.size,

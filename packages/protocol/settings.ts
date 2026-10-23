@@ -329,11 +329,6 @@ export const ENVIRONMENT = {
     description:
       '一条助手消息里可同时运行的工具调用上限（1 = 严格串行；只对声明了并行安全的工具生效）',
   },
-  YUANTU_EARLY_TOOL_START: {
-    kind: 'boolean',
-    description:
-      '模型仍在输出时，提前执行参数已完整的只读工具调用（默认关闭；只对声明了 earlyStart 的纯读取工具生效，结果仍按模型顺序落盘）',
-  },
   YUANTU_QUESTION_TIMEOUT_MS: {
     kind: 'number',
     range: [1_000, 3_600_000],
@@ -358,11 +353,6 @@ export const ENVIRONMENT = {
     kind: 'number',
     range: [0, 3_600_000],
     description: '单次工具调用的墙钟上限（毫秒，0 = 不设上限）',
-  },
-  YUANTU_INVARIANT_TIMEOUT_MS: {
-    kind: 'number',
-    range: [100, 600_000],
-    description: '单条运行时不变量检查的超时（毫秒）',
   },
   YUANTU_WORKSPACE: { kind: 'string', description: '工作区目录' },
   YUANTU_SANDBOX: {
@@ -409,10 +399,6 @@ export const ENVIRONMENT = {
     kind: 'string',
     description: '（内部）程序运行器离开工作区前记录的启动目录；由运行器覆盖',
   },
-  YUANTU_SANDBOX_IMAGE: {
-    kind: 'string',
-    description: '已停用：仅兼容旧配置，原生沙箱不读取镜像设置',
-  },
   YUANTU_PTY: {
     kind: 'string',
     description: '终端（terminal_* 工具）使用的 PTY 后端名，默认为内置的 node-pty',
@@ -421,12 +407,6 @@ export const ENVIRONMENT = {
   YUANTU_FS_OBSERVATION: {
     kind: 'boolean',
     description: '改动文件前是否要求本运行已读过该文件（默认开启，关闭则不检查）',
-  },
-  YUANTU_TOOL_MODE: {
-    kind: 'enum',
-    values: ['deferred', 'native', 'ptc'],
-    description:
-      '工具下发方式：deferred（默认）常用工具直接下发、其余经 load_tools 按需加载，native 逐个全部下发，ptc 折成 run_code + 生成 SDK',
   },
   YUANTU_PERMISSION_POLICY: { kind: 'string', description: '权限策略文件路径' },
   YUANTU_HOOKS_MODULE: { kind: 'string', description: '扩展钩子模块路径' },
@@ -443,16 +423,6 @@ export const ENVIRONMENT = {
     range: [1_000, 600_000],
     description: '单条外部钩子命令的超时（毫秒）',
   },
-  YUANTU_FORK_TRANSCRIPT_CHARS: {
-    kind: 'number',
-    range: [1_000, 10_000_000],
-    description: '分叉子代理继承的父会话转录字符上限',
-  },
-  YUANTU_FORK_TRANSCRIPT_MESSAGES: {
-    kind: 'number',
-    range: [1, 10_000],
-    description: '分叉子代理继承的父会话消息条数上限',
-  },
   YUANTU_SUBAGENT_MODELS: {
     kind: 'string',
     description: '额外的可委派模型 id（逗号分隔），供 list_subagent_models 列出',
@@ -460,40 +430,6 @@ export const ENVIRONMENT = {
   YUANTU_SUMMARY_MODEL: {
     kind: 'string',
     description: '上下文压缩摘要使用的模型 id（同一端点；未设置则用主模型），其窗口不应小于主模型',
-  },
-  YUANTU_TOOL_RESULT_KEEP_RECENT: {
-    kind: 'number',
-    range: [0, 100],
-    description: '末尾永不缩短的工具结果条数',
-  },
-  YUANTU_TOOL_RESULT_SHRINK_TOKENS: {
-    kind: 'number',
-    // A token budget rather than a character one: 1,200 characters is about 400 tokens of English and about
-    // 1,200 of Chinese, so the old unit spent three times as much context on one conversation as on another.
-    range: [100, 32_000],
-    description: '缩短后保留的 token 数（头尾各半）',
-  },
-  YUANTU_CONTEXT_SHRINK_PERCENT: {
-    kind: 'number',
-    range: [10, 95],
-    description: '占窗口（或提前压缩阈值）百分之多少时开始缩短旧工具结果',
-  },
-  YUANTU_TOOL_RESULT_PRUNE_THRESHOLD_CHARS: {
-    kind: 'number',
-    // Code points, and above the 24,000-character bound a tool result is produced with: this pass is a backstop
-    // for results that grew past that, not a second pass over everything shortening already handles.
-    range: [1_000, 10_000_000],
-    description: '旧工具结果超过多少字符时丢弃中段（保留头尾）',
-  },
-  YUANTU_TOOL_RESULT_PRUNE_HEAD_CHARS: {
-    kind: 'number',
-    range: [0, 1_000_000],
-    description: '丢弃中段时在开头保留的字符数',
-  },
-  YUANTU_TOOL_RESULT_PRUNE_TAIL_CHARS: {
-    kind: 'number',
-    range: [0, 1_000_000],
-    description: '丢弃中段时在结尾保留的字符数',
   },
   YUANTU_MCP_OAUTH_DIR: { kind: 'string', description: 'MCP OAuth 令牌目录' },
   YUANTU_STATE_DIR: {
@@ -591,11 +527,6 @@ export const ENVIRONMENT = {
     range: [1, 8],
     description: '同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行）',
   },
-  YUANTU_HOST_STALL_MS: {
-    kind: 'number',
-    range: [20, 60_000],
-    description: 'Host 事件循环被同步工作占住多久（毫秒）记为一次卡顿并写入 stderr（默认 200）',
-  },
   YUANTU_LIBREOFFICE_PATH: {
     kind: 'string',
     description: '可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com）',
@@ -691,7 +622,7 @@ export function settingShape(spec: EnvironmentSpec): string {
  * false negative prints an API key into scrollback or into whatever collects a terminal's output.
  *
  * The `_MS` / `_TOKENS` exemption is what keeps the rule about credentials rather than about the word "token":
- * `YUANTU_TOOL_RESULT_SHRINK_TOKENS` and `YUANTU_INVARIANT_TIMEOUT_MS` are budgets and durations, and a rule
+ * `YUANTU_MAX_RUN_TOKENS` and `YUANTU_TOOL_TIMEOUT_MS` are budgets and durations, and a rule
  * that hid them would be hiding the numbers an operator came to look at.
  */
 export function isCredentialSetting(name: string): boolean {

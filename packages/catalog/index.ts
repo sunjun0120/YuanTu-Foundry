@@ -30,7 +30,7 @@ import { hookDeclarationsDigest, workspaceHookTrust } from '../resources/hook-tr
 import type { HookDeclaration } from '../resources/hook-config.ts';
 import { toolDeadlinePolicy } from '../tools/timeouts.ts';
 import { fileObservationEnabled } from '../tools/fs-observation.ts';
-import { runCodeTool, toolMode } from '../tools/run-code.ts';
+import { runCodeTool } from '../tools/run-code.ts';
 import { DEFERRED_TOOLS, loadToolsTool } from '../tools/deferred-tools.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import {
@@ -116,9 +116,8 @@ export function createTools(
   // Every call the product makes has a wall clock; a bare `ToolRegistry` (a test, an embedder) has none until it
   // is given one, so nothing about the deadline leaks into callers that never asked for it.
   registry.deadlines = toolDeadlinePolicy();
-  // How the catalog reaches the model — one schema per tool, or one `run_code` with a generated declaration list.
-  registry.toolMode = toolMode();
-  // Which tools wait for `load_tools` under the `deferred` mode; the other modes ignore the list.
+  // The product always defers the rarer tools until `load_tools` names them (`../tools/deferred-tools.ts`).
+  registry.toolMode = 'deferred';
   registry.deferrable = DEFERRED_TOOLS;
   registry.register(loadToolsTool((name) => registry.offers(name)));
   const background = sharedBackground ?? new BackgroundCommands(root);

@@ -56,33 +56,14 @@ export interface Options {
    * and a host that cannot manage Git metadata fails the task rather than quietly falling back to it.
    */
   subagentWorkspace?: string;
-  /** Characters of this session's transcript a forked sub-agent inherits. */
-  forkTranscriptChars?: number;
-  /** Messages of this session's transcript a forked sub-agent inherits. */
-  forkTranscriptMessages?: number;
-  /** Newest tool results that are never shortened. Zero is allowed: shorten everything old. */
-  toolResultKeepRecent?: number;
-  /** Characters a shortened tool result keeps. */
-  toolResultShrinkTokens?: number;
-  /** Code points a tool result may reach before its middle is dropped. */
-  toolResultPruneThresholdChars?: number;
-  /** Code points a pruned result keeps at its head. */
-  toolResultPruneHeadChars?: number;
-  /** Code points a pruned result keeps at its tail. */
-  toolResultPruneTailChars?: number;
-  /** Share of the window at which old tool results start being shortened. */
-  contextShrinkPercent?: number;
   taskId?: string;
   help: boolean;
 }
 /**
- * The one count where zero is a choice rather than a typo: shortening every old tool result is exactly what an
- * operator who wants the smallest possible conversation would ask for. Every other number here bounds a budget
- * or a count, where zero means the run cannot do anything at all.
+ * The numbers where zero is a choice rather than a typo. Every other number here bounds a budget or a count,
+ * where zero means the run cannot do anything at all.
  */
 const ZERO_ALLOWED = new Set([
-  'YUANTU_TOOL_RESULT_KEEP_RECENT',
-  '--tool-result-keep-recent',
   // Zero retries is a policy ("a failed request is a failed run"), not a missing value.
   'YUANTU_MAX_RETRIES',
   '--max-retries',
@@ -110,14 +91,6 @@ const NUMBERS = [
   ['YUANTU_MAX_RUN_TOKENS', 'maxRunTokens'],
   ['YUANTU_SUBAGENT_CONCURRENCY', 'subagentConcurrency'],
   ['YUANTU_SUBAGENT_TIMEOUT_MS', 'subagentTimeoutMs'],
-  ['YUANTU_FORK_TRANSCRIPT_CHARS', 'forkTranscriptChars'],
-  ['YUANTU_FORK_TRANSCRIPT_MESSAGES', 'forkTranscriptMessages'],
-  ['YUANTU_TOOL_RESULT_KEEP_RECENT', 'toolResultKeepRecent'],
-  ['YUANTU_TOOL_RESULT_SHRINK_TOKENS', 'toolResultShrinkTokens'],
-  ['YUANTU_TOOL_RESULT_PRUNE_THRESHOLD_CHARS', 'toolResultPruneThresholdChars'],
-  ['YUANTU_TOOL_RESULT_PRUNE_HEAD_CHARS', 'toolResultPruneHeadChars'],
-  ['YUANTU_TOOL_RESULT_PRUNE_TAIL_CHARS', 'toolResultPruneTailChars'],
-  ['YUANTU_CONTEXT_SHRINK_PERCENT', 'contextShrinkPercent'],
 ] as const satisfies readonly (readonly [string, keyof Options])[];
 /**
  * The declared bound of each number, read from the settings table rather than repeated here.
@@ -235,14 +208,6 @@ export function parseArgs(
     | 'maxRunTokens'
     | 'subagentConcurrency'
     | 'subagentTimeoutMs'
-    | 'forkTranscriptChars'
-    | 'forkTranscriptMessages'
-    | 'toolResultKeepRecent'
-    | 'toolResultShrinkTokens'
-    | 'toolResultPruneThresholdChars'
-    | 'toolResultPruneHeadChars'
-    | 'toolResultPruneTailChars'
-    | 'contextShrinkPercent'
   > = {
     '--max-context-chars': 'maxContextChars',
     '--max-context-tokens': 'maxContextTokens',
@@ -257,14 +222,6 @@ export function parseArgs(
     '--max-run-tokens': 'maxRunTokens',
     '--subagent-concurrency': 'subagentConcurrency',
     '--subagent-timeout-ms': 'subagentTimeoutMs',
-    '--fork-transcript-chars': 'forkTranscriptChars',
-    '--fork-transcript-messages': 'forkTranscriptMessages',
-    '--tool-result-keep-recent': 'toolResultKeepRecent',
-    '--tool-result-shrink-tokens': 'toolResultShrinkTokens',
-    '--tool-result-prune-threshold-chars': 'toolResultPruneThresholdChars',
-    '--tool-result-prune-head-chars': 'toolResultPruneHeadChars',
-    '--tool-result-prune-tail-chars': 'toolResultPruneTailChars',
-    '--context-shrink-percent': 'contextShrinkPercent',
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;

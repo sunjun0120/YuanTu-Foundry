@@ -96,7 +96,7 @@ export interface EvaluationManifest {
   maxOutputTokens: number;
   reasoning: string;
   promptCache: 'off';
-  toolMode: 'native';
+  toolMode: 'deferred';
   sandbox: 'host';
   caseConcurrency: 1;
   caseTimeoutMs: Record<string, number>;
@@ -261,7 +261,7 @@ export function validateManifest(value: unknown): EvaluationManifest {
   )
     fail('cases');
   if (![1, 3].includes(v.repeats) || v.caseConcurrency !== 1) fail('repeats or concurrency');
-  if (v.sandbox !== 'host' || v.toolMode !== 'native' || v.promptCache !== 'off')
+  if (v.sandbox !== 'host' || v.toolMode !== 'deferred' || v.promptCache !== 'off')
     fail('fixed mode');
   if (!['fixed-policy', 'interactive'].includes(v.approvalMode)) fail('approvalMode');
   if (typeof v.reasoning !== 'string' || !v.reasoning.length) fail('reasoning must be explicit');

@@ -22,7 +22,7 @@ import {
   invalidArgumentsMessage,
   normalizeImages,
 } from './call-result.ts';
-import { FOLDED_DESCRIPTION, RUN_CODE, toolSdk, type ToolMode } from './run-code-sdk.ts';
+import type { ToolMode } from './run-code-sdk.ts';
 import { LOAD_TOOLS, deferredCatalog } from './deferred-tools.ts';
 import { presentedSchema } from './presented-schema.ts';
 import type {
@@ -150,11 +150,10 @@ export class ToolRegistry {
   deadlines?: ToolDeadlinePolicy;
   workspaceRoot?: string;
   /**
-   * How the catalog is presented to the model: every tool's schema, or `run_code` plus a generated declaration
-   * list (`./run-code.ts`).
+   * How the catalog is presented to the model: every tool's schema, or the common ones plus `load_tools`.
    *
    * A field for the same reason `deadlines` is, and one that travels with the tools through `forRun`: a
-   * delegated run that silently lost the mode would send sixty schemas where its parent sent one.
+   * delegated run that silently lost the mode would send every schema where its parent sent a few.
    */
   toolMode: ToolMode = 'native';
   /**
@@ -348,21 +347,6 @@ export class ToolRegistry {
    * The classifier is the tool's own statement about *this* call, which is why it takes the arguments: a tool
    * may read safely for one path and not for another, and only the tool knows which is which.
    */
-  /**
-   * Whether this call may start before the model has finished its turn.
-   *
-   * Narrower than `executionMode`, on purpose: an early start overlaps whatever the model has not written yet, so
-   * the call must be one that may overlap anything (`parallel`) *and* one whose discarded execution leaves no trace
-   * (`Tool.earlyStart`). A name this run does not offer is never started early either — it would only be refused.
-   */
-  startsEarly(call: ToolCall): boolean {
-    const entry = this.entries.get(call.name);
-    return (
-      entry?.tool.earlyStart === true &&
-      this.offers(call.name) &&
-      this.executionMode(call) === 'parallel'
-    );
-  }
   executionMode(call: ToolCall): 'parallel' | 'exclusive' {
     const entry = this.entries.get(call.name);
     if (!entry || entry.tool.permission) return 'exclusive';
@@ -434,23 +418,7 @@ export class ToolRegistry {
             ]
           : [spec];
       });
-    /**
-     * Folding is a *presentation* of the same set, never a change to it: the declaration list names the tools the
-     * model would otherwise have been sent one schema at a time, and each of them stays callable through
-     * `run_code` with exactly the permissions and approval it always had.
-     *
-     * A registry with no `run_code` — an embedder's own tool set — is left unfolded rather than left with
-     * nothing, because a mode that silently removed every capability would be the worst possible reading of a
-     * schema-cost setting. `mode: 'native'` is how the run asks for the set the model may actually call, which is
-     * what a program's catalog is built from.
-     */
-    if (mode !== 'ptc' || !visible.some((spec) => spec.name === RUN_CODE)) return visible;
-    return visible
-      .filter((spec) => spec.name === RUN_CODE)
-      .map((spec) => ({
-        ...spec,
-        description: `${FOLDED_DESCRIPTION}\n${toolSdk(visible)}`,
-      }));
+    return visible;
   }
   /**
    * A registry for a delegated run: the same tool objects, the same hook set, but its own run-scoped

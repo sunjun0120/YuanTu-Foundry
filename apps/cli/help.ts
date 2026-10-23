@@ -31,14 +31,6 @@ Options:
   --no-subagents             Disable sub-agent delegation (also YUANTU_SUBAGENTS=off)
   --subagent-concurrency <n> Sub-agents running at once, 1-16 (capped at ${SUBAGENT_CEILINGS.maxConcurrency}; default: ${SUBAGENT_DEFAULTS.maxConcurrency})
   --subagent-timeout-ms <n>  Stop a sub-agent after this long with no progress; 0 = no watchdog (default: ${Math.round(SUBAGENT_DEFAULTS.timeoutMs / 1000)}s)
-  --fork-transcript-chars <n>    Characters of this conversation a forked sub-agent inherits (default: ${RUN_DEFAULTS.forkTranscriptChars})
-  --fork-transcript-messages <n> Messages of this conversation a forked sub-agent inherits (default: ${RUN_DEFAULTS.forkTranscriptMessages})
-  --tool-result-keep-recent <n>  Newest tool results never shortened (default: ${RUN_DEFAULTS.toolResultKeepRecent}; 0 shortens all old ones)
-  --tool-result-shrink-tokens <n> Tokens a shortened tool result keeps (default: ${RUN_DEFAULTS.toolResultShrinkTokens})
-  --context-shrink-percent <n>   Window share at which old tool results are shortened (default: ${RUN_DEFAULTS.contextShrinkPercent})
-  --tool-result-prune-threshold-chars <n> Characters a tool result may reach before its middle is dropped (default: ${RUN_DEFAULTS.toolResultPruneThresholdChars})
-  --tool-result-prune-head-chars <n>      Characters a pruned result keeps at its head (default: ${RUN_DEFAULTS.toolResultPruneHeadChars})
-  --tool-result-prune-tail-chars <n>      Characters a pruned result keeps at its tail (default: ${RUN_DEFAULTS.toolResultPruneTailChars})
   --task-id <id>             Run and verify a persisted task
 
 Environment:
@@ -54,8 +46,6 @@ Environment:
   YUANTU_REQUEST_TIMEOUT_MS            Optional wall-clock request cap
   YUANTU_SUBAGENT_MODELS               Extra model ids list_subagent_models may offer (comma separated)
   YUANTU_SUBAGENT_TIMEOUT_MS           Stop a sub-agent after this long with no progress; 0 disables it
-  YUANTU_CONTEXT_SHRINK_PERCENT / YUANTU_TOOL_RESULT_KEEP_RECENT / YUANTU_TOOL_RESULT_SHRINK_TOKENS
-                                       When and how much old tool results are shortened for the model
   YUANTU_MCP_OAUTH_DIR                 MCP credential directory (default: ~/.yuantu/mcp-oauth)
   YUANTU_CREDENTIALS_FILE              File "credentials set" writes to (default: ~/.yuantu/credentials.json)
 

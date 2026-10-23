@@ -1,10 +1,9 @@
 /**
  * `run_code`: one round of model output can be a *program* that calls tools itself, instead of one tool call.
  *
- * Two problems share one lever. A run pays a round trip per tool call, so "read these eight files and tell me
+ * Two problems, two levers. A run pays a round trip per tool call, so "read these eight files and tell me
  * which two disagree" costs eight model turns and eight request rebuilds; and every tool's full JSON schema is
- * sent on every request, so a catalog of sixty tools costs more context than the task. A program fixes the first;
- * folding the catalog into `run_code` plus a generated declaration list (`YUANTU_TOOL_MODE=ptc`) fixes the second.
+ * sent on every request. A program fixes the first; deferred loading (`./deferred-tools.ts`) handles the second.
  *
  * Four decisions are deliberate:
  *
@@ -26,26 +25,13 @@
  *   catalog, and a disconnect during an inner call stops automatic continuation with an unknown outcome.
  */
 import { startCodeProcess } from './code-process.ts';
-import { parseSetting } from '../protocol/settings.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { BASE_DESCRIPTION, RUN_CODE } from './run-code-sdk.ts';
-import type { ToolMode } from './run-code-sdk.ts';
 import type { Tool, ToolCall, ToolResult } from '../protocol/index.ts';
 import type { CallRequest, CodeWorkerData, WorkerMessage } from './code-worker.ts';
 
-export { FOLDED_DESCRIPTION, RUN_CODE, toolSdk } from './run-code-sdk.ts';
+export { RUN_CODE } from './run-code-sdk.ts';
 export type { ToolMode } from './run-code-sdk.ts';
-
-/**
- * `YUANTU_TOOL_MODE` picks the presentation; anything the setting table rejects never gets this far.
- *
- * Unset means `deferred`: a request carries the common tools and a `load_tools` for the rest, which is the same
- * set of callable tools for a fraction of the schema. `native` sends every schema on every request.
- */
-export function toolMode(env: NodeJS.ProcessEnv = process.env): ToolMode {
-  const mode = parseSetting(env, 'YUANTU_TOOL_MODE');
-  return mode === 'ptc' || mode === 'native' ? mode : 'deferred';
-}
 
 /** How many calls a failure trace names before it says how many more there were. */
 const MAX_TRACE_ENTRIES = 40;

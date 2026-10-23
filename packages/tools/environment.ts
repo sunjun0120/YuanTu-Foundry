@@ -98,7 +98,7 @@ export function workerExecArgv(execArgv: readonly string[] = process.execArgv): 
  * `resourceLimits` inherits the process's own heap, so a program that allocates without bound does not fail — it
  * takes down the *host*: the session store, the run that is in flight, every other session in the process. The
  * isolation these tools promise for guest code has always been termination rather than a sandbox (see the note on
- * `workerExecArgv` above, and `YUANTU_TOOL_MODE`'s contract), and a ceiling is what makes "the guest dies" true
+ * `workerExecArgv` above), and a ceiling is what makes "the guest dies" true
  * instead of "everything dies".
  *
  * Generous on purpose. A program gets its data through tools whose results are bounded in the kilobytes, so a

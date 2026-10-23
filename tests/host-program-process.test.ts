@@ -45,7 +45,6 @@ test(
     });
     const host = await listeningHost(t, {
       YUANTU_SANDBOX: 'native',
-      YUANTU_TOOL_MODE: 'ptc',
       YUANTU_BASE_URL: url,
     });
     await writeFile(path.join(host.root, 'seed.txt'), 'seed');

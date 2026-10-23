@@ -15,7 +15,7 @@ import { build } from 'esbuild';
 import { createTools } from '../packages/catalog/index.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { MAX_TOOL_OUTPUT, ToolRegistry } from '../packages/tools/registry.ts';
-import { RUN_CODE, toolMode, toolSdk } from '../packages/tools/run-code.ts';
+import { RUN_CODE } from '../packages/tools/run-code.ts';
 import { TOOL_TIMEOUT_MARKER } from '../packages/tools/timeouts.ts';
 import { FS_NOT_OBSERVED } from '../packages/tools/fs-observation.ts';
 import { projectRoot } from './process-fixture.ts';
@@ -689,81 +689,11 @@ test("a picture a program's tool returned is reported, not silently dropped", as
   assert.match(result.content, /not visible inside a program; call read_image directly/);
 });
 
-test('the declaration list names every tool a program can call, and no others', () => {
-  const tools = createTools(process.cwd());
-  const native = tools.specs({ mode: 'native' });
-  const sdk = toolSdk(native);
-  assert.match(sdk, /tools\.read_file\(\{[^}\n]*path: string/);
-  assert.match(sdk, /tools\.search_files\(\{[^}\n]*query: string/);
-  // Optional parameters are marked, which is the one thing a JSON schema said and a declaration still can.
-  assert.match(sdk, /tools\.read_file\(\{[^}\n]*start_line\?: number/);
-  // The tool that runs the program is not offered inside it (and neither is anything not in this registry).
-  assert.doesNotMatch(sdk, /tools\.run_code\(/);
-  assert.equal(sdk.split('\n').length, native.length - 1);
-});
-
-test('folding the catalog sends one schema and keeps the tools reachable', () => {
-  const tools = createTools(process.cwd());
-  const native = tools.specs({ mode: 'native' });
-  tools.toolMode = 'ptc';
-  const folded = tools.specs();
-  assert.equal(folded.length, 1);
-  assert.equal(folded[0]!.name, RUN_CODE);
-  assert.match(folded[0]!.description, /tools\.read_file\(\{[^}\n]*path: string/);
-  // The lever, stated as a measurement: the schema cost of the catalog is what folding is for.
-  assert.ok(
-    JSON.stringify(folded).length < JSON.stringify(native).length / 2,
-    `folded ${JSON.stringify(folded).length} vs native ${JSON.stringify(native).length}`,
-  );
-  // Folding is presentation, not capability: the run has the same tools either way, which is what the catalog is
-  // built from.
-  assert.deepEqual(
-    tools.specs({ mode: 'native' }).map((spec) => spec.name),
-    native.map((spec) => spec.name),
-  );
-});
-
-test('a registry without run_code is never folded to nothing', async () => {
-  const registry = new ToolRegistry();
-  registry.register({
-    name: 'echo',
-    description: 'Echo text back.',
-    inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
-    execute: async (args) => ({ isError: false, content: String(args.text) }),
-  });
-  registry.toolMode = 'ptc';
-  assert.deepEqual(
-    registry.specs().map((spec) => spec.name),
-    ['echo'],
-  );
-  // The setting is a presentation choice, so it cannot be the thing that empties a run's capability set.
-  const result = await registry.execute(
-    { id: 'call', name: 'echo', arguments: { text: 'hi' } },
-    { signal: new AbortController().signal, approve: async () => true },
-  );
-  assert.equal(result.content, 'hi');
-});
-
-test('the mode comes from the setting, and a mistyped one is refused', () => {
-  assert.equal(toolMode({}), 'deferred');
-  assert.equal(toolMode({ YUANTU_TOOL_MODE: 'ptc' }), 'ptc');
-  assert.equal(toolMode({ YUANTU_TOOL_MODE: 'native' }), 'native');
-  assert.throws(() => toolMode({ YUANTU_TOOL_MODE: 'programmatic' }), /YUANTU_TOOL_MODE/);
-});
-
 test('the delegated run keeps the mode its parent was configured with', () => {
   const tools = createTools(process.cwd());
-  tools.toolMode = 'ptc';
+  assert.equal(tools.toolMode, 'deferred');
   const child = tools.forRun({ allow: ['run_code', 'read_file'] });
-  assert.equal(child.toolMode, 'ptc');
-  assert.deepEqual(
-    child.specs().map((spec) => spec.name),
-    [RUN_CODE],
-  );
-  // A read-only child's program is handed the child's own catalog, so the fold is a presentation of two tools
-  // rather than of the parent's sixty.
-  assert.match(child.specs()[0]!.description, /tools\.read_file/);
-  assert.doesNotMatch(child.specs()[0]!.description, /tools\.write_file/);
+  assert.equal(child.toolMode, 'deferred');
 });
 
 test('without a catalog the tool says so instead of guessing', async (t) => {

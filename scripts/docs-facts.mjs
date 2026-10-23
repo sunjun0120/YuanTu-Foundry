@@ -121,16 +121,6 @@ async function facts() {
      */
     tools.toolMode = 'deferred';
     const deferred = tools.specs({ loaded: new Set() });
-    /**
-     * The folded catalog, measured rather than described.
-     *
-     * `YUANTU_TOOL_MODE=ptc` replaces every schema with one `run_code` carrying a generated declaration list, and
-     * the whole point of the mode is that the number goes down — so the number belongs in the table the docs gate
-     * keeps honest, next to the unfolded one it is meant to be compared with.
-     */
-    tools.toolMode = 'ptc';
-    const folded = tools.specs();
-    tools.toolMode = 'native';
     const packageJson = JSON.parse(await read(path.join('package.json')));
     const smokeSuites = String(packageJson.scripts['smoke:desktop'])
       .split(/\s+/)
@@ -148,8 +138,6 @@ async function facts() {
       toolsReadOnlyBytes: JSON.stringify(readOnly).length,
       toolsDeferred: deferred.length,
       toolsDeferredBytes: JSON.stringify(deferred).length,
-      toolsFolded: folded.length,
-      toolsFoldedBytes: JSON.stringify(folded).length,
       exploreTools: EXPLORE_TOOLS.length,
       sessionSchema: await schemaVersion(),
       sessionEventTypes: SESSION_EVENT_TYPES.length,
@@ -184,8 +172,7 @@ function table(value) {
     '| --- | --- | --- |',
     `| 工具（空工作区，全部） | ${value.toolsAll} 个 / ${kb(value.toolsBytes)} | \`createTools().specs()\` |`,
     `| 工具（只读运行） | ${value.toolsReadOnly} 个 / ${kb(value.toolsReadOnlyBytes)} | \`specs({ readOnly: true })\` |`,
-    `| 工具（默认按需加载，首个请求） | ${value.toolsDeferred} 个 / ${kb(value.toolsDeferredBytes)} | \`specs({ loaded: new Set() })\`（默认 \`YUANTU_TOOL_MODE=deferred\`） |`,
-    `| 工具（折叠为 \`run_code\`） | ${value.toolsFolded} 个 / ${kb(value.toolsFoldedBytes)} | \`specs()\`（\`YUANTU_TOOL_MODE=ptc\`） |`,
+    `| 工具（默认按需加载，首个请求） | ${value.toolsDeferred} 个 / ${kb(value.toolsDeferredBytes)} | \`specs({ loaded: new Set() })\` |`,
     `| \`explore\` 白名单条目 | ${value.exploreTools} 条 | \`EXPLORE_TOOLS\` |`,
     `| 会话 schema 版本 | v${value.sessionSchema} | 新建库上的 \`PRAGMA user_version\` |`,
     `| 持久事件类型 / 实时事件类型 | ${value.sessionEventTypes} / ${value.agentEventTypes} | \`SESSION_EVENT_TYPES\`、\`AGENT_EVENT_TYPES\` |`,

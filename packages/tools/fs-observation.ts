@@ -111,8 +111,7 @@ export class FileObservations implements FileObservationLog {
   /**
    * Takes the observation now and returns the step that records it.
    *
-   * Split from `record` for a read that may still be discarded (`ToolContext.deferEffect`): the size and time
-   * have to be the ones the read saw, while the record itself must wait until the model has the content.
+   * Split from `record` so the size and time are the ones the read saw, even when the record is applied later.
    */
   async observe(input: string): Promise<() => void> {
     if (!this.enabled) return () => {};

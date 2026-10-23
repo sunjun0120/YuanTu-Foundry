@@ -583,7 +583,6 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_branches',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description: 'List local branches and mark the branch checked out in this workspace.',
       inputSchema: schema({}),
       async execute(_args, context) {
@@ -599,7 +598,6 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_worktrees',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description: 'List local Git worktrees and their checked-out branches without changing them.',
       inputSchema: schema({}),
       async execute(_args, context) {
@@ -629,7 +627,6 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_status',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description:
         'Read bounded Git porcelain v2 status for a repository contained in the workspace. Uses fixed arguments, isolated configuration, no prompts, and no repository mutation.',
       inputSchema: schema({}),
@@ -646,7 +643,6 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_diff',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description:
         'Read a bounded Git diff for working-tree, staged, or HEAD state, optionally restricted to repository-relative paths. External diff and textconv execution are disabled.',
       inputSchema: schema({
@@ -668,7 +664,6 @@ export function gitTools(root: string): Tool[] {
     {
       name: 'git_log',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description:
         'Read bounded recent commit history for a repository contained in the workspace, optionally restricted to repository-relative paths. Read-only; use it to match the repository commit message conventions before committing.',
       inputSchema: schema({

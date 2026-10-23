@@ -130,7 +130,7 @@ export async function runBatchCase(options: {
       if (signal.aborted) break;
       const tools =
         options.variant === 'full-native' ? owner : owner.forRun({ allow: ALLOW[stage] });
-      tools.toolMode = options.variant === 'stage-ptc' ? 'ptc' : 'native';
+      tools.toolMode = 'native';
       const before = store.statistics(session.id);
       const catalogBytes: number[] = [],
         catalogHashes: string[] = [];

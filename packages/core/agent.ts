@@ -6,7 +6,6 @@ import type {
   Questioner,
   RunResult,
   RunStatus,
-  ToolCall,
   Usage,
   UserInput,
 } from '../protocol/index.ts';
@@ -45,7 +44,7 @@ import { RunQueue, type InputMode, type QueuedInput } from './run-queue.ts';
 import { requestRunRound } from './run-request.ts';
 import { ResidentTurnSettlements } from './run-residency.ts';
 import { loadRunTask, registerTaskStepTool, startRunTask } from './run-task.ts';
-import { createToolBatch, type EarlyToolStarts } from './run-tools.ts';
+import { createToolBatch } from './run-tools.ts';
 import { ToolProgressGuard, toolProgressNotice } from './tool-progress.ts';
 import { sessionQueryTools } from './session-query.ts';
 import { subAgentJobProducer } from './subagent-jobs.ts';
@@ -532,19 +531,6 @@ export class Agent {
       }
       // The step the log has open, its timing, and the one way it closes (see `run-steps.ts`).
       const steps = new RunSteps({ store, sessionId: input.sessionId, runId, statistics, emit });
-      /**
-       * The calls the current attempt started while its turn was still streaming (see `run-tools.ts`).
-       *
-       * A fresh set per attempt, because a re-sent request is a different turn: whatever the abandoned one
-       * started is discarded before the next one can report calls. Every path out of a round that does not reach
-       * the batch discards them too, and so does the end of the run, so no early read outlives its round.
-       */
-      let earlyStarts: EarlyToolStarts | undefined;
-      const discardEarly = async (): Promise<void> => {
-        const starts = earlyStarts;
-        earlyStarts = undefined;
-        await starts?.discard();
-      };
       try {
         signal.throwIfAborted();
         const instructions = loadInstructions(workspace);
@@ -868,15 +854,6 @@ export class Agent {
             recordEnvelope,
             beforeRequest: (system) => admitVisibleBackground(store, input.sessionId, system),
             onVisibleText: (delta) => steps.visibleText(delta),
-            ...(this.options.earlyToolStarts && !concludeQueries
-              ? {
-                  onToolCall: (call: ToolCall) => earlyStarts?.offer(call),
-                  beforeAttempt: async () => {
-                    await discardEarly();
-                    earlyStarts = batch.early();
-                  },
-                }
-              : {}),
             onAnswerText: (answer) => {
               text = answer;
             },
@@ -892,17 +869,10 @@ export class Agent {
             calibration,
             calibrationRouteKey,
             emit,
-          }).catch(async (error: unknown) => {
-            if (earlyStarts) await discardEarly();
-            throw error;
           });
           // An abort after the provider's terminal event must keep the completed text while still
           // refusing to execute any pending tool call.
-          // Each discard is awaited only when there is something to discard, so a run without early starts takes
-          // exactly the ticks it always took.
-          if (signal.aborted && earlyStarts) await discardEarly();
           signal.throwIfAborted();
-          if (response.toolCalls.length === 0 && earlyStarts) await discardEarly();
           if (response.toolCalls.length === 0) {
             if (queue.hasSteer || consume('follow-up')) {
               steps.end(round, 'queued-input');
@@ -976,10 +946,7 @@ export class Agent {
           // results are recorded in (see `run-tools.ts`); what comes back is what the model is told *after* those
           // results, which is the loop's own step.
           await automaticVerification.beforeTools(response.toolCalls);
-          const running = batch.run(response.toolCalls, earlyStarts);
-          const { injected, changedGoals, observations } = earlyStarts
-            ? await running.finally(discardEarly)
-            : await running;
+          const { injected, changedGoals, observations } = await batch.run(response.toolCalls);
           automaticVerification.observe(observations);
           for (const goal of changedGoals) announcements.goal(goal);
           // Context a post-execute policy asked to inject becomes a persisted user message *after* the
@@ -1040,7 +1007,6 @@ export class Agent {
         if (outcome.text !== undefined) text = outcome.text;
         ({ status, error, code, endpointFailure } = outcome);
       } finally {
-        if (earlyStarts) await discardEarly();
         result = await finalizeRun({
           agent: this.options,
           store,

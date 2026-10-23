@@ -200,14 +200,6 @@ export interface AgentOptions {
   maxRunRounds?: number;
   maxRunMs?: number;
   maxRunTokens?: number;
-  /**
-   * Start a read the model has finished writing while the rest of its turn is still streaming.
-   *
-   * Only calls whose tool declares `earlyStart` (pure reads), and only while every call before them in the turn
-   * did too; the record is unchanged — results are still appended in model order after the turn. Off by
-   * default: `YUANTU_EARLY_TOOL_START=1` turns it on.
-   */
-  earlyToolStarts?: boolean;
   /** How many of the newest tool results are never shortened. */
   toolResultKeepRecent?: number;
   /** Characters a shortened tool result keeps. */

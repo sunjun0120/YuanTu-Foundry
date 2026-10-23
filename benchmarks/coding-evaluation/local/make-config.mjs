@@ -34,7 +34,7 @@ const manifest = {
   maxOutputTokens: 8192,
   reasoning: 'off',
   promptCache: 'off',
-  toolMode: 'native',
+  toolMode: 'deferred',
   sandbox: 'host',
   caseConcurrency: 1,
   caseTimeoutMs: {

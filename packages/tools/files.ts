@@ -15,7 +15,6 @@ import {
 } from './file-mutation.ts';
 import { loadInstructions } from './instructions.ts';
 import { FileObservations, type MutationGates } from './fs-observation.ts';
-import { afterDelivery } from './after-delivery.ts';
 import { isCredentialFileName } from '../platform/credential-paths.ts';
 import {
   LEGACY_MAX_ENTRIES,
@@ -295,8 +294,7 @@ export function fileTools(
   /**
    * The scoped instructions a call would hand over, and the step that records them as handed over.
    *
-   * Separate steps because a read started early may be discarded (`ToolContext.deferEffect`): recording
-   * instructions as shown for a result the model never read would keep them from it for the rest of the run.
+   * Separate steps so the instructions are recorded as shown only once the read has succeeded.
    */
   async function pendingGuidance(input: string): Promise<{ text: string; shown: () => void }> {
     // Spilled output is read like any other file, and the scoped-instruction lookup must not refuse the
@@ -322,7 +320,6 @@ export function fileTools(
     {
       name: 'list_files',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description:
         'List files recursively relative to workspace; skips links, credentials and dependency directories. Up to 1000 per page; pass limit, and the nextCursor of a previous result to reach the rest. The list ends with a retrieval-metadata line saying whether it is the whole scope or was cut short.',
       inputSchema: schema({
@@ -376,7 +373,6 @@ export function fileTools(
     {
       name: 'read_file',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       output: READ_FILE_OUTPUT,
       description:
         'Read a UTF-8 file. Returns numbered lines; use start_line and end_line for slices. The whole file is searchable, so a slice may start anywhere in it, and totalLines is the file’s real length. Output a tool could not return is stored under .yuantu/spill and is readable here.',
@@ -403,7 +399,7 @@ export function fileTools(
         const range = await readRange(access, input, start, end, ctx.signal, true);
         // The model sees this file's bytes once the result is delivered, which is what a later change to it will
         // be checked against.
-        afterDelivery(ctx, await observations.observe(input));
+        await observations.record(input);
         /**
          * The path in the payload is the resolved one, not the argument as written.
          *
@@ -418,7 +414,7 @@ export function fileTools(
         const pending = isSpillIdentity(await canonicalRelative(workspace, file))
           ? undefined
           : await pendingGuidance(input);
-        if (pending) afterDelivery(ctx, pending.shown);
+        pending?.shown();
         const instructions = pending?.text ?? '';
         /**
          * The numbered text keeps the convention it has always had, and the payload keeps the count.
@@ -458,7 +454,6 @@ export function fileTools(
     {
       name: 'read_image',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description:
         'Read an image file in the workspace (PNG, JPEG, GIF or WebP, up to 5MB) and return it as a picture you can actually look at. Use it on a screenshot or diagram instead of asking what is in it; read_file refuses binary files, and a path alone tells you nothing about the picture.',
       inputSchema: schema({ path: str }, ['path']),
@@ -511,7 +506,6 @@ export function fileTools(
     {
       name: 'search_files',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       output: SEARCH_FILES_OUTPUT,
       description:
         'Search workspace text. Defaults remain literal, case-sensitive, and 100 results; supports regex, case modes, include/exclude globs and a bounded result limit. Files are read to EOF, and the result says whether the scan was complete — an incomplete scan never reports that the workspace has no such text.',

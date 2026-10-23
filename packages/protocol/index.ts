@@ -240,16 +240,6 @@ export interface ModelRequest {
    * this display channel alone never authorizes replay. A provider with nothing to report never calls this.
    */
   onReasoning?: (text: string) => void;
-  /**
-   * One tool call whose arguments are complete, while the rest of the turn is still streaming.
-   *
-   * Advisory and early by design: it lets the run start a call that is safe to start before the turn ends, and
-   * nothing else. The returned `ModelResponse.toolCalls` stays the authority — a turn can still be truncated,
-   * filtered or broken off, and a call reported here may then not be in it, or may differ from it. Adapters
-   * report calls in the order the model wrote them, each at most once, and only once its arguments parse as a
-   * JSON object; an adapter that cannot tell when a call is complete simply never calls this.
-   */
-  onToolCall?: (call: ToolCall) => void;
   onProgress?: (progress: ModelProgress) => void;
   /**
    * The model to serve *this* request, when it is not the provider's configured one.

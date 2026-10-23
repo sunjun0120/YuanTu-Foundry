@@ -203,7 +203,7 @@ test('console truncation stays within the RPC log budget', async (t) => {
   assert.match(result.content, /console output truncated/);
 });
 
-for (const mode of ['native', 'ptc'] as const)
+for (const mode of ['native', 'deferred'] as const)
   test(`${mode} program records each task effect after its durable receipt`, async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-program-receipts-'));
     const file = path.join(root, 'sessions.sqlite');

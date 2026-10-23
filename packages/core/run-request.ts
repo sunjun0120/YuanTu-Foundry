@@ -5,7 +5,6 @@ import type {
   ModelResponse,
   Provider,
   ReasoningEffort,
-  ToolCall,
   ToolSpec,
   Usage,
 } from '../protocol/index.ts';
@@ -64,15 +63,6 @@ export interface RunRequestOptions {
   onVisibleText(delta: string): void;
   onAnswerText(text: string): void;
   /**
-   * The stream's complete calls, as they arrive (`ModelRequest.onToolCall`).
-   *
-   * Paired with `beforeAttempt`, which runs before every attempt of the round — the first included — and is
-   * awaited: an attempt that is thrown away (a retry, an overflow re-send) takes whatever its calls started with
-   * it, before the next attempt can report calls of its own.
-   */
-  onToolCall?(call: ToolCall): void;
-  beforeAttempt?(): Promise<void>;
-  /**
    * Mark a plain answer as one the caller expects to replace with another answer from the same turn.
    *
    * Only the successful no-tool-call path takes the mark: a tool-call turn is not an answer, and a partial or
@@ -130,8 +120,6 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     beforeRequest,
     onVisibleText,
     onAnswerText,
-    onToolCall,
-    beforeAttempt,
     provisionalAnswer = false,
     commitStepTiming,
     statistics,
@@ -364,8 +352,6 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       roundBytes = context.forecast.bytes;
       requestOutputLimit = context.forecast.outputTokens;
       let attempt: ModelResponse;
-      // Only awaited when present: an unconditional `await` would add a tick before every request.
-      if (beforeAttempt) await beforeAttempt();
       /**
        * While the request is in flight the run is working, and the lease says so.
        *
@@ -419,7 +405,6 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             streamedReasoning += delta;
             emit('message.reasoning', { messageId, text: delta });
           },
-          ...(onToolCall ? { onToolCall } : {}),
         });
       } catch (cause) {
         // A refused request is recoverable only while nothing has been shown: once text has streamed,

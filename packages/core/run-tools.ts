@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util';
 import type { FileChange, ToolCall, ToolContext } from '../protocol/index.ts';
 import type { ToolExecutionResult } from '../protocol/tool-pipeline.ts';
 import type { Goal } from '../protocol/goals.ts';
@@ -107,47 +106,12 @@ export interface RunToolBatchOptions {
 }
 
 export interface RunToolBatch {
-  /**
-   * Runs one round's calls in model order, honouring the group scheduler and the run's width.
-   *
-   * `early` is the set of calls the same turn already started while it was streaming (see `early`): the ones that
-   * match the turn's leading calls are adopted rather than started again, and every other one is discarded before
-   * this returns.
-   */
-  run(
-    calls: readonly ToolCall[],
-    early?: EarlyToolStarts,
-  ): Promise<{
+  /** Runs one round's calls in model order, honouring the group scheduler and the run's width. */
+  run(calls: readonly ToolCall[]): Promise<{
     injected: { callId: string; notes: string[] }[];
     changedGoals: Goal[];
     observations: ToolObservation[];
   }>;
-  /** A fresh set of early starts for one model attempt. */
-  early(): EarlyToolStarts;
-}
-
-/**
- * The calls one model attempt started before its turn ended.
- *
- * The model's stream reports each call once its arguments are complete (`ModelRequest.onToolCall`), and a call
- * whose tool promised `earlyStart` begins right then instead of after the whole turn — the read overlaps the rest
- * of the model's output, which is what the round would otherwise wait for. Nothing about the record changes:
- * an early call is announced, journalled and appended exactly where and when the batch would have done it, and
- * its execution records are held back until then too.
- *
- * Two rules keep a start from ever changing what the model asked for:
- *
- * - **Only a prefix starts.** Calls are offered in model order, and the first one that may not start early ends
- *   early starting for the attempt: a read the model wrote *after* a write must not run before that write.
- * - **Only an exact match is adopted.** The turn's final calls are the authority; an early call is used only when
- *   it is the same call (id, name and arguments) in the same position. Everything else is aborted, awaited and
- *   dropped with the bookkeeping it deferred, so a discarded start leaves nothing the model could notice.
- */
-export interface EarlyToolStarts {
-  /** One complete call from the stream, in model order. */
-  offer(call: ToolCall): void;
-  /** Aborts and awaits every start not adopted, and refuses further offers. */
-  discard(): Promise<void>;
 }
 
 /** What one executed call hands back to the batch. */
@@ -170,25 +134,13 @@ interface CallTiming {
   executionFinishedAt?: number;
 }
 
-/**
- * Where one call's by-products go.
- *
- * A batch call writes straight into the batch; an early call writes into its own scope, which the batch merges
- * on adoption and forgets on discard — that is the whole difference between the two paths.
- */
+/** Where one call's by-products go. */
 interface CallScope {
   timing: CallTiming;
   /** The monotonic clock reading `timing.queuedAt` corresponds to. */
   queuedClock: number;
   observations: ToolObservation[];
   changedGoals: Goal[];
-  early?: {
-    signal: AbortSignal;
-    /** Bookkeeping the result implies (`ToolContext.deferEffect`), applied on adoption. */
-    effects: (() => void)[];
-    /** Execution records, written on adoption so a discarded start leaves none. */
-    records: (() => void)[];
-  };
 }
 
 const newTiming = (queuedAt: number): CallTiming => ({
@@ -233,7 +185,6 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
     humanTurn,
     catalogSpecs,
   } = options;
-  // Shared by early and batch calls, because both are executions the run has in flight at the same time.
   let activeExecutions = 0;
   let peakConcurrency = 0;
   /**
@@ -246,7 +197,6 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
    */
   const runToolCall = async (call: ToolCall, scope: CallScope): Promise<CallOutcome> => {
     const { timing, observations, changedGoals } = scope;
-    const callSignal = scope.early ? AbortSignal.any([signal, scope.early.signal]) : signal;
     const dispatchClock = performance.now();
     timing.queueMs = Math.max(0, dispatchClock - scope.queuedClock);
     timing.dispatchStartedAt = Date.now();
@@ -265,10 +215,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
        * because what has to survive every seam is the link between a program and what it did.
        */
       const toolContext = (callId: string): ToolContext => ({
-        signal: callSignal,
-        ...(scope.early
-          ? { deferEffect: (effect: () => void) => scope.early!.effects.push(effect) }
-          : {}),
+        signal,
         /**
          * The call's identity and its run's promise. A policy hook that reports about a call has to be
          * able to name the session, and one that would touch the world outside this process has to be
@@ -423,7 +370,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
             const innerContext = toolContext(inner.id);
             const result = await tools.execute(inner, {
               ...innerContext,
-              signal: innerSignal ? AbortSignal.any([callSignal, innerSignal]) : callSignal,
+              signal: innerSignal ? AbortSignal.any([signal, innerSignal]) : signal,
               ...(taskEffectScope
                 ? {
                     effectJournal: {
@@ -509,16 +456,12 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
            * than from the model's prose: a result that carried only durations could not say whether a child
            * ran the test suite or merely said it had.
            */
-          const record = () => {
-            store.recordEvent(sessionId, type, {
-              runId,
-              tool: call.name,
-              ...measurement,
-            });
-            emit(type, measurement);
-          };
-          if (scope.early) scope.early.records.push(record);
-          else record();
+          store.recordEvent(sessionId, type, {
+            runId,
+            tool: call.name,
+            ...measurement,
+          });
+          emit(type, measurement);
         },
       });
       observations.push({
@@ -535,112 +478,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
     }
   };
 
-  interface EarlyStart {
-    call: ToolCall;
-    scope: CallScope;
-    abort: AbortController;
-    /** Settles, never rejects: the outcome is read by whoever adopts the start. */
-    settled: Promise<{ ok: true; value: CallOutcome } | { ok: false; reason: unknown }>;
-    done: boolean;
-  }
-  /** Calls started early and not yet adopted or discarded, across every attempt of this run. */
-  let earlyInFlight = 0;
-  const claims = new WeakMap<
-    EarlyToolStarts,
-    (calls: readonly ToolCall[]) => Promise<Map<string, EarlyStart>>
-  >();
-  const early: RunToolBatch['early'] = () => {
-    const offered: { call: ToolCall; start?: EarlyStart }[] = [];
-    let open = true;
-    const adopted = new Set<EarlyStart>();
-    const release = async (): Promise<void> => {
-      open = false;
-      const pending = offered.flatMap(({ start }) => (start && !adopted.has(start) ? [start] : []));
-      for (const start of pending) start.abort.abort(new Error('Early tool start discarded'));
-      await Promise.all(pending.map((start) => start.settled));
-    };
-    const starts: EarlyToolStarts = {
-      offer(call) {
-        if (!open) return;
-        // A repeated id is the stream contradicting itself; stop rather than guess which one the turn means.
-        if (offered.some((entry) => entry.call.id === call.id) || !tools.startsEarly(call)) {
-          open = false;
-          return;
-        }
-        const entry: { call: ToolCall; start?: EarlyStart } = { call: structuredClone(call) };
-        offered.push(entry);
-        // Not started is not a barrier: the call is still a read the batch will run beside its siblings.
-        if (signal.aborted || queue.hasSteer || earlyInFlight >= maxParallelToolCalls) return;
-        const abort = new AbortController();
-        const scope: CallScope = {
-          timing: newTiming(Date.now()),
-          queuedClock: performance.now(),
-          observations: [],
-          changedGoals: [],
-          early: { signal: abort.signal, effects: [], records: [] },
-        };
-        earlyInFlight++;
-        const start: EarlyStart = {
-          call: entry.call,
-          scope,
-          abort,
-          done: false,
-          settled: runToolCall(entry.call, scope).then(
-            (value) => ({ ok: true as const, value }),
-            (reason: unknown) => ({ ok: false as const, reason }),
-          ),
-        };
-        void start.settled.finally(() => {
-          start.done = true;
-          earlyInFlight--;
-        });
-        entry.start = start;
-      },
-      discard: release,
-    };
-    /**
-     * The starts the turn's final calls confirm: the longest leading run of exact matches, in position.
-     *
-     * Anything after the first mismatch is discarded — including a start that matches some later call, because
-     * the order it ran in is no longer the order the model wrote.
-     */
-    claims.set(starts, async (calls) => {
-      open = false;
-      const confirmed = new Map<string, EarlyStart>();
-      for (let index = 0; index < offered.length && index < calls.length; index++) {
-        const { call, start } = offered[index]!;
-        const final = calls[index]!;
-        if (call.id !== final.id || call.name !== final.name) break;
-        if (!isDeepStrictEqual(call.arguments, final.arguments)) break;
-        if (start) {
-          adopted.add(start);
-          confirmed.set(final.id, start);
-        }
-      }
-      await release();
-      return confirmed;
-    });
-    return starts;
-  };
-  /**
-   * The result of a confirmed early start, delivered as if the batch had just run it.
-   *
-   * Its execution records and deferred bookkeeping are written here, which is the point the batch would have
-   * written them: after `tool.started`, before the result is appended. A start that failed delivers nothing
-   * of the kind — its failure is the batch's failure, exactly as a batch call's would be.
-   */
-  const adopt = async (start: EarlyStart, into: CallScope): Promise<CallOutcome> => {
-    const outcome = await start.settled;
-    const scope = start.scope;
-    for (const record of scope.early!.records.splice(0)) record();
-    if (!outcome.ok) throw outcome.reason;
-    for (const effect of scope.early!.effects.splice(0)) effect();
-    into.observations.push(...scope.observations);
-    into.changedGoals.push(...scope.changedGoals);
-    return outcome.value;
-  };
-
-  const run: RunToolBatch['run'] = async (calls, earlyStarts) => {
+  const run: RunToolBatch['run'] = async (calls) => {
     // What the batch hands back to the loop: context a post-execute policy asked to inject, and the goals the
     // model changed. Both are published after every call of the batch has settled, by the caller.
     const injected: { callId: string; notes: string[] }[] = [];
@@ -649,11 +487,8 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
     const queuedClock = performance.now();
     const queuedAt = Date.now();
     peakConcurrency = activeExecutions;
-    const confirmed = earlyStarts
-      ? ((await claims.get(earlyStarts)?.(calls)) ?? new Map<string, EarlyStart>())
-      : new Map<string, EarlyStart>();
     const toolTimings = new Map<string, CallTiming>(
-      calls.map((call) => [call.id, confirmed.get(call.id)?.scope.timing ?? newTiming(queuedAt)]),
+      calls.map((call) => [call.id, newTiming(queuedAt)]),
     );
     const batchScope = (call: ToolCall): CallScope => ({
       timing: toolTimings.get(call.id)!,
@@ -661,10 +496,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
       observations,
       changedGoals,
     });
-    const startCall = (call: ToolCall): Promise<CallOutcome> => {
-      const start = confirmed.get(call.id);
-      return start ? adopt(start, batchScope(call)) : runToolCall(call, batchScope(call));
-    };
+    const startCall = (call: ToolCall): Promise<CallOutcome> => runToolCall(call, batchScope(call));
     /**
      * Which sibling calls may overlap, and the order everything they produce is written in.
      *
@@ -705,87 +537,73 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
      */
     let failure: { reason: unknown } | undefined;
     let cancelled = false;
-    try {
-      for (const group of groups) {
-        if (signal.aborted) signal.throwIfAborted();
-        // A call that already ran early is not "pending": it is reported with the result it produced, and only
-        // the rest of the group is retired.
-        if (queue.hasSteer && !group.some((call) => confirmed.has(call.id))) {
-          for (const call of group) retire(call);
+    for (const group of groups) {
+      if (signal.aborted) signal.throwIfAborted();
+      if (queue.hasSteer) {
+        for (const call of group) retire(call);
+        continue;
+      }
+      for (const call of group) emit('tool.started', { call, queuedAt });
+      /**
+       * A rolling pool bounded by the run's limit, started in model order. `shouldStop` is consulted
+       * before every start and never after one, so a call reported as not started is one that really did
+       * not start; the already-started calls are awaited either way, because a tool cannot be uninvented.
+       */
+      const outcomes = await runBounded(
+        group,
+        maxParallelToolCalls,
+        startCall,
+        () => signal.aborted || queue.hasSteer,
+      );
+      for (let index = 0; index < group.length; index++) {
+        const call = group[index]!;
+        const outcome = outcomes[index]!;
+        if (outcome.status === 'skipped') {
+          // A steer says so in the transcript; a cancel leaves the call unresolved, which is what
+          // `resolvePending` below reports as an unknown outcome rather than as a call that never happened.
+          if (queue.hasSteer) retire(call);
+          else cancelled = true;
           continue;
         }
-        for (const call of group) emit('tool.started', { call, queuedAt });
-        /**
-         * A rolling pool bounded by the run's limit, started in model order. `shouldStop` is consulted
-         * before every start and never after one, so a call reported as not started is one that really did
-         * not start; the already-started calls are awaited either way, because a tool cannot be uninvented.
-         * A confirmed early start has already started, so a steer lets it through.
-         */
-        const outcomes = await runBounded(
-          group,
-          maxParallelToolCalls,
-          startCall,
-          (index) => signal.aborted || (queue.hasSteer && !confirmed.has(group[index]!.id)),
-        );
-        for (let index = 0; index < group.length; index++) {
-          const call = group[index]!;
-          const outcome = outcomes[index]!;
-          if (outcome.status === 'skipped') {
-            // A steer says so in the transcript; a cancel leaves the call unresolved, which is what
-            // `resolvePending` below reports as an unknown outcome rather than as a call that never happened.
-            if (queue.hasSteer) retire(call);
-            else cancelled = true;
-            continue;
-          }
-          if (outcome.status === 'rejected') {
-            failure ??= { reason: outcome.reason };
-            continue;
-          }
-          const { effectId, result, additionalContext } = outcome.value;
-          store.append(sessionId, { role: 'tool', toolCallId: call.id, ...result });
-          /**
-           * Checked here rather than inside the registry, because this is the layer that can fail the run: a
-           * violated pipeline order means a policy stage ran out of order, and the registry's own handling
-           * turns that into a failed tool result the model reads and moves on from. The trace is this run's
-           * own registry, passed in because the registration that checks it is process-wide.
-           */
-          await invariants?.assert('tool-execution', {
-            sessionId,
-            runId,
-            pipeline: tools.pipelineInvariant,
-          });
-          if (effectId && !result.isError && taskEffectScope)
-            store.completeTaskEffect(taskEffectScope.sessionId, taskEffectScope.taskId, effectId);
-          emit('tool.finished', {
-            callId: call.id,
-            ...result,
-            timing: {
-              ...toolTimings.get(call.id)!,
-              peakConcurrency,
-              scope: 'model-tool-batch',
-              executionComplete:
-                toolTimings.get(call.id)!.attempts === toolTimings.get(call.id)!.finishedAttempts,
-            },
-          });
-          if (additionalContext?.length)
-            injected.push({ callId: call.id, notes: additionalContext });
+        if (outcome.status === 'rejected') {
+          failure ??= { reason: outcome.reason };
+          continue;
         }
-        // A failed or cancelled call ends the batch: later groups are not started at all, exactly as the
-        // serial loop would have stopped at the first one that threw.
-        if (failure !== undefined || cancelled) break;
+        const { effectId, result, additionalContext } = outcome.value;
+        store.append(sessionId, { role: 'tool', toolCallId: call.id, ...result });
+        /**
+         * Checked here rather than inside the registry, because this is the layer that can fail the run: a
+         * violated pipeline order means a policy stage ran out of order, and the registry's own handling
+         * turns that into a failed tool result the model reads and moves on from. The trace is this run's
+         * own registry, passed in because the registration that checks it is process-wide.
+         */
+        await invariants?.assert('tool-execution', {
+          sessionId,
+          runId,
+          pipeline: tools.pipelineInvariant,
+        });
+        if (effectId && !result.isError && taskEffectScope)
+          store.completeTaskEffect(taskEffectScope.sessionId, taskEffectScope.taskId, effectId);
+        emit('tool.finished', {
+          callId: call.id,
+          ...result,
+          timing: {
+            ...toolTimings.get(call.id)!,
+            peakConcurrency,
+            scope: 'model-tool-batch',
+            executionComplete:
+              toolTimings.get(call.id)!.attempts === toolTimings.get(call.id)!.finishedAttempts,
+          },
+        });
+        if (additionalContext?.length) injected.push({ callId: call.id, notes: additionalContext });
       }
-    } finally {
-      // A confirmed start the batch never reached (a cancel, an earlier failure) is still in flight; it ends here,
-      // with the batch, and leaves no record — the call stays unresolved like any other call that did not report.
-      if (confirmed.size) {
-        for (const start of confirmed.values())
-          if (!start.done) start.abort.abort(new Error('Early tool start discarded'));
-        await Promise.all([...confirmed.values()].map((start) => start.settled));
-      }
+      // A failed or cancelled call ends the batch: later groups are not started at all, exactly as the
+      // serial loop would have stopped at the first one that threw.
+      if (failure !== undefined || cancelled) break;
     }
     if (cancelled) signal.throwIfAborted();
     if (failure !== undefined) throw failure.reason;
     return { injected, changedGoals, observations };
   };
-  return { run, early };
+  return { run };
 }

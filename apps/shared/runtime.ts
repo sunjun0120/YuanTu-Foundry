@@ -350,8 +350,6 @@ export async function createAgent(
      * else would promise that the endpoint serves it, which is exactly what this runtime cannot know.
      */
     subagentModels: () => subagentModels(config.model),
-    forkTranscriptChars: options.forkTranscriptChars,
-    forkTranscriptMessages: options.forkTranscriptMessages,
     approve,
     // Absent for an embedder that cannot reach a human: the tool then reports the missing answer rather than
     // failing the call, which is why a run without a questioner still starts.
@@ -422,14 +420,6 @@ export async function createAgent(
     maxRunRounds: options.maxRunRounds,
     maxRunMs: options.maxRunMs,
     maxRunTokens: options.maxRunTokens,
-    // Opt-in: reads overlap the rest of the model's turn (see `AgentOptions.earlyToolStarts`).
-    earlyToolStarts: parseSetting(process.env, 'YUANTU_EARLY_TOOL_START') === true,
-    toolResultKeepRecent: options.toolResultKeepRecent,
-    toolResultShrinkTokens: options.toolResultShrinkTokens,
-    toolResultPruneThresholdChars: options.toolResultPruneThresholdChars,
-    toolResultPruneHeadChars: options.toolResultPruneHeadChars,
-    toolResultPruneTailChars: options.toolResultPruneTailChars,
-    contextShrinkPercent: options.contextShrinkPercent,
   });
 }
 export function safeError(error: unknown): string {

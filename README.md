@@ -335,19 +335,6 @@ validate → pre-execute → guards → prepare → approval → execute → pos
 `pre-execute` 与守卫因此是**单调的**：它们只能拒绝，「扩展允许了它」在这条管线里无法表达。这正是守卫可以安全地继承进被委派的运行的原因。
 
 `add-context` 注入的上下文**不会塞进工具结果文本**，而是由 agent 循环在本批工具结果之后写成本轮的一条 user 消息，因此它和任何模型可见输入一样落在会话记录里，也照常参与摘要与压缩边界。
-
-### 流式阶段提前执行只读调用
-
-`YUANTU_EARLY_TOOL_START=1`（默认关闭）时，模型还在输出这一轮的其余部分，参数已经完整的只读调用就开始执行，读取与模型输出的尾部重叠，而不是等整轮结束。三种协议各自给出「这个调用已完整」的信号：Messages 是该 `tool_use` 块的 `content_block_stop`，Chat Completions 是下一个调用的分片出现，Responses 是 `function_call` 项的 `response.output_item.done`。信号只是提示，轮结束时的 `toolCalls` 才是依据。
-
-- **只对纯读取开放。** 工具必须同时声明 `isConcurrencySafe` 与 `earlyStart`（`Tool.earlyStart`）：前者说它可以和兄弟调用重叠，后者更强，说执行之后再丢弃不会留下模型能察觉的痕迹。当前声明的有 `list_files`、`read_file`、`read_image`、`search_files`、五个 git 只读工具、`repo_map` 与 `verify_file_delivery`；`job_output` 读取已结束的命令会记录送达，所以不在其中。
-- **只启动前缀。** 调用按模型书写顺序报告，遇到第一个不能提前的调用就停止提前启动：写在写入之后的读取不能先于那次写入执行。
-- **只采用完全一致的调用。** 轮结束后，只有与最终调用的 id、名称、参数逐一相同且位置相同的前缀才被采用；其余全部中止、等待结束并丢弃。流中断后重发、输出被截断或被过滤时同样如此。
-- **记录不变。** `tool.started`、执行事件与结果仍按模型顺序在原来的位置写入；提前执行的执行事件在采用时才落盘，被丢弃的不留记录。结果所蕴含的运行内状态（`read_file` 记录「已读」以及作用域指令「已展示」）通过 `ToolContext.deferEffect` 推迟到结果送达时才生效。
-- 用户中途插话时，已经提前执行完的调用如实报告其结果，其余待执行的调用照常标记为「未执行」。
-
-外部钩子（`beforeTool`、守卫）对提前执行的调用照常运行，因此一次后来被丢弃的提前执行也可能被钩子看到；依赖「每次看到的调用都会落盘」的钩子不应与此开关同时使用。
-
 ---
 
 <a id="permissions"></a>
@@ -467,9 +454,6 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 | `--max-context-chars`           | 10000000 | 附加字符保护上限                                     |
 | `--max-parallel-tools`          | 8        | 同一助手消息里可重叠的工具调用数（1 = 严格串行）     |
 | `--max-retries`                 | 5        | 步骤边界重发模型请求的次数上限（0–5）                |
-| `--tool-result-keep-recent`     | 6        | 末尾永不缩短的工具结果条数                           |
-| `--tool-result-shrink-tokens`   | 400      | 缩短后保留的 token 数（头尾各半）                    |
-| `--context-shrink-percent`      | 60       | 占窗口这个百分比时开始缩短旧结果（10–95）            |
 | `--question-timeout-ms`         | 120000   | 向用户提问的等待上限                                 |
 | `--request-timeout-ms`          | 未设置   | 可选的单次请求总时长上限                             |
 | `YUANTU_STREAM_IDLE_TIMEOUT_MS` | 300000   | 连接与流式无数据超时，每次收到新数据重置             |
@@ -609,17 +593,17 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 进程拥有的每个 `YUANTU_*` 名字、它的类型与取值范围都登记在 `packages/protocol/settings.ts` 的 `ENVIRONMENT` 表里，运行上限的默认值同样只在 `RUN_DEFAULTS` 里声明一次。CLI 帮助里的默认值由这些常量渲染。
 
-| 主题         | 变量                                                                                                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 连接与协议   | `YUANTU_API_KEY`、`YUANTU_BASE_URL`、`YUANTU_MODEL`、`YUANTU_PROTOCOL`、`YUANTU_CONNECTION_ID`、`YUANTU_SUPPORTS_VISION`、`YUANTU_MODEL_CAPACITIES`、`YUANTU_CREDENTIALS_FILE`                         |
-| 缓存与重试   | `YUANTU_PROMPT_CACHE`、`YUANTU_MAX_RETRIES`、`YUANTU_REQUEST_TIMEOUT_MS`、`YUANTU_STREAM_IDLE_TIMEOUT_MS`                                                                                              |
-| 窗口与预算   | `YUANTU_MAX_CONTEXT_TOKENS`、`YUANTU_MAX_OUTPUT_TOKENS`、`YUANTU_AUTO_COMPACT_TOKENS`、`YUANTU_MAX_PARALLEL_TOOLS`、`YUANTU_EARLY_TOOL_START`、`YUANTU_TOOL_TIMEOUT_MS`、`YUANTU_INVARIANT_TIMEOUT_MS` |
-| 上下文整理   | `YUANTU_TOOL_RESULT_KEEP_RECENT`、`YUANTU_TOOL_RESULT_SHRINK_TOKENS`、`YUANTU_CONTEXT_SHRINK_PERCENT`、`YUANTU_TOOL_MODE`、`YUANTU_REPO_MAP`、`YUANTU_FS_OBSERVATION`、`YUANTU_LSP_AFTER_EDIT`         |
-| 子代理       | `YUANTU_SUBAGENTS`、`YUANTU_SUBAGENT_CONCURRENCY`、`YUANTU_SUBAGENT_TIMEOUT_MS`、`YUANTU_SUBAGENT_MODELS`、`YUANTU_FORK_TRANSCRIPT_CHARS`、`YUANTU_FORK_TRANSCRIPT_MESSAGES`                           |
-| 工作区与沙箱 | `YUANTU_WORKSPACE`、`YUANTU_SANDBOX`、`YUANTU_SANDBOX_HOOK`、`YUANTU_SANDBOX_IMAGE`、`YUANTU_SANDBOX_SPEC`、`YUANTU_PTY`、`YUANTU_ALLOW_PRIVATE_NETWORK`、`YUANTU_PERMISSION_POLICY`                   |
-| 集成与钩子   | `YUANTU_HOOKS_MODULE`、`YUANTU_HOOK_BRIDGE`、`YUANTU_TRUST_WORKSPACE_HOOKS`、`YUANTU_HOOK_TIMEOUT_MS`、`YUANTU_QUESTION_TIMEOUT_MS`                                                                    |
-| 检索与记忆   | `YUANTU_SEARCH_PROVIDER`、`YUANTU_SEARCH_API_KEY`、`YUANTU_SEARCH_BASE_URL`、`YUANTU_MEMORY_DIR`、`YUANTU_KNOWLEDGE_DB`、`YUANTU_MCP_OAUTH_DIR`                                                        |
-| 调度与会话   | `YUANTU_WORKFLOWS`、`YUANTU_WORKFLOW_INTERVAL_MS`、`YUANTU_SESSION_TITLES`                                                                                                                             |
+| 主题         | 变量                                                                                                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 连接与协议   | `YUANTU_API_KEY`、`YUANTU_BASE_URL`、`YUANTU_MODEL`、`YUANTU_PROTOCOL`、`YUANTU_CONNECTION_ID`、`YUANTU_SUPPORTS_VISION`、`YUANTU_MODEL_CAPACITIES`、`YUANTU_CREDENTIALS_FILE` |
+| 缓存与重试   | `YUANTU_PROMPT_CACHE`、`YUANTU_MAX_RETRIES`、`YUANTU_REQUEST_TIMEOUT_MS`、`YUANTU_STREAM_IDLE_TIMEOUT_MS`                                                                      |
+| 窗口与预算   | `YUANTU_MAX_CONTEXT_TOKENS`、`YUANTU_MAX_OUTPUT_TOKENS`、`YUANTU_AUTO_COMPACT_TOKENS`、`YUANTU_MAX_PARALLEL_TOOLS`、`YUANTU_TOOL_TIMEOUT_MS`                                   |
+| 上下文整理   | `YUANTU_REPO_MAP`、`YUANTU_FS_OBSERVATION`、`YUANTU_LSP_AFTER_EDIT`                                                                                                            |
+| 子代理       | `YUANTU_SUBAGENTS`、`YUANTU_SUBAGENT_CONCURRENCY`、`YUANTU_SUBAGENT_TIMEOUT_MS`、`YUANTU_SUBAGENT_MODELS`                                                                      |
+| 工作区与沙箱 | `YUANTU_WORKSPACE`、`YUANTU_SANDBOX`、`YUANTU_SANDBOX_HOOK`、`YUANTU_SANDBOX_SPEC`、`YUANTU_PTY`、`YUANTU_ALLOW_PRIVATE_NETWORK`、`YUANTU_PERMISSION_POLICY`                   |
+| 集成与钩子   | `YUANTU_HOOKS_MODULE`、`YUANTU_HOOK_BRIDGE`、`YUANTU_TRUST_WORKSPACE_HOOKS`、`YUANTU_HOOK_TIMEOUT_MS`、`YUANTU_QUESTION_TIMEOUT_MS`                                            |
+| 检索与记忆   | `YUANTU_SEARCH_PROVIDER`、`YUANTU_SEARCH_API_KEY`、`YUANTU_SEARCH_BASE_URL`、`YUANTU_MEMORY_DIR`、`YUANTU_KNOWLEDGE_DB`、`YUANTU_MCP_OAUTH_DIR`                                |
+| 调度与会话   | `YUANTU_WORKFLOWS`、`YUANTU_WORKFLOW_INTERVAL_MS`、`YUANTU_SESSION_TITLES`                                                                                                     |
 
 表中不含仅供测试使用的键（它们同样登记在 `ENVIRONMENT` 里，因为检查必须知道项目自己用到的每一个名字）。CLI 不自动加载 `.env`，配置从进程环境读取；`.env.example` 仅说明变量。桌面配置优先于环境变量，适用于所有工作目录。
 
@@ -649,13 +633,11 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_AUTO_COMPACT_TOKENS` | `1–100000000` | 提前压缩阈值 |
 | `YUANTU_REQUEST_TIMEOUT_MS` | `1000–3600000` | 单次模型请求超时 |
 | `YUANTU_MAX_PARALLEL_TOOLS` | `1–32` | 一条助手消息里可同时运行的工具调用上限（1 = 严格串行；只对声明了并行安全的工具生效） |
-| `YUANTU_EARLY_TOOL_START` | `0` / `1` | 模型仍在输出时，提前执行参数已完整的只读工具调用（默认关闭；只对声明了 earlyStart 的纯读取工具生效，结果仍按模型顺序落盘） |
 | `YUANTU_QUESTION_TIMEOUT_MS` | `1000–3600000` | 模型向用户提问的等待超时（毫秒） |
 | `YUANTU_MAX_RUN_ROUNDS` | `0–100000` | 单次运行最多的模型轮次（0 = 不限；默认不限，失控由时长与 token 上限兜底） |
 | `YUANTU_MAX_RUN_MS` | `0–86400000` | 单次运行的墙钟上限（毫秒，0 = 不限；默认 2 小时） |
 | `YUANTU_MAX_RUN_TOKENS` | `0–1000000000` | 单次运行累计消耗的模型 token 上限（输入 + 输出，0 = 不限；默认 2000 万） |
 | `YUANTU_TOOL_TIMEOUT_MS` | `0–3600000` | 单次工具调用的墙钟上限（毫秒，0 = 不设上限） |
-| `YUANTU_INVARIANT_TIMEOUT_MS` | `100–600000` | 单条运行时不变量检查的超时（毫秒） |
 | `YUANTU_WORKSPACE` | `string` | 工作区目录 |
 | `YUANTU_SANDBOX` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值） |
 | `YUANTU_SANDBOX_HOOK` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 钩子用的沙箱后端（默认继承当前调用的执行策略） |
@@ -666,26 +648,16 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE` | `0` / `1` | （测试）仅在可丢弃 GitHub Actions runner 启用原生账户真实验收 |
 | `YUANTU_SANDBOX_ACL_SOURCE` | `string` | （内部）Host 快照的 ACL helper 载荷；不向客体传递 |
 | `YUANTU_PROGRAM_LAUNCH_DIR` | `string` | （内部）程序运行器离开工作区前记录的启动目录；由运行器覆盖 |
-| `YUANTU_SANDBOX_IMAGE` | `string` | 已停用：仅兼容旧配置，原生沙箱不读取镜像设置 |
 | `YUANTU_PTY` | `string` | 终端（terminal_* 工具）使用的 PTY 后端名，默认为内置的 node-pty |
 | `YUANTU_ALLOW_PRIVATE_NETWORK` | `0` / `1` | 是否允许访问私有网段 |
 | `YUANTU_FS_OBSERVATION` | `0` / `1` | 改动文件前是否要求本运行已读过该文件（默认开启，关闭则不检查） |
-| `YUANTU_TOOL_MODE` | `deferred` / `native` / `ptc` | 工具下发方式：deferred（默认）常用工具直接下发、其余经 load_tools 按需加载，native 逐个全部下发，ptc 折成 run_code + 生成 SDK |
 | `YUANTU_PERMISSION_POLICY` | `string` | 权限策略文件路径 |
 | `YUANTU_HOOKS_MODULE` | `string` | 扩展钩子模块路径 |
 | `YUANTU_HOOK_BRIDGE` | `0` / `1` | 是否加载工作区里声明的外部钩子（.claude/settings.json、.yuantu/hooks.json） |
 | `YUANTU_TRUST_WORKSPACE_HOOKS` | `0` / `1` | 强制信任所有工作区的外部钩子，跳过逐工作区的信任确认（仅用于自己掌控的环境） |
 | `YUANTU_HOOK_TIMEOUT_MS` | `1000–600000` | 单条外部钩子命令的超时（毫秒） |
-| `YUANTU_FORK_TRANSCRIPT_CHARS` | `1000–10000000` | 分叉子代理继承的父会话转录字符上限 |
-| `YUANTU_FORK_TRANSCRIPT_MESSAGES` | `1–10000` | 分叉子代理继承的父会话消息条数上限 |
 | `YUANTU_SUBAGENT_MODELS` | `string` | 额外的可委派模型 id（逗号分隔），供 list_subagent_models 列出 |
 | `YUANTU_SUMMARY_MODEL` | `string` | 上下文压缩摘要使用的模型 id（同一端点；未设置则用主模型），其窗口不应小于主模型 |
-| `YUANTU_TOOL_RESULT_KEEP_RECENT` | `0–100` | 末尾永不缩短的工具结果条数 |
-| `YUANTU_TOOL_RESULT_SHRINK_TOKENS` | `100–32000` | 缩短后保留的 token 数（头尾各半） |
-| `YUANTU_CONTEXT_SHRINK_PERCENT` | `10–95` | 占窗口（或提前压缩阈值）百分之多少时开始缩短旧工具结果 |
-| `YUANTU_TOOL_RESULT_PRUNE_THRESHOLD_CHARS` | `1000–10000000` | 旧工具结果超过多少字符时丢弃中段（保留头尾） |
-| `YUANTU_TOOL_RESULT_PRUNE_HEAD_CHARS` | `0–1000000` | 丢弃中段时在开头保留的字符数 |
-| `YUANTU_TOOL_RESULT_PRUNE_TAIL_CHARS` | `0–1000000` | 丢弃中段时在结尾保留的字符数 |
 | `YUANTU_MCP_OAUTH_DIR` | `string` | MCP OAuth 令牌目录 |
 | `YUANTU_STATE_DIR` | `string` | 普通用户状态根目录（绝对路径，默认 ~/.yuantu） |
 | `YUANTU_WORKTREE_DIR` | `string` | 子代理隔离工作树的根目录（绝对路径；默认在用户数据目录下，位于仓库之外且不含受保护的路径片段） |
@@ -708,7 +680,6 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SESSION_TITLES` | `0` / `1` | 是否用一次模型调用为会话生成标题（默认开启） |
 | `YUANTU_WORKFLOW_INTERVAL_MS` | `1000–86400000` | 调度器两次查看之间的最长间隔（到期时刻会直接唤醒它；这里是上限与兜底） |
 | `YUANTU_HOST_MAX_RUNS` | `1–8` | 同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行） |
-| `YUANTU_HOST_STALL_MS` | `20–60000` | Host 事件循环被同步工作占住多久（毫秒）记为一次卡顿并写入 stderr（默认 200） |
 | `YUANTU_LIBREOFFICE_PATH` | `string` | 可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com） |
 | `YUANTU_NODE_PATH` | `string` | （测试）子进程使用的 node 路径 |
 | `YUANTU_QA_DIR` | `string` | （测试）QA 产物目录 |

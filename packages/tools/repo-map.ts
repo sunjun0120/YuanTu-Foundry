@@ -443,7 +443,6 @@ export function repoMapTools(
     {
       name: 'repo_map',
       isConcurrencySafe: parallelRead,
-      earlyStart: true,
       description:
         'Structural outline of the workspace and its declarations. Pass query to search symbol names, limit to bound the page, and the returned nextCursor as cursor with the same query to continue. Results report index freshness and scan coverage. An already-running language server is preferred for a first-page lookup.',
       inputSchema: {

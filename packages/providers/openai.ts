@@ -6,7 +6,6 @@ import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { cacheFields } from './cache.ts';
 import { validateImages } from '../protocol/images.ts';
 import { readSse } from './sse.ts';
-import { completeArguments } from './early-tool-call.ts';
 import {
   assistantHash,
   deepseekCapabilities,
@@ -211,8 +210,6 @@ export class OpenAIProvider implements Provider {
       reasoningChars = 0,
       toolArgumentChars = 0;
     const calls = new Map<number, { id: string; name: string; json: string }>();
-    /** The highest index already reported through `onToolCall`; calls are reported as a contiguous prefix. */
-    let reportedCalls = -1;
     for await (const event of readSse(
       response.body,
       request.signal,
@@ -337,23 +334,6 @@ export class OpenAIProvider implements Provider {
               }
             }
             calls.set(index, value);
-          }
-          /**
-           * A call is complete once the model has moved on to the next one.
-           *
-           * Chat Completions has no per-call end event, but a model writes its calls one after another, so a
-           * fragment for a later index closes every call before it. Reporting stops at the first call that is not
-           * yet whole — an unparsable fragment or a missing id — so what is reported is always a prefix, in order.
-           */
-          if (request.onToolCall) {
-            const latest = Math.max(...calls.keys());
-            while (reportedCalls + 1 < latest) {
-              const call = calls.get(reportedCalls + 1);
-              const args = call?.id && call.name ? completeArguments(call.json) : undefined;
-              if (!call || !args) break;
-              reportedCalls++;
-              request.onToolCall({ id: call.id, name: call.name, arguments: args });
-            }
           }
           request.onProgress?.({
             phase: 'tool_call',

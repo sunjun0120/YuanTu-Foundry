@@ -114,9 +114,8 @@ export class RunSurface {
       ...policy,
       ...(this.loaded ? { loaded: this.loaded } : {}),
     });
-    // Differs from `specs` only under `YUANTU_TOOL_MODE=ptc`: what the model is *sent* may be one tool with a
-    // declaration list, while what the run *has* is unchanged — which is what keeps a read-only child's program
-    // unable to reach the parent's tools.
+    // Every tool the run has, loaded or not: what a `run_code` program may call — trimmed like `specs`, which is
+    // what keeps a read-only child's program unable to reach the parent's tools.
     this.catalog = this.options.tools.specs({ readOnly, ...policy, mode: 'native' });
   }
 }

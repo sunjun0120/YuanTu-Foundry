@@ -193,11 +193,7 @@ test('commands can be confined while hooks stay on the host — the combination 
   const env = { YUANTU_SANDBOX: 'native', YUANTU_SANDBOX_HOOK: 'host' };
   assert.equal(resolveSandboxConfig(env, 'command').mode, 'native');
   assert.equal(resolveSandboxConfig(env, 'hook').mode, 'host');
-  // The image is global: the categories differ in *whether* there is a container, not in which one.
-  assert.equal(
-    resolveSandboxConfig({ ...env, YUANTU_SANDBOX_IMAGE: 'alpine:3' }, 'hook').image,
-    'native',
-  );
+  assert.equal(resolveSandboxConfig(env, 'hook').image, 'native');
 });
 
 test('a runtime switch outranks the environment, and only for commands', (t) => {
@@ -226,7 +222,6 @@ test('a mistyped category setting names the setting it came from', () => {
   );
   // A bad value on a category nobody asked about is not an error: the category is what selects the setting.
   assert.equal(resolveSandboxConfig({ YUANTU_SANDBOX_HOOK: 'podman' }, 'command').mode, 'host');
-  assert.equal(resolveSandboxConfig({ YUANTU_SANDBOX_IMAGE: '--privileged' }).image, 'native');
 });
 
 test('the hook bridge installs when hooks are on the host and commands are sandboxed', async () => {

@@ -12,7 +12,6 @@ import {
   deferredToolUsage,
   loadedTools,
 } from '../packages/tools/deferred-tools.ts';
-import { toolMode } from '../packages/tools/run-code.ts';
 import { LoadedDeferredTools, loadedDeferredTools } from '../packages/core/run-catalog.ts';
 import { editSnippet } from '../packages/tools/file-change.ts';
 import { presentedSchema } from '../packages/tools/presented-schema.ts';
@@ -39,10 +38,9 @@ async function registry(t: test.TestContext) {
   return { root, tools };
 }
 
-test('the product default defers, and an explicit mode still wins', () => {
-  assert.equal(toolMode({}), 'deferred');
-  assert.equal(toolMode({ YUANTU_TOOL_MODE: 'native' }), 'native');
-  assert.equal(toolMode({ YUANTU_TOOL_MODE: 'ptc' }), 'ptc');
+test('the product catalog defers', async (t) => {
+  const { tools } = await registry(t);
+  assert.equal(tools.toolMode, 'deferred');
 });
 
 test('tool request bytes do not depend on registration or schema property insertion order', () => {
@@ -125,19 +123,12 @@ test('a deferred catalog holds back the listed subsystems and names them in load
   );
 });
 
-test('native and folded modes never send load_tools', async (t) => {
+test('the native presentation never sends load_tools', async (t) => {
   const { tools } = await registry(t);
   tools.toolMode = 'native';
   const native = tools.specs({ loaded: new Set() }).map((spec) => spec.name);
   assert.ok(!native.includes(LOAD_TOOLS));
   assert.ok(native.includes('lsp_hover'));
-  tools.toolMode = 'ptc';
-  const folded = tools.specs({ loaded: new Set() });
-  assert.deepEqual(
-    folded.map((spec) => spec.name),
-    ['run_code'],
-  );
-  assert.doesNotMatch(folded[0]!.description, /load_tools/);
 });
 
 test('the loaded set is read from the transcript: named loads and direct calls', () => {

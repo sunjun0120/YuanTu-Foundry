@@ -60,7 +60,6 @@ export function controlledEnvironment(manifest, source = process.env, { subagent
     YUANTU_MAX_OUTPUT_TOKENS: String(manifest.maxOutputTokens),
     YUANTU_REQUEST_TIMEOUT_MS: String(manifest.requestTimeoutMs),
     YUANTU_STREAM_IDLE_TIMEOUT_MS: String(manifest.streamIdleTimeoutMs),
-    YUANTU_TOOL_MODE: manifest.toolMode,
     YUANTU_PROMPT_CACHE: 'off',
     YUANTU_SANDBOX: 'host',
     YUANTU_SANDBOX_HOOK: 'host',
