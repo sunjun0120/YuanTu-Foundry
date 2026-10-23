@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { useAccountTests } from './windows-account-fixture.ts';
 import { LspClient } from '../packages/lsp/client.ts';
 import { pathToUri } from '../packages/lsp/protocol.ts';
 import {
@@ -20,6 +21,8 @@ import {
   own,
   workspace,
 } from './restricted-consumers-fixture.ts';
+
+useAccountTests();
 
 test(
   'a restricted terminal handles input and Ctrl+C, confines writes and joins close',
@@ -74,12 +77,14 @@ test(
     const root = await workspace(t);
     const marker = path.join(root, 'lifecycle'),
       cancel = path.join(root, 'cancel');
-    await withExecutionPolicy(executionPolicy('windows'), async () => {
+    const localFixture = path.join(root, 'lsp-fixture.ts');
+    await writeFile(localFixture, await readFile(fixture));
+    await withExecutionPolicy(executionPolicy('windows-account'), async () => {
       const client = new LspClient(
         {
           language: 'fake',
           command: process.execPath,
-          args: [fixture, '--never-answer'],
+          args: [localFixture, '--never-answer'],
           extensions: ['.fake'],
           env: { FAKE_LSP_LIFECYCLE_MARKER: marker, FAKE_LSP_CANCEL_MARKER: cancel },
         },
@@ -133,12 +138,14 @@ for (const flag of ['--reject-on-start', '--malformed-output'])
   test('restricted LSP cleans up ' + flag, windows, async (t) => {
     const root = await workspace(t);
     const marker = path.join(root, 'lifecycle');
-    await withExecutionPolicy(executionPolicy('windows'), async () => {
+    const localFixture = path.join(root, 'lsp-fixture.ts');
+    await writeFile(localFixture, await readFile(fixture));
+    await withExecutionPolicy(executionPolicy('windows-account'), async () => {
       const client = new LspClient(
         {
           language: 'fake',
           command: process.execPath,
-          args: [fixture, flag],
+          args: [localFixture, flag],
           extensions: ['.fake'],
           env: { FAKE_LSP_LIFECYCLE_MARKER: marker },
         },

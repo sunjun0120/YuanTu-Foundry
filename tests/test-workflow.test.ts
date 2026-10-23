@@ -40,6 +40,7 @@ async function runnerTree(t: test.TestContext, files: Record<string, string>) {
     'test-reporter.mjs',
     'test-timings.mjs',
     'test-execution-policy.ts',
+    'windows-sandbox-suites.mjs',
     'test-resource-policy.ts',
     'test-resource-lease.mjs',
     'test-scheduler.mjs',

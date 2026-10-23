@@ -1,4 +1,5 @@
 // @test-serial desktop-ui: Launches real Electron windows.
+// @test-serial windows-sandbox: Product-default journeys use initialized sandbox accounts on Windows CI.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -17,10 +18,9 @@ process.env.YUANTU_SESSION_TITLES = 'false';
  * launched under it honestly reports its permission pair as "custom" (host + ask is no preset). Naming `native`
  * here is what the packaged app does when nothing is set, and `desktop.smoke.mjs` covers the overridden reading.
  *
- * Windows CI has no initialized sandbox accounts, so the native default (windows-account) refuses commands there.
- * This suite selects the explicit weaker `windows` backend on Windows; every other platform keeps `native`.
+ * Windows CI initializes sandbox accounts before this suite; missing initialization must fail closed.
  */
-process.env.YUANTU_SANDBOX = process.platform === 'win32' ? 'windows' : 'native';
+process.env.YUANTU_SANDBOX = 'native';
 import * as XLSX from 'xlsx';
 import { docxFixture, pdfFixture } from './attachment-fixtures.ts';
 

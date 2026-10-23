@@ -28,6 +28,32 @@ pub fn dependencies(profile: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Compare real targets before excluding roots. Like Codex, a dependency anywhere in one immediate profile
+/// child excludes all roots in that child, including sibling tool directories. Outside the profile, retain the
+/// explicit-root policy: a root containing a dependency is refused. Missing paths keep their configured spelling.
+pub(crate) fn holds_dependency(root: &Path, profile: &Path, dependencies: &[PathBuf]) -> bool {
+    use super::grants::reads::{key, under};
+    let canonical_key =
+        |path: &Path| key(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    let root = canonical_key(root);
+    let profile = canonical_key(profile);
+    let prefix = format!("{profile}\\");
+    let child = |path: &str| {
+        path.strip_prefix(&prefix)
+            .and_then(|relative| relative.split('\\').next())
+            .filter(|child| !child.is_empty())
+            .map(str::to_string)
+    };
+    let root_child = child(&root);
+    dependencies.iter().any(|path| {
+        let dependency = canonical_key(path);
+        under(&dependency, &root)
+            || root_child
+                .as_ref()
+                .is_some_and(|root_child| child(&dependency).as_ref() == Some(root_child))
+    })
+}
+
 fn visit(
     file: &Path,
     profile: &Path,

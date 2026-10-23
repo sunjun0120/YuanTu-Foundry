@@ -4,6 +4,7 @@ mod broker;
 mod desktop;
 mod exec;
 mod frame;
+mod maintenance_handoff;
 mod pipe;
 mod protocol;
 mod provision;
@@ -43,6 +44,7 @@ fn main_result() -> Result<u32> {
         ["account-uninstall"] => provision::uninstall(),
         ["account-initialize", "--handoff", pipe] => provision::initialize_handoff(pipe),
         ["account-remove", "--elevated"] => provision::remove_elevated(),
+        ["account-remove", "--handoff", pipe] => provision::remove_handoff(pipe),
         [
             "runner",
             "--control",

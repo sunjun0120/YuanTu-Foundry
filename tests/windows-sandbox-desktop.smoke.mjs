@@ -14,11 +14,13 @@ import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
 import { verificationNudge } from './desktop-smoke-support.mjs';
 import { quoteWindowsArgument } from '../packages/tools/sandbox-windows.ts';
+import { windowsAccountTests, useAccountTests } from './windows-account-fixture.ts';
+import { accountHelper } from '../scripts/windows-account-ci.mjs';
+
+useAccountTests();
 
 const execute = promisify(execFile);
 const packagedApp = process.env.WINDOWS_SANDBOX_PACKAGED_APP;
-const acl = async (root) =>
-  (await execute('icacls.exe', [root])).stdout.split(/\r?\n\s*\r?\n/, 1)[0].trim();
 const eventually = async (read, timeout = 30000) => {
   const deadline = Date.now() + timeout;
   for (;;) {
@@ -30,8 +32,8 @@ const eventually = async (read, timeout = 30000) => {
 };
 
 test(
-  'Windows desktop enforces the selected basic sandbox, joins cancellation and exit, and reopens its session',
-  { skip: process.platform !== 'win32' && 'needs Windows', timeout: 180000 },
+  'Windows desktop uses sandbox accounts, joins cancellation and exit, and reopens its session',
+  { ...windowsAccountTests, timeout: 180000 },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-desktop-windows-'));
     const outside = await mkdtemp(path.join(os.tmpdir(), 'yuantu-desktop-outside-'));
@@ -40,7 +42,6 @@ test(
     const exitErrors = path.join(profile, 'exit-errors.jsonl');
     await mkdir(path.join(root, '.codex'));
     await writeFile(path.join(outside, 'canary'), 'unchanged');
-    const originalAcl = await acl(root);
     const probe = path.join(root, 'probe.cjs');
     const wait = path.join(root, 'wait.cjs');
     await writeFile(
@@ -126,16 +127,10 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
       'YUANTU_SANDBOX_NETWORK',
     ])
       delete env[key];
-    // This suite exercises the basic restricted-token backend; native now always means the account backend.
-    env.YUANTU_SANDBOX = 'windows';
+    env.YUANTU_SANDBOX = 'native';
     if (packagedApp) delete env.YUANTU_NODE_PATH;
     let app;
-    const assertRestored = async () => {
-      assert.equal(
-        await acl(root),
-        originalAcl,
-        'Retain a failed fixture until its ACL restoration is verified',
-      );
+    const assertStopped = async () => {
       const errors = await readFile(exitErrors, 'utf8').catch((error) => {
         if (error.code === 'ENOENT') return '';
         throw error;
@@ -144,7 +139,9 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     };
     t.after(async () => {
       await app?.close();
-      await assertRestored();
+      await assertStopped();
+      // Account workspace grants persist across launches; revoke this owned fixture before removing it.
+      await execute(accountHelper, ['ungrant', '--root', root], { windowsHide: true });
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       await rm(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -261,7 +258,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     const choice = await page.evaluate(() => window.yuantu.presets({ type: 'get' }));
     assert.equal(choice.ok, true);
     assert.equal(choice.view.current, 'guarded');
-    assert.equal(choice.view.sandbox.mode, 'windows');
+    assert.equal(choice.view.sandbox.mode, 'native');
     assert.equal(choice.view.sandbox.availability, null);
     const sessionId = (await snapshot(page)).session.sessionId;
     await verify(page);
@@ -280,7 +277,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     assert.throws(() => process.kill(cancelledPid, 0), { code: 'ESRCH' });
     await app.close();
     app = undefined;
-    await assertRestored();
+    await assertStopped();
     page = await launch();
     assert.equal((await snapshot(page)).session.sessionId, sessionId);
     // Session choices last for this window's lifetime; restarting restores the session at the auto default.
@@ -293,7 +290,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     await app.close();
     app = undefined;
     assert.throws(() => process.kill(exitedPid, 0), { code: 'ESRCH' });
-    await assertRestored();
+    await assertStopped();
     page = await launch();
     assert.equal((await snapshot(page)).session.sessionId, sessionId);
     assert.equal(await page.locator('#permission-mode').inputValue(), 'auto');
@@ -301,6 +298,6 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
     await verify(page);
     await app.close();
     app = undefined;
-    await assertRestored();
+    await assertStopped();
   },
 );

@@ -1,5 +1,5 @@
-//! Serializes the elevated halves of `account-setup` and `account-uninstall`: account, group and network changes
-//! from two runs must never interleave. The holder keeps the lock until those changes finish.
+//! Serializes `account-setup` and `account-uninstall`, including the desktop user's credential and marker writes.
+//! The elevated holder keeps the lock through the user's final acknowledgement, not just account/network changes.
 //! Mirrors Codex `setup_mutex.rs` (openai/codex@86e17e9).
 use crate::Result;
 use std::{marker::PhantomData, ptr::null_mut};

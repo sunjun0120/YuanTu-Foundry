@@ -6,10 +6,13 @@ import path from 'node:path';
 import { listeningHost, connectClient } from './listening-host-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
+import { useAccountTests, windowsAccountTests } from './windows-account-fixture.ts';
+
+useAccountTests();
 
 test(
   'a real Host runs Windows PTC with durable receipts and no way out of the program VM',
-  { skip: process.platform !== 'win32' && 'needs Windows' },
+  windowsAccountTests,
   async (t) => {
     let requests = 0;
     let output = '';
@@ -41,7 +44,7 @@ test(
         );
     });
     const host = await listeningHost(t, {
-      YUANTU_SANDBOX: 'windows',
+      YUANTU_SANDBOX: 'native',
       YUANTU_TOOL_MODE: 'ptc',
       YUANTU_BASE_URL: url,
     });

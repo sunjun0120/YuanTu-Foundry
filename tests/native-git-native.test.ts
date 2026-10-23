@@ -1,4 +1,4 @@
-// @test-serial windows-sandbox: Runs Git in the actual Windows token and ACL sandbox.
+// @test-serial windows-sandbox: Runs Git under the Windows sandbox account.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -6,18 +6,15 @@ import path from 'node:path';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
 import { fixture } from './native-git-fixture.ts';
+import { useAccountTests, nativeAccountTests } from './windows-account-fixture.ts';
+
+useAccountTests();
 
 test(
   'real platform sandbox Git status preserves the repository index',
-  {
-    skip:
-      process.platform !== 'win32' &&
-      process.platform !== 'darwin' &&
-      'needs Windows or macOS native sandbox',
-    timeout: 120000,
-  },
+  nativeAccountTests,
   async (t) => {
-    const mode = process.platform === 'win32' ? 'windows' : 'seatbelt';
+    const mode = process.platform === 'win32' ? 'windows-account' : 'seatbelt';
     const provider = sandboxProvider(mode);
     const { root, tools } = await fixture(t);
     registerSandboxProvider(provider);

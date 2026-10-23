@@ -611,13 +611,7 @@ void app
           switching = true;
           try {
             await choices.following;
-            // `windows` is the operator's explicit weaker backend; a preset moves the approval half without
-            // silently upgrading it to the account backend, including after a host -> guarded switch.
-            const sandbox = choiceForPreset(
-              preset,
-              choices.view().sandbox.mode,
-              sandboxEnvironment.defaultMode,
-            ).sandbox;
+            const sandbox = choiceForPreset(preset).sandbox;
             const choice: SessionChoice = {
               sandbox,
               permission: preset.permission,

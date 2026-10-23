@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { WINDOWS_LEGACY_ACCEPTANCE_FILES } from './windows-sandbox-suites.mjs';
 export {
   partitionIsolatedTests as partitionTests,
   serialResources,
@@ -15,5 +16,6 @@ export async function discoverTests(root: string): Promise<string[]> {
   return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith('.test.ts'))
     .map((entry) => `tests/${entry.name}`)
+    .filter((file) => !WINDOWS_LEGACY_ACCEPTANCE_FILES.includes(file))
     .sort();
 }

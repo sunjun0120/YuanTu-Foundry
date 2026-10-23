@@ -719,10 +719,11 @@ pub(crate) fn grant_snapshot_locked(
     {
         return Err("Path is already readable through an automatic read root".into());
     }
-    if super::super::ssh_config::dependencies(profile)
-        .iter()
-        .any(|file| under(&key(file), &key(root)))
-    {
+    if super::super::ssh_config::holds_dependency(
+        root,
+        profile,
+        &super::super::ssh_config::dependencies(profile),
+    ) {
         return Err("Path holds a file the SSH configuration uses".into());
     }
     let existing = journal.grants.iter().position(|g| {
@@ -1736,6 +1737,32 @@ mod tests {
         let group = "S-1-5-21-1-2-3-9308";
         let error = grant_at(&picked, &profile, group, &journal_path).unwrap_err();
         assert_eq!(error, "Path holds a file the SSH configuration uses");
+        assert!(group_grants(&picked, group).is_empty());
+        assert!(load(&journal_path).unwrap().grants.is_empty());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_user_read_root_cannot_hide_an_ssh_dependency_behind_parent_components() {
+        let base = scratch("ssh-user-parent");
+        assert!(acl_available(&base));
+        let profile = base.join("profile");
+        let picked = profile.join("deploy");
+        std::fs::create_dir_all(&picked).unwrap();
+        std::fs::write(picked.join("id_ed25519"), "PRIVATE").unwrap();
+        std::fs::create_dir_all(profile.join(".ssh")).unwrap();
+        std::fs::write(
+            profile.join(".ssh/config"),
+            "IdentityFile ~/.ssh/../deploy/id_ed25519\n",
+        )
+        .unwrap();
+        let journal_path = base.join("reads.json");
+        let group = "S-1-5-21-1-2-3-9309";
+        let result = grant_at(&picked, &profile, group, &journal_path);
+        assert_eq!(
+            result.unwrap_err(),
+            "Path holds a file the SSH configuration uses"
+        );
         assert!(group_grants(&picked, group).is_empty());
         assert!(load(&journal_path).unwrap().grants.is_empty());
         std::fs::remove_dir_all(&base).unwrap();

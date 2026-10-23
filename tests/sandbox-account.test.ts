@@ -10,7 +10,6 @@ import {
   capabilityFor,
   configureAccountBackend,
   ensureReadRefresh,
-  READ_REFRESH_TTL_MS,
   parseAccountStatus,
   refreshAccountBackend,
   refreshAccountReadiness,
@@ -111,7 +110,7 @@ test('the helper status is accepted only in exactly its own shape', () => {
     assert.throws(() => parseAccountStatus(broken), broken);
 });
 
-test('the automatic read roots are refreshed once per environment and retried after a failure', async (t) => {
+test('read refresh retries failures and does not reuse a completed refresh', async (t) => {
   const state = await tempRoot(t, 'yuantu-account-refresh-');
   const calls: string[][] = [];
   let failures = 1;
@@ -129,44 +128,73 @@ test('the automatic read roots are refreshed once per environment and retried af
   await assert.rejects(ensureReadRefresh(env), /refresh refused/);
   await ensureReadRefresh(env);
   await ensureReadRefresh({ ...env });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.deepEqual(calls[0]![0], 'read-refresh');
   assert.equal(calls[0]![1], '--env');
   // A new PATH names other toolchains: that is a different question and is asked again.
   await ensureReadRefresh({ ...env, PATH: 'C:\\two' });
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   // The request file carries only the values discovery reads, and is gone afterwards.
   const file = calls[0]![2]!;
   assert.ok(file.startsWith(path.join(state, 'requests')));
   await assert.rejects(stat(file), { code: 'ENOENT' });
-  // Maintenance forgets the cache: the next command refreshes again.
+  // Maintenance leaves the next command free to refresh as well.
   await refreshAccountBackend();
   await ensureReadRefresh(env);
-  assert.equal(calls.filter((args) => args[0] === 'read-refresh').length, 4);
+  assert.equal(calls.filter((args) => args[0] === 'read-refresh').length, 5);
 });
 
-test('a read refresh expires, so a credential file created later is denied without a Host restart', async (t) => {
-  const state = await tempRoot(t, 'yuantu-account-refresh-ttl-');
-  const calls: string[][] = [];
-  let clock = 1_000_000;
-  t.after(() => configureAccountBackend({ now: Date.now }));
+test('returning from environment B to A refreshes the automatic read roots again', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-switch-');
+  const environments: string[] = [];
   configureAccountBackend({
     helper: 'C:\\fake\\yuantu-sandbox.exe',
     state,
-    now: () => clock,
     run: async (_helper, args) => {
-      calls.push(args);
-      return '{}';
+      assert.equal(args[0], 'read-refresh');
+      const request = JSON.parse(await readFile(args[2]!, 'utf8'));
+      environments.push(request.env.PATH);
+      return JSON.stringify({ version: 1, roots: [request.env.PATH], skipped: [] });
+    },
+  });
+  await ensureReadRefresh({ PATH: 'C:\\one' });
+  await ensureReadRefresh({ PATH: 'C:\\two' });
+  await ensureReadRefresh({ PATH: 'C:\\one' });
+  assert.deepEqual(environments, ['C:\\one', 'C:\\two', 'C:\\one']);
+});
+
+test('concurrent identical environments share only the refresh that is still running', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-refresh-concurrent-');
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let calls = 0;
+  configureAccountBackend({
+    helper: 'C:\\fake\\yuantu-sandbox.exe',
+    state,
+    run: async (_helper, args) => {
+      assert.equal(args[0], 'read-refresh');
+      calls++;
+      markStarted();
+      await waiting;
+      return '{"version":1,"roots":[],"skipped":[]}';
     },
   });
   const env = { PATH: 'C:\\one' };
+  const pending = Promise.all([ensureReadRefresh(env), ensureReadRefresh({ ...env })]);
+  await started;
+  assert.equal(calls, 1);
+  release();
+  await pending;
+  assert.equal(calls, 1);
   await ensureReadRefresh(env);
-  clock += READ_REFRESH_TTL_MS - 1;
-  await ensureReadRefresh(env);
-  assert.equal(calls.length, 1, 'an unexpired refresh answers for the same environment');
-  clock += 1;
-  await ensureReadRefresh(env);
-  assert.equal(calls.length, 2, 'an expired refresh asks the helper again');
+  assert.equal(calls, 2, 'a later command must not reuse the completed refresh');
 });
 
 test('a failed refresh never stops a command', { skip: windowsOnly }, async (t) => {
@@ -257,7 +285,9 @@ test(
     await backend(t, false);
     await refreshAccountReadiness();
     assert.equal(nativeSandboxBackend('win32'), 'windows-account');
-    assert.match((await windowsAccountSandboxProvider.available()) ?? '', /accounts-missing/);
+    const unavailable = (await windowsAccountSandboxProvider.available()) ?? '';
+    assert.match(unavailable, /accounts-missing/);
+    assert.doesNotMatch(unavailable, /select the weaker|mode manually/);
     await backend(t, true);
     await refreshAccountReadiness();
     assert.equal(nativeSandboxBackend('win32'), 'windows-account');

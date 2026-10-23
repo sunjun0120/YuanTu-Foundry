@@ -373,13 +373,13 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 桌面运行中也可以切换权限预设，新的选择立即作用于尚未执行的工具。等待授权的调用按新权限允许或拒绝，开始执行前再次核对执行环境；下一轮模型请求同步更新工具列表与环境说明。已经启动的命令、后台进程、终端和语言服务器保留创建时的执行环境。
 
-`YUANTU_SANDBOX` 接受 `native`、`windows`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。Windows 的 `windows` 是显式选择的受限令牌后端，不会由 `native` 自动回退。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
+`YUANTU_SANDBOX` 接受 `native`、`windows-account`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。应用命令及 hook 启动配置中的旧 `windows` 会迁到 `native`，隔离预设不再保留旧后端；底层受限令牌 provider 仅用于显式兼容性检查。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
 文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端（`windows`）使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径，因此拒绝严格进程只读及断网请求。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，WFP 断网，子进程可正常 fork）；`native` 在 Windows 上始终选择它，未初始化或标记版本不对时拒绝执行并提示去设置页初始化/修复，**不会自动回退**到 `windows`。基础验收入口为 `npm.cmd run check:windows-sandbox`，两个后端的边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
-Windows 桌面基础闭环通过 `npm.cmd run check:windows-desktop-sandbox` 复跑。
+Windows 账户主流程通过 `npm.cmd run check:windows-sandbox`、桌面闭环通过 `npm.cmd run check:windows-desktop-sandbox` 验证。两者只在已初始化账户的 GitHub 托管 Windows runner 上运行，要求 `FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS=1`，由 workflow 负责初始化及始终清理；本机不执行账户维护。旧后端专属验收通过 `npm.cmd run check:windows-legacy-sandbox` 单独运行，不属于默认主流程。
 
 Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩包、`node.exe` 与许可证哈希及发布者 GPG 指纹由 [运行时锁](build/windows-runtime.lock.json) 固定。`npm.cmd run fetch:windows-runtime` 下载并以签名的 `SHASUMS256.txt.asc` 校验后生成候选（`.scratch/windows-runtime/node-v<版本>-win-x64`），`npm.cmd run check:windows-runtime-source` 重验已有候选，`npm.cmd run package:windows:candidate:dir` 打包该候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。
 
@@ -738,7 +738,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 52 / 48 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 285 个 | `tests/*.test.ts` |
+| 行为测试文件 | 286 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -768,7 +768,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它。查询会核对源文件清单、大小与 mtime，发现外部新增、删除、重命名或改写后刷新索引；可选完整哈希核对用于大小与 mtime 均未变化的改写。调用方可取消刷新等待，共享构建继续供后续查询使用。单文件超过 8 MiB、读取失败或清单扫描截断时，覆盖状态明确标为不完整；读取失败的文件会在后续查询重试。凭据与依赖目录同样不进入索引。
 - **符号分页绑定查询与来源版本**：将 `repo_map` 返回的 `nextCursor` 作为 `cursor`，保留同一 `query` 即可续页；索引与已启动语言服务器均支持分页。查询、来源版本变化或游标失效后会拒绝续页，应从第一页重新检索。
 - **快速搜索后端需要固定资产**：`literal` + 区分大小写可走固定版本的 ripgrep，仅使用 `build/search-assets.lock.json` 中已记录 SHA-256 且校验通过的二进制；打包时由 `scripts/copy-search-assets.mjs` 核验后放入应用资源。没有可用资产、或执行环境无法安全启动进程时，一律回退内置流式扫描，不回退 host 进程。
-- **Windows 基础沙箱是部分写入边界**：工作区外的读与网络不受限，Low 完整性客体仍可写入已有的 Low/Everyone 可写位置。严格进程只读和断网要求会明确拒绝。沙箱内启动的进程无法再创建需要继承管道的子进程——Node 的 `child_process` 会得到 `spawn EPERM`——所以 `node --test`、vitest、jest 一类会 fork 的测试运行器在基础后端下不可用；不 fork 的测试文件（直接 `node tests/x.test.mjs`）可以运行。需要这类工具时应初始化 Windows 沙箱账户并使用 `native`（`windows-account` 后端没有这个限制）；如果管理员初始化无法完成，可由用户手动选择较弱的 `windows`，而不是等待自动回退。
+- **旧 Windows 基础沙箱仅保留兼容性检查**：它是部分写入边界，读取与网络不受限，也有子进程 `spawn EPERM` 限制。应用及主流程 CI 使用 `native` 对应的账户后端，支持正常 fork、严格只读及按账户断网；初始化无法完成时拒绝执行并提示修复。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。

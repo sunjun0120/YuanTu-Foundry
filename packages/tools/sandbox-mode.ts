@@ -13,15 +13,21 @@ export function parseSandboxMode(value: unknown, name = 'sandbox mode'): Executi
   return value as ExecutionMode;
 }
 
+/** Shipped app settings migrate the retired token backend; low-level compatibility callers stay explicit. */
+export function appSandboxMode(value: unknown, name = 'sandbox mode'): ExecutionMode {
+  const mode = parseSandboxMode(value, name);
+  return mode === 'windows' ? 'native' : mode;
+}
+
 /**
  * The platform backend `native` stands for.
  *
  * On Windows that is always the sandbox account backend. It is never silently replaced by the weaker restricted
- * token backend: `windows` remains an explicit, manual choice for machines where account setup is impossible.
+ * token backend: `windows` remains available only to low-level compatibility callers.
  */
 export function nativeSandboxBackend(
   platform: NodeJS.Platform = process.platform,
-): 'windows' | 'windows-account' | 'seatbelt' {
+): 'windows-account' | 'seatbelt' {
   if (platform === 'win32') return 'windows-account';
   if (platform === 'darwin') return 'seatbelt';
   throw new Error(`Native sandbox is unavailable on ${platform}; no host fallback is allowed`);

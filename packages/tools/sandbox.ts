@@ -167,7 +167,7 @@ registerSandboxProvider(seatbeltSandboxProvider);
 registerSandboxProvider({
   mode: 'native',
   description:
-    'Native operating-system sandbox: Windows sandbox accounts once initialized (otherwise the Windows restricted token), or macOS Seatbelt; unavailable policies fail closed.',
+    'Native operating-system sandbox: Windows sandbox accounts or macOS Seatbelt; initialization and policy failures stop execution without fallback.',
   capabilities: (config) =>
     sandboxProvider(nativeSandboxBackend()).capabilities?.(config) ?? HOST_CAPABILITIES,
   available: async (env) => {

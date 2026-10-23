@@ -1,10 +1,13 @@
-// @test-serial windows-sandbox: Executes npm validation under the real Windows restricted token.
+// @test-serial windows-sandbox: Executes npm validation under the Windows sandbox account.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { useAccountTests, windowsAccountTests } from './windows-account-fixture.ts';
+
+useAccountTests();
 
 async function fixture(t: test.TestContext) {
   const root = await tempRoot(t, 'yuantu-tools-');
@@ -19,7 +22,7 @@ const call = (name: string, args: Record<string, unknown>) => ({
 
 test(
   'Windows validation runs npm scripts through the native command interpreter',
-  { skip: process.platform !== 'win32' && 'needs Windows' },
+  windowsAccountTests,
   async (t) => {
     const { root, tools } = await fixture(t);
     t.after(() => tools.close());
@@ -32,7 +35,7 @@ test(
       "require('node:fs').writeFileSync('verified.txt', 'actual execution'); console.log('VALIDATION_MARKER');",
     );
     const previous = process.env.YUANTU_SANDBOX;
-    process.env.YUANTU_SANDBOX = 'windows';
+    process.env.YUANTU_SANDBOX = 'native';
     try {
       const result = await tools.execute(call('run_validation', { id: 'npm:test' }), ctx());
       assert.equal(result.isError, false, result.content);

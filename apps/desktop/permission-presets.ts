@@ -54,18 +54,17 @@ export function permissionPreset(id: PermissionPresetId): PermissionPreset {
 /**
  * Which preset a pair *is*, or `null` when it is one no preset declares.
  *
- * `windows` is the explicit weaker Windows implementation of the same "native isolation" rung, so presets keep
- * matching it: an operator who selected that backend must not see the chip fall through to `custom` just because
- * they moved the approval half. `session-choices` keeps the selected backend when it applies such a preset.
+ * Legacy backends remain custom. Matching one as native would describe account isolation while a weaker
+ * backend is actually running; applying an isolated preset must select the current native backend.
  */
 export function presetIdFor(
   sandbox: SandboxMode,
   permission: PermissionMode,
 ): PermissionPresetId | null {
-  const rung = sandbox === 'windows' ? 'native' : sandbox;
   return (
-    PERMISSION_PRESETS.find((preset) => preset.sandbox === rung && preset.permission === permission)
-      ?.id ?? null
+    PERMISSION_PRESETS.find(
+      (preset) => preset.sandbox === sandbox && preset.permission === permission,
+    )?.id ?? null
   );
 }
 /** Both knobs as the desktop shows them, plus which preset (if any) they currently are. */

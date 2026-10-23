@@ -54,13 +54,10 @@ interface Configuration {
   run: HelperRunner;
   launch?: BrokerLauncher;
   state: string;
-  /** The clock read-refresh expiry is measured on; replaced in tests. */
-  now: () => number;
 }
 let configuration: Configuration = {
   helper: path.join(assetRoot, 'yuantu-sandbox.exe'),
   run: runHelper,
-  now: Date.now,
   state: path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state', 'windows-account'),
 };
 
@@ -172,8 +169,7 @@ async function readiness(): Promise<string | null> {
       : `The Windows sandbox accounts are not ready (${current.problems.join(', ')})`;
   return (
     `${state}. Open Settings > General > Windows sandbox accounts to initialize or repair them. ` +
-    'If administrator initialization is impossible, select the weaker "windows" sandbox mode manually: it has ' +
-    'no separate account, weaker network isolation, and known child-process spawn EPERM failures.'
+    'Sandboxed commands remain blocked until initialization or repair succeeds.'
   );
 }
 
@@ -264,41 +260,27 @@ const REFRESH_ENVIRONMENT = [
   'USERPROFILE',
 ] as const;
 
-/**
- * How long one refresh answers for an unchanged environment.
- *
- * The helper denies only the credential files that exist when it runs, and an automatic root grants everything
- * created later through inheritance; the SSH-config check is likewise a snapshot. Without an expiry a token file
- * written into a granted toolchain root (`cargo login`) or a new `IdentityFile` stays readable for the life of
- * the Host. Refresh is a targeted check, so asking again after a minute is cheap; this bounds the window.
- */
-export const READ_REFRESH_TTL_MS = 60_000;
-
-const readRefreshes = new Map<string, { pending: Promise<void>; started: number }>();
+const readRefreshes = new Map<string, Promise<void>>();
 
 /**
- * Authorizes the toolchain roots this environment names, at most once per {@link READ_REFRESH_TTL_MS} per
- * environment.
+ * Authorizes the toolchain roots before each command, sharing only identical refreshes that are still running.
  *
- * The helper decides what those roots are; this side only decides *when* to ask. A different `PATH` (a version
- * manager switching toolchains) asks again, an expired refresh asks again, and a failed refresh is forgotten so
- * the next command retries.
+ * Refresh can revoke another environment's automatic roots, so a completed refresh cannot answer a later request:
+ * switching A to B and back to A must ask the helper again. Both success and failure discard their own entry.
  */
 export async function ensureReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
   const values = REFRESH_ENVIRONMENT.map((name) => env[name] ?? '');
   const key = createHash('sha256').update(JSON.stringify(values)).digest('hex');
-  const now = configuration.now();
-  let entry = readRefreshes.get(key);
-  if (!entry || now - entry.started >= READ_REFRESH_TTL_MS) {
-    const created = { pending: runReadRefresh(env), started: now };
-    readRefreshes.set(key, created);
-    // Only this attempt's own entry is forgotten: a newer refresh for the same key must survive it.
-    created.pending.catch(() => {
+  let pending = readRefreshes.get(key);
+  if (!pending) {
+    const created = runReadRefresh(env).finally(() => {
+      // Maintenance may have cleared the map and started a newer refresh for the same environment.
       if (readRefreshes.get(key) === created) readRefreshes.delete(key);
     });
-    entry = created;
+    readRefreshes.set(key, created);
+    pending = created;
   }
-  await entry.pending;
+  await pending;
 }
 
 async function runReadRefresh(env: NodeJS.ProcessEnv): Promise<void> {
@@ -361,8 +343,8 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   );
   // Even a read-only command needs the grant: the group's ACE is what lets the account read the workspace.
   await ensureGrant(root, capability);
-  // The toolchains this environment names are authorized once per process, before the first command runs. A failure
-  // must not stop the command: the workspace grant above is all it needs, and a missing read root shows up as the
+  // The toolchains this environment names are refreshed before each command; identical concurrent requests share it.
+  // A failure must not stop the command: the workspace grant above is all it needs, and a missing read root shows up as the
   // tool not being found rather than as a launch failure.
   await ensureReadRefresh(env).catch((failure: unknown) => {
     console.error(

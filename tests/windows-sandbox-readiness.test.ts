@@ -110,7 +110,7 @@ test('real Windows acceptance rejects skipped, empty, cancelled, todo and incomp
 });
 
 test('Windows acceptance refuses leftover leases and newly retained or changed ACL journals', async () => {
-  const { assertStateRestored } = await script('check-windows-sandbox.mjs');
+  const { assertStateRestored } = await script('check-windows-legacy-sandbox.mjs');
   const before = { locks: [], journals: { 'existing.json': 'original' } };
   assert.doesNotThrow(() => assertStateRestored(before, before));
   assert.throws(

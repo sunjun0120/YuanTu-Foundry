@@ -4,22 +4,18 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
+import { windowsAccountTests, nativeAccountTests } from './windows-account-fixture.ts';
 
-export const windows = { skip: process.platform !== 'win32' && 'needs Windows', timeout: 60000 };
-
-export const native = {
-  skip:
-    process.platform !== 'win32' &&
-    process.platform !== 'darwin' &&
-    'needs Windows or macOS native sandbox',
-  timeout: 60000,
-};
+export const windows = windowsAccountTests;
+export const native = nativeAccountTests;
 
 export const fixture = path.resolve('tests/lsp-fixture.ts');
 
-export const nativeMode = process.platform === 'darwin' ? 'seatbelt' : 'windows';
+export const nativeMode = process.platform === 'darwin' ? 'seatbelt' : 'windows-account';
 
-export const context = (mode: 'host' | 'windows' | 'seatbelt' = nativeMode): ToolContext => ({
+export const context = (
+  mode: 'host' | 'windows-account' | 'seatbelt' = nativeMode,
+): ToolContext => ({
   signal: new AbortController().signal,
   approve: async () => true,
   executionPolicy: executionPolicy(mode),

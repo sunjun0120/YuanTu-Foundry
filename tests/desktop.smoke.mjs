@@ -1,4 +1,5 @@
 // @test-serial desktop-ui: Launches real Electron windows.
+// @test-serial windows-sandbox: Live permission switching uses initialized sandbox accounts on Windows CI.
 // Turn cards, permission presets and the session sandbox, the core chat flow, and Markdown and diff review.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -333,7 +334,7 @@ test(
       ...process.env,
       YUANTU_WORKSPACE: root,
       YUANTU_NODE_PATH: process.execPath,
-      YUANTU_SANDBOX: process.platform === 'win32' ? 'windows' : 'native',
+      YUANTU_SANDBOX: 'native',
       YUANTU_PROTOCOL: 'anthropic',
       YUANTU_BASE_URL: url,
       YUANTU_MODEL: 'fixture',

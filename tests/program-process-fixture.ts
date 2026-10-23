@@ -13,7 +13,7 @@ import type { ToolContext, ToolCatalog } from '../packages/protocol/index.ts';
  */
 export async function fixture(
   t: test.TestContext,
-  mode: 'host' | 'windows' = 'host',
+  mode: 'host' | 'windows-account' = 'host',
   options: { escaped?: boolean } = {},
 ) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-program-process-'));
