@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { toolEnvironment } from './environment.ts';
-import { killTree } from './process.ts';
+import path from 'node:path';
+import { killOrphans, killTree } from './process.ts';
 import {
   registerSandboxProvider,
   resolveSandboxConfig,
@@ -19,6 +20,7 @@ import { seatbeltSandboxProvider } from './sandbox-seatbelt.ts';
 import { nativeSandboxBackend } from './sandbox-mode.ts';
 import { executionPolicy, requireExecutionCapabilities } from './execution-policy.ts';
 import { HOST_CAPABILITIES } from './execution-capabilities.ts';
+import { windowsShell, windowsShellArgs } from './windows-shell.ts';
 
 // A registry entry can be replaced while a process runs. Resource ownership
 // must remain attached to the original plan and provider, not its mutable tag.
@@ -65,12 +67,14 @@ export async function checkSandboxAvailability(
 async function hostPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   const win = process.platform === 'win32';
   const { command, argv, cwd } = request;
+  const shell = win && !argv ? windowsShell() : undefined;
   return {
-    executable: argv ? command : win ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh',
-    args: argv ? [...argv] : win ? ['/d', '/s', '/c', '"' + command + '"'] : ['-c', command],
+    executable: argv ? command : shell ? shell.path : '/bin/sh',
+    args: argv ? [...argv] : shell ? windowsShellArgs(shell, command) : ['-c', command],
     cwd,
     env: { ...toolEnvironment(), ...(request.env ?? {}) },
-    windowsVerbatimArguments: win && !argv,
+    // cmd's `/s /c "…"` form must reach it unquoted; PowerShell takes ordinary C-runtime arguments.
+    windowsVerbatimArguments: shell?.kind === 'cmd',
   };
 }
 
@@ -115,7 +119,12 @@ export async function stopSandboxProcess(child: ChildProcess): Promise<void> {
   if (child.pid && process.platform !== 'win32') await killTree(child.pid);
   if (child.pid && child.exitCode === null && child.signalCode === null) {
     try {
-      if (process.platform === 'win32') await killTree(child.pid);
+      if (process.platform === 'win32') {
+        await killTree(child.pid);
+        // A PowerShell host killed mid-start can leave the program it was starting behind (see `killOrphans`).
+        if (/^(?:pwsh|powershell)(?:\.exe)?$/i.test(path.win32.basename(child.spawnfile ?? '')))
+          await sweepOrphans(child, child.pid);
+      }
       if (child.exitCode === null && child.signalCode === null)
         await new Promise<void>((resolve, reject) => {
           const closed = () => {
@@ -136,6 +145,25 @@ export async function stopSandboxProcess(child: ChildProcess): Promise<void> {
     const error = new Error(String(failure));
     error.name = 'ToolCleanupError';
     throw error;
+  }
+}
+
+/**
+ * Sweeps a killed shell's orphans until nothing holds its output open.
+ *
+ * One sweep right after `taskkill` is not enough under load: the program the shell was starting can finish being
+ * created after it. The shell's pipes close only once every process holding them has exited, so that is the signal
+ * the sweep runs until, for at most five seconds; a shell started without pipes has no such signal and is swept
+ * three times over three quarters of a second.
+ */
+async function sweepOrphans(child: ChildProcess, pid: number): Promise<void> {
+  const streams = [child.stdout, child.stderr].filter((stream) => stream !== null);
+  const open = () => streams.some((stream) => !stream.destroyed && !stream.readableEnded);
+  const deadline = Date.now() + 5000;
+  for (let sweep = 0; ; sweep++) {
+    await killOrphans(pid);
+    if (streams.length ? !open() || Date.now() >= deadline : sweep >= 2) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
 

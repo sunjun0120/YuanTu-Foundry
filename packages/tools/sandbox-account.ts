@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { toolEnvironment } from './environment.ts';
 import { windowsAccountCapabilities } from './execution-capabilities.ts';
+import { windowsShell, windowsShellArgs } from './windows-shell.ts';
 import {
   brokerPipe,
   stopBrokers,
@@ -337,8 +338,9 @@ function comspec(): string {
 /**
  * The runner's `argv` for a request, in the shape the host backend runs it.
  *
- * Shell text and anything the shell has to resolve (a `.cmd` shim, a bare name) go through `cmd.exe /d /s /c`
- * verbatim; only an absolute program image is started directly. The runner never searches PATH itself.
+ * Shell text runs in the Windows shell (`./windows-shell.ts`), the same one the host backend uses; a program
+ * the shell has to resolve (a `.cmd` shim, a bare name) goes through `cmd.exe /d /s /c` verbatim; only an
+ * absolute program image is started directly. The runner never searches PATH itself.
  */
 export function accountCommand(
   request: Pick<SandboxRequest, 'command' | 'argv'>,
@@ -350,7 +352,10 @@ export function accountCommand(
     const line = [request.command, ...request.argv].map(quoteWindowsArgument).join(' ');
     return { argv: [comspec(), `/d /s /c "${line}"`], verbatim: true };
   }
-  return { argv: [comspec(), `/d /s /c "${request.command}"`], verbatim: true };
+  const shell = windowsShell();
+  if (shell.kind === 'cmd')
+    return { argv: [shell.path, `/d /s /c "${request.command}"`], verbatim: true };
+  return { argv: [shell.path, ...windowsShellArgs(shell, request.command)], verbatim: false };
 }
 
 const planFiles = new WeakMap<SandboxPlan, string>();

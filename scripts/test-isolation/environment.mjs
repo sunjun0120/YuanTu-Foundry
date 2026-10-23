@@ -65,6 +65,9 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     // Temporary workspaces sit inside this repository, so a Host or CLI a test starts must not write to its
     // `.git/info/exclude`; the cases that exercise the exclusion enable it explicitly.
     YUANTU_GIT_EXCLUDE: '0',
+    // Command text runs in cmd: a PowerShell start costs 0.4–1.2 s under the suite's eight-way load. The PowerShell
+    // path has its own file (`tests/windows-shell.test.ts`), which switches this back to `auto`.
+    YUANTU_TEST_WINDOWS_SHELL: 'cmd',
     FOUNDRY_TEST_ROOT: root,
     FOUNDRY_TEST_ARTIFACTS: paths.artifacts,
     // The desktop window deliberately does not read the process record; its smoke suites still assert that record,

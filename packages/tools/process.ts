@@ -69,6 +69,47 @@ function taskkill(pid: number): Promise<number | null> {
   });
 }
 
+/**
+ * End what a Windows process tree left behind after `taskkill /T`.
+ *
+ * `taskkill` walks the tree as it is at that moment. A PowerShell host killed while it is starting a native program
+ * can finish creating that child after the walk, and under load it does so about half the time: the child outlives
+ * the shell, keeps its inherited stdout pipe open, and the caller waiting for the shell's streams to close waits
+ * until its own deadline. Such an orphan still records the dead shell as its parent, so it can be found and ended.
+ *
+ * Only after the shell is gone: a pid that is alive again belongs to some other process now, and so do its children.
+ */
+export async function killOrphans(pid: number): Promise<void> {
+  if (process.platform !== 'win32' || processExists(pid)) return;
+  const listing = await new Promise<string>((resolve) => {
+    const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+    const child = spawn(
+      powershell,
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}' | ForEach-Object { $_.ProcessId }`,
+      ],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    let output = '';
+    const timer = setTimeout(() => child.kill(), TERMINATION_TIMEOUT_MS);
+    child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+    child.on('error', () => resolve(''));
+    child.on('close', () => {
+      clearTimeout(timer);
+      resolve(output);
+    });
+  });
+  const orphans = listing
+    .split(/\s+/)
+    .map(Number)
+    .filter((orphan) => Number.isInteger(orphan) && orphan > 0);
+  await Promise.all(orphans.map((orphan) => killTree(orphan).catch(() => {})));
+}
+
 /** Whether a pid is still alive; a pid this process may not signal still exists. */
 function processExists(pid: number): boolean {
   try {

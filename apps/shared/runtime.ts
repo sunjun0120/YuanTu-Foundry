@@ -1,4 +1,5 @@
 import { resolveSandboxConfig } from '../../packages/tools/sandbox.ts';
+import { windowsShell, windowsShellLabel } from '../../packages/tools/windows-shell.ts';
 import { appSandboxMode } from '../../packages/tools/sandbox-mode.ts';
 import {
   executionPolicy as callExecutionPolicy,
@@ -57,8 +58,23 @@ export function modelInfoFor(config: ProviderConfig): {
   };
 }
 
+/**
+ * The shell sentence for Windows: models default to POSIX syntax, so the prompt names the dialect and the habits
+ * that most often break a command in it.
+ */
+function windowsShellNote(): string {
+  const shell = windowsShell();
+  if (shell.kind === 'cmd') return ' Shell: cmd.exe.';
+  const chaining =
+    shell.kind === 'powershell'
+      ? '; use `;` to chain, `&&` is not available; a double quote inside an argument to a native program is dropped, so write it as \\"'
+      : '';
+  return ` Shell: ${windowsShellLabel(shell)}; write PowerShell syntax ($env:NAME for variables${chaining}).`;
+}
+
 export function executionEnvironment(): string {
   const mode = resolveSandboxConfig().mode;
+  const shellNote = process.platform === 'win32' ? windowsShellNote() : '';
   const web =
     ' Web search, page fetch and browser tools run in the Host process behind their own approval, independently of this command sandbox.';
   if (mode !== 'host') {
@@ -72,16 +88,19 @@ export function executionEnvironment(): string {
         : mode;
     return (
       (backend === 'windows'
-        ? 'Command environment: Windows native restricted-token sandbox, real workspace and private scratch. Filesystem enforcement is partial; reads and network are unconfined. Required unsupported policies fail closed. A process started in this sandbox cannot start its own child processes that need inherited pipes (Node `child_process` reports `spawn EPERM`), so test runners such as `node --test`, vitest and jest fail here while the same command works outside the sandbox; run a test file directly when it does not fork, and say so plainly when a task needs child processes instead of retrying the same command.'
+        ? 'Command environment: Windows native restricted-token sandbox, real workspace and private scratch. Filesystem enforcement is partial; reads and network are unconfined. Required unsupported policies fail closed. A process started in this sandbox cannot start its own child processes that need inherited pipes (Node `child_process` reports `spawn EPERM`), so test runners such as `node --test`, vitest and jest fail here while the same command works outside the sandbox; run a test file directly when it does not fork, and say so plainly when a task needs child processes instead of retrying the same command.' +
+          shellNote
         : backend === 'windows-account'
-          ? 'Command environment: Windows sandbox account, real workspace and private scratch. Workspace capabilities confine writes; file and network access follow the selected policy. Child processes and forking test runners are supported. Account initialization is required; unavailable isolation fails closed.'
+          ? 'Command environment: Windows sandbox account, real workspace and private scratch. Workspace capabilities confine writes; file and network access follow the selected policy. Child processes and forking test runners are supported. Account initialization is required; unavailable isolation fails closed.' +
+            shellNote
           : backend === 'seatbelt'
             ? 'Command environment: macOS native Seatbelt sandbox, /bin/sh, real workspace and private scratch. File and network access follow the selected policy. Unsupported policies fail closed.'
             : 'Command environment: native sandbox unavailable on this platform; command execution must fail closed.') +
       web
     );
   }
-  return `Command environment: host ${process.platform}, shell ${process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'}. Host commands are not OS-sandboxed; permissions still apply.${web}`;
+  const shell = process.platform === 'win32' ? shellNote : ' Shell: /bin/sh.';
+  return `Command environment: host ${process.platform}.${shell} Host commands are not OS-sandboxed; permissions still apply.${web}`;
 }
 
 /** Shipped apps select native isolation; an unavailable backend never selects host implicitly. */

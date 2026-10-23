@@ -366,6 +366,8 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
+Windows 上模型写的命令文本统一由 PowerShell 执行（host、`windows-account` 与旧基础沙箱一致，`terminal_open` 的默认 shell 相同），选择顺序参照 Codex：PATH 中的 `pwsh`、`C:\Program Files\PowerShell\7\pwsh.exe`、PATH 中的 `powershell`、System32 下的 Windows PowerShell 5.1，都不存在时才回退 `cmd.exe`；商店版（`WindowsApps`）PowerShell 被跳过，因为沙箱账户无法打开它。调用形式为 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`（执行策略只作用于该进程，否则 `npm` 会解析到被默认策略拒绝的 `npm.ps1`），脚本前置 UTF-8 输出与关闭进度条，脚本末尾保留最后一条原生命令的退出码；以引号开头的命令自动加调用运算符 `&`。终止 PowerShell 时，若它正好在启动子程序，`taskkill /T` 可能漏掉这个子程序（负载下约一半），因此在 shell 退出后再按父进程号补扫一次（`killOrphans`）。需要 PATHEXT 解析的「程序 + 参数」请求（`.cmd` 垫片，如 `npm`）与 `run_validation` 仍经 `cmd.exe /d /s /c`。PowerShell 每次启动比 cmd 多约 0.4 秒（8 路并发时约 0.7 秒），因此测试隔离环境（`scripts/test-isolation/environment.mjs`）默认设 `YUANTU_TEST_WINDOWS_SHELL=cmd`，PowerShell 路径由 `tests/windows-shell.test.ts` 专门覆盖。Windows PowerShell 5.1 会吞掉传给原生程序的参数里内嵌的双引号（7.3+ 由前缀里的 `$PSNativeCommandArgumentPassing` 修正），执行环境说明会提示模型改写为 `\"`。实现见 `packages/tools/windows-shell.ts`。
+
 Windows 账户主流程通过 `npm.cmd run check:windows-sandbox`、桌面闭环通过 `npm.cmd run check:windows-desktop-sandbox` 验证。两者只在已初始化账户的 GitHub 托管 Windows runner 上运行，要求 `FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS=1`，由 workflow 负责初始化及始终清理；本机不执行账户维护。旧后端专属验收通过 `npm.cmd run check:windows-legacy-sandbox` 单独运行，不属于默认主流程。
 
 Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩包、`node.exe` 与许可证哈希及发布者 GPG 指纹由 [运行时锁](build/windows-runtime.lock.json) 固定。`npm.cmd run fetch:windows-runtime` 下载并以签名的 `SHASUMS256.txt.asc` 校验后生成候选（`.scratch/windows-runtime/node-v<版本>-win-x64`），`npm.cmd run check:windows-runtime-source` 重验已有候选，`npm.cmd run package:windows:candidate:dir` 打包该候选，`npm.cmd run check:windows-package` 校验包内运行时、来源记录与辅助程序。
@@ -611,7 +613,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 82 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 70 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -682,6 +684,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_HOST_MAX_RUNS` | `1–8` | 同一 Host 可同时运行的不同会话数（默认 2；同一会话始终串行，1 为全局串行） |
 | `YUANTU_LIBREOFFICE_PATH` | `string` | 可选 Office PDF 预览的 LibreOffice 命令行程序路径（Windows 建议 soffice.com） |
 | `YUANTU_NODE_PATH` | `string` | （测试）子进程使用的 node 路径 |
+| `YUANTU_TEST_WINDOWS_SHELL` | `auto` / `cmd` | （测试）Windows 上命令文本使用的 shell：auto 按 PowerShell 优先探测，cmd 固定用 cmd.exe（测试隔离环境默认设为 cmd，PowerShell 专项测试设为 auto） |
 | `YUANTU_QA_DIR` | `string` | （测试）QA 产物目录 |
 | `YUANTU_QA_SCREENSHOT` | `string` | （测试）是否截图 |
 | `YUANTU_MCP_TEST_SECRET` | `string` | （测试）MCP 夹具密钥 |

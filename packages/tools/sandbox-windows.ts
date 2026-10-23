@@ -20,6 +20,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { windowsShell, windowsShellArgs } from './windows-shell.ts';
 import {
   mkdir,
   mkdtemp,
@@ -578,7 +579,7 @@ export function windowsProgramNeedsShell(
     );
   });
 }
-/** The command line for a request: the same shell shape the host backend uses, quoted for `CreateProcess`. */
+/** The command line for a request: the same shell the host backend uses, quoted for `CreateProcess`. */
 export function windowsCommandLine(request: Pick<SandboxRequest, 'command' | 'argv'>): string {
   // With an argv the request is program-plus-arguments (`acceptance` checks and the hook bridge pass it that
   // way), so the program has to lead the command line: `CreateProcess` resolves the *first* token as the image
@@ -590,8 +591,13 @@ export function windowsCommandLine(request: Pick<SandboxRequest, 'command' | 'ar
     const comspec = process.env.ComSpec ?? 'cmd.exe';
     return `${quoteWindowsArgument(comspec)} /d /s /c "${line}"`;
   }
-  // `/d` skips AutoRun commands and `/s` makes the quoting below the documented "everything inside the outer
-  // quotes" form, which is what the host backend does too. The command is deliberately *not* run through
+  const windows = windowsShell();
+  if (windows.kind !== 'cmd')
+    return [windows.path, ...windowsShellArgs(windows, request.command)]
+      .map(quoteWindowsArgument)
+      .join(' ');
+  // Without PowerShell: `/d` skips AutoRun commands and `/s` makes the quoting below the documented
+  // "everything inside the outer quotes" form, which is what the host backend does too. The command is deliberately *not* run through
   // `quoteWindowsArgument`: cmd's parser is not the C runtime's, and escaping the outer quotes as `\"` hands it
   // a literal program name (`'"exit 0"' is not recognized as an internal or external command`) instead of a
   // command. The command is shell text because a shell is what runs it — same contract as the host backend.

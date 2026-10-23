@@ -26,6 +26,7 @@ import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 import { tempRoot } from './temp-fixture.ts';
+import { windowsShell, windowsShellArgs } from '../packages/tools/windows-shell.ts';
 
 const windowsOnly = process.platform !== 'win32' && 'the account backend only runs on Windows';
 const PIPE = '\\\\.\\pipe\\yuantu-sbx-broker-' + '0123456789abcdef0123456789abcdef';
@@ -280,11 +281,13 @@ test('a broker announcement must name one of its own pipes', () => {
     assert.throws(() => parseBrokerAnnouncement(broken));
 });
 
-test('commands keep the host shape: shell text through cmd, absolute images directly', () => {
+test('commands keep the host shape: shell text through PowerShell, absolute images directly', () => {
   const shell = accountCommand({ command: 'npm test' });
-  assert.equal(shell.verbatim, true);
-  assert.match(shell.argv[0]!, /cmd\.exe$/i);
-  assert.equal(shell.argv[1], '/d /s /c "npm test"');
+  const expected = windowsShell();
+  assert.equal(shell.argv[0], expected.path);
+  assert.equal(shell.verbatim, expected.kind === 'cmd');
+  if (expected.kind !== 'cmd')
+    assert.deepEqual(shell.argv.slice(1), windowsShellArgs(expected, 'npm test'));
   const direct = accountCommand(
     { command: 'C:\\Program Files\\nodejs\\node.exe', argv: ['-e', 'x'] },
     { PATH: '' },
@@ -383,7 +386,7 @@ test(
     const request = JSON.parse(await readFile(file, 'utf8'));
     const capability = await capabilityFor(root);
     assert.deepEqual(request.capabilities, [capability]);
-    assert.equal(request.verbatim, true);
+    assert.equal(request.verbatim, windowsShell().kind === 'cmd');
     // An ordinary command runs on the host's pipes: no terminal is requested.
     assert.equal('tty' in request, false);
     assert.equal(request.cwd.toLowerCase(), path.join(root, 'src').toLowerCase());

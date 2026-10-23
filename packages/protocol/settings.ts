@@ -533,6 +533,12 @@ export const ENVIRONMENT = {
   },
   // Test-only keys, listed because the check has to know every YUANTU_* name the project itself sets.
   YUANTU_NODE_PATH: { kind: 'string', description: '（测试）子进程使用的 node 路径' },
+  YUANTU_TEST_WINDOWS_SHELL: {
+    kind: 'enum',
+    values: ['auto', 'cmd'],
+    description:
+      '（测试）Windows 上命令文本使用的 shell：auto 按 PowerShell 优先探测，cmd 固定用 cmd.exe（测试隔离环境默认设为 cmd，PowerShell 专项测试设为 auto）',
+  },
   YUANTU_QA_DIR: { kind: 'string', description: '（测试）QA 产物目录' },
   YUANTU_QA_SCREENSHOT: { kind: 'string', description: '（测试）是否截图' },
   YUANTU_MCP_TEST_SECRET: { kind: 'string', description: '（测试）MCP 夹具密钥' },

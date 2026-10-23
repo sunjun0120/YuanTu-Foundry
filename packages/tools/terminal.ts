@@ -16,6 +16,7 @@ import type { ExecutionPolicy } from '../protocol/execution.ts';
 import { bounded, failure } from './registry.ts';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { OutputRing } from './output-ring.ts';
+import { windowsShell } from './windows-shell.ts';
 
 /**
  * Terminals: the one kind of work a command runner cannot express.
@@ -98,7 +99,10 @@ export function defaultShell(env: NodeJS.ProcessEnv = process.env): {
   file: string;
   args: string[];
 } {
-  if (process.platform === 'win32') return { file: env.ComSpec ?? 'cmd.exe', args: [] };
+  if (process.platform === 'win32') {
+    const shell = windowsShell(env);
+    return { file: shell.path, args: shell.kind === 'cmd' ? [] : ['-NoLogo', '-NoProfile'] };
+  }
   return { file: env.SHELL ?? '/bin/sh', args: [] };
 }
 export class TerminalSessions {

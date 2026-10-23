@@ -31,6 +31,7 @@ import {
 } from '../packages/tools/sandbox-windows.ts';
 import { applySandboxDefaults } from '../apps/shared/runtime.ts';
 import { labelLowIntegrity } from './windows-label-fixture.ts';
+import { windowsShell, windowsShellArgs } from '../packages/tools/windows-shell.ts';
 
 const config = { mode: 'windows' as const, image: 'node:24-bookworm-slim' };
 /** Runs a prepared plan and resolves with its exit code and captured output. */
@@ -647,11 +648,14 @@ test('the quoting rule is the one Windows de-parses', () => {
   assert.equal(quoteWindowsArgument('a b\\'), '"a b\\\\"');
   assert.equal(quoteWindowsArgument('a\\"b'), '"a\\\\\\"b"');
   assert.equal(quoteWindowsArgument('back\\\\slash'), 'back\\\\slash');
-  // The shell form is quoted too: the command runs under `cmd /d /s /c` with the outer quotes intact, so a
-  // command string that contains quotes of its own cannot change where the wrapper ends.
+  // The shell form runs in the Windows shell with every argument quoted by the same rule, so a command string
+  // that contains quotes of its own cannot change where the script argument ends.
+  const shell = windowsShell();
   assert.equal(
-    windowsCommandLine({ command: 'echo hi' }),
-    `${process.env.ComSpec ?? 'cmd.exe'} /d /s /c "echo hi"`,
+    windowsCommandLine({ command: 'echo "hi"' }),
+    shell.kind === 'cmd'
+      ? `${quoteWindowsArgument(shell.path)} /d /s /c "echo "hi""`
+      : [shell.path, ...windowsShellArgs(shell, 'echo "hi"')].map(quoteWindowsArgument).join(' '),
   );
   // The argv form leads with the image: `CreateProcess` takes the first token as the program, so leaving it out
   // produced a command line starting with `-e` (nothing to run) while every other assertion here still held.
