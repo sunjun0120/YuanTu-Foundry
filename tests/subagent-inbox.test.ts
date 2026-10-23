@@ -611,7 +611,8 @@ test('a correction stays pending until the child’s own turn records reading it
         });
       if (parentRound === 2) {
         // The child session id arrives with the delegation's receipt, and the parent is the one reading it.
-        await until(() => Boolean(childSessionId));
+        // Residency is published before the child's provider starts. A correction must target the parked turn.
+        await until(() => Boolean(childSessionId) && gated);
         return toolCall('send-1', 'send_message', {
           childSessionId,
           message: 'also check the config',
@@ -720,7 +721,8 @@ test('a full child queue is refused loudly instead of being recorded as handed o
           tasks: [{ objective: 'Sweep it' }],
           wait: false,
         });
-      if (parentRound === 2) await until(() => Boolean(childSessionId));
+      // Fill the correction queue only after the child's first turn is parked behind the gate.
+      if (parentRound === 2) await until(() => Boolean(childSessionId) && gated);
       if (parentRound >= 2 && parentRound <= SENT + 1)
         return toolCall(`send-${parentRound}`, 'send_message', {
           childSessionId,
