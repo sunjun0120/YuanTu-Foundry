@@ -30,7 +30,7 @@ import type { SandboxMode } from './sandbox-settings.ts';
  * property the process refuses to change. A backend that cannot run says so before the choice is used.
  *
  * **The confirmation is the confirmation.** `unconfined` is the one preset that gives up isolation, so it goes
- * through the same acknowledge-the-risk dialog a full-access switch has always used, with the host sentence the
+ * through the same confirm-the-risk dialog a full-access switch has always used, with the host sentence the
  * deleted form used to carry. No preset is a way around it: the main process re-checks the same rule.
  */
 export function setupPermissionSettings(
@@ -57,7 +57,6 @@ export function setupPermissionSettings(
   const menu = byId('permission-menu');
   const select = byId<HTMLSelectElement>('permission-mode');
   const dialog = byId<HTMLDialogElement>('full-access-dialog');
-  const acknowledge = byId<HTMLInputElement>('full-access-acknowledge');
   const enable = byId<HTMLButtonElement>('full-access-enable');
   let view: PermissionPresetView | undefined;
   let pending = true;
@@ -316,22 +315,47 @@ export function setupPermissionSettings(
       })(),
     );
     /**
-     * The rung that gives up isolation, announced the way a risk is announced: what changes, and when to choose
-     * it. The paragraph is the whole reason this dialog exists — the checkbox is what makes it an acknowledgement
-     * rather than a notification.
+     * The rung that gives up isolation, announced the way Codex announces it: what the agent may now do without
+     * asking, spelled out as files, commands and network, then the risks that follow. 确认 is the acknowledgement:
+     * no checkbox in front of it, and 取消 holds the focus so Enter alone never gives up the sandbox.
      */
-    byId('full-access-title').textContent = text('确认启用完全访问权限？', 'Enable full access?');
+    byId('full-access-title').textContent = text('要开启完全访问权限吗？', 'Enable full access?');
     byId('full-access-description').textContent = text(
-      '启用完全访问权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-      'With full access the agent skips most confirmation steps and can act directly — sensitive operations, file changes, external commands. Use it only when you trust the current task.',
+      '智能体将能够在未经你许可的情况下，在这台计算机上的任何位置运行命令、使用互联网，以及创建和编辑文件。这包括但不限于：',
+      'The agent will be able to run commands anywhere on this computer, use the internet, and create and edit files, without asking for your permission. This includes, but is not limited to:',
     );
-    byId('full-access-acknowledge-label').textContent = text(
-      '我已了解风险，并愿意继续',
-      'I understand the risks and want to continue',
+    const risks: Record<string, [string, string, string, string]> = {
+      files: [
+        '文件和文件夹',
+        'Files and folders',
+        '读取、创建、修改、上传或删除此计算机上任意位置的文件',
+        'Read, create, change, upload or delete files anywhere on this computer',
+      ],
+      commands: [
+        '终端命令',
+        'Terminal commands',
+        '运行命令、安装软件和更改系统设置，不在沙箱中隔离',
+        'Run commands, install software and change system settings, outside any sandbox',
+      ],
+      network: [
+        '互联网',
+        'Internet',
+        '访问网站、下载内容并向外部发送数据',
+        'Visit websites, download content and send data out',
+      ],
+    };
+    for (const item of dialog.querySelectorAll<HTMLElement>('[data-risk]')) {
+      const [zhName, enName, zhLine, enLine] = risks[item.dataset.risk!]!;
+      item.querySelector('strong')!.textContent = text(zhName, enName);
+      item.querySelector('small')!.textContent = text(zhLine, enLine);
+    }
+    byId('full-access-risk').textContent = text(
+      '这会带来敏感数据丢失或泄露、提示注入等风险。你可以随时在权限菜单中切回其他模式。',
+      'This brings risks such as losing or leaking sensitive data and prompt injection. You can switch back from the permissions menu at any time.',
     );
     byId('full-access-close').setAttribute('aria-label', text('关闭', 'Close'));
     byId('full-access-cancel').textContent = text('取消', 'Cancel');
-    enable.textContent = text('启用完全访问权限', 'Enable full access');
+    enable.textContent = text('确认', 'Confirm');
     render();
   }
   function updateBusy(): void {
@@ -339,8 +363,6 @@ export function setupPermissionSettings(
   }
   function closeConfirmation(): void {
     confirming = undefined;
-    acknowledge.checked = false;
-    enable.disabled = true;
     if (dialog.open) dialog.close();
     render();
     trigger.focus();
@@ -380,10 +402,8 @@ export function setupPermissionSettings(
     }
     if (next === 'unconfined') {
       confirming = next;
-      acknowledge.checked = false;
-      enable.disabled = true;
       dialog.showModal();
-      acknowledge.focus();
+      byId('full-access-cancel').focus();
       return;
     }
     void apply(next, false);
@@ -433,9 +453,6 @@ export function setupPermissionSettings(
   select.addEventListener('change', () => {
     if (isPermissionPresetId(select.value)) choose(select.value);
   });
-  acknowledge.addEventListener('change', () => {
-    enable.disabled = !acknowledge.checked || pending;
-  });
   byId('full-access-cancel').addEventListener('click', closeConfirmation);
   // The × in the corner is the same act as 取消: withdraw the question, change nothing. Escape does it too
   // (`cancel` below), so the dialog has one meaning for every way out.
@@ -446,7 +463,7 @@ export function setupPermissionSettings(
   });
   byId<HTMLFormElement>('full-access-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!acknowledge.checked || pending || !confirming) return;
+    if (pending || !confirming) return;
     const preset = confirming;
     dialog.close();
     confirming = undefined;

@@ -148,20 +148,15 @@ test(
     assert.equal(await page.locator('#permission-custom').isVisible(), true);
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), true);
-    // The dialog says what changes and asks for one acknowledgement; the × and 取消 are the same way out.
-    assert.equal(
-      await page.locator('#full-access-acknowledge-label').innerText(),
-      'I understand the risks and want to continue',
-    );
-    assert.equal(
-      await page.getByText('I understand the risks and want to continue', { exact: true }).count(),
-      1,
-    );
+    // The dialog says what changes and 确认 is the acknowledgement; the × and 取消 are the same way out, and 取消
+    // holds the focus so Enter alone never gives up the sandbox.
+    assert.equal(await page.locator('#full-access-acknowledge').count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'full-access-cancel');
     assert.match(
       await page.locator('#full-access-description').innerText(),
-      /Use it only when you trust the current task\./,
+      /without asking for your permission\./,
     );
-    assert.equal(await page.locator('#full-access-enable').isDisabled(), true);
+    assert.equal(await page.locator('#full-access-dialog [data-risk]').count(), 3);
     assert.equal(await page.locator('#permission-mode').inputValue(), initialPreset);
     await page.locator('#full-access-close').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), false);
@@ -173,8 +168,6 @@ test(
     assert.equal(await page.locator('#permission-mode').inputValue(), initialPreset);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
-    assert.equal(await page.locator('#full-access-enable').isEnabled(), true);
     await page.locator('#full-access-enable').click();
     /**
      * The wait is on the renderer's own value, not on a `presets.get` poll: the store's pair flips in memory

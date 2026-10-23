@@ -894,13 +894,11 @@ test(
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), true);
-    assert.equal(await page.locator('#full-access-enable').isDisabled(), true);
     assert.equal((await pair(page)).view.current, 'auto', 'nothing moved before the confirmation');
     await page.locator('#full-access-cancel').click();
     assert.equal(await page.locator('#full-access-dialog').isVisible(), false);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
     await page.locator('#full-access-enable').click();
     await page.waitForFunction(
       () => document.querySelector('#permission-mode').value === 'unconfined',

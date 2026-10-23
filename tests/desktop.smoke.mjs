@@ -366,7 +366,6 @@ test(
     assert.match(await page.locator('#approvals').innerText(), /start_command/);
     await page.locator('#permission-trigger').click();
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
     await page.locator('#full-access-enable').click();
     await page.getByText('LIVE_PERMISSION_DONE', { exact: true }).waitFor();
     await waitForPage(page, async () => {
@@ -719,7 +718,6 @@ test(
      * about *writes* while staying confined; that rung is gone, and the chip says three things now.)
      */
     await page.locator('#permission-menu [data-preset="unconfined"]').click();
-    await page.locator('#full-access-acknowledge').check();
     await page.locator('#full-access-enable').click();
     await idle();
     assert.match(await readFile(path.join(root, 'approved.txt'), 'utf8'), /来自桌面审批/);
