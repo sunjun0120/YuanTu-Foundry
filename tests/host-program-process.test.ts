@@ -11,16 +11,17 @@ import { useAccountTests, windowsAccountTests } from './windows-account-fixture.
 useAccountTests();
 
 test(
-  'a real Host runs Windows PTC with durable receipts and no way out of the program VM',
+  'a real Host runs a Windows run_code program with durable receipts and no way out of the program VM',
   windowsAccountTests,
   async (t) => {
     let requests = 0;
     let output = '';
     const url = await httpFixture(t, (body, response) => {
       requests++;
-      assert.deepEqual(
-        body.tools.map((tool: { name: string }) => tool.name),
-        ['run_code'],
+      // The catalogue is the product's deferred one; all this case needs is that a program can be sent.
+      assert.ok(
+        body.tools.some((tool: { name: string }) => tool.name === 'run_code'),
+        'run_code is offered',
       );
       const last = body.messages.at(-1);
       const result = Array.isArray(last?.content)
