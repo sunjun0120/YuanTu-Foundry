@@ -165,7 +165,13 @@ fn exec(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: 
 }
 
 /// `exec` without waiting: the command keeps running in the sandbox while the test does something else.
-fn exec_spawn(pipe: &str, argv: &[&str], cwd: &Path, capabilities: &[&str], verbatim: bool) -> Child {
+fn exec_spawn(
+    pipe: &str,
+    argv: &[&str],
+    cwd: &Path,
+    capabilities: &[&str],
+    verbatim: bool,
+) -> Child {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let file = scratch().join(format!(
         "request-{}.json",
@@ -232,9 +238,7 @@ fn on_path(program: &str) -> Option<PathBuf> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .next()
-        .map(|line| PathBuf::from(line.trim()))
+    text.lines().next().map(|line| PathBuf::from(line.trim()))
 }
 
 fn inside(path: &Path, profile: &Path) -> bool {
@@ -245,13 +249,22 @@ fn inside(path: &Path, profile: &Path) -> bool {
 
 /// Authorizes the automatic read roots for an environment: the same call the Host makes before its first command.
 fn read_refresh(prepend: &Path) -> Output {
+    read_refresh_for(prepend, None)
+}
+
+/// The same refresh as the Host sends it before a command in `root`: that workspace's reserved names first.
+fn read_refresh_for(prepend: &Path, root: Option<&Path>) -> Output {
     let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     // `vars()` spells it `Path`; the request carries one `PATH`, so drop the original spelling first.
     env.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
     let path = std::env::var("PATH").unwrap_or_default();
     env.insert("PATH".into(), format!("{};{path}", prepend.display()));
     let file = scratch().join("refresh.json");
-    std::fs::write(&file, json!({ "version": 1, "env": env }).to_string()).unwrap();
+    let mut request = json!({ "version": 1, "env": env });
+    if let Some(root) = root {
+        request["root"] = json!(root);
+    }
+    std::fs::write(&file, request.to_string()).unwrap();
     Command::new(EXE)
         .args(["read-refresh", "--env"])
         .arg(&file)
@@ -426,6 +439,52 @@ fn sandbox_accounts_confine_writes_reads_and_network() {
         wrote.status.success() && a.join("own.txt").exists(),
         "{}",
         text(&wrote)
+    );
+    // A reserved directory a sandboxed command creates after the grant: the next command's refresh denies it, and
+    // owning it does not let the account take the denial back, on the directory or on a file it made inside.
+    let made = shell(
+        &offline.pipe,
+        "mkdir A\\.agents && echo first> A\\.agents\\one.txt",
+        &root,
+        &[&cap_a],
+    );
+    assert!(made.status.success(), "{}", text(&made));
+    let refreshed = read_refresh_for(&automatic, Some(&a));
+    assert!(refreshed.status.success(), "{}", text(&refreshed));
+    assert!(
+        text(&refreshed).contains(".agents"),
+        "the refresh did not protect the new reserved directory: {}",
+        text(&refreshed)
+    );
+    let _ = shell(
+        &offline.pipe,
+        "echo x> A\\.agents\\two.txt",
+        &root,
+        &[&cap_a],
+    );
+    assert!(!a.join(".agents").join("two.txt").exists());
+    for line in [
+        "icacls A\\.agents /grant *S-1-1-0:(OI)(CI)F",
+        "icacls A\\.agents\\one.txt /inheritance:r /grant *S-1-1-0:F",
+    ] {
+        let changed = shell(&offline.pipe, line, &root, &[&cap_a]);
+        assert!(
+            !changed.status.success(),
+            "the sandbox rewrote a reserved DACL with `{line}`: {}",
+            text(&changed)
+        );
+    }
+    let _ = shell(
+        &offline.pipe,
+        "echo x>> A\\.agents\\one.txt",
+        &root,
+        &[&cap_a],
+    );
+    assert_eq!(
+        std::fs::read_to_string(a.join(".agents").join("one.txt"))
+            .unwrap()
+            .trim(),
+        "first"
     );
     let crossed = shell(&offline.pipe, "echo x> B\\foreign.txt", &root, &[&cap_a]);
     assert!(!b.join("foreign.txt").exists(), "{}", text(&crossed));

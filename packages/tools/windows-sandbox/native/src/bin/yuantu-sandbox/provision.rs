@@ -36,6 +36,20 @@ const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 struct RefreshRequest {
     version: u32,
     env: BTreeMap<String, String>,
+    /// The command's workspace root: its reserved names are protected first.
+    #[serde(default)]
+    root: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RefreshOutput {
+    #[serde(flatten)]
+    report: read_refresh::RefreshReport,
+    /// Reserved paths this run had to deny; already denied ones are not listed.
+    protected: Vec<String>,
+    /// Why the read roots could not be refreshed. The command still runs: it only lacks those roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -249,16 +263,37 @@ fn environment() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// `read-refresh --env FILE`: authorize the toolchain roots one environment names. Never elevates.
+/// `read-refresh --env FILE`: before a command, protect its workspace's reserved names, then authorize the toolchain
+/// roots its environment names. Never elevates. Only a failed protection fails the run, so the Host can refuse the
+/// command; a failed refresh is reported in the output and the command runs without those roots.
 pub fn read_refresh(file: &str) -> Result<u32> {
     let request = refresh_request(file)?;
     if request.version != 1 {
         return Err("Unsupported read refresh request".into());
     }
-    let report = read_refresh::refresh(&request.env, &group_sid()?)?;
+    let group = group_sid()?;
+    let protected = match &request.root {
+        Some(root) => grants::protect(root, &group)?,
+        None => Vec::new(),
+    };
+    let (report, error) = match read_refresh::refresh(&request.env, &group) {
+        Ok(report) => (report, None),
+        Err(error) => (
+            read_refresh::RefreshReport {
+                version: 1,
+                ..Default::default()
+            },
+            Some(error),
+        ),
+    };
+    let output = RefreshOutput {
+        report,
+        protected,
+        error,
+    };
     println!(
         "{}",
-        serde_json::to_string(&report).map_err(|_| "Serialize read refresh")?
+        serde_json::to_string(&output).map_err(|_| "Serialize read refresh")?
     );
     Ok(0)
 }

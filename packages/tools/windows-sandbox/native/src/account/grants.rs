@@ -3,8 +3,8 @@
 //! backend is uninstalled. Only a write-restricted token that carries this workspace's capability — which only
 //! the runner creates — passes both access checks, so the ACEs do nothing for any other process.
 //! Every grant is recorded in `grants.json` so uninstall can take it back.
-use super::credentials::state_directory;
-use crate::{Result, wide};
+use super::credentials::{current_user_sid, state_directory};
+use crate::{Handle, Result, wide, win};
 use serde::{Deserialize, Serialize};
 use std::{
     os::windows::fs::MetadataExt,
@@ -19,7 +19,8 @@ use windows_sys::Win32::{
 #[path = "read_grants.rs"]
 pub mod reads;
 
-/// Directories a sandboxed command must never write, even inside its workspace.
+/// Names a sandboxed command must never write, even inside its workspace: directories, and `.git` as a worktree's
+/// file too.
 pub const RESERVED: [&str; 7] = [
     ".git", ".yuantu", ".agents", ".codex", ".aws", ".ssh", ".gnupg",
 ];
@@ -34,6 +35,13 @@ const DENIED_WRITE: u32 = FILE_WRITE_DATA
     | DELETE
     | WRITE_DAC
     | WRITE_OWNER;
+/// What the group may never do anywhere in the workspace, so it cannot take a denial back.
+const DENIED_CONTROL: u32 = WRITE_DAC | WRITE_OWNER;
+/// The `OWNER RIGHTS` trustee: an ACE for it replaces the owner's implicit `READ_CONTROL | WRITE_DAC`.
+const OWNER_RIGHTS: &str = "S-1-3-4";
+/// The owner's implicit rights, granted as an ordinary ACE instead.
+const OWNER_ACCESS: u32 = READ_CONTROL | WRITE_DAC;
+const ACCESS_DENIED_ACE_TYPE: u32 = 1;
 const INHERIT: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 const FILE_ATTRIBUTE_REPARSE: u32 = 0x400;
 
@@ -119,19 +127,77 @@ fn sid(text: &str) -> Result<Sid> {
     Ok(Sid(parsed))
 }
 
-/// Merges explicit entries into a path's DACL. `SetNamedSecurityInfoW` propagates inheritable ACEs to
-/// existing children.
-fn apply(path: &Path, entries: &[(&str, ACCESS_MODE, u32)]) -> Result<()> {
+/// A file or directory opened without following a reparse point at its name. The handle pins the object that was
+/// checked: a sandboxed command may rename it and put a junction in its place, but a DACL written through the handle
+/// still lands on the checked object, never on the junction's target.
+struct Pinned {
+    path: PathBuf,
+    handle: Handle,
+    directory: bool,
+}
+
+/// Opens `path` with `access`. A missing name or a reparse point is `None`; a refusal is the Windows error code.
+fn open_pinned(path: &Path, access: u32) -> std::result::Result<Option<Pinned>, String> {
     let name = wide(path.to_str().ok_or("Invalid path")?)?;
-    let (mut dacl, mut descriptor) = (null_mut(), null_mut());
-    let status = unsafe {
-        GetNamedSecurityInfoW(
+    let raw = unsafe {
+        CreateFileW(
             name.as_ptr(),
+            access | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        if error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND {
+            return Ok(None);
+        }
+        return Err(format!("Open {}: Windows error {error}", path.display()));
+    }
+    let handle = Handle(raw);
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    win(
+        unsafe { GetFileInformationByHandle(handle.0, &mut info) },
+        "Inspect reserved path",
+    )?;
+    if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Ok(None);
+    }
+    Ok(Some(Pinned {
+        path: path.to_path_buf(),
+        handle,
+        directory: info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0,
+    }))
+}
+
+/// Opens `path` as a real directory whose DACL this user may change. Anything else is `None`.
+fn open_directory(path: &Path) -> Result<Option<Pinned>> {
+    Ok(open_pinned(path, READ_CONTROL | WRITE_DAC)?.filter(|object| object.directory))
+}
+
+/// The object's DACL, read through its handle.
+struct Dacl {
+    acl: *mut ACL,
+    descriptor: PSECURITY_DESCRIPTOR,
+}
+impl Drop for Dacl {
+    fn drop(&mut self) {
+        unsafe { LocalFree(self.descriptor) };
+    }
+}
+fn dacl(object: &Pinned) -> Result<Dacl> {
+    let (mut acl, mut descriptor) = (null_mut(), null_mut());
+    let status = unsafe {
+        GetSecurityInfo(
+            object.handle.0,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION,
             null_mut(),
             null_mut(),
-            &mut dacl,
+            &mut acl,
             null_mut(),
             &mut descriptor,
         )
@@ -139,9 +205,17 @@ fn apply(path: &Path, entries: &[(&str, ACCESS_MODE, u32)]) -> Result<()> {
     if status != ERROR_SUCCESS {
         return Err(format!(
             "Read permissions of {}: Windows error {status}",
-            path.display()
+            object.path.display()
         ));
     }
+    Ok(Dacl { acl, descriptor })
+}
+
+/// Merges explicit entries into an object's DACL through its handle, keeping its inheritance protection. On a
+/// directory the entries are inheritable, and `SetSecurityInfo` propagates them to existing children.
+fn apply(object: &Pinned, entries: &[(&str, ACCESS_MODE, u32)]) -> Result<()> {
+    let current = dacl(object)?;
+    let inheritance = if object.directory { INHERIT } else { 0 };
     let sids: Vec<Sid> = entries
         .iter()
         .map(|(text, _, _)| sid(text))
@@ -152,7 +226,7 @@ fn apply(path: &Path, entries: &[(&str, ACCESS_MODE, u32)]) -> Result<()> {
         .map(|((_, mode, mask), sid)| EXPLICIT_ACCESS_W {
             grfAccessPermissions: *mask,
             grfAccessMode: *mode,
-            grfInheritance: INHERIT,
+            grfInheritance: inheritance,
             Trustee: TRUSTEE_W {
                 pMultipleTrustee: null_mut(),
                 MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -163,65 +237,225 @@ fn apply(path: &Path, entries: &[(&str, ACCESS_MODE, u32)]) -> Result<()> {
         })
         .collect();
     let mut merged = null_mut();
-    let status =
-        unsafe { SetEntriesInAclW(explicit.len() as u32, explicit.as_ptr(), dacl, &mut merged) };
+    let status = unsafe {
+        SetEntriesInAclW(
+            explicit.len() as u32,
+            explicit.as_ptr(),
+            current.acl,
+            &mut merged,
+        )
+    };
     let result = if status != ERROR_SUCCESS {
         Err(format!("Merge permissions: Windows error {status}"))
     } else {
-        let status = unsafe {
-            SetNamedSecurityInfoW(
-                name.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                null_mut(),
-                null_mut(),
-                merged,
-                null(),
-            )
-        };
-        if status != ERROR_SUCCESS {
-            Err(format!(
-                "Write permissions of {}: Windows error {status}",
-                path.display()
-            ))
-        } else {
-            Ok(())
-        }
+        write_dacl(object, &current, merged)
     };
-    unsafe {
-        LocalFree(merged as _);
-        LocalFree(descriptor);
-    }
+    unsafe { LocalFree(merged as _) };
     result
 }
 
-fn reserved_under(root: &Path) -> Vec<PathBuf> {
-    RESERVED
+/// Removes every explicit ACE, allow or deny, whose trustee is one of `trustees`, keeping the others in order.
+/// `REVOKE_ACCESS` cannot do this: it removes only allow ACEs, so a denial would outlive its grant.
+fn remove(object: &Pinned, trustees: &[&str]) -> Result<()> {
+    let current = dacl(object)?;
+    if current.acl.is_null() {
+        return Ok(());
+    }
+    let sids: Vec<Sid> = trustees
         .iter()
-        .map(|name| root.join(name))
-        .filter(|path| {
-            std::fs::symlink_metadata(path)
-                .map(|m| m.is_dir() && m.file_attributes() & FILE_ATTRIBUTE_REPARSE == 0)
-                .unwrap_or(false)
-        })
-        .collect()
+        .map(|text| sid(text))
+        .collect::<Result<_>>()?;
+    let revision = unsafe { (*current.acl).AclRevision } as u32;
+    let mut buffer = vec![0u32; (unsafe { (*current.acl).AclSize } as usize).div_ceil(4)];
+    let kept = buffer.as_mut_ptr() as *mut ACL;
+    win(
+        unsafe { InitializeAcl(kept, (buffer.len() * 4) as u32, revision) },
+        "Initialize revoked permissions",
+    )?;
+    for index in 0..unsafe { (*current.acl).AceCount } as u32 {
+        let mut ace = null_mut();
+        win(
+            unsafe { GetAce(current.acl, index, &mut ace) },
+            "Read revoked ACE",
+        )?;
+        let header = unsafe { &*(ace as *const ACE_HEADER) };
+        let ours = header.AceFlags as u32 & INHERITED_ACE == 0
+            && (header.AceType as u32 == ACCESS_DENIED_ACE_TYPE || header.AceType == 0)
+            && sids.iter().any(|sid| unsafe {
+                EqualSid(
+                    &(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart as *const u32 as PSID,
+                    sid.0,
+                ) != 0
+            });
+        if ours {
+            continue;
+        }
+        win(
+            unsafe { AddAce(kept, revision, u32::MAX, ace, header.AceSize as u32) },
+            "Keep other ACEs",
+        )?;
+    }
+    write_dacl(object, &current, kept)
 }
 
-/// Grants `group_sid` and `capability_sid` Modify on `root`, denies the group writes to reserved directories,
-/// and records the grant. Granting the same root again only refreshes it.
+/// Writes `acl` through the object's handle, keeping whether its DACL inherits from its parent. `SetSecurityInfo`
+/// re-derives the inherited ACEs of existing children.
+fn write_dacl(object: &Pinned, current: &Dacl, acl: *const ACL) -> Result<()> {
+    let path = &object.path;
+    let (mut control, mut revision) = (0, 0);
+    if unsafe { GetSecurityDescriptorControl(current.descriptor, &mut control, &mut revision) } == 0
+    {
+        return Err(format!("Read inheritance of {}", path.display()));
+    }
+    let protection = if control & SE_DACL_PROTECTED != 0 {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    };
+    let status = unsafe {
+        SetSecurityInfo(
+            object.handle.0,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | protection,
+            null_mut(),
+            null_mut(),
+            acl,
+            null(),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(format!(
+            "Write permissions of {}: Windows error {status}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the group's explicit write denial comes before every allow ACE: then no sandboxed command can write the
+/// object, and nothing needs rewriting. A denial placed after an allow, as a hand-made DACL could hold it, does not
+/// count: the allow is checked first.
+fn denied_first(object: &Pinned, group: &Sid) -> Result<bool> {
+    let current = dacl(object)?;
+    if current.acl.is_null() {
+        return Ok(false);
+    }
+    let required = if object.directory { INHERIT } else { 0 };
+    for index in 0..unsafe { (*current.acl).AceCount } as u32 {
+        let mut ace = null_mut();
+        win(
+            unsafe { GetAce(current.acl, index, &mut ace) },
+            "Inspect reserved ACE",
+        )?;
+        let header = unsafe { &*(ace as *const ACE_HEADER) };
+        if header.AceType as u32 != ACCESS_DENIED_ACE_TYPE {
+            return Ok(false);
+        }
+        let entry = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
+        let flags = header.AceFlags as u32;
+        if unsafe { EqualSid(&entry.SidStart as *const u32 as PSID, group.0) } != 0
+            && flags & INHERITED_ACE == 0
+            && flags & required == required
+            && entry.Mask & DENIED_WRITE == DENIED_WRITE
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Denies the group writes to one reserved name: a directory inheritably, a file (a worktree's `.git`) on itself.
+/// Returns whether it changed anything. A reserved object this user may not change and that is not already denied
+/// is an error: a sandboxed command made it with permissions of its own, and no command may run beside it.
+fn protect_reserved(path: &Path, group_sid: &str, group: &Sid) -> Result<bool> {
+    match open_pinned(path, READ_CONTROL | WRITE_DAC) {
+        Ok(None) => Ok(false),
+        Ok(Some(object)) => {
+            if denied_first(&object, group)? {
+                return Ok(false);
+            }
+            apply(&object, &[(group_sid, DENY_ACCESS, DENIED_WRITE)])?;
+            Ok(true)
+        }
+        Err(_) => match open_pinned(path, READ_CONTROL) {
+            Ok(None) => Ok(false),
+            Ok(Some(object)) if denied_first(&object, group)? => Ok(false),
+            _ => Err(format!(
+                "{} cannot be protected: this user may not change its permissions. A sandboxed command may have \
+                 created it; check it and remove it before running sandboxed commands in this workspace again.",
+                path.display()
+            )),
+        },
+    }
+}
+
+fn is_granted(root: &Path) -> Result<bool> {
+    let text = root.to_string_lossy();
+    Ok(load()?
+        .grants
+        .iter()
+        .any(|grant| grant.root.eq_ignore_ascii_case(&text)))
+}
+
+/// Protects every reserved name under a granted workspace root. Run before each sandboxed command, so a reserved
+/// directory or `.git` file that appeared since the last command is denied before the next one; an already denied
+/// one is only read. Returns the paths it changed.
+pub fn protect(root: &str, group_sid: &str) -> Result<Vec<String>> {
+    let _lock = reads::journal_lock(&grants_path()?)?;
+    let root = workspace_root(root)?;
+    if !is_granted(&root)? {
+        return Err("The workspace is not granted to the sandbox".into());
+    }
+    let group = sid(group_sid)?;
+    let mut changed = Vec::new();
+    for name in RESERVED {
+        let path = root.join(name);
+        if protect_reserved(&path, group_sid, &group)? {
+            changed.push(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(changed)
+}
+
+fn root_entries<'a>(
+    group_sid: &'a str,
+    capability_sid: &'a str,
+    user_sid: &'a str,
+) -> [(&'a str, ACCESS_MODE, u32); 5] {
+    [
+        (group_sid, GRANT_ACCESS, MODIFY),
+        (capability_sid, GRANT_ACCESS, MODIFY),
+        (group_sid, DENY_ACCESS, DENIED_CONTROL),
+        (OWNER_RIGHTS, GRANT_ACCESS, OWNER_ACCESS),
+        (user_sid, GRANT_ACCESS, OWNER_ACCESS),
+    ]
+}
+
+/// Whose ACEs `ungrant` takes back from a root. The desktop user's `READ_CONTROL | WRITE_DAC` stays: it may have merged
+/// with an ACE the user had before, and on the user's own workspace it gives nothing an owner does not already have.
+fn root_trustees<'a>(group_sid: &'a str, capability_sid: &'a str) -> [&'a str; 3] {
+    [group_sid, capability_sid, OWNER_RIGHTS]
+}
+
+/// Grants `group_sid` and `capability_sid` Modify on `root`, denies the group writes to reserved names, and records
+/// the grant. Granting the same root again only refreshes it.
+///
+/// Three more inheritable ACEs keep a reserved directory a sandboxed command created protectable. The group may not
+/// change any DACL or owner in the workspace; `OWNER RIGHTS` turns the owner's implicit `WRITE_DAC` into an ordinary
+/// ACE that this denial comes before, so owning an object no longer lets the sandbox account rewrite its DACL; and
+/// the desktop user gets `READ_CONTROL | WRITE_DAC` on everything, which a data drive granting only Modify would not
+/// give it on an object it does not own.
 pub fn grant(root: &str, group_sid: &str, capability_sid: &str) -> Result<Grant> {
     let _lock = reads::journal_lock(&grants_path()?)?;
     let root = workspace_root(root)?;
-    for reserved in reserved_under(&root) {
-        apply(&reserved, &[(group_sid, DENY_ACCESS, DENIED_WRITE)])?;
+    let directory =
+        open_directory(&root)?.ok_or("Workspace root must be a real directory, not a link")?;
+    let user = current_user_sid()?;
+    apply(&directory, &root_entries(group_sid, capability_sid, &user))?;
+    let group = sid(group_sid)?;
+    for name in RESERVED {
+        protect_reserved(&root.join(name), group_sid, &group)?;
     }
-    apply(
-        &root,
-        &[
-            (group_sid, GRANT_ACCESS, MODIFY),
-            (capability_sid, GRANT_ACCESS, MODIFY),
-        ],
-    )?;
     let grant = Grant {
         root: root.to_string_lossy().into_owned(),
         capability: capability_sid.to_string(),
@@ -250,18 +484,18 @@ fn ungrant_locked(root: &str, group_sid: &str) -> Result<()> {
         return Ok(());
     };
     let grant = file.grants[position].clone();
-    let path = Path::new(&grant.root);
-    if path.exists() {
-        for reserved in reserved_under(path) {
-            apply(&reserved, &[(group_sid, REVOKE_ACCESS, 0)])?;
+    // A root that is gone, or is now a link, is not the directory that was granted: nothing to take back there.
+    if let Some(directory) = open_directory(Path::new(&grant.root))? {
+        for name in RESERVED {
+            // A reserved object this user may not change cannot hold a denial it wrote; the group goes with
+            // uninstall anyway, so it must not block the rest.
+            if let Ok(Some(reserved)) =
+                open_pinned(&directory.path.join(name), READ_CONTROL | WRITE_DAC)
+            {
+                remove(&reserved, &[group_sid])?;
+            }
         }
-        apply(
-            path,
-            &[
-                (group_sid, REVOKE_ACCESS, 0),
-                (&grant.capability, REVOKE_ACCESS, 0),
-            ],
-        )?;
+        remove(&directory, &root_trustees(group_sid, &grant.capability))?;
     }
     file.grants.remove(position);
     save(&file)
@@ -331,12 +565,15 @@ mod tests {
             return;
         }
         let (group, cap) = ("S-1-5-21-1-2-3-9001", "S-1-5-21-1-2-3-9002");
+        let directory = open_directory(&root).unwrap().unwrap();
         apply(
-            &root,
+            &directory,
             &[(group, GRANT_ACCESS, MODIFY), (cap, GRANT_ACCESS, MODIFY)],
         )
         .unwrap();
-        apply(&root.join(".git"), &[(group, DENY_ACCESS, DENIED_WRITE)]).unwrap();
+        let git = open_directory(&root.join(".git")).unwrap().unwrap();
+        apply(&git, &[(group, DENY_ACCESS, DENIED_WRITE)]).unwrap();
+        drop(git);
         let top = aces(&root);
         for sid in [group, cap] {
             assert!(top.iter().any(|(kind, flags, mask, s)| *kind == 0
@@ -355,13 +592,236 @@ mod tests {
                 .iter()
                 .any(|(kind, _, _, s)| *kind == 1 && s == group)
         );
-        apply(&root, &[(group, REVOKE_ACCESS, 0), (cap, REVOKE_ACCESS, 0)]).unwrap();
+        remove(&directory, &[group, cap]).unwrap();
+        // The reserved directory's denial goes too, not only the allow ACEs.
+        let git = open_directory(&root.join(".git")).unwrap().unwrap();
+        remove(&git, &[group]).unwrap();
+        drop(git);
+        assert!(
+            !aces(&root.join(".git"))
+                .iter()
+                .any(|(_, _, _, s)| s == group)
+        );
+        drop(directory);
         assert!(
             !aces(&root)
                 .iter()
                 .any(|(_, _, _, s)| s == group || s == cap)
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn junction(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+    }
+
+    fn set_dacl(path: &Path, sddl: &str) {
+        let mut descriptor = null_mut();
+        assert_ne!(
+            unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    wide(sddl).unwrap().as_ptr(),
+                    SDDL_REVISION_1,
+                    &mut descriptor,
+                    null_mut(),
+                )
+            },
+            0
+        );
+        let (mut present, mut defaulted, mut dacl) = (0, 0, null_mut());
+        unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted) };
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wide(path.to_str().unwrap()).unwrap().as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                dacl,
+                null(),
+            )
+        };
+        unsafe { LocalFree(descriptor) };
+        assert_eq!(status, ERROR_SUCCESS);
+    }
+
+    /// The group's explicit deny is the first ACE, ahead of every allow.
+    fn denied_ahead(path: &Path, group: &str) -> bool {
+        matches!(aces(path).first(), Some((1, flags, mask, s))
+            if s == group && *flags as u32 & INHERITED_ACE == 0 && mask & DENIED_WRITE == DENIED_WRITE)
+    }
+
+    #[test]
+    fn reserved_junctions_are_skipped() {
+        let root = scratch("junction");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let outside = root.with_file_name(format!("grants-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+        junction(&root.join(".ssh"), &outside);
+        let group = "S-1-5-21-1-2-3-9004";
+        let parsed = sid(group).unwrap();
+        assert!(!protect_reserved(&root.join(".ssh"), group, &parsed).unwrap());
+        assert!(!aces(&outside).iter().any(|(_, _, _, s)| s == group));
+        std::fs::remove_dir(root.join(".ssh")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    /// Before each command: a reserved directory created since the last one and a worktree's `.git` file are denied,
+    /// and a second pass only reads them.
+    #[test]
+    fn reserved_directories_and_git_files_are_denied_once_and_then_left_alone() {
+        let root = scratch("protect");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let worktree = root.join("worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: ../.git/worktrees/w").unwrap();
+        let group = "S-1-5-21-1-2-3-9005";
+        let parsed = sid(group).unwrap();
+        assert!(protect_reserved(&root.join(".git"), group, &parsed).unwrap());
+        assert!(protect_reserved(&worktree.join(".git"), group, &parsed).unwrap());
+        assert!(!protect_reserved(&root.join(".ssh"), group, &parsed).unwrap());
+        assert!(denied_ahead(&root.join(".git"), group));
+        assert!(denied_ahead(&worktree.join(".git"), group));
+        // The directory's denial reaches what is created inside it later.
+        std::fs::write(root.join(".git").join("HEAD"), "ref").unwrap_or(());
+        assert!(
+            aces(&root.join(".git").join("HEAD"))
+                .iter()
+                .any(|(kind, flags, _, s)| *kind == 1
+                    && s == group
+                    && *flags as u32 & INHERITED_ACE != 0)
+        );
+        assert!(!protect_reserved(&root.join(".git"), group, &parsed).unwrap());
+        assert!(!protect_reserved(&worktree.join(".git"), group, &parsed).unwrap());
+        // Created after the grant: the next pass catches it.
+        std::fs::create_dir(root.join(".ssh")).unwrap();
+        assert!(protect_reserved(&root.join(".ssh"), group, &parsed).unwrap());
+        assert!(denied_ahead(&root.join(".ssh"), group));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A denial placed after an allow is not a denial, and a reserved object this user may not change cannot be
+    /// protected: both must be refused, never reported as protected.
+    #[test]
+    fn a_reserved_object_with_permissions_of_its_own_is_refused() {
+        let root = scratch("foreign");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let user = current_user_sid().unwrap();
+        let group = "S-1-5-21-1-2-3-9006";
+        let parsed = sid(group).unwrap();
+        // The owner keeps only READ_CONTROL, the allow comes first, and nobody else may rewrite the DACL.
+        let path = root.join(".agents");
+        std::fs::create_dir(&path).unwrap();
+        set_dacl(
+            &path,
+            &format!(
+                "D:P(A;OICI;FA;;;SY)(A;OICI;0x1300a9;;;{user})(D;OICI;0x{DENIED_WRITE:x};;;{group})(A;OICI;RC;;;OW)"
+            ),
+        );
+        let error = protect_reserved(&path, group, &parsed).unwrap_err();
+        assert!(error.contains("cannot be protected"), "{error}");
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The root keeps the group from changing any DACL or owner in the workspace, and makes the owner's rights an
+    /// ordinary ACE that the denial comes before; revoking takes all of it back but the desktop user's own ACE.
+    #[test]
+    fn the_root_denies_the_group_dacl_changes_ahead_of_owner_rights() {
+        let root = scratch("root-control");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let user = current_user_sid().unwrap();
+        let (group, cap) = ("S-1-5-21-1-2-3-9007", "S-1-5-21-1-2-3-9008");
+        let directory = open_directory(&root).unwrap().unwrap();
+        apply(&directory, &root_entries(group, cap, &user)).unwrap();
+        // Applying it twice (one grant per Host process) keeps the denial.
+        apply(&directory, &root_entries(group, cap, &user)).unwrap();
+        std::fs::write(root.join("src").join("made-later"), "x").unwrap();
+        for path in [
+            root.clone(),
+            root.join("src"),
+            root.join("src").join("made-later"),
+        ] {
+            let list = aces(&path);
+            let deny = list
+                .iter()
+                .position(|(kind, _, mask, s)| *kind == 1 && s == group && *mask == DENIED_CONTROL)
+                .unwrap_or_else(|| panic!("no control denial on {}", path.display()));
+            let owner = list
+                .iter()
+                .position(|(kind, _, mask, s)| {
+                    *kind == 0 && s == OWNER_RIGHTS && *mask == OWNER_ACCESS
+                })
+                .unwrap_or_else(|| panic!("no owner rights on {}", path.display()));
+            assert!(deny < owner, "{}: {list:?}", path.display());
+            assert!(list.iter().any(|(kind, _, mask, s)| *kind == 0
+                && *s == user
+                && mask & OWNER_ACCESS == OWNER_ACCESS));
+        }
+        remove(&directory, &root_trustees(group, cap)).unwrap();
+        let list = aces(&root.join("src").join("made-later"));
+        assert!(
+            !list
+                .iter()
+                .any(|(_, _, _, s)| s == group || s == cap || s == OWNER_RIGHTS),
+            "{list:?}"
+        );
+        drop(directory);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A sandboxed command can rename a reserved directory away and put a junction in its place between the check
+    /// and the DACL write. The write must still land on the directory that was checked, never on the link target.
+    #[test]
+    fn a_reserved_directory_swapped_for_a_junction_keeps_the_acl_on_the_checked_directory() {
+        let root = scratch("swap");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let outside = root.with_file_name(format!("grants-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+        let group = "S-1-5-21-1-2-3-9003";
+        let checked = [open_pinned(&root.join(".git"), READ_CONTROL | WRITE_DAC)
+            .unwrap()
+            .unwrap()];
+        std::fs::rename(root.join(".git"), root.join("moved")).unwrap();
+        junction(&root.join(".git"), &outside);
+        for directory in &checked {
+            apply(directory, &[(group, DENY_ACCESS, DENIED_WRITE)]).unwrap();
+        }
+        assert!(!aces(&outside).iter().any(|(_, _, _, s)| s == group));
+        assert!(
+            aces(&root.join("moved"))
+                .iter()
+                .any(|(kind, _, _, s)| *kind == 1 && s == group)
+        );
+        drop(checked);
+        std::fs::remove_dir(root.join(".git")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]
@@ -436,7 +896,11 @@ mod tests {
                 .any(|(_, flags, _, s)| s == group && *flags as u32 & INHERIT == 0)
         );
         assert!(journal.exists());
-        apply(&root, &[(group, REVOKE_ACCESS, 0)]).unwrap();
+        apply(
+            &open_directory(&root).unwrap().unwrap(),
+            &[(group, REVOKE_ACCESS, 0)],
+        )
+        .unwrap();
         reads::grant_at(&root, &profile, group, &journal).unwrap();
         assert!(
             aces(&root)
@@ -458,7 +922,9 @@ mod tests {
                 .any(|(_, _, _, s)| s == group)
         );
         let foreign = "S-1-5-21-1-2-3-9202";
-        apply(&root, &[(foreign, GRANT_ACCESS, FILE_GENERIC_READ)]).unwrap();
+        let directory = open_directory(&root).unwrap().unwrap();
+        apply(&directory, &[(foreign, GRANT_ACCESS, FILE_GENERIC_READ)]).unwrap();
+        drop(directory);
         reads::revoke_at(&root, &profile, group, &journal).unwrap();
         assert!(
             !aces(&root.join("later"))
