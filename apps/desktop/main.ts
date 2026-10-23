@@ -34,7 +34,7 @@ import {
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { mkdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
 import type {
@@ -407,9 +407,20 @@ void app
       nodePath: runtime.nodePath,
       workerPath: path.join(__dirname, 'sandbox-probe-worker.cjs'),
     });
+    const sandboxHelper = path.resolve(
+      __dirname,
+      '../packages/tools/windows-sandbox/yuantu-sandbox.exe',
+    );
+    // A missing helper is a broken installation, not a setting: the window stays silent about it, the log says
+    // so once, and a sandboxed command that is refused names the reinstall.
+    if (process.platform === 'win32' && !existsSync(sandboxHelper))
+      console.error(
+        'desktop: the Windows sandbox helper is missing; reinstall YuanTu',
+        sandboxHelper,
+      );
     const sandboxSetup = new WindowsAccountSandboxSetup({
       platform: process.platform,
-      helperPath: path.resolve(__dirname, '../packages/tools/windows-sandbox/yuantu-sandbox.exe'),
+      helperPath: sandboxHelper,
       // A read root is chosen in the native picker and never typed into the page: the journal, not the renderer, is
       // the list of what may be removed.
       chooseDirectory: async () => {

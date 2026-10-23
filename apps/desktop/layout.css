@@ -861,6 +861,54 @@ body[data-page='background'] {
 #chat-page .todos-panel[hidden] {
   display: none;
 }
+/* The one-time sandbox setup offer: a card on the composer's shelf, like the task list above it. */
+#chat-page .sandbox-prompt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 9px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--raised);
+  color: var(--ink);
+}
+#chat-page .sandbox-prompt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+#chat-page .sandbox-prompt-text strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+#chat-page .sandbox-prompt-text p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+#chat-page .sandbox-prompt-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+#chat-page .sandbox-prompt-actions button {
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--accent);
+  color: var(--surface);
+}
+#chat-page .sandbox-prompt-actions button.secondary {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+@media (max-width: 640px) {
+  #chat-page .sandbox-prompt {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
 #chat-page .todos-panel > summary {
   display: flex;
   align-items: center;

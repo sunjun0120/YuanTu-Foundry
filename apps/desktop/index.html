@@ -255,6 +255,22 @@
             <ul id="todos" class="todos"></ul>
           </div>
         </details>
+        <section
+          id="sandbox-prompt"
+          class="sandbox-prompt"
+          aria-labelledby="sandbox-prompt-title"
+          hidden
+        >
+          <div class="sandbox-prompt-text">
+            <strong id="sandbox-prompt-title"></strong>
+            <p id="sandbox-prompt-note"></p>
+            <p id="sandbox-prompt-feedback" role="status" aria-live="polite" hidden></p>
+          </div>
+          <div class="sandbox-prompt-actions">
+            <button id="sandbox-prompt-dismiss" type="button" class="secondary"></button>
+            <button id="sandbox-prompt-initialize" type="button"></button>
+          </div>
+        </section>
         <form id="composer">
           <div id="attachments" class="attachments" aria-label="待发送附件"></div>
           <div
@@ -293,9 +309,7 @@
                 aria-controls="permission-menu"
                 disabled
               ></button>
-              <div id="permission-menu" role="menu" aria-label="权限与隔离" hidden>
-                <p id="permission-environment" role="presentation" hidden></p>
-              </div>
+              <div id="permission-menu" role="menu" aria-label="权限与隔离" hidden></div>
             </div>
             <!--
               The chip's machine-readable current value. It has no visible role: the menu is the control, and the
@@ -568,7 +582,6 @@
         </form>
         <section id="sandbox-setup-section" hidden>
           <h3 id="sandbox-setup-title"></h3>
-          <p id="sandbox-setup-note"></p>
           <p
             id="sandbox-setup-feedback"
             class="settings-feedback"
@@ -576,10 +589,9 @@
             aria-live="polite"
           ></p>
           <div class="settings-actions">
-            <button id="sandbox-setup-initialize" type="button" disabled></button>
-            <button id="sandbox-setup-uninstall" type="button" disabled hidden></button>
+            <button id="sandbox-setup-uninstall" type="button"></button>
           </div>
-          <details id="sandbox-read-advanced" hidden>
+          <details id="sandbox-read-advanced">
             <summary id="sandbox-read-advanced-title"></summary>
             <ul id="sandbox-read-roots"></ul>
             <div class="settings-actions">

@@ -925,12 +925,14 @@ test(
       'and it does not disturb the conversation it was made in',
     );
     /**
-     * The menu is the four rungs, each with its one-line summary, and no environment line while the backend
-     * behind the current rung is usable. That line appears only when a backend answered that it cannot run — the
-     * one fact that changes what the choice will do.
+     * The menu is the four rungs, each with its one-line summary, and never a line about whether the backend can
+     * run: a sandbox that needs setting up is offered above the composer instead.
      */
     await page.locator('#permission-trigger').click();
-    assert.equal(await page.locator('#permission-environment').isVisible(), false);
+    assert.equal(
+      await page.locator('#permission-menu .permission-environment p:visible').count(),
+      0,
+    );
     assert.deepEqual(
       await page
         .locator('#permission-menu [data-preset] .permission-copy > span')

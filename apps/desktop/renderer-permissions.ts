@@ -6,6 +6,7 @@ import {
   type PermissionPresetId,
   type PermissionPresetView,
 } from './permission-presets.ts';
+import type { SandboxMode } from './sandbox-settings.ts';
 
 /**
  * The composer's permission chip: **one** choice that moves both security knobs.
@@ -36,6 +37,8 @@ export function setupPermissionSettings(
   onBusy: (busy: boolean) => void,
   /** Whether the desktop can accept a change yet; the rungs are locked until it can. */
   isReady: () => boolean,
+  /** The sandbox mode of the session on screen, for the setup prompt that only a sandboxed session needs. */
+  onSandboxMode: (mode: SandboxMode | undefined) => void = () => {},
 ): {
   updateBusy(): void;
   refresh(): void;
@@ -53,7 +56,6 @@ export function setupPermissionSettings(
   const trigger = byId<HTMLButtonElement>('permission-trigger');
   const menu = byId('permission-menu');
   const select = byId<HTMLSelectElement>('permission-mode');
-  const environment = byId('permission-environment');
   const dialog = byId<HTMLDialogElement>('full-access-dialog');
   const acknowledge = byId<HTMLInputElement>('full-access-acknowledge');
   const enable = byId<HTMLButtonElement>('full-access-enable');
@@ -213,7 +215,7 @@ export function setupPermissionSettings(
       item.disabled = locked;
     }
     if (customReading) customReading.hidden = id !== CUSTOM_PRESET;
-    drawEnvironment();
+    onSandboxMode(unreadable ? undefined : view?.sandbox.mode);
     select.disabled = locked;
     // Still clickable when unreadable: the click is the retry (see the trigger's listener).
     trigger.disabled = pending || !isReady();
@@ -264,12 +266,11 @@ export function setupPermissionSettings(
         return button;
       }),
       /**
-       * The current reading when no preset matches, and a line only when there is something wrong.
+       * The current reading when no preset matches. `custom` is text rather than a control because it has no
+       * target to click.
        *
-       * `custom` is text rather than a control because it has no target to click. The environment gets a line
-       * only when the backend behind the rung answered that it cannot run: the rung's name already says what the
-       * choice is, and "which program would confine it" is a detail of that choice, not a second choice — the
-       * settings page this replaced was the place that made it look like one.
+       * Whether the backend can run is not said here: the rung's name says what the choice is, and a sandbox that
+       * still needs setting up is offered above the composer (`renderer-sandbox-setup.ts`), where it can be done.
        */
       (() => {
         const footer = document.createElement('div');
@@ -279,7 +280,7 @@ export function setupPermissionSettings(
         reading.id = 'permission-custom';
         reading.textContent = label(CUSTOM_PRESET);
         customReading = reading;
-        footer.append(reading, environment);
+        footer.append(reading);
         return footer;
       })(),
     );
@@ -301,23 +302,6 @@ export function setupPermissionSettings(
     byId('full-access-cancel').textContent = text('取消', 'Cancel');
     enable.textContent = text('启用完全访问权限', 'Enable full access');
     render();
-  }
-  /**
-   * The one line the menu may add under the rungs: why the backend behind the current one cannot run here.
-   *
-   * It says nothing when there is nothing wrong — not the backend's name, not the image, not "no OS isolation" —
-   * because those are details of a choice already made, and a menu that explains itself under every option is a
-   * menu read instead of used. A backend that *cannot* run is different: that is the one fact that changes what
-   * the choice will do, and it is worth a sentence. `null` covers both "nobody has asked yet" and "it answered
-   * yes", so the line never claims a backend was found.
-   */
-  function drawEnvironment(): void {
-    if (!view) return;
-    const availability = view.sandbox.availability;
-    environment.hidden = !availability;
-    environment.textContent = availability
-      ? text('沙箱不可用：', 'Sandbox unavailable: ') + availability
-      : '';
   }
   function updateBusy(): void {
     render();

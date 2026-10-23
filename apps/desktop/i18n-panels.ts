@@ -228,11 +228,11 @@ export const panelMessages: Record<string, [string, string]> = {
     'Initialization is still pending and cleanup is unconfirmed. Check sandbox account status after reopening the app.',
   ],
   'sandboxSetup.note': [
-    '初始化或修复需要一次管理员确认。就绪后，原生沙箱使用专用低权限账户；卸载后需要重新初始化才能执行隔离命令。',
-    'Setup or repair requires administrator approval. Once ready, the native sandbox uses dedicated low-privilege accounts. After uninstalling, initialize again to run sandboxed commands.',
+    '命令将以专用低权限账户运行，只能写入工作区、默认断网。设置需要一次管理员确认；完成前，沙箱中的命令无法执行。',
+    'Commands will run as dedicated low-privilege accounts that can only write to the workspace and are offline by default. Setup needs one administrator approval; until then, sandboxed commands cannot run.',
   ],
-  'sandboxSetup.initialize': ['管理员初始化', 'Initialize as administrator'],
-  'sandboxSetup.repair': ['修复沙箱账户', 'Repair sandbox accounts'],
+  'sandboxSetup.initialize': ['立即设置', 'Set up'],
+  'sandboxSetup.repair': ['立即修复', 'Repair'],
   'sandboxSetup.problem.read-allowlist-invalid': [
     '读取白名单缺失、权限变更或包含不安全路径',
     'Read allowlist is missing, changed or contains unsafe paths',
@@ -277,16 +277,14 @@ export const panelMessages: Record<string, [string, string]> = {
     '初始化标记无效或与账户不一致',
     'The setup marker is invalid or does not match the accounts',
   ],
-  'sandboxSetup.unavailable': [
-    '无法读取沙箱账户状态，请确认应用目录中存在 yuantu-sandbox.exe。',
-    'Cannot read the sandbox account status; check that yuantu-sandbox.exe exists beside the application.',
-  ],
+  'sandboxSetup.prompt.title': ['设置 Windows 沙箱', 'Set up the Windows sandbox'],
+  'sandboxSetup.prompt.repairTitle': ['修复 Windows 沙箱', 'Repair the Windows sandbox'],
+  'sandboxSetup.prompt.dismiss': ['以后再说', 'Not now'],
   'sandboxSetup.pending': [
     '正在处理，请完成 Windows 管理员确认…',
     'Working; complete the Windows administrator prompt…',
   ],
   'sandboxSetup.checking': ['正在检查初始化条件…', 'Checking initialization requirements…'],
-  'sandboxSetup.ready': ['沙箱账户未初始化。', 'Sandbox accounts have not been initialized.'],
   'sandboxSetup.failed': [
     '初始化未完成或状态检查失败。请确认管理员提示并重新检查状态。',
     'Initialization did not complete or its status could not be verified. Check the administrator prompt and refresh the status.',

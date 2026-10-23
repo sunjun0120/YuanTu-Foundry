@@ -8,6 +8,7 @@
  * the files are read-only), and what command line. See docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md.
  */
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -160,7 +161,12 @@ async function readiness(): Promise<string | null> {
   if (process.platform !== 'win32')
     return 'The Windows sandbox account backend only runs on Windows';
   const current = status ? await status.catch(() => undefined) : await refreshAccountReadiness();
-  if (!current) return 'The Windows sandbox account helper is unavailable';
+  if (!current)
+    return existsSync(configuration.helper)
+      ? 'The Windows sandbox helper in this installation did not answer its status check; ' +
+          'reinstall YuanTu to run sandboxed commands'
+      : `The Windows sandbox helper is missing from this installation (${configuration.helper}); ` +
+          'reinstall YuanTu to run sandboxed commands';
   if (current.ready) return null;
   const state = current.problems.includes('setup-marker-missing')
     ? 'The Windows sandbox accounts have not been initialized'
@@ -168,7 +174,7 @@ async function readiness(): Promise<string | null> {
       ? 'The Windows sandbox setup marker is from an older version and needs to be repaired'
       : `The Windows sandbox accounts are not ready (${current.problems.join(', ')})`;
   return (
-    `${state}. Open Settings > General > Windows sandbox accounts to initialize or repair them. ` +
+    `${state}. Set them up from the Windows sandbox prompt above the message box. ` +
     'Sandboxed commands remain blocked until initialization or repair succeeds.'
   );
 }
@@ -387,8 +393,8 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   } catch (failure) {
     const message = failure instanceof Error ? failure.message : String(failure);
     throw new Error(
-      `The Windows sandbox account runner could not start (${message}). Open Settings > General > ` +
-        'Windows sandbox accounts to repair or reinitialize the accounts.',
+      `The Windows sandbox account runner could not start (${message}). If restarting YuanTu does not help, ` +
+        'uninstall the accounts in Settings > General > Windows sandbox accounts and set them up again.',
     );
   }
   const command = accountCommand(request, env);
