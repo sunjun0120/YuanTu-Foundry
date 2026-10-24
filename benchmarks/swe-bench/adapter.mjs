@@ -13,6 +13,14 @@ import { problemPrompt } from './prompt.mjs';
 import { git } from './repos.mjs';
 import { safeModelPatch } from './predictions.mjs';
 
+export function stringifyEvidence(value, secrets = [], space) {
+  return JSON.stringify(
+    value,
+    (_name, item) => (typeof item === 'string' ? redact(item, secrets) : item),
+    space,
+  );
+}
+
 export const APPROVAL_POLICY = {
   version: 1,
   rules: [
@@ -148,7 +156,7 @@ export async function runSweSample(input, signal = new AbortController().signal)
   const save = (file, value) =>
     writeFile(
       path.join(evidenceDirectory, file),
-      redact(typeof value === 'string' ? value : JSON.stringify(value, null, 2), [key]),
+      typeof value === 'string' ? redact(value, [key]) : stringifyEvidence(value, [key], 2),
       { flag: 'wx' },
     );
   await save('approval-policy.json', {
@@ -232,7 +240,7 @@ export async function runSweSample(input, signal = new AbortController().signal)
   };
   const unsubscribe = client.subscribe((event) => {
     const atMs = performance.now() - start;
-    const sanitized = JSON.parse(redact(JSON.stringify(event), [key]));
+    const sanitized = JSON.parse(stringifyEvidence(event, [key]));
     events.push({ atMs, event: sanitized });
     if (sanitized.sessionId && sanitized.runId)
       collector.write(Buffer.from(JSON.stringify({ type: 'event', event: sanitized }) + '\n'));
@@ -294,7 +302,7 @@ export async function runSweSample(input, signal = new AbortController().signal)
     combined.throwIfAborted();
     try {
       const run = await client.run(session.id, problemPrompt(record));
-      const safeRun = JSON.parse(redact(JSON.stringify(run), [key]));
+      const safeRun = JSON.parse(stringifyEvidence(run, [key]));
       runs.push(safeRun);
       collector.write(Buffer.from(JSON.stringify({ type: 'result', result: safeRun }) + '\n'));
       collector.expected = { sessionId: session.id, runId: run.runId };
@@ -334,13 +342,13 @@ export async function runSweSample(input, signal = new AbortController().signal)
     }
     sessionRecords.push(
       JSON.parse(
-        redact(
-          JSON.stringify({
+        stringifyEvidence(
+          {
             sessionId: session.id,
             parentSessionId: null,
             statistics: state.statistics,
             events: durable,
-          }),
+          },
           [key],
         ),
       ),

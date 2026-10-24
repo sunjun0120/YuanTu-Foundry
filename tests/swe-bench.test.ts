@@ -295,6 +295,28 @@ test('SWE dry-run freezes a commit, writes all blocked predictions and refuses d
   assert.ok(records.length > 0);
 });
 
+test('SWE evidence JSON redacts strings without consuming structural quotes', async () => {
+  const { stringifyEvidence } = await moduleFor('adapter.mjs');
+  assert.equal(typeof stringifyEvidence, 'function');
+  const value = {
+    text: 'password=public-fixture',
+    nested: [{ text: 'Bearer public-fixture' }, 'api_key=public-fixture'],
+    explicit: 'fixture-provider-credential',
+    count: 14,
+    absent: null,
+  };
+  const encoded = stringifyEvidence(value, ['fixture-provider-credential'], 2);
+  assert.deepEqual(JSON.parse(encoded), {
+    text: 'password=[REDACTED]',
+    nested: [{ text: 'Bearer [REDACTED]' }, 'api_key=[REDACTED]'],
+    explicit: '[REDACTED]',
+    count: 14,
+    absent: null,
+  });
+  assert.equal(value.text, 'password=public-fixture', 'original evidence must stay immutable');
+  assert.ok(!encoded.includes('fixture-provider-credential'));
+});
+
 test('SWE real Host fixture reads, edits, denies commands and emits an applicable official prediction', async (t) => {
   const { runSweSample, collectPatch } = await moduleFor('adapter.mjs');
   const { prediction, writePredictions } = await moduleFor('predictions.mjs');
@@ -327,7 +349,7 @@ test('SWE real Host fixture reads, edits, denies commands and emits an applicabl
   await git(['init']);
   await writeFile(
     path.join(source, 'module.py'),
-    'password = "public fixture"\nsecret = "public fixture"\nvalue = 1\n',
+    'password = "public fixture"\nsecret = "public fixture"\nvalue = 1\n# password=public-fixture',
   );
   await git(['add', '.']);
   await git([
@@ -453,7 +475,7 @@ test('SWE real Host fixture reads, edits, denies commands and emits an applicabl
   assert.ok(calls >= 4);
   assert.equal(
     await readFile(path.join(directory, 'module.py'), 'utf8'),
-    'password = "public fixture"\nsecret = "public fixture"\nvalue = 2\n',
+    'password = "public fixture"\nsecret = "public fixture"\nvalue = 2\n# password=public-fixture',
     JSON.stringify({
       interactions: result.interactions,
       tools: result.events.filter((item: any) => /tool/.test(item.event.type)),

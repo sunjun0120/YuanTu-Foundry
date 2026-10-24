@@ -7,7 +7,7 @@ import { copyLockedDependencies } from '../coding-evaluation/dependencies.mjs';
 import { redact } from '../coding-evaluation/adapters.mjs';
 import { readDataset, recordHash, DATASET } from './select-subset.mjs';
 import { materializeRepo } from './repos.mjs';
-import { runSweSample, assertSweRuntime } from './adapter.mjs';
+import { runSweSample, assertSweRuntime, stringifyEvidence } from './adapter.mjs';
 import { PROMPT_TEMPLATE } from './prompt.mjs';
 import { prediction, writePredictions, safeModelPatch } from './predictions.mjs';
 
@@ -157,7 +157,7 @@ export async function executeBatch(value, options = {}) {
   await newDirectory(out);
   const key = process.env.YUANTU_API_KEY;
   const save = (name, data) =>
-    writeFile(path.join(out, name), redact(JSON.stringify(data, null, 2), [key]), { flag: 'wx' });
+    writeFile(path.join(out, name), stringifyEvidence(data, [key], 2), { flag: 'wx' });
   const batch = {
     version: 1,
     batchId: manifest.batchId,
@@ -271,7 +271,7 @@ export async function executeBatch(value, options = {}) {
       result.status = 'invalid';
       batch.exitCode = 2;
     }
-    const serialized = redact(JSON.stringify(result), [key]);
+    const serialized = stringifyEvidence(result, [key]);
     await appendFile(path.join(out, 'results.jsonl'), serialized + '\n');
     predictions.push(
       prediction(
