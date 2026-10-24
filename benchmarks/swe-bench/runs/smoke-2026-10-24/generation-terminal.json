@@ -1,0 +1,142 @@
+[
+  {
+    "version": "before",
+    "instanceId": "astropy__astropy-14309",
+    "source": "evidence/astropy__astropy-14309/adapter.json",
+    "sourceSha256": "eee8d1869b4c50adfe88085633753237bd02aeb51a22736a262e66f7a54756bf",
+    "runs": [
+      {
+        "status": "needs_review",
+        "error": "Acceptance checks did not pass; review the evidence.",
+        "code": null
+      }
+    ],
+    "emptyPatch": false
+  },
+  {
+    "version": "before",
+    "instanceId": "django__django-13363",
+    "source": "evidence/django__django-13363/adapter.json",
+    "sourceSha256": "76d6a763da6b95396215ce18491e2eb2bfc78bf6aca3923dd1f19439db49daec",
+    "runs": [
+      {
+        "status": "needs_review",
+        "error": "The work ended without executable verification checks.",
+        "code": null
+      }
+    ],
+    "emptyPatch": false
+  },
+  {
+    "version": "before",
+    "instanceId": "scikit-learn__scikit-learn-25931",
+    "source": "evidence/scikit-learn__scikit-learn-25931/adapter.json",
+    "sourceSha256": "3080054be1378e004d51a304db095c9357046e4c1ebc009e1378aa7c2fcae458",
+    "runs": [
+      {
+        "status": "needs_review",
+        "error": "The work ended without executable verification checks.",
+        "code": null
+      }
+    ],
+    "emptyPatch": false
+  },
+  {
+    "version": "before",
+    "instanceId": "sphinx-doc__sphinx-10449",
+    "source": "evidence/sphinx-doc__sphinx-10449/adapter.json",
+    "sourceSha256": "3cc3537df1eb0d5feee953e75887fbb9d6ff510e995085d77f11ff486fb8020b",
+    "runs": [
+      {
+        "status": "failed",
+        "error": "Model connection idle timeout",
+        "code": "timeout"
+      }
+    ],
+    "emptyPatch": true
+  },
+  {
+    "version": "before",
+    "instanceId": "sympy__sympy-24443",
+    "source": "evidence/sympy__sympy-24443/adapter.json",
+    "sourceSha256": "f8fc4186767dbedc90a78ba49acbc48367785518e234f6bcf10b73bb6f4acac6",
+    "runs": [
+      {
+        "status": "completed",
+        "error": null,
+        "code": null
+      }
+    ],
+    "emptyPatch": true
+  },
+  {
+    "version": "after",
+    "instanceId": "astropy__astropy-14309",
+    "source": "evidence/astropy__astropy-14309/adapter.json",
+    "sourceSha256": "4e4cadd63403a0a6388e6ec4b80eac60c9bb562a82682fb00f50a7049723bda2",
+    "runs": [
+      {
+        "status": "needs_review",
+        "error": "Acceptance checks did not pass; review the evidence.",
+        "code": null
+      }
+    ],
+    "emptyPatch": false
+  },
+  {
+    "version": "after",
+    "instanceId": "django__django-13363",
+    "source": "evidence/django__django-13363/adapter.json",
+    "sourceSha256": "60b4e5326078ba032c3b898aab1ed12f364255b9ea314d21b99e668912fc78b8",
+    "runs": [
+      {
+        "status": "needs_review",
+        "error": "The work ended without executable verification checks.",
+        "code": null
+      }
+    ],
+    "emptyPatch": false
+  },
+  {
+    "version": "after",
+    "instanceId": "scikit-learn__scikit-learn-25931",
+    "source": "evidence/scikit-learn__scikit-learn-25931/adapter.json",
+    "sourceSha256": "1150d97a7b48b89fcb7b6aeaa7a95922dece4282a1e2aa151f3cb1a5bb377db7",
+    "runs": [
+      {
+        "status": "failed",
+        "error": "Model API returned HTTP 429: Rate limit exceeded for api_key: [REDACTED] Limit type: max_parallel_requests. Current limit: 50 (from global), Remaining: 0. Limit resets at: 2026-10-23 16:31:09 UTC",
+        "code": "rate-limit"
+      }
+    ],
+    "emptyPatch": false
+  },
+  {
+    "version": "after",
+    "instanceId": "sphinx-doc__sphinx-10449",
+    "source": "evidence/sphinx-doc__sphinx-10449/adapter.json",
+    "sourceSha256": "015d2a0c32bc274dabb7ff928c06fd8579ec0006f1b39e14a937e380e8cc87fb",
+    "runs": [
+      {
+        "status": "failed",
+        "error": "Model API returned HTTP 429: Rate limit exceeded for api_key: [REDACTED] Limit type: max_parallel_requests. Current limit: 50 (from global), Remaining: 0. Limit resets at: 2026-10-23 16:31:33 UTC",
+        "code": "rate-limit"
+      }
+    ],
+    "emptyPatch": true
+  },
+  {
+    "version": "after",
+    "instanceId": "sympy__sympy-24443",
+    "source": "evidence/sympy__sympy-24443/adapter.json",
+    "sourceSha256": "9b16ab7e52a074f42b35f8b7ef5c543c4ca85b454bdd74cbe9247987ab7ce06a",
+    "runs": [
+      {
+        "status": "completed",
+        "error": null,
+        "code": null
+      }
+    ],
+    "emptyPatch": true
+  }
+]

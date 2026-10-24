@@ -219,10 +219,10 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 - [x] 阶段 0：`fetch-dataset.py`、`select-subset.mjs`、`subset-v1.json`、`repos.mjs` + 离线测试
 - [x] 阶段 1：`schema.ts`、`manifest.example.json`、`prompt.mjs`、`adapter.mjs`、`run.mjs`、`predictions.mjs` + 离线测试
 - [x] 阶段 2 工装：`swe-bench-eval.yml`、`ingest.mjs`、`report.mjs` + 离线测试；`benchmarks/swe-bench/README.md`（真实验收另列）
-- [ ] 向用户确认 §3.2 四项，给出冒烟成本估算
-- [ ] 冒烟批次（两个版本 × 5 题）报告
+- [x] 向用户确认 §3.2 四项，给出冒烟实测 token 外推（未提供单价，不虚构金额）
+- [x] 冒烟批次（两个版本 × 5 题）报告
 - [ ] 用户批准后：全量批次（两个版本 × 50 题）对比报告
-- [ ] 每个阶段一次提交，`npm run check` 通过
+- [x] 每个阶段一次提交，`npm run check` 通过
 
 ## 12. 执行记录
 
@@ -252,5 +252,20 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 - 手动工作流只在专用 GitHub-hosted Linux runner 上验收现成预测，不接收模型密钥，不进入日常 CI。数据源 revision 与每题记录哈希和生成端完全一致。首次手动触发要求工作流先位于默认分支；发布到共享 `main` 仍须取得用户对具体提交的批准。
 - 导入绑定预测、子集、revision、逐题官方汇总原件/hash、报告分类及实际 `patch.diff`，拒绝空预测的 resolved/unresolved。报告保留 error 分母、Wilson 区间、配对表、精确 McNemar、指标分布与每题证据；配置不同拒绝比较，保存记录可逐字节重生成。
 - 阶段 2 专属 7 项断言/子用例及生成端 9 项共 16/16 通过；完整门禁使用最终待提交代码树统一验证，`npm run check` 退出 0（2982 passed、40 skipped、0 failed，构建与客户端冒烟 3/3 通过）。分阶段提交仅改变 index/历史，未在两次提交之间改动已验证的实现。
-- 工装提交哈希在真实冒烟记录中补入。模型冒烟已开始：先旧版 5 题，再新版 5 题，全部串行；未运行全量。官方 Docker 和真实通过率仍待实际验收，不能用离线测试代替。
+- 工装提交 `476f611`，后按用户要求变基到新增桌面修复的 `main@874609e`，变基后为 `972a945`。模型冒烟先旧版 5 题，再新版 5 题，全部串行；未运行全量。官方 Docker 和真实通过率另见下方实际记录，不能用离线测试代替。
 - 临时 Python 帮助环境与 wheel 解包目录已清理，保留实际 `--help`、失败/通过检查日志及批次证据。工装完成、真实解题结果和排行榜可比性分别报告。
+
+### 2026-10-24：真实冒烟生成与官方验收启动
+
+- 用户明确批准将已验证的四个提交合入并推送 `main`，继续官方验收。获取最新 `main@874609e` 后四个提交无冲突变基为 `79a3ca7`、`e3d8e31`、`04813d4`、`972a945`；两个被测运行时仍固定 `a17ddbc` / `ec08343`。
+- 集成后首轮完整检查因 `host-carrier` 进程清理竞态提前结束（596 passed、1 skipped、0 断言失败，仅完成 30/291 文件），保留失败日志。原样独立复测 12/12 且清理正常；使用仓库已有的收集全部失败模式重跑完整门禁，退出 0：2983 passed、40 skipped、0 failed，全部 291 文件完成，构建及 compiled-client 冒烟 3/3 通过。未改清理规则、超时或产品代码。`main@972a945` 已快进合入并推送。
+- 两批真实请求各恰好 5 次样本尝试，没有重试；旧版 74 次请求，新版 102 次请求，各生成 3 个非空补丁、2 个空补丁，均未修改测试文件。比较配置哈希一致，所有 Host 清理确认通过。生成完成不表示官方 resolved。
+- 终止状态补充记录：旧版 Sphinx 遇到模型连接空闲超时；新版 Sphinx 遇到服务端 HTTP 429；新版 scikit-learn 在生成非空补丁后遇到 HTTP 429；两版 SymPy 都没有实际写入修改，旧版将 DSML 调用文本作为最终回答。保留原始结果，不重跑，不把上游失败归为已证明的模型能力差异。
+- 已知 token 合计：旧版输入 1124034、输出 43308、缓存输入 982400；新版输入 1809324、输出 103757、缓存输入 1675136。两批 usage 均有不完整项，未知不视为零。
+- 仅按冒烟均值外推 50 题 × 2 版本：已知输入约 29333580、输出 1470650、缓存输入 26575360；缓存包含在输入总数内。若单价单位为每百万 token，金额公式为 `2.758220 × 输入单价 + 26.575360 × 缓存输入单价 + 1.470650 × 输出单价`。用户未提供单价，不报金额。冒烟只覆盖较低难度且 usage 不完整，此外推不是预算上界。
+- 每题已知输入与输出之和中位数的 3 倍：旧版 618837、新版 1081818 token，作为后续观察阈值参考；本轮使用 2000000，观察后取消不是硬费用上限。全量 50 × 2 仍等待冒烟验收后单独批准。
+- 扫描两批 52 个本地证据文件（含 SQLite），实际模型密钥在 UTF-8 / UTF-16LE 中均未命中。数据库和私有 HOME 仅留本地；两份官方预测提交 `c80aea5` 至功能分支，未追加推送到 `main`。
+- 官方验收全部成功：[旧版 Actions 40049388689](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049388689)、[新版 Actions 40049393160](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049393160)。验收仅读取既有补丁，使用 `ubuntu-latest`（实际镜像 ubuntu-26.04，版本 20261012.163.1）、`swebench==5.0.2` 和冻结数据。旧版 artifact `12542831699`，GitHub 声明 ZIP SHA-256 `d89513450ad47f1120c3d5bc4f3300a147e7b9dbf36243eac263a9bde7e7023a`；新版 artifact `12543181140`，声明 ZIP SHA-256 `8b50d12ddf85729c7861fe856246a7e0a1a4cba0b4bc56e8ac9731d55582d233`，保留至 2026-11-23。
+- 两批导入均核对预测哈希、子集、原始官方汇总、逐题报告及实际验收补丁。两版本均 Astropy、Django、scikit-learn resolved；Sphinx、SymPy 为空补丁，未获官方 resolved/unresolved 判定。全部计划题为分母时各为 3/5（60%），实际判定各 3 题；报告的 error/未判定各 2 题均来自空补丁，没有另外的 Docker error。Wilson 95% 均为 23.1%–88.2%；配对表为共同通过 3、仅旧版 0、仅新版 0、共同未通过 2，精确 McNemar p=1。此冒烟没有观察到版本间配对差异，不能推出等效或排行榜水平。
+- 本地报告位于 `.scratch/swe-bench/smoke-comparison-2026-10-24/report.md`，原始批次为 `swe-smoke-before-v1` / `swe-smoke-after-v1`。两份单批报告与配对报告的 `summary.json`、`report.md` 共 6 文件从保存记录重新生成后逐字节一致，哈希回执保存在配对目录的 `report-reproduction.json`；另保存生成终止状态与隐私扫描回执。
+- 推送后的 [main 自动 CI 40049341950](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049341950) 的 `npm run check` 通过（Linux 测试 2946 passed、77 skipped、0 failed，客户端冒烟 3/3）；后续 `audit:check` 因现有 body-parser / zod 的 high 条目失败，分别为 `GHSA-27r3-jxmh-p828` / `GHSA-mrhx-c7xc-m3w5`。已核对本次四提交未改 `package.json` 或 lockfile；不能把整体 CI 报成通过，也未在此评测任务中扩大到依赖升级。

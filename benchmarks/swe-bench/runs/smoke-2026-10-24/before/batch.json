@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "batchId": "swe-smoke-before-v1",
+  "live": true,
+  "requests": 74,
+  "attempts": 5,
+  "planned": 5,
+  "subsetHash": "b1fa435a7b863a4e264cd23f048f13f9d14bbda639ec15bc6401d1896256d775",
+  "configHash": "82c664ef4b8224dfdd32d5e4d9fcb395ee626a293c0b2fdd391cf857d7632fc4",
+  "runtimeRevision": "a17ddbc34d6f78835e2205cb63695c7686fcdc17",
+  "runtimeHash": "2dea9373d1ab6c525e83b96b87c3808bba715f5be55da27cff05308a52405fe1",
+  "exitCode": 0
+}

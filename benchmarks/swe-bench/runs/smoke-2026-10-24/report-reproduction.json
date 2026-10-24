@@ -1,0 +1,41 @@
+{
+  "byteIdentical": true,
+  "receipts": [
+    {
+      "report": "before",
+      "file": "summary.json",
+      "bytes": 1156,
+      "sha256": "1f6ae50d459904c22bf4788932dc636c324c8de96035aac2f54d9fa145ba8840"
+    },
+    {
+      "report": "before",
+      "file": "report.md",
+      "bytes": 2978,
+      "sha256": "b08bf8cdce5abcd4268a8bf11f2d54cbe2648c7e0070160d57381d73642579d2"
+    },
+    {
+      "report": "after",
+      "file": "summary.json",
+      "bytes": 1164,
+      "sha256": "620838875698c7434b88215730f5624730215dec2dc6fef30102486d11efc4c3"
+    },
+    {
+      "report": "after",
+      "file": "report.md",
+      "bytes": 2982,
+      "sha256": "92039484324debf892a7b20be95cfc5c44d6e6276df493b5d08077d3905a53e9"
+    },
+    {
+      "report": "comparison",
+      "file": "summary.json",
+      "bytes": 2820,
+      "sha256": "8c1b47e29f8dda790003c1819d527032354cd2b79a48a3b8d0a932828db45754"
+    },
+    {
+      "report": "comparison",
+      "file": "report.md",
+      "bytes": 4467,
+      "sha256": "bbccea97ba958247e77100a4b632ab1b0063bfc619cf13574951f0e83efafff0"
+    }
+  ]
+}

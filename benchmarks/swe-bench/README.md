@@ -2,7 +2,7 @@
 
 本目录把 YuanTu Agent Host 的补丁交给官方 SWE-bench 验收器。冻结子集包含 50 题，另有 5 题冒烟集；它不是排行榜成绩，也不表示真实模型已经通过。
 
-当前完成数据准备、Host 生成工装、官方验收工作流与报告，并通过本机环回假模型和手写官方结果验证；尚无真实模型通过率或 Docker 验收结论。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL。
+数据准备、Host 生成工装、官方验收工作流与报告已完成。2026-10-24 使用 `DeepSeek-V4.1-Flash-1017` 完成两版本各 5 题真实冒烟：`a17ddbc` 与 `ec08343` 均为 3/5 resolved（60%），相同两题为空补丁，实际被官方判定的各有 3 题；Wilson 95% 区间均为 23.1%–88.2%，精确 McNemar p=1，没有观察到配对差异。官方验收原件见[旧版运行](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049388689)和[新版运行](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049393160)，artifact 保留 30 天。两批 usage 有不完整项，上游超时及限流影响生成；全量 50 题仍待单独批准。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL。
 
 ## 冻结的数据
 
