@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "batchId": "swe-full-after-v1",
+  "configHash": "09e6d3baba5cb5f4254e790acd9dc3b06e0d7048bc9ccbc3757e2a47709c6332",
+  "runtime": "ec08343e147b46417ffe11d3249deb6b5a408184",
+  "runtimeHash": "115327ac41f849f7fd558a6d3f5607b6bb6283e17989cf52e4246185b4a1eb49",
+  "attempts": 50,
+  "planned": 50,
+  "generationExitCode": 2,
+  "originalResultsSha256": "db4900b052d75c4992fdd24e172e08c29d2aee4898c05590c86eab8953dd6bfe",
+  "predictionsSha256": "7d32c9a6c4f5a0d25a2e127ba4d7cb310bc35a8908ec6f8020d486a68c540a1c",
+  "publication": "Original final predictions, byte-identical to saved patch evidence; no sample rerun",
+  "checkedEncodings": ["utf8", "utf16le"],
+  "credentialMatches": 0
+}
