@@ -4,3 +4,8 @@ artifacts/
 package-lock.json
 .yuantu/
 packages/tools/windows-sandbox/native/target/
+# Immutable SWE experiment evidence and deterministic generated reports retain their byte hashes.
+benchmarks/swe-bench/runs/full-2026-10-24/before/
+benchmarks/swe-bench/runs/full-2026-10-24/after/
+benchmarks/swe-bench/runs/full-2026-10-24/report.generated.md
+benchmarks/swe-bench/runs/full-2026-10-24/summary.generated.json

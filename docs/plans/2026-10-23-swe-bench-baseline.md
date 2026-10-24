@@ -221,7 +221,7 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 - [x] 阶段 2 工装：`swe-bench-eval.yml`、`ingest.mjs`、`report.mjs` + 离线测试；`benchmarks/swe-bench/README.md`（真实验收另列）
 - [x] 向用户确认 §3.2 四项，给出冒烟实测 token 外推（未提供单价，不虚构金额）
 - [x] 冒烟批次（两个版本 × 5 题）报告
-- [ ] 用户批准后：全量批次（两个版本 × 50 题）对比报告
+- [x] 用户批准后：全量批次（两个版本 × 50 题）对比报告
 - [x] 每个阶段一次提交，`npm run check` 通过
 
 ## 12. 执行记录
@@ -269,3 +269,14 @@ evaluation/              # 从 Actions 下载回来的官方验收输出
 - 两批导入均核对预测哈希、子集、原始官方汇总、逐题报告及实际验收补丁。两版本均 Astropy、Django、scikit-learn resolved；Sphinx、SymPy 为空补丁，未获官方 resolved/unresolved 判定。全部计划题为分母时各为 3/5（60%），实际判定各 3 题；报告的 error/未判定各 2 题均来自空补丁，没有另外的 Docker error。Wilson 95% 均为 23.1%–88.2%；配对表为共同通过 3、仅旧版 0、仅新版 0、共同未通过 2，精确 McNemar p=1。此冒烟没有观察到版本间配对差异，不能推出等效或排行榜水平。
 - 本地报告位于 `.scratch/swe-bench/smoke-comparison-2026-10-24/report.md`，原始批次为 `swe-smoke-before-v1` / `swe-smoke-after-v1`。两份单批报告与配对报告的 `summary.json`、`report.md` 共 6 文件从保存记录重新生成后逐字节一致，哈希回执保存在配对目录的 `report-reproduction.json`；另保存生成终止状态与隐私扫描回执。
 - 推送后的 [main 自动 CI 40049341950](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049341950) 的 `npm run check` 通过（Linux 测试 2946 passed、77 skipped、0 failed，客户端冒烟 3/3）；后续 `audit:check` 因现有 body-parser / zod 的 high 条目失败，分别为 `GHSA-27r3-jxmh-p828` / `GHSA-mrhx-c7xc-m3w5`。已核对本次四提交未改 `package.json` 或 lockfile；不能把整体 CI 报成通过，也未在此评测任务中扩大到依赖升级。
+
+### 2026-10-24：获批全量与最终配对报告
+
+- 用户明确批准全量 50 题 × 2 版本；实际各 50 次新样本尝试，失败不重试，旧版观察请求 731、新版 779。模型、缓存、no-commands、每响应输出限制及观察后取消阈值沿用冒烟；运行时仍固定 `a17ddbc` / `ec08343`，配置哈希均为 `09e6d3baba5cb5f4254e790acd9dc3b06e0d7048bc9ccbc3757e2a47709c6332`。
+- 旧版预测提交 `d0ab817`、新版 `2109bc1`，均只推送任务分支。官方验收 [40062518767](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40062518767) / [40075340034](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40075340034) 均成功，下载 ZIP 实测哈希与 GitHub 声明一致，50 题严格导入通过。旧版 26 resolved、4 unresolved、20 空补丁；新版 25 resolved、4 unresolved、21 空补丁；Docker error 均为 0。
+- 全计划分母通过率 52% / 50%，Wilson 95% 为 38.5%–65.2% / 36.6%–63.4%。共同通过 19、仅旧版 7、仅新版 6、共同未通过 18，精确 McNemar p=1；没有检出版本差异，不能推断等效。27 对至少一边未获官方判定；两版唯一修改测试文件的样本均为 pytest-5809，均获 resolved，均保留在结果中。
+- 两版 Django11451 均遇到工装对完整 JSON 脱敏导致结构引号丢失。原始异常分类、补丁、结果与官方 resolved 保留；仅在验收派生记录中，经过关闭根会话、工作区、补丁、终态统计、请求数和源码哈希校验后恢复轮数/token，并保存不可变回执。新增恢复工具的错工作区、错补丁、篡改统计、未知保留与幂等探针通过。工装修复 `f3a962b` 改为先脱敏字符串值再序列化，回归先失败后通过，没有重跑历史样本。
+- 新版第 35 题 pytest-5631 在进程退出时中断，已观察到 6 次完成请求，空补丁，保留 invalid/process-interrupted；不重试，仅接续未开始的 15 题。用户确认当前会话为唯一执行者后，使用逐字节一致的原工装和已有冻结运行时/私有依赖，原先 34 行逐字节不变。中断题 token 与耗时保持未知；续跑包装器源码、开始记录及哈希一并交付。
+- 报告及原始/派生数值记录交付于 `benchmarks/swe-bench/runs/full-2026-10-24/`。两份单批报告和配对报告共 6 文件，从交付记录重生成后逐字节一致。510 个原始证据文件共 597762170 字节经 UTF-8/UTF-16LE 实际模型密钥扫描，命中 0；SQLite、私有 HOME 与密钥不上传。
+- 已知 token：旧版输入 10943641、输出 744706、缓存输入 10067456；新版输入 11662849、输出 896874、缓存输入 10604032。两版 usage 不完整，未提供单价，不虚构金额。每题已知总 token 中位数的 3 倍为 506199 / 541455，仅作以后观察阈值建议。
+- 最终修复 SWE 回归 17/17；完整 `npm run check` 退出 0，291 文件全部完成，2984 passed、40 skipped、0 failed，构建与客户端冒烟 3/3。独立只读代码审查无 Critical/Important/Minor。此前 main CI 的既有依赖 audit 失败仍单列，不把 npm check 当作完整发布门禁。可选容器内生成未执行。

@@ -1,0 +1,117 @@
+import path from 'node:path';
+import { readFile, writeFile, appendFile, readdir, access } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import { isDeepStrictEqual } from 'node:util';
+import { comparisonConfig } from './swe-original-harness/benchmarks/swe-bench/run.mjs';
+import { validateSweManifest, requireSweLiveAuthorization } from './swe-original-harness/benchmarks/swe-bench/schema.ts';
+import { assertSweRuntime, collectPatch, runSweSample } from './swe-original-harness/benchmarks/swe-bench/adapter.mjs';
+import { materializeRepo } from './swe-original-harness/benchmarks/swe-bench/repos.mjs';
+import { hash } from './swe-original-harness/benchmarks/coding-evaluation/materialize.mjs';
+import { readDataset, recordHash } from './swe-original-harness/benchmarks/swe-bench/select-subset.mjs';
+import { prediction, writePredictions, safeModelPatch } from './swe-original-harness/benchmarks/swe-bench/predictions.mjs';
+import { redact } from './swe-original-harness/benchmarks/coding-evaluation/adapters.mjs';
+
+const mode = process.argv[2];
+if (!['--inspect', '--live'].includes(mode) || process.argv.length !== 3) throw Error('Expected --inspect or --live');
+const root = path.resolve('.scratch/swe-bench/swe-full-after-v1');
+const key = process.env.YUANTU_API_KEY;
+if (!key) throw Error('Explicit credential required');
+const json = async relative => JSON.parse(await readFile(path.join(root, relative), 'utf8'));
+const manifest = validateSweManifest(JSON.parse(await readFile('.scratch/swe-bench/live-full-after-config.json')));
+requireSweLiveAuthorization(manifest, 50);
+const resolved = await json('manifest.resolved.json');
+const frozen = await json('frozen/inputs.json');
+const subsetBytes = await readFile(manifest.subset.path);
+if (hash(subsetBytes) !== manifest.subset.sha256) throw Error('Subset changed');
+const subset = JSON.parse(subsetBytes);
+const comparison = await comparisonConfig(manifest, [...manifest.instances].sort(), subset);
+const dependencies = JSON.parse(await readFile(path.join(frozen.runtimeDirectory, '.evaluation-dependencies.json')));
+comparison.dependenciesHash = dependencies.filesHash;
+if (!isDeepStrictEqual(comparison, resolved.comparison) || hash(comparison) !== resolved.configHash) throw Error('Original harness/settings fingerprint differs');
+await assertSweRuntime(frozen, true);
+const prefixBytes = await readFile(path.join(root, 'results.jsonl'));
+const rows = prefixBytes.toString('utf8').trim().split('\n').map(JSON.parse);
+if (rows.length !== 34 || !prefixBytes.toString('utf8').endsWith('\n')) throw Error('Expected exactly 34 immutable complete rows');
+const ids = resolved.instances;
+if (rows.some((row, i) => row.instanceId !== ids[i] || row.runtimeHash !== frozen.runtimeHash || row.configHash !== resolved.configHash || row.runtime !== manifest.runtime.revision)) throw Error('Completed prefix identity differs');
+for (const file of ['predictions.jsonl', 'batch.json', 'continuation-starts.jsonl', 'continuation.json']) {
+  try { await access(path.join(root, file)); throw Error(`Refusing existing ${file}`); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+const interruptedId = ids[34], remaining = ids.slice(35);
+if (ids.length !== 50 || remaining.length !== 15 || interruptedId !== 'pytest-dev__pytest-5631') throw Error('Authorized scope differs');
+const evidenceIds = (await readdir(path.join(root, 'evidence'))).sort();
+if (!isDeepStrictEqual(evidenceIds, ids.slice(0, 35).sort())) throw Error('Unexpected prior attempts');
+const workIds = (await readdir(path.join(root, 'work'))).sort();
+if (!isDeepStrictEqual(workIds, ids.slice(0, 35).sort())) throw Error('Unexpected prior workspaces');
+const beforeBatch = JSON.parse(await readFile('.scratch/swe-bench/swe-full-before-v1/batch.json'));
+if (beforeBatch.attempts !== 50) throw Error('Global prior attempts differ');
+const dbFile = path.join(root, 'evidence', interruptedId, 'session.sqlite');
+const db = new DatabaseSync(dbFile, { readOnly: true });
+let events, sessions;
+try {
+  events = db.prepare('SELECT seq,session_id AS sessionId,type,data,at FROM session_events ORDER BY seq').all();
+  sessions = db.prepare('SELECT id,workspace,active_run,parent_session_id FROM sessions').all();
+} finally { db.close(); }
+if (sessions.length !== 1 || sessions[0].parent_session_id !== null || !String(sessions[0].workspace).replaceAll('\\', '/').endsWith(`/${manifest.batchId}/work/${interruptedId}`) || events.some(e => e.type === 'run.finished') || events.filter(e => e.type === 'run.started').length !== 1) throw Error('Unexpected interrupted run identity');
+const requests = events.filter(e => e.type === 'provider.request.finished').length;
+const rounds = events.filter(e => e.type === 'step.finished').length;
+const dataset = await readDataset(manifest.datasetPath);
+const records = ids.map(id => {
+  const record = dataset.find(row => row.instance_id === id);
+  if (!record || recordHash(record) !== subset.instances.find(row => row.instance_id === id)?.sha256) throw Error('Frozen dataset differs');
+  return record;
+});
+const plan = { version: 1, originalHarnessCommit: 'd0ab817ea1a4084c984491d1ae6d0b1395b2423a', configHash: resolved.configHash, runtimeHash: frozen.runtimeHash, originalResultsPrefixSha256: hash(prefixBytes), preservedRows: rows.length, interruptedInstance: interruptedId, interruptedRequestsObserved: requests, interruptedRoundsObserved: rounds, interruptedSessionId: sessions[0].id, interruptedRunId: sessions[0].active_run, interruptedLastEventAt: events.at(-1)?.at, interruptedDatabaseSha256: hash(await readFile(dbFile)), interruptedWalSha256: hash(await readFile(`${dbFile}-wal`)), continuedInstances: remaining, additionalSampleAttempts: 15, totalSampleAttempts: 100, noRetry: true, orchestrationSha256: hash(await readFile(new URL(import.meta.url))) };
+if (mode === '--inspect') { console.log(JSON.stringify(plan)); process.exit(0); }
+const save = async (file, value, flag = 'wx') => {
+  const bytes = JSON.stringify(value, null, 2) + '\n';
+  if (bytes.includes(key)) throw Error('Credential detected');
+  await writeFile(path.join(root, file), bytes, { flag });
+};
+await save('continuation.json', plan);
+await writeFile(path.join(root, 'results.pre-interruption.jsonl'), prefixBytes, { flag: 'wx' });
+await writeFile(path.join(root, 'continuation-starts.jsonl'), '', { flag: 'wx' });
+const interruptedPatch = await collectPatch(path.join(root, 'work', interruptedId), records[34].base_commit);
+safeModelPatch(interruptedPatch.patch, [key]);
+await writeFile(path.join(root, 'evidence', interruptedId, 'patch.diff'), interruptedPatch.patch, { flag: 'wx' });
+const interrupted = { version: 1, instanceId: interruptedId, runtime: manifest.runtime.revision, runtimeHash: frozen.runtimeHash, configHash: resolved.configHash, live: true, status: 'invalid', failureClass: 'process-interrupted', rounds, tokens: { inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteInputTokens: null, complete: false }, durationMs: null, requests, patch: { ...interruptedPatch, patch: undefined }, cleanupConfirmed: false, timedOut: false, interruption: { receipt: 'continuation.json', terminalSeen: false, timingUnknown: true } };
+await appendFile(path.join(root, 'results.jsonl'), JSON.stringify(interrupted) + '\n');
+rows.push(interrupted);
+const controller = new AbortController();
+const stop = () => controller.abort();
+process.on('SIGINT', stop); process.on('SIGTERM', stop);
+try {
+  for (const record of records.slice(35)) {
+    controller.signal.throwIfAborted();
+    const id = record.instance_id;
+    const directory = path.join(root, 'work', id), evidenceDirectory = path.join(root, 'evidence', id);
+    await assertSweRuntime(frozen, true);
+    await materializeRepo({ record, cacheDirectory: path.resolve('.scratch/swe-bench/repos'), directory });
+    await appendFile(path.join(root, 'continuation-starts.jsonl'), JSON.stringify({ instanceId: id, at: new Date().toISOString() }) + '\n');
+    console.log(JSON.stringify({ starting: id, attemptsBeforeThis: 50 + rows.length }));
+    const adapter = await runSweSample({ manifest, frozen, record, directory, evidenceDirectory }, controller.signal);
+    const patch = safeModelPatch(adapter.patch.patch, [key]);
+    const row = { version: 1, instanceId: id, runtime: manifest.runtime.revision, runtimeHash: frozen.runtimeHash, configHash: resolved.configHash, live: true, status: adapter.failureClass || !adapter.cleanupConfirmed || !adapter.terminalSeen ? 'invalid' : patch ? 'generated' : 'failed', failureClass: adapter.failureClass ?? adapter.patch.failureClass, requests: adapter.metrics.requests ?? 0, rounds: adapter.rounds, tokens: adapter.metrics.usage, durationMs: adapter.timing.wallMs, patch: { ...adapter.patch, patch: undefined }, cleanupConfirmed: adapter.cleanupConfirmed, timedOut: adapter.timedOut };
+    await assertSweRuntime(frozen);
+    await appendFile(path.join(root, 'results.jsonl'), redact(JSON.stringify(row), [key]) + '\n');
+    rows.push(row);
+    console.log(JSON.stringify({ completed: rows.length, instanceId: id, status: row.status, patchBytes: row.patch.bytes }));
+  }
+  const finalBytes = await readFile(path.join(root, 'results.jsonl'));
+  if (!finalBytes.subarray(0, prefixBytes.length).equals(prefixBytes) || rows.length !== 50 || new Set(rows.map(r => r.instanceId)).size !== 50) throw Error('Final identity or prefix changed');
+  const predictions = [];
+  for (const row of rows) {
+    const bytes = await readFile(path.join(root, 'evidence', row.instanceId, 'patch.diff'));
+    if (hash(bytes) !== row.patch.sha256 || bytes.length !== row.patch.bytes) throw Error('Saved patch differs');
+    predictions.push(prediction(row.instanceId, manifest.runtime.revision, manifest.model, safeModelPatch(bytes.toString('utf8'), [key])));
+  }
+  await writePredictions(path.join(root, 'predictions.jsonl'), predictions);
+  const batch = { version: 1, batchId: manifest.batchId, live: true, requests: rows.reduce((n,r) => n + (r.requests ?? 0), 0), attempts: 50, planned: 50, subsetHash: manifest.subset.sha256, configHash: resolved.configHash, runtimeRevision: manifest.runtime.revision, runtimeHash: frozen.runtimeHash, exitCode: rows.some(r => r.status === 'invalid') ? 2 : 0, continuation: { receipt: 'continuation.json', priorCompleted: 34, interruptedNotRetried: 1, newAttempts: 15 } };
+  await save('batch.json', batch);
+  console.log(JSON.stringify(batch));
+  process.exitCode = batch.exitCode;
+} catch (error) {
+  console.error(redact(error instanceof Error ? error.stack : String(error), [key]));
+  process.exitCode = 2;
+} finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }

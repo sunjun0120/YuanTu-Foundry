@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "algorithmSha256": "eda1541f76f91b93ab8f403f8f721bd0953f4049c7581541739c6cd50de6dafd",
+  "implementations": [
+    {
+      "name": "benchmarks/coding-evaluation/adapters.mjs",
+      "sha256": "790e91cb6dac88e16bb9b220970618623532fa68b8f28081cff3ef69bec99e58"
+    },
+    {
+      "name": "benchmarks/coding-evaluation/metrics.mjs",
+      "sha256": "ba2ab06e36de49db903e830116e6357f6d1cdde6b6ec4d2d86e77f2c70145d6c"
+    },
+    {
+      "name": "benchmarks/coding-evaluation/materialize.mjs",
+      "sha256": "8736fd8c6055afb367a9ae7fc892a3404aec0a6847d1bd43794b4c7d4b95158e"
+    },
+    {
+      "name": "benchmarks/swe-bench/ingest.mjs",
+      "sha256": "2da44b73091b9dd5482caecea022293414354f4fb97f2221475b1a8433525d45"
+    }
+  ],
+  "node": "v24.19.0",
+  "inputResultsSha256": "db4900b052d75c4992fdd24e172e08c29d2aee4898c05590c86eab8953dd6bfe",
+  "source": "immutable closed SQLite and matching streamed terminal statistics; no model rerun",
+  "receipts": [
+    {
+      "instanceId": "django__django-11451",
+      "originalRowSha256": "531ddecf3f92407148a86445b3a1bbb97963da1f3099b7db7b5ca9c56e6c007c",
+      "adapterSha256": "28a79a84e4a895eea0fb87cf6f49d8a898e5d86729814abe5632d046a80e3b87",
+      "databaseSha256": "0e5cdf82ba1234648823613eecb5fb563e01f57349a1108d852f08f2f1719dca",
+      "databaseWalSha256": null,
+      "workspaceBinding": {
+        "batchId": "swe-full-after-v1",
+        "instanceId": "django__django-11451",
+        "workspaceSha256": "47f2105de221d00a1e144ee110521a490b5258301c2483b21a588519a2b65c86",
+        "rootSessionId": "c51e0aeb-c5be-494f-a47e-89e89f10a765"
+      },
+      "patchSha256": "6a8a65f27464542dae84eea9664757addb6550722425a09e25ff681b6e29c923",
+      "terminalEvent": {
+        "seq": 276,
+        "sha256": "7090dca78126efd72dbd098e7499816cb5509c0d6d76fd806e61cd9de66d38e6"
+      },
+      "serializationFailures": [
+        {
+          "seq": 112,
+          "type": "message.assistant"
+        },
+        {
+          "seq": 118,
+          "type": "message.tool"
+        },
+        {
+          "seq": 139,
+          "type": "message.tool"
+        },
+        {
+          "seq": 187,
+          "type": "message.assistant"
+        },
+        {
+          "seq": 192,
+          "type": "message.tool"
+        },
+        {
+          "seq": 193,
+          "type": "message.tool"
+        }
+      ],
+      "originalMetrics": {
+        "rounds": 0,
+        "tokens": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "cacheWriteInputTokens": null,
+          "complete": false
+        },
+        "requests": 25
+      },
+      "recoveredMetrics": {
+        "rounds": 25,
+        "tokens": {
+          "inputTokens": 376594,
+          "outputTokens": 16945,
+          "cachedInputTokens": 358528,
+          "cacheWriteInputTokens": 0,
+          "complete": true
+        },
+        "requests": 25
+      },
+      "generationStatusPreserved": "invalid",
+      "failureClassPreserved": "host-or-environment"
+    }
+  ]
+}

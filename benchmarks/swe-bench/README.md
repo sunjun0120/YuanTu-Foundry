@@ -1,8 +1,8 @@
 # SWE-bench Verified 外部评测
 
-本目录把 YuanTu Agent Host 的补丁交给官方 SWE-bench 验收器。冻结子集包含 50 题，另有 5 题冒烟集；它不是排行榜成绩，也不表示真实模型已经通过。
+本目录把 YuanTu Agent Host 的补丁交给官方 SWE-bench 验收器。冻结子集包含 50 题，另有 5 题冒烟集；no-commands 生成设定仅用于版本间对比，不是排行榜成绩。
 
-数据准备、Host 生成工装、官方验收工作流与报告已完成。2026-10-24 使用 `DeepSeek-V4.1-Flash-1017` 完成两版本各 5 题真实冒烟：`a17ddbc` 与 `ec08343` 均为 3/5 resolved（60%），相同两题为空补丁，实际被官方判定的各有 3 题；Wilson 95% 区间均为 23.1%–88.2%，精确 McNemar p=1，没有观察到配对差异。官方验收原件见[旧版运行](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049388689)和[新版运行](https://github.com/sunjun0120/YuanTu-Foundry/actions/runs/40049393160)，artifact 保留 30 天。两批 usage 有不完整项，上游超时及限流影响生成；全量 50 题仍待单独批准。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL。
+数据准备、Host 生成工装、官方验收工作流与报告已完成。2026-10-24 经冒烟后单独授权，完成两版本各 50 题：旧版 `a17ddbc` 为 26/50 resolved（52%），新版 `ec08343` 为 25/50（50%），精确 McNemar p=1，没有检出配对差异。详见[全量报告及可复现记录](runs/full-2026-10-24/README.md)，其中单列空补丁、中断、记录恢复与修改测试文件的样本。两版五题冒烟均为 3/5（60%），见[冒烟记录](runs/smoke-2026-10-24/README.md)。本机不运行被测 Python 仓库的代码，不需要 Docker 或 WSL；全部官方验收均在临时 GitHub-hosted Linux runner 完成。
 
 ## 冻结的数据
 
@@ -51,7 +51,7 @@ live 必须先获用户对模型、端点、冒烟预算、验收位置和缓存
 
 补丁包含新增、修改、删除和测试文件，排除 `.yuantu/` 等运行期目录。空补丁记 `empty-patch`，修改测试文件会标注。`generated` 仅表示生成了待验收补丁；官方验收后才能判定 resolved。
 
-补丁须保留原始字节，普通源码里的 `password`、`secret` 赋值不能用日志正则替换。写出前检查显式模型凭据，命中即阻断；日志仍做通用脱敏。工装的 Git 子进程不继承模型凭据、HOME 或 Git 配置注入，屏蔽系统/全局 Git 配置并关闭 hooks、fsmonitor、外部 diff 和凭据助手，避免模型编辑 `.gitattributes` 后在补丁收集时触发宿主 clean filter。个人 Git 配置不会用于公共仓库缓存。
+补丁须保留原始字节，普通源码里的 `password`、`secret` 赋值不能用日志正则替换。写出前检查显式模型凭据，命中即阻断；日志仍做通用脱敏，JSON 证据先脱敏字符串值再序列化，避免正则破坏结构引号。工装的 Git 子进程不继承模型凭据、HOME 或 Git 配置注入，屏蔽系统/全局 Git 配置并关闭 hooks、fsmonitor、外部 diff 和凭据助手，避免模型编辑 `.gitattributes` 后在补丁收集时触发宿主 clean filter。个人 Git 配置不会用于公共仓库缓存。
 
 批次目录包含 `manifest.resolved.json`（端点 URL 置 null）、`frozen/inputs.json`、`results.jsonl`、官方格式的 `predictions.jsonl`、`batch.json`、`work/<id>/` 和 `evidence/<id>/`。证据包含权限策略与应答器源码哈希、补丁、事件、取消与清理确认。SQLite 与私有 HOME 只保留本地，不上传或随报告交付。输出目录不可复用；错误批次保留证据，用新 ID 运行。
 

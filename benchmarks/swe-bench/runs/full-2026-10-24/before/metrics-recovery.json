@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "algorithmSha256": "eda1541f76f91b93ab8f403f8f721bd0953f4049c7581541739c6cd50de6dafd",
+  "implementations": [
+    {
+      "name": "benchmarks/coding-evaluation/adapters.mjs",
+      "sha256": "790e91cb6dac88e16bb9b220970618623532fa68b8f28081cff3ef69bec99e58"
+    },
+    {
+      "name": "benchmarks/coding-evaluation/metrics.mjs",
+      "sha256": "ba2ab06e36de49db903e830116e6357f6d1cdde6b6ec4d2d86e77f2c70145d6c"
+    },
+    {
+      "name": "benchmarks/coding-evaluation/materialize.mjs",
+      "sha256": "8736fd8c6055afb367a9ae7fc892a3404aec0a6847d1bd43794b4c7d4b95158e"
+    },
+    {
+      "name": "benchmarks/swe-bench/ingest.mjs",
+      "sha256": "2da44b73091b9dd5482caecea022293414354f4fb97f2221475b1a8433525d45"
+    }
+  ],
+  "node": "v24.19.0",
+  "inputResultsSha256": "9b5ccbd835d3407cfd990ef26f3f2a3e54c255ae090dd944eb324d88bd4c0419",
+  "source": "immutable closed SQLite and matching streamed terminal statistics; no model rerun",
+  "receipts": [
+    {
+      "instanceId": "django__django-11451",
+      "originalRowSha256": "fbb0b8986cac9b977543da8f6b4651a7d54abac427962160de4d98ad701481ba",
+      "adapterSha256": "1384de0757bf8dcbab2e8d25bf6c847fd0267cb14efe0ae35eae9ae19d3c5346",
+      "databaseSha256": "969b459403662a566ca57c5b8d625dae0fe12afa744197c67779bef9292bab7e",
+      "databaseWalSha256": null,
+      "workspaceBinding": {
+        "batchId": "swe-full-before-v1",
+        "instanceId": "django__django-11451",
+        "workspaceSha256": "d6337fcfce41077587310aefbe5961d2e323cd73e956cf91a74cfd6253933433",
+        "rootSessionId": "7312a554-3b20-4013-a7e8-c3a58efca35d"
+      },
+      "patchSha256": "6a8a65f27464542dae84eea9664757addb6550722425a09e25ff681b6e29c923",
+      "terminalEvent": {
+        "seq": 150,
+        "sha256": "3421a2016d327454b4e37d84dc01c83cab6e11bc4c8823aebbb380a6e6e904bc"
+      },
+      "serializationFailures": [
+        {
+          "seq": 69,
+          "type": "message.tool"
+        }
+      ],
+      "originalMetrics": {
+        "rounds": 0,
+        "tokens": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "cachedInputTokens": null,
+          "cacheWriteInputTokens": null,
+          "complete": false
+        },
+        "requests": 14
+      },
+      "recoveredMetrics": {
+        "rounds": 14,
+        "tokens": {
+          "inputTokens": 162236,
+          "outputTokens": 6613,
+          "cachedInputTokens": 152192,
+          "cacheWriteInputTokens": 0,
+          "complete": true
+        },
+        "requests": 14
+      },
+      "generationStatusPreserved": "invalid",
+      "failureClassPreserved": "host-or-environment"
+    }
+  ]
+}
