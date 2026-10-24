@@ -81,7 +81,7 @@
     "pptxgenjs": "^4.0.1",
     "typescript": "^5.9.3",
     "xlsx": "file:vendor/xlsx-0.20.3.tgz",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
