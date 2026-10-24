@@ -332,6 +332,12 @@ export class ToolRegistry {
     if (entry === undefined) return false;
     return this.restrictions.every((rule) => rule({ name, entry }));
   }
+  /** Internal capabilities stay on Tool definitions, never in provider-facing specs. */
+  namesWithEffect(effect: NonNullable<Tool['effect']>): string[] {
+    return [...this.entries.values()]
+      .filter(({ tool }) => tool.effect === effect && this.offers(tool.name))
+      .map(({ tool }) => tool.name);
+  }
   /**
    * Whether this call may overlap its siblings from the same assistant message.
    *

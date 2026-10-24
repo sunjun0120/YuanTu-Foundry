@@ -46,6 +46,7 @@ import { ResidentTurnSettlements } from './run-residency.ts';
 import { loadRunTask, registerTaskStepTool, startRunTask } from './run-task.ts';
 import { createToolBatch } from './run-tools.ts';
 import { ToolProgressGuard, toolProgressNotice } from './tool-progress.ts';
+import { projectChangedPaths } from './work-evidence.ts';
 import { sessionQueryTools } from './session-query.ts';
 import { subAgentJobProducer } from './subagent-jobs.ts';
 import {
@@ -457,12 +458,29 @@ export class Agent {
           !automaticVerification.hasProjectWork &&
           !store.goal(input.sessionId),
       });
-      let concludeQueries = false;
+      const queryState: { phase: 'none' | 'act' | 'conclude' } = { phase: 'none' };
+      let noChangeActRounds = 0;
+      let releaseAct: (() => void) | undefined;
+      let refreshProgressTools: (() => void) | undefined;
+      const setQueryPhase = (next: typeof queryState.phase): void => {
+        if (next === queryState.phase) return;
+        releaseAct?.();
+        releaseAct = undefined;
+        queryState.phase = next;
+        if (next === 'act')
+          releaseAct = tools.restrict({ allow: tools.namesWithEffect('workspace-file') });
+        // Registry restrictions take effect immediately; the two cached catalogs need rebuilding too.
+        refreshProgressTools?.();
+      };
+      const resetQueryPhase = (): void => {
+        noChangeActRounds = 0;
+        setQueryPhase('none');
+      };
       const consume = (mode: InputMode): boolean => {
         const item = queue.take(mode);
         if (!item) return false;
         progressGuard.reset();
-        concludeQueries = false;
+        resetQueryPhase();
         /**
          * A message the user typed is the user's own input, whichever run is carrying it.
          *
@@ -584,6 +602,7 @@ export class Agent {
           planNotice: planPhaseNotice(input.planPhase === true, Boolean(this.options.question)),
           composeSystem,
         });
+        refreshProgressTools = () => surface.refreshTools();
         /**
          * The model tool-call batch, one per run.
          *
@@ -696,7 +715,7 @@ export class Agent {
            */
           if (surface.refreshPolicies()) {
             progressGuard.reset();
-            concludeQueries = false;
+            resetQueryPhase();
           }
           /**
            * A plan approved during the previous round takes effect here, before anything about this round is
@@ -712,7 +731,7 @@ export class Agent {
           const approved = planning?.takeApproval();
           if (approved) {
             progressGuard.reset();
-            concludeQueries = false;
+            resetQueryPhase();
             readOnly = false;
             automaticVerification.register(approved);
             surface.setPlanNotice(approvedPlanNotice(approved));
@@ -766,7 +785,7 @@ export class Agent {
            */
           surface.refreshLoaded();
           if (automaticVerification.takeToolsChanged()) surface.refreshTools();
-          const requestSpecs = concludeQueries ? [] : surface.specs;
+          const requestSpecs = queryState.phase === 'conclude' ? [] : surface.specs;
           const contextInput = buildContextInput({
             store,
             sessionId: input.sessionId,
@@ -894,7 +913,7 @@ export class Agent {
                 { source: 'automatic-verification' },
               );
               progressGuard.reset();
-              concludeQueries = false;
+              resetQueryPhase();
               steps.end(round, 'queued-input');
               continue;
             }
@@ -917,7 +936,7 @@ export class Agent {
             });
             if (verdict.next === 'repair') {
               progressGuard.reset();
-              concludeQueries = false;
+              resetQueryPhase();
               steps.end(round, 'queued-input');
               continue;
             }
@@ -926,7 +945,7 @@ export class Agent {
             steps.end(round, 'final');
             break;
           }
-          if (concludeQueries) {
+          if (queryState.phase === 'conclude') {
             store.resolvePending(
               input.sessionId,
               'Not executed: the run reached a conclusion-only round.',
@@ -968,13 +987,36 @@ export class Agent {
               progress = 'continue';
             }
           }
+          if (progress === 'conclude') {
+            setQueryPhase('conclude');
+          } else if (queryState.phase === 'act') {
+            const projectChanged = observations.some(
+              ({ result }) =>
+                result.change && projectChangedPaths(result.change, workspace).length > 0,
+            );
+            if (projectChanged) {
+              // Preserve failure/blocker counts across edits; only leave the edit-only phase.
+              resetQueryPhase();
+            } else if (++noChangeActRounds >= 2) {
+              setQueryPhase('conclude');
+              progress = 'conclude';
+            } else if (progress === 'investigation-conclude') {
+              // An exhausted investigation is still exhausted; it cannot buy a fresh pair of attempts.
+              progress = 'continue';
+            }
+          } else if (progress === 'investigation-conclude') {
+            setQueryPhase('act');
+            if (!surface.specs.length) {
+              setQueryPhase('conclude');
+              progress = 'conclude';
+            }
+          }
           if (progress !== 'continue') {
             injectContext(store, input.sessionId, emit, toolProgressNotice(progress), {
               source: 'tool-progress',
               round,
               action: progress,
             });
-            concludeQueries = progress === 'conclude' || progress === 'investigation-conclude';
           }
           // Submitting the plan ends the planning run: the next step is a human decision, and letting
           // the loop continue would only burn rounds on a phase that cannot change anything.
@@ -1007,6 +1049,7 @@ export class Agent {
         if (outcome.text !== undefined) text = outcome.text;
         ({ status, error, code, endpointFailure } = outcome);
       } finally {
+        resetQueryPhase();
         result = await finalizeRun({
           agent: this.options,
           store,

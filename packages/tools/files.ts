@@ -690,6 +690,7 @@ export function fileTools(
     },
     {
       name: 'edit_file',
+      effect: 'workspace-file',
       description:
         'Replace exactly one occurrence of old_text in an existing UTF-8 file, preserving other bytes. Read before editing. Rejects ambiguous matches and files over 1MB.',
       permission: 'write',
@@ -708,6 +709,7 @@ export function fileTools(
     },
     {
       name: 'write_file',
+      effect: 'workspace-file',
       description:
         'Create a new UTF-8 file in an existing directory. Refuses to overwrite an existing file; use edit_file for changes.',
       permission: 'write',
@@ -722,6 +724,7 @@ export function fileTools(
     },
     {
       name: 'apply_patch',
+      effect: 'workspace-file',
       description:
         'Apply one exact unified diff to an existing UTF-8 file. The file is rechecked after approval before mutation.',
       permission: 'write',
@@ -736,6 +739,7 @@ export function fileTools(
     },
     {
       name: 'delete_file',
+      effect: 'workspace-file',
       description:
         'Delete one existing UTF-8 file after approval and an exact post-approval byte check.',
       permission: 'write',
@@ -747,6 +751,7 @@ export function fileTools(
     },
     {
       name: 'move_file',
+      effect: 'workspace-file',
       description:
         'Move one existing UTF-8 file to a nonexistent path in an existing directory. Source and destination are rechecked after approval.',
       permission: 'write',
@@ -758,6 +763,7 @@ export function fileTools(
     },
     {
       name: 'batch_edit',
+      effect: 'workspace-file',
       description:
         'Apply 1 to 100 ordered exact replacements across UTF-8 files. Effects are sequential and journaled as one group, not filesystem-atomic.',
       permission: 'write',

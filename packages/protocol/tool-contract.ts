@@ -223,6 +223,8 @@ export interface Tool extends ToolSpec {
   cancellationGraceMs?: number;
   approvalDescription?: string;
   permission?: 'write' | 'command' | 'external';
+  /** Internal capability used to restrict investigation handoff to workspace file edits. */
+  effect?: 'workspace-file';
   /**
    * Whether *this* call may run while its siblings from the same assistant message are still running.
    *

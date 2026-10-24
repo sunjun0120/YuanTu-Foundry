@@ -25,15 +25,15 @@ SWE-bench 五十题基线（`benchmarks/swe-bench/runs/full-2026-10-24/`）中�
 
 ### 2.1 行为
 
-| 情况 | 现状 | 修复后 |
-| --- | --- | --- |
-| `investigation-conclude` 触发 | 下一请求 `tools=[]` | 下一请求进入**动手回合**：只提供并只允许执行带“工作区文件编辑”元数据的工具（见 2.2，预期为 `packages/tools/files.ts` 的 `edit_file`、`write_file`、`apply_patch`、`delete_file`、`move_file`、`batch_edit`）。不提供读取、搜索、命令、网络、浏览器、子代理工具 |
-| 动手回合中产生项目修改（`projectChangedPaths` 非空） | — | 显式清除动手状态和无修改计数，恢复完整工具目录，任务继续。**不调用完整的 `progressGuard.reset()`**：守卫在有项目修改时已自行重置调查计时（`tool-progress.ts:98-108`），但跨编辑累计的重复失败记录（`failures`、`blocked`）必须保留，否则“编辑—同样失败—再编辑”的循环会失去约束 |
-| 动手回合中模型只回答文本 | — | 与现状相同（纯问答仍为 `completed`），不改 `run-verdict.ts` |
-| 动手回合中调用了工具但没有产生项目修改（编辑失败、写到 `.scratch/`、调用了被禁止的工具） | — | 无修改计数加 1。计数**跨轮保留**：后续轮次再次收到 `investigation-conclude` 时不重新开始计数。计数达到 2 时，下一请求退回 `tools=[]` 的结论回合，即现有行为 |
-| 本轮工具目录里本来就没有写工具（只读运行、计划阶段、只读子代理） | `tools=[]` | 过滤结果为空，等同现状 |
-| 重复查询触发的 `conclude`（`observeQueries` 等） | `tools=[]` | **不变**。只改 `investigation-conclude` |
-| `investigation-warn` | 注入提示 | 不变 |
+| 情况                                                                                     | 现状                | 修复后                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `investigation-conclude` 触发                                                            | 下一请求 `tools=[]` | 下一请求进入**动手回合**：只提供并只允许执行带“工作区文件编辑”元数据的工具（见 2.2，预期为 `packages/tools/files.ts` 的 `edit_file`、`write_file`、`apply_patch`、`delete_file`、`move_file`、`batch_edit`）。不提供读取、搜索、命令、网络、浏览器、子代理工具                 |
+| 动手回合中产生项目修改（`projectChangedPaths` 非空）                                     | —                   | 显式清除动手状态和无修改计数，恢复完整工具目录，任务继续。**不调用完整的 `progressGuard.reset()`**：守卫在有项目修改时已自行重置调查计时（`tool-progress.ts:98-108`），但跨编辑累计的重复失败记录（`failures`、`blocked`）必须保留，否则“编辑—同样失败—再编辑”的循环会失去约束 |
+| 动手回合中模型只回答文本                                                                 | —                   | 与现状相同（纯问答仍为 `completed`），不改 `run-verdict.ts`                                                                                                                                                                                                                    |
+| 动手回合中调用了工具但没有产生项目修改（编辑失败、写到 `.scratch/`、调用了被禁止的工具） | —                   | 无修改计数加 1。计数**跨轮保留**：后续轮次再次收到 `investigation-conclude` 时不重新开始计数。计数达到 2 时，下一请求退回 `tools=[]` 的结论回合，即现有行为                                                                                                                    |
+| 本轮工具目录里本来就没有写工具（只读运行、计划阶段、只读子代理）                         | `tools=[]`          | 过滤结果为空，等同现状                                                                                                                                                                                                                                                         |
+| 重复查询触发的 `conclude`（`observeQueries` 等）                                         | `tools=[]`          | **不变**。只改 `investigation-conclude`                                                                                                                                                                                                                                        |
+| `investigation-warn`                                                                     | 注入提示            | 不变                                                                                                                                                                                                                                                                           |
 
 ### 2.2 实现要点
 
@@ -43,9 +43,10 @@ SWE-bench 五十题基线（`benchmarks/swe-bench/runs/full-2026-10-24/`）中�
   2. 处于 `'act'` 且本轮产生项目修改：回到 `'none'`，无修改计数清零。
   3. 处于 `'act'` 且本轮没有项目修改：计数加 1；达到 2 时进入 `'conclude'`，否则保持 `'act'`。本轮守卫再次返回 `investigation-conclude` 时不重置计数，也不重复注入提示。
   4. 处于 `'none'` 且守卫返回 `investigation-conclude`：进入 `'act'`。
-  5. 清零点：`consume()`（用户追加消息）、`repair` 回合、`automatic-verification` 返回 `continue` 时，状态回到 `'none'`，计数清零，与这些位置现有的 `concludeQueries = false` 一致。
+  5. 清零点：`consume()`（用户追加消息）、`repair` 回合、`automatic-verification` 返回 `continue`、`surface.refreshPolicies()` 检测到权限或执行策略变化（`agent.ts:697`）、`planning?.takeApproval()` 取得获批计划（`agent.ts:712`）时，状态回到 `'none'`，计数清零，并释放动手阶段的限制，与这些位置现有的 `concludeQueries = false` 一致。保留这些分支原有的 `progressGuard.reset()` 行为；不要与“成功编辑后不完整重置守卫”混淆。释放限制后按下面的目录刷新要求重建工具目录，仍遵守当前策略和计划阶段的权限。
 - **工具元数据。** 单靠 `permission: 'write'` 不够（`browser.ts`、`workspaces.ts` 也有写权限工具）。给工具定义加一个内部元数据字段，例如 `effect: 'workspace-file'`，只标在修改工作区文件的那几个工具上。**不要**在 core 里硬编码工具名列表。字段不进入发给模型的 spec。
-- **过滤同时落实到展示层和执行层。** 已验证：即使工具不在 `request.tools` 里，模型直接调用时仍可能执行（deferred 工具允许直接调用）。动手回合要用现有的 `registry.restrict({ allow })`（`packages/tools/registry.ts:298`），allow 列表取带上述元数据的工具名。`offers()` 同时决定可见与可执行，所以这一处限制就能让 `requestSpecs` 和执行链一致。离开动手回合时调用返回的 disposer 解除限制；异常、取消、运行结束的路径也必须解除（放进 `finally`），不能遗留到下一个运行或子代理的注册表副本。普通阶段保留 deferred 工具可直接调用的现有行为。
+- **过滤同时落实到展示层和执行层。** 已验证：即使工具不在 `request.tools` 里，模型直接调用时仍可能执行（deferred 工具允许直接调用）。动手回合要用现有的 `registry.restrict({ allow })`（`packages/tools/registry.ts:298`），allow 列表取带上述元数据的工具名。限制会立即影响 `offers()` 和执行链，但不会自动更新 `RunSurface` 已缓存的 `specs`、`catalog`。离开动手回合时调用返回的 disposer 解除限制；异常、取消、运行结束的路径也必须解除（放进 `finally`），不能遗留到下一个运行或子代理的注册表副本。普通阶段保留 deferred 工具可直接调用的现有行为。
+- **进入、退出动手阶段都刷新目录。** 进入 `'act'` 时先施加限制，再调用 `surface.refreshTools()`（`packages/core/run-surface.ts:98`）；退出时先调用 disposer，再调用 `surface.refreshTools()`，同步重建 `surface.specs` 和 `surface.catalog`。刷新必须在下一次计算 `requestSpecs`、构建上下文和发送模型请求之前完成，不能只依赖 `refreshLoaded()` 或自动验证工具变化触发的刷新。权限策略刷新、计划获批分支也要在释放限制后重建目录：这两个分支较早进行的重建可能仍受旧的动手限制影响。重建时保留现有 read-only、权限策略和 deferred 展示规则，不强制加载尚未加载的工具。退回 `'conclude'` 时虽然解除动手限制并刷新缓存，最终 `requestSpecs` 仍须为 `[]`，原有结论回合的执行阻断继续生效。异常、取消或运行结束时也要保证限制被释放，且不会留下供后续运行复用的受限目录。
 - **被禁止的调用。** 动手回合里调用被限制的工具（例如 `read_file`），应得到注册表现有的“hidden/restricted”拒绝结果，不能执行。这一轮算无修改动手回合。同一轮里混合了允许和禁止的调用时，允许的照常执行，禁止的被拒；本轮是否算“有修改”只看 `projectChangedPaths`。
 - **提示文本。** `toolProgressNotice('investigation-conclude')` 改成动手回合的语义，英文，大意如下：调查额度已用完，不能再读取或搜索；如果用户要求修改且已收集的证据足够，现在就用可用的文件编辑工具做出最小修改；否则直接用已收集的证据作答，说明不确定之处，不要声称未完成的工作已经完成。退回 `tools=[]` 的结论回合时，复用 `conclude` 的现有文本或保留原 `investigation-conclude` 文本。注意 i18n 门禁：内核文本保持英文。
 - **审批与沙箱。** 不改审批策略、`sandbox`、权限模式。动手回合的编辑走与平时完全相同的审批流程。
@@ -72,12 +73,14 @@ SWE-bench 五十题基线（`benchmarks/swe-bench/runs/full-2026-10-24/`）中�
 4. **`.scratch` 写入不算修改。** 动手回合里 `write_file` 成功写入 `.scratch/` 下的文件，断言计入无修改动手回合。
 5. **越权调用被拒。** 动手回合里假模型直接调用 `read_file`，断言没有执行，得到注册表的限制拒绝，计入无修改动手回合。
 6. **混合调用。** 同一轮里同时调用 `read_file` 和成功的 `edit_file`：前者被拒，后者生效，本轮算有修改，状态回到 `'none'`。
-7. **限制解除。** 动手回合结束（成功修改、退回结论、运行异常或取消）后，`registry.offers('read_file')` 恢复为 true，下一个运行不受影响。
+7. **限制解除和目录刷新。** 在原本允许读取的运行中，动手阶段的 `registry.offers('read_file')` 为 false，实际发送的 `request.tools` 和 `surface.catalog` 都不包含读取工具。成功修改后，断言下一请求的 `request.tools` 和 `surface.catalog` 恢复读取工具，不能只检查 `offers()`；退回结论时断言动手限制已释放，但实际请求仍为 `tools=[]`，模型继续调用工具仍被原有结论回合逻辑阻断。另覆盖运行异常、取消后的限制释放和后续运行目录恢复，避免只恢复执行权限却遗留受限缓存。
 8. **成功编辑后保留失败记录。** 构造“同一个调用、同样的失败输出”跨越一次动手回合的成功编辑反复出现，断言 `FAILURE_WARN` / `FAILURE_CONCLUDE` 计数没有被清掉，仍按原阈值触发。
 9. **用户追加消息清零。** 动手回合中排队一条 follow-up 消息，断言 `consume()` 后状态回到 `'none'`、计数清零、限制解除。
-10. **只读运行。** 只读或计划模式下到点后，下一请求 `tools=[]`，与现状一致。
-11. **普通 `conclude` 优先。** 相同参数重复读取触发 `conclude` 后，下一请求仍是 `tools=[]`，不经过动手回合。已处于动手回合时触发普通 `conclude`，同样直接进入结论回合。
-12. **既有用例。** `tests/core.test.ts:36`（scratch 探针）在动手回合里还会继续写 `.scratch/`，请求数会比现在多最多 2 次。把 `requests <= 21` 改成符合新上界的值，并在断言旁写明原因；其余预期不变。`:70` 的 guard 单测不变。
+10. **权限策略变化清零。** 覆盖 `surface.refreshPolicies()` 检测到变化的分支，断言状态回到 `'none'`、无修改计数清零、动手限制释放，并在释放后刷新目录。下一请求的工具声明和实际执行遵守新策略；新策略仍允许的读取工具应恢复，若新策略收紧为只读则不能恢复写入能力。
+11. **计划获批清零。** 覆盖 `planning?.takeApproval()` 取得获批计划的分支，断言状态回到 `'none'`、无修改计数清零、动手限制释放；计划获批后的下一请求和程序目录按获批后的权限重新构建，不得残留动手限制或审批前的只读目录。
+12. **只读运行。** 只读或计划模式下到点后，下一请求 `tools=[]`，与现状一致。
+13. **普通 `conclude` 优先。** 相同参数重复读取触发 `conclude` 后，下一请求仍是 `tools=[]`，不经过动手回合。已处于动手回合时触发普通 `conclude`，同样直接进入结论回合。
+14. **既有用例。** `tests/core.test.ts:36`（scratch 探针）在动手回合里还会继续写 `.scratch/`，请求数会比现在多最多 2 次。把 `requests <= 21` 改成符合新上界的值，并在断言旁写明原因；其余预期不变。`:70` 的 guard 单测不变。
 
 另外用你诊断时的离线复现思路（`offline-reproduction.json`）跑一次新代码：4 次不同的成功读取到点后，下一请求应提供写工具。
 

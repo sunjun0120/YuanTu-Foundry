@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -17,6 +17,8 @@ import { RunQueue } from '../packages/core/run-queue.ts';
 import { emptyStatistics, addStatistics, addUsage } from '../packages/protocol/statistics.ts';
 import { redactSecrets } from '../packages/platform/redact.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
+import { RunSurface } from '../packages/core/run-surface.ts';
+import { PermissionPolicy } from '../packages/core/permissions.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { storeFixture } from './temp-fixture.ts';
 
@@ -64,7 +66,8 @@ test('changing queries and scratch probes cannot extend investigation indefinite
   assert.equal(result.text, 'Conclusion from collected evidence');
   assert.equal(result.status, 'completed', result.error);
   assert.equal(result.completion, undefined);
-  assert.ok(requests <= 21, `${requests} requests`);
+  // Twenty investigation rounds, two edit-only attempts, then the conclusion.
+  assert.ok(requests <= 23, `${requests} requests`);
 });
 
 test('investigation wall time converges even when each query returns new evidence', () => {
@@ -107,6 +110,487 @@ async function fixture(t: test.TestContext, provider: Provider, extra = {}) {
   });
   return { root, store, session, agent, events, tools };
 }
+
+const fileEditors = [
+  'apply_patch',
+  'batch_edit',
+  'delete_file',
+  'edit_file',
+  'move_file',
+  'write_file',
+];
+const toolReply = (id: string, name: string, args: Record<string, unknown>): ModelResponse => ({
+  ...reply(),
+  finishReason: 'tool_calls',
+  toolCalls: [{ id, name, arguments: args }],
+});
+const readRound = (round: number) =>
+  toolReply(`read-${round}`, 'read_file', {
+    path: round === 1 ? 'target.txt' : `input-${round}.txt`,
+  });
+const editRound = (id: string, old_text = 'bad') =>
+  toolReply(id, 'edit_file', { path: 'target.txt', old_text, new_text: 'good' });
+
+/** Advance only model requests; Date mocks do not drive RunSteps.modelMs. */
+function investigationClock(t: test.TestContext): () => void {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  return () => {
+    now += 30_000;
+  };
+}
+async function investigationFiles(root: string) {
+  await Promise.all([
+    mkdir(path.join(root, '.scratch'), { recursive: true }),
+    writeFile(path.join(root, 'target.txt'), 'bad'),
+    ...Array.from({ length: 4 }, (_, i) =>
+      writeFile(path.join(root, `input-${i + 1}.txt`), `evidence ${i}`),
+    ),
+  ]);
+}
+function assertActTools(request: ModelRequest) {
+  assert.ok(
+    request.tools.some((tool) => tool.name === 'edit_file'),
+    'editing remains available at the cutoff',
+  );
+  assert.ok(
+    request.tools.every((tool) => fileEditors.includes(tool.name)),
+    'only file editors are offered',
+  );
+  assert.ok(
+    request.tools.every((tool) => !('effect' in tool)),
+    'internal effect metadata stays off the wire',
+  );
+}
+
+test('investigation cutoff offers editors, persists an edit and restores both catalogs', async (t) => {
+  const tick = investigationClock(t);
+  const catalogs: string[][] = [];
+  const refresh = RunSurface.prototype.refreshTools;
+  t.mock.method(RunSurface.prototype, 'refreshTools', function (this: RunSurface) {
+    refresh.call(this);
+    catalogs.push(this.catalog.map((tool) => tool.name));
+  });
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      const round = ++requests;
+      if (round <= 4) {
+        tick();
+        return readRound(round);
+      }
+      if (round === 5) {
+        assertActTools(request);
+        assert.equal(ctx.tools.offers('read_file'), false);
+        assert.ok(catalogs.at(-1)?.every((name) => fileEditors.includes(name)));
+        return editRound('act-edit');
+      }
+      assert.ok(
+        request.tools.some((tool) => tool.name === 'read_file'),
+        JSON.stringify(request.messages.filter((m) => m.role === 'tool').slice(-2)),
+      );
+      assert.ok(catalogs.at(-1)?.includes('read_file'));
+      return reply('Changed; verification unavailable');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({
+    sessionId: ctx.session.id,
+    prompt: 'Fix target.txt',
+    autoVerify: true,
+  });
+  assert.equal(result.status, 'needs_review', result.error);
+  assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'good');
+  assert.equal(ctx.tools.offers('read_file'), true);
+  assert.equal(requests, 7, 'one automatic verification reminder follows the first answer');
+});
+
+test('investigation cutoff still accepts a direct answer without project changes', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      if (++requests <= 4) {
+        tick();
+        return readRound(requests);
+      }
+      assertActTools(request);
+      return reply('Answer from collected evidence');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Explain the evidence' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, 'Answer from collected evidence');
+  assert.equal(requests, 5);
+  assert.equal(ctx.tools.offers('read_file'), true);
+});
+
+test('investigation cutoff capabilities identify exactly the six file editors', async (t) => {
+  const ctx = await fixture(t, {
+    async complete() {
+      return reply();
+    },
+  });
+  assert.deepEqual(ctx.tools.namesWithEffect('workspace-file').sort(), fileEditors);
+  assert.ok(ctx.tools.specs({ mode: 'native' }).every((tool) => !('effect' in tool)));
+});
+
+for (const attempt of ['failed-edit', 'scratch', 'forbidden-read', 'forbidden-program'] as const) {
+  test(`investigation cutoff bounds two no-change attempts: ${attempt}`, async (t) => {
+    const tick = investigationClock(t);
+    let requests = 0;
+    const ctx = await fixture(t, {
+      async complete(request) {
+        const round = ++requests;
+        if (round <= 4) {
+          tick();
+          return readRound(round);
+        }
+        if (round <= 6) {
+          assertActTools(request);
+          if (attempt === 'failed-edit') return editRound(`attempt-${round}`, 'absent');
+          if (attempt === 'scratch')
+            return toolReply(`attempt-${round}`, 'write_file', {
+              path: `.scratch/act-${round}.txt`,
+              content: 'probe',
+            });
+          if (attempt === 'forbidden-program')
+            return toolReply(`attempt-${round}`, 'run_code', {
+              code: "return await tools.read_file({path:'target.txt'});",
+            });
+          return toolReply(`attempt-${round}`, 'read_file', { path: 'target.txt' });
+        }
+        assert.equal(round, 7);
+        assert.deepEqual(request.tools, []);
+        assert.equal(
+          ctx.tools.offers('read_file'),
+          true,
+          'the act restriction is released even in conclusion',
+        );
+        return reply('Stopped without changes');
+      },
+    });
+    await investigationFiles(ctx.root);
+    const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(requests, 7);
+    assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'bad');
+    const results = ctx.store
+      .messages(ctx.session.id)
+      .filter((m) => m.role === 'tool' && m.toolCallId.startsWith('attempt-'));
+    assert.equal(results.length, 2);
+    for (const result of results) {
+      assert.ok(result.role === 'tool');
+      assert.equal(result.isError, attempt !== 'scratch', result.content);
+      if (attempt.startsWith('forbidden'))
+        assert.match(result.content, /excluded by a restriction/);
+    }
+    assert.equal(
+      ctx.events.filter(
+        (e) => e.type === 'context.injected' && e.data.action === 'investigation-conclude',
+      ).length,
+      1,
+    );
+    assert.equal(ctx.tools.offers('read_file'), true);
+  });
+}
+
+test('investigation cutoff refuses a mixed read but executes its sibling edit', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      if (++requests <= 4) {
+        tick();
+        return readRound(requests);
+      }
+      if (requests === 5) {
+        assertActTools(request);
+        const response = editRound('mixed-edit');
+        response.toolCalls.unshift({
+          id: 'mixed-read',
+          name: 'read_file',
+          arguments: { path: 'target.txt' },
+        });
+        return response;
+      }
+      assert.ok(request.tools.some((tool) => tool.name === 'read_file'));
+      const denied = request.messages.find(
+        (m) => m.role === 'tool' && m.toolCallId === 'mixed-read',
+      );
+      assert.ok(denied?.role === 'tool' && denied.isError);
+      assert.match(denied.content, /excluded by a restriction/);
+      return reply('Edited');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'good');
+});
+
+for (const ending of ['exception', 'cancel', 'conclusion-call'] as const) {
+  test(`investigation cutoff releases restrictions after ${ending} and a later run can read`, async (t) => {
+    const tick = investigationClock(t);
+    const controller = new AbortController();
+    let requests = 0;
+    let laterRun = false;
+    const ctx = await fixture(t, {
+      async complete(request) {
+        if (laterRun) {
+          assert.ok(request.tools.some((tool) => tool.name === 'read_file'));
+          return reply('Later answer');
+        }
+        if (++requests <= 4) {
+          tick();
+          return readRound(requests);
+        }
+        if (ending === 'conclusion-call') {
+          if (requests <= 6) {
+            assertActTools(request);
+            return editRound(`failed-${requests}`, 'absent');
+          }
+          assert.deepEqual(request.tools, []);
+          return readRound(1);
+        }
+        assertActTools(request);
+        if (ending === 'cancel') {
+          controller.abort(new Error('Cancelled by test'));
+          request.signal.throwIfAborted();
+        }
+        throw new Error('Provider failure in act phase');
+      },
+    });
+    await investigationFiles(ctx.root);
+    const result = await ctx.agent.run({
+      sessionId: ctx.session.id,
+      prompt: 'Fix target.txt',
+      signal: controller.signal,
+    });
+    assert.equal(
+      result.status,
+      ending === 'cancel' ? 'cancelled' : ending === 'conclusion-call' ? 'needs_review' : 'failed',
+    );
+    if (ending === 'exception') assert.match(result.error ?? '', /Provider failure in act phase/);
+    assert.equal(ctx.tools.offers('read_file'), true);
+    laterRun = true;
+    assert.equal(
+      (await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Explain' })).status,
+      'completed',
+    );
+  });
+}
+
+test('investigation cutoff preserves identical failure counts across a successful act edit', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      const round = ++requests;
+      if (round <= 4) tick();
+      if (round <= 3 || round === 6 || round === 7)
+        return toolReply(`failure-${round}`, 'missing_tool', {});
+      if (round === 4) return readRound(1);
+      if (round === 5) {
+        assertActTools(request);
+        return editRound('successful-act');
+      }
+      assert.equal(round, 8);
+      assert.deepEqual(request.tools, []);
+      return reply('Repeated failure stopped');
+    },
+  });
+  await investigationFiles(ctx.root);
+  assert.equal(
+    (await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' })).status,
+    'completed',
+  );
+  assert.equal(requests, 8);
+  assert.ok(
+    ctx.events.some((e) => e.type === 'context.injected' && e.data.action === 'repeat-failure'),
+  );
+  assert.ok(ctx.events.some((e) => e.type === 'context.injected' && e.data.action === 'conclude'));
+});
+
+test('investigation cutoff consumes follow-up input and restores tools and a fresh allowance', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      if (++requests <= 4) {
+        tick();
+        return readRound(requests);
+      }
+      if (requests === 5) {
+        assertActTools(request);
+        return editRound('failed-act', 'absent');
+      }
+      if (requests === 6) {
+        assertActTools(request);
+        ctx.agent.enqueue(
+          ctx.session.id,
+          { prompt: 'Explain the existing evidence instead' },
+          'follow-up',
+        );
+        return reply('First answer');
+      }
+      assert.ok(request.tools.some((tool) => tool.name === 'read_file'));
+      if (requests === 7) return readRound(1);
+      assert.equal(requests, 8);
+      return reply('Follow-up answer');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+  assert.equal(result.text, 'Follow-up answer');
+  assert.equal(result.status, 'completed', result.error);
+});
+
+for (const tighten of [false, true]) {
+  test(`investigation cutoff clears act restrictions after a policy change (read-only=${tighten})`, async (t) => {
+    const tick = investigationClock(t);
+    let policy = new PermissionPolicy({ version: 1, rules: [] });
+    let requests = 0;
+    const ctx = await fixture(
+      t,
+      {
+        async complete(request) {
+          if (++requests <= 4) {
+            tick();
+            return readRound(requests);
+          }
+          if (requests === 5) {
+            assertActTools(request);
+            policy = new PermissionPolicy({
+              version: 1,
+              rules: tighten ? [{ effect: 'deny', kind: 'write' }] : [],
+            });
+            return editRound('failed-before-policy', 'absent');
+          }
+          assert.ok(request.tools.some((tool) => tool.name === 'read_file'));
+          assert.equal(
+            request.tools.some((tool) => tool.name === 'edit_file'),
+            !tighten,
+          );
+          if (requests === 6) return tighten ? editRound('denied-by-policy') : readRound(1);
+          assert.equal(requests, 7);
+          if (tighten) {
+            const denied = request.messages.find(
+              (m) => m.role === 'tool' && m.toolCallId === 'denied-by-policy',
+            );
+            assert.ok(denied?.role === 'tool' && denied.isError);
+            assert.match(denied.content, /denied|refused/i);
+          }
+          return reply('Policy refreshed');
+        },
+      },
+      {
+        permissionPolicy: () => policy,
+        approve: async (approval: Parameters<Approver>[0]) => policy.decide(approval) !== 'deny',
+      },
+    );
+    await investigationFiles(ctx.root);
+    const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'bad');
+  });
+}
+
+test('investigation cutoff at the plan approval boundary restores the approved catalog', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(
+    t,
+    {
+      async complete(request) {
+        if (++requests <= 3) {
+          tick();
+          return readRound(requests);
+        }
+        if (requests === 4) {
+          tick();
+          return toolReply('approve-plan', 'exit_plan_mode', {
+            title: 'Fix target',
+            summary: 'Make a minimal edit',
+            steps: ['Edit target.txt'],
+          });
+        }
+        assert.ok(
+          request.tools.some((tool) => tool.name === 'read_file'),
+          JSON.stringify(request.messages.filter((m) => m.role === 'tool').slice(-2)),
+        );
+        assert.ok(request.tools.some((tool) => tool.name === 'edit_file'));
+        return reply('Approved catalog restored');
+      },
+    },
+    {
+      question: async () => ({
+        answered: true,
+        answers: [{ id: 'plan', selected: ['Approve and execute'] }],
+      }),
+    },
+  );
+  await investigationFiles(ctx.root);
+  const plan = ctx.store.createPlan(ctx.session.id);
+  const result = await ctx.agent.run({
+    sessionId: ctx.session.id,
+    prompt: 'Plan a fix',
+    planPhase: true,
+    planId: plan.id,
+  });
+  assert.notEqual(result.status, 'failed', result.error);
+  assert.equal(requests, 5);
+  assert.equal(ctx.tools.offers('read_file'), true);
+});
+
+test('investigation cutoff leaves read-only requests with no editors', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      if (++requests <= 4) {
+        tick();
+        return readRound(requests);
+      }
+      assert.deepEqual(request.tools, []);
+      return reply('Read-only conclusion');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({
+    sessionId: ctx.session.id,
+    prompt: 'Explain',
+    readOnly: true,
+  });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(requests, 5);
+});
+
+test('investigation cutoff yields to the ordinary failure conclusion during the first act attempt', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      const round = ++requests;
+      if (round <= 4) {
+        tick();
+        return editRound(`failure-${round}`, 'absent');
+      }
+      if (round === 5) {
+        assertActTools(request);
+        return editRound('last-failure', 'absent');
+      }
+      assert.equal(round, 6, 'the fifth identical failure ends act before its second attempt');
+      assert.deepEqual(request.tools, []);
+      return reply('Failure limit reached');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(requests, 6);
+});
 
 test('ordinary questions carry direct-answer and scoped-project lookup rules', async (t) => {
   let requests = 0;
