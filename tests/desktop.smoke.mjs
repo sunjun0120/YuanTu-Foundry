@@ -21,7 +21,188 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
 
 test(
-  'desktop verifies a normal message and keeps passed checks concise across reloads',
+  'desktop automatic verification folds reasons and evidence into a plain status line',
+  { timeout: 60000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-verification-fold-'));
+    await mkdir(path.join(root, '.yuantu'));
+    const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+    const cases = [
+      ['verified', 'verified', '检查通过'],
+      ['needs_review', 'environment-error', '未能验证（环境限制）'],
+      ['unverified', 'missing-verification', '尚未验证'],
+      ['limited', 'repair-limit', '达到修复限制'],
+    ];
+    const sessions = cases.map(([state, reason, label]) => {
+      const session = store.create(root);
+      const runId = store.beginRun(session.id);
+      store.append(session.id, { role: 'assistant', content: reason, toolCalls: [] });
+      const evidence = {
+        passed: state === 'verified',
+        durationMs: 1,
+        checks:
+          reason === 'missing-verification'
+            ? []
+            : [
+                {
+                  id: 'auto-1',
+                  kind: 'command',
+                  passed: state === 'verified',
+                  durationMs: 1,
+                  detail: reason === 'environment-error' ? 'spawn EPERM' : 'Check output',
+                  ...(reason === 'environment-error'
+                    ? { failureReason: 'environment-error' }
+                    : {
+                        command: {
+                          exitCode: state === 'verified' ? 0 : 1,
+                          signal: null,
+                          timedOut: false,
+                          stdout: 'RECORDED_CHECK_OUTPUT',
+                          stderr: '',
+                          outputTruncated: false,
+                        },
+                      }),
+                },
+              ],
+      };
+      store.recordEvent(session.id, 'completion.updated', {
+        contractId: session.id,
+        runId,
+        source: 'automatic',
+        definitionHash: 'fixture',
+        definition: {
+          version: 1,
+          objective: 'Verify the game',
+          constraints: [],
+          steps: [],
+          inputs: [],
+          acceptance: [
+            {
+              description: 'Run the game check',
+              met: false,
+              check: { id: 'auto-1', kind: 'command', command: 'node', args: ['game-check.mjs'] },
+            },
+          ],
+        },
+        summary: {
+          version: 1,
+          definitionHash: 'fixture',
+          state,
+          reason,
+          verificationRound: 1,
+          repairRounds: state === 'limited' ? 3 : 0,
+          repeatedFailures: 0,
+          failedCheckIds:
+            state === 'verified' || reason === 'missing-verification' ? [] : ['auto-1'],
+          unfinishedStepIds: [],
+        },
+        policy: { maxRepairRounds: 3, maxRepeatedFailures: 2, repairTimeoutMs: 900000 },
+        steps: [],
+        affectedPaths: [],
+        evidence,
+      });
+      store.finishRun({
+        sessionId: session.id,
+        runId,
+        status: state === 'verified' ? 'completed' : 'needs_review',
+        text: reason,
+        usage: { inputTokens: 0, outputTokens: 0 },
+      });
+      assert.equal(store.completionCurrent(session.id)?.summary.state, state);
+      return { id: session.id, label, evidence, state, reason };
+    });
+    store.close();
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_SANDBOX: 'host',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let app;
+    t.after(async () => {
+      await app?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(10000);
+    await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+    for (const fixture of sessions) {
+      await page.locator(`[data-session-id="${fixture.id}"]`).first().click();
+      await waitForPage(
+        page,
+        async (id) => {
+          const session = (await window.yuantu.invoke({ type: 'snapshot' })).state.session;
+          return session.sessionId === id && !session.loading;
+        },
+        fixture.id,
+      );
+      const completion = await page.evaluate(
+        async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
+      );
+      assert.equal(completion.summary.state, fixture.state);
+      assert.deepEqual(completion.evidence, fixture.evidence);
+      if (fixture.state === 'verified') {
+        assert.equal(await page.locator('.completion-notice').count(), 0);
+        continue;
+      }
+      const notice = page.locator('details.completion-inline');
+      await notice.waitFor();
+      assert.equal(
+        await notice.locator(':scope > summary').innerText(),
+        `自动验证 · ${fixture.label}`,
+      );
+      assert.equal(await notice.getAttribute('open'), null);
+      assert.equal(await notice.locator('.completion-details').isVisible(), false);
+      for (const colorScheme of ['dark', 'light']) {
+        await page.emulateMedia({ colorScheme });
+        assert.deepEqual(
+          await notice.evaluate((el) => {
+            const style = getComputedStyle(el);
+            return [style.backgroundColor, style.borderLeftWidth, style.padding];
+          }),
+          ['rgba(0, 0, 0, 0)', '0px', '0px'],
+        );
+        assert.deepEqual(
+          await notice.locator(':scope > summary').evaluate((el) => {
+            const style = getComputedStyle(el);
+            return [style.backgroundColor, style.borderTopWidth, style.padding];
+          }),
+          ['rgba(0, 0, 0, 0)', '0px', '0px'],
+        );
+      }
+      await notice.locator(':scope > summary').focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await notice.locator('.completion-details').isVisible(), true);
+      if (fixture.reason === 'environment-error') {
+        assert.match(await notice.innerText(), /未执行/);
+        assert.match(await notice.innerText(), /spawn EPERM/);
+        assert.doesNotMatch(await notice.innerText(), /不是代码失败|未通过的检查|未通过 ·/);
+      } else if (fixture.evidence.checks.length) {
+        assert.match(await notice.innerText(), /node game-check.mjs/);
+        assert.match(await notice.innerText(), /RECORDED_CHECK_OUTPUT/);
+      }
+      await page.locator('#open-settings').click();
+      await page.locator('#settings-back').click();
+      assert.equal(await notice.getAttribute('open'), '');
+      await notice.locator(':scope > summary').focus();
+      await page.keyboard.press('Space');
+      assert.equal(await notice.locator('.completion-details').isVisible(), false);
+      await page.screenshot({ path: artifactPath(`verification-inline-${fixture.state}.png`) });
+    }
+  },
+);
+
+test(
+  'desktop hides successful automatic verification and preserves evidence across reloads',
   { timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-auto-verification-ui-'));
@@ -89,11 +270,13 @@ test(
     );
     await page.locator('#prompt').fill('Verify the output file');
     await page.locator('#send').click();
-    await page.waitForFunction(() =>
-      document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
+    await waitForPage(
+      page,
+      async () =>
+        (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion?.summary
+          .state === 'verified',
     );
-    assert.equal(await page.locator('.completion-notice').innerText(), '自动验证 · 检查通过');
-    assert.equal(await page.locator('.completion-notice details, .completion-check').count(), 0);
+    assert.equal(await page.locator('.completion-notice, .completion-check').count(), 0);
     const completion = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
     );
@@ -102,11 +285,13 @@ test(
     assert.match(completion.evidence.checks[0].command.stdout, /OUTPUT_CHECK_PASSED/);
     await page.screenshot({ path: artifactPath('automatic-verification.png'), fullPage: true });
     await page.reload();
-    await page.waitForFunction(() =>
-      document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
+    await waitForPage(
+      page,
+      async () =>
+        (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion?.summary
+          .state === 'verified',
     );
-    assert.equal(await page.locator('.completion-notice').innerText(), '自动验证 · 检查通过');
-    assert.equal(await page.locator('.completion-notice details, .completion-check').count(), 0);
+    assert.equal(await page.locator('.completion-notice, .completion-check').count(), 0);
     const restored = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
     );

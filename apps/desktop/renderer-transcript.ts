@@ -332,14 +332,9 @@ export function setupTranscript(options: {
     if (!completion) return null;
     const summary = completion.summary;
     const automatic = completion.source === 'automatic';
-    if (automatic && summary.state === 'verified')
-      return node(
-        'p',
-        `${t('ui.automaticVerificationTitle')} · ${t('ui.verificationChecksPassed')}`,
-        'completion-notice completion-verified completion-summary',
-      );
-    // A check the environment could not run is not a failed check: the card says "not verified" in amber and
-    // names the limit, instead of "needs review" over a repair counter for code that was never at fault.
+    // Successful automatic checks keep their evidence in session state without adding transcript UI.
+    if (automatic && summary.state === 'verified') return null;
+    // An environment limit leaves verification unknown; it cannot establish whether the code is correct.
     const environmentLimited =
       summary.state === 'needs_review' &&
       summary.reason.split(':')[0]!.trim() === 'environment-error';
@@ -351,18 +346,15 @@ export function setupTranscript(options: {
     const element = node(
       'div',
       '',
-      `completion-notice completion-${environmentLimited ? 'unverified' : summary.state}`,
+      automatic
+        ? 'completion-details'
+        : `completion-notice completion-${environmentLimited ? 'unverified' : summary.state}`,
     );
-    if (automatic) element.setAttribute('role', 'status');
     const stateKey = environmentLimited
       ? 'ui.completionState.environment'
       : `ui.completionState.${summary.state}`;
-    element.append(
-      node(
-        'strong',
-        `${t(completion.source === 'automatic' ? 'ui.automaticVerificationTitle' : 'ui.completionTitle')} · ${t(stateKey)}`,
-      ),
-    );
+    const title = `${t(automatic ? 'ui.automaticVerificationTitle' : 'ui.completionTitle')} · ${t(stateKey)}`;
+    if (!automatic) element.append(node('strong', title));
     // Why it is waiting, for the two states that wait on a person. Known reasons get their own sentence; any
     // other one says only that a person has to look — the reason code itself is the runtime's bookkeeping.
     if (
@@ -407,7 +399,7 @@ export function setupTranscript(options: {
       element.append(
         node('p', t('ui.completionUnfinished', { steps: summary.unfinishedStepIds.join(', ') })),
       );
-    if (summary.failedCheckIds.length) {
+    if (!automatic && summary.failedCheckIds.length) {
       const descriptions = summary.failedCheckIds.map(
         (id) =>
           completion.definition.acceptance.find((item) => item.check?.id === id)?.description ?? id,
@@ -428,9 +420,7 @@ export function setupTranscript(options: {
           }),
         ),
       );
-    // Automatic checks keep their evidence in session state; the transcript only shows the verdict and blockers.
-    // Explicit acceptance contracts retain their existing evidence display.
-    for (const check of automatic ? [] : (completion.evidence?.checks ?? [])) {
+    for (const check of completion.evidence?.checks ?? []) {
       const criterion = completion.definition.acceptance.find(
         (item) => item.check?.id === check.id,
       );
@@ -439,19 +429,28 @@ export function setupTranscript(options: {
         spec?.kind === 'command' ? [spec.command, ...(spec.args ?? [])].join(' ') : undefined;
       const shown = command && command.length > 160 ? `${command.slice(0, 157)}…` : command;
       const description = criterion?.description ?? check.id;
+      const notRun =
+        check.kind === 'command' &&
+        !check.command &&
+        (check.failureReason === 'environment-error' ||
+          check.failureReason === 'permission-denied');
+      const resultKey = check.passed
+        ? 'ui.verificationCheckPassed'
+        : notRun
+          ? 'ui.verificationCheckNotRun'
+          : 'ui.verificationCheckFailed';
       const line = node('p', '', `completion-check ${check.passed ? 'passed' : 'failed'}`);
-      line.append(
-        node(
-          'strong',
-          t(check.passed ? 'ui.verificationCheckPassed' : 'ui.verificationCheckFailed'),
-        ),
-        ' ',
-        node('span', description),
-      );
+      line.append(node('strong', t(resultKey)), ' ', node('span', description));
       if (shown)
         line.append(
           ' · ',
-          node('span', t('ui.verificationCommand', { command: shown }), 'completion-command'),
+          node(
+            'span',
+            t(notRun ? 'ui.verificationPlannedCommand' : 'ui.verificationCommand', {
+              command: shown,
+            }),
+            'completion-command',
+          ),
         );
       // The check description naming `npm test` while the command is a directly-run file is the substitution
       // this round produced; naming it is more honest than letting a green tick speak for a command nobody ran.
@@ -462,6 +461,19 @@ export function setupTranscript(options: {
       if (substitute)
         line.append(' ', node('span', t('ui.verificationSubstitute'), 'completion-substitute'));
       element.append(line);
+      if (automatic) {
+        element.append(node('p', check.detail));
+        if (check.command) {
+          element.append(
+            node(
+              'p',
+              t('ui.verificationExitCode', { code: String(check.command.exitCode ?? '—') }),
+            ),
+          );
+          const output = [check.command.stdout, check.command.stderr].filter(Boolean).join('\n');
+          if (output) element.append(node('pre', output));
+        }
+      }
     }
     if (!automatic && completion.evidence?.checks.length) {
       const details = node('details', '', 'completion-evidence');
@@ -494,6 +506,21 @@ export function setupTranscript(options: {
       }
       element.append(details);
     }
+    if (automatic) {
+      const details = node(
+        'details',
+        '',
+        `completion-notice completion-summary completion-inline completion-${environmentLimited ? 'unverified' : summary.state}`,
+      );
+      const key = `${completion.sessionId}:${completion.contractId}:${completion.latestRunId}:${locale()}`;
+      const previous = required('messages').querySelector<HTMLDetailsElement>('.completion-inline');
+      details.dataset.completionKey = key;
+      details.open = previous?.dataset.completionKey === key && previous.open;
+      const label = node('summary');
+      label.append(node('span', title, 'completion-inline-status'));
+      details.append(label, element);
+      return details;
+    }
     return element;
   }
   /** The "stopped here" line, with the one action that continues from it. */
@@ -514,6 +541,7 @@ export function setupTranscript(options: {
       last?.classList.contains('turn-changes') || last?.classList.contains('turn-changes-group')
         ? views.pop()
         : undefined;
+    const completion = completionNotice();
     reconcileChildren(required('messages'), [
       ...views,
       /**
@@ -523,7 +551,7 @@ export function setupTranscript(options: {
        */
       ...(runPaused ? [pausedNotice()] : []),
       // Keep the completion verdict with the final response, before that turn's file summary.
-      ...(completionNotice() ? [completionNotice()!] : []),
+      ...(completion ? [completion] : []),
       ...(footer ? [footer] : []),
     ]);
     restoreScroll();

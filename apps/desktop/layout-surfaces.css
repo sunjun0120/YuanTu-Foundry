@@ -83,6 +83,82 @@
   :is(.settings-feedback[data-error='true'], .settings-feedback.error, #mcp-delete) {
   color: #cb756e;
 }
+
+/* Deliverables share the workspace palette, including when the theme follows the system. */
+#chat-page .deliverables-panel {
+  background: var(--raised);
+  border-color: var(--line);
+  color: var(--ink);
+}
+#chat-page .deliverables-panel-header h2,
+#chat-page .deliverables .deliverable {
+  color: var(--ink);
+}
+#chat-page .deliverables .deliverable-open {
+  color: var(--accent);
+}
+#chat-page .deliverables .deliverable-action,
+#chat-page .deliverables .deliverable-description {
+  color: var(--muted);
+}
+#chat-page .deliverables :is(.deliverable-open, .deliverable-action):is(:hover, :focus-visible) {
+  color: var(--ink);
+}
+#chat-page .deliverables :is(.deliverable-open, .deliverable-action):focus-visible {
+  outline-color: var(--accent);
+}
+
+/* Automatic verification is a quiet line; its evidence stays available without a card surface. */
+#chat-page .completion-inline {
+  margin: 8px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+#chat-page .completion-inline > summary {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#chat-page .completion-inline > summary:hover,
+#chat-page .completion-inline[open] > summary {
+  color: var(--ink);
+}
+.completion-inline > summary:focus-visible {
+  outline-color: var(--accent);
+}
+.completion-inline .completion-details {
+  margin-top: 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.completion-inline .completion-details p {
+  margin: 4px 0;
+}
+.completion-inline .completion-details strong {
+  color: var(--ink);
+}
+.completion-inline .completion-command {
+  color: var(--muted);
+}
+.completion-inline .completion-details pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
 /*
  * Every setting is one full-width row: the title and its note on the left, the control on the right, a rule
  * between rows. The title is the label's bare text node, which the grid places in the first free cell.
