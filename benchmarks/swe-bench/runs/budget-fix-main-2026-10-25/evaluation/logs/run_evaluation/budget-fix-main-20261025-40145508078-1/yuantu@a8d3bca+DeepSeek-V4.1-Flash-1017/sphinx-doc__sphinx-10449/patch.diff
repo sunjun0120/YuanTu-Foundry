@@ -1,0 +1,71 @@
+diff --git a/CHANGES b/CHANGES
+index bc32362ae..c4b1ae495 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -16,6 +16,9 @@ Features added
+ Bugs fixed
+ ----------
+ 
++* #9575: autodoc: ``autodoc_typehints = "description"`` no longer emits the
++  return type of ``__init__()`` as the return type of a class.
++
+ Testing
+ --------
+ 
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+index 06768168e..491b9dc39 100644
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -51,7 +51,15 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
+         return
+ 
+     annotations = app.env.temp_data.get('annotations', {})
+-    if annotations.get(fullname, {}):
++    contents = annotations.get(fullname, {})
++    if objtype in ('class', 'exception'):
++        # A class (or an exception) never returns a value, so the return
++        # annotation recorded for its ``__init__()`` (or ``__new__()``) must
++        # not be rendered as the return type of the class itself.
++        contents = {name: value for name, value in contents.items()
++                    if name != 'return'}
++
++    if contents:
+         field_lists = [n for n in contentnode if isinstance(n, nodes.field_list)]
+         if field_lists == []:
+             field_list = insert_field_list(contentnode)
+@@ -59,14 +67,14 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
+ 
+         for field_list in field_lists:
+             if app.config.autodoc_typehints_description_target == "all":
+-                modify_field_list(field_list, annotations[fullname])
++                modify_field_list(field_list, contents)
+             elif app.config.autodoc_typehints_description_target == "documented_params":
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=True
++                    field_list, contents, force_rtype=True
+                 )
+             else:
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=False
++                    field_list, contents, force_rtype=False
+                 )
+ 
+ 
+@@ -126,7 +134,7 @@ def modify_field_list(node: nodes.field_list, annotations: Dict[str, str]) -> No
+     if 'return' in annotations and 'return' not in arguments:
+         field = nodes.field()
+         field += nodes.field_name('', 'rtype')
+-        field += nodes.field_body('', nodes.paragraph('', annotation))
++        field += nodes.field_body('', nodes.paragraph('', annotations['return']))
+         node += field
+ 
+ 
+@@ -169,7 +177,7 @@ def augment_descriptions_with_types(
+             node += field
+ 
+     # Add 'rtype' if 'return' is present and 'rtype' isn't.
+-    if 'return' in annotations:
++    if 'return' in annotations and not suppress_rtype:
+         rtype = annotations['return']
+         if 'return' not in has_type and ('return' in has_description or
+                                          (force_rtype and rtype != "None")):

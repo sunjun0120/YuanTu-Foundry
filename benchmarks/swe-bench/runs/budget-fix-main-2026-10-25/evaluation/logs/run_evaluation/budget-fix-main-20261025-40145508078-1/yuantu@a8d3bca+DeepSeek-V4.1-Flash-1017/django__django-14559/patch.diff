@@ -1,0 +1,52 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index 387deca527..9395d51499 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -541,7 +541,7 @@ class QuerySet:
+         if any(f.primary_key for f in fields):
+             raise ValueError('bulk_update() cannot be used with primary key fields.')
+         if not objs:
+-            return
++            return 0
+         # PK is used twice in the resulting update query, once in the filter
+         # and once in the WHEN. Each field will also have one CAST.
+         max_batch_size = connections[self.db].ops.bulk_batch_size(['pk', 'pk'] + fields, objs)
+@@ -564,8 +564,11 @@ class QuerySet:
+                 update_kwargs[field.attname] = case_statement
+             updates.append(([obj.pk for obj in batch_objs], update_kwargs))
+         with transaction.atomic(using=self.db, savepoint=False):
+-            for pks, update_kwargs in updates:
++            rows_updated = sum(
+                 self.filter(pk__in=pks).update(**update_kwargs)
++                for pks, update_kwargs in updates
++            )
++        return rows_updated
+     bulk_update.alters_data = True
+ 
+     def get_or_create(self, defaults=None, **kwargs):
+diff --git a/docs/ref/models/querysets.txt b/docs/ref/models/querysets.txt
+index 5dc7a6b5bc..d2f589829b 100644
+--- a/docs/ref/models/querysets.txt
++++ b/docs/ref/models/querysets.txt
+@@ -2251,6 +2251,8 @@ The ``batch_size`` parameter controls how many objects are saved in a single
+ query. The default is to update all objects in one batch, except for SQLite
+ and Oracle which have restrictions on the number of variables used in a query.
+ 
++``bulk_update()`` returns the number of objects updated.
++
+ ``count()``
+ ~~~~~~~~~~~
+ 
+diff --git a/docs/releases/4.0.txt b/docs/releases/4.0.txt
+index 9b57a524aa..a9b29d7ce4 100644
+--- a/docs/releases/4.0.txt
++++ b/docs/releases/4.0.txt
+@@ -263,6 +263,8 @@ Models
+ * :class:`~django.db.models.DurationField` now supports multiplying and
+   dividing by scalar values on SQLite.
+ 
++* :meth:`.QuerySet.bulk_update` now returns the number of objects updated.
++
+ Requests and Responses
+ ~~~~~~~~~~~~~~~~~~~~~~
+ 

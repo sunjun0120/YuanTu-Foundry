@@ -1,0 +1,66 @@
+2026-10-25 00:36:14,728 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:36:30,533 - INFO - Creating container for pytest-dev__pytest-5809...
+2026-10-25 00:36:36,362 - INFO - Container for pytest-dev__pytest-5809 created: f3e7f3770fa422753250b61557e445b90eabe66fdd8273742edccf99d6e856b2
+2026-10-25 00:36:36,450 - INFO - Container for pytest-dev__pytest-5809 started: f3e7f3770fa422753250b61557e445b90eabe66fdd8273742edccf99d6e856b2
+2026-10-25 00:36:36,451 - INFO - Intermediate patch for pytest-dev__pytest-5809 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/pytest-dev__pytest-5809/patch.diff, now applying to container...
+2026-10-25 00:36:36,516 - INFO - >>>>> Applied Patch:
+Checking patch changelog/5809.bugfix.rst...
+Checking patch src/_pytest/pastebin.py...
+Checking patch testing/test_pastebin.py...
+Applied patch changelog/5809.bugfix.rst cleanly.
+Applied patch src/_pytest/pastebin.py cleanly.
+Applied patch testing/test_pastebin.py cleanly.
+
+2026-10-25 00:36:36,586 - INFO - Git diff before:
+diff --git a/src/_pytest/pastebin.py b/src/_pytest/pastebin.py
+index 41576a615..79b0d9d40 100644
+--- a/src/_pytest/pastebin.py
++++ b/src/_pytest/pastebin.py
+@@ -79,7 +79,7 @@ def create_new_paste(contents):
+ 
+     params = {
+         "code": contents,
+-        "lexer": "python3" if sys.version_info[0] >= 3 else "python",
++        "lexer": "text",
+         "expiry": "1week",
+     }
+     url = "https://bpaste.net"
+diff --git a/testing/test_pastebin.py b/testing/test_pastebin.py
+index bac8f9802..aac0b651e 100644
+--- a/testing/test_pastebin.py
++++ b/testing/test_pastebin.py
+@@ -126,8 +126,7 @@ class TestPaste(object):
+         assert len(mocked_urlopen) == 1
+         url, data = mocked_urlopen[0]
+         assert type(data) is bytes
+-        lexer = "python3" if sys.version_info[0] >= 3 else "python"
+         assert url == "https://bpaste.net"
+-        assert "lexer=%s" % lexer in data.decode()
++        assert "lexer=text" in data.decode()
+         assert "code=full-paste-contents" in data.decode()
+         assert "expiry=1week" in data.decode()
+2026-10-25 00:36:36,586 - INFO - Eval script for pytest-dev__pytest-5809 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/pytest-dev__pytest-5809/eval.sh; copying to container...
+2026-10-25 00:36:41,116 - INFO - Test runtime: 4.49 seconds
+2026-10-25 00:36:41,116 - INFO - Test output for pytest-dev__pytest-5809 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/pytest-dev__pytest-5809/test_output.txt
+2026-10-25 00:36:41,149 - INFO - Git diff after:
+diff --git a/src/_pytest/pastebin.py b/src/_pytest/pastebin.py
+index 41576a615..79b0d9d40 100644
+--- a/src/_pytest/pastebin.py
++++ b/src/_pytest/pastebin.py
+@@ -79,7 +79,7 @@ def create_new_paste(contents):
+ 
+     params = {
+         "code": contents,
+-        "lexer": "python3" if sys.version_info[0] >= 3 else "python",
++        "lexer": "text",
+         "expiry": "1week",
+     }
+     url = "https://bpaste.net"
+2026-10-25 00:36:41,149 - INFO - Git diff changed after running eval script
+2026-10-25 00:36:41,149 - INFO - Grading answer for pytest-dev__pytest-5809...
+2026-10-25 00:36:41,149 - INFO - report: {'pytest-dev__pytest-5809': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': True, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': ['testing/test_pastebin.py::TestPaste::test_create_new_paste'], 'failure': []}, 'PASS_TO_PASS': {'success': ['testing/test_pastebin.py::TestPasteCapture::test_failed', 'testing/test_pastebin.py::TestPasteCapture::test_all', 'testing/test_pastebin.py::TestPasteCapture::test_non_ascii_paste_text'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for pytest-dev__pytest-5809: resolved: True
+2026-10-25 00:36:41,150 - INFO - Attempting to stop container sweb.eval.pytest-dev__pytest-5809.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:36:56,250 - INFO - Container sweb.eval.pytest-dev__pytest-5809.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:36:56,250 - INFO - Attempting to remove container sweb.eval.pytest-dev__pytest-5809.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:36:56,286 - INFO - Container sweb.eval.pytest-dev__pytest-5809.budget-fix-main-20261025-40145508078-1 removed successfully.

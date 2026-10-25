@@ -1,0 +1,153 @@
+2026-10-25 00:38:01,569 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:38:32,695 - INFO - Creating container for scikit-learn__scikit-learn-25931...
+2026-10-25 00:38:38,100 - INFO - Container for scikit-learn__scikit-learn-25931 created: 02eff3b6cff42a4a5fd9f468f3b8a9a7f38f58f8e47e7839b9143a067563f775
+2026-10-25 00:38:38,199 - INFO - Container for scikit-learn__scikit-learn-25931 started: 02eff3b6cff42a4a5fd9f468f3b8a9a7f38f58f8e47e7839b9143a067563f775
+2026-10-25 00:38:38,200 - INFO - Intermediate patch for scikit-learn__scikit-learn-25931 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-25931/patch.diff, now applying to container...
+2026-10-25 00:38:38,268 - INFO - >>>>> Applied Patch:
+Checking patch doc/whats_new/v1.3.rst...
+Checking patch sklearn/ensemble/_iforest.py...
+Applied patch doc/whats_new/v1.3.rst cleanly.
+Applied patch sklearn/ensemble/_iforest.py cleanly.
+
+2026-10-25 00:38:38,512 - INFO - Git diff before:
+diff --git a/doc/whats_new/v1.3.rst b/doc/whats_new/v1.3.rst
+index dac97146b..5bc47a7a1 100644
+--- a/doc/whats_new/v1.3.rst
++++ b/doc/whats_new/v1.3.rst
+@@ -232,6 +232,12 @@ Changelog
+   when `max_samples` is a float and `round(n_samples * max_samples) < 1`.
+   :pr:`25601` by :user:`Jan Fidor <JanFidor>`.
+ 
++- |Fix| :class:`ensemble.IsolationForest` no longer warns about invalid feature
++  names when `fit` is called with a dataframe and `contamination` is not
++  `"auto"`. The offset is now computed from the already validated training
++  data instead of re-validating it.
++  :pr:`25931`.
++
+ :mod:`sklearn.exception`
+ ........................
+ - |Feature| Added :class:`exception.InconsistentVersionWarning` which is raised
+diff --git a/sklearn/ensemble/_iforest.py b/sklearn/ensemble/_iforest.py
+index 4d6c1c3f0..eeda0f7fe 100644
+--- a/sklearn/ensemble/_iforest.py
++++ b/sklearn/ensemble/_iforest.py
+@@ -345,7 +345,16 @@ class IsolationForest(OutlierMixin, BaseBagging):
+             return self
+ 
+         # else, define offset_ wrt contamination parameter
+-        self.offset_ = np.percentile(self.score_samples(X), 100.0 * self.contamination)
++        # We call the private `_score_samples` instead of `score_samples` to
++        # avoid validating `X` a second time: this would raise a warning about
++        # invalid feature names when `X` was a dataframe at `fit` time.
++        if issparse(X):
++            # `X` was validated as CSC in `fit` but the trees require CSR with
++            # sorted indices to compute the leaves of the samples.
++            X = X.tocsr()
++            X.sort_indices()
++        training_scores = self._score_samples(X)
++        self.offset_ = np.percentile(training_scores, 100.0 * self.contamination)
+ 
+         return self
+ 
+@@ -435,6 +444,25 @@ class IsolationForest(OutlierMixin, BaseBagging):
+         # Check data
+         X = self._validate_data(X, accept_sparse="csr", dtype=np.float32, reset=False)
+ 
++        return self._score_samples(X)
++
++    def _score_samples(self, X):
++        """Private version of score_samples without any validation.
++
++        This is useful for computing the scores of the training data as done
++        in `fit` where `X` has already been validated.
++
++        Parameters
++        ----------
++        X : {array-like, sparse matrix} of shape (n_samples, n_features)
++            The input samples.
++
++        Returns
++        -------
++        scores : ndarray of shape (n_samples,)
++            The anomaly score of the input samples.
++            The lower, the more abnormal.
++        """
+         # Take the opposite of the scores as bigger is better (here less
+         # abnormal)
+         return -self._compute_chunked_score_samples(X)
+2026-10-25 00:38:38,512 - INFO - Eval script for scikit-learn__scikit-learn-25931 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-25931/eval.sh; copying to container...
+2026-10-25 00:38:44,251 - INFO - Test runtime: 5.68 seconds
+2026-10-25 00:38:44,251 - INFO - Test output for scikit-learn__scikit-learn-25931 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-25931/test_output.txt
+2026-10-25 00:38:44,292 - INFO - Git diff after:
+diff --git a/doc/whats_new/v1.3.rst b/doc/whats_new/v1.3.rst
+index dac97146b..5bc47a7a1 100644
+--- a/doc/whats_new/v1.3.rst
++++ b/doc/whats_new/v1.3.rst
+@@ -232,6 +232,12 @@ Changelog
+   when `max_samples` is a float and `round(n_samples * max_samples) < 1`.
+   :pr:`25601` by :user:`Jan Fidor <JanFidor>`.
+ 
++- |Fix| :class:`ensemble.IsolationForest` no longer warns about invalid feature
++  names when `fit` is called with a dataframe and `contamination` is not
++  `"auto"`. The offset is now computed from the already validated training
++  data instead of re-validating it.
++  :pr:`25931`.
++
+ :mod:`sklearn.exception`
+ ........................
+ - |Feature| Added :class:`exception.InconsistentVersionWarning` which is raised
+diff --git a/sklearn/ensemble/_iforest.py b/sklearn/ensemble/_iforest.py
+index 4d6c1c3f0..eeda0f7fe 100644
+--- a/sklearn/ensemble/_iforest.py
++++ b/sklearn/ensemble/_iforest.py
+@@ -345,7 +345,16 @@ class IsolationForest(OutlierMixin, BaseBagging):
+             return self
+ 
+         # else, define offset_ wrt contamination parameter
+-        self.offset_ = np.percentile(self.score_samples(X), 100.0 * self.contamination)
++        # We call the private `_score_samples` instead of `score_samples` to
++        # avoid validating `X` a second time: this would raise a warning about
++        # invalid feature names when `X` was a dataframe at `fit` time.
++        if issparse(X):
++            # `X` was validated as CSC in `fit` but the trees require CSR with
++            # sorted indices to compute the leaves of the samples.
++            X = X.tocsr()
++            X.sort_indices()
++        training_scores = self._score_samples(X)
++        self.offset_ = np.percentile(training_scores, 100.0 * self.contamination)
+ 
+         return self
+ 
+@@ -435,6 +444,25 @@ class IsolationForest(OutlierMixin, BaseBagging):
+         # Check data
+         X = self._validate_data(X, accept_sparse="csr", dtype=np.float32, reset=False)
+ 
++        return self._score_samples(X)
++
++    def _score_samples(self, X):
++        """Private version of score_samples without any validation.
++
++        This is useful for computing the scores of the training data as done
++        in `fit` where `X` has already been validated.
++
++        Parameters
++        ----------
++        X : {array-like, sparse matrix} of shape (n_samples, n_features)
++            The input samples.
++
++        Returns
++        -------
++        scores : ndarray of shape (n_samples,)
++            The anomaly score of the input samples.
++            The lower, the more abnormal.
++        """
+         # Take the opposite of the scores as bigger is better (here less
+         # abnormal)
+         return -self._compute_chunked_score_samples(X)
+2026-10-25 00:38:44,292 - INFO - Grading answer for scikit-learn__scikit-learn-25931...
+2026-10-25 00:38:44,293 - INFO - report: {'scikit-learn__scikit-learn-25931': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': True, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': ['sklearn/ensemble/tests/test_iforest.py::test_iforest_preserve_feature_names'], 'failure': []}, 'PASS_TO_PASS': {'success': ['sklearn/ensemble/tests/test_iforest.py::test_iforest[42]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_sparse[42]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_error', 'sklearn/ensemble/tests/test_iforest.py::test_recalculate_max_depth', 'sklearn/ensemble/tests/test_iforest.py::test_max_samples_attribute', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_parallel_regression[42]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_performance[42]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_works[42-0.25]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_works[42-auto]', 'sklearn/ensemble/tests/test_iforest.py::test_max_samples_consistency', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_subsampled_features', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_average_path_length', 'sklearn/ensemble/tests/test_iforest.py::test_score_samples', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_warm_start', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_chunks_works1[42-0.25-3]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_chunks_works1[42-auto-2]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_chunks_works2[42-0.25-3]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_chunks_works2[42-auto-2]', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_with_uniform_data', 'sklearn/ensemble/tests/test_iforest.py::test_iforest_with_n_jobs_does_not_segfault', 'sklearn/ensemble/tests/test_iforest.py::test_base_estimator_property_deprecated'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for scikit-learn__scikit-learn-25931: resolved: True
+2026-10-25 00:38:44,293 - INFO - Attempting to stop container sweb.eval.scikit-learn__scikit-learn-25931.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:38:59,420 - INFO - Container sweb.eval.scikit-learn__scikit-learn-25931.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:38:59,420 - INFO - Attempting to remove container sweb.eval.scikit-learn__scikit-learn-25931.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:38:59,467 - INFO - Container sweb.eval.scikit-learn__scikit-learn-25931.budget-fix-main-20261025-40145508078-1 removed successfully.

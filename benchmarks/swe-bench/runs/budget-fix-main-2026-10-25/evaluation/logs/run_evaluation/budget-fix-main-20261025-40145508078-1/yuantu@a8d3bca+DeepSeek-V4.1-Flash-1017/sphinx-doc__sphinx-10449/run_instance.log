@@ -1,0 +1,165 @@
+2026-10-25 00:39:12,507 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:39:28,702 - INFO - Creating container for sphinx-doc__sphinx-10449...
+2026-10-25 00:39:35,263 - INFO - Container for sphinx-doc__sphinx-10449 created: 8435cbc7b6ced80bd7aa8f959a1828daa0bd146213577c76e4926272b0f0e17a
+2026-10-25 00:39:35,347 - INFO - Container for sphinx-doc__sphinx-10449 started: 8435cbc7b6ced80bd7aa8f959a1828daa0bd146213577c76e4926272b0f0e17a
+2026-10-25 00:39:35,347 - INFO - Intermediate patch for sphinx-doc__sphinx-10449 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/sphinx-doc__sphinx-10449/patch.diff, now applying to container...
+2026-10-25 00:39:35,409 - INFO - >>>>> Applied Patch:
+Checking patch CHANGES...
+Checking patch sphinx/ext/autodoc/typehints.py...
+Applied patch CHANGES cleanly.
+Applied patch sphinx/ext/autodoc/typehints.py cleanly.
+
+2026-10-25 00:39:35,609 - INFO - Git diff before:
+diff --git a/CHANGES b/CHANGES
+index bc32362ae..c4b1ae495 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -16,6 +16,9 @@ Features added
+ Bugs fixed
+ ----------
+ 
++* #9575: autodoc: ``autodoc_typehints = "description"`` no longer emits the
++  return type of ``__init__()`` as the return type of a class.
++
+ Testing
+ --------
+ 
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+index 06768168e..491b9dc39 100644
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -51,7 +51,15 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
+         return
+ 
+     annotations = app.env.temp_data.get('annotations', {})
+-    if annotations.get(fullname, {}):
++    contents = annotations.get(fullname, {})
++    if objtype in ('class', 'exception'):
++        # A class (or an exception) never returns a value, so the return
++        # annotation recorded for its ``__init__()`` (or ``__new__()``) must
++        # not be rendered as the return type of the class itself.
++        contents = {name: value for name, value in contents.items()
++                    if name != 'return'}
++
++    if contents:
+         field_lists = [n for n in contentnode if isinstance(n, nodes.field_list)]
+         if field_lists == []:
+             field_list = insert_field_list(contentnode)
+@@ -59,14 +67,14 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
+ 
+         for field_list in field_lists:
+             if app.config.autodoc_typehints_description_target == "all":
+-                modify_field_list(field_list, annotations[fullname])
++                modify_field_list(field_list, contents)
+             elif app.config.autodoc_typehints_description_target == "documented_params":
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=True
++                    field_list, contents, force_rtype=True
+                 )
+             else:
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=False
++                    field_list, contents, force_rtype=False
+                 )
+ 
+ 
+@@ -126,7 +134,7 @@ def modify_field_list(node: nodes.field_list, annotations: Dict[str, str]) -> No
+     if 'return' in annotations and 'return' not in arguments:
+         field = nodes.field()
+         field += nodes.field_name('', 'rtype')
+-        field += nodes.field_body('', nodes.paragraph('', annotation))
++        field += nodes.field_body('', nodes.paragraph('', annotations['return']))
+         node += field
+ 
+ 
+@@ -169,7 +177,7 @@ def augment_descriptions_with_types(
+             node += field
+ 
+     # Add 'rtype' if 'return' is present and 'rtype' isn't.
+-    if 'return' in annotations:
++    if 'return' in annotations and not suppress_rtype:
+         rtype = annotations['return']
+         if 'return' not in has_type and ('return' in has_description or
+                                          (force_rtype and rtype != "None")):
+2026-10-25 00:39:35,610 - INFO - Eval script for sphinx-doc__sphinx-10449 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/sphinx-doc__sphinx-10449/eval.sh; copying to container...
+2026-10-25 00:39:39,994 - INFO - Test runtime: 4.35 seconds
+2026-10-25 00:39:39,994 - INFO - Test output for sphinx-doc__sphinx-10449 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/sphinx-doc__sphinx-10449/test_output.txt
+2026-10-25 00:39:40,031 - INFO - Git diff after:
+diff --git a/CHANGES b/CHANGES
+index bc32362ae..c4b1ae495 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -16,6 +16,9 @@ Features added
+ Bugs fixed
+ ----------
+ 
++* #9575: autodoc: ``autodoc_typehints = "description"`` no longer emits the
++  return type of ``__init__()`` as the return type of a class.
++
+ Testing
+ --------
+ 
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+index 06768168e..491b9dc39 100644
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -51,7 +51,15 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
+         return
+ 
+     annotations = app.env.temp_data.get('annotations', {})
+-    if annotations.get(fullname, {}):
++    contents = annotations.get(fullname, {})
++    if objtype in ('class', 'exception'):
++        # A class (or an exception) never returns a value, so the return
++        # annotation recorded for its ``__init__()`` (or ``__new__()``) must
++        # not be rendered as the return type of the class itself.
++        contents = {name: value for name, value in contents.items()
++                    if name != 'return'}
++
++    if contents:
+         field_lists = [n for n in contentnode if isinstance(n, nodes.field_list)]
+         if field_lists == []:
+             field_list = insert_field_list(contentnode)
+@@ -59,14 +67,14 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
+ 
+         for field_list in field_lists:
+             if app.config.autodoc_typehints_description_target == "all":
+-                modify_field_list(field_list, annotations[fullname])
++                modify_field_list(field_list, contents)
+             elif app.config.autodoc_typehints_description_target == "documented_params":
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=True
++                    field_list, contents, force_rtype=True
+                 )
+             else:
+                 augment_descriptions_with_types(
+-                    field_list, annotations[fullname], force_rtype=False
++                    field_list, contents, force_rtype=False
+                 )
+ 
+ 
+@@ -126,7 +134,7 @@ def modify_field_list(node: nodes.field_list, annotations: Dict[str, str]) -> No
+     if 'return' in annotations and 'return' not in arguments:
+         field = nodes.field()
+         field += nodes.field_name('', 'rtype')
+-        field += nodes.field_body('', nodes.paragraph('', annotation))
++        field += nodes.field_body('', nodes.paragraph('', annotations['return']))
+         node += field
+ 
+ 
+@@ -169,7 +177,7 @@ def augment_descriptions_with_types(
+             node += field
+ 
+     # Add 'rtype' if 'return' is present and 'rtype' isn't.
+-    if 'return' in annotations:
++    if 'return' in annotations and not suppress_rtype:
+         rtype = annotations['return']
+         if 'return' not in has_type and ('return' in has_description or
+                                          (force_rtype and rtype != "None")):
+2026-10-25 00:39:40,031 - INFO - Grading answer for sphinx-doc__sphinx-10449...
+2026-10-25 00:39:40,039 - INFO - report: {'sphinx-doc__sphinx-10449': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': False, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': ['tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_with_documented_init'], 'failure': []}, 'PASS_TO_PASS': {'success': ['tests/test_ext_autodoc_configs.py::test_autoclass_content_class', 'tests/test_ext_autodoc_configs.py::test_autoclass_content_init', 'tests/test_ext_autodoc_configs.py::test_autodoc_class_signature_mixed', 'tests/test_ext_autodoc_configs.py::test_autodoc_class_signature_separated_init', 'tests/test_ext_autodoc_configs.py::test_autodoc_class_signature_separated_new', 'tests/test_ext_autodoc_configs.py::test_autoclass_content_both', 'tests/test_ext_autodoc_configs.py::test_autodoc_inherit_docstrings', 'tests/test_ext_autodoc_configs.py::test_autodoc_docstring_signature', 'tests/test_ext_autodoc_configs.py::test_autoclass_content_and_docstring_signature_class', 'tests/test_ext_autodoc_configs.py::test_autoclass_content_and_docstring_signature_init', 'tests/test_ext_autodoc_configs.py::test_autoclass_content_and_docstring_signature_both', 'tests/test_ext_autodoc_configs.py::test_mocked_module_imports', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_signature', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_none', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_none_for_overload', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_for_invalid_node', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_both', 'tests/test_ext_autodoc_configs.py::test_autodoc_type_aliases', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_and_type_aliases', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_format_fully_qualified', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_format_fully_qualified_for_class_alias', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_format_fully_qualified_for_generic_alias', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_format_fully_qualified_for_newtype_alias', 'tests/test_ext_autodoc_configs.py::test_autodoc_default_options', 'tests/test_ext_autodoc_configs.py::test_autodoc_default_options_with_values'], 'failure': ['tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_no_undoc', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_no_undoc_doc_rtype', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_with_documented_init_no_undoc', 'tests/test_ext_autodoc_configs.py::test_autodoc_typehints_description_with_documented_init_no_undoc_doc_rtype']}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for sphinx-doc__sphinx-10449: resolved: False
+2026-10-25 00:39:40,039 - INFO - Attempting to stop container sweb.eval.sphinx-doc__sphinx-10449.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:39:55,156 - INFO - Container sweb.eval.sphinx-doc__sphinx-10449.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:39:55,156 - INFO - Attempting to remove container sweb.eval.sphinx-doc__sphinx-10449.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:39:55,218 - INFO - Container sweb.eval.sphinx-doc__sphinx-10449.budget-fix-main-20261025-40145508078-1 removed successfully.
