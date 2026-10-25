@@ -21,6 +21,9 @@ test(
     await mkdir(path.join(root, '.yuantu'));
     const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
     const session = store.create(root);
+    // A session is named from its first user message by default; give it a title that cannot be confused with
+    // the exported message bodies counted below.
+    store.rename(session.id, 'Complete export fixture');
     for (let i = 0; i < 150; i++)
       store.append(session.id, { role: 'user', content: `EXPORT_MESSAGE_${i}` });
     store.close();

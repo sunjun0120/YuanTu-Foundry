@@ -721,7 +721,9 @@ test(
     const hidden = 'private thought never shown';
     let requestBudget;
     const url = await httpFixture(t, async (body, res) => {
-      requestBudget = body.max_completion_tokens;
+      // Loopback is treated as a compatible gateway, so the adapter asks for the older `max_tokens` field;
+      // accept either dialect here and keep the assertion about the configured budget.
+      requestBudget = body.max_tokens ?? body.max_completion_tokens;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const send = (value) => res.write('data: ' + JSON.stringify(value) + '\n\n');
       send({

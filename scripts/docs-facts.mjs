@@ -124,7 +124,7 @@ async function facts() {
     const packageJson = JSON.parse(await read(path.join('package.json')));
     const smokeSuites = String(packageJson.scripts['smoke:desktop'])
       .split(/\s+/)
-      .filter((part) => part.endsWith('.smoke.mjs')).length;
+      .filter((part) => part.startsWith('tests/')).length;
     /**
      * Test files and snapshot scenarios are counted rather than written down: both grow with every change, and a
      * hand-written number is how the README ended up claiming 36 test files while the directory held far more.

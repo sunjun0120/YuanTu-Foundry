@@ -20,6 +20,17 @@ process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
 
+/**
+ * The Host snapshot can report a verified completion before the renderer has repainted the previous notice.
+ * Wait for the transcript DOM rather than sampling it immediately, so the assertion is about the rendered result
+ * instead of about IPC-versus-render latency. A genuinely visible notice still fails after the wait timeout.
+ */
+async function waitForNoCompletionUi(page) {
+  await page.waitForFunction(
+    () => document.querySelectorAll('.completion-notice, .completion-check').length === 0,
+  );
+}
+
 test(
   'desktop automatic verification folds reasons and evidence into a plain status line',
   { timeout: 60000 },
@@ -276,7 +287,7 @@ test(
         (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion?.summary
           .state === 'verified',
     );
-    assert.equal(await page.locator('.completion-notice, .completion-check').count(), 0);
+    await waitForNoCompletionUi(page);
     const completion = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
     );
@@ -291,7 +302,7 @@ test(
         (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion?.summary
           .state === 'verified',
     );
-    assert.equal(await page.locator('.completion-notice, .completion-check').count(), 0);
+    await waitForNoCompletionUi(page);
     const restored = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
     );

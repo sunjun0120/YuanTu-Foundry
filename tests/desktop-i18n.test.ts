@@ -1,5 +1,7 @@
+// @test-serial desktop-ui: Launches a real Electron window for renderer i18n tests.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,8 +26,29 @@ function installedElectron(): string | undefined {
   }
 }
 const electronPath = installedElectron();
+/**
+ * Whether Electron can start here at all.
+ *
+ * A present binary is not enough: a sandbox policy, a session without a desktop, or a broken install can make
+ * every launch fail. Probe with the same default launch path Playwright uses before any test starts, so the
+ * whole file skips with one reason instead of reporting one test failure per launch attempt.
+ */
+function electronLaunchProblem(executable: string): string | undefined {
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const result = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    windowsHide: true,
+    env,
+  });
+  if (result.error) return `Electron could not start: ${result.error.message}`;
+  if (result.status !== 0)
+    return `Electron could not start (exit ${String(result.status ?? result.signal)})`;
+  return undefined;
+}
 const electronSkip = electronPath
-  ? false
+  ? electronLaunchProblem(electronPath)
   : 'the Electron binary is not installed (npx install-electron)';
 
 async function desktopPage(t: test.TestContext) {
@@ -47,11 +70,21 @@ async function desktopPage(t: test.TestContext) {
     ),
   );
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({
-    executablePath: String(electronPath),
-    args: [main, `--user-data-dir=${path.join(root, 'profile')}`],
-    env,
-  });
+  try {
+    app = await electron.launch({
+      executablePath: String(electronPath),
+      args: [main, `--user-data-dir=${path.join(root, 'profile')}`],
+      env,
+    });
+  } catch (error) {
+    // The binary can exist and still be unable to start here (no desktop session, a sandbox policy, a broken
+    // install). That is a property of the host, not of the renderer under test; skip with the launch error
+    // instead of turning it into seven assertion failures.
+    t.skip(
+      `Electron could not launch on this host: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return null;
+  }
   const page = await app.firstWindow();
   const html = await readFile(path.join(projectRoot, 'apps/desktop/index.html'), 'utf8');
   // This isolated harness injects a test bundle; the product CSP stays unchanged.
@@ -81,6 +114,7 @@ test(
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
+    if (!page) return;
     const states = await page.evaluate<
       Record<
         'initial' | 'active' | 'switched' | 'completed' | 'cleared',
@@ -113,6 +147,7 @@ test(
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
+    if (!page) return;
     await page.setViewportSize({ width: 1100, height: 550 });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     for (const file of [
@@ -189,6 +224,7 @@ for (const surface of ['background', 'workspace']) {
     { timeout: 30000, skip: electronSkip },
     async (t) => {
       const page = await desktopPage(t);
+      if (!page) return;
       const result = (await page.evaluate(`(async () => {
       window.addEventListener('unhandledrejection', event => event.preventDefault());
       let calls = 0, rejectAction;
@@ -238,6 +274,7 @@ test(
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
+    if (!page) return;
     await page.evaluate(`
     window.yuantu = { files: async (command) => command.type === 'read' ? ({ok:true,preview:{kind:'text',text:'file bytes',path:command.path}}) : ({ok:true, listing:{path:'', entries:[{name:'工具',path:'工具',kind:'file'},{name:'保存',path:'保存',kind:'file'}]}}) };
     window.sessionRows = localeApi.setupSessionList({select:async()=>null,createMenuButton:()=>document.createElement('button')});
@@ -302,6 +339,7 @@ test(
      * typed without a description comes out of the dictionary rather than being concatenated in Chinese.
      */
     const page = await desktopPage(t);
+    if (!page) return;
     const result = (await page.evaluate(`
       (() => {
         const palette = localeApi.setupCommandPalette({
@@ -354,6 +392,7 @@ test(
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
+    if (!page) return;
     await page.evaluate(`
     document.querySelector('#settings-page').hidden=false;
     window.requests=0; window.rejectRefresh=false;

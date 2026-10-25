@@ -40,6 +40,32 @@
 - `format:check`、`docs:check`、`references:check`、`cycles:check`、`layers:check`、`i18n:check`、`typecheck`、`lint`、`test:isolation:check` 全部通过。
 - `tests/test-isolation.test.ts` 23/23 通过（含两条新增回归），`tests/large-response.test.ts` 15/15 通过。
 
+最终验证（2026-10-25 22:20–22:30，最终源码）：
+
+- 默认发现的 296 个测试文件中执行 295 个（排除 `tests/desktop-i18n.test.ts`，原因见下）；`node scripts/run-tests.mjs --concurrency=4 --timings=…` 完整运行：并行 3108 项 + 串行 19 项 = 3127 项，**3085 通过、0 失败、42 跳过**；元数据 `complete=true`、`passed=true`，源码指纹前后一致（SHA-256 `c484861e…3065`，1387 个文件）。
+- `tests/desktop-i18n.test.ts` 的 7 项在本机无法执行：Electron 二进制直接运行 `--version` 退出码 `0x80000003`；加 `ELECTRON_DISABLE_SANDBOX=1` 可启动，但页面测试以 `0xC0000005` 崩溃。该文件只启动空白 BrowserWindow，不经过本批产品代码；这是本机图形/沙箱环境限制，仍需在真实 Windows 桌面 runner 上验证（CI 的 `desktop-smoke` 负责）。
+- `npm run build` 通过（Host bundle 6.07 MB，desktop 构建完成）；`npm run smoke:client` 3/3；`npm run bench:check` 15 条规则；`npm run audit:check` 通过（2 条已接受公告）。
+- 未执行：3 个默认发现即排除的 `sandbox-windows*.test.ts`（由 `check:windows-legacy-sandbox` 单独运行）、真实 Windows 账户初始化、macOS Seatbelt、桌面 smoke、coverage、真实模型调用。
+
+> 并发写入说明：本会话没有执行 `git commit` 或 `git push`。2026-10-25 22:22 一个并发运行的自动化进程把上述源码与文档修复提交为 `a4a92a3`，随后切到 `main` 并把该提交推送到 `origin/main`；本节最终验证记录形成于该推送之后，仍是未提交的工作区改动。若需要撤销远端提交，应另行决定 revert 或经批准改写远端历史。
+
+## CI 修复（用户授权重跑 main CI）
+
+`a4a92a3` 的 main CI 只有 `desktop-smoke` 失败（`check`、`bench`、`coverage`、`native-macos` 通过），三项均为桌面冒烟测试本身的问题：
+
+1. `tests/agent.smoke.mjs` 仍读 `max_completion_tokens`，而 loopback 兼容端点按适配器约定收到 `max_tokens`；改为 `body.max_tokens ?? body.max_completion_tokens`。
+2. `tests/desktop-language.smoke.mjs` 把导出标题行也算进 `EXPORT_MESSAGE_`；会话标题默认取第一条用户消息，故 150 条消息出现 151 次。种子会话改用固定标题。
+3. `tests/desktop.smoke.mjs` 在 snapshot 已 `verified` 后立刻数 DOM，可能早于渲染器重绘；改为等待 `.completion-notice, .completion-check` 数量为 0 再继续，真正可见的提示仍会超时失败。
+
+同时让 Electron UI 测试可恢复：
+
+- `tests/desktop-i18n.test.ts` 启动前用 `--version` 探测 Electron；不能启动时以明确原因跳过，而不是让 7 个测试各报一次启动失败。
+- 文件加入 `@test-serial desktop-ui`，并加入 `smoke:desktop` 清单；`scripts/docs-facts.mjs` 按清单中的测试文件数生成“桌面冒烟套件 14”。
+
+本地验证：静态门禁全部通过；`npm test` 共 3134 项、3084 通过、49 跳过、1 个 `windows-shell` 已知时序抖动（独立复跑 7/7 通过）；`npm run build` 通过。`smoke:desktop` 仍只能由 Windows CI 执行。
+
+本次 CI 修复按用户“重跑 main CI”的明确要求提交并推送；上一节记录的 `a4a92a3` 仍是并发自动化进程的行为，不是本会话发起的。
+
 ## Review focus
 
 - 导出不依赖已加载历史，不因切换会话而导出另一会话，不泄露 provider continuation state。
@@ -54,4 +80,4 @@
 - 输出超限：旧实现 stop/tool_calls 两项失败，length 与精确边界两项对照通过；修复后与已有 length 回归合计 5/5 通过。content-filter 保留供应商策略优先级。
 - 路径探针：两项确定性回归先失败；重试与耗尽拒绝、原有目录外 junction 保护合计 3/3 通过。最多解析三次，中间等待 5ms；不放行词法路径。
 - 真实并发数据库迁移连续六轮通过（修复前六轮中有一轮失败）。旧报告十张截图与 HEAD 字节一致；八份新批次证据哈希已记录以便最终核验。
-- 2026-10-25 复核两项失败的静态门禁：`references:check` 与 `format:check` 均通过。旧报告十张截图恢复后 `git status` 无差异，即与 HEAD 字节一致；`docs/` 下文档的图片链接独立复核 0 处指向缺失文件。B123 冻结批次八份证据哈希与记录一致；绕过忽略规则时仍有四个文件不符 Prettier，说明修复方式是忽略冻结证据而非重写其字节。`docs:check`、`typecheck`、`cycles:check`、`layers:check`、`i18n:check`、`lint` 同批通过。步骤 5 中的测试、构建与编译客户端冒烟尚未在本轮执行。
+- 2026-10-25 复核两项失败的静态门禁：`references:check` 与 `format:check` 均通过。旧报告十张截图恢复后 `git status` 无差异，即与 HEAD 字节一致；`docs/` 下文档的图片链接独立复核 0 处指向缺失文件。B123 冻结批次八份证据哈希与记录一致；绕过忽略规则时仍有四个文件不符 Prettier，说明修复方式是忽略冻结证据而非重写其字节。`docs:check`、`typecheck`、`cycles:check`、`layers:check`、`i18n:check`、`lint` 同批通过。步骤 5 已在晚间复扫中执行，结果见上。
