@@ -482,3 +482,83 @@ test('an approved plan clears the count', async (t) => {
   );
   assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'b');
 });
+
+test('a first write with inverse hunks does not undo an earlier write', () => {
+  const guard = new ToolProgressGuard();
+  const gap = Array.from({ length: 12 }, (_, index) => `keep-${index}`).join('\n');
+  const before = `A\n${gap}\nB\n`;
+  const after = `B\n${gap}\nA\n`;
+  const observation = written('target.txt', before, after);
+  assert.equal(observation.fileStates?.[0]?.hunks.length, 2);
+  assert.equal(guard.observeRound([observation]), 'continue');
+  assert.deepEqual(counts(guard), []);
+});
+
+test('prepared but abandoned journal snapshots are not successful writes', async (t) => {
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete() {
+      return ++requests === 1 ? toolReply('retry', 'fixture_write', {}) : reply();
+    },
+  });
+  ctx.tools.register({
+    name: 'fixture_write',
+    description: 'Fixture re-prepares a write',
+    inputSchema: { type: 'object' },
+    async execute(_args, context) {
+      const fileChange = change('target.txt');
+      context.fileJournal!.prepare(fileChange, Buffer.from('a'), Buffer.from('b'));
+      const id = context.fileJournal!.prepare(fileChange, Buffer.from('b'), Buffer.from('a'));
+      await writeFile(path.join(ctx.root, 'target.txt'), 'a');
+      context.fileJournal!.applied(id);
+      return { isError: false, content: 'Written', change: fileChange };
+    },
+  });
+  await writeFile(path.join(ctx.root, 'target.txt'), 'b');
+  await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Run the fixture write' });
+  assert.deepEqual(
+    ctx.store.events(ctx.session.id).filter((event) => event.type === 'edit.oscillation'),
+    [],
+  );
+});
+
+test('post-execute context does not skip oscillation observations', async (t) => {
+  const targets = ['b', 'a', 'b', 'a', 'b'];
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      const round = ++requests;
+      assert.ok(request.tools.some((tool) => tool.name === 'read_file'));
+      if (round === 1) return toolReply('read', 'read_file', { path: 'target.txt' });
+      if (round <= 6) {
+        const current = await readFile(path.join(ctx.root, 'target.txt'), 'utf8');
+        return edit(`edit-${round}`, current, targets[round - 2]!);
+      }
+      return reply('Done');
+    },
+  });
+  ctx.tools.registerHooks({
+    postExecute: () => ({
+      action: 'add-context',
+      context: 'Fixture context: continue from the current file bytes.',
+    }),
+  });
+  await writeFile(path.join(ctx.root, 'target.txt'), 'a');
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+  assert.equal(result.status, 'completed', result.error);
+  const recorded = ctx.store
+    .events(ctx.session.id)
+    .filter((event) => event.type === 'edit.oscillation');
+  assert.deepEqual(
+    recorded.map((event) => event.data.count),
+    [1, 2, 3, 4],
+  );
+  const notices = ctx.events.filter(
+    (event) =>
+      event.type === 'context.injected' && String(event.data.action).startsWith('edit-oscillation'),
+  );
+  assert.deepEqual(
+    notices.map((event) => event.data.action),
+    ['edit-oscillation-warn', 'edit-oscillation-warn-final'],
+  );
+});

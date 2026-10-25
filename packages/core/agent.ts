@@ -997,7 +997,7 @@ export class Agent {
             });
           let progress =
             injected.length || changedGoals.length
-              ? (progressGuard.reset(), 'continue')
+              ? (progressGuard.reset(), progressGuard.observeWrites(observations))
               : progressGuard.observeRound(observations);
           // One record per hit, not one per notice: the count and the signal are what a later review reads the
           // cost of a run from, and the prompt is only two of the hits.

@@ -182,6 +182,11 @@ export class ToolProgressGuard {
     if (queries === 'warn') return 'warn';
     return failing === FAILURE_WARN ? 'repeat-failure' : 'continue';
   }
+  /** New context resets query counters, but does not erase the writes that just happened. */
+  observeWrites(observations: readonly ToolObservation[]): ToolProgress {
+    this.recordOscillation(observations);
+    return this.oscillationNotice() ?? 'continue';
+  }
   /**
    * Counts each write that undid an earlier one, recording one hit per write.
    *
@@ -199,6 +204,7 @@ export class ToolProgressGuard {
           : [],
       );
       let signal: EditOscillation['signal'] | undefined;
+      const newHunks: string[] = [];
       for (const file of fileStates) {
         if (!projectPaths.has(normalizedPath(file.path))) continue;
         // A write that changes nothing says nothing about the plan, and must not become a state either: a
@@ -219,11 +225,13 @@ export class ToolProgressGuard {
         for (const hunk of file.hunks) {
           const reverse = digest([file.path, hunk.added, hunk.deleted]);
           if (this.reverseHunks.has(reverse) && signal === undefined) signal = 'local';
-          this.reverseHunks.add(digest([file.path, hunk.deleted, hunk.added]));
-          while (this.reverseHunks.size > OSCILLATION_MAX_HUNKS)
-            this.reverseHunks.delete(this.reverseHunks.values().next().value!);
+          newHunks.push(digest([file.path, hunk.deleted, hunk.added]));
         }
       }
+      // Only earlier writes are evidence of a reversal, never another hunk of this write.
+      for (const hunk of newHunks) this.reverseHunks.add(hunk);
+      while (this.reverseHunks.size > OSCILLATION_MAX_HUNKS)
+        this.reverseHunks.delete(this.reverseHunks.values().next().value!);
       if (!signal) continue;
       this.oscillationWrites++;
       this.oscillationEvents.push({ count: this.oscillationWrites, signal });

@@ -215,6 +215,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
        * directly. The inner id is derived from the outer one (`<outer>#<n>`) rather than freshly generated,
        * because what has to survive every seam is the link between a program and what it did.
        */
+      const pending = new Map<string, FileStateDigest[]>();
       const toolContext = (callId: string, fileStates: FileStateDigest[]): ToolContext => ({
         signal,
         /**
@@ -263,14 +264,20 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
          */
         fileJournal: {
           prepare: (change, before, after) => {
-            fileStates.push(...digestFileStates([{ path: change.path, before, after }]));
-            return store.prepareFileChange(journalSessionId, tagChange(change), before, after);
+            const id = store.prepareFileChange(journalSessionId, tagChange(change), before, after);
+            pending.set(id, digestFileStates([{ path: change.path, before, after }]));
+            return id;
           },
           prepareGroup: (change, files) => {
-            fileStates.push(...digestFileStates(files));
-            return store.prepareFileChangeGroup(journalSessionId, tagChange(change), files);
+            const id = store.prepareFileChangeGroup(journalSessionId, tagChange(change), files);
+            pending.set(id, digestFileStates(files));
+            return id;
           },
-          applied: (id) => store.markFileChange(id, 'applied'),
+          applied: (id) => {
+            store.markFileChange(id, 'applied');
+            fileStates.push(...(pending.get(id) ?? []));
+            pending.delete(id);
+          },
         },
         approve: approve(),
         ask: ask(),
