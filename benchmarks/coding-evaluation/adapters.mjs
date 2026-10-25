@@ -69,6 +69,10 @@ export function controlledEnvironment(manifest, source = process.env, { subagent
     // Only a failure that produced no bytes is re-sent, and only on this separate allowance. Absent means zero,
     // which is exactly the behaviour a frozen batch had.
     YUANTU_ZERO_BYTE_RETRIES: String(manifest.zeroByteRetries ?? 0),
+    // Absent means the product default, which is what a frozen batch ran with.
+    ...(manifest.investigationMs === undefined
+      ? {}
+      : { YUANTU_INVESTIGATION_MS: String(manifest.investigationMs) }),
     YUANTU_PROMPT_CACHE: 'off',
     YUANTU_SANDBOX: 'host',
     YUANTU_SANDBOX_HOOK: 'host',

@@ -27,6 +27,11 @@ export interface SweManifest {
    */
   responseHeadersTimeoutMs?: number;
   /**
+   * Model time before the investigation allowance nudges the run to edit, and (at twice this value) withdraws
+   * the investigation tools. Optional, and absent means the product default.
+   */
+  investigationMs?: number;
+  /**
    * How many empty attempts (no headers, or a response with zero body bytes) may be re-sent, when the batch
    * asked for that at all. Absent means zero, which is what every frozen batch had.
    */
@@ -73,7 +78,7 @@ export function validateSweManifest(input: unknown): SweManifest {
   ];
   object(
     input,
-    ['responseHeadersTimeoutMs', 'zeroByteRetries', ...required, 'instances'],
+    ['responseHeadersTimeoutMs', 'investigationMs', 'zeroByteRetries', ...required, 'instances'],
     required,
   );
   object(input.runtime, ['kind', 'revision']);
@@ -148,6 +153,13 @@ export function validateSweManifest(input: unknown): SweManifest {
       (input.zeroByteRetries as number) > 3)
   )
     throw new Error('Invalid zero-byte retry allowance');
+  if (
+    input.investigationMs !== undefined &&
+    (!Number.isSafeInteger(input.investigationMs) ||
+      (input.investigationMs as number) < 1_000 ||
+      (input.investigationMs as number) > 3_600_000)
+  )
+    throw new Error('Invalid investigation allowance');
   if (
     typeof input.approvedLiveBudget.authorized !== 'boolean' ||
     !Number.isSafeInteger(input.approvedLiveBudget.maxAttempts) ||

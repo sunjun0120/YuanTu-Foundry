@@ -196,6 +196,8 @@ export interface AgentOptions {
   maxModelRetries?: number;
   /** How many times an attempt that produced no bytes at all may be re-sent, on top of that allowance. */
   zeroByteRetries?: number;
+  /** Model time a run may investigate before it is nudged to edit, and (at twice the nudge point) cut short. */
+  investigationMs?: number;
   /** How many sibling tool calls from one assistant message may be in flight at once. */
   maxParallelToolCalls?: number;
   /** A run's total budget, `0` = that one off (see `RunDefaults.maxRunRounds`). */

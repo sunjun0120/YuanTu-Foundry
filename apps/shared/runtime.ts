@@ -436,6 +436,7 @@ export async function createAgent(
     requestTimeoutMs: options.requestTimeoutMs,
     maxModelRetries: options.maxModelRetries,
     zeroByteRetries: options.zeroByteRetries,
+    investigationMs: options.investigationMs,
     maxParallelToolCalls: options.maxParallelToolCalls,
     maxRunRounds: options.maxRunRounds,
     maxRunMs: options.maxRunMs,

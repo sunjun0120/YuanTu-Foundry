@@ -73,6 +73,15 @@ export interface RunDefaults {
   maxModelRetries: number;
   /** How many times an attempt that produced no bytes may be re-sent, beyond `maxModelRetries`. `0` is off. */
   zeroByteRetries: number;
+  /**
+   * Model time a run may spend investigating before it is nudged to start editing.
+   *
+   * The nudge ("stop widening the search") fires at half this value and the tool withdrawal at the value itself.
+   * Raised from 120 s after the first measured batch: the median first edit of a run that edited naturally was
+   * 70 s, the ninetieth percentile 100 s and the latest 125 s, so 120 s cut the tail of normal work rather than
+   * a runaway.
+   */
+  investigationMs: number;
   questionTimeoutMs: number;
   /**
    * A run's total budget: rounds, wall-clock milliseconds and model tokens (input + output, every round). `0`
@@ -200,6 +209,12 @@ export const RUN_DEFAULTS = Object.freeze({
    * "free"). The evaluation asks for one; the product does not.
    */
   zeroByteRetries: 0,
+  /**
+   * 240 s, and the nudge at 120 s. The first version hard-coded 120 s / 60 s, which the measured batch showed was
+   * inside the range of ordinary work rather than past it: every one of its fourteen hand-offs was triggered by
+   * this clock, at the fifth to twelfth round, never by the round count.
+   */
+  investigationMs: 240_000,
   questionTimeoutMs: 120_000,
   maxRunRounds: 0,
   maxRunMs: 2 * 60 * 60 * 1000,
@@ -322,6 +337,18 @@ export const ENVIRONMENT = {
     kind: 'number',
     range: [0, 5],
     description: '每个 step 边界重发模型请求的次数上限（0 = 不重试）',
+  },
+  /**
+   * How long a run may investigate before it is asked to start editing, and (at twice the warning point) before
+   * search and other investigation tools are withdrawn for a targeted read or an edit.
+   *
+   * One number rather than two: the warning is half of it, so the pair cannot be configured into a state where
+   * the "you are taking long" notice arrives after the tools were already taken away.
+   */
+  YUANTU_INVESTIGATION_MS: {
+    kind: 'number',
+    range: [1_000, 3_600_000],
+    description: '调查到动手的时间阈值（毫秒；提醒取一半，工具轮数阈值 12/20 不变）',
   },
   /**
    * How many times an attempt that produced no bytes at all may be sent again, beyond the retry allowance above.
@@ -814,6 +841,7 @@ export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefault
       options.responseHeadersTimeoutMs ?? RUN_DEFAULTS.responseHeadersTimeoutMs,
     maxModelRetries: options.maxModelRetries ?? RUN_DEFAULTS.maxModelRetries,
     zeroByteRetries: options.zeroByteRetries ?? RUN_DEFAULTS.zeroByteRetries,
+    investigationMs: options.investigationMs ?? RUN_DEFAULTS.investigationMs,
     questionTimeoutMs: options.questionTimeoutMs ?? RUN_DEFAULTS.questionTimeoutMs,
     maxRunRounds: options.maxRunRounds ?? RUN_DEFAULTS.maxRunRounds,
     maxRunMs: options.maxRunMs ?? RUN_DEFAULTS.maxRunMs,

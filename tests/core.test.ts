@@ -80,12 +80,32 @@ test('investigation wall time converges even when each query returns new evidenc
     },
   ];
   assert.equal(guard.observeRound(read('a')), 'continue');
-  now = 65_000;
-  assert.equal(guard.observeRound(read('b')), 'investigation-warn');
+  // The default allowance is 240 s, and the nudge to start editing is half of it (see `RunDefaults`).
   now = 125_000;
+  assert.equal(guard.observeRound(read('b')), 'investigation-warn');
+  now = 245_000;
   assert.equal(guard.observeRound(read('c')), 'investigation-conclude');
   guard.reset();
   assert.equal(guard.observeRound(read('d')), 'continue');
+});
+
+test('the investigation allowance is configurable, and its nudge is half of it', () => {
+  let now = 0;
+  const guard = new ToolProgressGuard({ now: () => now, investigationMs: 40_000 });
+  const read = () => [
+    {
+      call: { id: 'read', name: 'read_file', arguments: { path: 'a.txt' } },
+      result: { isError: false, content: 'stable' },
+    },
+  ];
+  assert.equal(guard.observeRound(read()), 'continue');
+  now = 20_000;
+  assert.equal(guard.observeRound(read()), 'investigation-warn');
+  now = 40_000;
+  assert.equal(guard.observeRound(read()), 'investigation-conclude');
+  // A configured allowance is what the guard uses: the same clock would still be inside the default one.
+  const defaults = new ToolProgressGuard({ now: () => 20_000 });
+  assert.equal(defaults.observeRound(read()), 'continue');
 });
 
 // ---- merged from core.test.ts ----
@@ -131,12 +151,17 @@ const readRound = (round: number) =>
 const editRound = (id: string, old_text = 'bad') =>
   toolReply(id, 'edit_file', { path: 'target.txt', old_text, new_text: 'good' });
 
-/** Advance only model requests; Date mocks do not drive RunSteps.modelMs. */
+/**
+ * Advance only model requests; Date mocks do not drive RunSteps.modelMs.
+ *
+ * One tick is a minute of model time: four of them reach the 240 s allowance the default now sets, which is what
+ * these tests are about. The nudge fires halfway through, at 120 s, which is two ticks.
+ */
 function investigationClock(t: test.TestContext): () => void {
   let now = 0;
   t.mock.method(performance, 'now', () => now);
   return () => {
-    now += 30_000;
+    now += 60_000;
   };
 }
 async function investigationFiles(root: string) {

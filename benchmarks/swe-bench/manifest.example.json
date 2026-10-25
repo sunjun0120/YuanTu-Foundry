@@ -22,6 +22,7 @@
   "requestTimeoutMs": 120000,
   "streamIdleTimeoutMs": 30000,
   "responseHeadersTimeoutMs": 120000,
+  "investigationMs": 240000,
   "zeroByteRetries": 1,
   "maxObservedRequestsPerSample": 100,
   "maxKnownTokensPerSample": 2000000,

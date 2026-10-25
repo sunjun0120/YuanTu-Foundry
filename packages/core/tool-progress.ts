@@ -65,6 +65,15 @@ const OSCILLATION_FINAL = 4;
 /** Bounds on what the guard remembers about writes, so a very long run cannot grow it without limit. */
 const OSCILLATION_MAX_PATHS = 512;
 const OSCILLATION_MAX_HUNKS = 4_096;
+/**
+ * The investigation allowance's two round thresholds, and the clock default used when a caller passes none.
+ *
+ * The round count was not changed by the measurement that moved the clock: it is the rounds that are hard to
+ * bound honestly, and 12/20 was never the branch that fired (`RunDefaults.investigationMs`).
+ */
+const INVESTIGATION_WARN_ROUNDS = 12;
+const INVESTIGATION_CONCLUDE_ROUNDS = 20;
+const INVESTIGATION_DEFAULT_MS = 240_000;
 const queries = new Set(['read_file', 'list_files', 'search_files', 'git_status', 'git_diff']);
 const normalizedPath = (value: string): string => value.replaceAll('\\', '/').replace(/^\.\//, '');
 const digest = (value: unknown): string =>
@@ -87,11 +96,25 @@ export class ToolProgressGuard {
   private investigationRounds = 0;
   private investigationStarted: number;
   private investigationWarned = false;
-  private options: { now?: () => number; investigate?: () => boolean; workspace?: string };
+  private options: {
+    now?: () => number;
+    investigate?: () => boolean;
+    workspace?: string;
+    /** Model time the investigation may take; the nudge fires at half of it. */
+    investigationMs?: number;
+  };
+  /** The configured allowance, never below a second: a zero here would withdraw the tools immediately. */
+  private investigationMs: number;
   constructor(
-    options: { now?: () => number; investigate?: () => boolean; workspace?: string } = {},
+    options: {
+      now?: () => number;
+      investigate?: () => boolean;
+      workspace?: string;
+      investigationMs?: number;
+    } = {},
   ) {
     this.options = options;
+    this.investigationMs = Math.max(1_000, options.investigationMs ?? INVESTIGATION_DEFAULT_MS);
     this.investigationStarted = (options.now ?? Date.now)();
   }
   private seen = new Map<string, string>();
@@ -241,8 +264,15 @@ export class ToolProgressGuard {
       return;
     this.investigationRounds++;
     const elapsed = (this.options.now ?? Date.now)() - this.investigationStarted;
-    if (this.investigationRounds >= 20 || elapsed >= 120_000) return 'investigation-conclude';
-    if (!this.investigationWarned && (this.investigationRounds >= 12 || elapsed >= 60_000)) {
+    if (
+      this.investigationRounds >= INVESTIGATION_CONCLUDE_ROUNDS ||
+      elapsed >= this.investigationMs
+    )
+      return 'investigation-conclude';
+    if (
+      !this.investigationWarned &&
+      (this.investigationRounds >= INVESTIGATION_WARN_ROUNDS || elapsed >= this.investigationMs / 2)
+    ) {
       this.investigationWarned = true;
       return 'investigation-warn';
     }

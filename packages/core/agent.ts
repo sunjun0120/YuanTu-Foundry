@@ -449,6 +449,7 @@ export class Agent {
       let humanTurn = input.authority !== 'automatic';
       const progressGuard = new ToolProgressGuard({
         workspace,
+        investigationMs: limits.investigationMs,
         // Model processing time excludes a person thinking about an approval or answering a question.
         now: () => statistics.modelMs,
         investigate: () =>

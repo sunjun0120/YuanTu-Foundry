@@ -613,7 +613,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 72 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 73 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -630,6 +630,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_STREAM_IDLE_TIMEOUT_MS` | `1000–3600000` | 流式空闲超时（毫秒） |
 | `YUANTU_RESPONSE_HEADERS_TIMEOUT_MS` | `1000–3600000` | 等待响应头的超时（毫秒；缺省与流空闲超时相同） |
 | `YUANTU_MAX_RETRIES` | `0–5` | 每个 step 边界重发模型请求的次数上限（0 = 不重试） |
+| `YUANTU_INVESTIGATION_MS` | `1000–3600000` | 调查到动手的时间阈值（毫秒；提醒取一半，工具轮数阈值 12/20 不变） |
 | `YUANTU_ZERO_BYTE_RETRIES` | `0–3` | 零字节失败的独立重发次数（0 = 不重发；只对完全没有收到字节的失败生效） |
 | `YUANTU_MAX_CONTEXT_TOKENS` | `1–100000000` | 模型上下文窗口 |
 | `YUANTU_MAX_OUTPUT_TOKENS` | `1–10000000` | 单次输出上限 |

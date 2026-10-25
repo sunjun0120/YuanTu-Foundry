@@ -30,6 +30,8 @@ export interface Options {
   maxModelRetries?: number;
   /** How many times an attempt that produced no bytes at all may be re-sent, on top of that allowance. */
   zeroByteRetries?: number;
+  /** Model time a run may investigate before it is nudged to edit (the tool cutoff is twice that). */
+  investigationMs?: number;
   /** How many sibling tool calls from one assistant message may be in flight at once. */
   maxParallelToolCalls?: number;
   /** How long the Host waits for an answer to `ask_user_question` before settling it unanswered. */
@@ -87,6 +89,7 @@ const NUMBERS = [
   ['YUANTU_MAX_CONTEXT_TOKENS', 'maxContextTokens'],
   ['YUANTU_MAX_RETRIES', 'maxModelRetries'],
   ['YUANTU_ZERO_BYTE_RETRIES', 'zeroByteRetries'],
+  ['YUANTU_INVESTIGATION_MS', 'investigationMs'],
   ['YUANTU_AUTO_COMPACT_TOKENS', 'autoCompactTokens'],
   ['YUANTU_MAX_OUTPUT_TOKENS', 'maxOutputTokens'],
   ['YUANTU_REQUEST_TIMEOUT_MS', 'requestTimeoutMs'],
@@ -208,6 +211,7 @@ export function parseArgs(
     | 'requestTimeoutMs'
     | 'maxModelRetries'
     | 'zeroByteRetries'
+    | 'investigationMs'
     | 'maxParallelToolCalls'
     | 'questionTimeoutMs'
     | 'maxRunRounds'
@@ -223,6 +227,7 @@ export function parseArgs(
     '--request-timeout-ms': 'requestTimeoutMs',
     '--max-retries': 'maxModelRetries',
     '--zero-byte-retries': 'zeroByteRetries',
+    '--investigation-ms': 'investigationMs',
     '--max-parallel-tools': 'maxParallelToolCalls',
     '--question-timeout-ms': 'questionTimeoutMs',
     '--max-run-rounds': 'maxRunRounds',

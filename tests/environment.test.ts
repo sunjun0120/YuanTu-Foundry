@@ -235,6 +235,31 @@ test('the provider config reports a bad value with the table’s own words', () 
   // value the doctor called invalid ran anyway.
   assert.throws(() => parseArgs([], { YUANTU_MAX_RETRIES: '9' }), /at most 5/);
   assert.throws(() => parseArgs(['--max-retries', '9']), /at most 5/);
+  /**
+   * The investigation allowance is a run limit too, and the two new settings that only the run reads behave the
+   * same way: the table is what refuses a bad value, and the parser that owns each one refuses the values a run
+   * would otherwise accept above the declared ceiling.
+   */
+  for (const [key, value, ceiling] of [
+    ['YUANTU_INVESTIGATION_MS', '999', 3_600_000],
+    ['YUANTU_INVESTIGATION_MS', '3600001', 3_600_000],
+    ['YUANTU_ZERO_BYTE_RETRIES', '4', 3],
+    ['YUANTU_ZERO_BYTE_RETRIES', '-1', 0],
+  ] as const) {
+    const problem = environmentProblems({ [key]: value }).find(
+      (entry) => entry.key === key,
+    )?.problem;
+    assert.ok(problem, `the environment table refuses ${key}=${value}`);
+    // The lower bound of `YUANTU_INVESTIGATION_MS` is the table's alone: the parser's floor is "positive", as it
+    // is for every other number in it, so only the ceiling is asserted here.
+    if (Number(value) > ceiling)
+      assert.throws(() => parseArgs([], { [key]: value }), /at most/, `refuses ${key}=${value}`);
+  }
+  assert.equal(
+    parseArgs([], { YUANTU_INVESTIGATION_MS: '240000' }).options.investigationMs,
+    240_000,
+  );
+  assert.equal(parseArgs([], { YUANTU_ZERO_BYTE_RETRIES: '0' }).options.zeroByteRetries, 0);
   // The boundaries themselves, so a bound cannot be widened on one side only: 2 retries are allowed, 3 are
   // not; an empty value means "not set" for both readers rather than an invalid number.
   assert.deepEqual(environmentProblems({ YUANTU_STREAM_IDLE_TIMEOUT_MS: '' }), []);
