@@ -331,6 +331,13 @@ export function setupTranscript(options: {
     const completion = options.getState()?.session.completion ?? null;
     if (!completion) return null;
     const summary = completion.summary;
+    const automatic = completion.source === 'automatic';
+    if (automatic && summary.state === 'verified')
+      return node(
+        'p',
+        `${t('ui.automaticVerificationTitle')} · ${t('ui.verificationChecksPassed')}`,
+        'completion-notice completion-verified completion-summary',
+      );
     // A check the environment could not run is not a failed check: the card says "not verified" in amber and
     // names the limit, instead of "needs review" over a repair counter for code that was never at fault.
     const environmentLimited =
@@ -346,11 +353,10 @@ export function setupTranscript(options: {
       '',
       `completion-notice completion-${environmentLimited ? 'unverified' : summary.state}`,
     );
+    if (automatic) element.setAttribute('role', 'status');
     const stateKey = environmentLimited
       ? 'ui.completionState.environment'
-      : completion.source === 'automatic' && summary.state === 'verified'
-        ? 'ui.verificationChecksPassed'
-        : `ui.completionState.${summary.state}`;
+      : `ui.completionState.${summary.state}`;
     element.append(
       node(
         'strong',
@@ -362,6 +368,9 @@ export function setupTranscript(options: {
     if (
       summary.state === 'needs_review' ||
       summary.state === 'limited' ||
+      (automatic &&
+        summary.state === 'unverified' &&
+        COMPLETION_REASONS.has(summary.reason.split(':')[0]!.trim())) ||
       summary.reason === 'missing-verification' ||
       summary.reason === 'superseded'
     ) {
@@ -419,15 +428,9 @@ export function setupTranscript(options: {
           }),
         ),
       );
-    /**
-     * What the checks actually ran is part of the verdict, not a detail a reader has to open.
-     *
-     * `auto-1` and a green "checks passed" said nothing about the command; a model can register a narrower
-     * check than the user asked for (`node tests/x.mjs` after `npm test` hit the sandbox), and the person is
-     * entitled to see that before trusting the green line. The full command stays in the details; this line is
-     * the command shortened only for width.
-     */
-    for (const check of completion.evidence?.checks ?? []) {
+    // Automatic checks keep their evidence in session state; the transcript only shows the verdict and blockers.
+    // Explicit acceptance contracts retain their existing evidence display.
+    for (const check of automatic ? [] : (completion.evidence?.checks ?? [])) {
       const criterion = completion.definition.acceptance.find(
         (item) => item.check?.id === check.id,
       );
@@ -460,7 +463,7 @@ export function setupTranscript(options: {
         line.append(' ', node('span', t('ui.verificationSubstitute'), 'completion-substitute'));
       element.append(line);
     }
-    if (completion.evidence?.checks.length) {
+    if (!automatic && completion.evidence?.checks.length) {
       const details = node('details', '', 'completion-evidence');
       details.append(
         node(

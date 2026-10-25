@@ -1170,6 +1170,32 @@ textarea::placeholder {
 #send span {
   margin-left: 12px;
 }
+.completion-summary {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.completion-unverified,
+.completion-needs_review,
+.completion-limited {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-left: 3px solid #b88632;
+  background: color-mix(in srgb, #b88632 10%, var(--surface));
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.completion-needs_review,
+.completion-limited {
+  border-left-color: #cc6565;
+  background: color-mix(in srgb, #cc6565 10%, var(--surface));
+}
+.completion-notice > p {
+  margin: 6px 0 0;
+}
 .completion-evidence {
   margin-top: 8px;
 }

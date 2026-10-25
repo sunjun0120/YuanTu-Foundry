@@ -21,7 +21,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
 
 test(
-  'desktop verifies a normal message and shows command evidence without an acceptance form',
+  'desktop verifies a normal message and keeps passed checks concise across reloads',
   { timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-auto-verification-ui-'));
@@ -92,16 +92,25 @@ test(
     await page.waitForFunction(() =>
       document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
     );
-    await page.locator('.completion-evidence summary').click();
-    assert.match(await page.locator('.completion-evidence').innerText(), /退出码：0/);
-    assert.match(await page.locator('.completion-evidence pre').innerText(), /OUTPUT_CHECK_PASSED/);
+    assert.equal(await page.locator('.completion-notice').innerText(), '自动验证 · 检查通过');
+    assert.equal(await page.locator('.completion-notice details, .completion-check').count(), 0);
+    const completion = await page.evaluate(
+      async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
+    );
+    assert.equal(completion.summary.state, 'verified');
+    assert.equal(completion.evidence.checks[0].command.exitCode, 0);
+    assert.match(completion.evidence.checks[0].command.stdout, /OUTPUT_CHECK_PASSED/);
     await page.screenshot({ path: artifactPath('automatic-verification.png'), fullPage: true });
     await page.reload();
     await page.waitForFunction(() =>
       document.querySelector('.completion-notice')?.textContent.includes('检查通过'),
     );
-    await page.locator('.completion-evidence summary').click();
-    assert.match(await page.locator('.completion-evidence pre').innerText(), /OUTPUT_CHECK_PASSED/);
+    assert.equal(await page.locator('.completion-notice').innerText(), '自动验证 · 检查通过');
+    assert.equal(await page.locator('.completion-notice details, .completion-check').count(), 0);
+    const restored = await page.evaluate(
+      async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.completion,
+    );
+    assert.match(restored.evidence.checks[0].command.stdout, /OUTPUT_CHECK_PASSED/);
   },
 );
 
