@@ -157,7 +157,7 @@ export async function fetchModel(
         new RunFailure('timeout', 'Model connection idle timeout', {
           cause: new Error(`No response within ${connectTimeoutMs}ms`),
           // No response object ever existed, so nothing of the body was read: this failure is empty by
-          // construction, which is what the step boundary reads to decide whether a re-send is free.
+          // construction, which is what the step boundary reads to decide whether a zero-byte retry applies.
           details: {
             responseBytes: 0,
             events: 0,

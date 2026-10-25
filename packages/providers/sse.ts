@@ -27,7 +27,7 @@ function parseFrame(
  *
  * Counted here because nowhere above this layer can tell "the endpoint said nothing" from "the user was shown
  * nothing": a request that failed before its first event and one that failed after streaming its whole reasoning
- * both look like a failed attempt to the step boundary, and only the first is worth re-sending for free.
+ * both look like a failed attempt to the step boundary; only the first qualifies for a zero-byte retry.
  */
 export interface StreamCounters {
   bytes: number;

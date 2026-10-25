@@ -58,7 +58,7 @@ export class OpenAIProvider implements Provider {
      * What this attempt received, counted where the bytes are read.
      *
      * The step boundary cannot tell an attempt that produced nothing from one that streamed its whole reasoning
-     * before failing, and only the first may be re-sent without charge; so the counts travel on the failure.
+     * before failing, and only the first qualifies for a zero-byte retry; the counts travel on the failure.
      */
     const stream: StreamCounters = { bytes: 0, events: 0 };
     const counted = (): { responseBytes: number; events: number; durationMs: number } => ({
