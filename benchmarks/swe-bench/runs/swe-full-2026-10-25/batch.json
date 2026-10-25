@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "batchId": "swe-full-20261025-v1",
+  "live": true,
+  "requests": 1102,
+  "attempts": 50,
+  "planned": 50,
+  "subsetHash": "b1fa435a7b863a4e264cd23f048f13f9d14bbda639ec15bc6401d1896256d775",
+  "configHash": "7ab043237a6ba64168ef009a80780e1dca5d20f7230da48fe5ddb5d11e7fb83b",
+  "runtimeRevision": "91fa342347c550ce2e0033e13a6d259a2dd9cd8f",
+  "runtimeHash": "4845d8786b1d538c605ba474185ec3c43630793cdeb8f4f0c390eeafca178616",
+  "exitCode": 0
+}
