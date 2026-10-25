@@ -66,8 +66,8 @@ test('changing queries and scratch probes cannot extend investigation indefinite
   assert.equal(result.text, 'Conclusion from collected evidence');
   assert.equal(result.status, 'completed', result.error);
   assert.equal(result.completion, undefined);
-  // Twenty investigation rounds, two edit-only attempts, then the conclusion.
-  assert.ok(requests <= 23, `${requests} requests`);
+  // Twenty investigation rounds, three act attempts, then the conclusion.
+  assert.ok(requests <= 24, `${requests} requests`);
 });
 
 test('investigation wall time converges even when each query returns new evidence', () => {
@@ -154,8 +154,8 @@ function assertActTools(request: ModelRequest) {
     'editing remains available at the cutoff',
   );
   assert.ok(
-    request.tools.every((tool) => fileEditors.includes(tool.name)),
-    'only file editors are offered',
+    request.tools.every((tool) => [...fileEditors, 'read_file'].includes(tool.name)),
+    'only file editors and targeted reads are offered',
   );
   assert.ok(
     request.tools.every((tool) => !('effect' in tool)),
@@ -181,8 +181,8 @@ test('investigation cutoff offers editors, persists an edit and restores both ca
       }
       if (round === 5) {
         assertActTools(request);
-        assert.equal(ctx.tools.offers('read_file'), false);
-        assert.ok(catalogs.at(-1)?.every((name) => fileEditors.includes(name)));
+        assert.equal(ctx.tools.offers('read_file'), true);
+        assert.ok(catalogs.at(-1)?.every((name) => [...fileEditors, 'read_file'].includes(name)));
         return editRound('act-edit');
       }
       assert.ok(
@@ -236,8 +236,14 @@ test('investigation cutoff capabilities identify exactly the six file editors', 
   assert.ok(ctx.tools.specs({ mode: 'native' }).every((tool) => !('effect' in tool)));
 });
 
-for (const attempt of ['failed-edit', 'scratch', 'forbidden-read', 'forbidden-program'] as const) {
-  test(`investigation cutoff bounds two no-change attempts: ${attempt}`, async (t) => {
+for (const attempt of [
+  'failed-edit',
+  'scratch',
+  'forbidden-search',
+  'forbidden-program',
+  'read-only',
+] as const) {
+  test(`investigation cutoff bounds three no-change attempts: ${attempt}`, async (t) => {
     const tick = investigationClock(t);
     let requests = 0;
     const ctx = await fixture(t, {
@@ -247,7 +253,7 @@ for (const attempt of ['failed-edit', 'scratch', 'forbidden-read', 'forbidden-pr
           tick();
           return readRound(round);
         }
-        if (round <= 6) {
+        if (round <= 7) {
           assertActTools(request);
           if (attempt === 'failed-edit') return editRound(`attempt-${round}`, 'absent');
           if (attempt === 'scratch')
@@ -259,9 +265,13 @@ for (const attempt of ['failed-edit', 'scratch', 'forbidden-read', 'forbidden-pr
             return toolReply(`attempt-${round}`, 'run_code', {
               code: "return await tools.read_file({path:'target.txt'});",
             });
-          return toolReply(`attempt-${round}`, 'read_file', { path: 'target.txt' });
+          return toolReply(
+            `attempt-${round}`,
+            attempt === 'read-only' ? 'read_file' : 'search_files',
+            { path: 'target.txt', ...(attempt === 'read-only' ? {} : { pattern: 'bad' }) },
+          );
         }
-        assert.equal(round, 7);
+        assert.equal(round, 8);
         assert.deepEqual(request.tools, []);
         assert.equal(
           ctx.tools.offers('read_file'),
@@ -274,15 +284,19 @@ for (const attempt of ['failed-edit', 'scratch', 'forbidden-read', 'forbidden-pr
     await investigationFiles(ctx.root);
     const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
     assert.equal(result.status, 'completed', result.error);
-    assert.equal(requests, 7);
+    assert.equal(requests, 8);
     assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'bad');
     const results = ctx.store
       .messages(ctx.session.id)
       .filter((m) => m.role === 'tool' && m.toolCallId.startsWith('attempt-'));
-    assert.equal(results.length, 2);
+    assert.equal(results.length, 3);
     for (const result of results) {
       assert.ok(result.role === 'tool');
-      assert.equal(result.isError, attempt !== 'scratch', result.content);
+      assert.equal(
+        result.isError,
+        attempt !== 'scratch' && attempt !== 'read-only',
+        result.content,
+      );
       if (attempt.startsWith('forbidden'))
         assert.match(result.content, /excluded by a restriction/);
     }
@@ -296,7 +310,7 @@ for (const attempt of ['failed-edit', 'scratch', 'forbidden-read', 'forbidden-pr
   });
 }
 
-test('investigation cutoff refuses a mixed read but executes its sibling edit', async (t) => {
+test('investigation cutoff refuses a mixed search but executes its sibling edit', async (t) => {
   const tick = investigationClock(t);
   let requests = 0;
   const ctx = await fixture(t, {
@@ -310,8 +324,8 @@ test('investigation cutoff refuses a mixed read but executes its sibling edit', 
         const response = editRound('mixed-edit');
         response.toolCalls.unshift({
           id: 'mixed-read',
-          name: 'read_file',
-          arguments: { path: 'target.txt' },
+          name: 'search_files',
+          arguments: { path: 'target.txt', pattern: 'bad' },
         });
         return response;
       }
@@ -347,7 +361,7 @@ for (const ending of ['exception', 'cancel', 'conclusion-call'] as const) {
           return readRound(requests);
         }
         if (ending === 'conclusion-call') {
-          if (requests <= 6) {
+          if (requests <= 7) {
             assertActTools(request);
             return editRound(`failed-${requests}`, 'absent');
           }
@@ -544,7 +558,7 @@ test('investigation cutoff at the plan approval boundary restores the approved c
   assert.equal(ctx.tools.offers('read_file'), true);
 });
 
-test('investigation cutoff leaves read-only requests with no editors', async (t) => {
+test('investigation cutoff allows three targeted reads under a read-only request', async (t) => {
   const tick = investigationClock(t);
   let requests = 0;
   const ctx = await fixture(t, {
@@ -552,6 +566,13 @@ test('investigation cutoff leaves read-only requests with no editors', async (t)
       if (++requests <= 4) {
         tick();
         return readRound(requests);
+      }
+      if (requests <= 7) {
+        assert.deepEqual(
+          request.tools.map((tool) => tool.name),
+          ['read_file'],
+        );
+        return readRound(1);
       }
       assert.deepEqual(request.tools, []);
       return reply('Read-only conclusion');
@@ -564,7 +585,7 @@ test('investigation cutoff leaves read-only requests with no editors', async (t)
     readOnly: true,
   });
   assert.equal(result.status, 'completed', result.error);
-  assert.equal(requests, 5);
+  assert.equal(requests, 8);
 });
 
 test('investigation cutoff yields to the ordinary failure conclusion during the first act attempt', async (t) => {
@@ -590,6 +611,43 @@ test('investigation cutoff yields to the ordinary failure conclusion during the 
   const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
   assert.equal(result.status, 'completed', result.error);
   assert.equal(requests, 6);
+});
+
+test('investigation handoff reads exact source before editing and restores searches', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      const round = ++requests;
+      if (round <= 4) {
+        tick();
+        return readRound(round);
+      }
+      if (round === 5) {
+        assertActTools(request);
+        const notice = JSON.stringify(request.messages);
+        assert.match(notice, /do not reconstruct/i);
+        assert.match(notice, /read_file/);
+        assert.match(notice, /line range/i);
+        return toolReply('targeted-read', 'read_file', {
+          path: 'target.txt',
+          start_line: 1,
+          end_line: 1,
+        });
+      }
+      if (round === 6) {
+        assertActTools(request);
+        return editRound('after-read');
+      }
+      assert.ok(request.tools.some((tool) => tool.name === 'search_files'));
+      return reply('Edited after checking source');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'good');
+  assert.equal(requests, 7);
 });
 
 test('ordinary questions carry direct-answer and scoped-project lookup rules', async (t) => {

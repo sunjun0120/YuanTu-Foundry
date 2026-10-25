@@ -468,7 +468,12 @@ export class Agent {
         releaseAct = undefined;
         queryState.phase = next;
         if (next === 'act')
-          releaseAct = tools.restrict({ allow: tools.namesWithEffect('workspace-file') });
+          releaseAct = tools.restrict({
+            allow: [
+              ...tools.namesWithEffect('workspace-file'),
+              ...tools.namesWithEffect('workspace-read'),
+            ],
+          });
         // Registry restrictions take effect immediately; the two cached catalogs need rebuilding too.
         refreshProgressTools?.();
       };
@@ -997,11 +1002,11 @@ export class Agent {
             if (projectChanged) {
               // Preserve failure/blocker counts across edits; only leave the edit-only phase.
               resetQueryPhase();
-            } else if (++noChangeActRounds >= 2) {
+            } else if (++noChangeActRounds >= 3) {
               setQueryPhase('conclude');
               progress = 'conclude';
             } else if (progress === 'investigation-conclude') {
-              // An exhausted investigation is still exhausted; it cannot buy a fresh pair of attempts.
+              // An exhausted investigation is still exhausted; it cannot buy a fresh allowance of attempts.
               progress = 'continue';
             }
           } else if (progress === 'investigation-conclude') {

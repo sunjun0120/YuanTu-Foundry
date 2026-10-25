@@ -372,6 +372,7 @@ export function fileTools(
     },
     {
       name: 'read_file',
+      effect: 'workspace-read',
       isConcurrencySafe: parallelRead,
       output: READ_FILE_OUTPUT,
       description:

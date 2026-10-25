@@ -197,7 +197,7 @@ export function toolProgressNotice(action: Exclude<ToolProgress, 'continue'>): s
     (action === 'investigation-warn'
       ? 'This investigation has used its initial time or tool-round allowance. Stop widening the search. Answer from the evidence already collected, or make only the essential remaining check. State uncertainty instead of auditing unrelated subsystems. Diagnostic scratch scripts do not require project verification checks.'
       : action === 'investigation-conclude'
-        ? 'The investigation reached its time or tool-round allowance. Reading, searching and other investigation tools are no longer available. If the user requested changes and the collected evidence is sufficient, use the available workspace file editing tools now to make the smallest necessary change. Otherwise answer from the evidence already collected and name any uncertainty. Do not claim unfinished work is complete.'
+        ? 'The investigation reached its time or tool-round allowance. Searching and other investigation tools are no longer available. Edit only a specific location supported by the collected evidence; do not reconstruct code from memory. If exact source is needed, use read_file with an explicit line range to read only the lines you intend to change, then edit immediately. Otherwise answer from the evidence already collected and name any uncertainty. Do not claim unfinished work is complete.'
         : action === 'warn'
           ? 'Repeated queries with identical arguments returned unchanged results. Do not repeat those queries. Answer the question from the evidence already collected, or make one materially different, narrowly scoped check if a specific missing fact requires it.'
           : action === 'repeat-failure'
