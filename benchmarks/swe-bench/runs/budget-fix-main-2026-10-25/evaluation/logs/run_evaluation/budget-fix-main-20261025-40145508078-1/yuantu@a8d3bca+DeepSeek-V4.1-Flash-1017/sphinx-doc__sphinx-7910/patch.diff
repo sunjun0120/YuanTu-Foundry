@@ -1,0 +1,42 @@
+diff --git a/CHANGES b/CHANGES
+index 894b9447a..67d1601bf 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -25,6 +25,8 @@ Bugs fixed
+ ----------
+ 
+ * #7886: autodoc: TypeError is raised on mocking generic-typed classes
++* #7910: napoleon: a decorated ``__init__`` method is not documented even if
++  ``napoleon_include_init_with_doc`` is enabled
+ * #7839: autosummary: cannot handle umlauts in function names
+ * #7865: autosummary: Failed to extract summary line when abbreviations found
+ * #7866: autosummary: Failed to extract correct summary line when docstring
+diff --git a/sphinx/ext/napoleon/__init__.py b/sphinx/ext/napoleon/__init__.py
+index 10b1ff3a3..229ec089d 100644
+--- a/sphinx/ext/napoleon/__init__.py
++++ b/sphinx/ext/napoleon/__init__.py
+@@ -438,7 +438,23 @@ def _skip_member(app: Sphinx, what: str, name: str, obj: Any,
+                         mod_path = cls_path.split('.')
+                         cls = functools.reduce(getattr, mod_path, mod)
+                     else:
+-                        cls = obj.__globals__[cls_path]
++                        try:
++                            cls = obj.__globals__[cls_path]
++                        except Exception:
++                            # The member might be decorated by a wrapper which
++                            # is defined in another module (ex. a decorator
++                            # using functools.wraps).  In that case
++                            # obj.__globals__ is the globals of the decorator
++                            # module and does not contain the class.  So
++                            # resolve the class from the module the member
++                            # belongs to instead (refs: #7910).
++                            import importlib
++
++                            modname = getattr(obj, '__module__', None)
++                            if not isinstance(modname, str):
++                                raise
++                            mod = importlib.import_module(modname)
++                            cls = getattr(mod, cls_path)
+                 except Exception:
+                     cls_is_owner = False
+                 else:

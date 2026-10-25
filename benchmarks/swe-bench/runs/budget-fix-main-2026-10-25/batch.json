@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "batchId": "swe-budget-fix-main-20261024-v1",
+  "live": true,
+  "requests": 1141,
+  "attempts": 50,
+  "planned": 50,
+  "subsetHash": "b1fa435a7b863a4e264cd23f048f13f9d14bbda639ec15bc6401d1896256d775",
+  "configHash": "297690abe2ac17b3104c51220d106d89224b2fc5c5ce432e5e9a17121eb20721",
+  "runtimeRevision": "a8d3bca89feb34b25b21b88b814e333a1edd7fb7",
+  "runtimeHash": "24ae47bc6eee8b568ed6ab9896fd3f4baf694615fa5a1451d242015e66ede95d",
+  "exitCode": 2
+}

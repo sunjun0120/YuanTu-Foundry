@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "total": 50,
+  "live": true,
+  "resolved": 31,
+  "unresolved": 5,
+  "error": 14,
+  "pending": 0,
+  "graded": 36,
+  "complete": true,
+  "passRate": 0.62,
+  "wilson95": {
+    "lower": 0.4815044693099298,
+    "upper": 0.7413721068980641
+  },
+  "emptyPatches": 14,
+  "changedTests": 4,
+  "generationErrors": 3,
+  "rounds": {
+    "median": 16.5,
+    "min": 6,
+    "max": 67,
+    "count": 50
+  },
+  "durationMs": {
+    "median": 217133.3402000002,
+    "min": 64736.10780000035,
+    "max": 1200128.3586999997,
+    "count": 50
+  },
+  "inputTokens": {
+    "median": 194390,
+    "min": 60236,
+    "max": 1955522,
+    "count": 50
+  },
+  "outputTokens": {
+    "median": 20451,
+    "min": 2523,
+    "max": 122418,
+    "count": 50
+  },
+  "cachedInputTokens": {
+    "median": 180992,
+    "min": 46208,
+    "max": 1885568,
+    "count": 50
+  },
+  "tokenTotals": {
+    "inputTokens": 21634468,
+    "outputTokens": 1406846,
+    "cachedInputTokens": 20054016,
+    "complete": false
+  },
+  "configHash": "297690abe2ac17b3104c51220d106d89224b2fc5c5ce432e5e9a17121eb20721",
+  "suggestedMaxKnownTokensPerSample": 639626,
+  "runtime": [
+    "a8d3bca89feb34b25b21b88b814e333a1edd7fb7"
+  ]
+}

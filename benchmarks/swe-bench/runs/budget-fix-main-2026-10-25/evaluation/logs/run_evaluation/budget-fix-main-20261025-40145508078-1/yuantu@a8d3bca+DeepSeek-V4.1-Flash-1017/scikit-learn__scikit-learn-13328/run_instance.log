@@ -1,0 +1,81 @@
+2026-10-25 00:37:04,840 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:37:27,242 - INFO - Creating container for scikit-learn__scikit-learn-13328...
+2026-10-25 00:37:33,002 - INFO - Container for scikit-learn__scikit-learn-13328 created: 91bbe3bc5dfc3b3c6c117966debacac1a5809ade2d7bc48e54e4d2987a033571
+2026-10-25 00:37:33,090 - INFO - Container for scikit-learn__scikit-learn-13328 started: 91bbe3bc5dfc3b3c6c117966debacac1a5809ade2d7bc48e54e4d2987a033571
+2026-10-25 00:37:33,090 - INFO - Intermediate patch for scikit-learn__scikit-learn-13328 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-13328/patch.diff, now applying to container...
+2026-10-25 00:37:33,156 - INFO - >>>>> Applied Patch:
+Checking patch doc/whats_new/v0.21.rst...
+Checking patch sklearn/linear_model/huber.py...
+Applied patch doc/whats_new/v0.21.rst cleanly.
+Applied patch sklearn/linear_model/huber.py cleanly.
+
+2026-10-25 00:37:33,327 - INFO - Git diff before:
+diff --git a/doc/whats_new/v0.21.rst b/doc/whats_new/v0.21.rst
+index e3e3ec9f8..13c7c14e5 100644
+--- a/doc/whats_new/v0.21.rst
++++ b/doc/whats_new/v0.21.rst
+@@ -234,6 +234,10 @@ Support for Python 3.4 and below has been officially dropped.
+   now supports fitting the intercept (i.e. ``fit_intercept=True``) when
+   inputs are sparse . :issue:`13336` by :user:`Bartosz Telenczuk <btel>`
+ 
++- |Fix| :class:`linear_model.HuberRegressor` now accepts boolean input for
++  ``X`` by converting it to floating point, instead of raising a
++  ``TypeError``. :issue:`13328`
++
+ :mod:`sklearn.manifold`
+ ............................
+ 
+diff --git a/sklearn/linear_model/huber.py b/sklearn/linear_model/huber.py
+index 65c686400..285913684 100644
+--- a/sklearn/linear_model/huber.py
++++ b/sklearn/linear_model/huber.py
+@@ -251,7 +251,8 @@ class HuberRegressor(LinearModel, RegressorMixin, BaseEstimator):
+         self : object
+         """
+         X, y = check_X_y(
+-            X, y, copy=False, accept_sparse=['csr'], y_numeric=True)
++            X, y, copy=False, accept_sparse=['csr'], y_numeric=True,
++            dtype=[np.float64, np.float32])
+         if sample_weight is not None:
+             sample_weight = np.array(sample_weight)
+             check_consistent_length(y, sample_weight)
+2026-10-25 00:37:33,328 - INFO - Eval script for scikit-learn__scikit-learn-13328 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-13328/eval.sh; copying to container...
+2026-10-25 00:37:35,764 - INFO - Test runtime: 2.40 seconds
+2026-10-25 00:37:35,765 - INFO - Test output for scikit-learn__scikit-learn-13328 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-13328/test_output.txt
+2026-10-25 00:37:35,799 - INFO - Git diff after:
+diff --git a/doc/whats_new/v0.21.rst b/doc/whats_new/v0.21.rst
+index e3e3ec9f8..13c7c14e5 100644
+--- a/doc/whats_new/v0.21.rst
++++ b/doc/whats_new/v0.21.rst
+@@ -234,6 +234,10 @@ Support for Python 3.4 and below has been officially dropped.
+   now supports fitting the intercept (i.e. ``fit_intercept=True``) when
+   inputs are sparse . :issue:`13336` by :user:`Bartosz Telenczuk <btel>`
+ 
++- |Fix| :class:`linear_model.HuberRegressor` now accepts boolean input for
++  ``X`` by converting it to floating point, instead of raising a
++  ``TypeError``. :issue:`13328`
++
+ :mod:`sklearn.manifold`
+ ............................
+ 
+diff --git a/sklearn/linear_model/huber.py b/sklearn/linear_model/huber.py
+index 65c686400..285913684 100644
+--- a/sklearn/linear_model/huber.py
++++ b/sklearn/linear_model/huber.py
+@@ -251,7 +251,8 @@ class HuberRegressor(LinearModel, RegressorMixin, BaseEstimator):
+         self : object
+         """
+         X, y = check_X_y(
+-            X, y, copy=False, accept_sparse=['csr'], y_numeric=True)
++            X, y, copy=False, accept_sparse=['csr'], y_numeric=True,
++            dtype=[np.float64, np.float32])
+         if sample_weight is not None:
+             sample_weight = np.array(sample_weight)
+             check_consistent_length(y, sample_weight)
+2026-10-25 00:37:35,799 - INFO - Grading answer for scikit-learn__scikit-learn-13328...
+2026-10-25 00:37:35,800 - INFO - report: {'scikit-learn__scikit-learn-13328': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': True, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': ['sklearn/linear_model/tests/test_huber.py::test_huber_bool'], 'failure': []}, 'PASS_TO_PASS': {'success': ['sklearn/linear_model/tests/test_huber.py::test_huber_equals_lr_for_high_epsilon', 'sklearn/linear_model/tests/test_huber.py::test_huber_max_iter', 'sklearn/linear_model/tests/test_huber.py::test_huber_gradient', 'sklearn/linear_model/tests/test_huber.py::test_huber_sample_weights', 'sklearn/linear_model/tests/test_huber.py::test_huber_sparse', 'sklearn/linear_model/tests/test_huber.py::test_huber_scaling_invariant', 'sklearn/linear_model/tests/test_huber.py::test_huber_and_sgd_same_results', 'sklearn/linear_model/tests/test_huber.py::test_huber_warm_start', 'sklearn/linear_model/tests/test_huber.py::test_huber_better_r2_score'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for scikit-learn__scikit-learn-13328: resolved: True
+2026-10-25 00:37:35,800 - INFO - Attempting to stop container sweb.eval.scikit-learn__scikit-learn-13328.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:37:50,901 - INFO - Container sweb.eval.scikit-learn__scikit-learn-13328.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:37:50,901 - INFO - Attempting to remove container sweb.eval.scikit-learn__scikit-learn-13328.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:37:50,944 - INFO - Container sweb.eval.scikit-learn__scikit-learn-13328.budget-fix-main-20261025-40145508078-1 removed successfully.

@@ -1,0 +1,30 @@
+diff --git a/sympy/printing/conventions.py b/sympy/printing/conventions.py
+index 9a3be6bbe9..e6a9061afa 100644
+--- a/sympy/printing/conventions.py
++++ b/sympy/printing/conventions.py
+@@ -7,7 +7,10 @@
+ from collections.abc import Iterable
+ from sympy import Derivative
+ 
+-_name_with_digits_p = re.compile(r'^([a-zA-Z]+)([0-9]+)$')
++# The name may consist of any kind of letter, not just ASCII ones, so that
++# e.g. the Greek letter 'omega' written as 'ω0' is also split into the name
++# 'ω' and the subscript '0'.
++_name_with_digits_p = re.compile(r'^([^\W\d_]+)([0-9]+)$')
+ 
+ 
+ def split_super_sub(text):
+@@ -28,6 +31,13 @@ def split_super_sub(text):
+     >>> split_super_sub('var_sub1__sup_sub2')
+     ('var', ['sup'], ['sub1', 'sub2'])
+ 
++    Note that the name does not have to be written with ASCII characters; a
++    Greek letter given as the corresponding unicode character is treated the
++    same way:
++
++    >>> split_super_sub('ω0')
++    ('ω', [], ['0'])
++
+     """
+     if not text:
+         return text, [], []

@@ -1,0 +1,169 @@
+2026-10-25 00:34:39,893 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:34:55,965 - INFO - Creating container for pylint-dev__pylint-4604...
+2026-10-25 00:35:01,180 - INFO - Container for pylint-dev__pylint-4604 created: 5103ca6886549871f6d59a0981aa4a3c9466e8393a7cb8afee4b675a8e5931ef
+2026-10-25 00:35:01,315 - INFO - Container for pylint-dev__pylint-4604 started: 5103ca6886549871f6d59a0981aa4a3c9466e8393a7cb8afee4b675a8e5931ef
+2026-10-25 00:35:01,315 - INFO - Intermediate patch for pylint-dev__pylint-4604 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/pylint-dev__pylint-4604/patch.diff, now applying to container...
+2026-10-25 00:35:01,378 - INFO - >>>>> Applied Patch:
+Checking patch ChangeLog...
+Checking patch doc/whatsnew/2.9.rst...
+Checking patch pylint/checkers/variables.py...
+Checking patch tests/functional/u/unused/unused_typing_imports.py...
+Applied patch ChangeLog cleanly.
+Applied patch doc/whatsnew/2.9.rst cleanly.
+Applied patch pylint/checkers/variables.py cleanly.
+Applied patch tests/functional/u/unused/unused_typing_imports.py cleanly.
+
+2026-10-25 00:35:01,499 - INFO - Git diff before:
+diff --git a/ChangeLog b/ChangeLog
+index a0f12a7a..3e90d3f9 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -21,6 +21,11 @@ Release date: TBA
+   Closes #4117
+   Closes #4593
+ 
++* Fix false positive ``unused-import`` when a module is only used inside a type comment
++  through one of its attributes, as in ``x = ...  # type: abc.ABC``.
++
++  Closes #4717
++
+ * ``setuptools_scm`` has been removed and replaced by ``tbump`` in order to not
+   have hidden runtime dependencies to setuptools
+ 
+diff --git a/doc/whatsnew/2.9.rst b/doc/whatsnew/2.9.rst
+index 514dcb3e..a1ba4961 100644
+--- a/doc/whatsnew/2.9.rst
++++ b/doc/whatsnew/2.9.rst
+@@ -77,3 +77,8 @@ Other Changes
+ 
+ * Fix false positive ``useless-type-doc`` on ignored argument using ``pylint.extensions.docparams`` when a function
+   was typed using pep484 but not inside the docstring.
++
++* Fix false positive ``unused-import`` when a module is only used inside a type
++  comment through one of its attributes, as in ``x = ...  # type: abc.ABC``.
++
++  Closes #4717
+diff --git a/pylint/checkers/variables.py b/pylint/checkers/variables.py
+index 3ddafd59..8a463750 100644
+--- a/pylint/checkers/variables.py
++++ b/pylint/checkers/variables.py
+@@ -1826,6 +1826,10 @@ class VariablesChecker(BaseChecker):
+             self._type_annotation_names.append(type_annotation.name)
+             return
+ 
++        if isinstance(type_annotation, astroid.Attribute):
++            self._store_type_annotation_node(type_annotation.expr)
++            return
++
+         if not isinstance(type_annotation, astroid.Subscript):
+             return
+ 
+diff --git a/tests/functional/u/unused/unused_typing_imports.py b/tests/functional/u/unused/unused_typing_imports.py
+index 7de4e411..128bcdae 100644
+--- a/tests/functional/u/unused/unused_typing_imports.py
++++ b/tests/functional/u/unused/unused_typing_imports.py
+@@ -5,8 +5,10 @@ The problem was that we weren't handling keyword-only arguments annotations,
+ which means we were never processing them.
+ """
+ 
++import abc
+ import re
+ import typing
++from abc import ABC
+ from collections import Counter as CollectionCounter
+ from collections import defaultdict
+ from datetime import datetime
+@@ -83,3 +85,11 @@ def unused_reassigned_import(counter):
+     # type: (CollectionCounter) -> int
+     print(counter)
+     return 42
++
++
++def attribute_in_type_comment():
++    """Regression test for https://github.com/PyCQA/pylint/issues/4717: the
++    ``abc`` module is only used through an attribute inside a type comment."""
++    value = None  # type: abc.ABC
++    other_value = None  # type: ABC
++    return value, other_value
+2026-10-25 00:35:01,499 - INFO - Eval script for pylint-dev__pylint-4604 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/pylint-dev__pylint-4604/eval.sh; copying to container...
+2026-10-25 00:35:03,341 - INFO - Test runtime: 1.81 seconds
+2026-10-25 00:35:03,342 - INFO - Test output for pylint-dev__pylint-4604 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/pylint-dev__pylint-4604/test_output.txt
+2026-10-25 00:35:03,386 - INFO - Git diff after:
+diff --git a/ChangeLog b/ChangeLog
+index a0f12a7a..3e90d3f9 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -21,6 +21,11 @@ Release date: TBA
+   Closes #4117
+   Closes #4593
+ 
++* Fix false positive ``unused-import`` when a module is only used inside a type comment
++  through one of its attributes, as in ``x = ...  # type: abc.ABC``.
++
++  Closes #4717
++
+ * ``setuptools_scm`` has been removed and replaced by ``tbump`` in order to not
+   have hidden runtime dependencies to setuptools
+ 
+diff --git a/doc/whatsnew/2.9.rst b/doc/whatsnew/2.9.rst
+index 514dcb3e..a1ba4961 100644
+--- a/doc/whatsnew/2.9.rst
++++ b/doc/whatsnew/2.9.rst
+@@ -77,3 +77,8 @@ Other Changes
+ 
+ * Fix false positive ``useless-type-doc`` on ignored argument using ``pylint.extensions.docparams`` when a function
+   was typed using pep484 but not inside the docstring.
++
++* Fix false positive ``unused-import`` when a module is only used inside a type
++  comment through one of its attributes, as in ``x = ...  # type: abc.ABC``.
++
++  Closes #4717
+diff --git a/pylint/checkers/variables.py b/pylint/checkers/variables.py
+index 3ddafd59..8a463750 100644
+--- a/pylint/checkers/variables.py
++++ b/pylint/checkers/variables.py
+@@ -1826,6 +1826,10 @@ class VariablesChecker(BaseChecker):
+             self._type_annotation_names.append(type_annotation.name)
+             return
+ 
++        if isinstance(type_annotation, astroid.Attribute):
++            self._store_type_annotation_node(type_annotation.expr)
++            return
++
+         if not isinstance(type_annotation, astroid.Subscript):
+             return
+ 
+diff --git a/tests/functional/u/unused/unused_typing_imports.py b/tests/functional/u/unused/unused_typing_imports.py
+index 7de4e411..128bcdae 100644
+--- a/tests/functional/u/unused/unused_typing_imports.py
++++ b/tests/functional/u/unused/unused_typing_imports.py
+@@ -5,8 +5,10 @@ The problem was that we weren't handling keyword-only arguments annotations,
+ which means we were never processing them.
+ """
+ 
++import abc
+ import re
+ import typing
++from abc import ABC
+ from collections import Counter as CollectionCounter
+ from collections import defaultdict
+ from datetime import datetime
+@@ -83,3 +85,11 @@ def unused_reassigned_import(counter):
+     # type: (CollectionCounter) -> int
+     print(counter)
+     return 42
++
++
++def attribute_in_type_comment():
++    """Regression test for https://github.com/PyCQA/pylint/issues/4717: the
++    ``abc`` module is only used through an attribute inside a type comment."""
++    value = None  # type: abc.ABC
++    other_value = None  # type: ABC
++    return value, other_value
+2026-10-25 00:35:03,386 - INFO - Grading answer for pylint-dev__pylint-4604...
+2026-10-25 00:35:03,387 - INFO - report: {'pylint-dev__pylint-4604': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': False, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': [], 'failure': ['tests/checkers/unittest_variables.py::TestVariablesChecker::test_bitbucket_issue_78', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_no_name_in_module_skipped', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_all_elements_without_parent', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_redefined_builtin_ignored', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_redefined_builtin_custom_modules', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_redefined_builtin_modname_not_ignored', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_redefined_builtin_in_function', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_unassigned_global', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_listcomp_in_decorator', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_listcomp_in_ancestors', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_return_type_annotation', 'tests/checkers/unittest_variables.py::TestVariablesChecker::test_attribute_in_type_comment', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_custom_callback_string', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_redefined_builtin_modname_not_ignored', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_redefined_builtin_in_function', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_import_as_underscore', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_lambda_in_classdef', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_nested_lambda', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_ignored_argument_names_no_message', 'tests/checkers/unittest_variables.py::TestVariablesCheckerWithTearDown::test_ignored_argument_names_starred_args', 'tests/checkers/unittest_variables.py::TestMissingSubmodule::test_package_all']}, 'PASS_TO_PASS': {'success': [], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for pylint-dev__pylint-4604: resolved: False
+2026-10-25 00:35:03,387 - INFO - Attempting to stop container sweb.eval.pylint-dev__pylint-4604.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:35:18,484 - INFO - Container sweb.eval.pylint-dev__pylint-4604.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:35:18,484 - INFO - Attempting to remove container sweb.eval.pylint-dev__pylint-4604.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:35:18,518 - INFO - Container sweb.eval.pylint-dev__pylint-4604.budget-fix-main-20261025-40145508078-1 removed successfully.

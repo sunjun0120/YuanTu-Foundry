@@ -1,0 +1,416 @@
+{
+  "resolved_ids": [
+    "astropy__astropy-14309",
+    "django__django-10880",
+    "django__django-11099",
+    "django__django-11451",
+    "django__django-11815",
+    "django__django-12155",
+    "django__django-12276",
+    "django__django-12419",
+    "django__django-13028",
+    "django__django-13089",
+    "django__django-13343",
+    "django__django-13363",
+    "django__django-13964",
+    "django__django-14559",
+    "django__django-14771",
+    "django__django-16569",
+    "django__django-17084",
+    "matplotlib__matplotlib-25122",
+    "pallets__flask-5014",
+    "psf__requests-1921",
+    "pydata__xarray-4075",
+    "pytest-dev__pytest-5631",
+    "pytest-dev__pytest-5809",
+    "scikit-learn__scikit-learn-13328",
+    "scikit-learn__scikit-learn-25931",
+    "sphinx-doc__sphinx-7910",
+    "sympy__sympy-13551",
+    "sympy__sympy-13798",
+    "sympy__sympy-23950",
+    "sympy__sympy-24443",
+    "sympy__sympy-24562"
+  ],
+  "unresolved_ids": [
+    "django__django-10999",
+    "pylint-dev__pylint-4604",
+    "sphinx-doc__sphinx-10449",
+    "sympy__sympy-18199",
+    "sympy__sympy-20916"
+  ],
+  "error_ids": [],
+  "empty_patch_ids": [
+    "astropy__astropy-14598",
+    "django__django-11149",
+    "django__django-11885",
+    "django__django-15561",
+    "django__django-15957",
+    "django__django-16877",
+    "django__django-16950",
+    "matplotlib__matplotlib-24627",
+    "matplotlib__matplotlib-24870",
+    "mwaskom__seaborn-3187",
+    "pydata__xarray-7229",
+    "scikit-learn__scikit-learn-13124",
+    "sphinx-doc__sphinx-10614",
+    "sphinx-doc__sphinx-10673"
+  ],
+  "submitted_ids": [
+    "astropy__astropy-14309",
+    "astropy__astropy-14598",
+    "django__django-10880",
+    "django__django-10999",
+    "django__django-11099",
+    "django__django-11149",
+    "django__django-11451",
+    "django__django-11815",
+    "django__django-11885",
+    "django__django-12155",
+    "django__django-12276",
+    "django__django-12419",
+    "django__django-13028",
+    "django__django-13089",
+    "django__django-13343",
+    "django__django-13363",
+    "django__django-13964",
+    "django__django-14559",
+    "django__django-14771",
+    "django__django-15561",
+    "django__django-15957",
+    "django__django-16569",
+    "django__django-16877",
+    "django__django-16950",
+    "django__django-17084",
+    "matplotlib__matplotlib-24627",
+    "matplotlib__matplotlib-24870",
+    "matplotlib__matplotlib-25122",
+    "mwaskom__seaborn-3187",
+    "pallets__flask-5014",
+    "psf__requests-1921",
+    "pydata__xarray-4075",
+    "pydata__xarray-7229",
+    "pylint-dev__pylint-4604",
+    "pytest-dev__pytest-5631",
+    "pytest-dev__pytest-5809",
+    "scikit-learn__scikit-learn-13124",
+    "scikit-learn__scikit-learn-13328",
+    "scikit-learn__scikit-learn-25931",
+    "sphinx-doc__sphinx-10449",
+    "sphinx-doc__sphinx-10614",
+    "sphinx-doc__sphinx-10673",
+    "sphinx-doc__sphinx-7910",
+    "sympy__sympy-13551",
+    "sympy__sympy-13798",
+    "sympy__sympy-18199",
+    "sympy__sympy-20916",
+    "sympy__sympy-23950",
+    "sympy__sympy-24443",
+    "sympy__sympy-24562"
+  ],
+  "failure_reasons": {
+    "pylint-dev__pylint-4604": "no_tests_collected"
+  },
+  "official_summaries": [
+    {
+      "instanceId": "astropy__astropy-14309",
+      "path": "parts/astropy__astropy-14309/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "8b3912ec15fe423ee17f749a04e8282e696c0d88e1b3f0b69b7b71d69c759102",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "astropy__astropy-14598",
+      "path": "parts/astropy__astropy-14598/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "73db491effd7b73dd11477398c9ecbab5b1bf7a2dee03f88e69c87a18f322f63",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-10880",
+      "path": "parts/django__django-10880/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "82175248fba7cd787bac34fcc2d0f70f5c77b597ec8d69254bdfb9447abc5308",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-10999",
+      "path": "parts/django__django-10999/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "22de8c23fc0905fe1ce2de109888efc098b1978fa97232db59c6a1cf7df81f71",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-11099",
+      "path": "parts/django__django-11099/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "77ec4aa66e534028f57f6aa932893e69637ea1f773bfb262b769a4dd576951c1",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-11149",
+      "path": "parts/django__django-11149/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "663e5a94409c59cb18a50798609f19a932be5ca9967973a297c96cc0a5693342",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-11451",
+      "path": "parts/django__django-11451/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "5f7f539bf277a4803b97c6dccb6a8568e02f0c08ed6a1858fb556a809c94a3ed",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-11815",
+      "path": "parts/django__django-11815/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "766f7f58bfae0d2f79a13b6c893ce921ad3b5a636936bad92744fa20f821a9c8",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-11885",
+      "path": "parts/django__django-11885/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "1985b10b0d136045435ef15871a66538b07c4ab805142046a0711549bab3d6cc",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-12155",
+      "path": "parts/django__django-12155/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "51c5ca3f13a9e77d51cc35d2ce9750852eff2b8c5fa106193c8c2151633a137c",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-12276",
+      "path": "parts/django__django-12276/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "45cccfa389faa618ab8dabef7fd2b6021379ba11c4c9fd73f1ccef2666651dbc",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-12419",
+      "path": "parts/django__django-12419/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "c0b0342a75e4420a28a3b8d86f199017d17135a4d7575dd04918067d3211f2be",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-13028",
+      "path": "parts/django__django-13028/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "bbfda0c89c54da6d7e0dae74ccb6048b2633e7468a0db1bb38a4d1cdd0ea7e02",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-13089",
+      "path": "parts/django__django-13089/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "a2631d19f1ccc6a5ce380e34748057b84e605de2769b2fae7fc9c490e592f5ca",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-13343",
+      "path": "parts/django__django-13343/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "2c1d1714962b53afd681950dc307259c7da1559e655d3caecfd7c2f6c2f027de",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-13363",
+      "path": "parts/django__django-13363/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "f02e1fb0602b48d2649c17388a0524571c2e4fca999f6d3bb06be6d930a53057",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-13964",
+      "path": "parts/django__django-13964/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "a302d1aaab9ae667f729ebc2f6a8fff30156d49ed96c147166faaa7dc7b3d05f",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-14559",
+      "path": "parts/django__django-14559/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "52f5339c53d22e5a0f5fe69bdbc6fe4a920096f621933346c567369c3fe43b6b",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-14771",
+      "path": "parts/django__django-14771/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "93e6b401eea1cbf7530bd59d7571d47917e5df12767a8642e599a5993175bbc4",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-15561",
+      "path": "parts/django__django-15561/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "80a1c93488e69a3c1297c56cf8f84a47b399601cb8dbd53c001af28a997545de",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-15957",
+      "path": "parts/django__django-15957/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "8f5b18a0b6e275ae26c033936520a353df4825947d20767947609855d48ea2ff",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-16569",
+      "path": "parts/django__django-16569/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "3f729f0c07aafdef62d78a071c834291c86132d6444a6c5c232a946971e30130",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-16877",
+      "path": "parts/django__django-16877/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "e7713831db190f504e4cc0537483c8daa597d714ed9ab95d8dc42378037970f8",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-16950",
+      "path": "parts/django__django-16950/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "0023368e4c28f96a53994900d6855a93cef883398be08ba7fb38b786be1a8267",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "django__django-17084",
+      "path": "parts/django__django-17084/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "1d9c0ace099065a4dca5fb08ebf43743e22a0968f795fbcb745bfb7ee95dfa2f",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "matplotlib__matplotlib-24627",
+      "path": "parts/matplotlib__matplotlib-24627/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "5bd4079250ce318f90f735a1d91ee2fcdafca02f146bf534341671f649a51177",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "matplotlib__matplotlib-24870",
+      "path": "parts/matplotlib__matplotlib-24870/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "cca3a164417423c75bbb6660e730d4cdff99b78073a9de7832e44c605aa1e08f",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "matplotlib__matplotlib-25122",
+      "path": "parts/matplotlib__matplotlib-25122/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "abc07fb2fe13f3dcf24c753ef2170f50a6e57652b8f2ee03df62246ec8e5b243",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "mwaskom__seaborn-3187",
+      "path": "parts/mwaskom__seaborn-3187/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "0690aa4b6533e45ca4f02eb0449bb761d44101d8d1da0a839afc6f3dd1777e95",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "pallets__flask-5014",
+      "path": "parts/pallets__flask-5014/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "cb22867f5e6569f719b1da8c17eda43eae8a2aa53c66788d275acbb4a9cee191",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "psf__requests-1921",
+      "path": "parts/psf__requests-1921/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "0746cc91a78d6c970f850951c154b43933c91784a3bc782fc81762d6dd9627a5",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "pydata__xarray-4075",
+      "path": "parts/pydata__xarray-4075/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "6f1a2ecb423abfcd33b31f1a519cb96d180cede7644506af25b395562a9a3d92",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "pydata__xarray-7229",
+      "path": "parts/pydata__xarray-7229/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "4f8cd6deb8fe5c669ca189946e1360bf4d4bb0d2e2288def714390dbea7ddf5d",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "pylint-dev__pylint-4604",
+      "path": "parts/pylint-dev__pylint-4604/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "28e4a7a64b4087422f5559a24d4252586d6898d612b886a5d7227db634757740",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "pytest-dev__pytest-5631",
+      "path": "parts/pytest-dev__pytest-5631/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "f7f4f495a710faa12850f6ba0b1237a2d83aa1b536a45fdaf195e5d6d297c4da",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "pytest-dev__pytest-5809",
+      "path": "parts/pytest-dev__pytest-5809/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "7ea567649cb116f036b8e5f97b1d8c3bce248c640b9c6e10ece74be92d9df074",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "scikit-learn__scikit-learn-13124",
+      "path": "parts/scikit-learn__scikit-learn-13124/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "23c92a3cd3d7ac24249e4178de7c4de4da86d092a72b68de60efa5baa5d25add",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "scikit-learn__scikit-learn-13328",
+      "path": "parts/scikit-learn__scikit-learn-13328/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "6c27f97a539fac88b1b2609cb08e04ab1f033a31925d342742b6c31699dc09d9",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "scikit-learn__scikit-learn-25931",
+      "path": "parts/scikit-learn__scikit-learn-25931/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "a9721c301d196c7812d75e427c4ca6cb154e94af908abdd16ca6a3b14ef41346",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sphinx-doc__sphinx-10449",
+      "path": "parts/sphinx-doc__sphinx-10449/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "02f9a255046cb98d71599167456610f019664d22197d550fa77b75a0414e1880",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sphinx-doc__sphinx-10614",
+      "path": "parts/sphinx-doc__sphinx-10614/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "3175382a19170137a6cf8b6eae2cc03eb5027bd37d08057265815579f9aef2dc",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sphinx-doc__sphinx-10673",
+      "path": "parts/sphinx-doc__sphinx-10673/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "b38897ce5e1f2463a88b0c7022e395d13db93c5b07e01cf092e65eabf2f2dd45",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sphinx-doc__sphinx-7910",
+      "path": "parts/sphinx-doc__sphinx-7910/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "7bc4f0386c3f2a6694f838e720b5da49675b624dc8c9632b2afc60eb7a4e25d3",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-13551",
+      "path": "parts/sympy__sympy-13551/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "80b729ecd716ab3d78b6a45b38f19dfce7fb1d4bc905b23539a19a74c15c6e5c",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-13798",
+      "path": "parts/sympy__sympy-13798/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "3591f8f855ee034b6aef0383e2c58c931319abe4071a43e005a9c4c748e43f2f",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-18199",
+      "path": "parts/sympy__sympy-18199/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "1cbd265b25bb135be5c6f2b678811e94125eb20d12cf4ade06a117a0e88e8873",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-20916",
+      "path": "parts/sympy__sympy-20916/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "2d73a1327d4d24078439b3b0f2b00cb949638d9b611a9944448a40876f123651",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-23950",
+      "path": "parts/sympy__sympy-23950/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "d6cca4569250a7f0cac5020ba564cedd25acabf2d19940a8248db7457db39842",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-24443",
+      "path": "parts/sympy__sympy-24443/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "1cc2351fd7af210c9fb0b00187fbc47d6242d3e2f73d474e4ddda9a64570a62a",
+      "exitCode": 0
+    },
+    {
+      "instanceId": "sympy__sympy-24562",
+      "path": "parts/sympy__sympy-24562/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json",
+      "sha256": "b73c483bab64966eb4b84108561807370a77bdc060d8dad372587066f8e08e24",
+      "exitCode": 0
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+Running 1 instances...
+All instances run.
+Total instances: 1
+Instances submitted: 1
+Instances completed: 1
+Instances incomplete: 0
+Instances resolved: 0
+Instances unresolved: 1
+Instances with likely infrastructure failures: 0
+Instances with ambiguous failures: 0
+Instances with empty patches: 0
+Instances with errors: 0
+Unstopped containers: 0
+Unremoved images: 1
+Report written to /home/runner/work/YuanTu-Foundry/YuanTu-Foundry/.scratch/swe-bench/evaluation/parts/sympy__sympy-18199/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017.budget-fix-main-20261025-40145508078-1.json
+
+  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [01:39<00:00, 99.05s/it]1 ran successfully, 0 failed: 100%|██████████| 1/1 [01:39<00:00, 99.05s/it]1 ran successfully, 0 failed: 100%|██████████| 1/1 [01:39<00:00, 99.05s/it]

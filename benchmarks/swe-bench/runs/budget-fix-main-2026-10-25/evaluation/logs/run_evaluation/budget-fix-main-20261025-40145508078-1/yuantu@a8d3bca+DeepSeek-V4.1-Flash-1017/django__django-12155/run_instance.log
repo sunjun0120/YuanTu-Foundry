@@ -1,0 +1,51 @@
+2026-10-25 00:17:07,051 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:17:24,124 - INFO - Creating container for django__django-12155...
+2026-10-25 00:17:32,335 - INFO - Container for django__django-12155 created: 834fc83e479165a730528a6c08deaf07f4a19633b73372d23b97194c58237a55
+2026-10-25 00:17:32,419 - INFO - Container for django__django-12155 started: 834fc83e479165a730528a6c08deaf07f4a19633b73372d23b97194c58237a55
+2026-10-25 00:17:32,419 - INFO - Intermediate patch for django__django-12155 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/django__django-12155/patch.diff, now applying to container...
+2026-10-25 00:17:32,477 - INFO - >>>>> Applied Patch:
+Checking patch django/contrib/admindocs/utils.py...
+Applied patch django/contrib/admindocs/utils.py cleanly.
+
+2026-10-25 00:17:33,061 - INFO - Git diff before:
+diff --git a/django/contrib/admindocs/utils.py b/django/contrib/admindocs/utils.py
+index 4c0e7e2a56..cda95a90b3 100644
+--- a/django/contrib/admindocs/utils.py
++++ b/django/contrib/admindocs/utils.py
+@@ -34,7 +34,10 @@ def trim_docstring(docstring):
+         return ''
+     # Convert tabs to spaces and split into lines
+     lines = docstring.expandtabs().splitlines()
+-    indent = min(len(line) - len(line.lstrip()) for line in lines if line.lstrip())
++    indent = min(
++        (len(line) - len(line.lstrip()) for line in lines[1:] if line.lstrip()),
++        default=0,
++    )
+     trimmed = [lines[0].lstrip()] + [line[indent:].rstrip() for line in lines[1:]]
+     return "\n".join(trimmed).strip()
+2026-10-25 00:17:33,062 - INFO - Eval script for django__django-12155 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/django__django-12155/eval.sh; copying to container...
+2026-10-25 00:17:36,515 - INFO - Test runtime: 3.42 seconds
+2026-10-25 00:17:36,515 - INFO - Test output for django__django-12155 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/django__django-12155/test_output.txt
+2026-10-25 00:17:36,559 - INFO - Git diff after:
+diff --git a/django/contrib/admindocs/utils.py b/django/contrib/admindocs/utils.py
+index 4c0e7e2a56..cda95a90b3 100644
+--- a/django/contrib/admindocs/utils.py
++++ b/django/contrib/admindocs/utils.py
+@@ -34,7 +34,10 @@ def trim_docstring(docstring):
+         return ''
+     # Convert tabs to spaces and split into lines
+     lines = docstring.expandtabs().splitlines()
+-    indent = min(len(line) - len(line.lstrip()) for line in lines if line.lstrip())
++    indent = min(
++        (len(line) - len(line.lstrip()) for line in lines[1:] if line.lstrip()),
++        default=0,
++    )
+     trimmed = [lines[0].lstrip()] + [line[indent:].rstrip() for line in lines[1:]]
+     return "\n".join(trimmed).strip()
+2026-10-25 00:17:36,559 - INFO - Grading answer for django__django-12155...
+2026-10-25 00:17:36,560 - INFO - report: {'django__django-12155': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': True, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': ['test_parse_rst_with_docstring_no_leading_line_feed (admin_docs.test_utils.TestUtils)'], 'failure': []}, 'PASS_TO_PASS': {'success': ['test_description_output (admin_docs.test_utils.TestUtils)', 'test_initial_header_level (admin_docs.test_utils.TestUtils)', 'test_parse_docstring (admin_docs.test_utils.TestUtils)', 'test_parse_rst (admin_docs.test_utils.TestUtils)', 'test_publish_parts (admin_docs.test_utils.TestUtils)', 'test_title_output (admin_docs.test_utils.TestUtils)'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for django__django-12155: resolved: True
+2026-10-25 00:17:36,560 - INFO - Attempting to stop container sweb.eval.django__django-12155.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:17:51,693 - INFO - Container sweb.eval.django__django-12155.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:17:51,693 - INFO - Attempting to remove container sweb.eval.django__django-12155.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:17:51,766 - INFO - Container sweb.eval.django__django-12155.budget-fix-main-20261025-40145508078-1 removed successfully.

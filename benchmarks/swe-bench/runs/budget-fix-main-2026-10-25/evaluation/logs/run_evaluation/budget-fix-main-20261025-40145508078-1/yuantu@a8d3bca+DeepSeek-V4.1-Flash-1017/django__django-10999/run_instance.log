@@ -1,0 +1,47 @@
+2026-10-25 00:13:29,788 - INFO - Image not found locally, attempting to pull...
+2026-10-25 00:13:47,982 - INFO - Creating container for django__django-10999...
+2026-10-25 00:13:55,604 - INFO - Container for django__django-10999 created: f3c4cce08e5df4a461198bf061703c1e9d72080fb53ad74b4a96a7a7ca5622f8
+2026-10-25 00:13:55,693 - INFO - Container for django__django-10999 started: f3c4cce08e5df4a461198bf061703c1e9d72080fb53ad74b4a96a7a7ca5622f8
+2026-10-25 00:13:55,693 - INFO - Intermediate patch for django__django-10999 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/django__django-10999/patch.diff, now applying to container...
+2026-10-25 00:13:55,754 - INFO - >>>>> Applied Patch:
+Checking patch django/utils/dateparse.py...
+Applied patch django/utils/dateparse.py cleanly.
+
+2026-10-25 00:13:56,393 - INFO - Git diff before:
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+index 8d08b7d1d3..a037758784 100644
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@ datetime_re = re.compile(
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+2026-10-25 00:13:56,393 - INFO - Eval script for django__django-10999 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/django__django-10999/eval.sh; copying to container...
+2026-10-25 00:13:59,770 - INFO - Test runtime: 3.35 seconds
+2026-10-25 00:13:59,771 - INFO - Test output for django__django-10999 written to logs/run_evaluation/budget-fix-main-20261025-40145508078-1/yuantu@a8d3bca+DeepSeek-V4.1-Flash-1017/django__django-10999/test_output.txt
+2026-10-25 00:13:59,812 - INFO - Git diff after:
+diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py
+index 8d08b7d1d3..a037758784 100644
+--- a/django/utils/dateparse.py
++++ b/django/utils/dateparse.py
+@@ -29,7 +29,7 @@ datetime_re = re.compile(
+ standard_duration_re = re.compile(
+     r'^'
+     r'(?:(?P<days>-?\d+) (days?, )?)?'
+-    r'((?:(?P<hours>-?\d+):)(?=\d+:\d+))?'
++    r'((?:(?P<hours>-?\d+):)(?=-?\d+:-?\d+))?'
+     r'(?:(?P<minutes>-?\d+):)?'
+     r'(?P<seconds>-?\d+)'
+     r'(?:\.(?P<microseconds>\d{1,6})\d{0,6})?'
+2026-10-25 00:13:59,812 - INFO - Grading answer for django__django-10999...
+2026-10-25 00:13:59,813 - INFO - report: {'django__django-10999': {'patch_is_None': False, 'patch_exists': True, 'patch_successfully_applied': True, 'resolved': False, 'infra_failure': False, 'tests_status': {'FAIL_TO_PASS': {'success': [], 'failure': ['test_negative (utils_tests.test_dateparse.DurationParseTests)', 'test_parse_postgresql_format (utils_tests.test_dateparse.DurationParseTests)']}, 'PASS_TO_PASS': {'success': ['test_parse_date (utils_tests.test_dateparse.DateParseTests)', 'test_parse_datetime (utils_tests.test_dateparse.DateParseTests)', 'test_parse_time (utils_tests.test_dateparse.DateParseTests)', 'test_days (utils_tests.test_dateparse.DurationParseTests)', 'test_fractions_of_seconds (utils_tests.test_dateparse.DurationParseTests)', 'test_hours_minutes_seconds (utils_tests.test_dateparse.DurationParseTests)', 'test_iso_8601 (utils_tests.test_dateparse.DurationParseTests)', 'test_minutes_seconds (utils_tests.test_dateparse.DurationParseTests)', 'test_parse_python_format (utils_tests.test_dateparse.DurationParseTests)', 'test_seconds (utils_tests.test_dateparse.DurationParseTests)'], 'failure': []}, 'FAIL_TO_FAIL': {'success': [], 'failure': []}, 'PASS_TO_FAIL': {'success': [], 'failure': []}}}}
+Result for django__django-10999: resolved: False
+2026-10-25 00:13:59,813 - INFO - Attempting to stop container sweb.eval.django__django-10999.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:14:14,952 - INFO - Container sweb.eval.django__django-10999.budget-fix-main-20261025-40145508078-1 stopped successfully.
+2026-10-25 00:14:14,952 - INFO - Attempting to remove container sweb.eval.django__django-10999.budget-fix-main-20261025-40145508078-1...
+2026-10-25 00:14:15,020 - INFO - Container sweb.eval.django__django-10999.budget-fix-main-20261025-40145508078-1 removed successfully.

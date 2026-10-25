@@ -1,0 +1,40 @@
+diff --git a/sympy/ntheory/residue_ntheory.py b/sympy/ntheory/residue_ntheory.py
+index 9a3052d4c3..964f44e022 100644
+--- a/sympy/ntheory/residue_ntheory.py
++++ b/sympy/ntheory/residue_ntheory.py
+@@ -755,6 +755,12 @@ def nthroot_mod(a, n, p, all_roots=False):
+     p : positive integer
+     all_roots : if False returns the smallest root, else the list of roots
+ 
++    Notes
++    =====
++
++    If ``a % p == 0`` then ``0`` is the only solution, since
++    ``x**n = 0 (mod p)`` with ``p`` prime implies ``x = 0 (mod p)``.
++
+     Examples
+     ========
+ 
+@@ -765,6 +771,10 @@ def nthroot_mod(a, n, p, all_roots=False):
+     [8, 11]
+     >>> nthroot_mod(68, 3, 109)
+     23
++    >>> nthroot_mod(17*17, 5, 17)
++    0
++    >>> nthroot_mod(17*17, 5, 17, True)
++    [0]
+     """
+     from sympy.core.numbers import igcdex
+     a, n, p = as_int(a), as_int(n), as_int(p)
+@@ -776,6 +786,11 @@ def nthroot_mod(a, n, p, all_roots=False):
+     if not isprime(p):
+         raise NotImplementedError("Not implemented for composite p")
+ 
++    # ``x = 0 (mod p)`` is a solution of ``x**n = 0 (mod p)`` and, for
++    # prime ``p``, it is the only one
++    if a % p == 0:
++        return [0] if all_roots else 0
++
+     if (p - 1) % n == 0:
+         return _nthroot_mod1(a, n, p, all_roots)
+     # The roots of ``x**n - a = 0 (mod p)`` are roots of
