@@ -48,7 +48,7 @@ test('manifest rejects unsafe, unknown and ambiguous configuration before execut
     { caseConcurrency: 2 },
     { runtimeSource: { kind: 'commit', revision: 'main', directory: process.cwd() } },
     { apiKey: 'fake-secret' },
-    { maxOutputTokens: 9000 },
+    { maxOutputTokens: valid.maxContextTokens },
     { sandbox: 'native' },
     { runtimeSource: { kind: 'snapshot', directory: '../source', manifestSha256: '0'.repeat(64) } },
     {
@@ -62,6 +62,10 @@ test('manifest rejects unsafe, unknown and ambiguous configuration before execut
     },
   ])
     assert.throws(() => validateManifest({ ...valid, ...patch }));
+  // The output allowance is an experiment a batch declares, not a fixed 8192 ceiling: each of these is legal,
+  // and only a value that cannot be a request at all is refused (asserted above).
+  for (const maxOutputTokens of [8192, 16384, 32768])
+    validateManifest({ ...valid, maxOutputTokens });
 });
 
 test('freezing copies production files with stable hashes and refuses reuse, mismatches and links', async (t) => {

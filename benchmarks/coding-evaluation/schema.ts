@@ -277,7 +277,11 @@ export function validateManifest(value: unknown): EvaluationManifest {
       fail('endpoint URL must not include credentials/query');
   }
   integer(v.maxContextTokens, 'context', 1);
-  integer(v.maxOutputTokens, 'output', 1, 8192);
+  // No fixed ceiling: the output allowance is one of the conditions a batch may declare, and 8192 was a number
+  // the product never had. What has to hold is that the request can exist — positive, and smaller than the
+  // window the same manifest names.
+  integer(v.maxOutputTokens, 'output', 1);
+  if (v.maxOutputTokens >= v.maxContextTokens) fail('output must be smaller than context');
   for (const key of [
     'requestTimeoutMs',
     'streamIdleTimeoutMs',

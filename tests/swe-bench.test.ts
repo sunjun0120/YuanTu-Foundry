@@ -99,6 +99,19 @@ test('SWE materialization pins base commit and confines git configuration to the
   );
 });
 
+test('the output allowance is declared, not capped at 8192', async () => {
+  const { validateSweManifest } = await moduleFor('schema.ts');
+  const valid: SweManifest = JSON.parse(
+    await readFile(new URL('manifest.example.json', harness), 'utf8'),
+  );
+  // 8192 was the ceiling this harness enforced, and the product never had it: the point of B4 is that a bigger
+  // allowance is a condition a batch may declare, so each of these has to be a legal manifest.
+  for (const maxOutputTokens of [8192, 16384, 32768])
+    validateSweManifest({ ...valid, maxOutputTokens });
+  for (const maxOutputTokens of [0, -1, valid.maxContextTokens])
+    assert.throws(() => validateSweManifest({ ...valid, maxOutputTokens }));
+});
+
 test('SWE manifest and CLI reject credentials, unknown keys and unauthorized live execution', async () => {
   const { validateSweManifest, requireSweLiveAuthorization } = await moduleFor('schema.ts');
   assert.equal(typeof validateSweManifest, 'function');

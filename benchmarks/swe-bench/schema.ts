@@ -126,10 +126,11 @@ export function validateSweManifest(input: unknown): SweManifest {
       (input[key] as number) > 2_147_483_647
     )
       throw new Error(`Invalid positive limit: ${key}`);
-  if (
-    (input.maxOutputTokens as number) > 8192 ||
-    (input.maxOutputTokens as number) >= (input.maxContextTokens as number)
-  )
+  // The output budget is a declared experimental condition, not a constant of the harness: 8192 was a ceiling
+  // the product never had (`DEFAULT_MAX_OUTPUT_TOKENS` is far larger), and it made "raise the output allowance"
+  // impossible to run as an experiment at all. What stays checked is that it can be a real request at all: a
+  // positive whole number smaller than the window the same manifest declares.
+  if ((input.maxOutputTokens as number) >= (input.maxContextTokens as number))
     throw new Error('Invalid output/context budget');
   // Optional, so a manifest written before these existed is still a manifest. Named explicitly so a typo in the
   // name is refused rather than silently defaulted: both are configuration identity, not decoration.
