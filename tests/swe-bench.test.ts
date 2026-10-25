@@ -506,7 +506,11 @@ test('SWE real Host fixture reads, edits, denies commands and emits an applicabl
         item.event.type === 'tool.finished' &&
         item.event.data.callId === commandId &&
         item.event.data.isError &&
-        /denied|not available/i.test(item.event.data.content),
+        // The harness's approval policy denies commands, and a policy refusal now says so instead of calling it
+        // "denied by user" (see `decisionSource` in the registry).
+        /denied|not available|blocked by the session's permission policy/i.test(
+          item.event.data.content,
+        ),
     ),
   );
   assert.ok(!JSON.stringify(result).includes('swe-bench-fake-key'));

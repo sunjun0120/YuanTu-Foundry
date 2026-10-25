@@ -237,6 +237,18 @@ export const conversationMessages: Record<string, [string, string]> = {
     '验收检查已经登记，不能替换成更容易通过的检查；要让它通过，需要修复工作本身。',
     'The acceptance checks are registered and cannot be replaced by easier ones; passing them means fixing the work.',
   ],
+  'ui.toolApprovalUnavailable': [
+    '当前没有可用的审批端，这次调用没有执行。',
+    'No approval responder is available. This call did not run.',
+  ],
+  'ui.toolApprovalTimedOut': [
+    '等待审批超时，这次调用没有执行。',
+    'The approval request timed out. This call did not run.',
+  ],
+  'ui.toolApprovalDenied': [
+    '你拒绝了这次调用，因此没有执行。',
+    'You denied this call, so it did not run.',
+  ],
   'ui.toolGitOutsideWorkspace': [
     'Git 工具要求仓库根目录在工作区内；当前工作区是某个仓库的子目录。',
     'Git tools need the repository root inside the workspace; this workspace is a subdirectory of one.',

@@ -204,6 +204,13 @@ test('a refusal the kernel writes in English gets one sentence in the interface 
   );
   assert.match(policy ?? '', /权限预设/);
   assert.doesNotMatch(policy ?? '', /已拒绝/);
+  const refusals = [
+    ['Permission was not granted: no approval responder is available.', /审批端/],
+    ['Permission was not granted: nobody answered the approval request within 10ms.', /超时/],
+    ['Permission denied by user.', /你拒绝/],
+  ] as const;
+  for (const [content, expected] of refusals)
+    assert.match(toolFailureNote(tool(content)) ?? '', expected);
   // Only a failed tool result is annotated; a successful one that happens to contain the words is not.
   assert.equal(toolFailureNote(tool('Invalid arguments: …', false)), null);
   assert.equal(toolFailureNote(tool('2 passing')), null);

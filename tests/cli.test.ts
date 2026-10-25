@@ -365,7 +365,7 @@ test(
           ]),
         );
       else {
-        assert.match(JSON.stringify(body.messages), /Permission denied/);
+        assert.match(JSON.stringify(body.messages), /no approval responder is available/);
         sendFrames(res, frames('Write was denied.'));
       }
     });
@@ -422,7 +422,14 @@ for (const effect of ['deny', 'ask'])
         },
       );
       assert.equal(result.code, 0, result.stderr);
-      assert.match(result.stdout, /Permission denied/);
+      // A preset's `deny` is a policy decision nobody was asked about, so the model must not be told a person
+      // refused it; `ask` without a responder records unavailable approval.
+      assert.match(
+        result.stdout,
+        effect === 'deny'
+          ? /Blocked by the session's permission policy/
+          : /no approval responder is available/,
+      );
       await assert.rejects(readFile(path.join(root, 'effect.txt')), { code: 'ENOENT' });
     },
   );

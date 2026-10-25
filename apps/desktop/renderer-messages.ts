@@ -47,6 +47,11 @@ export function toolFailureNote(message: {
   // A permission preset refused this call; nobody was asked. The card must not read as "you denied it".
   if (content.startsWith("Blocked by the session's permission policy"))
     return t('ui.toolPermissionPolicy');
+  if (content.startsWith('Permission was not granted: no approval responder is available'))
+    return t('ui.toolApprovalUnavailable');
+  if (content.startsWith('Permission was not granted: nobody answered'))
+    return t('ui.toolApprovalTimedOut');
+  if (content.startsWith('Permission denied by user.')) return t('ui.toolApprovalDenied');
   return null;
 }
 

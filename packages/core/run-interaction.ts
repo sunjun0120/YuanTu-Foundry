@@ -190,7 +190,6 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
    * already writes down as `read-only` in `decisionReason`.
    */
   approve.decisionSource = (approval) =>
-    options.approve?.decisionSource?.(approval) ??
-    (readOnlyRefusals.has(approval) ? 'policy' : undefined);
+    readOnlyRefusals.has(approval) ? 'policy' : options.approve?.decisionSource?.(approval);
   return { approve, ask };
 }

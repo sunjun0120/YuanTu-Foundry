@@ -667,7 +667,9 @@ export class ToolRegistry {
             errorResult(
               decision.timedOut
                 ? `Permission was not granted: nobody answered the approval request within ${decision.budgetMs}ms. Nothing was executed; do not retry without new authorization.`
-                : 'Permission denied by user. Do not retry the operation without new authorization.',
+                : source === 'unavailable'
+                  ? 'Permission was not granted: no approval responder is available. Nothing was executed; do not retry without new authorization.'
+                  : 'Permission denied by user. Do not retry the operation without new authorization.',
             ),
           );
         }

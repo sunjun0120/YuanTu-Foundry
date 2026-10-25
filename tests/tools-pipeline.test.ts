@@ -215,7 +215,8 @@ test('a refusal names who refused it: a preset, an unanswered wait, or the user'
     call('echo'),
     context({ approve: denying('unavailable') }),
   );
-  assert.match(unavailable.content, /Permission denied by user/);
+  assert.match(unavailable.content, /no approval responder is available/i);
+  assert.doesNotMatch(unavailable.content, /denied by user/i);
   assert.equal(bodyRan, false);
 });
 
