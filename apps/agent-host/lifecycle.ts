@@ -1,3 +1,4 @@
+import { RunCancellation } from '../../packages/protocol/run-cancellation.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { RESIDENCY_DEFAULTS } from '../../packages/core/residency.ts';
 import { closeAllToolResources } from '../../packages/catalog/resource-pool.ts';
@@ -29,7 +30,7 @@ export function createShutdown(ctx: HostContext): () => void {
     ctx.loopHealth?.stop();
     ctx.scheduler.stop();
     cancelSessionTitles(ctx);
-    for (const run of ctx.active.values()) run.controller.abort();
+    for (const run of ctx.active.values()) run.controller.abort(new RunCancellation('shutdown'));
     for (const operation of ctx.manualOperations) operation.controller.abort();
     settleInteraction(ctx);
     // Unloading happens after the runs above were aborted: an activation's in-flight turn is stopped by its

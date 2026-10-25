@@ -404,6 +404,7 @@ export class SessionController {
   ): Promise<{
     messages: Message[];
     providerDegraded: boolean | undefined;
+    runEndings: readonly import('../protocol/run-cancellation.ts').RunEnding[] | undefined;
     statistics: SessionStatistics;
     historyStart: number;
     /** The run the session had active when the transcript was read, when the Host says. */
@@ -441,6 +442,7 @@ export class SessionController {
           historyStart: Math.min(start, base),
           activeRun: page.activeRun,
           providerDegraded: page.providerDegraded,
+          runEndings: page.runEndings,
         };
     }
     const tail = Math.max(100, this.state.sessionId === sessionId ? this.state.messages.length : 0);
@@ -451,6 +453,7 @@ export class SessionController {
       historyStart: history.startOffset,
       activeRun: history.activeRun,
       providerDegraded: history.providerDegraded,
+      runEndings: history.runEndings,
     };
   }
   /** Put a history read on screen, and remember how much of it is the Host's. */
@@ -461,9 +464,11 @@ export class SessionController {
       statistics: SessionStatistics;
       historyStart: number;
       providerDegraded?: boolean;
+      runEndings?: readonly import('../protocol/run-cancellation.ts').RunEnding[];
     },
   ): void {
     this.state.messages = transcript.messages;
+    this.state.runEndings = transcript.runEndings ?? [];
     this.state.providerDegraded = transcript.providerDegraded ?? false;
     this.state.historyStart = transcript.historyStart;
     this.state.messageRevision++;
@@ -622,7 +627,7 @@ export class SessionController {
      * true after it ends, so a reload has to bring them back from the log.
      */
     const [
-      { messages, statistics, historyStart, activeRun, providerDegraded },
+      { messages, statistics, historyStart, activeRun, providerDegraded, runEndings },
       plan,
       subagents,
       checklist,
@@ -669,7 +674,7 @@ export class SessionController {
     const running = snapshot.answered ? snapshot.running : seenRun !== null;
     const liveRun = running ? (snapshot.runId ?? seenRun) : null;
     const moved = seenRun !== liveRun || (running && liveRun === null);
-    let transcript = { messages, statistics, historyStart, providerDegraded };
+    let transcript = { messages, statistics, historyStart, providerDegraded, runEndings };
     if (moved) {
       const reread = await this.history(sessionId, false, client);
       if (this.staleRead(generation)) return;
@@ -701,6 +706,7 @@ export class SessionController {
       instructions: [],
       sessionId,
       messages: transcript.messages,
+      runEndings: transcript.runEndings ?? [],
       providerDegraded: transcript.providerDegraded ?? false,
       historyStart: transcript.historyStart,
       messageRevision: this.state.messageRevision + 1,

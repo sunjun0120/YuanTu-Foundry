@@ -225,6 +225,19 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.sendTimeUnavailable': ['这条消息未记录发送时间', 'Send time unavailable for this message'],
   'ui.copyMessage': ['复制问题', 'Copy message'],
   'ui.operationFailed': ['操作未完成', 'Operation failed'],
+  'ui.unanswered.shutdown': [
+    '运行在应用关闭时中断，未产生回答。',
+    'The run was interrupted when the application closed, without an answer.',
+  ],
+  'ui.unanswered.user': ['已停止，未产生回答。', 'Stopped without an answer.'],
+  'ui.unanswered.cancelled': [
+    '运行已中断或停止，未产生回答。',
+    'The run was interrupted or stopped without an answer.',
+  ],
+  'ui.unanswered.crash': [
+    '运行因应用异常退出而中断。',
+    'The run was interrupted by an unexpected application exit.',
+  ],
   'ui.toolArgumentsInvalid': [
     '工具参数不符合它自己的定义（多传或漏传了字段），这次调用没有执行。下面是原始诊断。',
     'The tool arguments did not match the tool definition (a field was missing or extra), so the call did not run. The raw diagnostic follows.',

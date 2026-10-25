@@ -187,6 +187,7 @@ export interface SubAgentView {
   workspaceProgress?: { processed: number; total: number };
 }
 export interface SessionSnapshot {
+  runEndings?: readonly import('../protocol/run-cancellation.ts').RunEnding[];
   statistics?: SessionStatistics;
   /**
    * What the current run — or the last one this window saw — spent on its own.

@@ -3,6 +3,7 @@ import type { StepRecord } from '../../../packages/protocol/steps.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
 import { HOST_RESPONSE_FRAME_BYTES } from '../../../packages/protocol/host-wire.ts';
+import type { RunEndingsState } from '../../../packages/storage/run-endings.ts';
 
 /**
  * The paged read side of a session's log: its messages, its audit trail, and its raw events.
@@ -162,6 +163,9 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
           offset,
           totalMessages: endOffset,
           ...sessionState,
+          ...(params.view === 'display'
+            ? { runEndings: ctx.store.stateOf<RunEndingsState>('runEndings', id).endings }
+            : {}),
           messageChunk: {
             index: offset,
             part: serialized.slice(start, next),
@@ -182,6 +186,9 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
       offset,
       totalMessages: endOffset,
       ...sessionState,
+      ...(params.view === 'display'
+        ? { runEndings: ctx.store.stateOf<RunEndingsState>('runEndings', id).endings }
+        : {}),
       ...(end < endOffset ? { nextOffset: end } : {}),
     };
   },

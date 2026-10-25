@@ -13,6 +13,23 @@ import { splitAttachmentPrompt } from './attachment-contract.ts';
 import { locale, t } from './i18n.ts';
 import { renderMarkdown, type MarkdownActions } from './markdown.ts';
 import { toolCardModel, toolCardView } from './tool-cards.ts';
+import type { RunEnding } from '../../packages/protocol/run-cancellation.ts';
+import { localizedRunError } from './renderer-error-text.ts';
+
+export function runEndingText(ending: RunEnding): string {
+  if (ending.status === 'interrupted') return t('ui.unanswered.crash');
+  if (ending.status !== 'cancelled')
+    return ending.error
+      ? (localizedRunError(ending.error, locale() === 'en-US') ?? ending.error)
+      : t(`ui.runStatus.${ending.status}`);
+  return t(
+    ending.cancelReason === 'shutdown'
+      ? 'ui.unanswered.shutdown'
+      : ending.cancelReason === 'user'
+        ? 'ui.unanswered.user'
+        : 'ui.unanswered.cancelled',
+  );
+}
 
 function node<K extends keyof HTMLElementTagNameMap>(
   tag: K,

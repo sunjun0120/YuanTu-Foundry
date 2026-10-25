@@ -516,6 +516,7 @@ export interface AcceptanceEvidence {
   }>;
 }
 export interface RunResult {
+  cancelReason?: import('./run-cancellation.ts').CancelReason;
   /** Summary usage already present in context.compacted events, for exactly-once session aggregation. */
   compactionUsage?: Usage;
   statistics?: import('./statistics.ts').SessionStatistics;

@@ -9,6 +9,13 @@ import type { RunStatus } from '../protocol/index.ts';
 import type { StepEndReason } from '../protocol/steps.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { redactSecrets } from '../platform/redact.ts';
+import { RunCancellation, type CancelReason } from '../protocol/run-cancellation.ts';
+
+export function runCancelReason(signal: AbortSignal): CancelReason | undefined {
+  return signal.aborted && signal.reason instanceof RunCancellation
+    ? signal.reason.cancelReason
+    : undefined;
+}
 
 /**
  * How a run that threw is described: the status, the message, the code and the step's end reason.

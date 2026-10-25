@@ -18,6 +18,7 @@ import { settleOpenToolSpans, type RunEmission } from './run-emit.ts';
 import type { RunQueue } from './run-queue.ts';
 import type { ResidentTurnSettlements } from './run-residency.ts';
 import { finishRunTask } from './run-task.ts';
+import { runCancelReason } from './run-outcome.ts';
 import type { SubAgentCoordinator } from './subagents.ts';
 
 export interface RunFinalizationOptions {
@@ -148,6 +149,9 @@ export async function finalizeRun(options: RunFinalizationOptions): Promise<RunR
   }
   completion.finalizeVerdict(status, error);
   result = {
+    ...(status === 'cancelled' && runCancelReason(signal)
+      ? { cancelReason: runCancelReason(signal) }
+      : {}),
     runId,
     sessionId: sessionId,
     status,

@@ -1,3 +1,6 @@
+import { Agent } from '../packages/core/agent.ts';
+import { ToolRegistry } from '../packages/tools/registry.ts';
+import { storeFixture } from './temp-fixture.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
@@ -160,3 +163,49 @@ for (const seam of ['attach', 'terminals', 'store'] as const) {
     assert.deepEqual(closed, ['carrier', 'terminals', 'background', 'store', 'hooks']);
   });
 }
+
+test('shutdown tags the active run abort without guessing a user stop', () => {
+  const { ctx } = host(async () => {});
+  const controller = new AbortController();
+  ctx.active.set('fixture', { controller } as never);
+  createShutdown(ctx)();
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(controller.signal.reason.cancelReason, 'shutdown');
+});
+
+test('Host shutdown persists its cause through actual run finalization', async (t) => {
+  const { store, session } = await storeFixture(t, 'yuantu-shutdown-cause-');
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const controller = new AbortController();
+  const agent = new Agent({
+    store,
+    approve: async () => false,
+    tools: new ToolRegistry(),
+    provider: {
+      async complete({ signal }) {
+        signal.throwIfAborted();
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          enter();
+        });
+      },
+    },
+  });
+  const running = agent.run({
+    sessionId: session.id,
+    prompt: 'Wait for shutdown',
+    signal: controller.signal,
+  });
+  await entered;
+  const { ctx } = host(async () => {});
+  ctx.active.set(session.id, { controller, agent } as never);
+  createShutdown(ctx)();
+  const result = await running;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.cancelReason, 'shutdown');
+  const end = store.events(session.id).findLast((event) => event.type === 'run.finished');
+  assert.equal(end?.data.cancelReason, 'shutdown');
+});

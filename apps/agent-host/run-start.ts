@@ -1,3 +1,4 @@
+import { RunCancellation } from '../../packages/protocol/run-cancellation.ts';
 import {
   exhaustedGoalVerdict,
   standDownGoal,
@@ -117,10 +118,7 @@ export async function startRun(
     ? new PermissionPolicy(wake.authority.permissionPolicy)
     : undefined;
   const wakeTimer = wake
-    ? setTimeout(
-        () => controller.abort(new Error('Background wake time budget exhausted')),
-        wake.maxRunMs,
-      )
+    ? setTimeout(() => controller.abort(new RunCancellation('background-budget')), wake.maxRunMs)
     : undefined;
   try {
     if (!wake) ctx.captureAuthority(sessionId);

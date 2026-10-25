@@ -18,6 +18,7 @@ import type { Message } from '../../packages/protocol/index.ts';
 import { isRuntimeContext } from '../../packages/protocol/context.ts';
 import { TranscriptCache, reconcileChildren } from './transcript-cache.ts';
 import { locale, t } from './i18n.ts';
+import { runEndingText } from './renderer-messages.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -169,6 +170,10 @@ export function setupTranscript(options: {
     const retainedGroups = new Set<HTMLDetailsElement>();
     const changeCards = options.turnChanges?.() ?? new Map<number, HTMLElement>();
     const pendingCards = [...changeCards].sort(([a], [b]) => a - b);
+    const endings = [...(options.getState()?.session.runEndings ?? [])]
+      .filter((ending) => ending.afterIndex >= startIndex)
+      .sort((a, b) => a.afterIndex - b.afterIndex);
+    let nextEnding = 0;
     let nextCard = 0;
     let group: HTMLDetailsElement | undefined;
     const add = (step: HTMLElement, key: string) => {
@@ -220,6 +225,14 @@ export function setupTranscript(options: {
         views.push(view);
       }
       const nextIndex = rows[position + 1]?.index ?? startIndex + messages.length;
+      while (nextEnding < endings.length && endings[nextEnding]!.afterIndex < nextIndex) {
+        const ending = endings[nextEnding++]!;
+        if (ending.afterIndex < index) continue;
+        group = undefined;
+        const marker = node('p', runEndingText(ending), 'run-paused');
+        marker.setAttribute('role', 'status');
+        views.push(marker);
+      }
       while (nextCard < pendingCards.length && pendingCards[nextCard]![0] < nextIndex) {
         const [afterIndex, card] = pendingCards[nextCard++]!;
         if (afterIndex >= index && afterIndex < nextIndex) {

@@ -574,6 +574,7 @@ export class SessionRuns {
       this.port.recordEvent(result.sessionId, 'run.finished', {
         runId: result.runId,
         status: result.status,
+        ...(result.cancelReason ? { cancelReason: result.cancelReason } : {}),
         // Usage is what the statistics projection folds; the full result row stays the record of record
         // for everything else, so a multi-megabyte payload is not duplicated into the log.
         usage: result.usage,

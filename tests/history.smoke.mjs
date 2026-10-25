@@ -18,12 +18,36 @@ test(
     await mkdir(path.join(root, '.yuantu'));
     const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
     const session = store.create(root);
-    for (let i = 0; i < 250; i++)
+    const endings = new Map([
+      [20, 'shutdown'],
+      [80, 'user'],
+      [180, undefined],
+      [230, 'interrupted'],
+    ]);
+    for (let i = 0; i < 250; i++) {
+      if (endings.has(i)) store.recordEvent(session.id, 'run.started', { runId: `history-${i}` });
       store.append(session.id, { role: 'user', content: `HISTORY_ENTRY_${i}` });
+      if (endings.has(i)) {
+        const reason = endings.get(i);
+        store.recordEvent(
+          session.id,
+          reason === 'interrupted' ? 'run.interrupted' : 'run.finished',
+          {
+            runId: `history-${i}`,
+            status: 'cancelled',
+            ...(reason && reason !== 'interrupted' ? { cancelReason: reason } : {}),
+          },
+        );
+      }
+    }
     store.close();
     let modelRequests = 0;
     const endpoint = await httpFixture(t, (body, res) => {
       modelRequests++;
+      assert.doesNotMatch(
+        JSON.stringify(body.messages),
+        /未产生回答|异常退出而中断|runEndings|cancelReason/,
+      );
       assert.match(
         JSON.stringify(body.messages),
         /HISTORY_ENTRY_0/,
@@ -62,6 +86,7 @@ test(
     await page.locator(`[data-session-id="${session.id}"]`).first().click();
     await page.getByText('HISTORY_ENTRY_249', { exact: true }).waitFor();
     assert.equal(await page.locator('#messages > .message').count(), 100);
+    assert.equal(await page.locator('#messages > .run-paused[role=status]').count(), 2);
     await page.evaluate(() => {
       window.savedHistoryNode = document.querySelector('#messages > .message');
       const area = document.querySelector('#conversation');
@@ -71,7 +96,14 @@ test(
     await page.locator('#load-older-history').click();
     await page.getByText('HISTORY_ENTRY_50', { exact: true }).waitFor();
     assert.equal(await page.locator('#messages > .message').count(), 200);
+    assert.equal(await page.locator('#messages > .run-paused[role=status]').count(), 3);
     assert.equal(await page.evaluate(() => window.savedHistoryNode.isConnected), true);
+    // The command's finalizer restores the anchor after the history snapshot renders.
+    await waitForPage(
+      page,
+      () =>
+        Math.abs(window.savedHistoryNode.getBoundingClientRect().top - window.savedHistoryTop) < 4,
+    );
     assert.ok(
       await page.evaluate(
         () =>
@@ -90,6 +122,31 @@ test(
       'appending a reply reuses the unchanged history',
     );
     assert.equal(modelRequests, 1);
+    await page.reload();
+    await page.getByText('History reply', { exact: true }).waitFor();
+    assert.equal(await page.locator('#messages > .run-paused[role=status]').count(), 3);
+    await page.locator('#load-older-history').click();
+    await page.locator('#messages').getByText('HISTORY_ENTRY_0', { exact: true }).waitFor();
+    const markers = await page
+      .locator('#messages > .run-paused[role=status]')
+      .evaluateAll((nodes) =>
+        nodes.map((n) => ({
+          text: n.textContent,
+          previous: n.previousElementSibling?.textContent,
+        })),
+      );
+    assert.equal(markers.length, 4);
+    assert.deepEqual(
+      markers.map((n) => n.text),
+      [
+        '运行在应用关闭时中断，未产生回答。',
+        '已停止，未产生回答。',
+        '运行已中断或停止，未产生回答。',
+        '运行因应用异常退出而中断。',
+      ],
+    );
+    for (const [index, anchor] of [20, 80, 180, 230].entries())
+      assert.match(markers[index].previous, new RegExp(`HISTORY_ENTRY_${anchor}`));
   },
 );
 

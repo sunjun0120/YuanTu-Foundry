@@ -411,6 +411,7 @@ export interface HostMethods {
        * the statistics: it describes the session rather than the window of history being paged.
        */
       steps?: readonly import('./steps.ts').StepRecord[];
+      runEndings?: readonly import('./run-cancellation.ts').RunEnding[];
     };
   };
   /**

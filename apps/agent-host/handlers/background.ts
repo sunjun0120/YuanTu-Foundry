@@ -1,3 +1,4 @@
+import { RunCancellation } from '../../../packages/protocol/run-cancellation.ts';
 import {
   reconcileBackground,
   setBackgroundPolicy,
@@ -72,7 +73,7 @@ export const backgroundHandlers: Readonly<Record<string, Handler>> = {
       ctx.currentAuthority(sessionId),
     );
     if ((policy.paused || policy.mode === 'notify') && ctx.waking.has(sessionId))
-      ctx.active.get(sessionId)?.controller.abort();
+      ctx.active.get(sessionId)?.controller.abort(new RunCancellation('background-policy'));
     return reconcileBackground(ctx.store, sessionId);
   },
   'background.clear': async (ctx, params) => {

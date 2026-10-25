@@ -1,3 +1,6 @@
+import { runEndingsProjection, type RunEndingsState } from '../packages/storage/run-endings.ts';
+import { runEndingText } from '../apps/desktop/renderer-messages.ts';
+import { setLocale } from '../apps/desktop/i18n.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -807,4 +810,47 @@ test('an upgraded database keeps its cards and does not show old children as run
   assert.equal(cards[0]?.rounds, 2, 'the recorded outcome is the real one, not a default');
   assert.deepEqual(cards[0]?.usage, { inputTokens: 40, outputTokens: 9 });
   assert.match(String(cards[1]?.error), /Interrupted/);
+});
+
+test('unanswered run endings preserve recorded causes through a store reopen', async (t) => {
+  const { db, store, session } = await storeFixture(t, 'yuantu-run-endings-');
+  for (const [index, reason] of ['shutdown', 'user', undefined, 'interrupted'].entries()) {
+    const runId = `fixture-${index}`;
+    store.recordEvent(session.id, 'run.started', { runId });
+    store.append(session.id, { role: 'user', content: `Question ${index}` });
+    store.recordEvent(session.id, 'provider.request.finished', { runId });
+    store.recordEvent(session.id, 'step.finished', { runId, reason: 'cancelled' });
+    store.recordEvent(session.id, reason === 'interrupted' ? 'run.interrupted' : 'run.finished', {
+      runId,
+      status: 'cancelled',
+      ...(reason && reason !== 'interrupted' ? { cancelReason: reason } : {}),
+    });
+  }
+  const expected = store.stateOf<RunEndingsState>('runEndings', session.id).endings;
+  assert.deepEqual(
+    expected.map((e) => e.cancelReason),
+    ['shutdown', 'user', undefined, undefined],
+  );
+  assert.deepEqual(
+    expected.map((e) => e.afterIndex),
+    [0, 1, 2, 3],
+  );
+  setLocale('zh-CN');
+  assert.match(runEndingText(expected[0]!), /应用关闭/);
+  assert.equal(runEndingText(expected[1]!), '已停止，未产生回答。');
+  assert.equal(runEndingText(expected[2]!), '运行已中断或停止，未产生回答。');
+  assert.match(runEndingText(expected[3]!), /异常退出/);
+  setLocale('en-US');
+  assert.match(runEndingText(expected[2]!), /interrupted or stopped/);
+  setLocale('zh-CN');
+  const reopened = new SessionStore(db);
+  assert.deepEqual(reopened.stateOf<RunEndingsState>('runEndings', session.id).endings, expected);
+  // Fold the persisted log independently: no synthetic message is added for a marker.
+  assert.deepEqual(
+    store.events(session.id).reduce(runEndingsProjection.apply, runEndingsProjection.initial())
+      .endings,
+    expected,
+  );
+  assert.equal(store.messages(session.id).length, 4);
+  reopened.close();
 });

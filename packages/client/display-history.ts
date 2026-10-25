@@ -1,4 +1,5 @@
 import type { Message } from '../protocol/index.ts';
+import type { RunEnding } from '../protocol/run-cancellation.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { AgentHostClient } from './host-client.ts';
 
@@ -24,6 +25,7 @@ export async function readDisplayHistory(
    * `undefined` for a Host that answers without session info; `null` for a session nobody is running.
    */
   activeRun?: string | null;
+  runEndings?: readonly RunEnding[];
 }> {
   const messages: Message[] = [];
   const parts: string[] = [];
@@ -35,6 +37,7 @@ export async function readDisplayHistory(
   let statistics: SessionStatistics | undefined;
   let providerDegraded: boolean | undefined;
   let activeRun: string | null | undefined;
+  let runEndings: readonly RunEnding[] | undefined;
   for (;;) {
     const page = await client.request('session.get', {
       sessionId,
@@ -59,6 +62,7 @@ export async function readDisplayHistory(
       first = false;
     }
     const previousCount = messages.length;
+    runEndings = page.runEndings ?? runEndings;
     if (page.messageChunk) {
       const chunk = page.messageChunk;
       if (page.messages.length || chunk.index !== offset || !chunk.part)
@@ -96,6 +100,7 @@ export async function readDisplayHistory(
         startOffset: resolvedStart,
         statistics,
         activeRun,
+        runEndings,
         providerDegraded,
         truncated: unreadInPage || page.nextOffset !== undefined,
         nextOffset: unreadInPage
@@ -109,6 +114,7 @@ export async function readDisplayHistory(
         startOffset: resolvedStart,
         statistics,
         activeRun,
+        runEndings,
         providerDegraded,
         truncated: false,
         nextOffset: offset + (page.messageChunk ? 1 : page.messages.length),

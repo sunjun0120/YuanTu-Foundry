@@ -1,3 +1,4 @@
+import { RunCancellation } from '../../../packages/protocol/run-cancellation.ts';
 import {
   backgroundState,
   setBackgroundPolicy,
@@ -98,7 +99,7 @@ export const runHandlers: Readonly<Record<string, Handler>> = {
         maxWakeups: policy.maxWakeups,
         maxRunMs: policy.maxRunMs,
       });
-    run?.controller.abort();
+    run?.controller.abort(new RunCancellation('user'));
     for (const operation of manual) operation.controller.abort();
     await ctx.background.close(sessionId);
     return { cancelled: !!run || manual.length > 0 };

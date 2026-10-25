@@ -983,7 +983,13 @@ test('abort propagates to provider and session is unlocked', async (t) => {
   const controller = new AbortController();
   const running = agent.run({ sessionId: session.id, prompt: 'Wait', signal: controller.signal });
   controller.abort();
-  assert.equal((await running).status, 'cancelled');
+  const result = await running;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.cancelReason, undefined);
+  assert.equal(
+    store.events(session.id).findLast((event) => event.type === 'run.finished')?.data.cancelReason,
+    undefined,
+  );
   assert.equal(store.get(session.id).activeRun, null);
 });
 

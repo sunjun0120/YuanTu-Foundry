@@ -1314,6 +1314,7 @@ test('JSONL Host accepts approvals, returns run results and cancels a streaming 
   cancelOnStart = true;
   const cancelled = await rpc('run.start', { sessionId: session.id, prompt: 'wait' });
   assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.cancelReason, 'user');
   child.stdin.end();
   const exit = await new Promise<number | null>((resolve) => child.once('exit', resolve));
   assert.equal(exit, 0, stderr);
