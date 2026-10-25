@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-25T11:31:20.685Z",
+  "runtime": "91fa342347c550ce2e0033e13a6d259a2dd9cd8f",
+  "head": "91fa342347c550ce2e0033e13a6d259a2dd9cd8f",
+  "dirty": 26,
+  "subsetHash": "b1fa435a7b863a4e264cd23f048f13f9d14bbda639ec15bc6401d1896256d775",
+  "instances": 50,
+  "smoke": [
+    "astropy__astropy-14309",
+    "django__django-13363",
+    "scikit-learn__scikit-learn-25931",
+    "sphinx-doc__sphinx-10449",
+    "sympy__sympy-24443"
+  ],
+  "models": "DeepSeek-V4.1-Flash-1017",
+  "endpointId": "isrc-deepseek",
+  "maxOutputTokens": 16384,
+  "requestTimeoutMs": 600000,
+  "authorizedAttempts": 60,
+  "keyPresent": true,
+  "repos": 12,
+  "outputs": {
+    "smoke16k": "E:\\agent-desktop\\YuanTu-Foundry\\.scratch\\swe-bench\\swe-full-20261025-smoke16k",
+    "full": "E:\\agent-desktop\\YuanTu-Foundry\\.scratch\\swe-bench\\swe-full-20261025-v1"
+  }
+}
