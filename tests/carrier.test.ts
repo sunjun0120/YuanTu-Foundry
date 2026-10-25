@@ -33,6 +33,60 @@ import { connectSocket, listeningHost } from './listening-host-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 import { withoutComments } from '../scripts/i18n-gate.mjs';
 import { nativeSkip } from './native-platform.ts';
+import { SessionStore } from '../packages/storage/sqlite.ts';
+
+test('session export reads complete display history without changing the visible session', async (t) => {
+  let sessionId = '';
+  const host = await listeningHost(t, {}, (file) => {
+    const store = new SessionStore(file);
+    try {
+      sessionId = store.create(path.dirname(file)).id;
+      for (let i = 0; i < 150; i++)
+        store.append(sessionId, { role: 'user', content: `EXPORT_MESSAGE_${i}` });
+    } finally {
+      store.close();
+    }
+  });
+  const socket = await connectSocket(host.port);
+  const carrier = connectedCarrier({
+    transport: socketTransport(socket),
+    authToken: host.authToken,
+    env: {},
+  });
+  host.beforeStop(() => carrier.stop());
+  await carrier.start();
+  await carrier.dispatch({ type: 'load', id: sessionId });
+  assert.equal(carrier.snapshot.session.messages.length, 100);
+  assert.equal(carrier.snapshot.session.historyStart, 50);
+  const exported = await carrier.exportTranscript(sessionId);
+  assert.equal(exported.messages.length, 150);
+  assert.equal(exported.messages[0]?.content, 'EXPORT_MESSAGE_0');
+  assert.equal(exported.messages.at(-1)?.content, 'EXPORT_MESSAGE_149');
+  assert.equal(carrier.snapshot.session.messages.length, 100);
+  await carrier.dispatch({ type: 'create' });
+  const visibleId = carrier.snapshot.session.sessionId;
+  assert.notEqual(visibleId, sessionId);
+  assert.equal((await carrier.exportTranscript(sessionId)).messages.length, 150);
+  assert.equal(carrier.snapshot.session.sessionId, visibleId);
+  await assert.rejects(carrier.exportTranscript('missing-session'));
+});
+
+test('export commands select exactly one source: a session or legacy content', () => {
+  for (const source of [{ sessionId: 'session' }, { content: 'legacy transcript' }]) {
+    const command = { type: 'export', ...source, suggestedName: 'session.md' };
+    assert.deepEqual(parseCarrierCommand(command), command);
+  }
+  for (const source of [
+    {},
+    { sessionId: '' },
+    { sessionId: 'session', content: 'ambiguous' },
+    { sessionId: 1 },
+  ])
+    assert.throws(
+      () => parseCarrierCommand({ type: 'export', ...source, suggestedName: 'session.md' }),
+      /Invalid carrier command/,
+    );
+});
 
 /** Poll until `condition` holds, so a test does not encode a sleep that is either slow or flaky. */
 async function waitFor(condition: () => boolean, what: string): Promise<void> {
@@ -106,6 +160,55 @@ test('the audit window appends, keeps the newest entries, and carries the last s
   assert.equal(window.at(-1)?.seq, 3);
   // A page that brought nothing new changes nothing.
   assert.deepEqual(mergeAuditWindow([entry(1)], []), [entry(1)]);
+});
+
+test('a managing command cannot close the door on the answer it is waiting for', async () => {
+  const calls: string[] = [];
+  const service = Object.create(CarrierService.prototype) as any;
+  service.restoring = false;
+  service.managing = true;
+  service.ready = true;
+  service.recovering = false;
+  service.recovery = null;
+  service.client = { status: 'ready' };
+  service.unconfirmedPolicies = new Set();
+  service.error = null;
+  service.controller = {
+    sessionId: null,
+    answerQuestion: async (id: string, answers: unknown[]) => {
+      calls.push(`answer:${id}:${answers.length}`);
+    },
+    dismissQuestion: async (id: string) => {
+      calls.push(`dismiss:${id}`);
+    },
+    approve: async (id: string, allow: boolean) => {
+      calls.push(`approve:${id}:${allow}`);
+    },
+    cancel: async () => {
+      calls.push('cancel');
+    },
+  };
+  service.refresh = async () => {};
+  service.publish = () => {};
+  Object.defineProperty(service, 'snapshot', { value: { session: {} } });
+
+  // `/plan` holds `managing` for the whole planning run. The run asks a question, waits for an approval, and
+  // the user may also stop it: all three must reach the controller instead of being refused as "busy".
+  await service.dispatch({
+    type: 'questionAnswer',
+    id: 'q1',
+    answers: [{ id: 'plan', selected: ['Approve and execute'] }],
+  });
+  await service.dispatch({ type: 'approve', id: 'a1', allow: true });
+  await service.dispatch({ type: 'cancel' });
+  assert.deepEqual(calls, ['answer:q1:1', 'approve:a1:true', 'cancel']);
+
+  // A restore still owns the service; the exemption is only for commands a managing run is blocked on.
+  service.restoring = true;
+  await assert.rejects(
+    service.dispatch({ type: 'questionAnswer', id: 'q2', answers: [{ id: 'plan', selected: [] }] }),
+    /Session operation is in progress/,
+  );
 });
 
 test('each command refreshes only the panels its effect moves; unknown or session-wide commands keep the full read', () => {

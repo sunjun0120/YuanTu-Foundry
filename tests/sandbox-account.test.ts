@@ -24,6 +24,7 @@ import {
 } from '../packages/tools/sandbox-account-broker.ts';
 import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { ToolRegistry } from '../packages/tools/registry.ts';
 import { withSandboxPreparation, type SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 import { tempRoot } from './temp-fixture.ts';
 import { windowsShell, windowsShellArgs } from '../packages/tools/windows-shell.ts';
@@ -214,6 +215,143 @@ const announcing: BrokerLauncher = () => {
   setImmediate(() => stdout.write(`${JSON.stringify({ version: 1, pipe: PIPE })}\n`));
   return child as unknown as ChildProcess;
 };
+
+/** Exercises the real provider/registry wait without provisioning accounts or launching a command. */
+async function authorizationBudgetFixture(
+  t: TestContext,
+  after?: (signal: AbortSignal) => Promise<void>,
+) {
+  const root = await realpath(await tempRoot(t, 'yuantu-grant-budget-'));
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const active = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let helperSignal: AbortSignal | undefined;
+  configureAccountBackend({
+    state: root,
+    launch: announcing,
+    run: async (_helper, args, options) => {
+      if (args[0] === 'account-status') return status(true);
+      if (args[0] === 'grant') {
+        helperSignal = options?.signal;
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(helperSignal!.reason);
+          helperSignal?.addEventListener('abort', abort, { once: true });
+          void waiting
+            .then(resolve)
+            .finally(() => helperSignal?.removeEventListener('abort', abort));
+          if (helperSignal?.aborted) abort();
+        });
+      }
+      return '{}';
+    },
+  });
+  const registry = new ToolRegistry();
+  registry.deadlines = { defaultMs: 100 };
+  registry.register({
+    name: 'authorize',
+    description: 'Prepare a command through the Windows account provider',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    async execute(_args, ctx) {
+      const plan = await windowsAccountSandboxProvider.prepare({
+        root,
+        cwd: root,
+        command: 'echo ok',
+        config: { mode: 'windows-account', image: '' },
+      });
+      await windowsAccountSandboxProvider.cleanup(plan);
+      ctx.signal.throwIfAborted();
+      await after?.(ctx.signal);
+      return { isError: false, content: 'authorized' };
+    },
+  });
+  const controller = new AbortController();
+  const progress: boolean[] = [];
+  const result = registry.execute(
+    { id: 'authorize-1', name: 'authorize', arguments: {} },
+    {
+      signal: controller.signal,
+      approve: async () => true,
+      executionPolicy: executionPolicy('windows-account'),
+      onPreparation: (event) => {
+        progress.push(event.active);
+        if (event.active) started();
+      },
+    },
+  );
+  // Attach immediately so a regression timing out before the test releases authorization is observed.
+  void result.catch(() => {});
+  t.after(async () => {
+    controller.abort();
+    release();
+    await result.catch(() => {});
+    await stopBrokers();
+    await registry.close();
+  });
+  return { result, active, release, controller, progress, helperSignal: () => helperSignal };
+}
+
+test(
+  'workspace authorization can outlast the tool budget without ending the call or its progress',
+  { skip: windowsOnly },
+  async (t) => {
+    const fixture = await authorizationBudgetFixture(t);
+    await fixture.active;
+    let settled = false;
+    void fixture.result
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    assert.equal(settled, false, 'authorization must be excluded from the tool execution budget');
+    assert.deepEqual(fixture.progress, [true]);
+    assert.equal(fixture.helperSignal()?.aborted, false);
+    fixture.release();
+    assert.equal((await fixture.result).isError, false);
+    assert.deepEqual(fixture.progress, [true, false]);
+  },
+);
+
+test(
+  'the tool budget resumes after a long workspace authorization',
+  { skip: windowsOnly },
+  async (t) => {
+    let afterStarted = false;
+    const fixture = await authorizationBudgetFixture(t, (signal) => {
+      afterStarted = true;
+      return new Promise<void>((_resolve, reject) =>
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+      );
+    });
+    await fixture.active;
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    fixture.release();
+    const result = await fixture.result;
+    assert.equal(afterStarted, true, 'the tool must reach its post-authorization work');
+    assert.equal(result.isError, true);
+    assert.match(result.content, /^TOOL_TIMEOUT:/);
+    assert.deepEqual(fixture.progress, [true, false]);
+  },
+);
+
+test(
+  'Stop still cancels authorization while its tool budget is suspended',
+  { skip: windowsOnly },
+  async (t) => {
+    const fixture = await authorizationBudgetFixture(t);
+    await fixture.active;
+    const rejected = assert.rejects(fixture.result, /stopped during authorization/);
+    fixture.controller.abort(new Error('stopped during authorization'));
+    await rejected;
+    assert.equal(fixture.helperSignal()?.aborted, true);
+    assert.deepEqual(fixture.progress, [true, false]);
+  },
+);
 
 test(
   'workspace authorization has its own deadline and reports the failed stage before retry',

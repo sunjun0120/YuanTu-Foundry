@@ -27,6 +27,18 @@ function tokens(value: unknown): number {
     throw new Error('Invalid model token usage');
   return value;
 }
+/**
+ * The field an OpenAI-Chat endpoint expects for the output cap.
+ *
+ * OpenAI's own newer endpoint takes `max_completion_tokens`; the family of compatible gateways this runtime
+ * speaks to (DeepSeek, Qwen, and most proxies) only understands the older `max_tokens`, and silently ignores
+ * the newer name. Sending the wrong one is invisible: the request succeeds, the usage reports more tokens than
+ * the caller allowed, and the run still ends `completed`. The endpoint — not the model id — is what distinguishes
+ * the two dialects, so the choice is made from the URL the adapter is already talking to.
+ */
+export function outputTokenField(endpoint: string): 'max_tokens' | 'max_completion_tokens' {
+  return new URL(endpoint).hostname === 'api.openai.com' ? 'max_completion_tokens' : 'max_tokens';
+}
 export class OpenAIProvider implements Provider {
   private config: ProviderConfig;
   private endpoint: string;
@@ -177,7 +189,7 @@ export class OpenAIProvider implements Provider {
             ...(request.parallelToolCalls === false ? { parallel_tool_calls: false } : {}),
             stream: true,
             stream_options: { include_usage: true },
-            max_completion_tokens: request.maxOutputTokens,
+            [outputTokenField(this.endpoint)]: request.maxOutputTokens,
             ...(cache.key && !capabilities.reasoning ? { prompt_cache_key: cache.key } : {}),
             ...(request.tools.length
               ? {

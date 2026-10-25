@@ -186,7 +186,7 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.refreshSkills': ['刷新技能', 'Refresh skills'],
   'ui.compactContext': ['压缩上下文', 'Compact context'],
   'ui.exportSession': ['导出会话', 'Export session'],
-  'ui.createGoal': ['创建目标', 'Create goal'],
+  'ui.createGoal': ['创建任务草稿', 'Create task draft'],
   'ui.createPlan': ['制定计划', 'Create plan'],
   'command.modelDescription': [
     '打开模型设置并切换当前连接',
@@ -207,7 +207,10 @@ export const conversationMessages: Record<string, [string, string]> = {
     '导出当前会话为 Markdown 文件',
     'Export this conversation as a Markdown file',
   ],
-  'command.goalDescription': ['创建一个可持续跟踪的目标', 'Create a goal you can track over time'],
+  'command.goalDescription': [
+    '把描述变成可编辑、可执行的任务草稿',
+    'Turn the description into an editable, executable task draft',
+  ],
   'command.planDescription': [
     '只读探索后给出计划，人工批准才执行',
     'Read-only exploration, then a plan that needs human approval to run',

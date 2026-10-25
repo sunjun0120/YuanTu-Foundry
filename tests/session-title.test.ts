@@ -15,7 +15,8 @@ import { storeFixture } from './temp-fixture.ts';
 
 test('title output budget leaves room for reasoning before a short visible title', async (t) => {
   const url = await httpFixture(t, (body, res) => {
-    const enough = body.max_completion_tokens >= 512;
+    // This local endpoint emulates a compatible gateway, whose output cap uses max_tokens.
+    const enough = body.max_tokens >= 512;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const events = [
       {

@@ -12,3 +12,6 @@ benchmarks/swe-bench/runs/full-2026-10-24/summary.generated.json
 
 # Frozen official import: preserve byte hashes and deterministic generated reports.
 benchmarks/swe-bench/runs/budget-fix-main-2026-10-25/
+
+# Frozen B1/B2/B3 small-set evidence keeps its recorded byte hashes.
+benchmarks/swe-bench/runs/b123-small22-2026-10-25/

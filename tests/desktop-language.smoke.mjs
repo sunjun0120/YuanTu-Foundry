@@ -2,7 +2,7 @@
 // Language switching, sidebar titles, the sub-agent catalog and child pages, and user-message bubbles.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { _electron as electron } from 'playwright';
@@ -12,6 +12,78 @@ import { artifactPath } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
+
+test(
+  'desktop exports the complete paged session through its save dialog in the selected language',
+  { timeout: 60000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-complete-export-'));
+    await mkdir(path.join(root, '.yuantu'));
+    const store = new SessionStore(path.join(root, '.yuantu', 'sessions.sqlite'));
+    const session = store.create(root);
+    for (let i = 0; i < 150; i++)
+      store.append(session.id, { role: 'user', content: `EXPORT_MESSAGE_${i}` });
+    store.close();
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_SANDBOX: 'host',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    let app;
+    t.after(async () => {
+      await app?.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    });
+    app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    const page = await app.firstWindow();
+    await waitForPage(
+      page,
+      async (id) => {
+        const reply = await window.yuantu.invoke({ type: 'snapshot' });
+        return reply.state.session.sessionId === id && !reply.state.session.loading;
+      },
+      session.id,
+    );
+    const target = path.join(root, 'export.md');
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: file });
+    }, target);
+    const result = await page.evaluate(async (id) => {
+      const settings = await window.yuantu.uiSettings({ type: 'get' });
+      await window.yuantu.uiSettings({
+        type: 'save',
+        settings: { ...settings.settings, language: 'en-US' },
+      });
+      const before = (await window.yuantu.invoke({ type: 'snapshot' })).state.session;
+      const exported = await window.yuantu.invoke({
+        type: 'export',
+        sessionId: id,
+        suggestedName: 'export.md',
+      });
+      const after = (await window.yuantu.invoke({ type: 'snapshot' })).state.session;
+      return {
+        ok: exported.ok,
+        before: before.messages.length,
+        after: after.messages.length,
+        start: after.historyStart,
+      };
+    }, session.id);
+    assert.deepEqual(result, { ok: true, before: 100, after: 100, start: 50 });
+    const content = await readFile(target, 'utf8');
+    assert.equal(content.match(/EXPORT_MESSAGE_/g)?.length, 150);
+    assert.match(content, /## You\n\nEXPORT_MESSAGE_0\n/);
+    assert.match(content, /EXPORT_MESSAGE_149$/);
+  },
+);
 
 // ---- merged from language.smoke.mjs ----
 
@@ -109,7 +181,7 @@ test(
         (await page.locator('#command-menu button strong').allTextContents()).filter((name) =>
           name.startsWith('/'),
         ),
-        ['/compact', '/goal', '/plan'],
+        ['/compact', '/export', '/task', '/plan'],
       );
       await record(found, 'slash-menu');
       await page.locator('#prompt').fill('');

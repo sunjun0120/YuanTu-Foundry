@@ -20,18 +20,33 @@ export function resolvedTarget(input) {
   // rejects them unless its exact native-resource rule allows the pipe first.
   if (process.platform === 'win32' && /^\\\\[?.]\\pipe\\/i.test(value))
     return path.normalize(value);
-  let current = path.resolve(value);
-  const suffix = [];
-  for (;;) {
-    try {
-      lstat(current);
-      return path.join(realpath(current), ...suffix);
-    } catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
-      const parent = path.dirname(current);
-      if (parent === current) return path.join(current, ...suffix);
-      suffix.unshift(path.basename(current));
-      current = parent;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let current = path.resolve(value);
+    const suffix = [];
+    for (;;) {
+      try {
+        lstat(current);
+        const resolved = realpath(current);
+        // NTFS can move a concurrently deleted lock into its tombstone directory between lstat and realpath.
+        // Resolve the original name again: neither that transient name nor a lexical fallback proves ownership.
+        if (
+          process.platform === 'win32' &&
+          /^(?:\\\\\?\\)?[a-z]:\\\$Extend\\\$Deleted(?:\\|$)/i.test(resolved)
+        )
+          break;
+        return path.join(resolved, ...suffix);
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+        const parent = path.dirname(current);
+        if (parent === current) return path.join(current, ...suffix);
+        suffix.unshift(path.basename(current));
+        current = parent;
+      }
     }
+    if (attempt < 2) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
   }
+  throw Object.assign(
+    new Error(`Cannot resolve ownership of a concurrently deleted path: ${value}`),
+    { code: 'EAGAIN' },
+  );
 }

@@ -9,6 +9,9 @@
   --ink: #25262b;
   --muted: #777982;
   --accent: #426bd2;
+  --goal-active: #8c6b2f;
+  --goal-blocked: #9a4b3d;
+  --goal-completed: #3f6b3a;
   --logo-light: block;
   --logo-dark: none;
 }
@@ -22,6 +25,9 @@
   --ink: #e9e9ee;
   --muted: #9898a2;
   --accent: #82a5ff;
+  --goal-active: #d3b070;
+  --goal-blocked: #e09888;
+  --goal-completed: #8fc488;
   --logo-light: none;
   --logo-dark: block;
 }
@@ -36,6 +42,9 @@
     --ink: #e9e9ee;
     --muted: #9898a2;
     --accent: #82a5ff;
+    --goal-active: #d3b070;
+    --goal-blocked: #e09888;
+    --goal-completed: #8fc488;
     --logo-light: none;
     --logo-dark: block;
   }
@@ -614,6 +623,13 @@ body[data-page='background'] {
   border-radius: 14px;
   background: var(--raised);
   color: var(--ink);
+  /**
+   * A plan can be longer than the window. Scroll it inside the card instead of letting the card grow past the
+   * top of the transcript: an approval dialog whose first line is cut off is asking about a plan nobody can read.
+   */
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .question-head {
   display: flex;

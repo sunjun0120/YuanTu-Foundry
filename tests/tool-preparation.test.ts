@@ -50,7 +50,7 @@ test('a preparation reported inside a tool becomes a pair of live frames for tha
         ambient?.onPreparation,
         'the registry must make the observer ambient around the body',
       );
-      // Authorization is run-scoped and cancellable: its signal is not a body's own (deadline-combined) one.
+      // Authorization remains cancellable while its wait is excluded from the execution budget.
       assert.ok(ambient.signal, 'the wait must be cancellable');
       assert.equal(ambient.onPreparation, context.onPreparation);
       for (const report of reports) ambient.onPreparation!(report);

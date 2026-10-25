@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
+import { runWithDeadline, withoutToolDeadline } from '../packages/tools/call-runtime.ts';
 import {
   TOOL_DEADLINE_DEFAULTS,
   TOOL_TIMEOUT_MARKER,
@@ -32,6 +33,93 @@ import { storeFixture } from './temp-fixture.ts';
 
 const approve = async () => true;
 const call = (name: string): ToolCall => ({ id: `call-${name}`, name, arguments: {} });
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+test('authorization resumes the remaining tool budget rather than granting a fresh budget', async () => {
+  const abort = new AbortController();
+  let postAuthorizationFinished = false;
+  await assert.rejects(
+    runWithDeadline(
+      'prepare',
+      abort,
+      async () => {
+        await sleep(80);
+        await withoutToolDeadline(() => sleep(180));
+        await sleep(100);
+        postAuthorizationFinished = true;
+        return { isError: false, content: 'too late' };
+      },
+      { defaultMs: 140 },
+    ),
+    ToolTimeoutError,
+  );
+  assert.equal(postAuthorizationFinished, false, 'the 80 ms already spent must still count');
+  // Let the deliberately noncooperative body settle before the next case.
+  await sleep(100);
+});
+
+test('overlapping authorization waits exclude their union from one tool budget', async () => {
+  const result = await runWithDeadline(
+    'parallel-prepare',
+    new AbortController(),
+    async () => {
+      await Promise.all([
+        withoutToolDeadline(() => sleep(100)),
+        withoutToolDeadline(() => sleep(260)),
+      ]);
+      return { isError: false, content: 'both authorized' };
+    },
+    { defaultMs: 80 },
+  );
+  assert.equal(result.content, 'both authorized');
+});
+
+test('an inner authorization suspends both the command and its enclosing program budget', async () => {
+  const result = await runWithDeadline(
+    'program',
+    new AbortController(),
+    () =>
+      runWithDeadline(
+        'command',
+        new AbortController(),
+        async () => {
+          await withoutToolDeadline(() => sleep(180));
+          return { isError: false, content: 'authorized inside program' };
+        },
+        { defaultMs: 80 },
+      ),
+    { defaultMs: 100 },
+  );
+  assert.equal(result.content, 'authorized inside program');
+});
+
+test('a failed authorization releases the budget for work that handles its failure', async () => {
+  const abort = new AbortController();
+  let handled = false;
+  await assert.rejects(
+    runWithDeadline(
+      'handle-failure',
+      abort,
+      async () => {
+        try {
+          await withoutToolDeadline(async () => {
+            await sleep(160);
+            throw new Error('grant failed');
+          });
+        } catch {
+          handled = true;
+        }
+        return await new Promise<ToolResult>((_resolve, reject) =>
+          abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true }),
+        );
+      },
+      { defaultMs: 80 },
+    ),
+    ToolTimeoutError,
+  );
+  assert.equal(handled, true);
+});
 
 /** A tool whose body is supplied by the case, so "hangs", "hangs until told" and "slow but fine" are data. */
 function tool(name: string, execute: Tool['execute']): Tool {

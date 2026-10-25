@@ -1,4 +1,5 @@
-import { t } from './i18n.ts';
+import { t, translate } from './i18n.ts';
+import type { UiLanguage } from './ui-settings.ts';
 
 /**
  * The markdown a person gets when they export a conversation.
@@ -17,14 +18,16 @@ export interface ExportableMessage {
 export function conversationMarkdown(input: {
   title?: string | undefined;
   messages: readonly ExportableMessage[];
+  language?: UiLanguage;
 }): string {
-  const title = input.title?.trim() || t('ui.export.untitled');
+  const text = (key: string) => (input.language ? translate(key, input.language) : t(key));
+  const title = input.title?.trim() || text('ui.export.untitled');
   const roleOf = (role: string): string =>
     role === 'user'
-      ? t('ui.export.roleUser')
+      ? text('ui.export.roleUser')
       : role === 'assistant'
-        ? t('ui.export.roleAssistant')
-        : t('ui.export.roleTool');
+        ? text('ui.export.roleAssistant')
+        : text('ui.export.roleTool');
   return `# ${title}\n\n${input.messages
     .map((message) => `## ${roleOf(message.role)}\n\n${message.content}`)
     .join('\n\n')}`;

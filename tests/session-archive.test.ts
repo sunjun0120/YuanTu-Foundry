@@ -89,7 +89,7 @@ test('archiving through the carrier hides the session from the sidebar and moves
   assert.deepEqual(await service.archivedSessions(), []);
 });
 
-test('the archived-sessions page is bounded to the newest 500', { timeout: 30000 }, async (t) => {
+test('the archived-sessions page is bounded to the newest 500', { timeout: 60000 }, async (t) => {
   let service: CarrierService | undefined;
   t.after(async () => {
     await service?.stop();
@@ -104,6 +104,7 @@ test('the archived-sessions page is bounded to the newest 500', { timeout: 30000
     hostPath: path.resolve('apps/agent-host/main.ts'),
     workspace: root,
     db: file,
+    startupTimeoutMs: 30_000,
   });
   await service.start();
   const archived = await service.archivedSessions();

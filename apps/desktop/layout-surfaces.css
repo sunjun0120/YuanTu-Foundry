@@ -84,6 +84,30 @@
   color: #cb756e;
 }
 
+/* The goal banner follows the same palette as the checklist and the deliverables above/below it. */
+#chat-page .goal-panel {
+  background: var(--raised);
+  border-color: var(--line);
+  color: var(--ink);
+}
+#chat-page .goal-panel-header h2,
+#chat-page .goal-status,
+#chat-page .goal-meta {
+  color: var(--muted);
+}
+#chat-page .goal-status.goal-active {
+  color: var(--goal-active);
+}
+#chat-page .goal-status.goal-blocked {
+  color: var(--goal-blocked);
+}
+#chat-page .goal-status.goal-completed {
+  color: var(--goal-completed);
+}
+#chat-page .goal-objective {
+  color: var(--ink);
+}
+
 /* Deliverables share the workspace palette, including when the theme follows the system. */
 #chat-page .deliverables-panel {
   background: var(--raised);

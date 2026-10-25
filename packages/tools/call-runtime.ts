@@ -1,7 +1,25 @@
 import type { ToolContext, ToolResult, ToolScope } from '../protocol/index.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ToolDispatch } from '../protocol/tool-hooks.ts';
 import type { ToolExecution } from './pipeline.ts';
 import { ToolTimeoutError, resolveToolDeadline, type ToolDeadlinePolicy } from './timeouts.ts';
+
+type SuspendDeadline = () => () => void;
+const executionDeadlines = new AsyncLocalStorage<readonly SuspendDeadline[]>();
+
+/**
+ * Workspace authorization is preparation, not tool execution. Exclude only its awaited time from every
+ * enclosing tool budget (including a program awaiting an inner command). Overlapping waits suspend a budget
+ * once, and resuming preserves its remaining time. Cancellation signals remain live throughout the wait.
+ */
+export async function withoutToolDeadline<T>(work: () => Promise<T>): Promise<T> {
+  const resume = (executionDeadlines.getStore() ?? []).map((suspend) => suspend());
+  try {
+    return await work();
+  } finally {
+    for (const release of resume.reverse()) release();
+  }
+}
 
 /**
  * The bounds one tool call runs inside: the wrapper chain's dispatch, the approval wait and the body's deadline.
@@ -95,23 +113,51 @@ export async function runWithDeadline(
   cancellationGraceMs?: number,
 ): Promise<ToolResult> {
   const timeoutMs = resolveToolDeadline(name, deadlines);
-  const call = body();
-  if (timeoutMs === undefined) return await call;
+  if (timeoutMs === undefined) return await body();
   let timer: NodeJS.Timeout | undefined;
+  let remaining = timeoutMs;
+  let armedAt = 0;
+  let suspended = 0;
+  let finished = false;
+  let rejectDeadline!: (error: ToolTimeoutError) => void;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new ToolTimeoutError(name, timeoutMs);
-      // Abort before rejecting: a tool that is listening is given the same error it is about to be reported
-      // with, so "what the tool was told" and "what the model is told" cannot end up saying different things.
-      // The controller is the one the wrapper chain handed down, so a wrapper that replaced the signal gets its
-      // replacement aborted — a bound it can actually tighten rather than one it can only report.
-      abort.abort(error);
-      reject(error);
-    }, timeoutMs);
+    rejectDeadline = reject;
+  });
+  const arm = () => {
+    if (finished || suspended) return;
+    armedAt = performance.now();
+    timer = setTimeout(
+      () => {
+        const error = new ToolTimeoutError(name, timeoutMs);
+        // Abort before rejecting: a tool that is listening is given the same error it is about to be reported
+        // with, so "what the tool was told" and "what the model is told" cannot end up saying different things.
+        // The controller is the one the wrapper chain handed down, so a wrapper that replaced the signal gets its
+        // replacement aborted — a bound it can actually tighten rather than one it can only report.
+        abort.abort(error);
+        rejectDeadline(error);
+      },
+      Math.max(0, remaining),
+    );
     // A pending deadline must not be a reason for the process to stay alive, or every test that leaves a hung
     // tool behind would wait out the whole budget before it could exit.
     timer.unref();
-  });
+  };
+  const suspend: SuspendDeadline = () => {
+    if (finished) return () => {};
+    if (suspended++ === 0) {
+      remaining -= performance.now() - armedAt;
+      clearTimeout(timer);
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--suspended === 0) arm();
+    };
+  };
+  arm();
+  const enclosing = executionDeadlines.getStore() ?? [];
+  const call = Promise.resolve().then(() => executionDeadlines.run([...enclosing, suspend], body));
   // The abandoned attempt may still settle — it was *asked* to stop, not guaranteed to have stopped — and by
   // then nothing is reading it. An unhandled rejection here would take the process down for a call the run
   // already reported as failed.
@@ -146,6 +192,7 @@ export async function runWithDeadline(
     }
     throw error;
   } finally {
+    finished = true;
     clearTimeout(timer);
   }
 }

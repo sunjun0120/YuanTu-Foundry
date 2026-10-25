@@ -109,6 +109,15 @@ export interface RunErrorInput {
   sessionError?: string | null;
   /** The completion verdict, when the run has one. */
   completion?: { state: string; reason: string } | null;
+  /**
+   * How the run ended, when it did.
+   *
+   * A `needs_review` run is a verdict even when its completion record is `unverified`: automatic verification
+   * that found no executable checks leaves the summary unverified while the run itself is waiting for a person.
+   * Suppressing the banner on the completion state alone let the kernel's English review sentence through in
+   * exactly that case, beside the localized "验收未通过，需检查" status line.
+   */
+  runStatus?: SessionRunStatus;
 }
 /**
  * Which error text becomes the red banner across the top of the conversation.
@@ -128,6 +137,10 @@ export function visibleRunError(input: RunErrorInput): string {
   if (!input.error) return '';
   if (input.error === RUN_CANCELLED) return '';
   const isRunError = input.sessionError != null && input.error === input.sessionError;
-  if (isRunError && input.completion?.state === 'needs_review') return '';
+  if (
+    isRunError &&
+    (input.runStatus === 'needs_review' || input.completion?.state === 'needs_review')
+  )
+    return '';
   return input.error;
 }

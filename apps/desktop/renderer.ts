@@ -213,6 +213,7 @@ const commandsView = setupCommandPalette({
   getState: () => state,
   requestRender: render,
   requestComposerUpdate: renderComposerState,
+  invoke,
 });
 const backgroundView = setupBackgroundView({ getState: () => state, invoke });
 const attachmentsView = setupAttachments({
@@ -548,6 +549,7 @@ function render(): void {
     error: stopError,
     sessionError: session.error,
     completion: session.completion?.summary ?? null,
+    runStatus: session.status,
   });
   renderErrorBanner(error);
   // A recovery is reported, not hidden: the window came back by itself, and the reason the reply the user was

@@ -37,6 +37,8 @@ export class HostDisconnectedError extends Error {
 interface HostClientLimits {
   /** Carrier restores policy and history before explicitly admitting unattended work. */
   deferAutomatic?: boolean;
+  /** Initial host.info handshake budget; ordinary RPCs retain requestTimeoutMs. */
+  startupTimeoutMs?: number;
   requestTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   maxFrameBytes?: number;
@@ -135,6 +137,8 @@ export class AgentHostClient {
     }
     for (const [key, value] of Object.entries({
       requestTimeoutMs: options.requestTimeoutMs ?? 10_000,
+      startupTimeoutMs:
+        options.startupTimeoutMs ?? Math.max(options.requestTimeoutMs ?? 10_000, 10_000),
       shutdownTimeoutMs: options.shutdownTimeoutMs ?? 10_000,
       maxFrameBytes: options.maxFrameBytes ?? 64_000_000,
     })) {
@@ -262,7 +266,7 @@ export class AgentHostClient {
             ? { authToken: this.options.authToken }
             : {}),
         },
-        Math.max(this.options.requestTimeoutMs ?? 10_000, 10_000),
+        this.options.startupTimeoutMs ?? Math.max(this.options.requestTimeoutMs ?? 10_000, 10_000),
       );
       validateHostInfo(info);
       if (this.currentStatus !== 'starting') throw new Error('Agent Host stopped during startup');

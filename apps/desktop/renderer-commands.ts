@@ -2,10 +2,9 @@
  * The command palette above the composer, and the slash commands it is the discoverable half of.
  *
  * Everything starts with `/`: typing `/` opens a menu of the window's own commands and the session's skills,
- * filtering as the line grows, and Enter either selects the highlighted row or submits `/compact`, `/goal`
- * and `/plan` when typed in full. The menu and the typed form are one vocabulary, so they are one module:
- * `commandItems` feeds the menu and the same three
- * names are matched here.
+ * filtering as the line grows, and Enter either selects the highlighted row or submits `/compact`, `/export`,
+ * `/goal` and `/plan` when typed in full. The menu and the typed form are one vocabulary, so they are one module:
+ * `commandItems` feeds the menu and the same four names are matched here.
  *
  * Selection and dismissal (`selectedCommand`, `menuDismissed`) live here rather than in the DOM because the menu
  * is rebuilt on every keystroke and a highlight is not something an element can be trusted to remember. `onInput`
@@ -45,6 +44,8 @@ export function setupCommandPalette(actions: {
   requestRender(): void;
   /** Repaint only the composer's controls: what a keystroke can change. */
   requestComposerUpdate(): void;
+  /** Run a shell-owned command (the export save dialog lives in the main process). */
+  invoke(command: CarrierCommand): Promise<CarrierSnapshot | null>;
 }): {
   render(): void;
   onInput(): void;
@@ -54,6 +55,18 @@ export function setupCommandPalette(actions: {
   const prompt = required<HTMLTextAreaElement>('prompt');
   let selectedCommand = 0;
   let menuDismissed = false;
+  function exportPayload(): { sessionId: string; suggestedName: string } | null {
+    const state = actions.getState();
+    if (!state?.session.sessionId) return null;
+    return {
+      sessionId: state.session.sessionId,
+      suggestedName: 'yuantu-session.md',
+    };
+  }
+  function exportConversation(): void {
+    const payload = exportPayload();
+    if (payload) void actions.invoke({ type: 'export', ...payload });
+  }
   function commandItems(): PaletteItem[] {
     return [
       {
@@ -64,9 +77,15 @@ export function setupCommandPalette(actions: {
       },
       {
         kind: 'command',
+        name: t('ui.exportSession'),
+        description: t('command.exportDescription'),
+        value: 'export',
+      },
+      {
+        kind: 'command',
         name: t('ui.createGoal'),
         description: t('command.goalDescription'),
-        value: 'goal',
+        value: 'task',
       },
       {
         kind: 'command',
@@ -104,6 +123,13 @@ export function setupCommandPalette(actions: {
       return;
     }
     selectedCommand = 0;
+    if (item.value === 'export') {
+      prompt.value = '';
+      renderPalette();
+      actions.requestRender();
+      exportConversation();
+      return;
+    }
     prompt.value = `/${item.value} `;
     renderPalette();
     actions.requestRender();
@@ -217,20 +243,27 @@ export function setupCommandPalette(actions: {
    */
   function submitSlash(text: string, hasAttachments: boolean): SlashOutcome | null {
     if (hasAttachments) return null;
-    const slash = text.match(/^\/(compact|goal|plan)(?:\s+([\s\S]*))?$/i);
+    const slash = text.match(/^\/(compact|export|goal|task|plan)(?:\s+([\s\S]*))?$/i);
     if (!slash) return null;
     const name = slash[1]!.toLowerCase();
     const argument = slash[2]?.trim() || '';
-    if ((name === 'goal' || name === 'plan') && !argument)
+    // `/task` is the honest name for the draft command; `/goal` stays accepted for people who learned it.
+    const commandName = name === 'task' ? 'goal' : name;
+    if ((commandName === 'goal' || commandName === 'plan') && !argument)
       return { error: format(t('ui.commandNeedsDescription'), { name }) };
     prompt.value = '';
     menuDismissed = true;
     const command: CarrierCommand =
       name === 'compact'
         ? { type: 'compact' }
-        : name === 'goal'
-          ? { type: 'goal', prompt: argument, language: locale() }
-          : { type: 'plan', prompt: argument, language: locale() };
+        : name === 'export'
+          ? {
+              type: 'export',
+              ...(exportPayload() ?? { content: '', suggestedName: 'yuantu-session.md' }),
+            }
+          : commandName === 'goal'
+            ? { type: 'goal', prompt: argument, language: locale() }
+            : { type: 'plan', prompt: argument, language: locale() };
     return { command };
   }
   return { render: renderPalette, onInput, onKeydown, submitSlash };

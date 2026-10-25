@@ -599,6 +599,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         streamedReasoning !== '';
       if (
         !carried &&
+        attempt.usage.outputTokens <= requestOutputLimit &&
         attempt.finishReason !== 'length' &&
         attempt.finishReason !== 'content-filter'
       ) {
@@ -707,7 +708,10 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         'stopped again, so nothing was re-sent',
     );
   }
-  if (response.finishReason === 'length') {
+  // A compatible endpoint may ignore the requested cap and still report a normal stop. Its reported usage
+  // remains billable evidence, but the oversized response must not start tools or masquerade as completion.
+  const outputCapExceeded = response.usage.outputTokens > requestOutputLimit;
+  if (response.finishReason === 'length' || outputCapExceeded) {
     recordPartialTurn({ ...response, text: response.text || streamedText });
     // A truncated answer is still an answer: it assembled a message, so the step spent what it spent.
     commitStepTiming(response);
@@ -733,6 +737,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
       'output-limit',
       'Model output limit reached (' +
         breakdown.join(', ') +
+        (outputCapExceeded ? '; endpoint reported output above the requested cap' : '') +
         '); partial tool calls were not executed',
     );
   }

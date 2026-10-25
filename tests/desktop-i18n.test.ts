@@ -305,26 +305,38 @@ test(
     const result = (await page.evaluate(`
       (() => {
         const palette = localeApi.setupCommandPalette({
-          getState: () => null,
+          getState: () => ({ session: { sessionId: 'export-session', messages: [] } }),
           requestRender: () => {},
           requestComposerUpdate: () => {},
+          invoke: async () => null,
         });
         localeApi.setLocale('en-US');
         const english = palette.submitSlash('/plan tidy the settings page', false);
         const refusal = palette.submitSlash('/plan', false);
+        const exported = palette.submitSlash('/export', false);
         localeApi.setLocale('zh-CN');
         const chinese = palette.submitSlash('/goal ship it', false);
-        const removed = ['model', 'permissions', 'stop', 'export', 'refresh-resources', 'new-session']
+        const draft = palette.submitSlash('/task ship it', false);
+        const removed = ['model', 'permissions', 'stop', 'refresh-resources', 'new-session']
           .map(name => palette.submitSlash('/' + name, false));
-        return { english, refusal, chinese, removed };
+        return { english, refusal, exported, chinese, draft, removed };
       })()
     `)) as {
       english: { command: { language: string; type: string; prompt: string } };
       refusal: { error: string };
-      chinese: { command: { language: string } };
+      exported: { command: { type: string; suggestedName: string; sessionId: string } };
+      chinese: { command: { language: string; type: string } };
+      draft: { command: { type: string; prompt: string } };
       removed: unknown[];
     };
-    assert.deepEqual(result.removed, [null, null, null, null, null, null]);
+    assert.deepEqual(result.removed, [null, null, null, null, null]);
+    assert.equal(result.exported.command.type, 'export');
+    assert.equal(result.exported.command.suggestedName, 'yuantu-session.md');
+    assert.equal(result.exported.command.sessionId, 'export-session');
+    // `/task` is the advertised name; `/goal` remains the compatibility alias for the same draft command.
+    assert.equal(result.draft.command.type, 'goal');
+    assert.equal(result.draft.command.prompt, 'ship it');
+    assert.equal(result.chinese.command.type, 'goal');
     assert.equal(result.english.command.language, 'en-US');
     assert.equal(result.english.command.type, 'plan');
     assert.equal(result.english.command.prompt, 'tidy the settings page');

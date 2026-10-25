@@ -507,9 +507,8 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
       /**
        * The preparation observer above is the only path to the live channel.
        *
-       * The registry turns it into an ambient context around the body, carrying the run's signal: stopping the
-       * run reaches a first authorization that has no deadline of its own, while a single call's deadline must
-       * not discard a walk the next call would have to repeat.
+       * The registry makes the observer ambient around the body with its dispatch signal. Authorization
+       * suspends the execution budget, while Stop still cancels the pending wait and clears its progress.
        */
       const { additionalContext, ...result } = await tools.execute(call, context);
       observations.push({

@@ -1,5 +1,6 @@
 import { AgentHostClient, type HostClientOptions } from '../client/host-client.ts';
 import { deepFreeze } from '../client/freeze.ts';
+import { readDisplayHistory } from '../client/display-history.ts';
 import {
   SessionController,
   type MessageDelta,
@@ -89,6 +90,21 @@ export interface CarrierOptions {
   startupCheck?: () => void;
 }
 export class CarrierService {
+  /** Read a fixed transcript window for the shell without changing the visible history or selection. */
+  async exportTranscript(sessionId: string) {
+    const client = this.client;
+    const first = await client.request('session.get', {
+      sessionId,
+      view: 'display',
+      offset: 0,
+      tail: 1,
+    });
+    const history = await readDisplayHistory(client, sessionId, Infinity, 0, {
+      ...(first.totalMessages === undefined ? {} : { endOffset: first.totalMessages }),
+    });
+    return { title: first.session.title, messages: history.messages };
+  }
+
   private client: AgentHostClient;
   private controller: SessionController;
   private readonly backgroundPanel: BackgroundPanel;
@@ -969,7 +985,18 @@ export class CarrierService {
       await this.backgroundPanel.refresh();
       return this.snapshot;
     }
-    if (this.restoring || this.managing) throw new CarrierError('sessionOperationBusy');
+    /**
+     * Commands that answer something a managing command is itself waiting on.
+     *
+     * `/plan` is a managing command: it holds `managing` for the whole planning run, and that run can stop to
+     * ask whether the plan should be approved (or to wait for a tool approval). Those answers are not mutations
+     * racing the plan — they are the only way it can finish — so the managing gate must not close on them.
+     * `cancel` belongs here for the same reason: a person must always be able to stop the run they are staring at.
+     */
+    const interactive =
+      command.type === 'approve' || command.type === 'questionAnswer' || command.type === 'cancel';
+    if (this.restoring || (this.managing && !interactive))
+      throw new CarrierError('sessionOperationBusy');
     const manages = MANAGING_COMMANDS.has(command.type);
     if (manages) {
       if (this.busy) throw new CarrierError('runBusy');

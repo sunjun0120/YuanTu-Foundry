@@ -37,6 +37,24 @@
 
 ## Verification
 
+### Follow-up: exclude authorization from execution budgets
+
+- Review reproduced a tool-budget timeout while the helper was still authorizing. Merely removing the helper's 60-second deadline did not exclude that wait from `run_command`'s 330-second budget.
+- Suspend the enclosing execution budgets only around the real authorization wait. Resume the remaining time on success, failure or cancellation; overlapping waits exclude their union, and nested command waits also suspend the enclosing program budget.
+- Use the dispatch signal for authorization now that its execution budget is suspended, so wrapper cancellation and Stop both reach the helper.
+- Regression coverage: real provider/registry preparation with a simulated helper, cancellation, post-authorization timeout, remaining-budget accounting, concurrent waits, nested calls and failure recovery. No local account provisioning.
+- Follow-up verification: the three focused suites pass 38/38; typecheck, scoped ESLint/Prettier, cycle/layer checks and `npm run build` pass.
+- Full follow-up run `1792928496622-29728-8d759221-6420-4787-86e3-a3a8406f51a9` settled all 296 files: 3076 passed, 4 failed, 40 skipped. Three failures were `host.info` startup timeouts (`client.test.ts`: cancellation clears approval; cached-usage session statistics; `session-archive.test.ts`: newest 500 archived sessions); all three pass in isolated reruns. The remaining `session-title.test.ts` case, “title output budget leaves room for reasoning before a short visible title”, also fails in isolation: the concurrently edited provider uses `max_tokens` for the fixture endpoint while the fixture only reads `max_completion_tokens`. Those unrelated provider changes were preserved. This full run is not green; real-account acceptance remains CI-only.
+
+### Follow-up: repair the four full-suite failures
+
+- Added optional `startupTimeoutMs` to `AgentHostClient`. The `host.info` handshake can have its own budget, with the existing default preserved; ordinary RPCs continue to use `requestTimeoutMs`. Existing startup classification, redaction and cleanup remain in place.
+- The affected real-Host test fixtures use a 30-second startup budget. The archived-page case has a 60-second overall test budget so setup and assertions still have time after startup.
+- The title fixture now reads the compatible endpoint's `max_tokens` field and retains the minimum output-budget and title-content checks.
+- New regression tests first reproduced the missing startup bound and missing validation; they now verify a bounded handshake, unchanged ordinary RPC deadlines and rejection of invalid startup budgets. All four original failed cases pass.
+- Related suites: 129/129 passed. Typecheck, scoped ESLint/Prettier, `git diff --check` and `npm run build` passed.
+- Full run `1792930101271-32636-d5fca772-8fae-42f5-ac57-97dd5f39e65f` passed all 296 files: **3083 passed, 0 failed, 40 skipped**. Report: `.scratch/test-logs/startup-budget-1792930099892.jsonl` and its `.meta.json`. Skips include real-account journeys that remain disposable-CI-only.
+
 - `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm run i18n:check`, `npm run cycles:check`, `npm run layers:check`, `npm run references:check`, `npm run docs:check`: pass. README event/test counts were regenerated with `npm run docs:generate`.
 - Focused TypeScript suites: `tests/sandbox-account.test.ts`, `tests/tool-preparation.test.ts`, `tests/client.test.ts`, `tests/desktop-copy.test.ts`, `tests/acceptance.test.ts`, `tests/hook-bridge.test.ts`, `tests/execution-environment.test.ts`, `tests/tool-timeout.test.ts`, `tests/invariants.test.ts`, `tests/desktop.test.ts`, `tests/desktop-language.smoke.mjs`, plus the sandbox provider/started suites: pass.
 - Native: `cargo test --lib` (68 tests, including the new reuse/interruption test) and `cargo fmt --check`: pass.

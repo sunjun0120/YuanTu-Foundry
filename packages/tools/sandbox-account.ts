@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { toolEnvironment } from './environment.ts';
+import { withoutToolDeadline } from './call-runtime.ts';
 import { windowsAccountCapabilities } from './execution-capabilities.ts';
 import { windowsShell, windowsShellArgs } from './windows-shell.ts';
 import {
@@ -308,13 +309,21 @@ async function ensureGrant(
   capability: string,
   context: SandboxPreparationContext,
 ): Promise<void> {
+  await withoutToolDeadline(() => waitForGrant(root, capability, context));
+}
+
+async function waitForGrant(
+  root: string,
+  capability: string,
+  context: SandboxPreparationContext,
+): Promise<void> {
   context.signal?.throwIfAborted();
   const key = `${root.toLowerCase()}|${capability}`;
   let flight = grants.get(key);
   // A cancelled helper must close before another grant starts for this root.
   if (flight?.abort.signal.aborted) {
     await flight.done.catch(() => undefined);
-    return ensureGrant(root, capability, context);
+    return waitForGrant(root, capability, context);
   }
   if (!flight) {
     const abort = new AbortController();

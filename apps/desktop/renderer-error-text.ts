@@ -27,6 +27,10 @@ function httpFailure(error: string, english: boolean): string | null {
     return english
       ? `The model endpoint does not exist (HTTP 404). ${SETTINGS_HINT_EN}`
       : `模型接口地址不存在（HTTP 404）。${SETTINGS_HINT_ZH}`;
+  if (status === 400)
+    return english
+      ? 'The model endpoint rejected the request content (HTTP 400). The endpoint may not support this request shape, or its gateway may be filtering the content; try another model, or check the endpoint.'
+      : '模型接口拒绝了请求内容（HTTP 400）。可能是端点不支持这种请求格式，或网关拦截了内容；可以换一个模型，或核对端点。';
   if (status === 429)
     return english
       ? 'The model endpoint is rate-limiting requests (HTTP 429). Wait a moment and try again, or switch models.'
@@ -48,7 +52,15 @@ export function localizedRunError(error: string, english: boolean): string | nul
       ? 'ui.toolArgumentsUnsupported'
       : /parallel tool calls disabled; still missing/.test(error)
         ? 'ui.toolArgumentsRecoveryFailed'
-        : null;
+        : /Duplicate tool ID fragment|Invalid tool (?:delta|index|type)|Unsupported tool type/.test(
+              error,
+            )
+          ? 'ui.modelStreamMalformed'
+          : /Incomplete model stream: missing terminal event/.test(error)
+            ? 'ui.modelStreamIncomplete'
+            : /Model output limit reached/.test(error)
+              ? 'ui.outputLimitReached'
+              : null;
   return key ? translate(key, english ? 'en-US' : 'zh-CN') : httpFailure(error, english);
 }
 

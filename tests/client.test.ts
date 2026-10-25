@@ -566,6 +566,89 @@ test('request timeout rejects once and the connection remains usable', async (t)
   assert.deepEqual(await client.request('session.list', {}), []);
 });
 
+/** A delayed wire handshake, without coupling deadline tests to child-process cold-start latency. */
+function delayedHandshake(delayMs: number): HostTransport {
+  const lines = new Set<(line: string) => void>();
+  const exits = new Set<(exit: { code: number | null; signal: NodeJS.Signals | null }) => void>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  return {
+    label: 'delayed handshake fixture',
+    pid: undefined,
+    writable: true,
+    send(line) {
+      const request = JSON.parse(line);
+      if (request.method === 'host.info') {
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          const reply = JSON.stringify({
+            id: request.id,
+            result: {
+              protocolVersion: 1,
+              runtime: 'yuantu',
+              workspace: projectRoot,
+              capabilities: ['sessions'],
+            },
+          });
+          for (const receive of lines) receive(reply);
+        }, delayMs);
+        timers.add(timer);
+      }
+      // Other requests intentionally never answer, to exercise the ordinary RPC budget.
+      return true;
+    },
+    onLine(listener) {
+      lines.add(listener);
+      return () => lines.delete(listener);
+    },
+    onExit(listener) {
+      exits.add(listener);
+      return () => exits.delete(listener);
+    },
+    onDiagnostic: () => () => {},
+    onError: () => () => {},
+    end() {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      for (const receive of exits) receive({ code: 0, signal: null });
+    },
+    kill() {
+      this.end();
+    },
+  };
+}
+
+test('the startup budget bounds a stalled handshake independently of ordinary RPCs', async (t) => {
+  const client = new AgentHostClient({
+    transport: delayedHandshake(150),
+    startupTimeoutMs: 40,
+    requestTimeoutMs: 500,
+  });
+  t.after(() => client.stop());
+  await assert.rejects(client.start(), /timed out: host.info/);
+  assert.equal(client.status, 'failed');
+});
+
+test('a longer startup budget leaves the ordinary RPC deadline unchanged', async (t) => {
+  const client = new AgentHostClient({
+    transport: delayedHandshake(100),
+    startupTimeoutMs: 500,
+    requestTimeoutMs: 40,
+  });
+  t.after(() => client.stop());
+  await client.start();
+  assert.equal(client.status, 'ready');
+  await assert.rejects(client.request('session.create', {}), /timed out: session.create/);
+  assert.equal(client.status, 'ready');
+});
+
+test('invalid startup budgets are rejected before connecting', () => {
+  for (const startupTimeoutMs of [0, -1, 1.5, NaN, Infinity])
+    assert.throws(
+      () => new AgentHostClient({ transport: delayedHandshake(0), startupTimeoutMs }),
+      /Invalid startupTimeoutMs/,
+    );
+});
+
 test('terminal errors in both Host events and results redact configured credentials', async (t) => {
   const { client } = await setup(
     t,
@@ -678,6 +761,8 @@ async function setup2(t: test.TestContext, url: string) {
     nodePath: process.execPath,
     hostPath: path.join(projectRoot, 'apps/agent-host/main.ts'),
     workspace: root,
+    // Parallel integration tests can cold-start the Host slowly; keep ordinary RPCs on their own budget.
+    startupTimeoutMs: 30_000,
     env: {
       YUANTU_MAX_CONTEXT_TOKENS: '128000',
       YUANTU_BASE_URL: url,
@@ -922,6 +1007,7 @@ test('session statistics count cached usage once, measure tools, and reload from
     nodePath: process.execPath,
     hostPath: path.join(projectRoot, 'apps/agent-host/main.ts'),
     workspace: root,
+    startupTimeoutMs: 30_000,
     env: {
       YUANTU_MAX_CONTEXT_TOKENS: '128000',
       YUANTU_SESSION_TITLES: '0',

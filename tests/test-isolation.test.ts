@@ -7,6 +7,40 @@ import path from 'node:path';
 import { createIsolation } from '../scripts/test-isolation/environment.mjs';
 import { settleProcesses } from '../scripts/test-isolation/processes.mjs';
 
+for (const transient of [true, false])
+  test(
+    `Windows deleted-object paths retry without allowing unknown targets (transient: ${transient})`,
+    { skip: process.platform !== 'win32' && 'NTFS deleted-object names are Windows-only' },
+    async (t) => {
+      const parent = await fixture(t);
+      const isolation = await createIsolation(parent, 'deleted-path.test.ts', [], process.env);
+      const result = run(
+        isolation,
+        `
+      import fs from 'node:fs';
+      import path from 'node:path';
+      const target = path.join(process.env.TEMP, 'maintenance-lock');
+      fs.writeFileSync(target, 'owned');
+      const native = fs.realpathSync.native;
+      let calls = 0;
+      fs.realpathSync.native = (file) => file === target && (++calls <= ${transient ? 2 : 100})
+        ? path.parse(target).root + '$Extend\\\\$Deleted\\\\synthetic-object'
+        : native(file);
+      const { resolvedTarget, inside } = await import('./scripts/test-isolation/paths.mjs?deleted=${transient}');
+      try {
+        console.log(JSON.stringify({ inside: inside(process.env.FOUNDRY_TEST_ROOT, resolvedTarget(target)), calls }));
+      } catch (error) {
+        console.log(JSON.stringify({ code: error.code, calls }));
+      }
+    `,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const observed = JSON.parse(result.stdout);
+      if (transient) assert.deepEqual(observed, { inside: true, calls: 3 });
+      else assert.deepEqual(observed, { code: 'EAGAIN', calls: 3 });
+    },
+  );
+
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-isolation-tests-'));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));

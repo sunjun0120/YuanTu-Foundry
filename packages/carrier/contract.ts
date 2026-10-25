@@ -50,7 +50,7 @@ import { validateUserInput } from '../protocol/images.ts';
  * carrier from inventing a second parser.
  */
 export type CarrierCommand =
-  | { type: 'export'; content: string; suggestedName: string }
+  | ({ type: 'export'; suggestedName: string } & ({ content: string } | { sessionId: string }))
   | {
       type:
         | 'snapshot'
@@ -331,7 +331,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     taskVerify: ['type', 'taskId'],
     taskRetry: ['type', 'taskId', 'prompt'],
     taskHistory: ['type', 'taskId'],
-    export: ['type', 'content', 'suggestedName'],
+    export: ['type', 'content', 'sessionId', 'suggestedName'],
     goal: ['type', 'prompt', 'language'],
     plan: ['type', 'prompt', 'language'],
     copyText: ['type', 'text'],
@@ -508,14 +508,21 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     (typeof value.text !== 'string' || value.text.length > 1_000_000)
   )
     return invalid();
-  if (
-    value.type === 'export' &&
-    (typeof value.content !== 'string' ||
-      value.content.length > 5_000_000 ||
+  if (value.type === 'export') {
+    const hasSession = 'sessionId' in value;
+    const hasContent = 'content' in value;
+    if (
+      hasSession === hasContent ||
+      (hasContent && (typeof value.content !== 'string' || value.content.length > 5_000_000)) ||
+      (hasSession &&
+        (typeof value.sessionId !== 'string' ||
+          !value.sessionId.trim() ||
+          value.sessionId.length > 256)) ||
       (value.suggestedName !== undefined &&
-        (typeof value.suggestedName !== 'string' || value.suggestedName.length > 120)))
-  )
-    return invalid();
+        (typeof value.suggestedName !== 'string' || value.suggestedName.length > 120))
+    )
+      return invalid();
+  }
   if (value.type === 'openLink') {
     if (typeof value.url !== 'string' || value.url.length > 4096 || /[\x00-\x20]/.test(value.url))
       return invalid();

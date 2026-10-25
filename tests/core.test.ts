@@ -131,6 +131,82 @@ async function fixture(t: test.TestContext, provider: Provider, extra = {}) {
   return { root, store, session, agent, events, tools };
 }
 
+for (const finishReason of ['stop', 'tool_calls', 'length'] as const)
+  test(`reported output above the requested cap is limited before tools run (${finishReason})`, async (t) => {
+    const ctx = await fixture(
+      t,
+      {
+        async complete(request) {
+          assert.equal(request.maxOutputTokens, 64);
+          return {
+            ...reply('Retained partial answer'),
+            finishReason,
+            usage: { inputTokens: 10, outputTokens: 500 },
+            toolCalls:
+              finishReason === 'tool_calls'
+                ? [
+                    {
+                      id: 'must-not-run',
+                      name: 'write_file',
+                      arguments: { path: 'unexpected.txt', content: 'bad' },
+                    },
+                  ]
+                : [],
+          };
+        },
+      },
+      { maxOutputTokens: 64, maxModelRetries: 0 },
+    );
+    const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Reply briefly' });
+    assert.equal(result.status, 'limited');
+    assert.equal(result.code, 'output-limit');
+    assert.match(result.error ?? '', /500\/64 output tokens/);
+    assert.equal(result.usage.outputTokens, 500);
+    assert.equal(ctx.events.filter((e) => e.type === 'tool.started').length, 0);
+    const partial = ctx.store
+      .messages(ctx.session.id)
+      .find((message) => message.role === 'assistant');
+    assert.ok(partial?.role === 'assistant');
+    assert.equal(partial.content, 'Retained partial answer');
+    assert.equal(partial.interrupted, true);
+    await assert.rejects(readFile(path.join(ctx.root, 'unexpected.txt')), { code: 'ENOENT' });
+  });
+
+test('a normal stop exactly at the requested output cap remains completed', async (t) => {
+  const ctx = await fixture(
+    t,
+    {
+      async complete() {
+        return { ...reply(), usage: { inputTokens: 10, outputTokens: 64 } };
+      },
+    },
+    { maxOutputTokens: 64 },
+  );
+  assert.equal(
+    (await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Reply briefly' })).status,
+    'completed',
+  );
+});
+
+test('an empty over-cap response retains its billed usage and is never retried', async (t) => {
+  let calls = 0;
+  const ctx = await fixture(
+    t,
+    {
+      async complete() {
+        calls++;
+        return { ...reply(''), usage: { inputTokens: 10, outputTokens: 500 } };
+      },
+    },
+    { maxOutputTokens: 64, maxModelRetries: 2 },
+  );
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Reply briefly' });
+  assert.equal(result.status, 'limited');
+  assert.equal(result.code, 'output-limit');
+  assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 500 });
+  assert.equal(calls, 1);
+});
+
 const fileEditors = [
   'apply_patch',
   'batch_edit',

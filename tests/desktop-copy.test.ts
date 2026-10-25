@@ -207,6 +207,7 @@ test('the exported conversation is written in the interface language and keeps i
   assert.match(english, /## Assistant\n\nAnswer body\./);
   assert.match(english, /## Tool\n\nexit 0$/);
   setLocale('zh-CN');
+  assert.equal(conversationMarkdown({ title: '', messages, language: 'en-US' }), english);
   const chinese = conversationMarkdown({ title: '', messages });
   assert.match(chinese, /^# 新会话\n/);
   assert.match(chinese, /## 你\n/);
@@ -363,6 +364,23 @@ test('a provider failure is explained in the interface language', () => {
   // The status code is what changes the advice, so each class says something different.
   assert.match(localizedRunError('Model API returned HTTP 429: busy', false) ?? '', /限流/);
   assert.match(localizedRunError('Model API returned HTTP 503: down', false) ?? '', /服务端出错/);
+  // A 400 is not always a credential problem: gateways reject request shape and content under the same code.
+  assert.match(
+    localizedRunError('Model API returned HTTP 400: safety policy', false) ?? '',
+    /请求内容/,
+  );
+  assert.match(localizedRunError('Duplicate tool ID fragment', false) ?? '', /工具调用流/);
+  assert.match(
+    localizedRunError('Incomplete model stream: missing terminal event', false) ?? '',
+    /断开/,
+  );
+  assert.match(
+    localizedRunError(
+      'Model output limit reached (64/64 output tokens, 33 reasoning tokens); partial tool calls were not executed',
+      false,
+    ) ?? '',
+    /输出达到本轮上限/,
+  );
   // An error with no known shape is not reworded: a friendly sentence for an unknown failure hides the cause.
   assert.equal(localizedRunError('Something odd happened', false), null);
   assert.equal(localizedRunError('', false), null);
@@ -429,6 +447,27 @@ test('the red banner shows failures, not run verdicts', () => {
       completion: { state: 'unverified', reason: 'checks-failed' },
     }),
     'Model API returned HTTP 401',
+  );
+  // Automatic verification can leave the completion summary `unverified` while the run itself is
+  // `needs_review`; that is still a verdict, and its kernel sentence must not reach the banner.
+  assert.equal(
+    visibleRunError({
+      error: 'The work ended without executable verification checks.',
+      sessionError: 'The work ended without executable verification checks.',
+      completion: { state: 'unverified', reason: 'missing-verification' },
+      runStatus: 'needs_review',
+    }),
+    '',
+  );
+  // The same completion with a failed run is a real failure, not a verdict.
+  assert.equal(
+    visibleRunError({
+      error: 'The work ended without executable verification checks.',
+      sessionError: 'The work ended without executable verification checks.',
+      completion: { state: 'unverified', reason: 'missing-verification' },
+      runStatus: 'failed',
+    }),
+    'The work ended without executable verification checks.',
   );
   // A window-level error is not the run's error, so a review verdict must not hide it.
   assert.equal(

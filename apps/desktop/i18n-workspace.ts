@@ -21,6 +21,18 @@ export const workspaceMessages: Record<string, [string, string]> = {
     '端点返回的工具调用缺少参数；已关闭并行调用重发一次，仍然缺少参数',
     'The endpoint dropped tool arguments; required arguments are still missing after one re-send with parallel calls disabled.',
   ],
+  'ui.modelStreamMalformed': [
+    '模型返回的工具调用流无法解析，本轮没有执行工具。可以重试；如果反复出现，换一个模型。',
+    'The model returned a malformed tool-call stream, so no tool ran. Retry; if it repeats, switch models.',
+  ],
+  'ui.modelStreamIncomplete': [
+    '模型流在正常结束前断开，本轮没有完成。可以重试；如果反复出现，换一个模型。',
+    'The model stream ended before it finished, so the turn did not complete. Retry; if it repeats, switch models.',
+  ],
+  'ui.outputLimitReached': [
+    '模型输出达到本轮上限，回答可能不完整。可以重试、缩小任务，或在模型设置中提高输出上限。',
+    'The model reached this turn’s output limit, so the answer may be incomplete. Retry, narrow the task, or raise the output cap in model settings.',
+  ],
   'session.actions': ['会话操作', 'Session actions'],
   'session.rename': ['重命名', 'Rename'],
   'session.archive': ['归档', 'Archive'],

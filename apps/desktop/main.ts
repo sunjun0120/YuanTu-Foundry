@@ -54,6 +54,7 @@ import type { ProviderConfig } from '../../packages/providers/config.ts';
 import { discoverModels } from '../../packages/providers/discovery.ts';
 import { parseUiSettingsCommand, type UiSettingsReply } from './ui-settings.ts';
 import { mainText, setMainLocale } from './i18n.ts';
+import { conversationMarkdown } from './renderer-export.ts';
 import { carrierErrorReply } from './carrier-errors.ts';
 import { UiSettingsStore } from './ui-settings-store.ts';
 import { PermissionSettingsStore } from './permission-settings-store.ts';
@@ -914,6 +915,14 @@ void app
           return { ok: true, patch: replyPatch(service.snapshot) };
         }
         if (command.type === 'export') {
+          const language = uiSettingsStore.view.language;
+          const content =
+            'sessionId' in command
+              ? conversationMarkdown({
+                  ...(await service.exportTranscript(command.sessionId)),
+                  language,
+                })
+              : command.content;
           const result = await dialog.showSaveDialog(window!, {
             title: mainText('desktop.exportTitle'),
             defaultPath: path.join(
@@ -926,7 +935,7 @@ void app
             ],
           });
           if (!result.canceled && result.filePath)
-            await writeFile(result.filePath, command.content, 'utf8');
+            await writeFile(result.filePath, content, 'utf8');
           return { ok: true, patch: replyPatch(service.snapshot) };
         }
         if (switching && command.type !== 'snapshot') throw new Error('Workspace is changing');

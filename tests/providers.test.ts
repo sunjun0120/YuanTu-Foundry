@@ -5,7 +5,7 @@ import { readConfig } from '../packages/providers/config.ts';
 import type { ModelRequest, Provider } from '../packages/protocol/index.ts';
 import { RunFailure, failureCodeOf } from '../packages/protocol/failure.ts';
 import { httpFixture, sendFrames, frames } from './http-fixture.ts';
-import { OpenAIProvider } from '../packages/providers/openai.ts';
+import { OpenAIProvider, outputTokenField } from '../packages/providers/openai.ts';
 import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { readSse } from '../packages/providers/sse.ts';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -1436,12 +1436,25 @@ test('Anthropic encodes validated images as base64 content blocks', async (t) =>
   const provider = createProvider({ apiKey: 'test', model: 'test', baseUrl: url });
   assert.equal((await provider.complete(request4())).text, 'pixel');
 });
+test('the output cap uses the dialect of the endpoint, not one hard-coded field', () => {
+  assert.equal(
+    outputTokenField('https://api.openai.com/v1/chat/completions'),
+    'max_completion_tokens',
+  );
+  assert.equal(outputTokenField('https://api.deepseek.com/v1/chat/completions'), 'max_tokens');
+  assert.equal(outputTokenField('https://llmapi.isrc.ac.cn/v1/chat/completions'), 'max_tokens');
+  assert.equal(outputTokenField('http://127.0.0.1:1234/v1/chat/completions'), 'max_tokens');
+});
+
 test('OpenAI streams text and fragmented tool calls with image and usage wire contracts', async (t) => {
   const url = await httpFixture(t, (body, res, headers, requestPath) => {
     assert.equal(requestPath, '/v1/chat/completions');
     assert.equal(headers.authorization, 'Bearer test');
     assert.equal(body.messages[1].content[1].image_url.url, `data:image/png;base64,${png}`);
     assert.equal(body.stream_options.include_usage, true);
+    // A compatible gateway gets the older dialect: DeepSeek and most proxies ignore `max_completion_tokens`.
+    assert.equal(body.max_tokens, 30);
+    assert.equal(body.max_completion_tokens, undefined);
     assert.equal(body.messages[2].tool_calls[0].id, 'previous');
     assert.equal(body.messages[3].tool_call_id, 'previous');
     assert.equal(body.messages[3].content, 'Permission denied');
