@@ -1,0 +1,148 @@
+{
+  "baselineRuntime": "a8d3bca89feb34b25b21b88b814e333a1edd7fb7",
+  "currentRuntime": "cf7808d2d2fb4c97299de88ebab606cbaf6b2bce",
+  "baselineConfigHash": "297690abe2ac17b3104c51220d106d89224b2fc5c5ce432e5e9a17121eb20721",
+  "currentConfigHash": "7ce17ab305d1db45b13ea32fa0f5556dc5e65427424505016fb275dd65b5fb2a",
+  "strictPairing": false,
+  "differences": [
+    {
+      "key": "harnessHash",
+      "before": "e2824c1820bdf73e810fd2e2b78c4912fe00b37327162874f57820966dbd8095",
+      "now": "c62d640e6776ecc7f8e3f0a24de3d782b18a77d9ed7524c019d0352c892bf555"
+    },
+    {
+      "key": "instances",
+      "before": [
+        "astropy__astropy-14309",
+        "astropy__astropy-14598",
+        "django__django-10880",
+        "django__django-10999",
+        "django__django-11099",
+        "django__django-11149",
+        "django__django-11451",
+        "django__django-11815",
+        "django__django-11885",
+        "django__django-12155",
+        "django__django-12276",
+        "django__django-12419",
+        "django__django-13028",
+        "django__django-13089",
+        "django__django-13343",
+        "django__django-13363",
+        "django__django-13964",
+        "django__django-14559",
+        "django__django-14771",
+        "django__django-15561",
+        "django__django-15957",
+        "django__django-16569",
+        "django__django-16877",
+        "django__django-16950",
+        "django__django-17084",
+        "matplotlib__matplotlib-24627",
+        "matplotlib__matplotlib-24870",
+        "matplotlib__matplotlib-25122",
+        "mwaskom__seaborn-3187",
+        "pallets__flask-5014",
+        "psf__requests-1921",
+        "pydata__xarray-4075",
+        "pydata__xarray-7229",
+        "pylint-dev__pylint-4604",
+        "pytest-dev__pytest-5631",
+        "pytest-dev__pytest-5809",
+        "scikit-learn__scikit-learn-13124",
+        "scikit-learn__scikit-learn-13328",
+        "scikit-learn__scikit-learn-25931",
+        "sphinx-doc__sphinx-10449",
+        "sphinx-doc__sphinx-10614",
+        "sphinx-doc__sphinx-10673",
+        "sphinx-doc__sphinx-7910",
+        "sympy__sympy-13551",
+        "sympy__sympy-13798",
+        "sympy__sympy-18199",
+        "sympy__sympy-20916",
+        "sympy__sympy-23950",
+        "sympy__sympy-24443",
+        "sympy__sympy-24562"
+      ],
+      "now": [
+        "astropy__astropy-14598",
+        "django__django-10999",
+        "django__django-11149",
+        "django__django-11885",
+        "django__django-12419",
+        "django__django-14771",
+        "django__django-15561",
+        "django__django-15957",
+        "django__django-16950",
+        "django__django-17084",
+        "matplotlib__matplotlib-24627",
+        "matplotlib__matplotlib-24870",
+        "pydata__xarray-7229",
+        "scikit-learn__scikit-learn-13124",
+        "sphinx-doc__sphinx-10449",
+        "sphinx-doc__sphinx-10614",
+        "sphinx-doc__sphinx-10673",
+        "sympy__sympy-13551",
+        "sympy__sympy-13798",
+        "sympy__sympy-20916",
+        "sympy__sympy-23950",
+        "sympy__sympy-24562"
+      ]
+    },
+    {
+      "key": "investigationMs",
+      "before": null,
+      "now": 240000
+    },
+    {
+      "key": "responseHeadersTimeoutMs",
+      "before": null,
+      "now": 30000
+    },
+    {
+      "key": "sharedModules",
+      "before": [
+        {
+          "name": "../coding-evaluation/adapters.mjs",
+          "sha256": "790e91cb6dac88e16bb9b220970618623532fa68b8f28081cff3ef69bec99e58"
+        },
+        {
+          "name": "../coding-evaluation/dependencies.mjs",
+          "sha256": "f8be63989e8d501930151ead578ac2d734ba699674b1271404cccc622e8d5a1f"
+        },
+        {
+          "name": "../coding-evaluation/metrics.mjs",
+          "sha256": "ba2ab06e36de49db903e830116e6357f6d1cdde6b6ec4d2d86e77f2c70145d6c"
+        },
+        {
+          "name": "../coding-evaluation/materialize.mjs",
+          "sha256": "8736fd8c6055afb367a9ae7fc892a3404aec0a6847d1bd43794b4c7d4b95158e"
+        }
+      ],
+      "now": [
+        {
+          "name": "../coding-evaluation/adapters.mjs",
+          "sha256": "785370e7b5f390f081b7cf072f5acf79e65c1fd188613cba3348eb8bc5be6dfa"
+        },
+        {
+          "name": "../coding-evaluation/dependencies.mjs",
+          "sha256": "f8be63989e8d501930151ead578ac2d734ba699674b1271404cccc622e8d5a1f"
+        },
+        {
+          "name": "../coding-evaluation/metrics.mjs",
+          "sha256": "a3b92a6a875a2eeaa456b340a239924c90a50ec780bf940d92872e07914d434f"
+        },
+        {
+          "name": "../coding-evaluation/materialize.mjs",
+          "sha256": "8736fd8c6055afb367a9ae7fc892a3404aec0a6847d1bd43794b4c7d4b95158e"
+        }
+      ]
+    },
+    {
+      "key": "zeroByteRetries",
+      "before": null,
+      "now": 0
+    }
+  ],
+  "note": "22 selected tasks compared with historical results. Current full runtime includes other accepted fixes; no causal attribution to B1/B2/B3 alone, no McNemar test, no claim about the full fifty-task set."
+}
