@@ -44,6 +44,9 @@ export function toolFailureNote(message: {
     return t('ui.toolCheckLocked');
   if (content.startsWith('Git tools need the repository root'))
     return t('ui.toolGitOutsideWorkspace');
+  // A permission preset refused this call; nobody was asked. The card must not read as "you denied it".
+  if (content.startsWith("Blocked by the session's permission policy"))
+    return t('ui.toolPermissionPolicy');
   return null;
 }
 

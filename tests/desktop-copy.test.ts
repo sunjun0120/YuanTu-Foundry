@@ -196,6 +196,14 @@ test('a refusal the kernel writes in English gets one sentence in the interface 
     toolFailureNote(tool('Git tools need the repository root inside the workspace: …')) ?? '',
     /子目录/,
   );
+  // A permission preset refused the call, so the card must not read as "you denied it".
+  const policy = toolFailureNote(
+    tool(
+      "Blocked by the session's permission policy (for example a read-only preset). No effect was executed. …",
+    ),
+  );
+  assert.match(policy ?? '', /权限预设/);
+  assert.doesNotMatch(policy ?? '', /已拒绝/);
   // Only a failed tool result is annotated; a successful one that happens to contain the words is not.
   assert.equal(toolFailureNote(tool('Invalid arguments: …', false)), null);
   assert.equal(toolFailureNote(tool('2 passing')), null);

@@ -229,6 +229,10 @@ export const conversationMessages: Record<string, [string, string]> = {
     '工具参数不符合它自己的定义（多传或漏传了字段），这次调用没有执行。下面是原始诊断。',
     'The tool arguments did not match the tool definition (a field was missing or extra), so the call did not run. The raw diagnostic follows.',
   ],
+  'ui.toolPermissionPolicy': [
+    '这次调用被会话的权限预设拦下（例如「仅可查看」），没有执行，也没有询问你。要改的是预设或所需权限。',
+    'The session’s permission preset blocked this call (for example a read-only preset). It did not run, and nobody was asked. Change the preset or the permission it needs.',
+  ],
   'ui.toolCheckLocked': [
     '验收检查已经登记，不能替换成更容易通过的检查；要让它通过，需要修复工作本身。',
     'The acceptance checks are registered and cannot be replaced by easier ones; passing them means fixing the work.',

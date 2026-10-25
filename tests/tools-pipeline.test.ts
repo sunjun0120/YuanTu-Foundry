@@ -186,6 +186,39 @@ test('neither a hook nor a guard can grant what the approval layer refuses', asy
   assert.equal(bodyRan, false);
 });
 
+test('a refusal names who refused it: a preset, an unanswered wait, or the user', async () => {
+  const registry = new ToolRegistry();
+  let bodyRan = false;
+  registry.register(
+    echo({
+      permission: 'command',
+      execute: async () => ((bodyRan = true), { isError: false, content: '' }),
+    }),
+  );
+  const denying = (source?: 'policy' | 'unavailable' | 'user') => {
+    const approve = (async () => false) as ToolContext['approve'];
+    if (source) approve.decisionSource = () => source;
+    return approve;
+  };
+  // A permission preset refused without asking anybody: the model must not be told a person refused it.
+  const policy = await registry.execute(call('echo'), context({ approve: denying('policy') }));
+  assert.equal(policy.isError, true);
+  assert.match(policy.content, /Blocked by the session's permission policy/);
+  assert.doesNotMatch(policy.content, /denied by user/i);
+  // A person did refuse this one, and an approver that reports no source keeps that same wording.
+  for (const approver of [denying('user'), denying()]) {
+    const denied = await registry.execute(call('echo'), context({ approve: approver }));
+    assert.match(denied.content, /Permission denied by user/);
+  }
+  // "Nobody could be asked" is not the policy wording either: it keeps the refusal wording it had.
+  const unavailable = await registry.execute(
+    call('echo'),
+    context({ approve: denying('unavailable') }),
+  );
+  assert.match(unavailable.content, /Permission denied by user/);
+  assert.equal(bodyRan, false);
+});
+
 test('cancellation during a guard stays a cancellation, not a denial', async () => {
   const registry = new ToolRegistry();
   registry.register(echo());

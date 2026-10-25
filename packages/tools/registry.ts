@@ -648,6 +648,21 @@ export class ToolRegistry {
                   'If this is a planning run, do not ask the user to authorize it; call exit_plan_mode with the plan instead.',
               ),
             );
+          /**
+           * Who refused it, when that is not the same question as what the answer was.
+           *
+           * A permission preset (`source: 'policy'`) denies without asking anybody, and a model that hears "the
+           * user denied it" will ask the user to change a decision they never made. Only a source that really is
+           * a person — or a legacy approver that reports none — keeps the human wording.
+           */
+          const source = approval ? context.approve?.decisionSource?.(approval) : undefined;
+          if (source === 'policy' && !decision.timedOut)
+            return materialize(
+              errorResult(
+                "Blocked by the session's permission policy (for example a read-only preset). No effect was executed. " +
+                  'Tell the user which permission is needed instead of retrying.',
+              ),
+            );
           return materialize(
             errorResult(
               decision.timedOut

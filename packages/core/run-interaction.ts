@@ -179,5 +179,18 @@ export function createRunInteraction(options: RunInteractionOptions): RunInterac
     }
   };
   approve.decisionReason = (approval) => (readOnlyRefusals.has(approval) ? 'read-only' : undefined);
+  /**
+   * Why the refusal happened, as the layer that decided it can say.
+   *
+   * The registry reads this instead of calling every `false` "the user said no": a permission preset that denied
+   * the call without asking anybody is a policy decision, and telling the model (and the person reading the tool
+   * card) that a human refused it would be a false account of what happened. The inner approver owns the answer
+   * when there is one — the host records `policy`, `launch-options`, `task-approval` or `user` at the moment it
+   * decides — and this wrapper adds only the case it decides itself: a read-only refusal, which its own record
+   * already writes down as `read-only` in `decisionReason`.
+   */
+  approve.decisionSource = (approval) =>
+    options.approve?.decisionSource?.(approval) ??
+    (readOnlyRefusals.has(approval) ? 'policy' : undefined);
   return { approve, ask };
 }
