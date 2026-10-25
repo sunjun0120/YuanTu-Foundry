@@ -57,6 +57,8 @@ export interface RunDefaults {
    */
   summaryTimeoutMs: number;
   streamIdleTimeoutMs: number;
+  /** How long the endpoint may take to send its response headers; the provider reads its connection's value. */
+  responseHeadersTimeoutMs: number;
   /**
    * How many times a round's model request may be re-sent after a failure the retry policy calls transient
    * (`packages/protocol/retry.ts`).
@@ -69,6 +71,8 @@ export interface RunDefaults {
    * is expensive, or when they would rather see the failure than the bill.
    */
   maxModelRetries: number;
+  /** How many times an attempt that produced no bytes may be re-sent, beyond `maxModelRetries`. `0` is off. */
+  zeroByteRetries: number;
   questionTimeoutMs: number;
   /**
    * A run's total budget: rounds, wall-clock milliseconds and model tokens (input + output, every round). `0`
@@ -179,11 +183,23 @@ export const RUN_DEFAULTS = Object.freeze({
   summaryTimeoutMs: 120_000,
   streamIdleTimeoutMs: 300_000,
   /**
+   * The same default as `streamIdleTimeoutMs`, so a connection that names neither behaves exactly as it did when
+   * one number bounded both waits. The provider reads its *connection's* value; this is the run-level default and
+   * the single place the bound is validated.
+   */
+  responseHeadersTimeoutMs: 300_000,
+  /**
    * Five, which is the same allowance the LLM layer's own retry policy resolves to by default. A round that
    * has failed five times is usually failing for a reason re-sending cannot fix, and each attempt is a bill
    * for the same answer.
    */
   maxModelRetries: 5,
+  /**
+   * Off unless asked for. A failure that produced no bytes is cheap to re-send, but it is also still a failure:
+   * the endpoint may have received the request and billed for it (which is why the record says "re-sent", not
+   * "free"). The evaluation asks for one; the product does not.
+   */
+  zeroByteRetries: 0,
   questionTimeoutMs: 120_000,
   maxRunRounds: 0,
   maxRunMs: 2 * 60 * 60 * 1000,
@@ -290,10 +306,35 @@ export const ENVIRONMENT = {
     range: [1_000, 3_600_000],
     description: '流式空闲超时（毫秒）',
   },
+  /**
+   * Time to the response headers, separate from the stream's own idle clock.
+   *
+   * Not set means "the same as the idle timeout", which is what a connection used to get: the one number bounded
+   * both waits. A reasoning model's first byte can be a minute away while its stream is healthy, so an operator
+   * (and the evaluation harness) can give the wait for headers its own budget.
+   */
+  YUANTU_RESPONSE_HEADERS_TIMEOUT_MS: {
+    kind: 'number',
+    range: [1_000, 3_600_000],
+    description: '等待响应头的超时（毫秒；缺省与流空闲超时相同）',
+  },
   YUANTU_MAX_RETRIES: {
     kind: 'number',
     range: [0, 5],
     description: '每个 step 边界重发模型请求的次数上限（0 = 不重试）',
+  },
+  /**
+   * How many times an attempt that produced no bytes at all may be sent again, beyond the retry allowance above.
+   *
+   * A separate allowance rather than a larger `YUANTU_MAX_RETRIES`, because the two are not the same bargain:
+   * a normal retry is spent on any transient failure, including one that already streamed part of an answer,
+   * while this one only applies when the connection produced nothing to duplicate. Zero is the product default —
+   * the evaluation is what asks for one re-send.
+   */
+  YUANTU_ZERO_BYTE_RETRIES: {
+    kind: 'number',
+    range: [0, 3],
+    description: '零字节失败的独立重发次数（0 = 不重发；只对完全没有收到字节的失败生效）',
   },
   YUANTU_MAX_CONTEXT_TOKENS: {
     kind: 'number',
@@ -751,6 +792,7 @@ export function assertEnvironment(env: NodeJS.ProcessEnv = process.env): void {
 const ZERO_ALLOWED = new Set([
   'toolResultKeepRecent',
   'maxModelRetries',
+  'zeroByteRetries',
   'maxRunRounds',
   'maxRunMs',
   'maxRunTokens',
@@ -768,7 +810,10 @@ export function resolveRunLimits(options: Partial<RunDefaults> = {}): RunDefault
       : { requestTimeoutMs: options.requestTimeoutMs }),
     summaryTimeoutMs: options.summaryTimeoutMs ?? RUN_DEFAULTS.summaryTimeoutMs,
     streamIdleTimeoutMs: options.streamIdleTimeoutMs ?? RUN_DEFAULTS.streamIdleTimeoutMs,
+    responseHeadersTimeoutMs:
+      options.responseHeadersTimeoutMs ?? RUN_DEFAULTS.responseHeadersTimeoutMs,
     maxModelRetries: options.maxModelRetries ?? RUN_DEFAULTS.maxModelRetries,
+    zeroByteRetries: options.zeroByteRetries ?? RUN_DEFAULTS.zeroByteRetries,
     questionTimeoutMs: options.questionTimeoutMs ?? RUN_DEFAULTS.questionTimeoutMs,
     maxRunRounds: options.maxRunRounds ?? RUN_DEFAULTS.maxRunRounds,
     maxRunMs: options.maxRunMs ?? RUN_DEFAULTS.maxRunMs,

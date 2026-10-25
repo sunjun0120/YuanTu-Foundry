@@ -21,6 +21,8 @@
   "instanceTimeoutMs": 1200000,
   "requestTimeoutMs": 120000,
   "streamIdleTimeoutMs": 30000,
+  "responseHeadersTimeoutMs": 120000,
+  "zeroByteRetries": 1,
   "maxObservedRequestsPerSample": 100,
   "maxKnownTokensPerSample": 2000000,
   "approvedLiveBudget": {

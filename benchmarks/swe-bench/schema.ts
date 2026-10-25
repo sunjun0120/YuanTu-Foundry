@@ -16,6 +16,21 @@ export interface SweManifest {
   instanceTimeoutMs: number;
   requestTimeoutMs: number;
   streamIdleTimeoutMs: number;
+  /**
+   * How long the endpoint may take to send response headers, when the manifest wants it separate from the
+   * stream's idle clock.
+   *
+   * Optional, and absent means "the same as `streamIdleTimeoutMs`" — the behaviour every frozen batch was run
+   * with. A manifest that names it gets its own clock, and because it is part of the manifest it enters
+   * `configHash` (see `comparisonConfig` in `run.mjs`), so a batch that changed only this number is not
+   * comparable with one that did not.
+   */
+  responseHeadersTimeoutMs?: number;
+  /**
+   * How many empty attempts (no headers, or a response with zero body bytes) may be re-sent, when the batch
+   * asked for that at all. Absent means zero, which is what every frozen batch had.
+   */
+  zeroByteRetries?: number;
   maxObservedRequestsPerSample: number;
   maxKnownTokensPerSample: number;
   approvedLiveBudget: { authorized: boolean; maxAttempts: number };
@@ -56,7 +71,11 @@ export function validateSweManifest(input: unknown): SweManifest {
     'maxKnownTokensPerSample',
     'approvedLiveBudget',
   ];
-  object(input, [...required, 'instances'], required);
+  object(
+    input,
+    ['responseHeadersTimeoutMs', 'zeroByteRetries', ...required, 'instances'],
+    required,
+  );
   object(input.runtime, ['kind', 'revision']);
   object(input.subset, ['path', 'sha256']);
   object(input.approvedLiveBudget, ['authorized', 'maxAttempts']);
@@ -112,6 +131,22 @@ export function validateSweManifest(input: unknown): SweManifest {
     (input.maxOutputTokens as number) >= (input.maxContextTokens as number)
   )
     throw new Error('Invalid output/context budget');
+  // Optional, so a manifest written before these existed is still a manifest. Named explicitly so a typo in the
+  // name is refused rather than silently defaulted: both are configuration identity, not decoration.
+  if (
+    input.responseHeadersTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(input.responseHeadersTimeoutMs) ||
+      (input.responseHeadersTimeoutMs as number) <= 0 ||
+      (input.responseHeadersTimeoutMs as number) > 2_147_483_647)
+  )
+    throw new Error('Invalid response header timeout');
+  if (
+    input.zeroByteRetries !== undefined &&
+    (!Number.isSafeInteger(input.zeroByteRetries) ||
+      (input.zeroByteRetries as number) < 0 ||
+      (input.zeroByteRetries as number) > 3)
+  )
+    throw new Error('Invalid zero-byte retry allowance');
   if (
     typeof input.approvedLiveBudget.authorized !== 'boolean' ||
     !Number.isSafeInteger(input.approvedLiveBudget.maxAttempts) ||

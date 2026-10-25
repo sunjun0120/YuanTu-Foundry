@@ -5,7 +5,7 @@ import { failureForStatus, failureFromResponse, fetchModel } from './http.ts';
 import { RunFailure, failureCodeOf } from '../protocol/failure.ts';
 import { cacheFields } from './cache.ts';
 import { validateImages } from '../protocol/images.ts';
-import { readSse } from './sse.ts';
+import { readSse, type StreamCounters } from './sse.ts';
 import {
   assistantHash,
   deepseekCapabilities,
@@ -54,6 +54,18 @@ export class OpenAIProvider implements Provider {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     request.signal.throwIfAborted();
     const requestStarted = performance.now();
+    /**
+     * What this attempt received, counted where the bytes are read.
+     *
+     * The step boundary cannot tell an attempt that produced nothing from one that streamed its whole reasoning
+     * before failing, and only the first may be re-sent without charge; so the counts travel on the failure.
+     */
+    const stream: StreamCounters = { bytes: 0, events: 0 };
+    const counted = (): { responseBytes: number; events: number; durationMs: number } => ({
+      responseBytes: stream.bytes,
+      events: stream.events,
+      durationMs: Math.max(0, performance.now() - requestStarted),
+    });
     const cache = cacheFields(this.config, request.cacheKey, 'openai');
     const model = request.model ?? this.config.model;
     const capabilities = deepseekCapabilities(this.config, this.endpoint, model);
@@ -182,7 +194,10 @@ export class OpenAIProvider implements Provider {
               : {}),
           }),
         },
-        this.config.streamIdleTimeoutMs ?? 300_000,
+        // Time to the response headers, which is a different clock from the stream's idle timeout: a reasoning
+        // model may think for a minute before its first byte. The connection's own value wins; absent, it falls
+        // back to the idle timeout, which is the behaviour this call had before the two were separated.
+        this.config.responseHeadersTimeoutMs ?? this.config.streamIdleTimeoutMs ?? 300_000,
       );
     } catch (error) {
       request.signal.throwIfAborted();
@@ -194,6 +209,8 @@ export class OpenAIProvider implements Provider {
         'Model request failed; check endpoint and network configuration',
         {
           cause: error,
+          // The response never arrived, so this attempt is empty for the same reason a timeout is.
+          details: counted(),
         },
       );
     }
@@ -220,6 +237,7 @@ export class OpenAIProvider implements Provider {
       request.signal,
       true,
       this.config.streamIdleTimeoutMs ?? 300_000,
+      stream,
     )) {
       if (event.type === 'stream.done') {
         done = true;
@@ -361,7 +379,9 @@ export class OpenAIProvider implements Provider {
     if (!done || !reason)
       // Named for the same reason the Anthropic adapter names it: the endpoint stopped mid-answer, and only a
       // failure with a code can be re-sent by the step boundary. See `RunFailure('transport')` there.
-      throw new RunFailure('transport', 'Incomplete model stream: missing terminal event');
+      throw new RunFailure('transport', 'Incomplete model stream: missing terminal event', {
+        details: counted(),
+      });
     if (!usage)
       throw new Error('Model endpoint omitted token usage; enable streaming usage support');
     // Empty raw arguments differ from an explicit {}: only an entire required parallel batch

@@ -22,14 +22,29 @@ function parseFrame(
     throw new Error('Invalid stream event');
   return event as Record<string, unknown>;
 }
+/**
+ * What one attempt actually received from the wire.
+ *
+ * Counted here because nowhere above this layer can tell "the endpoint said nothing" from "the user was shown
+ * nothing": a request that failed before its first event and one that failed after streaming its whole reasoning
+ * both look like a failed attempt to the step boundary, and only the first is worth re-sending for free.
+ */
+export interface StreamCounters {
+  bytes: number;
+  events: number;
+}
 export async function* readSse(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   allowDone = false,
   idleTimeoutMs = 300_000,
+  counters?: StreamCounters,
 ): AsyncGenerator<Record<string, unknown>> {
   const reader = body.getReader(),
     decoder = new TextDecoder();
+  /** The counters as a failure carries them; absent when the caller did not ask for them. */
+  const counted = (): { responseBytes: number; events: number } | undefined =>
+    counters ? { responseBytes: counters.bytes, events: counters.events } : undefined;
   let buffer = '',
     bufferedBytes = 0,
     searchFrom = 0;
@@ -43,7 +58,12 @@ export async function* readSse(
       let timer: ReturnType<typeof setTimeout> | undefined;
       const idle = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new RunFailure('timeout', 'Model stream idle timeout')),
+          () =>
+            reject(
+              new RunFailure('timeout', 'Model stream idle timeout', {
+                ...(counters ? { details: counted() } : {}),
+              }),
+            ),
           idleTimeoutMs,
         );
       });
@@ -70,13 +90,17 @@ export async function* readSse(
         throw new RunFailure(
           'transport',
           'Model stream interrupted; check endpoint and network configuration',
-          { cause: error },
+          {
+            cause: error,
+            ...(counters ? { details: counted() } : {}),
+          },
         );
       } finally {
         clearTimeout(timer);
       }
       const { value, done } = chunk;
       if (done) break;
+      if (counters) counters.bytes += value.byteLength;
       const decoded = decoder.decode(value, { stream: true });
       buffer += decoded;
       bufferedBytes += Buffer.byteLength(decoded, 'utf8');
@@ -101,9 +125,11 @@ export async function* readSse(
         const event = parseFrame(frame, allowDone);
         if (event === undefined) continue;
         if (event === DONE) {
+          if (counters) counters.events++;
           yield { type: 'stream.done' };
           return;
         }
+        if (counters) counters.events++;
         yield event;
       }
       if (bufferedBytes > maxFrameBytes) throw new Error('Model stream frame exceeds 16MB limit');
@@ -125,8 +151,13 @@ export async function* readSse(
       } catch {
         throw new Error('Incomplete model stream frame');
       }
-      if (event === DONE) yield { type: 'stream.done' };
-      else if (event !== undefined) yield event;
+      if (event === DONE) {
+        if (counters) counters.events++;
+        yield { type: 'stream.done' };
+      } else if (event !== undefined) {
+        if (counters) counters.events++;
+        yield event;
+      }
     }
   } finally {
     await reader.cancel().catch(() => {});

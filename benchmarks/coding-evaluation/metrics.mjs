@@ -6,11 +6,16 @@ export function collectMetrics({ events, runs: _runs, sessionRecords, timing }) 
   const requests = new Map();
   const tools = new Set();
   const settlements = new Map();
+  // A live frame and the durable record describe the same re-send, so the count is keyed by what identifies
+  // one attempt rather than by which channel reported it.
+  const zeroByteRetries = new Set();
   let firstVisibleTextMs = null;
   function consume(event, atMs) {
     const data = event.data ?? {};
     const runId = event.runId ?? data.runId;
     const key = `${event.sessionId}\0${runId}\0`;
+    if (event.type === 'llm.zero-byte-retry')
+      zeroByteRetries.add(key + `${data.round}\0${data.attempt}`);
     if (event.type === 'provider.request.finished') {
       if (!event.sessionId || !runId || !Number.isSafeInteger(data.requestId))
         throw new Error('Request identity missing');
@@ -109,6 +114,10 @@ export function collectMetrics({ events, runs: _runs, sessionRecords, timing }) 
     summaryRequests: requests.size
       ? [...requests.values()].filter((r) => r.purpose === 'summary').length
       : null,
+    // How many empty attempts this sample actually re-sent. Zero for a run whose endpoint never failed that way,
+    // and zero for every batch whose manifest did not ask for the allowance — the two are different facts, which
+    // is why the manifest value is recorded separately (`responseHeadersTimeoutMs` / `zeroByteRetries`).
+    zeroByteRetries: zeroByteRetries.size,
     toolCalls: tools.size,
     usage: { ...usage, complete },
     cost: { amount: null, currency: null, source: null },

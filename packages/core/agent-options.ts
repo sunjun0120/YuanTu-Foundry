@@ -194,6 +194,8 @@ export interface AgentOptions {
   requestTimeoutMs?: number;
   /** How many times a round's model request may be re-sent after a transient failure. */
   maxModelRetries?: number;
+  /** How many times an attempt that produced no bytes at all may be re-sent, on top of that allowance. */
+  zeroByteRetries?: number;
   /** How many sibling tool calls from one assistant message may be in flight at once. */
   maxParallelToolCalls?: number;
   /** A run's total budget, `0` = that one off (see `RunDefaults.maxRunRounds`). */

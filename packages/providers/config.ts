@@ -29,6 +29,15 @@ export interface ProviderConfig {
   autoCompactTokens?: number;
   streamIdleTimeoutMs?: number;
   /**
+   * How long the endpoint may take to send its response *headers*.
+   *
+   * A separate clock from `streamIdleTimeoutMs`, and one that used to share its value: the two are different
+   * questions ("is the model thinking?" versus "is the connection dead?"), and a reasoning model's first byte can
+   * be a minute away while its stream, once started, is fine. Absent falls back to the idle timeout, which is
+   * exactly the behaviour this connection had before the two were separated.
+   */
+  responseHeadersTimeoutMs?: number;
+  /**
    * Which adapter serves this endpoint.
    *
    * A string rather than a union of the three built-ins, because the registry is extensible: a host that
@@ -89,6 +98,8 @@ export function readConfig(
     throw new Error('Set YUANTU_MODEL to a model ID available on your endpoint');
   const streamIdleTimeoutMs = parseSetting(env, 'YUANTU_STREAM_IDLE_TIMEOUT_MS') as
     number | undefined;
+  const responseHeadersTimeoutMs = parseSetting(env, 'YUANTU_RESPONSE_HEADERS_TIMEOUT_MS') as
+    number | undefined;
   const maxContextTokens = parseSetting(env, 'YUANTU_MAX_CONTEXT_TOKENS') as number | undefined;
   const maxOutputTokens = parseSetting(env, 'YUANTU_MAX_OUTPUT_TOKENS') as number | undefined;
   /**
@@ -110,6 +121,7 @@ export function readConfig(
     ...(deepseekCompatibility === undefined ? {} : { deepseekCompatibility }),
     ...(supportsVision === undefined ? {} : { supportsVision }),
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),
+    ...(responseHeadersTimeoutMs === undefined ? {} : { responseHeadersTimeoutMs }),
     // The connection declares its own capacity, from the one owner of those bounds (the settings table).
     ...(maxContextTokens === undefined ? {} : { maxContextTokens }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),

@@ -613,7 +613,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 70 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 72 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -628,7 +628,9 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_DEEPSEEK_COMPAT` | `auto` / `on` / `off` | DeepSeek 原生历史兼容：auto 仅识别官方端点的已知模型；on 显式声明网关支持思考回传与历史系统提示更新；off 禁用 |
 | `YUANTU_PROMPT_CACHE` | `auto` / `blocks` / `key-only` / `off` | 提示缓存的粒度：auto / blocks / key-only / off；auto 按路由声明的能力选，其余三种照字面执行，off 不发送缓存字段（旧值 0 / false 等价于 off，1 / true 等价于 auto） |
 | `YUANTU_STREAM_IDLE_TIMEOUT_MS` | `1000–3600000` | 流式空闲超时（毫秒） |
+| `YUANTU_RESPONSE_HEADERS_TIMEOUT_MS` | `1000–3600000` | 等待响应头的超时（毫秒；缺省与流空闲超时相同） |
 | `YUANTU_MAX_RETRIES` | `0–5` | 每个 step 边界重发模型请求的次数上限（0 = 不重试） |
+| `YUANTU_ZERO_BYTE_RETRIES` | `0–3` | 零字节失败的独立重发次数（0 = 不重发；只对完全没有收到字节的失败生效） |
 | `YUANTU_MAX_CONTEXT_TOKENS` | `1–100000000` | 模型上下文窗口 |
 | `YUANTU_MAX_OUTPUT_TOKENS` | `1–10000000` | 单次输出上限 |
 | `YUANTU_MODEL_CAPACITIES` | `string` | 同一端点其他模型的窗口声明（JSON） |
@@ -713,9 +715,9 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 工具（默认按需加载，首个请求） | 24 个 / 14.3 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 54 / 50 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 持久事件类型 / 实时事件类型 | 55 / 51 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 13 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 296 个 | `tests/*.test.ts` |
+| 行为测试文件 | 297 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

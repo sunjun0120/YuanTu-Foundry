@@ -486,13 +486,33 @@ export class SessionRuns {
    * keeps working, which is what the public API promises.
    */
   retryCount(runId: string, round: number, sessionId?: string): number {
+    return this.countRoundEvents('llm.retry', runId, round, sessionId);
+  }
+
+  /**
+   * How many empty attempts this round has already re-sent, counted from the log for the same reason
+   * `retryCount` is.
+   *
+   * A separate count from `retryCount` because the two allowances are separate: a zero-byte re-send must not
+   * consume a normal retry, and a normal retry must not consume this one.
+   */
+  zeroByteRetryCount(runId: string, round: number, sessionId?: string): number {
+    return this.countRoundEvents('llm.zero-byte-retry', runId, round, sessionId);
+  }
+
+  private countRoundEvents(
+    type: 'llm.retry' | 'llm.zero-byte-retry',
+    runId: string,
+    round: number,
+    sessionId?: string,
+  ): number {
     const row = this.port.db
       .prepare(
         `SELECT COUNT(*) AS n FROM session_events WHERE ${
           sessionId === undefined ? '' : 'session_id=? AND '
-        } type='llm.retry' AND json_extract(data,'$.runId')=? AND json_extract(data,'$.round')=?`,
+        } type=? AND json_extract(data,'$.runId')=? AND json_extract(data,'$.round')=?`,
       )
-      .get(...(sessionId === undefined ? [runId, round] : [sessionId, runId, round]));
+      .get(...(sessionId === undefined ? [type, runId, round] : [sessionId, type, runId, round]));
     return Number(row?.n ?? 0);
   }
 

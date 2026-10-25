@@ -40,6 +40,7 @@ export interface RunRequestOptions {
     SessionStore,
     | 'contextSurface'
     | 'retryCount'
+    | 'zeroByteRetryCount'
     | 'recordEvent'
     | 'renewLease'
     | 'checkpointStream'
@@ -50,7 +51,10 @@ export interface RunRequestOptions {
   sessionId: string;
   runId: string;
   round: number;
-  limits: Pick<ReturnType<typeof resolveRunLimits>, 'requestTimeoutMs' | 'maxModelRetries'>;
+  limits: Pick<
+    ReturnType<typeof resolveRunLimits>,
+    'requestTimeoutMs' | 'maxModelRetries' | 'zeroByteRetries'
+  >;
   signal: AbortSignal;
   context: PreparedContext;
   contextInput: Parameters<typeof prepareContext>[0];
@@ -268,6 +272,43 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
    * - **The failure is transient by nature** (`retryable`), never a failure that describes the run's own
    *   room or the request's content: re-sending those buys the same answer at full price.
    */
+  /**
+   * Whether this failure is one an empty attempt produced, and so may be sent again on its own allowance.
+   *
+   * The definition is deliberately narrow, and it is the point of the feature: no response headers were received,
+   * or the response carried zero body bytes, *and* no stream event was parsed, *and* the code says the connection
+   * failed rather than the endpoint refusing the request. Anything that streamed even one reasoning chunk is not
+   * this: re-sending it would pay twice for the same thought.
+   */
+  const zeroByteFailure = (cause: unknown): boolean => {
+    const code = failureCodeOf(cause);
+    if (code !== 'timeout' && code !== 'transport') return false;
+    const details = cause instanceof RunFailure ? cause.details : undefined;
+    return details?.responseBytes === 0 && details?.events === 0;
+  };
+  /**
+   * The separate allowance for an empty attempt.
+   *
+   * Counted from its own record rather than from `llm.retry`: an operator with a normal retry budget must not
+   * have it spent on a re-send that duplicated nothing, and an evaluation that sets `maxModelRetries=0` still
+   * gets its one zero-byte re-send. A zero-byte failure is *not* guaranteed to be free — the endpoint may have
+   * received the request and billed for it — which is why this records `re-sent`, not `free`.
+   */
+  const zeroByteRetry = async (cause: unknown): Promise<boolean> => {
+    if (!zeroByteFailure(cause)) return false;
+    const attempts = store.zeroByteRetryCount(runId, round, sessionId);
+    if (attempts >= limits.zeroByteRetries) return false;
+    const record = {
+      runId,
+      round,
+      attempt: attempts + 1,
+      firstRequestMs: cause instanceof RunFailure ? (cause.details?.durationMs ?? 0) : 0,
+    };
+    // Recorded before the re-send, for the same reason the retry record is: the count and the fact are one write.
+    store.recordEvent(sessionId, 'llm.zero-byte-retry', record);
+    emit('llm.zero-byte-retry', record);
+    return true;
+  };
   const retryRequest = async (cause: unknown): Promise<boolean> => {
     const code = failureCodeOf(cause);
     if (!retryable(code)) return false;
@@ -476,6 +517,9 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
               },
             );
         }
+        // An attempt that produced nothing at all is re-sent on its own allowance first; only once that is
+        // exhausted does the ordinary retry policy get a say. Nothing was shown, so nothing can be duplicated.
+        if (!streamedText && (await zeroByteRetry(cause))) continue;
         // A transient failure is re-sent under the same rule, and for the same reason.
         if (!streamedText && (await retryRequest(cause))) {
           /**

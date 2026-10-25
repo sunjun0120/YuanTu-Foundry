@@ -101,6 +101,14 @@ export const AGENT_EVENT_TYPES = [
    * waiting and giving up.
    */
   'llm.retry',
+  /**
+   * An attempt that produced no bytes at all was sent again, on its own allowance.
+   *
+   * Not folded into `llm.retry`: the two are different counts, and a product with a normal retry allowance must
+   * not spend it on a re-send that duplicated nothing. The record is what the *next process* reads to know how
+   * much of this allowance a round already used.
+   */
+  'llm.zero-byte-retry',
   'provider.degraded',
   /**
    * A write that undid an earlier one in the same run: the whole file went back to a state it already had, or

@@ -28,6 +28,8 @@ export interface Options {
   requestTimeoutMs?: number;
   /** How many times a round's model request may be re-sent after a transient failure. */
   maxModelRetries?: number;
+  /** How many times an attempt that produced no bytes at all may be re-sent, on top of that allowance. */
+  zeroByteRetries?: number;
   /** How many sibling tool calls from one assistant message may be in flight at once. */
   maxParallelToolCalls?: number;
   /** How long the Host waits for an answer to `ask_user_question` before settling it unanswered. */
@@ -67,6 +69,9 @@ const ZERO_ALLOWED = new Set([
   // Zero retries is a policy ("a failed request is a failed run"), not a missing value.
   'YUANTU_MAX_RETRIES',
   '--max-retries',
+  // Zero re-sends of an empty attempt is the product default, not a typo.
+  'YUANTU_ZERO_BYTE_RETRIES',
+  '--zero-byte-retries',
   // Zero sub-agent timeout is a policy too: the child is bounded by the run that owns it, not by a stopwatch.
   'YUANTU_SUBAGENT_TIMEOUT_MS',
   '--subagent-timeout-ms',
@@ -81,6 +86,7 @@ const floorFor = (name: string): number => (ZERO_ALLOWED.has(name) ? 0 : 1);
 const NUMBERS = [
   ['YUANTU_MAX_CONTEXT_TOKENS', 'maxContextTokens'],
   ['YUANTU_MAX_RETRIES', 'maxModelRetries'],
+  ['YUANTU_ZERO_BYTE_RETRIES', 'zeroByteRetries'],
   ['YUANTU_AUTO_COMPACT_TOKENS', 'autoCompactTokens'],
   ['YUANTU_MAX_OUTPUT_TOKENS', 'maxOutputTokens'],
   ['YUANTU_REQUEST_TIMEOUT_MS', 'requestTimeoutMs'],
@@ -201,6 +207,7 @@ export function parseArgs(
     | 'maxOutputTokens'
     | 'requestTimeoutMs'
     | 'maxModelRetries'
+    | 'zeroByteRetries'
     | 'maxParallelToolCalls'
     | 'questionTimeoutMs'
     | 'maxRunRounds'
@@ -215,6 +222,7 @@ export function parseArgs(
     '--max-output-tokens': 'maxOutputTokens',
     '--request-timeout-ms': 'requestTimeoutMs',
     '--max-retries': 'maxModelRetries',
+    '--zero-byte-retries': 'zeroByteRetries',
     '--max-parallel-tools': 'maxParallelToolCalls',
     '--question-timeout-ms': 'questionTimeoutMs',
     '--max-run-rounds': 'maxRunRounds',

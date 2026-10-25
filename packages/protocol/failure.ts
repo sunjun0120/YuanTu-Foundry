@@ -57,6 +57,16 @@ export interface FailureDetails {
   finishReason?: import('./index.ts').ModelResponse['finishReason'];
   requestNumber?: number;
   durationMs?: number;
+  /**
+   * Raw response-body bytes this attempt received before it failed, when the transport could count them.
+   *
+   * `0` is what makes a failure *empty* rather than merely unsuccessful: the connection either never produced a
+   * response at all, or produced one with no body. That distinction cannot be recovered a layer up — "nothing
+   * was shown" is a much wider condition — so it is recorded here, where the bytes are read.
+   */
+  responseBytes?: number;
+  /** Stream events parsed from those bytes, which is 0 whenever `responseBytes` is. */
+  events?: number;
 }
 export interface FailureOptions {
   details?: FailureDetails;

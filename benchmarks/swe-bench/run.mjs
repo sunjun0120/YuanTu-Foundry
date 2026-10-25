@@ -222,6 +222,9 @@ export async function executeBatch(value, options = {}) {
       tokens: { inputTokens: null, outputTokens: null, cachedInputTokens: null, complete: false },
       durationMs: 0,
       requests: 0,
+      // Added field, so a reader of an older batch simply does not see it. How many empty attempts were
+      // re-sent during this sample; the manifest value says how many were permitted.
+      zeroByteRetries: 0,
       patch: { files: 0, bytes: 0, changedTests: false },
     };
     let modelPatch = '';
@@ -255,6 +258,7 @@ export async function executeBatch(value, options = {}) {
                 : 'failed',
           failureClass: adapter.failureClass ?? adapter.patch.failureClass,
           requests: adapter.metrics.requests ?? 0,
+          zeroByteRetries: adapter.metrics.zeroByteRetries ?? 0,
           rounds: adapter.rounds,
           tokens: adapter.metrics.usage,
           durationMs: adapter.timing.wallMs,

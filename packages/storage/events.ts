@@ -246,6 +246,12 @@ export const SESSION_EVENT_TYPES = [
    * does not come back with a fresh allowance.
    */
   'llm.retry',
+  /**
+   * An attempt that produced no bytes at all was re-sent, counted on its own allowance (`llm.zero-byte-retry`
+   * in `packages/protocol/events.ts`). Durable because the count is read back by the next process: a host that
+   * restarts between attempts must not come back with a fresh allowance, exactly as for `llm.retry`.
+   */
+  'llm.zero-byte-retry',
   'provider.degraded',
   /**
    * One write that undid an earlier one in this session's run (`edit-oscillation-warn` in `tool-progress.ts`).
@@ -339,6 +345,13 @@ export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
    * is the explanation for why a round took longer than one request.
    */
   'llm.retry',
+  /**
+   * A re-send of an attempt that produced nothing. Carries no transcript part: whatever it describes was
+   * superseded by the attempt that followed, and the outcome is recorded where it always was. What a reader
+   * loses by skipping it is the explanation for an extra request, and the count itself — which the run reads
+   * from this record, so a reader that is the *run* never skips it.
+   */
+  'llm.zero-byte-retry',
   'provider.degraded',
   /**
    * A write that undid an earlier one. It carries no part of the transcript and no state a reader must act on:

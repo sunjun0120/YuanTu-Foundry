@@ -127,6 +127,8 @@ export interface SampleMetrics extends SampleTiming {
   requests: number | null;
   summaryRequests: number | null;
   toolCalls: number;
+  /** Empty attempts this sample sent again, on the allowance its manifest asked for (`zeroByteRetries`). */
+  zeroByteRetries: number;
   usage: {
     inputTokens: number | null;
     outputTokens: number | null;

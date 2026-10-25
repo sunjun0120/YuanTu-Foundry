@@ -60,6 +60,15 @@ export function controlledEnvironment(manifest, source = process.env, { subagent
     YUANTU_MAX_OUTPUT_TOKENS: String(manifest.maxOutputTokens),
     YUANTU_REQUEST_TIMEOUT_MS: String(manifest.requestTimeoutMs),
     YUANTU_STREAM_IDLE_TIMEOUT_MS: String(manifest.streamIdleTimeoutMs),
+    // The wait for response headers has its own clock: a reasoning model's first byte can be far away while its
+    // stream, once started, is healthy. Absent in a manifest means "same as the idle timeout", which is what the
+    // connection had when one number bounded both waits.
+    YUANTU_RESPONSE_HEADERS_TIMEOUT_MS: String(
+      manifest.responseHeadersTimeoutMs ?? manifest.streamIdleTimeoutMs,
+    ),
+    // Only a failure that produced no bytes is re-sent, and only on this separate allowance. Absent means zero,
+    // which is exactly the behaviour a frozen batch had.
+    YUANTU_ZERO_BYTE_RETRIES: String(manifest.zeroByteRetries ?? 0),
     YUANTU_PROMPT_CACHE: 'off',
     YUANTU_SANDBOX: 'host',
     YUANTU_SANDBOX_HOOK: 'host',

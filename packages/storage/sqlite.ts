@@ -845,6 +845,9 @@ export class SessionStore implements PlanRepository {
   retryCount(runId: string, round: number, sessionId?: string): number {
     return this.parts.runs.retryCount(runId, round, sessionId);
   }
+  zeroByteRetryCount(runId: string, round: number, sessionId?: string): number {
+    return this.parts.runs.zeroByteRetryCount(runId, round, sessionId);
+  }
   /** Record a compaction summary over the transcript (see `./session-context.ts`). */
   applyCompaction(id: string, input: Parameters<SessionContext['applyCompaction']>[1]): void {
     return this.parts.context.applyCompaction(id, input);
