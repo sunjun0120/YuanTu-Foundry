@@ -24,7 +24,7 @@ import {
 } from '../packages/tools/sandbox-account-broker.ts';
 import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
 import { executionPolicy } from '../packages/tools/execution-policy.ts';
-import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
+import { withSandboxPreparation, type SandboxPlan } from '../packages/tools/sandbox-provider.ts';
 import { tempRoot } from './temp-fixture.ts';
 import { windowsShell, windowsShellArgs } from '../packages/tools/windows-shell.ts';
 
@@ -215,6 +215,146 @@ const announcing: BrokerLauncher = () => {
   return child as unknown as ChildProcess;
 };
 
+test(
+  'workspace authorization has its own deadline and reports the failed stage before retry',
+  { skip: windowsOnly },
+  async (t) => {
+    const root = await realpath(await tempRoot(t, 'yuantu-grant-policy-'));
+    let attempts = 0;
+    const progress: unknown[] = [];
+    configureAccountBackend({
+      state: root,
+      launch: announcing,
+      run: async (_helper, args, options) => {
+        if (args[0] === 'account-status') return status(true);
+        if (args[0] === 'grant') {
+          assert.equal(
+            options?.timeout,
+            0,
+            'workspace propagation must not use the 60-second helper deadline',
+          );
+          if (++attempts === 1)
+            throw Object.assign(new Error('Command failed'), {
+              stderr: JSON.stringify({
+                version: 1,
+                stage: 'protect-reserved',
+                path: root + '/.git',
+                message: 'Windows error 5',
+              }),
+              code: 1,
+            });
+        }
+        return '{}';
+      },
+    });
+    t.after(stopBrokers);
+    const request = {
+      root,
+      cwd: root,
+      command: 'echo ok',
+      config: { mode: 'windows-account' as const, image: '' },
+    };
+    // The observer arrives through the ambient context, which is what a run's tool execution provides.
+    const prepare = () =>
+      withSandboxPreparation({ onPreparation: (event) => progress.push(event) }, () =>
+        windowsAccountSandboxProvider.prepare(request),
+      );
+    await assert.rejects(prepare(), (error: Error) => {
+      assert.match(error.message, /workspace authorization.*incomplete/i);
+      assert.match(error.message, /protect-reserved/);
+      assert.match(error.message, /Windows error 5/);
+      assert.ok(error.message.includes(root));
+      return true;
+    });
+    const plan = await prepare();
+    await windowsAccountSandboxProvider.cleanup(plan);
+    assert.equal(attempts, 2);
+    assert.deepEqual(
+      progress,
+      [true, false, true, false].map((active) => ({
+        stage: 'workspace-authorization',
+        root,
+        active,
+      })),
+    );
+  },
+);
+
+test(
+  'cancelling one authorization waiter keeps the other, cancelling all stops the helper',
+  { skip: windowsOnly },
+  async (t) => {
+    const root = await realpath(await tempRoot(t, 'yuantu-grant-cancel-'));
+    let starts = 0;
+    let helperSignal: AbortSignal | undefined;
+    let release!: () => void;
+    configureAccountBackend({
+      state: root,
+      launch: announcing,
+      run: async (_helper, args, options) => {
+        if (args[0] === 'account-status') return status(true);
+        if (args[0] === 'grant') {
+          starts++;
+          helperSignal = options?.signal;
+          await new Promise<void>((resolve, reject) => {
+            release = resolve;
+            helperSignal?.addEventListener('abort', () => reject(helperSignal!.reason), {
+              once: true,
+            });
+          });
+        }
+        return '{}';
+      },
+    });
+    t.after(stopBrokers);
+    const first = new AbortController(),
+      second = new AbortController();
+    let seen = 0;
+    let bothStarted!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
+    const request = {
+      root,
+      cwd: root,
+      command: 'echo ok',
+      config: { mode: 'windows-account' as const, image: '' },
+    };
+    const prepare = (signal: AbortSignal) =>
+      withSandboxPreparation(
+        {
+          signal,
+          onPreparation: (event) => {
+            if (event.active && ++seen === 2) bothStarted();
+          },
+        },
+        () => windowsAccountSandboxProvider.prepare(request),
+      );
+    const a = prepare(first.signal);
+    const b = prepare(second.signal);
+    const rejectedA = assert.rejects(a, /first stopped/);
+    const rejectedB = assert.rejects(b, /second stopped/);
+    // This deadline is only a guard for a regression that never reports preparation.
+    await Promise.race([
+      ready,
+      new Promise((_, reject) => {
+        const timer = setTimeout(() => {
+          release?.();
+          reject(new Error('authorization progress missing'));
+        }, 1000);
+        timer.unref();
+      }),
+    ]);
+    assert.equal(starts, 1);
+    first.abort(new Error('first stopped'));
+    await rejectedA;
+    assert.equal(helperSignal?.aborted, false);
+    second.abort(new Error('second stopped'));
+    await rejectedB;
+    assert.equal(helperSignal?.aborted, true);
+  },
+);
+
 /** Prepares one command with `refresh` answering the helper's `read-refresh`; returns the requests it was sent. */
 async function prepareWithRefresh(
   t: TestContext,
@@ -345,6 +485,45 @@ test(
         config: { mode: 'windows-account', image: '' },
       }),
       /not ready/,
+    );
+  },
+);
+
+test(
+  'account initialization names its stage, its helper and the failure underneath',
+  { skip: windowsOnly },
+  async (t) => {
+    const state = await tempRoot(t, 'yuantu-account-init-');
+    // The helper path exists, so the refusal is "did not answer" rather than "missing"; the runner's own text is
+    // the only record of why, and a message that dropped it would be the vague "sandbox unavailable" again.
+    configureAccountBackend({
+      helper: process.execPath,
+      state,
+      run: async () => {
+        throw Object.assign(new Error('Command failed: yuantu-sandbox.exe account-status'), {
+          stderr: 'resource directory is incomplete: yuantu-sandbox.manifest',
+          code: 1,
+        });
+      },
+    });
+    const root = await tempRoot(t, 'yuantu-account-init-ws-');
+    await assert.rejects(
+      windowsAccountSandboxProvider.prepare({
+        root,
+        cwd: root,
+        command: 'echo x',
+        config: { mode: 'windows-account', image: '' },
+      }),
+      (error: Error) => {
+        assert.match(error.message, /blocked at Windows sandbox account initialization/i);
+        assert.ok(
+          error.message.includes(process.execPath),
+          'the helper path is part of the report',
+        );
+        assert.match(error.message, /resource directory is incomplete/);
+        assert.doesNotMatch(error.message, /workspace authorization/i);
+        return true;
+      },
     );
   },
 );

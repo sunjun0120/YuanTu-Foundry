@@ -92,10 +92,35 @@ test('running status distinguishes preparation, model waiting, thinking, text an
   assert.equal(say({ activity: { kind: 'model', phase: 'text' } }), '正在生成回复…');
   assert.equal(say({ activity: { kind: 'model', phase: 'tool_call' } }), '正在生成工具调用…');
   assert.equal(say({ activity: { kind: 'tool' } }), '正在执行工具…');
+  // The first Windows workspace authorization can take minutes before the command starts: saying a tool is
+  // running would describe work that has not begun.
+  assert.equal(
+    say({
+      activity: { kind: 'tool' },
+      preparation: { stage: 'workspace-authorization', root: 'E:\\work' },
+    }),
+    '正在授权工作区…',
+  );
+  assert.equal(
+    say({ preparation: { stage: 'workspace-authorization', root: 'E:\\work' }, approvals: 1 }),
+    '等待你的确认',
+  );
+  // A preparation for another stage is not a workspace authorization, and must not borrow its wording.
+  assert.equal(
+    say({ activity: { kind: 'tool' }, preparation: { stage: 'other', root: 'E:\\work' } }),
+    '正在执行工具…',
+  );
   assert.equal(say({ tools: 1 }), '正在执行工具…');
   assert.equal(say({ tools: 1, approvals: 1 }), '等待你的确认');
   setLocale('en-US');
   assert.equal(say({ activity: { kind: 'model' } }), 'Waiting for the model…');
+  assert.equal(
+    say({
+      activity: { kind: 'tool' },
+      preparation: { stage: 'workspace-authorization', root: 'E:\\work' },
+    }),
+    'Authorizing the workspace…',
+  );
 });
 
 test('every run status reads in the interface language', (t) => {
@@ -148,6 +173,22 @@ test('the conditions the status line reports outrank each other in a fixed order
   assert.equal(say({ ready: false, loading: true }), 'The connection is not ready');
   assert.equal(say({ loading: true }), 'Loading the session…');
   assert.equal(say({}), 'Preparing the request…');
+  // A sandbox preparation is about the work already dispatched, so it outranks "running a tool" but not the
+  // person-facing waits above.
+  assert.equal(
+    say({
+      activity: { kind: 'tool' },
+      preparation: { stage: 'workspace-authorization', root: 'E:\\work' },
+    }),
+    'Authorizing the workspace…',
+  );
+  assert.equal(
+    say({
+      approvals: 1,
+      preparation: { stage: 'workspace-authorization', root: 'E:\\work' },
+    }),
+    'Waiting for your confirmation',
+  );
   // And with nothing else true, the status itself decides.
   assert.equal(say({ status: 'limited' }), 'The run limit was reached');
 });
@@ -208,6 +249,16 @@ test('a refusal the kernel writes in English gets one sentence in the interface 
     ['Permission was not granted: no approval responder is available.', /审批端/],
     ['Permission was not granted: nobody answered the approval request within 10ms.', /超时/],
     ['Permission denied by user.', /你拒绝/],
+    // Preparation that refused before the command started: the stage is named, and the raw text below the note
+    // is where the path and the helper's own error stay.
+    [
+      'Sandboxed commands are blocked at Windows sandbox account initialization: the helper (C:\\x\\yuantu-sandbox.exe) did not answer its status check (Windows error 5).',
+      /初始化/,
+    ],
+    [
+      'Windows sandbox workspace authorization is incomplete for D:\\work; the command has not started. propagate-workspace-acl (D:\\work): Windows error 5',
+      /授权/,
+    ],
   ] as const;
   for (const [content, expected] of refusals)
     assert.match(toolFailureNote(tool(content)) ?? '', expected);

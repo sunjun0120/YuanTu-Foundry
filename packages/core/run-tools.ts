@@ -441,8 +441,23 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
         },
       });
       const fileStates: FileStateDigest[] = [];
-      const { additionalContext, ...result } = await tools.execute(call, {
+      /**
+       * Sandbox preparation a call is waiting on, before any command starts.
+       *
+       * The ambient context is established by the registry, where the call's own signal exists; this is the
+       * observer it carries. The stop frame matters as much as the start: a preparation that ended because the
+       * helper refused or the call was cancelled has to clear the status line too.
+       */
+      const context: ToolContext = {
         ...toolContext(call.id, fileStates),
+        onPreparation: (progress) =>
+          emit('tool.preparation', {
+            callId: call.id,
+            name: call.name,
+            stage: progress.stage,
+            root: progress.root,
+            active: progress.active,
+          }),
         onExecution: ({ phase, attempt, startedAt, finishedAt, durationMs }) => {
           if (phase === 'started') {
             timing.executionStartedAt ??= startedAt;
@@ -488,7 +503,15 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
           });
           emit(type, measurement);
         },
-      });
+      };
+      /**
+       * The preparation observer above is the only path to the live channel.
+       *
+       * The registry turns it into an ambient context around the body, carrying the run's signal: stopping the
+       * run reaches a first authorization that has no deadline of its own, while a single call's deadline must
+       * not discard a walk the next call would have to repeat.
+       */
+      const { additionalContext, ...result } = await tools.execute(call, context);
       observations.push({
         call,
         result: { ...result, ...(additionalContext?.length ? { additionalContext } : {}) },

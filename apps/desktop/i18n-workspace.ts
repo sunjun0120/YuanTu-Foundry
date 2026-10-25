@@ -129,7 +129,9 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.verificationDetails': ['检查详情（{count}）', 'Check details ({count})'],
   'ui.verificationCheckPassed': ['通过', 'Passed'],
   'ui.verificationCheckFailed': ['未通过', 'Failed'],
+  'ui.verificationCheckNotRun': ['未执行', 'Not run'],
   'ui.verificationCommand': ['执行：{command}', 'Ran: {command}'],
+  'ui.verificationPlannedCommand': ['计划执行：{command}', 'Planned: {command}'],
   'ui.verificationSubstitute': ['替代验证', 'Substitute check'],
   'ui.verificationExitCode': ['退出码：{code}', 'Exit code: {code}'],
   'ui.completionReason.missing-verification': [
@@ -166,8 +168,8 @@ export const workspaceMessages: Record<string, [string, string]> = {
     'The acceptance criteria changed during the run and need to be confirmed again',
   ],
   'ui.completionReason.environment-error': [
-    '检查命令在当前环境里没能运行，这是环境限制，不是代码失败；自动修复已停止。',
-    'The check could not run in this environment. That is an environment limit, not a code failure; automatic repair stopped.',
+    '验证受当前环境限制，尚未确认实际运行结果。',
+    'Verification was limited by the environment; the actual result has not been confirmed.',
   ],
   'ui.completionReason.sandboxSpawn': [
     '原因：Windows 沙箱不允许命令再启动子进程（spawn EPERM），npm test、vitest、jest 这类会派生子进程的测试都会这样。可以在“完全访问权限”下重跑这条检查。',
@@ -245,6 +247,11 @@ export const workspaceMessages: Record<string, [string, string]> = {
   ],
   'ui.runStatus.responding': ['正在生成回复…', 'Writing the response…'],
   'ui.runStatus.tools': ['正在执行工具…', 'Running tools…'],
+  /**
+   * The first Windows workspace authorization can walk every existing child before the command starts; while it
+   * runs the tool itself has not begun, so the line says which wait this is instead of 正在执行工具….
+   */
+  'ui.runStatus.authorizingWorkspace': ['正在授权工作区…', 'Authorizing the workspace…'],
   'ui.runStatus.completed': ['本轮已结束', 'This turn is finished'],
   'ui.runStatus.needsReview': ['验收未通过，需检查', 'Acceptance failed; review needed'],
   'ui.openModelSettings': ['打开模型设置', 'Open model settings'],

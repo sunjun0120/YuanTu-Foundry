@@ -126,6 +126,7 @@ export class SessionController {
     tools: [],
     approvals: [],
     questions: [],
+    sandboxPreparation: [],
     error: null,
   };
   private listeners = new Set<(state: SessionSnapshot) => void>();
@@ -713,6 +714,7 @@ export class SessionController {
       statistics: transcript.statistics,
       runStatistics: null,
       statisticsActivity: null,
+      sandboxPreparation: [],
       liveMessage: null,
       subagents,
       todos: checklist.todos,
@@ -934,6 +936,7 @@ export class SessionController {
     this.state.messageRevision++;
     this.statisticsBase = structuredClone(this.state.statistics ?? emptyStatistics());
     this.state.statisticsActivity = null;
+    this.state.sandboxPreparation = [];
     this.state.running = true;
     this.state.status = 'running';
     this.state.error = null;
@@ -1138,6 +1141,7 @@ export class SessionController {
   private clearLive(): void {
     this.stateRevision++;
     this.state.statisticsActivity = null;
+    this.state.sandboxPreparation = [];
     this.state.queue = [];
     this.state.compacting = false;
     this.state.running = false;
@@ -1253,6 +1257,8 @@ export class SessionController {
         this.state.status = 'running';
         this.state.error = null;
       }
+      // A run's first frame cannot inherit a preparation from the run before it: those waits ended with it.
+      this.state.sandboxPreparation = [];
       this.runId = event.runId;
       this.publish();
       return;
@@ -1360,6 +1366,10 @@ export class SessionController {
         break;
       case 'tool.finished':
         this.state.tools = this.state.tools.filter((call) => call.id !== event.data.callId);
+        // A finished call cannot still be preparing; a dropped close frame must not leave the status line behind.
+        this.state.sandboxPreparation = this.state.sandboxPreparation.filter(
+          (entry) => entry.callId !== event.data.callId,
+        );
         this.state.approvals = this.state.approvals.filter(
           (item) => item.approval.toolCall.id !== event.data.callId,
         );
@@ -1371,6 +1381,24 @@ export class SessionController {
         this.state.messages.push(toolResultMessage(event.data));
         this.state.messageRevision++;
         break;
+      case 'tool.preparation': {
+        /**
+         * A call waiting for its sandbox, folded per call.
+         *
+         * The frames are a pair — `active: true` opens one call's entry, `active: false` closes it — and several
+         * calls may wait on the same authorization. Replacing by call id rather than clearing on the first
+         * close is what keeps one call finishing from telling the status line that nothing is preparing.
+         */
+        const callId = String(event.data.callId ?? '');
+        const stage = event.data.stage;
+        const root = String(event.data.root ?? '');
+        if (!callId || stage !== 'workspace-authorization' || !root) break;
+        this.state.sandboxPreparation = this.state.sandboxPreparation.filter(
+          (entry) => entry.callId !== callId,
+        );
+        if (event.data.active === true) this.state.sandboxPreparation.push({ callId, stage, root });
+        break;
+      }
       case 'approval.required': {
         const approval = structuredClone(event.data.approval as Approval);
         const approvalId = String(event.data.approvalId);

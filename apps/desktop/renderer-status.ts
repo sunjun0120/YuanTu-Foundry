@@ -34,6 +34,13 @@ export interface RunStatusInput {
   /** The clock the wait is measured against; the caller re-renders while a model is silent. */
   now?: number;
   tools?: number;
+  /**
+   * Sandbox preparation a running tool is waiting for.
+   *
+   * A first Windows workspace authorization propagates an inheritable grant over every existing child, which can
+   * take minutes on a large tree; the command has not started and the line used to say 正在执行工具… for all of it.
+   */
+  preparation?: { stage: string; root: string } | null;
   /** Why the last verdict stopped, so a check the environment could not run is not called a failed one. */
   completionReason?: string;
 }
@@ -58,6 +65,9 @@ export function runStatusText(input: RunStatusInput): string {
   if (!input.ready) return t('ui.runStatus.connecting');
   if (input.loading) return t('ui.runStatus.loadingSession');
   if (input.status === 'running') {
+    // Before the tool has a command to run, the useful fact is what it is waiting for — not that a tool is active.
+    if (input.preparation?.stage === 'workspace-authorization')
+      return t('ui.runStatus.authorizingWorkspace');
     if (input.tools || input.activity?.kind === 'tool') return t('ui.runStatus.tools');
     if (input.activity?.kind === 'model') {
       if (input.activity.phase === 'reasoning') return t('ui.modelReasoning');

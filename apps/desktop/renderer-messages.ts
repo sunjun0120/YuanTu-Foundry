@@ -61,6 +61,14 @@ export function toolFailureNote(message: {
     return t('ui.toolCheckLocked');
   if (content.startsWith('Git tools need the repository root'))
     return t('ui.toolGitOutsideWorkspace');
+  // Two preparation stages that stop a command before it starts. The raw text below either one carries the path,
+  // the failed stage and the helper's own error; this line says which stage it was.
+  if (
+    content.startsWith('Sandboxed commands are blocked at Windows sandbox account initialization')
+  )
+    return t('ui.toolSandboxInitialization');
+  if (content.startsWith('Windows sandbox workspace authorization is incomplete'))
+    return t('ui.toolSandboxAuthorization');
   // A permission preset refused this call; nobody was asked. The card must not read as "you denied it".
   if (content.startsWith("Blocked by the session's permission policy"))
     return t('ui.toolPermissionPolicy');

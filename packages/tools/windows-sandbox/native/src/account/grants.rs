@@ -50,9 +50,13 @@ const FILE_ATTRIBUTE_REPARSE: u32 = 0x400;
 pub struct Grant {
     pub root: String,
     pub capability: String,
+    #[serde(default)]
+    complete: bool,
+    #[serde(default)]
+    identity: Option<[u32; 3]>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(deny_unknown_fields)]
 struct GrantFile {
     version: u32,
@@ -64,7 +68,10 @@ fn grants_path() -> Result<PathBuf> {
 }
 
 fn load() -> Result<GrantFile> {
-    match std::fs::read(grants_path()?) {
+    load_at(&grants_path()?)
+}
+fn load_at(path: &Path) -> Result<GrantFile> {
+    match std::fs::read(path) {
         Ok(bytes) => {
             serde_json::from_slice(&bytes).map_err(|_| "Invalid sandbox grant record".into())
         }
@@ -77,7 +84,9 @@ fn load() -> Result<GrantFile> {
 }
 
 fn save(file: &GrantFile) -> Result<()> {
-    let path = grants_path()?;
+    save_at(file, &grants_path()?)
+}
+fn save_at(file: &GrantFile, path: &Path) -> Result<()> {
     let directory = path.parent().ok_or("Invalid grant record path")?;
     std::fs::create_dir_all(directory).map_err(|_| "Create sandbox state directory failed")?;
     let temporary = directory.join(format!("grants.{}.tmp", std::process::id()));
@@ -86,7 +95,7 @@ fn save(file: &GrantFile) -> Result<()> {
         serde_json::to_vec(file).map_err(|_| "Serialize grants")?,
     )
     .map_err(|_| "Write sandbox grant record failed")?;
-    std::fs::rename(&temporary, &path).map_err(|_| "Replace sandbox grant record failed".into())
+    std::fs::rename(&temporary, path).map_err(|_| "Replace sandbox grant record failed".into())
 }
 
 /// A workspace root this backend may grant: an existing, local, non-root directory that is not a link.
@@ -437,6 +446,89 @@ fn root_trustees<'a>(group_sid: &'a str, capability_sid: &'a str) -> [&'a str; 3
     [group_sid, capability_sid, OWNER_RIGHTS]
 }
 
+/// Only explicit ACEs applying to both the root and descendants satisfy a standing grant.
+/// The control denial must precede any allows, and sandbox trustees must not acquire DELETE_CHILD or control.
+fn root_permissions_match(object: &Pinned, entries: &[(&str, ACCESS_MODE, u32)]) -> Result<bool> {
+    let current = dacl(object)?;
+    if current.acl.is_null() {
+        return Ok(false);
+    }
+    let sids = entries
+        .iter()
+        .map(|(text, _, _)| sid(text))
+        .collect::<Result<Vec<_>>>()?;
+    let mut masks = vec![0u32; entries.len()];
+    let mut seen_allow = false;
+    for index in 0..unsafe { (*current.acl).AceCount } as u32 {
+        let mut ace = null_mut();
+        win(
+            unsafe { GetAce(current.acl, index, &mut ace) },
+            "Inspect workspace ACE",
+        )?;
+        let header = unsafe { &*(ace as *const ACE_HEADER) };
+        if header.AceType as u32 != ACCESS_DENIED_ACE_TYPE && header.AceType != 0 {
+            continue;
+        }
+        let entry = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
+        let flags = header.AceFlags as u32;
+        let allow = header.AceType == 0;
+        for (i, ((_, mode, _), sid)) in entries.iter().zip(&sids).enumerate() {
+            if unsafe { EqualSid(&entry.SidStart as *const u32 as PSID, sid.0) } == 0 {
+                continue;
+            }
+            if i < 2
+                && allow
+                && entry.Mask & (WRITE_DAC | WRITE_OWNER | FILE_DELETE_CHILD | GENERIC_ALL) != 0
+            {
+                return Ok(false);
+            }
+            if allow == (*mode == GRANT_ACCESS)
+                && flags & (INHERITED_ACE | INHERIT_ONLY_ACE | NO_PROPAGATE_INHERIT_ACE) == 0
+                && flags & INHERIT == INHERIT
+                && (allow || !seen_allow)
+            {
+                masks[i] |= entry.Mask;
+            }
+        }
+        seen_allow |= allow;
+    }
+    Ok(entries
+        .iter()
+        .zip(masks)
+        .all(|((_, _, required), actual)| actual & required == *required))
+}
+
+fn grant_step<T>(stage: &str, path: &Path, result: Result<T>) -> Result<T> {
+    result.map_err(|message| {
+        serde_json::json!({
+            "version": 1, "stage": stage, "path": path.to_string_lossy(), "message": message
+        })
+        .to_string()
+    })
+}
+
+/// Whether a recorded completion describes this exact object, so the root DACL still has to be checked and
+/// nothing else can be skipped.
+///
+/// Every field is required: `complete` is written only after propagation and reserved-name protection ended, the
+/// identity names the directory instance (a replaced directory reused at the same path is a new object), and the
+/// capability is the SID the ACL currently grants. A record from before completion journaling has neither field
+/// and is never reused — an interrupted authorization wrote no completion, and guessing from a legacy row is
+/// exactly the stale-success reading this exists to prevent.
+fn grant_reusable(
+    file: &GrantFile,
+    root: &Path,
+    capability: &str,
+    identity: Option<[u32; 3]>,
+) -> bool {
+    file.grants.iter().any(|grant| {
+        grant.complete
+            && grant.identity == identity
+            && grant.root.eq_ignore_ascii_case(&root.to_string_lossy())
+            && grant.capability == capability
+    })
+}
+
 /// Grants `group_sid` and `capability_sid` Modify on `root`, denies the group writes to reserved names, and records
 /// the grant. Granting the same root again only refreshes it.
 ///
@@ -446,26 +538,81 @@ fn root_trustees<'a>(group_sid: &'a str, capability_sid: &'a str) -> [&'a str; 3
 /// the desktop user gets `READ_CONTROL | WRITE_DAC` on everything, which a data drive granting only Modify would not
 /// give it on an object it does not own.
 pub fn grant(root: &str, group_sid: &str, capability_sid: &str) -> Result<Grant> {
-    let _lock = reads::journal_lock(&grants_path()?)?;
-    let root = workspace_root(root)?;
-    let directory =
-        open_directory(&root)?.ok_or("Workspace root must be a real directory, not a link")?;
-    let user = current_user_sid()?;
-    apply(&directory, &root_entries(group_sid, capability_sid, &user))?;
-    let group = sid(group_sid)?;
-    for name in RESERVED {
-        protect_reserved(&root.join(name), group_sid, &group)?;
-    }
-    let grant = Grant {
+    grant_at(root, group_sid, capability_sid, &grants_path()?)
+}
+
+fn grant_at(root: &str, group_sid: &str, capability_sid: &str, journal: &Path) -> Result<Grant> {
+    let _lock = grant_step("lock-grant-record", journal, reads::journal_lock(journal))?;
+    let root = grant_step("resolve-workspace", Path::new(root), workspace_root(root))?;
+    let directory = grant_step(
+        "open-workspace",
+        &root,
+        open_directory(&root).and_then(|entry| {
+            entry.ok_or("Workspace root must be a real directory, not a link".into())
+        }),
+    )?;
+    let user = grant_step("resolve-owner", &root, current_user_sid())?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    grant_step(
+        "inspect-workspace",
+        &root,
+        win(
+            unsafe { GetFileInformationByHandle(directory.handle.0, &mut info) },
+            "Workspace identity",
+        ),
+    )?;
+    let identity = Some([
+        info.dwVolumeSerialNumber,
+        info.nFileIndexHigh,
+        info.nFileIndexLow,
+    ]);
+    let mut file = grant_step("read-grant-record", journal, load_at(journal))?;
+    let entries = root_entries(group_sid, capability_sid, &user);
+    let recorded = grant_reusable(&file, &root, capability_sid, identity);
+    let matched = grant_step(
+        "check-workspace-acl",
+        &root,
+        root_permissions_match(&directory, &entries),
+    )?;
+    let mut grant = Grant {
         root: root.to_string_lossy().into_owned(),
         capability: capability_sid.to_string(),
+        complete: false,
+        identity,
     };
-    let mut file = load()?;
+    // Persist an incomplete record BEFORE any propagation. A killed helper must never leave a stale success.
     file.version = 1;
     file.grants
         .retain(|existing| !existing.root.eq_ignore_ascii_case(&grant.root));
     file.grants.push(grant.clone());
-    save(&file)?;
+    grant_step(
+        "record-authorization-start",
+        journal,
+        save_at(&file, journal),
+    )?;
+    if !recorded || !matched {
+        grant_step(
+            "propagate-workspace-acl",
+            &root,
+            apply(&directory, &entries),
+        )?;
+    }
+    let group = sid(group_sid)?;
+    for name in RESERVED {
+        let path = root.join(name);
+        grant_step(
+            "protect-reserved",
+            &path,
+            protect_reserved(&path, group_sid, &group),
+        )?;
+    }
+    grant.complete = true;
+    *file.grants.last_mut().unwrap() = grant.clone();
+    grant_step(
+        "record-authorization-complete",
+        journal,
+        save_at(&file, journal),
+    )?;
     Ok(grant)
 }
 
@@ -517,6 +664,85 @@ pub fn grants() -> Result<Vec<Grant>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_complete_record_and_a_matching_root_acl_reuse_a_grant() {
+        let root = scratch("reuse");
+        let journal = root.with_extension("json");
+        let (group, cap) = ("S-1-5-21-1-2-3-9301", "S-1-5-21-1-2-3-9302");
+        if !reads::may_change_dacl(&root) {
+            eprintln!("this session cannot change a DACL; skipping");
+            return;
+        }
+        let grant = grant_at(root.to_str().unwrap(), group, cap, &journal).unwrap();
+        let root_text = root.to_string_lossy().into_owned();
+        let user = current_user_sid().unwrap();
+        let entries = root_entries(group, cap, &user);
+        let directory = open_directory(&root).unwrap().unwrap();
+        let exact = load_at(&journal).unwrap();
+        assert!(grant_reusable(&exact, &root, cap, grant.identity));
+        assert!(root_permissions_match(&directory, &entries).unwrap());
+
+        // Every way the record can be incomplete or about a different object has to force the propagation again.
+        let mut interrupted = exact.clone();
+        interrupted.grants[0].complete = false;
+        assert!(!grant_reusable(&interrupted, &root, cap, grant.identity));
+        let mut replaced = exact.clone();
+        replaced.grants[0].identity = Some([0, 0, 0]);
+        assert!(!grant_reusable(&replaced, &root, cap, grant.identity));
+        let mut other_capability = exact.clone();
+        other_capability.grants[0].capability = "S-1-5-21-1-2-3-9303".into();
+        assert!(!grant_reusable(
+            &other_capability,
+            &root,
+            cap,
+            grant.identity
+        ));
+        let mut other_root = exact.clone();
+        other_root.grants[0].root = root_text.clone() + "-elsewhere";
+        assert!(!grant_reusable(&other_root, &root, cap, grant.identity));
+        // A row written before completions were journalled has neither field, and must never be read as success.
+        let legacy: Grant = serde_json::from_value(serde_json::json!({
+            "root": root_text,
+            "capability": cap,
+        }))
+        .unwrap();
+        assert!(!legacy.complete && legacy.identity.is_none());
+        let mut legacy_file = exact.clone();
+        legacy_file.grants = vec![legacy];
+        assert!(!grant_reusable(&legacy_file, &root, cap, grant.identity));
+
+        // The ACL side is checked too: a complete record over a root that lost an ACE must repair, not skip.
+        remove(&directory, &[cap]).unwrap();
+        assert!(!root_permissions_match(&directory, &entries).unwrap());
+        grant_at(root.to_str().unwrap(), group, cap, &journal).unwrap();
+        assert!(root_permissions_match(&directory, &entries).unwrap());
+
+        // An interrupted authorization repairs on the next command and ends with a complete record.
+        let mut file = load_at(&journal).unwrap();
+        file.grants[0].complete = false;
+        save_at(&file, &journal).unwrap();
+        assert!(!grant_reusable(
+            &load_at(&journal).unwrap(),
+            &root,
+            cap,
+            grant.identity
+        ));
+        grant_at(root.to_str().unwrap(), group, cap, &journal).unwrap();
+        assert!(load_at(&journal).unwrap().grants[0].complete);
+
+        // Reusing a completed grant still protects a reserved directory created since the last command.
+        std::fs::create_dir(root.join(".aws")).unwrap();
+        grant_at(root.to_str().unwrap(), group, cap, &journal).unwrap();
+        assert!(
+            aces(&root.join(".aws"))
+                .iter()
+                .any(|(kind, _, mask, sid)| *kind == 1 && sid == group && *mask == DENIED_WRITE)
+        );
+        drop(directory);
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_file(journal).unwrap();
+    }
 
     fn aces(path: &Path) -> Vec<(u8, u8, u32, String)> {
         let name = wide(path.to_str().unwrap()).unwrap();

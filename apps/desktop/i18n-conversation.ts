@@ -267,6 +267,19 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Git tools need the repository root inside the workspace; this workspace is a subdirectory of one.',
   ],
   /**
+   * Two preparation stages that refuse before a command starts, kept apart because the fix differs: one is the
+   * account setup, the other is this workspace's access grant. The raw result stays below and carries the path,
+   * the failed stage and the helper's own error, which is what makes either one actionable.
+   */
+  'ui.toolSandboxInitialization': [
+    'Windows 沙箱账户初始化没有完成，命令没有启动。下面保留了 helper 路径与底层错误。',
+    'Windows sandbox account initialization did not finish, so the command never started. The raw text names the helper and the error underneath.',
+  ],
+  'ui.toolSandboxAuthorization': [
+    '工作区授权没有完成，命令没有启动。下面保留了失败阶段、具体路径与底层错误。',
+    'Workspace authorization did not finish, so the command never started. The raw text names the failed stage, the path and the error underneath.',
+  ],
+  /**
    * A dead Windows sandbox lease: every command is refused until the workspace permissions it left are put back.
    * The kernel's own sentence ends by naming a CLI the desktop does not install, so the window replaces it with
    * what a person can act on — one button, and what happened after pressing it.

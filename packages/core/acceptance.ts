@@ -4,6 +4,7 @@ import {
   stopSandbox,
   cleanupSandbox,
   markSandboxStarted,
+  withSandboxPreparation,
 } from '../tools/sandbox.ts';
 import type { SandboxPlan } from '../tools/sandbox-provider.ts';
 import { createHash } from 'node:crypto';
@@ -321,10 +322,11 @@ function captureChunk(
  * The sandbox a check runs in, or the abort that arrived while it was being prepared.
  *
  * Preparing the native Windows sandbox journals and grants workspace access, which takes seconds (more for the
- * first command of a process), and none of it can be interrupted half way. Stop used to wait for all of it, then
- * for the cleanup that undid it: a check stopped before its command even started still took over ten seconds to
- * end. The wait is what is abandoned, not the work — a plan that finishes preparing after the abort is cleaned up
- * as soon as it exists, by the provider that owns it, so no grant is left behind by a cancelled check.
+ * first command of a process). Stop used to wait for all of it, then for the cleanup that undid it: a check
+ * stopped before its command even started still took over ten seconds to end. The wait is abandoned, and the
+ * preparation itself now carries the same signal — a first authorization still walking the workspace is
+ * cancelled rather than left running — while a plan that finishes anyway is cleaned up as soon as it exists, by
+ * the provider that owns it, so no grant is left behind by a cancelled check.
  */
 async function preparedUnlessAborted(
   preparing: Promise<SandboxPlan>,
@@ -376,7 +378,13 @@ async function runCommand(
   );
   signal?.throwIfAborted();
   const plan = await preparedUnlessAborted(
-    prepareSandbox(root, cwd.target, spec.command, args),
+    /**
+     * The signal travels with the preparation, not only with the wait for it.
+     *
+     * A first workspace authorization has no deadline of its own (see `ensureGrant`): without this, Stop would
+     * return while the helper kept propagating a grant over the whole workspace in the background.
+     */
+    withSandboxPreparation({ signal }, () => prepareSandbox(root, cwd.target, spec.command, args)),
     signal,
   );
   return new Promise((resolve, reject) => {

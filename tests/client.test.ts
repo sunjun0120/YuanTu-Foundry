@@ -1286,6 +1286,85 @@ test('a live statistics update travels on its own channel instead of republishin
   assert.ok(publishes > before, 'the end of a run is structural and still publishes a snapshot');
 });
 
+test('sandbox preparation is folded per call and cannot outlive its call or its run', async (t) => {
+  // The first Windows workspace authorization can take minutes, and two commands announced in one batch may
+  // wait on the same one. The list is keyed by call so the close of one waiter cannot clear another's entry,
+  // and nothing may survive the frame that ends the call or the run — the status line is derived from it.
+  class PreparationClient {
+    status = 'ready';
+    readonly events = new Set<(event: AgentEvent) => void>();
+    subscribe(listener: (event: AgentEvent) => void): () => void {
+      this.events.add(listener);
+      return () => this.events.delete(listener);
+    }
+    subscribeStatus(): () => void {
+      return () => {};
+    }
+    run(): Promise<RunResult> {
+      return new Promise(() => {});
+    }
+    async request(method: string): Promise<unknown> {
+      if (method === 'session.get')
+        return {
+          session: { id: 's1', workspace: '.', createdAt: '', activeRun: null },
+          messages: [],
+        };
+      if (method === 'plan.get') return null;
+      if (method === 'subagents.list') return [];
+      if (method === 'changes.list') return [];
+      if (method === 'background.list') return [];
+      if (method === 'task.list') return [];
+      return {};
+    }
+    emit(event: AgentEvent): void {
+      for (const listener of this.events) listener(event);
+    }
+  }
+  const client = new PreparationClient();
+  const controller = new SessionController(client as unknown as AgentHostClient);
+  t.after(() => controller.dispose());
+  await controller.load('s1');
+  const sending = controller.send('go');
+  sending.catch(() => {});
+  client.emit({ type: 'run.started', sessionId: 's1', runId: 'r1', seq: 1, data: {} });
+  const preparing = (callId: string, active: boolean, stage = 'workspace-authorization') =>
+    client.emit({
+      type: 'tool.preparation',
+      sessionId: 's1',
+      runId: 'r1',
+      seq: 1,
+      data: { callId, name: 'run_command', stage, root: 'E:\\work', active },
+    });
+  const ids = () => controller.snapshot.sandboxPreparation.map((entry) => entry.callId);
+
+  preparing('a', true);
+  preparing('b', true);
+  assert.deepEqual(ids(), ['a', 'b']);
+  preparing('a', false);
+  assert.deepEqual(ids(), ['b'], 'one waiter finishing must not clear another');
+  // A frame for a stage this build does not draw is not reported as a workspace authorization.
+  preparing('c', true, 'sandbox-start');
+  assert.deepEqual(ids(), ['b']);
+  // A dropped close frame cannot leave an entry behind once the call has answered.
+  client.emit({
+    type: 'tool.finished',
+    sessionId: 's1',
+    runId: 'r1',
+    seq: 1,
+    data: { callId: 'b', content: 'ok' },
+  });
+  assert.deepEqual(ids(), []);
+  preparing('c', true);
+  client.emit({
+    type: 'run.finished',
+    sessionId: 's1',
+    runId: 'r1',
+    seq: 1,
+    data: { result: { status: 'completed' } },
+  });
+  assert.deepEqual(ids(), [], 'the end of the run clears every waiting entry');
+});
+
 test('an event type this build does not know is ignored without costing the link', async (t) => {
   /**
    * The compatibility boundary that a new *live* event type has to cross.

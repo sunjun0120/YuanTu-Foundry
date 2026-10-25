@@ -26,6 +26,8 @@ import {
 } from './sandbox-account-broker.ts';
 import {
   insideWorkspace,
+  currentSandboxPreparation,
+  type SandboxPreparationContext,
   type SandboxPlan,
   type SandboxProvider,
   type SandboxRequest,
@@ -38,14 +40,19 @@ const assetRoot =
     : fileURLToPath(new URL('./windows-sandbox/', import.meta.url));
 
 /** Runs the helper with fixed arguments and answers its stdout; replaced in tests. */
-export type HelperRunner = (helper: string, args: string[]) => Promise<string>;
+export type HelperRunner = (
+  helper: string,
+  args: string[],
+  options?: { timeout?: number; signal?: AbortSignal },
+) => Promise<string>;
 
-const runHelper: HelperRunner = async (helper, args) => {
+const runHelper: HelperRunner = async (helper, args, options) => {
   const { stdout } = await promisify(execFile)(helper, args, {
     windowsHide: true,
     encoding: 'utf8',
     maxBuffer: 1 << 20,
-    timeout: 60_000,
+    timeout: options?.timeout ?? 60_000,
+    signal: options?.signal,
     env: toolEnvironment(),
   });
   return stdout;
@@ -73,6 +80,7 @@ export function configureAccountBackend(change: Partial<Configuration>): void {
   readRefreshes.clear();
   capabilities = undefined;
   status = undefined;
+  statusFailure = undefined;
 }
 
 export interface AccountStatus {
@@ -138,6 +146,8 @@ export function parseAccountStatus(text: string): AccountStatus {
 }
 
 let status: Promise<AccountStatus> | undefined;
+/** Why the last status read failed; kept so a refusal can name the helper's own failure instead of guessing. */
+let statusFailure: unknown;
 
 /** Maintenance may replace account passwords and revoke grants: discard every process-local lease. */
 export async function refreshAccountBackend(): Promise<void> {
@@ -150,7 +160,14 @@ export async function refreshAccountBackend(): Promise<void> {
 /** Asks the helper for the backend's state. Never throws. */
 export async function refreshAccountReadiness(): Promise<AccountStatus | undefined> {
   if (process.platform !== 'win32') return undefined;
-  status = configuration.run(configuration.helper, ['account-status']).then(parseAccountStatus);
+  statusFailure = undefined;
+  status = configuration
+    .run(configuration.helper, ['account-status'])
+    .then(parseAccountStatus)
+    .catch((failure: unknown) => {
+      statusFailure = failure;
+      throw failure;
+    });
   try {
     return await status;
   } catch {
@@ -158,24 +175,42 @@ export async function refreshAccountReadiness(): Promise<AccountStatus | undefin
   }
 }
 
+/** The helper's own error text, bounded, for a refusal that has to stay readable in a tool result. */
+function failureDetail(failure: unknown, limit = 500): string {
+  const error = failure as { stderr?: string; message?: string };
+  const text = (
+    error?.stderr?.trim() || (failure instanceof Error ? failure.message : String(failure))
+  ).trim();
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
 async function readiness(): Promise<string | null> {
   if (process.platform !== 'win32')
     return 'The Windows sandbox account backend only runs on Windows';
   const current = status ? await status.catch(() => undefined) : await refreshAccountReadiness();
+  const helper = configuration.helper;
   if (!current)
-    return existsSync(configuration.helper)
-      ? 'The Windows sandbox helper in this installation did not answer its status check; ' +
-          'reinstall YuanTu to run sandboxed commands'
-      : `The Windows sandbox helper is missing from this installation (${configuration.helper}); ` +
-          'reinstall YuanTu to run sandboxed commands';
+    return existsSync(helper)
+      ? `Sandboxed commands are blocked at Windows sandbox account initialization: the helper (${helper}) ` +
+          `did not answer its status check${
+            statusFailure === undefined ? '' : ` (${failureDetail(statusFailure)})`
+          }. Reinstall YuanTu to run sandboxed commands.`
+      : `Sandboxed commands are blocked at Windows sandbox account initialization: the helper is missing from ` +
+          `this installation (${helper}); reinstall YuanTu to run sandboxed commands.`;
   if (current.ready) return null;
   const state = current.problems.includes('setup-marker-missing')
     ? 'The Windows sandbox accounts have not been initialized'
     : current.problems.includes('setup-marker-version')
       ? 'The Windows sandbox setup marker is from an older version and needs to be repaired'
       : `The Windows sandbox accounts are not ready (${current.problems.join(', ')})`;
+  const details = current.details
+    .map((detail) => detail.trim())
+    .filter(Boolean)
+    .join('; ');
   return (
-    `${state}. Set them up from the Windows sandbox prompt above the message box. ` +
+    `Sandboxed commands are blocked at Windows sandbox account initialization: ${state}.` +
+    (details ? ` (${details})` : '') +
+    ' Set them up from the Windows sandbox prompt above the message box. ' +
     'Sandboxed commands remain blocked until initialization or repair succeeds.'
   );
 }
@@ -233,20 +268,100 @@ export async function capabilityFor(root: string): Promise<string> {
   return sid;
 }
 
-const grants = new Map<string, Promise<void>>();
+interface GrantFlight {
+  done: Promise<void>;
+  abort: AbortController;
+  waiters: number;
+  settled: boolean;
+}
+const grants = new Map<string, GrantFlight>();
+
+function authorizationFailure(root: string, failure: unknown): Error {
+  const error = failure as { stderr?: string; code?: unknown; signal?: unknown };
+  let detail =
+    error?.stderr?.trim() || (failure instanceof Error ? failure.message : String(failure));
+  try {
+    const report = JSON.parse(detail) as {
+      version?: number;
+      stage?: string;
+      path?: string;
+      message?: string;
+    };
+    if (
+      report.version === 1 &&
+      typeof report.stage === 'string' &&
+      typeof report.message === 'string'
+    )
+      detail = `${report.stage}${typeof report.path === 'string' ? ` (${report.path})` : ''}: ${report.message}`;
+  } catch {
+    /* Older helpers report plain stderr. */
+  }
+  return new Error(
+    `Windows sandbox workspace authorization is incomplete for ${root}; the command has not started. ${detail}${error?.code !== undefined ? ` (exit/code: ${String(error.code)})` : ''}${error?.signal ? ` (signal: ${String(error.signal)})` : ''}`,
+    { cause: failure },
+  );
+}
 
 /** Grants the workspace once per process; the grant itself is persistent (see the helper's `grant`). */
-async function ensureGrant(root: string, capability: string): Promise<void> {
+async function ensureGrant(
+  root: string,
+  capability: string,
+  context: SandboxPreparationContext,
+): Promise<void> {
+  context.signal?.throwIfAborted();
   const key = `${root.toLowerCase()}|${capability}`;
-  let pending = grants.get(key);
-  if (!pending) {
-    pending = configuration
-      .run(configuration.helper, ['grant', '--root', root, '--capability', capability])
-      .then(() => undefined);
-    grants.set(key, pending);
-    pending.catch(() => grants.delete(key));
+  let flight = grants.get(key);
+  // A cancelled helper must close before another grant starts for this root.
+  if (flight?.abort.signal.aborted) {
+    await flight.done.catch(() => undefined);
+    return ensureGrant(root, capability, context);
   }
-  await pending;
+  if (!flight) {
+    const abort = new AbortController();
+    const created: GrantFlight = { abort, waiters: 0, settled: false, done: Promise.resolve() };
+    created.done = Promise.resolve()
+      .then(() =>
+        configuration.run(
+          configuration.helper,
+          ['grant', '--root', root, '--capability', capability],
+          { timeout: 0, signal: abort.signal },
+        ),
+      )
+      .then(() => undefined)
+      .catch((failure: unknown) => {
+        if (grants.get(key) === created) grants.delete(key);
+        throw authorizationFailure(root, failure);
+      })
+      .finally(() => {
+        created.settled = true;
+      });
+    grants.set(key, created);
+    flight = created;
+  }
+  if (flight.settled) return flight.done;
+  const pending = flight;
+  pending.waiters++;
+  const report = (active: boolean) => {
+    try {
+      context.onPreparation?.({ stage: 'workspace-authorization', root, active });
+    } catch {
+      /* An observer cannot change authorization. */
+    }
+  };
+  report(true);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const cancel = () => reject(context.signal!.reason);
+      context.signal?.addEventListener('abort', cancel, { once: true });
+      pending.done
+        .then(resolve, reject)
+        .finally(() => context.signal?.removeEventListener('abort', cancel));
+      if (context.signal?.aborted) cancel();
+    });
+  } finally {
+    if (--pending.waiters === 0 && !pending.settled) pending.abort.abort();
+    report(false);
+  }
 }
 
 /**
@@ -361,6 +476,8 @@ export function accountCommand(
 const planFiles = new WeakMap<SandboxPlan, string>();
 
 async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
+  const context = { ...currentSandboxPreparation(), ...request };
+  context.signal?.throwIfAborted();
   insideWorkspace(request.root, request.cwd);
   const unavailable = await readiness();
   if (unavailable) throw new Error(unavailable);
@@ -374,7 +491,8 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
     ),
   );
   // Even a read-only command needs the grant: the group's ACE is what lets the account read the workspace.
-  await ensureGrant(root, capability);
+  await ensureGrant(root, capability, context);
+  context.signal?.throwIfAborted();
   // Before each command the workspace's reserved names are protected and the toolchains this environment names are
   // refreshed; identical concurrent requests share it. Protection failing stops the command: a reserved directory a
   // sandboxed command could still write must not sit beside the next one. A failed read-root refresh does not: the

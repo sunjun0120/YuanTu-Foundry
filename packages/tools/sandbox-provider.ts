@@ -5,6 +5,7 @@
  * an explicit category override selects a backend without discarding file or network requirements.
  */
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentExecutionPolicy } from './execution-policy.ts';
 import type {
   ExecutionCapabilities,
@@ -43,7 +44,37 @@ export interface SandboxPlan {
   backend?: SandboxMode;
   cleanupPath?: string;
 }
-export interface SandboxRequest {
+export interface SandboxPreparationProgress {
+  stage: 'workspace-authorization';
+  root: string;
+  active: boolean;
+}
+export interface SandboxPreparationContext {
+  signal?: AbortSignal;
+  onPreparation?: (event: SandboxPreparationProgress) => void;
+}
+const preparation = new AsyncLocalStorage<SandboxPreparationContext>();
+/**
+ * Carries cancellation and observation through nested tool/process preparation paths.
+ *
+ * A nested scope inherits what it does not state: an absent signal or observer is taken from the enclosing
+ * scope. A hook or an acceptance check that only knows its own signal must not silently drop the observer of the
+ * call waiting on it, and a registry body states its own (more precise) signal while keeping the run's observer.
+ */
+export function withSandboxPreparation<T>(context: SandboxPreparationContext, work: () => T): T {
+  const enclosing = preparation.getStore();
+  return preparation.run(
+    {
+      signal: context.signal ?? enclosing?.signal,
+      onPreparation: context.onPreparation ?? enclosing?.onPreparation,
+    },
+    work,
+  );
+}
+export function currentSandboxPreparation(): SandboxPreparationContext | undefined {
+  return preparation.getStore();
+}
+export interface SandboxRequest extends SandboxPreparationContext {
   root: string;
   cwd: string;
   command: string;

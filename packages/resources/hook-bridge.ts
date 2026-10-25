@@ -7,6 +7,7 @@ import {
   resolveSandboxConfig,
   stopSandbox,
   markSandboxStarted,
+  withSandboxPreparation,
 } from '../tools/sandbox.ts';
 import type { ClaudeHookEvent, HookDeclaration } from './hook-config.ts';
 import { hookMatcherMatches } from './hook-config.ts';
@@ -279,13 +280,15 @@ async function runCommand(
 ): Promise<Decided> {
   if (signal.aborted) return { kind: 'allow' };
   // Resolve the live policy for each event; never retry a failed native launch on the host.
-  const plan = await prepareSandbox(
-    workspace,
-    workspace,
-    declaration.command,
-    undefined,
-    resolveSandboxConfig(process.env, 'hook'),
-    'hook',
+  const plan = await withSandboxPreparation({ signal }, () =>
+    prepareSandbox(
+      workspace,
+      workspace,
+      declaration.command,
+      undefined,
+      resolveSandboxConfig(process.env, 'hook'),
+      'hook',
+    ),
   );
   return new Promise<Decided>((resolve, reject) => {
     markSandboxStarted(plan);

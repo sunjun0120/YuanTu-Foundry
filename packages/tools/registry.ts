@@ -6,7 +6,12 @@ import {
   snapshotExecutionPolicy,
   withExecutionPolicy,
 } from './execution-policy.ts';
-import { resolveSandboxConfig, sandboxProvider, type SandboxMode } from './sandbox-provider.ts';
+import {
+  resolveSandboxConfig,
+  sandboxProvider,
+  withSandboxPreparation,
+  type SandboxMode,
+} from './sandbox-provider.ts';
 import type { ValidateFunction } from 'ajv';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { JobRegistry } from '../protocol/jobs.ts';
@@ -826,21 +831,36 @@ export class ToolRegistry {
                   observe('started');
                   try {
                     return await withExecutionPolicy(dispatchPolicy, () =>
-                      prepared
-                        ? prepared.execute({
-                            ...current.scope,
-                            executionPolicy: dispatchPolicy,
-                            executionPolicyForCall: undefined,
-                            permissionPolicyForCall: undefined,
-                            workspaceRoot: context.workspaceRoot,
-                          })
-                        : entry.tool.execute(call.arguments, {
-                            ...current.scope,
-                            executionPolicy: dispatchPolicy,
-                            executionPolicyForCall: undefined,
-                            permissionPolicyForCall: undefined,
-                            workspaceRoot: context.workspaceRoot,
-                          }),
+                      /**
+                       * The ambient preparation context belongs here, not at the run's dispatch site.
+                       *
+                       * Every sandbox the body reaches (`prepareSandbox` inside the command, terminal and
+                       * background tools) reads this context. Its signal is the **run's**, not the body's:
+                       * a first workspace authorization has no deadline of its own and can outlive a single
+                       * call's tool budget, and discarding that progress because one call gave up would make
+                       * the next call walk the whole workspace again. Stop still reaches the helper, because
+                       * stopping the run aborts this signal; the body itself remains bounded by its own
+                       * deadline, and a command that never got to start is cleaned up by its tool.
+                       */
+                      withSandboxPreparation(
+                        { signal: context.signal, onPreparation: context.onPreparation },
+                        () =>
+                          prepared
+                            ? prepared.execute({
+                                ...current.scope,
+                                executionPolicy: dispatchPolicy,
+                                executionPolicyForCall: undefined,
+                                permissionPolicyForCall: undefined,
+                                workspaceRoot: context.workspaceRoot,
+                              })
+                            : entry.tool.execute(call.arguments, {
+                                ...current.scope,
+                                executionPolicy: dispatchPolicy,
+                                executionPolicyForCall: undefined,
+                                permissionPolicyForCall: undefined,
+                                workspaceRoot: context.workspaceRoot,
+                              }),
+                      ),
                     );
                   } finally {
                     observe('finished');

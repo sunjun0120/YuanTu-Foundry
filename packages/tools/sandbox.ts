@@ -46,6 +46,7 @@ export {
   sandboxProvider,
   sandboxProviders,
   setSandboxMode,
+  withSandboxPreparation,
 } from './sandbox-provider.ts';
 export { nativeSandboxBackend, parseSandboxMode } from './sandbox-mode.ts';
 export type {
@@ -53,6 +54,8 @@ export type {
   SandboxConfig,
   SandboxMode,
   SandboxPlan,
+  SandboxPreparationContext,
+  SandboxPreparationProgress,
   SandboxProvider,
   SandboxRequest,
 } from './sandbox-provider.ts';

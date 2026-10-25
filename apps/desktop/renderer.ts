@@ -429,6 +429,7 @@ function renderRunStatus(): void {
       loading: session.loading,
       activity: session.statisticsActivity,
       tools: session.tools.length,
+      preparation: session.sandboxPreparation[0] ?? null,
       now: Date.now(),
       ...(session.completion ? { completionReason: session.completion.summary.reason } : {}),
     }) + (session.providerDegraded ? ' · ' + providerDegradedText(session.providerDegraded) : '');

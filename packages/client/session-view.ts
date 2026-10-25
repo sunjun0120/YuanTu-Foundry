@@ -211,6 +211,20 @@ export interface SessionSnapshot {
     toolArgumentChars?: number;
     visibleChars?: number;
   } | null;
+  /**
+   * Sandbox preparation a running tool is waiting for, one entry per call that is waiting.
+   *
+   * The Windows account backend's first workspace authorization walks the whole tree and can take minutes; while
+   * it runs the command has not started, and the run status used to say only "running tools". Keyed by call
+   * because several calls may share one authorization — the list empties when the last of them has prepared, and
+   * the status line is derived from it. Live only: on a reload the preparation either finished or the tool is
+   * about to answer, so there is no durable fact to rebuild it from.
+   */
+  sandboxPreparation: {
+    callId: string;
+    stage: 'workspace-authorization';
+    root: string;
+  }[];
   queue: QueuedInput[];
   compacting: boolean;
   instructions: string[];

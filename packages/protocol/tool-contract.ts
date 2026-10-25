@@ -13,6 +13,14 @@ import type {
 } from './index.ts';
 import type { ToolResultOutput } from './tool-result.ts';
 
+/** A sandbox preparation a call is waiting on, before the command it asked for can start. */
+export interface ToolPreparationProgress {
+  stage: 'workspace-authorization';
+  root: string;
+  /** `true` opens one call's wait, `false` closes it — after success, a refusal or cancellation alike. */
+  active: boolean;
+}
+
 export interface ToolContext {
   /** Diagnostic observer around each actual tool body attempt, after approval. Cannot control execution. */
   onExecution?: (event: {
@@ -22,6 +30,16 @@ export interface ToolContext {
     finishedAt?: number;
     durationMs?: number;
   }) => void;
+  /**
+   * Sandbox preparation this call is waiting on, forwarded to the run's live channel.
+   *
+   * The first Windows workspace authorization can walk an existing tree for minutes, and the command has not
+   * started while it does; this is how the run learns the wait began and ended. The registry makes it ambient
+   * around the body together with the run's signal, so stopping the run cancels a helper that has no deadline
+   * of its own, while one call's deadline does not throw away progress the next call would have to redo. A
+   * report cannot control execution.
+   */
+  onPreparation?: (event: ToolPreparationProgress) => void;
   signal: AbortSignal;
   /** Fixed invocation snapshot; only the trusted resolver below may refresh a pending dispatch. */
   executionPolicy?: import('./execution.ts').ExecutionPolicy;

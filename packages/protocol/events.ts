@@ -17,6 +17,16 @@ export const AGENT_EVENT_TYPES = [
   'tool.finished',
   'tool.execution.started',
   'tool.execution.finished',
+  /**
+   * A call is waiting for the sandbox that will run it.
+   *
+   * The Windows account backend's first workspace authorization propagates an inheritable grant over every
+   * existing child and can outlast any deadline a person would call reasonable; the tool is announced but no
+   * command has started. Live only: the state exists while the preparation is in flight, so a reader that missed
+   * a frame loses the explanation for a slow call, not a fact about the conversation. `active` opens and closes
+   * one call's entry; `callId` is what keeps two calls sharing one authorization from closing each other's entry.
+   */
+  'tool.preparation',
   'approval.required',
   /**
    * What the human answered. The live event lets a client settle its panel; the durable record (same name, in
