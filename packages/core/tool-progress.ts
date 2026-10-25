@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
 import { environmentBlockedCode } from '../tools/environment-blocked.ts';
+import type { FileStateDigest } from '../tools/file-state-digest.ts';
 import { projectChangedPaths } from './work-evidence.ts';
 
 export interface ToolObservation {
@@ -8,6 +9,13 @@ export interface ToolObservation {
   result: ToolResult & { additionalContext?: readonly string[] };
   /** Set only for a successful program whose actual inner tools are observed in the same batch. */
   kind?: 'program-output';
+  /**
+   * What a successful write did to each file, as hashes (`file-state-digest.ts`).
+   *
+   * Taken at the write boundary, where both sides of the bytes still exist. It is internal run evidence: the
+   * observation it rides on is not stored or sent anywhere, and `RunToolBatch` keeps it off the tool result.
+   */
+  fileStates?: readonly FileStateDigest[];
 }
 export type ToolProgress =
   | 'continue'
@@ -16,7 +24,15 @@ export type ToolProgress =
   | 'environment-blocked'
   | 'conclude'
   | 'investigation-warn'
-  | 'investigation-conclude';
+  | 'investigation-conclude'
+  | 'edit-oscillation-warn'
+  | 'edit-oscillation-warn-final';
+/** One write that undid an earlier one, as the guard counted it. */
+export interface EditOscillation {
+  count: number;
+  /** `full` when the whole file returned to a state it already had; `local` when only a block did. */
+  signal: 'full' | 'local';
+}
 /**
  * How often one call may fail the same way before the run is told so, and before it is stopped.
  *
@@ -36,7 +52,21 @@ const FAILURE_CONCLUDE = 5;
  */
 const BLOCKED_WARN = 2;
 const BLOCKED_CONCLUDE = 3;
+/**
+ * How many writes that undo an earlier one before the run is told, and how many before it is told again.
+ *
+ * Two levels rather than a hard stop, because the official result says the oscillation is a cost problem and
+ * not a correctness one: three of the four samples that oscillated still ended `resolved`, and the state each
+ * was in when a threshold would have fired was *not* the state its final patch came from. So the guard only
+ * ever injects a prompt; the run budget stays the thing that stops a run that ignores it.
+ */
+const OSCILLATION_WARN = 2;
+const OSCILLATION_FINAL = 4;
+/** Bounds on what the guard remembers about writes, so a very long run cannot grow it without limit. */
+const OSCILLATION_MAX_PATHS = 512;
+const OSCILLATION_MAX_HUNKS = 4_096;
 const queries = new Set(['read_file', 'list_files', 'search_files', 'git_status', 'git_diff']);
+const normalizedPath = (value: string): string => value.replaceAll('\\', '/').replace(/^\.\//, '');
 const digest = (value: unknown): string =>
   createHash('sha256')
     .update(
@@ -70,6 +100,19 @@ export class ToolProgressGuard {
   private failures = new Map<string, number>();
   /** Refusals per environment blocker, cleared with `failures`: a person acting is what may have changed it. */
   private blocked = new Map<string, number>();
+  /**
+   * The whole-file states each path has been in, and every changed block a write has produced, by digest.
+   *
+   * Deliberately *not* cleared by `reset()`. The other counters are cleared whenever new evidence arrives,
+   * because a new round of queries or a fresh failure may be progress; this one is the state that says the
+   * model is going in circles, and a successful edit in between is exactly what it must survive. Only an
+   * intervention that could plausibly change the plan clears it (`resetOscillation`).
+   */
+  private fileStates = new Map<string, Set<string>>();
+  private reverseHunks = new Set<string>();
+  private oscillationWrites = 0;
+  private oscillationPrompted: 0 | 1 | 2 = 0;
+  private oscillationEvents: EditOscillation[] = [];
   reset(): void {
     this.resetQueries();
     this.failures.clear();
@@ -77,6 +120,20 @@ export class ToolProgressGuard {
     this.investigationRounds = 0;
     this.investigationStarted = (this.options.now ?? Date.now)();
     this.investigationWarned = false;
+  }
+  /** What a person or a policy speaking resets: the oscillation evidence, and only that. */
+  resetOscillation(): void {
+    this.fileStates.clear();
+    this.reverseHunks.clear();
+    this.oscillationWrites = 0;
+    this.oscillationPrompted = 0;
+    this.oscillationEvents = [];
+  }
+  /** The hits counted so far and not yet read, for the run to record as events. */
+  takeOscillationEvents(): EditOscillation[] {
+    const events = this.oscillationEvents;
+    this.oscillationEvents = [];
+    return events;
   }
   private resetQueries(): void {
     this.seen.clear();
@@ -86,13 +143,80 @@ export class ToolProgressGuard {
     const failing = this.observeFailures(observations);
     const blocked = this.observeBlocked(observations);
     const queries = this.observeQueries(observations);
+    // Counted before the early return below: a hit is recorded as an event even in a round whose own notice is
+    // the conclusion, because the log is what a later review reads the cost of the run from.
+    this.recordOscillation(observations);
     if (failing >= FAILURE_CONCLUDE || blocked >= BLOCKED_CONCLUDE || queries === 'conclude')
       return 'conclude';
     const investigation = this.observeInvestigation(observations);
     if (investigation) return investigation;
     if (blocked === BLOCKED_WARN) return 'environment-blocked';
+    // Before the query and failure notices: those two re-arm themselves on the next round, while each level of
+    // the oscillation notice is said once and would otherwise be dropped for good by a round that happened to
+    // end in a repeated query.
+    const oscillation = this.oscillationNotice();
+    if (oscillation) return oscillation;
     if (queries === 'warn') return 'warn';
     return failing === FAILURE_WARN ? 'repeat-failure' : 'continue';
+  }
+  /**
+   * Counts each write that undid an earlier one, recording one hit per write.
+   *
+   * Two signals, either one enough, because a whole-file comparison alone misses the shape that actually
+   * appeared in the sample: the model alternated edits across several places in one file and never repeated
+   * the complete file. One write counts once however many of its blocks reversed — it is one decision to go
+   * back.
+   */
+  private recordOscillation(observations: readonly ToolObservation[]): void {
+    for (const { result, fileStates } of observations) {
+      if (result.isError || !fileStates?.length) continue;
+      const projectPaths = new Set(
+        result.change
+          ? projectChangedPaths(result.change, this.options.workspace).map(normalizedPath)
+          : [],
+      );
+      let signal: EditOscillation['signal'] | undefined;
+      for (const file of fileStates) {
+        if (!projectPaths.has(normalizedPath(file.path))) continue;
+        // A write that changes nothing says nothing about the plan, and must not become a state either: a
+        // reported "written" with identical bytes is not evidence the model went anywhere.
+        const before = file.before ?? '';
+        const after = file.after ?? '';
+        if (before === after) continue;
+        let states = this.fileStates.get(file.path);
+        if (!states) {
+          // The state the file was in before the first write this guard saw: a later return to it is a revert
+          // even though this run never wrote that state.
+          states = new Set([before]);
+          this.fileStates.set(file.path, states);
+          while (this.fileStates.size > OSCILLATION_MAX_PATHS)
+            this.fileStates.delete(this.fileStates.keys().next().value!);
+        } else if (states.has(after)) signal = 'full';
+        states.add(after);
+        for (const hunk of file.hunks) {
+          const reverse = digest([file.path, hunk.added, hunk.deleted]);
+          if (this.reverseHunks.has(reverse) && signal === undefined) signal = 'local';
+          this.reverseHunks.add(digest([file.path, hunk.deleted, hunk.added]));
+          while (this.reverseHunks.size > OSCILLATION_MAX_HUNKS)
+            this.reverseHunks.delete(this.reverseHunks.values().next().value!);
+        }
+      }
+      if (!signal) continue;
+      this.oscillationWrites++;
+      this.oscillationEvents.push({ count: this.oscillationWrites, signal });
+    }
+  }
+  /** The next level of the oscillation notice this run has earned, marking it said so it is said once. */
+  private oscillationNotice(): ToolProgress | undefined {
+    if (this.oscillationPrompted < 2 && this.oscillationWrites >= OSCILLATION_FINAL) {
+      this.oscillationPrompted = 2;
+      return 'edit-oscillation-warn-final';
+    }
+    if (this.oscillationPrompted < 1 && this.oscillationWrites >= OSCILLATION_WARN) {
+      this.oscillationPrompted = 1;
+      return 'edit-oscillation-warn';
+    }
+    return undefined;
   }
   private observeInvestigation(observations: readonly ToolObservation[]): ToolProgress | undefined {
     if (
@@ -204,7 +328,11 @@ export function toolProgressNotice(action: Exclude<ToolProgress, 'continue'>): s
             ? 'The same call has now failed with identical output several times, including after changes in between. Repeating the same approach is not converging. Step back: re-read the failure, question the assumption behind the last changes, and try a materially different approach — or stop and report what blocks you.'
             : action === 'environment-blocked'
               ? 'The same environment blocker has now refused more than one call (the "Environment blocked" results above). No call that needs it can succeed until a person changes the environment, so do not call such tools again in this run. Finish only what does not need it, then tell the user what is blocked, the remedy the result names, and what remains unverified.'
-              : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
+              : action === 'edit-oscillation-warn'
+                ? 'You are undoing edits you made earlier in this run. Pick the version the evidence supports best, keep only that one, and stop switching between implementations. If the evidence does not settle the difference between them, state what is uncertain and finish instead of rewriting the same code again.'
+                : action === 'edit-oscillation-warn-final'
+                  ? 'Going back and forth over the same code has stopped producing new evidence. Choose the version best supported by what you have already read, say plainly what remains uncertain, and end the work. Do not rewrite that region again.'
+                  : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
     '\n</runtime-context>'
   );
 }

@@ -247,6 +247,13 @@ export const SESSION_EVENT_TYPES = [
    */
   'llm.retry',
   'provider.degraded',
+  /**
+   * One write that undid an earlier one in this session's run (`edit-oscillation-warn` in `tool-progress.ts`).
+   *
+   * Durable because the cost of a run is a question about the past and the prompt's effect is measured after
+   * the fact: a reviewer comparing runs needs the hits even though the transcript is identical without them.
+   */
+  'edit.oscillation',
   'provider.request.finished',
   'tool.execution.started',
   'tool.execution.finished',
@@ -333,6 +340,13 @@ export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
    */
   'llm.retry',
   'provider.degraded',
+  /**
+   * A write that undid an earlier one. It carries no part of the transcript and no state a reader must act on:
+   * the edits it describes are still in the transcript, and the prompt it triggered said its piece. A reader
+   * that skipped it would show the same conversation, losing only the explanation for why a run re-edited the
+   * same region.
+   */
+  'edit.oscillation',
   /**
    * A round that did not run on the run's configured model (or effort). The transcript is unaffected: the
    * answer is stored as an answer, whoever produced it. The reader that loses something is the one asking which

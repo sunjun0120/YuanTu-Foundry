@@ -486,6 +486,7 @@ export class Agent {
         const item = queue.take(mode);
         if (!item) return false;
         progressGuard.reset();
+        progressGuard.resetOscillation();
         resetQueryPhase();
         /**
          * A message the user typed is the user's own input, whichever run is carrying it.
@@ -721,6 +722,7 @@ export class Agent {
            */
           if (surface.refreshPolicies()) {
             progressGuard.reset();
+            progressGuard.resetOscillation();
             resetQueryPhase();
           }
           /**
@@ -737,6 +739,7 @@ export class Agent {
           const approved = planning?.takeApproval();
           if (approved) {
             progressGuard.reset();
+            progressGuard.resetOscillation();
             resetQueryPhase();
             readOnly = false;
             automaticVerification.register(approved);
@@ -949,6 +952,7 @@ export class Agent {
             });
             if (verdict.next === 'repair') {
               progressGuard.reset();
+              progressGuard.resetOscillation();
               resetQueryPhase();
               steps.end(round, 'queued-input');
               continue;
@@ -993,6 +997,13 @@ export class Agent {
             injected.length || changedGoals.length
               ? (progressGuard.reset(), 'continue')
               : progressGuard.observeRound(observations);
+          // One record per hit, not one per notice: the count and the signal are what a later review reads the
+          // cost of a run from, and the prompt is only two of the hits.
+          for (const hit of progressGuard.takeOscillationEvents()) {
+            const record = { runId, round, count: hit.count, signal: hit.signal };
+            store.recordEvent(input.sessionId, 'edit.oscillation', record);
+            emit('edit.oscillation', record);
+          }
           if (progress === 'investigation-warn' || progress === 'investigation-conclude') {
             await automaticVerification.assessChanges();
             if (automaticVerification.hasProjectWork) {

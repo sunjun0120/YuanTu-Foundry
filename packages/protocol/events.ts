@@ -102,6 +102,13 @@ export const AGENT_EVENT_TYPES = [
    */
   'llm.retry',
   'provider.degraded',
+  /**
+   * A write that undid an earlier one in the same run: the whole file went back to a state it already had, or
+   * one block of lines did while the rest of the file moved on. Recorded per hit rather than per notice, because
+   * the count is what says how much a run spent going back and forth and whether telling it once helped. The
+   * transcript is unaffected, so a client that ignores this loses only that measurement.
+   */
+  'edit.oscillation',
   'provider.request.finished',
   /** Session metadata may arrive before or after its answer, independently of any run. */
   'session.title.updated',

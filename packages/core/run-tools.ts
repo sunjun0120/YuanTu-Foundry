@@ -2,6 +2,7 @@ import type { FileChange, ToolCall, ToolContext } from '../protocol/index.ts';
 import type { ToolExecutionResult } from '../protocol/tool-pipeline.ts';
 import type { Goal } from '../protocol/goals.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
+import { digestFileStates, type FileStateDigest } from '../tools/file-state-digest.ts';
 import { spillOutput } from '../tools/spill.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { commandJournal } from './command-jobs.ts';
@@ -214,7 +215,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
        * directly. The inner id is derived from the outer one (`<outer>#<n>`) rather than freshly generated,
        * because what has to survive every seam is the link between a program and what it did.
        */
-      const toolContext = (callId: string): ToolContext => ({
+      const toolContext = (callId: string, fileStates: FileStateDigest[]): ToolContext => ({
         signal,
         /**
          * The call's identity and its run's promise. A policy hook that reports about a call has to be
@@ -253,11 +254,22 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
               },
             }
           : {}),
+        /**
+         * The write boundary, where both sides of every file still exist.
+         *
+         * The oscillation guard needs to know a write put a file back the way it was, and after this point the
+         * "before" bytes are gone. So the digests are taken here, immediately before the journal row is written,
+         * and handed to this call's observation — never to the result, the request or the session log.
+         */
         fileJournal: {
-          prepare: (change, before, after) =>
-            store.prepareFileChange(journalSessionId, tagChange(change), before, after),
-          prepareGroup: (change, files) =>
-            store.prepareFileChangeGroup(journalSessionId, tagChange(change), files),
+          prepare: (change, before, after) => {
+            fileStates.push(...digestFileStates([{ path: change.path, before, after }]));
+            return store.prepareFileChange(journalSessionId, tagChange(change), before, after);
+          },
+          prepareGroup: (change, files) => {
+            fileStates.push(...digestFileStates(files));
+            return store.prepareFileChangeGroup(journalSessionId, tagChange(change), files);
+          },
           applied: (id) => store.markFileChange(id, 'applied'),
         },
         approve: approve(),
@@ -367,7 +379,8 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
         catalog: {
           specs: catalogSpecs(),
           invoke: async (inner, innerSignal) => {
-            const innerContext = toolContext(inner.id);
+            const innerFileStates: FileStateDigest[] = [];
+            const innerContext = toolContext(inner.id, innerFileStates);
             const result = await tools.execute(inner, {
               ...innerContext,
               signal: innerSignal ? AbortSignal.any([signal, innerSignal]) : signal,
@@ -390,7 +403,11 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
                 : {}),
             });
             programCalls++;
-            observations.push({ call: inner, result });
+            observations.push({
+              call: inner,
+              result,
+              ...(innerFileStates.length ? { fileStates: innerFileStates } : {}),
+            });
             return result;
           },
           // The registry's own classification and the run's own width, so a program cannot overlap what the
@@ -416,8 +433,9 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
           },
         },
       });
+      const fileStates: FileStateDigest[] = [];
       const { additionalContext, ...result } = await tools.execute(call, {
-        ...toolContext(call.id),
+        ...toolContext(call.id, fileStates),
         onExecution: ({ phase, attempt, startedAt, finishedAt, durationMs }) => {
           if (phase === 'started') {
             timing.executionStartedAt ??= startedAt;
@@ -467,6 +485,7 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
       observations.push({
         call,
         result: { ...result, ...(additionalContext?.length ? { additionalContext } : {}) },
+        ...(fileStates.length ? { fileStates } : {}),
         ...(call.name === 'run_code' && programCalls && !result.isError
           ? { kind: 'program-output' as const }
           : {}),
