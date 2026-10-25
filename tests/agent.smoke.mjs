@@ -1032,6 +1032,12 @@ test(
         (call) => call.name === 'run_command',
       ),
     );
+    // The snapshot can list the command before the process summary repaints; wait for the rendered line.
+    await page.waitForFunction(() =>
+      document
+        .querySelector('#messages > .process-group > summary')
+        ?.textContent.includes('wait.cjs'),
+    );
     assert.match(await group.locator(':scope > summary').innerText(), /wait\.cjs/);
     await writeFile(path.join(root, 'release-command'), 'ready');
     try {
