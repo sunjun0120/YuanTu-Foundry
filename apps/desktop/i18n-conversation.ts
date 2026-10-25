@@ -364,6 +364,8 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.undoChange': ['撤销此修改', 'Undo this change'],
   'plan.title': ['计划', 'Plan'],
   'plan.status.planning': ['正在制定计划', 'Planning in progress'],
+  'plan.waitingAnswer': ['规划正在等待你的回答', 'Planning is waiting for your answer'],
+  'plan.showQuestion': ['前往问题', 'Go to question'],
   'plan.status.planningIdle': ['计划模式 · 等待下一步', 'Plan mode · waiting'],
   'plan.status.proposed': ['等待批准', 'Awaiting approval'],
   'plan.status.approved': ['已批准', 'Approved'],

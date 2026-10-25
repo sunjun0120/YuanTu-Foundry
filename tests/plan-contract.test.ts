@@ -1,3 +1,5 @@
+import { setupPlanPanel } from '../apps/desktop/renderer-plan.ts';
+import { setLocale } from '../apps/desktop/i18n.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -184,4 +186,93 @@ test('cancelled questions cannot approve a plan even if the questioner resolves 
   assert.equal(result.isError, true);
   assert.deepEqual(writes, []);
   assert.equal(run.takeApproval(), undefined);
+});
+
+test('plan panel shows its pending question and jumps to it, clearing after answer', (t) => {
+  class Element {
+    textContent = '';
+    className = '';
+    hidden = false;
+    disabled = false;
+    type = '';
+    children: Element[] = [];
+    click?: () => void;
+    append(...children: Element[]) {
+      this.children.push(...children);
+    }
+    replaceChildren(...children: Element[]) {
+      this.children = children;
+    }
+    addEventListener(_event: string, callback: () => void) {
+      this.click = callback;
+    }
+  }
+  const elements = new Map<string, Element>();
+  for (const id of [
+    'plan-panel',
+    'plan-title',
+    'plan-status',
+    'plan-summary',
+    'plan-steps',
+    'plan-reason',
+    'plan-actions',
+  ])
+    elements.set(id, new Element());
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const originalNode = Object.getOwnPropertyDescriptor(globalThis, 'Node');
+  Object.defineProperty(globalThis, 'Node', {
+    configurable: true,
+    value: { TEXT_NODE: 3, ELEMENT_NODE: 1, DOCUMENT_NODE: 9 },
+  });
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      documentElement: { lang: '' },
+      getElementById: (id: string) => elements.get(id),
+      createElement: () => new Element(),
+    },
+  });
+  t.after(() => {
+    if (originalNode) Object.defineProperty(globalThis, 'Node', originalNode);
+    else Reflect.deleteProperty(globalThis, 'Node');
+    if (original) Object.defineProperty(globalThis, 'document', original);
+    else Reflect.deleteProperty(globalThis, 'document');
+    setLocale('zh-CN');
+  });
+  let pending: string | null = 'question-1',
+    jumped = '';
+  const view = setupPlanPanel({
+    isOperating: () => false,
+    isBusy: () => true,
+    waitingQuestion: () => pending,
+    showQuestion: (id) => {
+      jumped = id;
+    },
+    select: async () => {},
+    setError: () => {},
+  });
+  const plan: Plan = {
+    id: 'plan',
+    sessionId: 's',
+    status: 'planning',
+    title: 'Plan',
+    summary: '',
+    steps: [],
+    hash: 'h',
+    createdAt: '',
+    updatedAt: '',
+  };
+  setLocale('zh-CN');
+  view.render(plan);
+  assert.equal(elements.get('plan-status')!.textContent, '规划正在等待你的回答');
+  elements.get('plan-actions')!.children[1]!.click!();
+  assert.equal(jumped, 'question-1');
+  setLocale('en-US');
+  view.render(plan);
+  assert.equal(elements.get('plan-status')!.textContent, 'Planning is waiting for your answer');
+  view.render({ ...plan, status: 'proposed' });
+  assert.equal(elements.get('plan-status')!.textContent, 'Planning is waiting for your answer');
+  pending = null;
+  view.render(plan);
+  assert.equal(elements.get('plan-status')!.textContent, 'Planning in progress');
 });

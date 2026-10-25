@@ -352,6 +352,14 @@ const liveView = setupLiveMessage({
 });
 
 const planView = setupPlanPanel({
+  waitingQuestion: () => (state?.session.running ? (state.session.questions[0]?.id ?? null) : null),
+  showQuestion: (id) => {
+    const card = Array.from(document.querySelectorAll<HTMLElement>('.question-card')).find(
+      (card) => card.dataset.questionId === id,
+    );
+    card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    card?.querySelector<HTMLElement>('button, input, textarea')?.focus({ preventScroll: true });
+  },
   // The panel's key holds the window's own in-flight command (`operation`) and nothing wider: `isBusy` is the
   // separate question that gates the buttons, and it stays separate so the panel repaints exactly when it did.
   isOperating: () => operation,

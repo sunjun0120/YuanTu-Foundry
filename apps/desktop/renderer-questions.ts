@@ -86,6 +86,7 @@ export function setupQuestions(actions: {
         );
         const collapsed = questionCollapsed.has(item.id);
         const card = node('section', '', 'question-card');
+        card.dataset.questionId = item.id;
         const head = node('div', '', 'question-head');
         const headings = node('div', '', 'question-headings');
         headings.append(

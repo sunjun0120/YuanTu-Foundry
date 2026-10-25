@@ -34,6 +34,8 @@ export function setupPlanPanel(actions: {
   isOperating(): boolean;
   /** Whether the gate's buttons are refused: the session is running, or a command of this window is. */
   isBusy(): boolean;
+  waitingQuestion?(): string | null;
+  showQuestion?(id: string): void;
   select(command: CarrierCommand): Promise<unknown>;
   setError(message: string | null): void;
 }): { render(plan: Plan | null): void } {
@@ -43,6 +45,7 @@ export function setupPlanPanel(actions: {
     panel.hidden = !plan;
     if (!plan) return;
     const key = JSON.stringify([
+      actions.waitingQuestion?.() ?? null,
       plan.id,
       plan.status,
       plan.hash,
@@ -75,7 +78,16 @@ export function setupPlanPanel(actions: {
     const actionsElement = required('plan-actions');
     actionsElement.replaceChildren();
     const busy = actions.isBusy();
-    if (plan.status === 'proposed') {
+    const waiting = ['planning', 'proposed'].includes(plan.status)
+      ? actions.waitingQuestion?.()
+      : null;
+    if (waiting) {
+      required('plan-status').textContent = t('plan.waitingAnswer');
+      const jump = node('button', t('plan.showQuestion'), 'secondary');
+      jump.type = 'button';
+      jump.addEventListener('click', () => actions.showQuestion?.(waiting));
+      actionsElement.append(node('span', t('plan.waitingAnswer'), 'plan-hint'), jump);
+    } else if (plan.status === 'proposed') {
       const approve = node('button', t('plan.approve'), 'plan-approve');
       approve.disabled = busy;
       approve.addEventListener(
