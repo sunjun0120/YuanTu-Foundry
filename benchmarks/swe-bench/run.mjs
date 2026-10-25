@@ -234,13 +234,14 @@ export async function executeBatch(value, options = {}) {
       await assertSweRuntime(frozen);
       const directory = path.join(out, 'work', record.instance_id),
         evidenceDirectory = path.join(out, 'evidence', record.instance_id);
-      await materializeRepo({
+      const materialized = await materializeRepo({
         record,
         cacheDirectory:
           options.cacheDirectory ?? path.join(projectRoot, '.scratch/swe-bench/repos'),
         directory,
         source: options.repoSource,
       });
+      result.materialization = materialized.materialization;
       if (live) {
         result.live = true;
         batch.attempts++;

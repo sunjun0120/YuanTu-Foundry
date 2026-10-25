@@ -1,7 +1,11 @@
+import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
+import { createTools } from '../packages/catalog/index.ts';
+import { executionPolicy } from '../packages/tools/execution-policy.ts';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile, rm, access } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rm, access, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -70,7 +74,7 @@ test('SWE materialization pins base commit and confines git configuration to the
   assert.equal((await exec('git', ['rev-parse', 'HEAD'], { cwd: directory })).stdout.trim(), base);
   assert.equal((await exec('git', ['status', '--porcelain'], { cwd: directory })).stdout, '');
   assert.equal(await readFile(path.join(directory, 'module.py'), 'utf8'), 'value = 1\n');
-  assert.match(await readFile(path.join(directory, '.git'), 'utf8'), /^gitdir: /);
+  assert.equal((await lstat(path.join(directory, '.git'))).isDirectory(), true);
   for (const [key, value] of [
     ['core.autocrlf', 'false'],
     ['core.longpaths', 'true'],
@@ -959,4 +963,97 @@ test('SWE saved reports regenerate byte-identically and estimate token threshold
   assert.equal(await readFile(path.join(root, 'summary.json'), 'utf8'), summary);
   assert.ok(report.includes('logs/report.json'));
   assert.ok(report.includes('no-commands'));
+});
+
+test('SWE independent snapshot has complete base blobs, no lazy fetch, and stable patches', async (t) => {
+  const { materializeRepo, git } = await moduleFor('repos.mjs');
+  const { collectPatch } = await moduleFor('adapter.mjs');
+  const root = await tempRoot(t, 'yuantu-swe-independent-');
+  const source = path.join(root, 'upstream');
+  await mkdir(source);
+  await git(source, ['init']);
+  await git(source, ['config', 'user.name', 'Fixture']);
+  await git(source, ['config', 'user.email', 'fixture@example.invalid']);
+  await git(source, ['config', 'uploadpack.allowFilter', 'true']);
+  await writeFile(path.join(source, 'file.py'), 'old-history-only\n');
+  await git(source, ['add', '.']);
+  await git(source, ['commit', '-m', 'old']);
+  const oldBlob = (await git(source, ['rev-parse', 'HEAD:file.py'])).trim();
+  await writeFile(path.join(source, 'file.py'), 'base-version\n');
+  await git(source, ['commit', '-am', 'base']);
+  const base = (await git(source, ['rev-parse', 'HEAD'])).trim();
+  const cacheDirectory = path.join(root, 'cache');
+  await mkdir(cacheDirectory);
+  const cache = path.join(cacheDirectory, 'fixture__source.git');
+  const url = pathToFileURL(source).href;
+  await git(root, ['clone', '--bare', '--filter=blob:none', url, cache]);
+  assert.equal((await git(cache, ['config', 'remote.origin.promisor'])).trim(), 'true');
+  // The old blob really is missing from this partial cache, before any checkout can hydrate it.
+  assert.match(
+    await git(cache, ['rev-list', '--objects', '--all', '--missing=print']),
+    new RegExp(`\\?${oldBlob}`),
+  );
+  const directory = path.join(root, 'work');
+  const materialized = await materializeRepo({
+    record: { repo: 'fixture/source', base_commit: base },
+    cacheDirectory,
+    directory,
+    source: url,
+  });
+  assert.equal(materialized.materialization.historyDepth, 0);
+  assert.ok(materialized.materialization.metadataBytes > 0);
+  assert.equal((await lstat(path.join(directory, '.git'))).isDirectory(), true);
+  const common = (await git(directory, ['rev-parse', '--git-common-dir'])).trim();
+  assert.equal(path.resolve(directory, common), path.join(directory, '.git'));
+  await assert.rejects(access(path.join(directory, '.git/objects/info/alternates')));
+  assert.equal((await git(directory, ['remote'])).trim(), '');
+  assert.doesNotMatch(
+    await git(directory, ['config', '--local', '--list']),
+    /promisor|partialclone/i,
+  );
+  await assert.rejects(
+    git(directory, ['cat-file', '-p', oldBlob]),
+    /Not a valid object|bad object|could not get object info/i,
+  );
+  // Verify every base-tree blob locally; the snapshot has no remote for fetching.
+  const objects = (await git(directory, ['ls-tree', '-r', base])).trim().split('\n');
+  for (const line of objects) await git(directory, ['cat-file', '-p', line.split(/\s+/)[2]]);
+  const tools = createTools(directory);
+  try {
+    for (const name of ['git_status', 'git_log']) {
+      const result = await tools.execute(
+        { id: name, name, arguments: {} },
+        {
+          signal: new AbortController().signal,
+          executionPolicy: executionPolicy('host'),
+          approve: async () => false,
+        },
+      );
+      assert.equal(result.isError, false, result.content);
+    }
+  } finally {
+    await tools.close();
+  }
+  const legacy = path.join(root, 'linked');
+  await git(cache, ['worktree', 'add', '--detach', legacy, base]);
+  for (const folder of [legacy, directory]) {
+    await writeFile(path.join(folder, 'file.py'), 'changed-version\n');
+    await writeFile(path.join(folder, 'new.py'), 'new-version\n');
+  }
+  const prior = await collectPatch(legacy, base),
+    next = await collectPatch(directory, base);
+  assert.equal(next.patch, prior.patch);
+  assert.equal(
+    createHash('sha256').update(next.patch).digest('hex'),
+    createHash('sha256').update(prior.patch).digest('hex'),
+  );
+  assert.doesNotMatch(next.patch, /diff --git a\/\.git/);
+  await rm(directory, { recursive: true });
+  assert.equal(
+    (await git(cache, ['worktree', 'list', '--porcelain']))
+      .replaceAll('\\', '/')
+      .includes(directory.replaceAll('\\', '/')),
+    false,
+  );
+  await git(cache, ['worktree', 'remove', '--force', legacy]);
 });

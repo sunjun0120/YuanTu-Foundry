@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir, access } from 'node:fs/promises';
+import { mkdir, access, readdir, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -71,6 +71,7 @@ export async function git(directory, args) {
   ).stdout;
 }
 export async function materializeRepo({ record, cacheDirectory, directory, source }) {
+  const started = performance.now();
   if (
     !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(record.repo) ||
     record.repo.split('/').some((p) => p === '.' || p === '..') ||
@@ -103,12 +104,44 @@ export async function materializeRepo({ record, cacheDirectory, directory, sourc
     await git(cache, ['config', '--local', key, value]);
   await git(cache, ['cat-file', '-e', `${record.base_commit}^{commit}`]);
   await mkdir(directory);
-  // Keep the cache's promisor configuration: a shared clone loses lazy blob fetching.
-  await git(cache, ['worktree', 'add', '--detach', '--', directory, record.base_commit]);
+  // Strategy B: a complete base tree, zero parent history, and no promisor/alternates.
+  // Fetch from the real source: a partial cache's upload-pack cannot promise missing blobs.
+  // No remote remains for model-time lazy fetching; older objects fail locally and immediately.
+  await git(directory, ['init']);
+  await git(directory, ['config', '--local', 'core.autocrlf', 'false']);
+  await git(directory, ['config', '--local', 'core.longpaths', 'true']);
+  await git(directory, [
+    'remote',
+    'add',
+    'origin',
+    source ?? `https://github.com/${record.repo}.git`,
+  ]);
+  await git(directory, ['fetch', '--no-tags', '--depth=1', 'origin', record.base_commit]);
+  await git(directory, ['checkout', '--detach', record.base_commit]);
+  await git(directory, ['remote', 'remove', 'origin']);
   if (
     (await git(directory, ['rev-parse', 'HEAD'])).trim() !== record.base_commit ||
     (await git(directory, ['status', '--porcelain'])).trim()
   )
     throw new Error('Materialized repository is not clean at base_commit');
-  return { directory, baseCommit: record.base_commit, cache };
+  const metadataBytes = async (root) => {
+    let bytes = 0;
+    for (const item of await readdir(root, { withFileTypes: true })) {
+      const file = path.join(root, item.name);
+      if (item.isDirectory()) bytes += await metadataBytes(file);
+      else if (item.isFile()) bytes += (await stat(file)).size;
+    }
+    return bytes;
+  };
+  return {
+    directory,
+    baseCommit: record.base_commit,
+    cache,
+    materialization: {
+      strategy: 'complete-base-tree',
+      historyDepth: 0,
+      metadataBytes: await metadataBytes(path.join(directory, '.git')),
+      durationMs: Math.round(performance.now() - started),
+    },
+  };
 }
