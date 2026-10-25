@@ -174,6 +174,10 @@ async function investigationFiles(root: string) {
   ]);
 }
 function assertActTools(request: ModelRequest) {
+  assert.deepEqual(
+    request.tools.map((tool) => tool.name).sort(),
+    [...fileEditors, 'read_file'].sort(),
+  );
   assert.ok(
     request.tools.some((tool) => tool.name === 'edit_file'),
     'editing remains available at the cutoff',

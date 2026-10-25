@@ -599,6 +599,7 @@ export class Agent {
           sessionId: input.sessionId,
           tools,
           readOnly: () => readOnly,
+          nativeTools: () => queryState.phase === 'act',
           policy,
           executionPolicy,
           ...(this.options.permissionPolicy

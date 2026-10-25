@@ -23,6 +23,8 @@ export interface RunSurfaceOptions {
   sessionId: string;
   tools: ToolRegistry;
   readOnly: () => boolean;
+  /** A bounded act turn exposes every tool left by the registry restriction, including deferred editors. */
+  nativeTools?: () => boolean;
   /** The policies the run started under; the run reads them before the prompt hooks, so they are handed in. */
   policy: PermissionPolicyView | undefined;
   executionPolicy: ExecutionPolicy | undefined;
@@ -113,6 +115,7 @@ export class RunSurface {
       readOnly,
       ...policy,
       ...(this.loaded ? { loaded: this.loaded } : {}),
+      ...(this.options.nativeTools?.() ? { mode: 'native' as const } : {}),
     });
     // Every tool the run has, loaded or not: what a `run_code` program may call — trimmed like `specs`, which is
     // what keeps a read-only child's program unable to reach the parent's tools.
