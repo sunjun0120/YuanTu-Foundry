@@ -78,6 +78,15 @@ export interface CarrierOptions {
    * them to a renderer that discarded them.
    */
   audit?: boolean;
+  /**
+   * What the embedder must verify before a Host process is allowed to exist.
+   *
+   * Called first thing in `start()`, inside the same `try` as the spawn, so throwing here fails the start in the
+   * one way everything else does: the error is captured into the snapshot and published to the window. The point
+   * of the hook is the *before*: a Host that cannot accept its environment exits with a message about *exiting*,
+   * which tells a person to restart rather than to fix the variables, and spends a process on finding that out.
+   */
+  startupCheck?: () => void;
 }
 export class CarrierService {
   private client: AgentHostClient;
@@ -91,6 +100,8 @@ export class CarrierService {
    * restart, and whether `hostPid` means anything.
    */
   private readonly supervisesHost: boolean;
+  /** The embedder's precondition on the environment, run before any Host process exists (see `CarrierOptions`). */
+  private readonly startupCheck: (() => void) | undefined;
   /** The environment this carrier runs under, used for configuration reads and error redaction. */
   private readonly env: NodeJS.ProcessEnv;
   /**
@@ -165,8 +176,9 @@ export class CarrierService {
   private statisticsDeltaListeners = new Set<(delta: StatisticsDelta) => void>();
   private unsubscribers: (() => void)[];
   constructor(options: HostClientOptions & CarrierOptions) {
-    const { audit, ...clientOptions } = options;
+    const { audit, startupCheck, ...clientOptions } = options;
     this.readsAudit = audit !== false;
+    this.startupCheck = startupCheck;
     // `workspace` is the spawning shape's own key; the connected shape learns it from `host.info`.
     this.supervisesHost = 'workspace' in clientOptions;
     this.env = clientOptions.env ?? {};
@@ -836,6 +848,8 @@ export class CarrierService {
     try {
       this.startupStage = 'starting';
       this.publish();
+      // Before the first process exists: an environment the Host cannot accept is not a Host that exited.
+      this.startupCheck?.();
       const info = await this.client.start();
       // The Host realpaths the workspace; its answer is the authority, not the path the carrier passed in.
       this.workspace = info.workspace;

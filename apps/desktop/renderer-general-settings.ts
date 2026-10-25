@@ -97,8 +97,44 @@ export function setupGeneralSettings(): { show(): void } {
     feedback.hidden = !text;
     feedback.classList.toggle('error', error);
   };
+  /**
+   * The startup environment, listed where a person goes looking for "why does it not start".
+   *
+   * A model-settings page has shown this list since the first version, and a window whose Host refuses to start
+   * opens on the general page — so the one page it must appear on is this one. The text comes from the main
+   * process already localized (`settings.environmentProblems`) and already worded as a list; nothing is
+   * re-formatted here, so the banner and this page cannot disagree about what is wrong.
+   */
+  const showEnvironmentProblems = (message: string | undefined): void => {
+    const block = document.getElementById('general-environment');
+    const problems = document.getElementById('general-environment-problems');
+    const title = document.getElementById('general-environment-title');
+    const hint = document.getElementById('general-environment-hint');
+    // A shell built from an older page may not have the block at all; it then simply does not show one.
+    if (!block || !problems || !title || !hint) return;
+    block.hidden = !message;
+    problems.textContent = message ?? '';
+    if (!message) return;
+    title.textContent = t('general.environment');
+    hint.textContent = t('general.environmentHint');
+  };
+  onLocaleChange(() => {
+    const problems = document.getElementById('general-environment-problems')?.textContent ?? '';
+    showEnvironmentProblems(problems || undefined);
+  });
   const show = () => {
     showSettingsPanel('general-settings-content');
+    // Read on every open rather than once: the environment does not change while the app runs, but a *save* can
+    // still be the thing that made the list appear or go away. A shell without the bridge has no list to show.
+    const settings = window.yuantu.settings;
+    if (!settings) return;
+    void settings({ type: 'get' })
+      .then((reply) =>
+        showEnvironmentProblems(
+          reply.ok ? reply.settings.environmentProblems?.join('\n') || undefined : undefined,
+        ),
+      )
+      .catch(() => showEnvironmentProblems(undefined));
   };
   /**
    * Every change is saved as it is made. A failed save — a refusal, or a promise that rejects because the answer

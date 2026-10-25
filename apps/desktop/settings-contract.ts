@@ -60,6 +60,8 @@ export interface ModelSettingsView {
   source: 'saved' | 'environment' | 'empty';
   encryptionAvailable: boolean;
   error: string | null;
+  /** Actual merged Host environment diagnostics, independent of model-settings storage errors. */
+  environmentProblems?: readonly string[];
 }
 /**
  * What the settings page may ask the Host process to do.

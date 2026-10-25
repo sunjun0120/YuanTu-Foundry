@@ -1208,3 +1208,52 @@ function artifactPath(relative) {
     relative,
   );
 }
+
+test(
+  'desktop lists an invalid startup environment in the banner and general settings',
+  { timeout: 30000 },
+  async (t) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-invalid-env-ui-'));
+    const misspelled = 'YUANTU_MAX_RETRIES'.replace(/S$/, '');
+    const invalid = 'private-invalid-setting-value';
+    const env = {
+      ...process.env,
+      YUANTU_WORKSPACE: root,
+      YUANTU_NODE_PATH: process.execPath,
+      YUANTU_MODEL: 'fixture',
+      YUANTU_API_KEY: 'synthetic-key',
+      YUANTU_BASE_URL: 'http://127.0.0.1:1',
+      YUANTU_MAX_RETRIES: invalid,
+      [misspelled]: '2',
+      YUANTU_SESSION_TITLES: 'false',
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const app = await electron.launch({
+      executablePath: electronPath,
+      args: [
+        path.resolve('dist/desktop/main.cjs'),
+        `--user-data-dir=${path.join(root, 'profile')}`,
+      ],
+      env,
+    });
+    t.after(async () => {
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const page = await app.firstWindow();
+    page.setDefaultTimeout(15000);
+    await page.locator('#error-text').waitFor({ state: 'visible' });
+    const banner = await page.locator('#error-text').textContent();
+    assert.match(banner, new RegExp(misspelled));
+    assert.match(banner, /did you mean YUANTU_MAX_RETRIES/);
+    assert.doesNotMatch(banner, new RegExp(invalid));
+    assert.doesNotMatch(banner, /Host.*意外退出|restart the application/);
+    await page.locator('#open-settings').click();
+    await page.locator('#general-settings').click();
+    await page.locator('#general-environment').waitFor({ state: 'visible' });
+    const problems = await page.locator('#general-environment-problems').textContent();
+    assert.match(problems, new RegExp(misspelled));
+    assert.match(problems, /did you mean YUANTU_MAX_RETRIES/);
+    assert.doesNotMatch(problems, new RegExp(invalid));
+  },
+);

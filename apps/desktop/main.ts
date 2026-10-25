@@ -47,6 +47,7 @@ import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
 import { redactSecrets } from '../../packages/platform/redact.ts';
+import { startupEnvironmentCheck, startupEnvironmentProblems } from './startup-environment.ts';
 import { ModelSettingsStore, testModelConnection } from './model-settings.ts';
 import { parseSettingsCommand, type SettingsReply } from './settings-contract.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
@@ -190,18 +191,40 @@ const choices = new SessionChoices({
 const backups = new DesktopBackups(ctx);
 const reviewWorkspaceHooks = workspaceHookReviewer(() => window);
 
+function hostEnvironment(config?: ProviderConfig): NodeJS.ProcessEnv {
+  return {
+    ...settingsStore.environment(config),
+    ...sandboxEnvironment.environment(),
+    YUANTU_PERMISSION_POLICY: permissionSettingsStore.file,
+    YUANTU_MCP_OAUTH_DIR: mcpOAuthDirectory(),
+  };
+}
+function modelSettingsView() {
+  return {
+    ...settingsStore.view,
+    environmentProblems: startupEnvironmentProblems(process.env, hostEnvironment()),
+  };
+}
 function createService(workspace: string, config?: ProviderConfig): CarrierService {
   const runtime = runtimePaths();
+  const env = hostEnvironment(config);
+  /**
+   * The environment this Host will actually receive, checked before a process exists.
+   *
+   * `process.env` first, then the desktop's own keys, which is the order the carrier spawns with
+   * (`{ ...process.env, ...this.env }`): checking only `process.env` would miss every variable the settings store
+   * injects, and checking only `env` would misreport one the desktop overrides. The Host refuses an unknown or
+   * invalid `YUANTU_*` name by exiting, and what the window can say about an exit is "restart" — which is wrong
+   * advice for a name that has to be corrected first. So the list is produced here, before the spawn, and carried
+   * as the start failure itself.
+   */
+  const startupCheck = startupEnvironmentCheck(startupEnvironmentProblems(process.env, env));
   return new CarrierService({
     nodePath: runtime.nodePath,
     hostPath: runtime.hostPath,
     workspace,
-    env: {
-      ...settingsStore.environment(config),
-      ...sandboxEnvironment.environment(),
-      YUANTU_PERMISSION_POLICY: permissionSettingsStore.file,
-      YUANTU_MCP_OAUTH_DIR: mcpOAuthDirectory(),
-    },
+    env,
+    ...(startupCheck ? { startupCheck } : {}),
     // The window has no process-record panel, so the carrier does not read one for it. The desktop smoke
     // suites still assert the record (approval decisions, restart persistence); they opt back in explicitly.
     audit: process.env.FOUNDRY_TEST_DESKTOP_AUDIT === '1',
@@ -775,7 +798,7 @@ void app
         assertSender(event);
         const command = parseSettingsCommand(input);
         if (quitting) throw new Error(mainText('desktop.quitting'));
-        if (command.type === 'get') return { ok: true, settings: settingsStore.view };
+        if (command.type === 'get') return { ok: true, settings: modelSettingsView() };
         submittedKey = 'values' in command ? command.values.apiKey : '';
         if (!service || switching || service.busy) throw new Error(mainText('settingsMain.busy'));
         if (command.type === 'delete') {
@@ -784,7 +807,7 @@ void app
             await settingsStore.delete(command.connectionId);
             return {
               ok: true,
-              settings: settingsStore.view,
+              settings: modelSettingsView(),
               message: mainText('settingsMain.connectionDeleted'),
             };
           } finally {
@@ -814,7 +837,7 @@ void app
             });
             return {
               ok: true,
-              settings: settingsStore.view,
+              settings: modelSettingsView(),
               discovered,
               message: mainText('settingsMain.modelsRead', { count: discovered.models.length }),
             };
@@ -826,7 +849,7 @@ void app
             );
             return {
               ok: true,
-              settings: settingsStore.view,
+              settings: modelSettingsView(),
               message: mainText('settingsMain.testSucceeded'),
             };
           }
@@ -851,7 +874,7 @@ void app
             await choices.following;
             return {
               ok: true,
-              settings: settingsStore.view,
+              settings: modelSettingsView(),
               message: cleanupWarning
                 ? mainText('settingsMain.savedCleanupWarning')
                 : mainText('settingsMain.saved'),

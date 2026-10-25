@@ -15,6 +15,10 @@ export const carrierMessages: Record<`carrier.${CarrierErrorCode}`, [string, str
     'Agent Host 意外退出，请重新启动应用。',
     'Agent Host exited unexpectedly; restart the application.',
   ],
+  'carrier.environmentInvalid': [
+    'Agent Host 无法启动：启动环境里有不合法的设置。请先删除或更正这些变量，然后重启应用：{problems}',
+    'Agent Host cannot start: some settings in the startup environment are invalid. Fix or remove them, then restart: {problems}',
+  ],
   'carrier.hostDisconnected': [
     '与 Agent Host 的连接已断开；请让启动它的载体重新连接。',
     'The Agent Host connection was lost; ask the carrier that started it to reconnect.',

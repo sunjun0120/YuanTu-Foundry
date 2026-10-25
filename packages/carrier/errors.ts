@@ -1,6 +1,15 @@
 /** Locale-independent failures. Application shells own their translated copy. */
 const messages = {
   hostExited: 'Agent Host exited unexpectedly; restart the application.',
+  /**
+   * The environment the Host would be started with cannot work, so it was never started.
+   *
+   * Its own code rather than `hostExited`, because the advice differs: restarting changes nothing — the variables
+   * have to be fixed or removed first. The list rides in `problems`, one `NAME: problem` per line, because the
+   * first typo is rarely the only one.
+   */
+  environmentInvalid:
+    'Agent Host cannot start: these settings are invalid. Fix or remove them from the startup environment, then restart: {problems}',
   hostDisconnected:
     'The Agent Host connection was lost; ask the carrier that started it to reconnect.',
   policyUnsupported:

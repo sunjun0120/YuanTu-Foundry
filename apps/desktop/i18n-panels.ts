@@ -201,6 +201,17 @@ export const panelMessages: Record<string, [string, string]> = {
     'Adjust the interface language, appearance, and text size.',
   ],
   'general.language': ['语言', 'Language'],
+  /**
+   * The startup environment, shown where a person looks for "why does it not start".
+   *
+   * The list itself comes from the main process in the settings view's `error` field; this is only its heading and
+   * the thing to do about it, so the same sentence appears on this page as in the startup banner.
+   */
+  'general.environment': ['启动环境', 'Startup environment'],
+  'general.environmentHint': [
+    '这些变量让 Agent Host 拒绝启动。删除或更正后重启应用；设置里改不到的，请改启动它的环境。',
+    'These variables make Agent Host refuse to start. Fix or remove them and restart the app; if the settings cannot change one, change the environment that launches it.',
+  ],
   'general.languageNote': ['设置界面首选语言。', 'Set the preferred interface language.'],
   'general.appearance': ['外观', 'Appearance'],
   'general.appearanceNote': ['选择应用的明暗外观。', 'Choose the application appearance.'],

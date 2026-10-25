@@ -7,10 +7,10 @@ import { redactSecrets } from '../../packages/platform/redact.ts';
 import { mainText } from './i18n.ts';
 import {
   MODEL_LIMIT_KEYS,
-  environmentProblems,
   parseSetting,
   type ModelLimitField,
 } from '../../packages/protocol/settings.ts';
+import { startupEnvironmentProblems } from './startup-environment.ts';
 import {
   parseSettingsCommand,
   type ModelSettingsInput,
@@ -83,10 +83,10 @@ export class ModelSettingsStore {
      * out of a constructor — and so an unknown `YUANTU_*` name is reported too, which is the same failure one
      * keystroke earlier: `YUANTU_MAX_CONTEXT_TOKEN` (no S) is a value that never arrives.
      */
-    const problems = environmentProblems(this.env);
+    const problems = startupEnvironmentProblems(this.env, {});
     if (problems.length)
       this.environmentError = mainText('settings.environmentProblems', {
-        problems: problems.map((entry) => `${entry.key}: ${entry.problem}`).join('；'),
+        problems: problems.join('；'),
       });
   }
   async load(): Promise<void> {

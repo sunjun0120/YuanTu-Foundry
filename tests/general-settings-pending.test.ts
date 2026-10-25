@@ -128,6 +128,7 @@ function generalSettingsPage(): {
   document: FakeDocument;
   form: FakeNode;
   feedback: FakeNode;
+  environment: FakeNode;
   language: FakeNode;
   appearance: FakeNode;
   fontSize: FakeNode;
@@ -167,7 +168,21 @@ function generalSettingsPage(): {
   create('ui-notifications', 'input');
   create('ui-notifications-note', 'small');
   const feedback = create('general-settings-feedback');
-  return { document: new FakeDocument(ids), form, feedback, language, appearance, fontSize };
+  // The startup-environment block exists in the page, so a fixture without it would only test the missing-element
+  // path rather than what the page does with the settings view.
+  create('general-environment');
+  create('general-environment-title', 'h3');
+  create('general-environment-hint', 'small');
+  const environment = create('general-environment-problems');
+  return {
+    document: new FakeDocument(ids),
+    form,
+    feedback,
+    environment,
+    language,
+    appearance,
+    fontSize,
+  };
 }
 function installDom(document_: FakeDocument, window_: unknown): () => void {
   const globals = globalThis as unknown as Record<string, unknown>;
@@ -217,6 +232,26 @@ class FakeBridge {
     this.queued = null;
     return queued;
   };
+  /**
+   * The model-settings view, which is where the main process puts the startup-environment list.
+   *
+   * Only the field this page reads is modelled: `error` is what the model settings page has always shown, and the
+   * general page now shows the same text rather than asking the environment twice.
+   */
+  environmentError: string | null = null;
+  readonly settings = (_command: {
+    type: 'get';
+  }): Promise<{
+    ok: true;
+    settings: { error: string | null; environmentProblems: string[] };
+  }> =>
+    Promise.resolve({
+      ok: true,
+      settings: {
+        error: 'unrelated model storage failure',
+        environmentProblems: this.environmentError ? [this.environmentError] : [],
+      },
+    });
 }
 /** Let every promise the handler created settle. */
 function flush(): Promise<void> {
@@ -225,18 +260,30 @@ function flush(): Promise<void> {
 interface Page {
   feedback: FakeNode;
   appearance: FakeNode;
+  environment: FakeNode;
+  environmentBlock: FakeNode;
+  general: FakeNode;
   bridge: FakeBridge;
 }
 function open(t: test.TestContext): Page {
   const page = generalSettingsPage();
   const bridge = new FakeBridge();
-  const restore = installDom(page.document, { yuantu: { uiSettings: bridge.uiSettings } });
+  const restore = installDom(page.document, {
+    yuantu: { uiSettings: bridge.uiSettings, settings: bridge.settings },
+  });
   t.after(restore);
   // After the document, not before: the module registers a locale listener, and a *previous* test's listener is
   // still registered here — `setLocale` with no document installed would reach it and read through `undefined`.
   setLocale('zh-CN');
   setupGeneralSettings();
-  return { feedback: page.feedback, appearance: page.appearance, bridge };
+  return {
+    feedback: page.feedback,
+    appearance: page.appearance,
+    environment: page.environment,
+    environmentBlock: page.document.getElementById('general-environment') as FakeNode,
+    general: page.document.getElementById('general-settings') as FakeNode,
+    bridge,
+  };
 }
 /** Change one control, which saves it, and wait for the save to finish. */
 async function change(page: Page, value: string): Promise<void> {
@@ -256,6 +303,30 @@ test('a change saves itself without a save button', async (t) => {
     'dark',
   );
   assert.equal(page.feedback.hidden, true, 'a successful save says nothing');
+});
+
+test('the startup environment list appears on the general page, and only when there is one', async (t) => {
+  const page = open(t);
+  // Nothing to report: the block stays out of the way rather than showing an empty heading.
+  await page.general.fire('click').catch(() => {});
+  await flush();
+  assert.equal(page.environmentBlock.hidden, true);
+  assert.equal(page.environment.textContent, '');
+  // An environment the Host would refuse: the main process's own sentence, listed here as it is in the banner.
+  // The name is *computed* from the registered one, because `tests/environment.test.ts` refuses any unknown
+  // `YUANTU_*` literal anywhere in the project — a deliberate misspelling included.
+  const misspelled = 'YUANTU_MAX_RETRIES'.replace(/S$/, '');
+  page.bridge.environmentError = `启动环境有 1 个问题：${misspelled}: unknown setting; did you mean YUANTU_MAX_RETRIES?`;
+  await page.general.fire('click').catch(() => {});
+  await flush();
+  assert.equal(page.environmentBlock.hidden, false);
+  assert.match(page.environment.textContent, new RegExp(misspelled));
+  assert.match(page.environment.textContent, /did you mean YUANTU_MAX_RETRIES/);
+  // A corrected environment clears it again: the block follows the view rather than pinning the first failure.
+  page.bridge.environmentError = null;
+  await page.general.fire('click').catch(() => {});
+  await flush();
+  assert.equal(page.environmentBlock.hidden, true);
 });
 
 test('a save whose promise rejects reverts the form, and the next change still saves', async (t) => {
