@@ -307,17 +307,18 @@ test('fixed ten-case corpus rejects drift, preserves paused cases and seals exac
   await applyReference(getCase('E02'), workspace);
   assert.equal(await readFile(path.join(root, 'packages/protocol/failure.ts'), 'utf8'), original);
   /**
-   * The paused CLI surface is a **product** fact, not a harness refusal.
+   * E06 and E10 are sampled, not refused.
    *
-   * E06 and E10 are still sampled through the Agent Host: the requirement cannot be met while
-   * `PRODUCT_SCOPE.cli` is false, and that is exactly what the report has to say. A `blockedReason` here would
-   * hide a real product limitation behind the harness — which is why `cases.mjs` deliberately has none.
+   * Their product requirement is a CLI surface; whether the frozen corpus exposes it is answered by
+   * `casePreparationBlock` at preparation time, not by a `blockedReason` in the case table. A `blockedReason`
+   * here would hide a real product limitation behind the harness — which is why `cases.mjs` deliberately has
+   * none.
    */
   for (const id of ['E06', 'E10']) {
     assert.equal(getCase(id).blockedReason, undefined, `${id} is sampled, not refused`);
     assert.ok(
       getCase(id).allowedPaths.includes('apps/shared/args.ts'),
-      `${id} still owns the paused CLI surface`,
+      `${id} still owns the CLI surface`,
     );
   }
 });

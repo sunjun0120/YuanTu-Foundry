@@ -3,6 +3,10 @@ dist/
 artifacts/
 package-lock.json
 .yuantu/
+# Local scratch evidence and logs are untracked and not part of the formatter's contract; scanning them made
+# format:check slow and let a generated file fail a gate unrelated to the source tree.
+.scratch/
+.claude/
 packages/tools/windows-sandbox/native/target/
 # Immutable SWE experiment evidence and deterministic generated reports retain their byte hashes.
 benchmarks/swe-bench/runs/full-2026-10-24/before/

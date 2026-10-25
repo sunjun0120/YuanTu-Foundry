@@ -27,5 +27,5 @@
 
 ## 备注
 
-- 验证期间仓库里有其他并发改动（例如 `packages/tools/*`、`tests/sandbox-account.test.ts`、`benchmarks/swe-bench/...`）。全量 `npm test` 仍会在这些文件上出现 `host.info` 启动超时（`host-workflows.test.ts`、`client.test.ts` 等），不是本批修复引入；`format:check` 也仍被 4 个并发生成的 benchmark 文件阻塞。本批改动文件的 lint 与 Prettier 均通过。
-- 报告图片已恢复在 `docs/assets/2026-10-25-desktop-real-models-round2/`；上一轮报告图片目录的删除来自其他并发改动，未回滚，因此 `references:check` 仍会报告旧报告的缺图。
+- 以上验证是在仓库里有其他并发改动时进行的（例如 `packages/tools/*`、`tests/sandbox-account.test.ts`、`benchmarks/swe-bench/...`）。当次全量 `npm test` 曾在这些文件上出现 `host.info` 启动超时（`host-workflows.test.ts`、`client.test.ts` 等），不是本批修复引入；当次 `format:check` 也仍被 4 个并发生成的 benchmark 文件阻塞。本批改动文件的 lint 与 Prettier 均通过。
+- **后续更新（提交 `8d0e0ed`）**：旧报告的十张截图已恢复，B123 冻结证据只加入 `.prettierignore` 而字节未变；`references:check` 与 `format:check` 现在均通过。全量测试、构建与编译客户端冒烟的最终结果记录在[仓库扫描遗留问题修复计划](superpowers/plans/2026-10-25-repository-audit-fixes.md)的执行记录中。

@@ -1,4 +1,4 @@
-// Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
+// Product-scope-gated cases keep their bodies so re-enabling a paused surface restores coverage without a rewrite.
 /**
  * The environment this process reads: one owner for its defaults, and a loud failure for anything else.
  *

@@ -23,7 +23,22 @@
 - [x] 2. 为超限 stop/tool_calls、正常边界及 length 增加回归；内核在执行工具前检查实际输出用量，保留计费记录和中断文本。
 - [x] 3. 为删除中路径、真实越界链接及重试耗尽增加确定性回归；修复隔离路径解析。再复跑真实并发迁移用例。
 - [x] 4. 恢复旧报告的十张截图；只把新冻结批次加入 Prettier 忽略范围，核对证据字节未变。
-- [ ] 5. 执行相关测试、静态门禁、构建、完整测试及编译客户端冒烟；核对测试汇总、源码指纹、跳过和清理结果，记录验证范围。
+- [x] 5. 执行相关测试、静态门禁、构建、完整测试及编译客户端冒烟；核对测试汇总、源码指纹、跳过和清理结果，记录验证范围。
+
+## 复扫记录（2026-10-25 晚）
+
+五项修复提交后复查完整门禁，发现并修复：
+
+- **全量测试回归**：`tests/large-response.test.ts` 的两个 Host 集成用例在“报告用量超过请求上限即 `limited`”规则生效后失败：夹具报告 200k output tokens，而 128k 上下文只自动授予 100k 输出预算，运行在到达传输断言前被正确判为 `limited`。产品规则本身正确；夹具改为声明 400k 窗口与 256k 输出上限，仍断言大响应完整落盘与重载。
+- **零输出预留误判（全量测试发现）**：上下文预估没有输出余量时 `requestOutputLimit` 为 0（发送请求让端点裁决是否放得下），新规则却把端点返回的任意 3 个 token 判成 `3/0` 超限，导致 `tests/context.test.ts` 四个既有用例变成 `limited`。现在只有 `requestOutputLimit > 0` 才执行超限判定；`context.test.ts` 44/44、`core.test.ts` 72/72、`large-response.test.ts` 15/15 通过。
+- **隔离路径解析缺口**：`scripts/test-isolation/paths.mjs` 在 `lstat` 成功、`realpath` 因悬空符号链接失败时，仍回退到词法路径，写入会穿过链接落到根外。现在有界重试后拒绝；`unlink`/`rm`/`rmdir` 等目录项操作不跟随最终符号链接，避免无法清理悬空链接；`copyFile`/`cp` 目标仍跟随符号链接。`bootstrap.mjs` 把无法证明归属的写入记为 ownership 违规。新增“悬空链接写入被拒”和“悬空链接可删除”两条回归。
+- **文档同步**：CLI 已启用，修正 `apps/cli/main.ts`、测试头注释、`benchmarks/coding-evaluation` 的 README/注释中“CLI 暂停”的过时说明；更新第二轮修复记录中已被后续提交满足的静态门禁备注；README 补充“报告用量超过请求上限也按 `output-limit` 结束”的行为。
+- **格式门禁范围**：`.scratch/`、`.claude/` 加入 `.prettierignore`，未跟踪的本地证据与临时脚本不再参与 `format:check`（此前会拖慢并在生成文件未格式化时误报）。
+
+验证：
+
+- `format:check`、`docs:check`、`references:check`、`cycles:check`、`layers:check`、`i18n:check`、`typecheck`、`lint`、`test:isolation:check` 全部通过。
+- `tests/test-isolation.test.ts` 23/23 通过（含两条新增回归），`tests/large-response.test.ts` 15/15 通过。
 
 ## Review focus
 

@@ -1,4 +1,4 @@
-// Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
+// Product-scope-gated cases keep their bodies so re-enabling a paused surface restores coverage without a rewrite.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -201,9 +201,9 @@ test('compaction returns the pages deleted records left behind, and keeps what r
    * pages go on a free list for later writes to reuse, so the file keeps the size of its historical peak — and
    * before this operation there was no path in the product that ended that state.
    *
-   * The maintenance commands live in the CLI beside this one, and this product currently pauses that entry point
-   * (`PRODUCT_SCOPE.cli`), which is why the case below drives the operation directly instead of through
-   * `runCli` — the same reason the CLI-level backup and restore cases in this file are paused.
+   * The maintenance commands live in the CLI beside this one. This case drives the store-level operation
+   * directly so it can inspect the file and free-list state in-process; the CLI entry point itself is covered
+   * by the backup and restore cases above.
    */
   const { root, file } = fixture(t);
   const store = new SessionStore(file);

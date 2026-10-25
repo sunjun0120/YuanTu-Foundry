@@ -18,7 +18,8 @@ import { runRecordCommand } from './task-commands.ts';
 import { createApprover, createQuestioner } from './terminal.ts';
 import { excludeRuntimeState } from '../../packages/workspaces/runtime-exclude.ts';
 
-// Public CLI is paused; refuse before parsing arguments or opening workspace state.
+// The product-scope guard must run before arguments are parsed or workspace state is opened: whether this
+// entry point exists is a product decision, not a startup option. The CLI is enabled today, so this is a no-op.
 requireProductEntry('cli');
 
 async function main(): Promise<void> {

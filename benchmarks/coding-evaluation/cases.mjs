@@ -121,20 +121,22 @@ const cases = [
   reference: `reference:${id}:v1`,
   platformSkips,
   /**
-   * E06 and E10 carry `tests/cli.test.ts` as their frozen old regression, and that whole file is paused upstream:
-   * every case in it is a literal `test.skip` with the comment that the bodies are retained for restoration. So
-   * "the file ran and asserted nothing" is the input's real, verifiable state rather than a candidate deleting
-   * assertions — the report says so explicitly instead of either inventing a red result or calling it green.
+   * E06 and E10 carry `tests/cli.test.ts` as their frozen old regression. A frozen input may declare the CLI
+   * surface paused, and then "the file ran and asserted nothing" is the input's real, verifiable state rather
+   * than a candidate deleting assertions — the report says so explicitly instead of either inventing a red
+   * result or calling it green. This flag records that declared property of the input; it is inert when the
+   * frozen file actually executes.
    *
    * A case listed here still fails if any test in the file executes and fails: the exemption only widens what
    * "paused" covers, it does not stop the file from being run.
    */
   ...(['E06', 'E10'].includes(id) ? { publicCheckFullyPaused: true } : {}),
   /**
-   * E06 and E10 are *not* blocked here on purpose: the harness can sample them through the Agent Host, and the
-   * product-level obstacle is part of the result. `PRODUCT_SCOPE.cli` is false, so a task whose requirement is a
-   * CLI flag is expected to fail rather than to be skipped — a `blocked` row would hide a real product limitation
-   * behind a harness refusal, which is exactly what the report is supposed to distinguish.
+   * E06 and E10 are *not* blocked here on purpose: the harness can sample them through the Agent Host, and a
+   * product-level obstacle is part of the result. `casePreparationBlock` reads the **frozen** corpus's product
+   * scope; if that input disables the CLI, a task whose requirement is a CLI flag is expected to fail rather
+   * than to be silently skipped. A `blocked` row would hide a real product limitation behind a harness refusal,
+   * which is exactly what the report is supposed to distinguish.
    */
 }));
 export function getCase(id) {
@@ -312,8 +314,9 @@ async function applySpillRetentionReference(workspace) {
 /**
  * E06's reference: `--prompt-file` for `run` and `resume` only, validated before any model request.
  *
- * The reference deliberately stops at "the option is parsed and its input is validated": the CLI entry point is
- * behind `PRODUCT_SCOPE.cli`, so a reference that also ran the command could not be exercised in this product.
+ * The reference deliberately stops at "the option is parsed and its input is validated": that is the boundary
+ * the oracle can exercise without starting a model run, whether or not the frozen input enables the CLI entry
+ * point. Running the command as well would require a provider and a workspace, which is outside this case.
  * The oracle asserts the same boundary.
  */
 async function applyPromptFileReference(workspace) {

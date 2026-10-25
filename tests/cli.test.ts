@@ -1,4 +1,4 @@
-// Temporarily paused tests retain their bodies; restore test.skip to test with the corresponding entry.
+// Product-scope-gated cases keep their bodies so re-enabling a paused surface restores coverage without a rewrite.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';

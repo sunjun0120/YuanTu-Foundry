@@ -186,7 +186,7 @@ async function dependenciesReady(directory, lockDirectory = directory) {
 export async function runCliSample(input, _signal) {
   requireLiveAuthorization(input.manifest);
   throw new Error(
-    'CLI adapter blocked: PRODUCT_SCOPE.cli=false; retained JSONL decoder is offline only',
+    'CLI adapter is not implemented; E06/E10 are sampled through the Agent Host instead',
   );
 }
 export async function runHostSample(input, signal) {
@@ -218,12 +218,13 @@ export async function runHostSample(input, signal) {
    * Which cases this adapter can drive.
    *
    * Every case is sampled through the Agent Host, which is the product's real entry for a task that edits a
-   * workspace. The paused surfaces are a different matter: `PRODUCT_SCOPE.cli` is false, so a task whose
-   * requirement is a CLI flag cannot be completed by the product at all. That is a product fact the report has to
-   * state, not a harness defect — so those cases are graded from the workspace the Host produces (which will not
-   * contain the flag) rather than being refused here. E09's cancellation and restart lifecycle is the one
-   * exception: without an owned workload script and a two-phase Host restart it cannot be triggered at all, and a
-   * refusal is the honest answer.
+   * workspace. A frozen corpus may declare the CLI surface disabled; then a task whose requirement is a CLI flag
+   * cannot be completed by that input at all. That is a product fact the report has to state, not a harness
+   * defect — so those cases are graded from the workspace the Host produces rather than being refused here. If
+   * the frozen corpus enables the CLI, the same Host sampling applies and a correct implementation can pass
+   * through the workspace. E09's cancellation and restart lifecycle is the one exception: without an owned
+   * workload script and a two-phase Host restart it cannot be triggered at all, and a refusal is the honest
+   * answer.
    */
   if (input.caseDef.id === 'E09' && !input.scenarioPhase)
     return runE09Sample(input, signal, runHostSample);

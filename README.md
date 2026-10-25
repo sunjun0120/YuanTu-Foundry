@@ -145,7 +145,7 @@ CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `cre
 - **用量与缓存**：Anthropic 的缓存读取与写入分别计入 `cachedInputTokens` / `cacheWriteInputTokens`；供应商没报写入时该字段**未定义而不是 0**。提示缓存的粒度由 `YUANTU_PROMPT_CACHE` 决定，四种取值：`auto`（默认）按**路由声明的能力**选，`blocks` 打 `cache_control` 断点（系统提示、最后一个工具定义、最新消息末尾，这是 Anthropic 的扩展），`key-only` 只传 `prompt_cache_key`，`off` 两个字段都不发；旧的 `0` / `false` 等价于 `off`，`1` / `true` 等价于 `auto`。**不认识的协议名在 `auto` 下不发送任何缓存字段**（沉默不等于声明支持），要发就显式点名。键是「协议 + 模型 + 系统提示 + 工具定义」的 SHA-256 摘要，正文与凭据都不进键。
 - **DeepSeek 前缀复用**：已知官方路由自动保留原生思考历史，支持的模型还会在历史中追加系统提示词更新；兼容网关须通过 `YUANTU_DEEPSEEK_COMPAT=on` 显式声明支持。逐请求事件记录缓存用量及实际序列化前缀的变化，未知用量不补零。工具顺序与 schema 对象键采用确定顺序。
 - **重试**：适配器与传输层**不**重试。重试决策在步骤边界，只对 `rate-limit` / `server` / `timeout` / `transport` / `no-stream` 生效，且要求**尚未向用户显示任何内容**；退避 `min(30s, 250·2ⁿ⁻¹ + jitter)`，服务端 cooldown 不被缩短——要求等待超过 30 秒就直接放弃。计数从日志读回，因此进程崩溃不会重置额度。
-- **失败分类**：12 个失败码定义在 `packages/protocol/failure.ts`；其中 `context-window-exceeded` 与 `output-limit` 让运行以「任务太大」（`limited`）结束，其余归为「出问题」（`failed`）。上下文溢出只在供应商明确确认时触发压缩恢复。
+- **失败分类**：12 个失败码定义在 `packages/protocol/failure.ts`；其中 `context-window-exceeded` 与 `output-limit` 让运行以「任务太大」（`limited`）结束，其余归为「出问题」（`failed`）。上下文溢出只在供应商明确确认时触发压缩恢复。兼容端点即使报 `stop` / `tool_calls`，只要请求了正的输出上限而报告的 `outputTokens` 超过它，也按 `output-limit` 结束：保留已报告用量与可见文本，不执行该响应的工具调用；恰好等于上限仍算正常完成。
 
 ---
 

@@ -31,7 +31,8 @@ export function installFilesystemProbe(checkWrite, violate, policy = {}) {
     }
     checkWrite(owner);
   };
-  const target = (value) => (typeof value === 'number' ? fd(value) : checkWrite(value));
+  const target = (value, followFinal = true) =>
+    typeof value === 'number' ? fd(value) : checkWrite(value, followFinal);
   for (const name of [
     'writeFile',
     'appendFile',
@@ -48,28 +49,36 @@ export function installFilesystemProbe(checkWrite, violate, policy = {}) {
     'mkdir',
     'mkdtemp',
   ]) {
+    // `rm`, `rmdir`, `unlink` and the `l*` variants operate on the directory entry, not through a symlink at the
+    // final component: deleting a dangling link is safe, and resolving the link instead would both refuse it and
+    // make cleanup impossible.
+    const followFinal = !['rm', 'rmdir', 'unlink', 'lchmod', 'lchown', 'lutimes'].includes(name);
     for (const method of [name, name + 'Sync'])
       if (typeof fs[method] === 'function')
         fs[method] = function (file, ...args) {
-          target(file);
+          target(file, followFinal);
           return Reflect.apply(original[method], this, [file, ...args]);
         };
     if (typeof fs.promises[name] === 'function') {
       const method = fs.promises[name];
       fs.promises[name] = async function (file, ...args) {
-        target(file);
+        target(file, followFinal);
         return Reflect.apply(method, this, [file, ...args]);
       };
     }
   }
   for (const name of ['rename', 'link', 'copyFile', 'cp', 'symlink']) {
     const check = (from, to) => {
-      if (name === 'rename' || name === 'link') checkWrite(from);
+      // A rename or hard-link source is a directory entry: a symlink there is moved or linked, not followed.
+      // Their destination is created or replaced, so it is not followed either. `copyFile`/`cp` open the
+      // destination for writing, so they do follow a symlink there and must keep the final component in the
+      // ownership check. A symlink's target is different again — a later write follows it.
+      if (name === 'rename' || name === 'link') checkWrite(from, false);
       if (name === 'symlink') {
         const destination = to instanceof URL ? fileURLToPath(to) : String(to);
         checkWrite(path.resolve(path.dirname(destination), String(from)));
       }
-      checkWrite(to);
+      checkWrite(to, name === 'copyFile' || name === 'cp');
     };
     for (const method of [name, name + 'Sync'])
       if (typeof fs[method] === 'function')

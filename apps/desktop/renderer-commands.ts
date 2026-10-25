@@ -3,8 +3,9 @@
  *
  * Everything starts with `/`: typing `/` opens a menu of the window's own commands and the session's skills,
  * filtering as the line grows, and Enter either selects the highlighted row or submits `/compact`, `/export`,
- * `/goal` and `/plan` when typed in full. The menu and the typed form are one vocabulary, so they are one module:
- * `commandItems` feeds the menu and the same four names are matched here.
+ * `/task` (with `/goal` kept as its alias) and `/plan` when typed in full. The menu and the typed form are one
+ * vocabulary, so they are one module: `commandItems` feeds the menu and the same command vocabulary is matched
+ * here.
  *
  * Selection and dismissal (`selectedCommand`, `menuDismissed`) live here rather than in the DOM because the menu
  * is rebuilt on every keystroke and a highlight is not something an element can be trusted to remember. `onInput`

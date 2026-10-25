@@ -98,10 +98,14 @@ test('Host persists and returns a visible reply larger than 4 MB', async (t) => 
     workspace: root,
     db: path.join(root, 'sessions.sqlite'),
     env: {
+      // The fixture reports 200k output tokens, so declare a cap above that (and a window that leaves room
+      // for it). Otherwise the turn would (correctly) be classified `limited` before it reaches the
+      // transport assertions this test is about.
       YUANTU_PROTOCOL: 'openai',
       YUANTU_API_KEY: 'fixture',
       YUANTU_MODEL: 'fixture',
-      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_MAX_CONTEXT_TOKENS: '400000',
+      YUANTU_MAX_OUTPUT_TOKENS: '256000',
       YUANTU_SESSION_TITLES: '0',
       YUANTU_BASE_URL: url,
     },
@@ -204,10 +208,13 @@ test('Host can reload a large Responses turn with its opaque continuation state'
     workspace: root,
     db: path.join(root, 'sessions.sqlite'),
     env: {
+      // Same reported usage as the Chat fixture above: the declared cap has to cover it, or the turn is
+      // limited before the continuation state can be exercised.
       YUANTU_PROTOCOL: 'openai-responses',
       YUANTU_API_KEY: 'fixture',
       YUANTU_MODEL: 'fixture',
-      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+      YUANTU_MAX_CONTEXT_TOKENS: '400000',
+      YUANTU_MAX_OUTPUT_TOKENS: '256000',
       YUANTU_SESSION_TITLES: '0',
       YUANTU_BASE_URL: url,
     },

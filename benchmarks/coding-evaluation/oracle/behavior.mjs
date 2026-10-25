@@ -364,10 +364,10 @@ try {
     }
   } else if (id === 'E06' || id === 'E10') {
     /**
-     * E06's requirement lives in the CLI's argument parser, which is importable on its own even though the CLI
-     * entry point is paused (`PRODUCT_SCOPE.cli`). That is the boundary the oracle scores: the option, its
-     * validation and its command scope. A sample that implemented nothing fails here, and a sample that wired the
-     * rest of the product around a paused surface cannot pass by other means.
+     * E06's requirement lives in the CLI's argument parser, which is importable on its own whether or not a
+     * frozen input enables the CLI entry point (`PRODUCT_SCOPE.cli`). That is the boundary the oracle scores:
+     * the option, its validation and its command scope. A sample that implemented nothing fails here, and a
+     * sample that wired the rest of the product around the parser cannot pass by other means.
      *
      * When E10 runs, this same check is one of its two themes, so the oracle for E10 is E06's plus E05's.
      */

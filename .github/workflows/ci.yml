@@ -54,7 +54,7 @@ jobs:
       - name: Browser runtime for browser-tool regressions
         run: npx playwright install --with-deps chromium
       # The aggregate is the entry point, and that is the point: `check` is what the README tells a developer to
-      # run and what every gate is added to. Web and public SDK smoke are temporarily paused;
+      # run and what every gate is added to. Web and public SDK smoke were removed with the paused surfaces;
       # the internal client smoke remains active. `docs:check` and `references:check` inside it are what
       # make the numbers and the paths in the documentation fail here rather than in a reader's browser.
       - run: npm run check

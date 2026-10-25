@@ -27,7 +27,7 @@ if (encoded && !controller) {
   const roots = [config.root];
   if (config.resources.includes('windows-sandbox'))
     roots.push(path.join(os.userInfo().homedir, '.yuantu', 'sandbox-state'));
-  const checkWrite = (input) => {
+  const checkWrite = (input, followFinal = true) => {
     // node-pty allocates unique native ConPTY transports, owned by the serialized PTY resource.
     if (
       process.platform === 'win32' &&
@@ -35,7 +35,17 @@ if (encoded && !controller) {
       /^\\\\\.\\pipe\\conpty-\d+\.\d+-(?:in|out)(?:-worker)?$/.test(String(input))
     )
       return;
-    const target = resolvedTarget(input);
+    let target;
+    try {
+      target = resolvedTarget(input, { followFinal });
+    } catch (error) {
+      // A name that exists but cannot be resolved (dangling link, delete in progress) cannot be allowed: its
+      // lexical parent may be inside the root while the write lands somewhere else. Record it as a violation
+      // rather than letting a caught exception hide the attempt.
+      if (error?.code === 'EAGAIN')
+        violate('ownership', `cannot prove ownership of write target: ${String(input)}`);
+      throw error;
+    }
     if (!target || !roots.some((root) => inside(root, target)))
       violate('ownership', `write outside worker ownership: ${String(input)}`);
   };

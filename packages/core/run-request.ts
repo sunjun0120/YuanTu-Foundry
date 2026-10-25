@@ -597,9 +597,14 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         attempt.text.trim() !== '' ||
         streamedText !== '' ||
         streamedReasoning !== '';
+      // A zero reservation is the forecast's "no room to reserve output" sentinel, not a cap the endpoint was
+      // asked to honour: that request is sent precisely so the endpoint can be the authority on whether it fits.
+      // Treating any output under it as over-cap would turn every such answer into `limited`.
+      const attemptOverCap =
+        requestOutputLimit > 0 && attempt.usage.outputTokens > requestOutputLimit;
       if (
         !carried &&
-        attempt.usage.outputTokens <= requestOutputLimit &&
+        !attemptOverCap &&
         attempt.finishReason !== 'length' &&
         attempt.finishReason !== 'content-filter'
       ) {
@@ -710,7 +715,10 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
   }
   // A compatible endpoint may ignore the requested cap and still report a normal stop. Its reported usage
   // remains billable evidence, but the oversized response must not start tools or masquerade as completion.
-  const outputCapExceeded = response.usage.outputTokens > requestOutputLimit;
+  // `requestOutputLimit === 0` is the forecast's "no reservation" sentinel: no positive cap was requested, so the
+  // endpoint's answer is the one the run asked for (the over-window estimate already carries `problem`).
+  const outputCapExceeded =
+    requestOutputLimit > 0 && response.usage.outputTokens > requestOutputLimit;
   if (response.finishReason === 'length' || outputCapExceeded) {
     recordPartialTurn({ ...response, text: response.text || streamedText });
     // A truncated answer is still an answer: it assembled a message, so the step spent what it spent.

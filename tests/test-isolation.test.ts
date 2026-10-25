@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, symlinkSync } from 'node:fs';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -200,6 +201,51 @@ test('a junction cannot redirect an owned write into another file root', async (
   );
   assert.equal(result.status, 1, result.stderr);
   assert.match(await readFile(a.violationPath, 'utf8'), /ownership/);
+});
+
+test('a dangling symlink cannot launder an owned write outside the worker root', async (t) => {
+  const parent = await fixture(t);
+  const isolation = await createIsolation(parent, 'dangling-link.test.ts', [], process.env);
+  const outside = path.join(parent, 'outside-dangling.txt');
+  const link = path.join(isolation.env.TMP!, 'dangling-link.txt');
+  try {
+    symlinkSync(outside, link, 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? ''))
+      return t.skip('symlink creation needs privileges on this host');
+    throw error;
+  }
+  // The link's lexical parent is inside the root while its target is outside; a resolver that walks up and
+  // appends the name would allow this write and create the outside file.
+  const result = run(
+    isolation,
+    `import{writeFileSync}from'node:fs';try{writeFileSync(${JSON.stringify(link)},'escaped')}catch{}`,
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(await readFile(isolation.violationPath, 'utf8'), /ownership/);
+  assert.equal(existsSync(outside), false);
+});
+
+test('a dangling symlink inside the worker root can still be removed', async (t) => {
+  const parent = await fixture(t);
+  const isolation = await createIsolation(parent, 'delete-dangling.test.ts', [], process.env);
+  const neverCreated = path.join(parent, 'never-created.txt');
+  const link = path.join(isolation.env.TMP!, 'delete-dangling.txt');
+  try {
+    symlinkSync(neverCreated, link, 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? ''))
+      return t.skip('symlink creation needs privileges on this host');
+    throw error;
+  }
+  // Deleting the entry is not writing through it, so an unresolvable target must not make cleanup impossible.
+  const result = run(
+    isolation,
+    `import{unlinkSync}from'node:fs';unlinkSync(${JSON.stringify(link)});console.log('removed')`,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /removed/);
+  assert.equal(existsSync(link), false);
 });
 
 test('missing listener hosts never permit wildcard TCP or UDP binds', async (t) => {

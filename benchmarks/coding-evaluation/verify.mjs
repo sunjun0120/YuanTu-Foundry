@@ -443,12 +443,13 @@ export async function verifyCase({
       /**
        * A fully paused regression file is a declared property of the *input*, not a pass.
        *
-       * `tests/cli.test.ts` is paused upstream (every case is a literal `test.skip` retaining its body) because the
-       * CLI surface is disabled by product scope. That file therefore can never produce an executed assertion, and
-       * saying nothing would let a batch look as though the CLI had been regression-checked when it never was. The
-       * check below is recorded as passing-but-inert with the counts in its evidence, and it still fails the moment
-       * a test in the file actually runs and fails — the exemption widens what "paused" covers, it does not stop
-       * the file from being executed.
+       * A frozen corpus may declare the CLI surface disabled, and then `tests/cli.test.ts` is paused upstream
+       * (every case a literal `test.skip` retaining its body). That file can never produce an executed
+       * assertion, and saying nothing would let a batch look as though the CLI had been regression-checked when
+       * it never was. The check below is recorded as passing-but-inert with the counts in its evidence, and it
+       * still fails the moment a test in the file actually runs and fails — the exemption widens what "paused"
+       * covers, it does not stop the file from being executed. When the frozen input enables the CLI, the file
+       * runs and this branch simply does not apply.
        */
       const fullyPaused =
         caseDef.publicCheckFullyPaused === true &&
