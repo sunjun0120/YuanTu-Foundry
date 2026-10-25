@@ -802,7 +802,12 @@ test(
     await page.locator('#run-status').getByText('正在生成工具调用…').waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(requestBudget, 100, 'the provider request retains the configured output budget');
-    assert.match(await page.locator('#error').innerText(), /100\/100 output tokens/);
+    // The banner is localized; the raw token breakdown stays in the session error for the evidence trail.
+    assert.match(await page.locator('#error').innerText(), /输出达到本轮上限/);
+    const sessionError = await page.evaluate(
+      async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.error,
+    );
+    assert.match(sessionError, /100\/100 output tokens/);
     assert.equal(await page.locator('#messages .tool-call').count(), 0);
     assert.doesNotMatch(
       await page.locator('#live .message-content').textContent(),

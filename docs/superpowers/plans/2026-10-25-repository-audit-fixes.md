@@ -64,6 +64,8 @@
 
 本地验证：静态门禁全部通过；`npm test` 共 3134 项、3084 通过、49 跳过、1 个 `windows-shell` 已知时序抖动（独立复跑 7/7 通过）；`npm run build` 通过。`smoke:desktop` 仍只能由 Windows CI 执行。
 
+首轮修复推送（`6bb8f32`）后，CI 的 `desktop-language`、`desktop.smoke` 与新增的 `desktop-i18n` 均通过；只剩 `agent.smoke` 一项：错误横幅已按桌面本地化显示“模型输出达到本轮上限…”，原断言仍只认原始 `100/100 output tokens`。已改为断言本地化横幅，并从 `session.error` 保留原始用量断言。
+
 本次 CI 修复按用户“重跑 main CI”的明确要求提交并推送；上一节记录的 `a4a92a3` 仍是并发自动化进程的行为，不是本会话发起的。
 
 ## Review focus
