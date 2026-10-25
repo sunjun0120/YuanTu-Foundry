@@ -46,11 +46,20 @@ export type FailureCode =
   | 'unsupported'
   /** The endpoint answered with something that is not the stream this protocol speaks. */
   | 'no-stream'
+  /** A complete parallel tool batch lost its required argument fragments. */
+  | 'tool-arguments-dropped'
   /** A tool could not be cleaned up, so an external process may still be running. */
   | 'tool-cleanup'
   /** The run reached its own total budget: rounds, wall clock or tokens (`RunDefaults.maxRunRounds`). */
   | 'run-budget';
+export interface FailureDetails {
+  usage?: import('./index.ts').Usage;
+  finishReason?: import('./index.ts').ModelResponse['finishReason'];
+  requestNumber?: number;
+  durationMs?: number;
+}
 export interface FailureOptions {
+  details?: FailureDetails;
   cause?: unknown;
   retryAfterMs?: number;
   /**
@@ -84,6 +93,7 @@ export interface FailureOptions {
  */
 export class RunFailure extends Error {
   readonly code: FailureCode;
+  readonly details?: FailureDetails;
   readonly retryAfterMs?: number;
   readonly httpStatus?: number;
   readonly requestId?: string;
@@ -91,6 +101,7 @@ export class RunFailure extends Error {
     super(message, options);
     this.name = 'RunFailure';
     this.code = code;
+    if (options?.details) this.details = options.details;
     if (options?.retryAfterMs !== undefined) this.retryAfterMs = options.retryAfterMs;
     if (options?.httpStatus !== undefined) this.httpStatus = options.httpStatus;
     if (options?.requestId !== undefined) this.requestId = options.requestId;

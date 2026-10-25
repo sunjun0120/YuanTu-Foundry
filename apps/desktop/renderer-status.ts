@@ -85,6 +85,10 @@ export function runStatusText(input: RunStatusInput): string {
   return t(KEYS[input.status]);
 }
 
+export function providerDegradedText(degraded: boolean | undefined): string {
+  return degraded ? t('ui.providerDegraded') : '';
+}
+
 /** The kernel's marker for "the signal aborted this run", which is what pressing 停止 produces. */
 export const RUN_CANCELLED = 'Run cancelled';
 /** What the completion verdict looked like when the run ended, as far as the banner decision needs it. */

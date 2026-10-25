@@ -23,7 +23,12 @@ import { setupSessionPanels } from './renderer-session-panels.ts';
 import { setupSessionList, type SessionActivity } from './renderer-session-list.ts';
 import { setupTranscript } from './renderer-transcript.ts';
 import { setupTurnChanges } from './renderer-changes.ts';
-import { RUN_CANCELLED, runStatusText, visibleRunError } from './renderer-status.ts';
+import {
+  RUN_CANCELLED,
+  runStatusText,
+  visibleRunError,
+  providerDegradedText,
+} from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { setupGeneralSettings } from './renderer-general-settings.ts';
 import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
@@ -409,18 +414,19 @@ function sandboxLeaseBlocked(error: string): boolean {
 function renderRunStatus(): void {
   if (!state) return;
   const session = state.session;
-  element('run-status').textContent = runStatusText({
-    status: session.status,
-    compacting: session.compacting,
-    approvals: session.approvals.length,
-    questions: session.questions.length,
-    ready: state.ready,
-    loading: session.loading,
-    activity: session.statisticsActivity,
-    tools: session.tools.length,
-    now: Date.now(),
-    ...(session.completion ? { completionReason: session.completion.summary.reason } : {}),
-  });
+  element('run-status').textContent =
+    runStatusText({
+      status: session.status,
+      compacting: session.compacting,
+      approvals: session.approvals.length,
+      questions: session.questions.length,
+      ready: state.ready,
+      loading: session.loading,
+      activity: session.statisticsActivity,
+      tools: session.tools.length,
+      now: Date.now(),
+      ...(session.completion ? { completionReason: session.completion.summary.reason } : {}),
+    }) + (session.providerDegraded ? ' · ' + providerDegradedText(session.providerDegraded) : '');
 }
 // Only the "waiting for the model" reading changes with time; the timer is cheap and skips every other state.
 window.setInterval(() => {

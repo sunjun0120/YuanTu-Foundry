@@ -101,6 +101,7 @@ export const AGENT_EVENT_TYPES = [
    * waiting and giving up.
    */
   'llm.retry',
+  'provider.degraded',
   'provider.request.finished',
   /** Session metadata may arrive before or after its answer, independently of any run. */
   'session.title.updated',

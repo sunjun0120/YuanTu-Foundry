@@ -5,6 +5,22 @@
  */
 /** Sessions, diffs, the welcome screen, workspace files and model settings. */
 export const workspaceMessages: Record<string, [string, string]> = {
+  'ui.providerDegraded': [
+    '该模型端点并行调用工具时丢失参数，已改为逐个调用',
+    'This model endpoint dropped parallel tool arguments; tools now run one at a time.',
+  ],
+  'ui.toolArgumentsPartial': [
+    '端点返回的工具调用缺少参数；已经输出了部分回答，因此没有重发',
+    'The endpoint dropped tool arguments; a partial answer was already shown, so the request was not re-sent.',
+  ],
+  'ui.toolArgumentsUnsupported': [
+    '端点不接受关闭并行调用的参数',
+    'The endpoint does not accept disabling parallel tool calls.',
+  ],
+  'ui.toolArgumentsRecoveryFailed': [
+    '端点返回的工具调用缺少参数；已关闭并行调用重发一次，仍然缺少参数',
+    'The endpoint dropped tool arguments; required arguments are still missing after one re-send with parallel calls disabled.',
+  ],
   'session.actions': ['会话操作', 'Session actions'],
   'session.rename': ['重命名', 'Rename'],
   'session.archive': ['归档', 'Archive'],

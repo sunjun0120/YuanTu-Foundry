@@ -246,6 +246,7 @@ export const SESSION_EVENT_TYPES = [
    * does not come back with a fresh allowance.
    */
   'llm.retry',
+  'provider.degraded',
   'provider.request.finished',
   'tool.execution.started',
   'tool.execution.finished',
@@ -331,6 +332,7 @@ export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
    * is the explanation for why a round took longer than one request.
    */
   'llm.retry',
+  'provider.degraded',
   /**
    * A round that did not run on the run's configured model (or effort). The transcript is unaffected: the
    * answer is stored as an answer, whoever produced it. The reader that loses something is the one asking which

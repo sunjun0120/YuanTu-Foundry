@@ -1,3 +1,5 @@
+import { translate } from './i18n.ts';
+
 /**
  * The one sentence a person reads for a failure that has a known shape.
  *
@@ -40,7 +42,14 @@ function httpFailure(error: string, english: boolean): string | null {
 
 /** The sentence to show in the banner, or `null` when this error has no known shape. */
 export function localizedRunError(error: string, english: boolean): string | null {
-  return httpFailure(error, english);
+  const key = /partial answer; request was not re-sent/.test(error)
+    ? 'ui.toolArgumentsPartial'
+    : /does not accept disabling parallel tool calls/.test(error)
+      ? 'ui.toolArgumentsUnsupported'
+      : /parallel tool calls disabled; still missing/.test(error)
+        ? 'ui.toolArgumentsRecoveryFailed'
+        : null;
+  return key ? translate(key, english ? 'en-US' : 'zh-CN') : httpFailure(error, english);
 }
 
 /**

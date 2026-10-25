@@ -82,6 +82,7 @@ test('what may be re-sent and what may not, one decision per code', () => {
    * turn the endpoint closed with nothing in it, which is a hiccup rather than an answer.
    */
   const expected: Record<FailureCode, boolean> = {
+    'tool-arguments-dropped': false,
     'context-window-exceeded': false,
     'output-limit': false,
     auth: false,

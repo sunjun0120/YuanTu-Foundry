@@ -401,6 +401,7 @@ export interface HostMethods {
       totalMessages?: number;
       nextOffset?: number;
       messageChunk?: { index: number; part: string; nextChunkOffset?: number };
+      providerDegraded?: boolean;
       statistics?: import('./statistics.ts').SessionStatistics;
       /**
        * The run's recent step boundaries, oldest first.

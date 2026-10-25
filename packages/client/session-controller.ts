@@ -403,6 +403,7 @@ export class SessionController {
     client: AgentHostClient = this.client,
   ): Promise<{
     messages: Message[];
+    providerDegraded: boolean | undefined;
     statistics: SessionStatistics;
     historyStart: number;
     /** The run the session had active when the transcript was read, when the Host says. */
@@ -439,6 +440,7 @@ export class SessionController {
           statistics: page.statistics ?? emptyStatistics(),
           historyStart: Math.min(start, base),
           activeRun: page.activeRun,
+          providerDegraded: page.providerDegraded,
         };
     }
     const tail = Math.max(100, this.state.sessionId === sessionId ? this.state.messages.length : 0);
@@ -448,14 +450,21 @@ export class SessionController {
       statistics: history.statistics ?? emptyStatistics(),
       historyStart: history.startOffset,
       activeRun: history.activeRun,
+      providerDegraded: history.providerDegraded,
     };
   }
   /** Put a history read on screen, and remember how much of it is the Host's. */
   private applyTranscript(
     sessionId: string,
-    transcript: { messages: Message[]; statistics: SessionStatistics; historyStart: number },
+    transcript: {
+      messages: Message[];
+      statistics: SessionStatistics;
+      historyStart: number;
+      providerDegraded?: boolean;
+    },
   ): void {
     this.state.messages = transcript.messages;
+    this.state.providerDegraded = transcript.providerDegraded ?? false;
     this.state.historyStart = transcript.historyStart;
     this.state.messageRevision++;
     this.state.statistics = transcript.statistics;
@@ -613,7 +622,7 @@ export class SessionController {
      * true after it ends, so a reload has to bring them back from the log.
      */
     const [
-      { messages, statistics, historyStart, activeRun },
+      { messages, statistics, historyStart, activeRun, providerDegraded },
       plan,
       subagents,
       checklist,
@@ -660,7 +669,7 @@ export class SessionController {
     const running = snapshot.answered ? snapshot.running : seenRun !== null;
     const liveRun = running ? (snapshot.runId ?? seenRun) : null;
     const moved = seenRun !== liveRun || (running && liveRun === null);
-    let transcript = { messages, statistics, historyStart };
+    let transcript = { messages, statistics, historyStart, providerDegraded };
     if (moved) {
       const reread = await this.history(sessionId, false, client);
       if (this.staleRead(generation)) return;
@@ -692,6 +701,7 @@ export class SessionController {
       instructions: [],
       sessionId,
       messages: transcript.messages,
+      providerDegraded: transcript.providerDegraded ?? false,
       historyStart: transcript.historyStart,
       messageRevision: this.state.messageRevision + 1,
       statistics: transcript.statistics,
@@ -1228,6 +1238,7 @@ export class SessionController {
     }
     this.stateRevision++;
     if (event.type === 'run.started') {
+      this.state.providerDegraded = false;
       this.olderLoad = null;
       if (!this.state.running) {
         this.statisticsBase = structuredClone(this.state.statistics ?? emptyStatistics());
@@ -1262,6 +1273,9 @@ export class SessionController {
       this.state.statisticsActivity = event.data.activity as SessionSnapshot['statisticsActivity'];
     }
     switch (event.type) {
+      case 'provider.degraded':
+        this.state.providerDegraded = true;
+        break;
       case 'resources.loaded':
         this.state.instructions = event.data.instructions as string[];
         break;

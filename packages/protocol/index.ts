@@ -265,8 +265,16 @@ export interface ModelRequest {
    * provider's message cache. Omitted means the protocol's own default (`auto`).
    */
   toolChoice?: 'none';
+  /** Disable parallel calls only for a route that dropped required arguments. */
+  parallelToolCalls?: false;
+  /** Strict validation belongs only to the one recovery response. Never serialized. */
+  toolArgumentsRecovery?: boolean;
+  /** Measurement identity of the discarded request. Never serialized. */
+  degradedFrom?: number;
 }
 export interface Provider {
+  /** Non-secret routing identity for embedders that do not supply modelInfo. */
+  readonly route?: { protocol: string; model: string };
   complete(request: ModelRequest): Promise<ModelResponse>;
 }
 export interface Approval {

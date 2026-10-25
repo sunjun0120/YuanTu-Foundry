@@ -23,6 +23,7 @@ import type { FailureCode } from './failure.ts';
  *   record of what happened is more useful than a silent second attempt.
  */
 const RETRYABLE: Record<FailureCode, boolean> = {
+  'tool-arguments-dropped': false,
   'rate-limit': true,
   server: true,
   timeout: true,

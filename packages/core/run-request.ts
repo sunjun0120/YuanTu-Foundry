@@ -45,6 +45,8 @@ export interface RunRequestOptions {
     | 'checkpointStream'
     | 'appendStreamMessage'
   >;
+  serialToolRoutes?: Set<string>;
+  routeKey?: string;
   sessionId: string;
   runId: string;
   round: number;
@@ -129,6 +131,18 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     emit,
   } = options;
   let { context } = options;
+  const serialToolRoutes = options.serialToolRoutes ?? new Set<string>();
+  const routeKey = options.routeKey ?? '';
+  let recoveringArguments = false;
+  let degradedFrom: number | undefined;
+  const countUsage = (used: Usage): void => {
+    usage.inputTokens += used.inputTokens;
+    usage.outputTokens += used.outputTokens;
+    if (used.cachedInputTokens !== undefined)
+      usage.cachedInputTokens = (usage.cachedInputTokens ?? 0) + used.cachedInputTokens;
+    if (used.cacheWriteInputTokens !== undefined)
+      usage.cacheWriteInputTokens = (usage.cacheWriteInputTokens ?? 0) + used.cacheWriteInputTokens;
+  };
   let text = '';
   const requestSignal = limits.requestTimeoutMs
     ? AbortSignal.any([signal, AbortSignal.timeout(limits.requestTimeoutMs)])
@@ -250,8 +264,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
    * Two rules keep a retry from costing more than it buys:
    *
    * - **Nothing has been shown yet.** A retry re-sends the request, so any text the user already saw
-   *   would be shown twice — the same rule the overflow recovery follows, extended to reasoning, because
-   *   reasoning is displayed too.
+   *   would be shown twice. Displayed reasoning can be reset before a resend.
    * - **The failure is transient by nature** (`retryable`), never a failure that describes the run's own
    *   room or the request's content: re-sending those buys the same answer at full price.
    */
@@ -374,6 +387,10 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         beforeRequest(context.system);
         attempt = await measuredProvider.complete({
           system: context.system,
+          ...(recoveringArguments || serialToolRoutes.has(routeKey)
+            ? { parallelToolCalls: false as const }
+            : {}),
+          ...(recoveringArguments ? { toolArgumentsRecovery: true, degradedFrom } : {}),
           messages: context.messages,
           tools: specs,
           // The key of the request this is, from the prompt this request carries — see `cacheKeyOf`.
@@ -407,6 +424,37 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
           },
         });
       } catch (cause) {
+        if (cause instanceof RunFailure && cause.details?.usage) countUsage(cause.details.usage);
+        if (recoveringArguments) {
+          // The one changed-body recovery has its own failure boundary; never retry it again.
+          cause = new RunFailure(
+            'tool-arguments-dropped',
+            failureCodeOf(cause) === 'tool-arguments-dropped'
+              ? 'Tool arguments missing after one re-send with parallel tool calls disabled; still missing required arguments'
+              : cause instanceof RunFailure &&
+                  cause.code === 'http' &&
+                  cause.httpStatus !== undefined &&
+                  cause.httpStatus >= 400 &&
+                  cause.httpStatus < 500 &&
+                  /parallel[_ -]tool[_ -]calls/i.test(cause.message)
+                ? 'Model endpoint does not accept disabling parallel tool calls'
+                : 'Tool argument recovery failed: ' +
+                  (cause instanceof Error ? cause.message : 'Model request failed'),
+            { cause },
+          );
+        } else if (failureCodeOf(cause) === 'tool-arguments-dropped') {
+          if (!streamedText) {
+            recoveringArguments = true;
+            degradedFrom = cause instanceof RunFailure ? cause.details?.requestNumber : undefined;
+            resetReasoning();
+            continue;
+          }
+          cause = new RunFailure(
+            'tool-arguments-dropped',
+            'Tool arguments missing after a partial answer; request was not re-sent',
+            { cause },
+          );
+        }
         // A refused request is recoverable only while nothing has been shown: once text has streamed,
         // compressing and re-sending would show the beginning of the turn to the user twice.
         if (!streamedText && isContextWindowExceeded(cause)) {
@@ -464,7 +512,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         attempt.truncation === 'context-window' &&
         !streamedText
       ) {
-        if (await recoverFromOverflow()) continue;
+        if (!recoveringArguments && (await recoverFromOverflow())) continue;
         /**
          * Recovery is over, and the provider's own reason is the one that stands.
          *
@@ -516,8 +564,24 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             ? 'Provider returned an empty tool-call turn'
             : 'Provider returned a turn with no content',
         );
-        if (await retryRequest(empty)) continue;
+        if (!recoveringArguments && (await retryRequest(empty))) continue;
         throw empty;
+      }
+      if (
+        recoveringArguments &&
+        attempt.finishReason !== 'length' &&
+        attempt.finishReason !== 'content-filter'
+      ) {
+        serialToolRoutes.add(routeKey);
+        const degraded = {
+          runId,
+          round,
+          route: routeKey,
+          reason: 'tool-arguments-dropped',
+          parallelToolCalls: false,
+        };
+        store.recordEvent(sessionId, 'provider.degraded', degraded);
+        emit('provider.degraded', degraded);
       }
       return attempt;
     }
@@ -558,16 +622,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
         reportedInputTokens: response.usage.inputTokens,
       },
     });
-  usage.inputTokens += response.usage.inputTokens;
-  usage.outputTokens += response.usage.outputTokens;
-  // The cache fields ride along, for the reason spelled out on the context builder's `onUsage`: this hand
-  // sum is what `RunResult.usage` is made of, and dropping them made the result under-report what the
-  // provider said — a run whose input was mostly a cache hit arrived looking like it paid for all of it.
-  if (response.usage.cachedInputTokens !== undefined)
-    usage.cachedInputTokens = (usage.cachedInputTokens ?? 0) + response.usage.cachedInputTokens;
-  if (response.usage.cacheWriteInputTokens !== undefined)
-    usage.cacheWriteInputTokens =
-      (usage.cacheWriteInputTokens ?? 0) + response.usage.cacheWriteInputTokens;
+  countUsage(response.usage);
   /**
    * The part of a stopped turn that is still true: what the user already saw.
    *

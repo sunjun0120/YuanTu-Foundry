@@ -234,6 +234,7 @@ export interface SessionSnapshot {
   running: boolean;
   loading: boolean;
   status: 'idle' | 'running' | RunStatus;
+  providerDegraded?: boolean;
   tools: ToolCall[];
   approvals: PendingApproval[];
   /** Questions the run is blocked on, newest last. */

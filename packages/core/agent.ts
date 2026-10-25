@@ -90,6 +90,7 @@ export function runBudgetExhausted(
 
 export class Agent {
   private options: AgentOptions;
+  private serialToolRoutes = new Set<string>();
   /** The live queue of each running session, and the log behind it once nothing runs (see `run-inbox.ts`). */
   private inbox: RunInbox;
   private subagents?: ResolvedSubAgentOptions;
@@ -871,6 +872,13 @@ export class Agent {
             contextInput,
             roundContextTokens: roundAim.contextTokens,
             measuredProvider,
+            serialToolRoutes: this.serialToolRoutes,
+            // Without modelInfo the provider exposes only protocol/model; connection identity is unavailable.
+            routeKey: JSON.stringify([
+              this.options.modelInfo?.protocol ?? provider.route?.protocol ?? '',
+              roundAim.model ?? provider.route?.model ?? '',
+              this.options.modelInfo?.connectionId ?? '',
+            ]),
             specs: requestSpecs,
             requestedModel: roundAim.requestedModel,
             requestedEffort: roundAim.requestedEffort,

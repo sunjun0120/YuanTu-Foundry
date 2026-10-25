@@ -11,6 +11,7 @@ export async function readDisplayHistory(
   window: { tail?: number; endOffset?: number } = {},
 ): Promise<{
   messages: Message[];
+  providerDegraded?: boolean;
   statistics?: SessionStatistics;
   truncated: boolean;
   nextOffset: number;
@@ -32,6 +33,7 @@ export async function readDisplayHistory(
   let endOffset = window.endOffset;
   let chunkOffset: number | undefined;
   let statistics: SessionStatistics | undefined;
+  let providerDegraded: boolean | undefined;
   let activeRun: string | null | undefined;
   for (;;) {
     const page = await client.request('session.get', {
@@ -51,6 +53,7 @@ export async function readDisplayHistory(
       resolvedStart = offset;
       if (window.tail !== undefined && page.totalMessages !== undefined)
         endOffset = page.totalMessages;
+      providerDegraded = page.providerDegraded;
       statistics = page.statistics;
       activeRun = page.session?.activeRun;
       first = false;
@@ -93,6 +96,7 @@ export async function readDisplayHistory(
         startOffset: resolvedStart,
         statistics,
         activeRun,
+        providerDegraded,
         truncated: unreadInPage || page.nextOffset !== undefined,
         nextOffset: unreadInPage
           ? offset + (maxMessages - previousCount)
@@ -105,6 +109,7 @@ export async function readDisplayHistory(
         startOffset: resolvedStart,
         statistics,
         activeRun,
+        providerDegraded,
         truncated: false,
         nextOffset: offset + (page.messageChunk ? 1 : page.messages.length),
       };

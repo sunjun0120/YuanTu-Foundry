@@ -98,3 +98,13 @@ test('unlimited history still reads all pages', async () => {
   assert.equal(result.nextOffset, 2);
   assert.equal(result.truncated, false);
 });
+
+test('display history reload retains the run downgrade without adding model messages', async () => {
+  const messages = [message(0)];
+  const result = await readDisplayHistory(
+    client([{ messages, providerDegraded: true }]),
+    'session',
+  );
+  assert.equal(result.providerDegraded, true);
+  assert.deepEqual(result.messages, messages);
+});

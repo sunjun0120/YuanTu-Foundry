@@ -48,8 +48,12 @@ export class OpenAIProvider implements Provider {
     this.endpoint = url.toString();
     this.config = config;
   }
+  get route(): { protocol: string; model: string } {
+    return { protocol: 'openai', model: this.config.model };
+  }
   async complete(request: ModelRequest): Promise<ModelResponse> {
     request.signal.throwIfAborted();
+    const requestStarted = performance.now();
     const cache = cacheFields(this.config, request.cacheKey, 'openai');
     const model = request.model ?? this.config.model;
     const capabilities = deepseekCapabilities(this.config, this.endpoint, model);
@@ -158,6 +162,7 @@ export class OpenAIProvider implements Provider {
               ? { reasoning_effort: request.reasoningEffort }
               : {}),
             messages,
+            ...(request.parallelToolCalls === false ? { parallel_tool_calls: false } : {}),
             stream: true,
             stream_options: { include_usage: true },
             max_completion_tokens: request.maxOutputTokens,
@@ -359,6 +364,33 @@ export class OpenAIProvider implements Provider {
       throw new RunFailure('transport', 'Incomplete model stream: missing terminal event');
     if (!usage)
       throw new Error('Model endpoint omitted token usage; enable streaming usage support');
+    // Empty raw arguments differ from an explicit {}: only an entire required parallel batch
+    // disappearing is evidence of a broken endpoint. Single omissions remain schema errors.
+    if (reason !== 'length' && reason !== 'content-filter') {
+      const requiredCalls = [...calls.values()].filter((call) => {
+        const required = request.tools.find((tool) => tool.name === call.name)?.inputSchema
+          .required;
+        return Array.isArray(required) && required.length > 0;
+      });
+      if (
+        request.toolArgumentsRecovery
+          ? requiredCalls.some((call) => call.json === '')
+          : calls.size >= 2 &&
+            requiredCalls.length > 0 &&
+            requiredCalls.every((call) => call.json === '')
+      )
+        throw new RunFailure(
+          'tool-arguments-dropped',
+          'Model endpoint returned tool calls without required arguments',
+          {
+            details: {
+              usage,
+              finishReason: reason,
+              durationMs: Math.max(0, performance.now() - requestStarted),
+            },
+          },
+        );
+    }
     const toolCalls: ToolCall[] = [];
     // A truncated call is half a JSON document and a filtered one was never allowed to run: neither is a call.
     if (reason !== 'length' && reason !== 'content-filter')

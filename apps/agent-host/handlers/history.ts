@@ -135,6 +135,7 @@ export const historyHandlers: Readonly<Record<string, Handler>> = {
     const sessionState =
       (offset === 0 || params.tail !== undefined) && params.chunkOffset === undefined
         ? {
+            providerDegraded: ctx.store.stateOf<boolean>('providerDegraded', id),
             statistics: ctx.store.statistics(id),
             steps: ctx.store.stateOf<readonly StepRecord[]>('steps', id),
           }

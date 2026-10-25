@@ -668,9 +668,18 @@ export const goalProjection: SessionProjection<Goal | null> = {
     return isGoal(goal) ? goal : state;
   },
 };
+/** An endpoint downgrade is run state, never a model-visible message. */
+export const providerDegradedProjection: SessionProjection<boolean> = {
+  name: 'providerDegraded',
+  description: 'Whether the most recent run recovered dropped parallel tool arguments.',
+  initial: () => false,
+  apply: (state, event) =>
+    event.type === 'run.started' ? false : event.type === 'provider.degraded' || state,
+};
 /** The projections every store starts with. A host may register more, and remove any of them. */
 export const BUILT_IN_SESSION_PROJECTIONS: readonly SessionProjection<unknown>[] = [
   messagesProjection,
+  providerDegradedProjection,
   statisticsProjection,
   turnTimingProjection,
   subAgentsProjection,

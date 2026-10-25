@@ -1,3 +1,4 @@
+import { RunFailure } from '../protocol/failure.ts';
 import type { ModelProgress, ModelResponse, Provider, Usage } from '../protocol/index.ts';
 import type { PreparedRequestFingerprint, RequestFingerprint } from '../protocol/request-cache.ts';
 import { compareRequestFingerprint, readRequestFingerprint } from './request-cache.ts';
@@ -77,6 +78,7 @@ export function createProviderMeasurement(
       let requestUsage: Usage | undefined;
       let fingerprint: PreparedRequestFingerprint | undefined;
       let failed = false;
+      let discarded: 'tool-arguments-dropped' | undefined;
       let lastPhase = '';
       let lastProgressAt = 0;
       let reasoningChars = 0;
@@ -146,7 +148,13 @@ export function createProviderMeasurement(
       } catch (error) {
         failed = true;
         timing.failedRequests++;
-        statistics.usageComplete = false;
+        if (error instanceof RunFailure && error.details?.usage) {
+          if (error.code === 'tool-arguments-dropped') discarded = error.code;
+          requestUsage = error.details.usage;
+          finishReason = error.details.finishReason;
+          error.details.requestNumber = requestId;
+          addUsage(statistics, requestUsage);
+        } else statistics.usageComplete = false;
         throw error;
       } finally {
         const durationMs = Math.max(0, performance.now() - requestStarted);
@@ -177,6 +185,8 @@ export function createProviderMeasurement(
           firstTextMs,
           ...(preparationMs === undefined ? {} : { preparationMs }),
           failed,
+          ...(discarded ? { discarded } : {}),
+          ...(request.degradedFrom === undefined ? {} : { degradedFrom: request.degradedFrom }),
           ...(finishReason ? { finishReason } : {}),
           ...(requestUsage ? { usage: { ...requestUsage } } : {}),
           ...(validCache
