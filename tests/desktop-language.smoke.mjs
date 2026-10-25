@@ -105,6 +105,12 @@ test(
 
       await page.locator('#prompt').fill('/');
       await page.locator('#command-menu').waitFor({ state: 'visible' });
+      assert.deepEqual(
+        (await page.locator('#command-menu button strong').allTextContents()).filter((name) =>
+          name.startsWith('/'),
+        ),
+        ['/compact', '/goal', '/plan'],
+      );
       await record(found, 'slash-menu');
       await page.locator('#prompt').fill('');
 
@@ -134,8 +140,8 @@ test(
     await page.waitForFunction(() => document.documentElement.lang === 'en-US');
     const after = await collect();
     await toChat();
-    await page.locator('#prompt').fill('/switch');
-    assert.ok(((await page.locator('#command-menu').textContent()) ?? '').includes('/model'));
+    await page.locator('#prompt').fill('/comp');
+    assert.ok(((await page.locator('#command-menu').textContent()) ?? '').includes('/compact'));
 
     const report = [...after].map(
       ([text, where]) => `  ${text}   (${[...new Set(where)].join(', ')})`,

@@ -306,24 +306,25 @@ test(
       (() => {
         const palette = localeApi.setupCommandPalette({
           getState: () => null,
-          select: async () => null,
-          invoke: async () => null,
           requestRender: () => {},
           requestComposerUpdate: () => {},
-          onStop: () => {},
         });
         localeApi.setLocale('en-US');
         const english = palette.submitSlash('/plan tidy the settings page', false);
         const refusal = palette.submitSlash('/plan', false);
         localeApi.setLocale('zh-CN');
         const chinese = palette.submitSlash('/goal ship it', false);
-        return { english, refusal, chinese };
+        const removed = ['model', 'permissions', 'stop', 'export', 'refresh-resources', 'new-session']
+          .map(name => palette.submitSlash('/' + name, false));
+        return { english, refusal, chinese, removed };
       })()
     `)) as {
       english: { command: { language: string; type: string; prompt: string } };
       refusal: { error: string };
       chinese: { command: { language: string } };
+      removed: unknown[];
     };
+    assert.deepEqual(result.removed, [null, null, null, null, null, null]);
     assert.equal(result.english.command.language, 'en-US');
     assert.equal(result.english.command.type, 'plan');
     assert.equal(result.english.command.prompt, 'tidy the settings page');

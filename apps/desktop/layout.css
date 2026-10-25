@@ -486,20 +486,6 @@ body[data-page='background'] {
   font-size: 11px;
   white-space: nowrap;
 }
-.conversation-heading {
-  height: 32px;
-  padding: 0 28px;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.conversation-heading span {
-  display: inline-block;
-  height: 32px;
-  line-height: 30px;
-  border-bottom: 2px solid var(--accent);
-  color: var(--accent);
-  font-size: 12px;
-}
 #chat-page #conversation {
   padding: 32px max(28px, calc((100% - 780px) / 2));
   scrollbar-color: var(--line) transparent;

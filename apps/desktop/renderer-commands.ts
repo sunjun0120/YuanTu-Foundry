@@ -2,9 +2,9 @@
  * The command palette above the composer, and the slash commands it is the discoverable half of.
  *
  * Everything starts with `/`: typing `/` opens a menu of the window's own commands and the session's skills,
- * filtering as the line grows, and Enter either runs the highlighted row or — for `/compact`, `/export`,
- * `/goal` and `/plan` — is recognised as a command the palette never lists when it is typed in full. The menu
- * and the typed form are one vocabulary, so they are one module: `commandItems` feeds the menu and the same four
+ * filtering as the line grows, and Enter either selects the highlighted row or submits `/compact`, `/goal`
+ * and `/plan` when typed in full. The menu and the typed form are one vocabulary, so they are one module:
+ * `commandItems` feeds the menu and the same three
  * names are matched here.
  *
  * Selection and dismissal (`selectedCommand`, `menuDismissed`) live here rather than in the DOM because the menu
@@ -14,7 +14,6 @@
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import { format, locale, t } from './i18n.ts';
-import { conversationMarkdown } from './renderer-export.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -43,13 +42,9 @@ export type SlashOutcome = { command: CarrierCommand } | { error: string };
 
 export function setupCommandPalette(actions: {
   getState(): CarrierSnapshot | null;
-  select(command: CarrierCommand): Promise<CarrierSnapshot | null>;
-  invoke(command: CarrierCommand): Promise<CarrierSnapshot | null>;
   requestRender(): void;
   /** Repaint only the composer's controls: what a keystroke can change. */
   requestComposerUpdate(): void;
-  /** Clicking the send button while a run is live is how a run is stopped. */
-  onStop(): void;
 }): {
   render(): void;
   onInput(): void;
@@ -63,45 +58,9 @@ export function setupCommandPalette(actions: {
     return [
       {
         kind: 'command',
-        name: t('ui.switchModel'),
-        description: t('command.modelDescription'),
-        value: 'model',
-      },
-      {
-        kind: 'command',
-        name: t('ui.permissions'),
-        description: t('command.permissionsDescription'),
-        value: 'permissions',
-      },
-      {
-        kind: 'command',
-        name: t('ui.newSession'),
-        description: t('command.newSessionDescription'),
-        value: 'new-session',
-      },
-      {
-        kind: 'command',
-        name: t('ui.stop'),
-        description: t('command.stopDescription'),
-        value: 'stop',
-      },
-      {
-        kind: 'command',
-        name: t('ui.refreshSkills'),
-        description: t('command.refreshSkillsDescription'),
-        value: 'refresh-resources',
-      },
-      {
-        kind: 'command',
         name: t('ui.compactContext'),
         description: t('command.compactDescription'),
         value: 'compact',
-      },
-      {
-        kind: 'command',
-        name: t('ui.exportSession'),
-        description: t('command.exportDescription'),
-        value: 'export',
       },
       {
         kind: 'command',
@@ -134,20 +93,6 @@ export function setupCommandPalette(actions: {
       `${item.name} ${item.description} ${item.value}`.toLowerCase().includes(query),
     );
   }
-  function openSettingsPage(kind: 'model' | 'permissions'): void {
-    if (kind === 'model') {
-      document.getElementById('open-settings')?.dispatchEvent(new Event('click'));
-      document.getElementById('model-settings')?.dispatchEvent(new Event('click'));
-    } else {
-      document.getElementById('permission-trigger')?.focus();
-    }
-  }
-  function exportConversation(): string {
-    const state = actions.getState();
-    if (!state) return '';
-    const title = state.sessions.find((item) => item.id === state.session.sessionId)?.title;
-    return conversationMarkdown({ title, messages: state.session.messages });
-  }
   function choosePaletteItem(item: PaletteItem): void {
     menuDismissed = true;
     if (item.kind === 'skill') {
@@ -159,39 +104,10 @@ export function setupCommandPalette(actions: {
       return;
     }
     selectedCommand = 0;
-    if (item.value === 'model' || item.value === 'permissions') {
-      prompt.value = '';
-      renderPalette();
-      actions.requestRender();
-      openSettingsPage(item.value);
-      return;
-    }
-    if (item.value === 'new-session') {
-      prompt.value = '';
-      renderPalette();
-      void actions.select({ type: 'create' });
-    } else if (item.value === 'stop') {
-      prompt.value = '';
-      renderPalette();
-      if (actions.getState()?.session.running) actions.onStop();
-    } else if (item.value === 'refresh-resources') {
-      prompt.value = '';
-      renderPalette();
-      void actions.select({ type: 'refreshResources' });
-    } else if (item.value === 'export') {
-      prompt.value = '';
-      renderPalette();
-      void actions.invoke({
-        type: 'export',
-        content: exportConversation(),
-        suggestedName: 'yuantu-session.md',
-      });
-    } else {
-      prompt.value = `/${item.value} `;
-      renderPalette();
-      actions.requestRender();
-      prompt.focus();
-    }
+    prompt.value = `/${item.value} `;
+    renderPalette();
+    actions.requestRender();
+    prompt.focus();
   }
   /**
    * What the last render put in the menu.
@@ -301,7 +217,7 @@ export function setupCommandPalette(actions: {
    */
   function submitSlash(text: string, hasAttachments: boolean): SlashOutcome | null {
     if (hasAttachments) return null;
-    const slash = text.match(/^\/(compact|export|goal|plan)(?:\s+([\s\S]*))?$/i);
+    const slash = text.match(/^\/(compact|goal|plan)(?:\s+([\s\S]*))?$/i);
     if (!slash) return null;
     const name = slash[1]!.toLowerCase();
     const argument = slash[2]?.trim() || '';
@@ -312,11 +228,9 @@ export function setupCommandPalette(actions: {
     const command: CarrierCommand =
       name === 'compact'
         ? { type: 'compact' }
-        : name === 'export'
-          ? { type: 'export', content: exportConversation(), suggestedName: 'yuantu-session.md' }
-          : name === 'goal'
-            ? { type: 'goal', prompt: argument, language: locale() }
-            : { type: 'plan', prompt: argument, language: locale() };
+        : name === 'goal'
+          ? { type: 'goal', prompt: argument, language: locale() }
+          : { type: 'plan', prompt: argument, language: locale() };
     return { command };
   }
   return { render: renderPalette, onInput, onKeydown, submitSlash };

@@ -211,11 +211,8 @@ let holdReadingPosition = false;
 let approvalKey = '';
 const commandsView = setupCommandPalette({
   getState: () => state,
-  select,
-  invoke,
   requestRender: render,
   requestComposerUpdate: renderComposerState,
-  onStop: () => sendButton.click(),
 });
 const backgroundView = setupBackgroundView({ getState: () => state, invoke });
 const attachmentsView = setupAttachments({
