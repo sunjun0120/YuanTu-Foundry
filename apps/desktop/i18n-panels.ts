@@ -222,6 +222,16 @@ export const panelMessages: Record<string, [string, string]> = {
     '命令将以专用低权限账户运行，只能写入工作区、默认断网。设置需要一次管理员确认；完成前，沙箱中的命令无法执行。',
     'Commands will run as dedicated low-privilege accounts that can only write to the workspace and are offline by default. Setup needs one administrator approval; until then, sandboxed commands cannot run.',
   ],
+  /**
+   * The one sentence the composer says while commands are refused.
+   *
+   * The rest of the interface is working — chat, reading files and approving edits do not need the sandbox — so this
+   * says what is unavailable rather than that the application is not ready.
+   */
+  'sandboxSetup.commandsUnavailable': [
+    '命令暂时不可用：沙箱账户尚未由管理员初始化。其余操作（聊天、读取文件、文件编辑审批）不受影响。',
+    'Commands are unavailable until an administrator initializes the Windows sandbox accounts. Everything else — chat, reading files, approving edits — still works.',
+  ],
   'sandboxSetup.initialize': ['立即设置', 'Set up'],
   'sandboxSetup.repair': ['立即修复', 'Repair'],
   'sandboxSetup.problem.read-allowlist-invalid': [

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setupSandboxInitialization } from '../apps/desktop/renderer-sandbox-setup.ts';
+import { commandsNeedSandboxAccounts } from '../apps/desktop/sandbox-setup.ts';
+import { runStatusText } from '../apps/desktop/renderer-status.ts';
+import { translate } from '../apps/desktop/i18n.ts';
 import type {
   SandboxSetupCommand,
   SandboxSetupReply,
@@ -124,6 +127,56 @@ test('uninitialized accounts are offered above the composer', async () => {
   } finally {
     fixture.restore();
   }
+});
+
+test('commands are announced as unavailable, and the rest of the application is not', async () => {
+  const fixture = await page(async () => ({ ok: true, view: uninitialized }));
+  try {
+    const note = fixture.prompt('note').textContent;
+    assert.match(note, /命令暂时不可用/);
+    assert.match(note, /不受影响/);
+    // The status line keeps saying ready: the Host, the session and file editing all still work.
+    assert.equal(
+      runStatusText({
+        status: 'idle',
+        compacting: false,
+        approvals: 0,
+        questions: 0,
+        ready: true,
+        loading: false,
+      }),
+      translate('ui.ready', 'zh-CN'),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('only a native preset with uninitialized accounts needs the setup', () => {
+  // Four states the interface has to tell apart; only one of them means commands cannot run.
+  assert.equal(
+    commandsNeedSandboxAccounts({ mode: 'native', state: 'uninitialized' }),
+    true,
+    'native + uninitialized',
+  );
+  assert.equal(
+    commandsNeedSandboxAccounts({ mode: 'native', state: 'ready' }),
+    false,
+    'native + initialized',
+  );
+  assert.equal(
+    commandsNeedSandboxAccounts({ mode: 'windows', state: 'uninitialized' }),
+    false,
+    'the weaker backend does not use the accounts',
+  );
+  assert.equal(
+    commandsNeedSandboxAccounts({ mode: 'host', state: 'uninitialized' }),
+    false,
+    'the host backend does not use the accounts',
+  );
+  // A damaged backend refuses commands just as hard as a missing one, and an unrecorded preset is native.
+  assert.equal(commandsNeedSandboxAccounts({ mode: 'windows-account', state: 'damaged' }), true);
+  assert.equal(commandsNeedSandboxAccounts({ mode: undefined, state: 'uninitialized' }), true);
 });
 
 test('dismissing the prompt lasts until the session moves back onto the sandbox', async () => {

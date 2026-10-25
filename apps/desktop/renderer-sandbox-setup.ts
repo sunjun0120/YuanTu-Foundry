@@ -1,4 +1,5 @@
 import { t, onLocaleChange } from './i18n.ts';
+import { commandsNeedSandboxAccounts } from './sandbox-setup.ts';
 import type { SandboxSetupCommand, SandboxSetupView } from './sandbox-setup.ts';
 import type { SandboxMode } from './sandbox-settings.ts';
 
@@ -34,6 +35,8 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
   let dismissed = false;
   /** Whether the session on screen runs commands through the account backend; unknown counts as yes. */
   let needed = true;
+  /** The preset on screen, for the command-availability note; `undefined` is the native default. */
+  let modeOnScreen: SandboxMode | undefined;
   let operation: SandboxSetupCommand['type'] = 'status';
 
   const draw = () => {
@@ -44,10 +47,20 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
     promptTitle.textContent = t(
       state === 'damaged' ? 'sandboxSetup.prompt.repairTitle' : 'sandboxSetup.prompt.title',
     );
-    promptNote.textContent =
+    /**
+     * What the prompt is about, before what setting it up does.
+     *
+     * "Ready" in the status line means the Host and session are usable, and that stays true while commands are
+     * refused — so this note is the one place a person can learn why a command did nothing.
+     */
+    const baseNote =
       state === 'damaged'
         ? `${t('sandboxSetup.damaged')} ${(view?.problems ?? []).map((problem) => t(`sandboxSetup.problem.${problem}`)).join('；')}`
         : t('sandboxSetup.note');
+    promptNote.textContent =
+      !dismissed && commandsNeedSandboxAccounts({ mode: modeOnScreen, state })
+        ? `${t('sandboxSetup.commandsUnavailable')} ${baseNote}`
+        : baseNote;
     promptNote.title = state === 'damaged' ? (view?.details ?? []).join('; ') : '';
     if (promptFeedback) {
       const text =
@@ -136,6 +149,7 @@ export function setupSandboxInitialization(): { setMode(mode: SandboxMode | unde
       // Moving back onto the sandbox is the moment it is needed again.
       if (next && !needed) dismissed = false;
       needed = next;
+      modeOnScreen = mode;
       draw();
     },
   };
