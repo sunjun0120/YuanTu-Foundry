@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setupSandboxInitialization } from '../apps/desktop/renderer-sandbox-setup.ts';
-import { commandsNeedSandboxAccounts } from '../apps/desktop/sandbox-setup.ts';
+import { commandsNeedSandboxAccounts } from '../apps/desktop/renderer-sandbox-setup.ts';
 import { runStatusText } from '../apps/desktop/renderer-status.ts';
 import { translate } from '../apps/desktop/i18n.ts';
 import type {

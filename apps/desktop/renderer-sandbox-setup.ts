@@ -1,7 +1,24 @@
 import { t, onLocaleChange } from './i18n.ts';
-import { commandsNeedSandboxAccounts } from './sandbox-setup.ts';
 import type { SandboxSetupCommand, SandboxSetupView } from './sandbox-setup.ts';
 import type { SandboxMode } from './sandbox-settings.ts';
+
+/**
+ * Whether this session's commands need the Windows sandbox accounts before they can run at all.
+ *
+ * Three of the five presets run commands through those accounts — the default native preset and the two approval
+ * presets — and the weaker and host backends do not. `undefined` counts as native because that is what a session
+ * with no recorded choice gets. Accounts that are `uninitialized` or `damaged` refuse every such command, and that
+ * is a *command* state rather than a whole-application state: chat, reads and file approvals keep working, which is
+ * why the interface says "commands are unavailable" instead of "not ready".
+ */
+export function commandsNeedSandboxAccounts(input: {
+  mode: 'host' | 'native' | 'windows' | 'windows-account' | 'seatbelt' | undefined;
+  state: SandboxSetupView['state'];
+}): boolean {
+  const accounts =
+    input.mode === undefined || input.mode === 'native' || input.mode === 'windows-account';
+  return accounts && (input.state === 'uninitialized' || input.state === 'damaged');
+}
 
 /**
  * The Windows sandbox accounts, drawn only while they need something from the person.

@@ -26,23 +26,6 @@ export interface SandboxSetupView {
   readRoots?: { path: string; source: 'auto' | 'user' }[];
 }
 export type SandboxSetupReply = { ok: true; view: SandboxSetupView } | { ok: false; error: string };
-/**
- * Whether this session's commands need the Windows sandbox accounts before they can run at all.
- *
- * Three of the five presets run commands through those accounts — the default native preset and the two approval
- * presets — and the weaker and host backends do not. `undefined` counts as native because that is what a session
- * with no recorded choice gets. Accounts that are `uninitialized` or `damaged` refuse every such command, and that
- * is a *command* state rather than a whole-application state: chat, reads and file approvals keep working, which is
- * why the interface says "commands are unavailable" instead of "not ready".
- */
-export function commandsNeedSandboxAccounts(input: {
-  mode: 'host' | 'native' | 'windows' | 'windows-account' | 'seatbelt' | undefined;
-  state: SandboxSetupView['state'];
-}): boolean {
-  const accounts =
-    input.mode === undefined || input.mode === 'native' || input.mode === 'windows-account';
-  return accounts && (input.state === 'uninitialized' || input.state === 'damaged');
-}
 /** Bound the UI's wait, without pretending a detached elevated initializer can be cancelled. */
 export async function waitForSandboxInitialization(
   pending: Promise<unknown> | undefined,
