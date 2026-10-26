@@ -38,7 +38,12 @@ export function WorkspacePanel({
   const panel = useRef<HTMLElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; width: number } | null>(null);
+  const drag = useRef<{
+    x: number;
+    width: number;
+    pointerId: number;
+    element: HTMLElement;
+  } | null>(null);
   // The scroll of a tab is captured before leaving it: programmatic scroll events can land after the click that
   // switched tabs, and a preview that was already replaced cannot report where it was.
   const rememberScroll = (): void => {
@@ -105,6 +110,12 @@ export function WorkspacePanel({
   }, [selected, tab?.shown, tab?.changePreview, tab?.reading, tab?.scrollTop]);
 
   const endDrag = useCallback(() => {
+    const start = drag.current;
+    if (start) {
+      document.body.classList.remove('workspace-resizing');
+      if (start.element.hasPointerCapture?.(start.pointerId))
+        start.element.releasePointerCapture(start.pointerId);
+    }
     drag.current = null;
   }, []);
   useEffect(() => {
@@ -245,7 +256,16 @@ export function WorkspacePanel({
           aria-valuemax={Math.round(limits.max)}
           aria-valuenow={actualWidth}
           onPointerDown={(event) => {
-            drag.current = { x: event.clientX, width: actualWidth };
+            const element = event.currentTarget;
+            document.body.classList.add('workspace-resizing');
+            element.setPointerCapture?.(event.pointerId);
+            element.focus();
+            drag.current = {
+              x: event.clientX,
+              width: actualWidth,
+              pointerId: event.pointerId,
+              element,
+            };
             event.preventDefault();
           }}
           onKeyDown={(event) => {
