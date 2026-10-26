@@ -738,8 +738,18 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   const handleY = handleBounds.y + handleBounds.height / 2;
   await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleY);
   await page.mouse.down();
+  assert.equal(
+    await page.evaluate(() => document.body.classList.contains('workspace-resizing')),
+    true,
+    'dragging shows the resize cursor and suppresses selection',
+  );
   await page.mouse.move(handleBounds.x - 100, handleY, { steps: 8 });
   await page.mouse.up();
+  assert.equal(
+    await page.evaluate(() => document.body.classList.contains('workspace-resizing')),
+    false,
+    'releasing the pointer clears the resize state',
+  );
   const draggedWidth = (await page.locator('#workspace-panel').boundingBox()).width;
   assert.ok(draggedWidth > initialWidth + 80, 'dragging left widens the sidebar');
   await resizeHandle.focus();

@@ -55,7 +55,8 @@ export function SessionSidebar({
   };
   const openMenu = (button: HTMLButtonElement, sessionId: string): void => {
     if (state.blocked) return;
-    // A close scheduled by the previous row must not close the menu that is opening now.\n    cancelClose();
+    // A close scheduled by the previous row must not close the menu that is opening now.
+    cancelClose();
     const rect = button.getBoundingClientRect();
     setAnchor(button);
     setPosition({
