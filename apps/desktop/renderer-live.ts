@@ -16,25 +16,14 @@
  */
 import type { CarrierSnapshot, MessageDelta } from '../../packages/carrier/contract.ts';
 import { format, t } from './i18n.ts';
-import { renderMarkdown, type MarkdownActions } from './markdown.ts';
-import { markdownBlocks } from './markdown-blocks.ts';
+import type { MarkdownActions } from './markdown.ts';
+import { mountLiveContent } from './ui/conversation/live-content.tsx';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
   if (!value) throw new Error(`Missing element: ${id}`);
   return value as T;
 }
-function node<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  text = '',
-  className = '',
-): HTMLElementTagNameMap[K] {
-  const value = document.createElement(tag);
-  value.textContent = text;
-  value.className = className;
-  return value;
-}
-
 export function setupLiveMessage(options: {
   getState(): CarrierSnapshot | null;
   /** The hub's bridge-backed markdown actions. */
@@ -64,37 +53,8 @@ export function setupLiveMessage(options: {
   const conversation = required('conversation');
   let liveKey = '';
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * The live bubble's content element and the blocks already built into it.
-   *
-   * Only the last block of a streaming answer is still changing, so the blocks before it keep their nodes and
-   * only the tail is parsed again (see `markdownBlocks`). A transcript repaint that rebuilt the bubble leaves a
-   * different element in place, which is noticed and starts the blocks over.
-   */
-  let liveContent: HTMLElement | null = null;
-  let liveBlocks: { source: string; nodes: ChildNode[] }[] = [];
-  function paintLive(target: Element, text: string): void {
-    if (target !== liveContent) {
-      liveContent = node('div', '', 'message-content markdown');
-      liveBlocks = [];
-      target.replaceWith(liveContent);
-    }
-    const sources = markdownBlocks(text);
-    let keep = 0;
-    while (
-      keep < liveBlocks.length &&
-      keep < sources.length &&
-      liveBlocks[keep]!.source === sources[keep]
-    )
-      keep++;
-    for (const block of liveBlocks.slice(keep)) for (const child of block.nodes) child.remove();
-    liveBlocks.length = keep;
-    for (const source of sources.slice(keep)) {
-      const nodes = Array.from(renderMarkdown(source, markdownActions).childNodes);
-      liveContent.append(...nodes);
-      liveBlocks.push({ source, nodes });
-    }
-  }
+  /** The answer body is React now; the block-level incremental parsing lives in `MarkdownView`. */
+  const liveContent = mountLiveContent(markdownActions);
   /**
    * Streamed text accumulated from the delta channel. Snapshots no longer arrive per token, so the
    * live bubble reads from this buffer and falls back to the snapshot's own copy (which the controller
@@ -139,19 +99,15 @@ export function setupLiveMessage(options: {
       if (reasoning) thought.replaceChildren(...Array.from(reasoningView(reasoning).childNodes));
       placeLiveThought(thought, Boolean(reasoning));
       const full = liveText();
-      required('live').hidden = !options.getState()?.session.liveMessage || !full;
-      const target = required('live').querySelector('.message-content');
-      if (target && options.getState()?.session.liveMessage) {
+      const live = options.getState()?.session.liveMessage;
+      required('live').hidden = !live || !full;
+      if (live) {
         const preview =
           full.length > 120_000
             ? `${format(t('ui.liveTail'), { count: full.length })}\n\n${full.slice(-120_000)}`
             : full || livePlaceholder();
-        paintLive(target, preview);
-      } else {
-        target?.replaceWith(node('div', '', 'message-content'));
-        liveContent = null;
-        liveBlocks = [];
-      }
+        liveContent.update(preview);
+      } else liveContent.update('');
       if (
         nearBottom &&
         !isChildPageOpen() &&
@@ -170,9 +126,7 @@ export function setupLiveMessage(options: {
     // reappear under a new message id.
     if (!live) {
       liveDelta = null;
-      const target = required('live').querySelector<HTMLElement>('.message-content')!;
-      if (target.childNodes.length || target.className !== 'message-content')
-        target.replaceWith(node('div', '', 'message-content'));
+      liveContent.update('');
     } else if (liveDelta && liveDelta.id !== live.id) liveDelta = null;
     const nextLive = live?.id ?? '';
     if (nextLive !== liveKey) {
