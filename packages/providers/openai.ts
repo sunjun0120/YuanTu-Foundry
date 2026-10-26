@@ -13,6 +13,7 @@ import {
   projectNativeSystem,
 } from './native-history.ts';
 import { observedRequestBody } from './request-observation.ts';
+import { DsmlContentBuffer, dsmlStart, parseDsml } from './deepseek-dsml.ts';
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Invalid model stream object');
@@ -81,6 +82,10 @@ export class OpenAIProvider implements Provider {
     const cache = cacheFields(this.config, request.cacheKey, 'openai');
     const model = request.model ?? this.config.model;
     const capabilities = deepseekCapabilities(this.config, this.endpoint, model);
+    const dsmlEnabled =
+      this.config.deepseekCompatibility !== 'off' &&
+      (this.config.deepseekCompatibility === 'on' || /^deepseek(?:[-_]|$)/i.test(model));
+    const contentBuffer = dsmlEnabled ? new DsmlContentBuffer() : undefined;
     const route = { protocol: 'openai' as const, model, endpoint: this.endpoint };
     const prompt = projectNativeSystem(request, route, capabilities.systemUpdates);
     const toolImages: Record<string, unknown>[] = [];
@@ -313,7 +318,8 @@ export class OpenAIProvider implements Provider {
         if (delta.content !== undefined && delta.content !== null) {
           const part = string(delta.content);
           text += part;
-          request.onText(part);
+          const visible = contentBuffer ? contentBuffer.push(part) : part;
+          if (visible) request.onText(visible);
           if (part)
             request.onProgress?.({
               phase: 'text',
@@ -423,7 +429,7 @@ export class OpenAIProvider implements Provider {
           },
         );
     }
-    const toolCalls: ToolCall[] = [];
+    let toolCalls: ToolCall[] = [];
     // A truncated call is half a JSON document and a filtered one was never allowed to run: neither is a call.
     if (reason !== 'length' && reason !== 'content-filter')
       for (const [, call] of [...calls].sort(([a], [b]) => a - b)) {
@@ -436,6 +442,35 @@ export class OpenAIProvider implements Provider {
         }
         toolCalls.push({ id: call.id, name: call.name, arguments: args });
       }
+    if (
+      dsmlEnabled &&
+      reason !== 'length' &&
+      reason !== 'content-filter' &&
+      dsmlStart(text) !== undefined
+    ) {
+      try {
+        if (calls.size || request.toolChoice === 'none' || !request.tools.length)
+          throw new Error('DSML calls conflict with native calls or disabled tools');
+        const normalized = parseDsml(text, request.tools)!;
+        text = normalized.text;
+        toolCalls = normalized.toolCalls;
+        toolArgumentChars += toolCalls.reduce(
+          (count, call) => count + JSON.stringify(call.arguments).length,
+          0,
+        );
+        // The buffered suffix was protocol output, not an answer. All calls still use the registry below.
+        contentBuffer!.flush();
+      } catch (cause) {
+        throw new RunFailure(
+          'unsupported',
+          cause instanceof Error ? cause.message : 'Invalid DSML tool calls',
+          { cause, details: { usage, finishReason: reason, ...counted() } },
+        );
+      }
+    } else {
+      const pending = contentBuffer?.flush();
+      if (pending) request.onText(pending);
+    }
     // Several OpenAI-compatible servers (Ollama, some vLLM and gateway builds) finish a turn that called tools with
     // `stop`. The calls are complete and parsed, so the turn is a tool turn; the reverse — `tool_calls` with no
     // call — is still refused, because there is nothing to run.
@@ -465,8 +500,8 @@ export class OpenAIProvider implements Provider {
                           function: {
                             name: call.name,
                             arguments:
-                              [...calls.values()].find((native) => native.id === call.id)!.json ||
-                              '{}',
+                              [...calls.values()].find((native) => native.id === call.id)?.json ||
+                              JSON.stringify(call.arguments),
                           },
                         })),
                       }
