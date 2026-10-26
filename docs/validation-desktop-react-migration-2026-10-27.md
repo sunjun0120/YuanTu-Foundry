@@ -71,7 +71,9 @@
 2. 动效：正常与 reduced-motion 两套，覆盖页面切换、设置分类、侧栏、菜单/弹窗、折叠、新消息首次出现；记录开始/中间/结束帧与最终焦点/草稿/锚点断言。
 3. 打包：确认 `renderer.css/ui.css` 存在、离线无外部请求、真实 CSP 下无样式拒绝或脚本放行变化。
 
-## 6. 复现验证
+## 6. 复现验证\n\n最终门禁复核：HEAD 69a75e1，工作区干净； ypecheck/lint/i18n/layers/cycles/ormat/docs/
+
+eferences/ est:isolation/uild 全部通过。以下命令按顺序可复现本记录。
 
 ```powershell
 npm run typecheck
