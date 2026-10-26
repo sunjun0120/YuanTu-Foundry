@@ -22,7 +22,7 @@ import {
   attachmentFailureLine,
   attachmentFailureText,
   type AttachmentFailure,
-} from '../apps/desktop/renderer-attachment-copy.ts';
+} from '../apps/desktop/ui/composer/attachment-model.ts';
 
 /**
  * The renderer's own copy, in the interface's language.

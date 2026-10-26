@@ -721,16 +721,16 @@ interface PanelTransitionProps {
 
 #### T16: 附件
 
-**Files:** 新增 `ui/composer/Attachments.tsx`、`attachment-model.ts`；修改 `renderer-attachments.ts` 接入点；新增 `tests/desktop-react-attachments.test.ts`。
+**Files:** 新增 `ui/composer/Attachments.tsx`、`attachment-model.ts`、`attachment-mount.tsx`；删除 `renderer-attachments.ts`、`renderer-attachment-copy.ts`；修改 `renderer.ts`、`index.html`、`i18n-conversation.ts`、`tests/desktop-copy.test.ts`；新增 `tests/desktop-react-attachments.test.ts`。
 
 **规模:** 约 450–650 行。
 
-**进度:** 数据与 controller 已完成（10 条纯测试）：图片/文档分流、`validateImages`（含真实 PNG 签名）、数量上限（8 个合计）、vision 与大小限制、逐文件错误行、同名附件按位置保留、延迟读取期间切换 session/workspace 丢弃、进行中重复 attach 忽略、remove/clear/restore。React 附件条与 DOM 接线待下一步。
+**进度:** 已完成。数据/controller（10 条纯测试）+ React 附件条（文档/图片卡片、移除、图片预览对话框）+ `attachment-mount`（picker/paste/drop 接线，返回与 legacy 相同的 `images/documents/hasAny/clear/restore/isBusy` 接口）；`#attachments` 改为 `#attachments-root`，旧模块删除。
 
 - [x] 复用原大小、数量、模型能力与 `attachmentPrompt` 校验；延迟 Promise 验证切换 session/workspace 丢弃；同名附件不合并。
-- [ ] 保留图片/文档拼接与预览、计数显示、发送失败恢复。（发送失败恢复的 controller 接口 `restore()` 已就绪；React 呈现待下一步）
-- [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-attachments.test.ts tests/desktop-react.smoke.mjs tests/backups.smoke.mjs`。
+- [x] 图片/文档拼接与预览、错误行、发送失败恢复：`restore()` 由 composer 的失败路径调用；预览用原生 `<dialog>`；卡片仍带 `.attachment`/`.document-attachment`/`.attachment-remove`，`agent.smoke` 的附件用例原样通过。
+- [x] 文案键化：新增 `ui.attachmentsLabel`/`ui.attachmentCharacters`/`ui.removeAttachment`，复用 `ui.image`/`ui.removeImage`；`renderer-attachment-copy.ts` 的失败文案并入 `attachment-model.ts`，`desktop-copy.test.ts` 导入更新。
+- [x] 验证：`desktop-react-attachments` 10/10、`agent` 7/7、`capabilities` 3/3、`desktop-copy` 14/14、`desktop` 9/9、`language` 7/7、`settings` 8 通过+1 跳过（MCP）、`backups` 1 跳过（范围外）；lint/i18n/typecheck/format 通过，build 通过。
 
 #### T17: 工作区面板
 

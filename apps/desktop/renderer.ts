@@ -19,7 +19,7 @@ import { setupModelSettingsEntry } from './renderer-settings.ts';
 import { mountModelSettings } from './ui/settings/model-mount.tsx';
 import { diffView } from './diff-view.ts';
 import { approvalSummary } from './approval-view.ts';
-import { setupAttachments } from './renderer-attachments.ts';
+import { mountAttachments } from './ui/composer/attachment-mount.tsx';
 import { setupBackgroundView } from './renderer-background.ts';
 import { mountCommandPalette } from './ui/composer/command-mount.tsx';
 import { setupComposer } from './renderer-composer.ts';
@@ -258,7 +258,7 @@ const commandsView = mountCommandPalette({
   invoke,
 });
 const backgroundView = setupBackgroundView({ getState: () => state, invoke });
-const attachmentsView = setupAttachments({
+const attachmentsView = mountAttachments({
   getState: () => state,
   requestRender: render,
   setError: (message) => {
@@ -1016,6 +1016,7 @@ window.addEventListener(
   'pagehide',
   () => {
     permissionSettings?.dispose();
+    attachmentsView.dispose();
     commandsView.dispose();
     sessionSidebar.dispose();
     workspaceSettings.dispose();
