@@ -555,12 +555,13 @@ interface PanelTransitionProps {
 
 **Interfaces:** 架构约定中的 `DesktopRuntime`、`ReadableStore`、`useReadable/useSection` 和 `invoke/select`，提供稳定实例与幂等资源清理。
 
-- [ ] 用 fake `DesktopBridge` 编写测试：重复 start 只订阅一次，dispose 只解绑一次；同一个 section getter 引用稳定，未变区不通知；旧 bridge 无 changed 时全量刷新；可选区删除后不留旧值。
-- [ ] 断言 `SnapshotMirror.apply` 原地复用 state 的事实：runtime 必须投影出新快照；直接透传同一对象时测试必须失败（先红后绿）。
-- [ ] 增加交错时序：订阅期间先推送后回复初始快照，初始请求拒绝、卸载后回复，以及同一对象被 preload 继续合并时旧 UI 快照不被原地改变。断言最新视图不倒退且 late callback 无通知。
-- [ ] 将 `renderer.ts` 的 snapshot 订阅转交 runtime，通过 `onSnapshot` 暂时驱动旧视图；保留现有 1 frame/50ms 的快照绘制合并，不让过渡适配失去该优化。每个 delta/preset/通知频道移交时同时解除原 owner，不同时绑定两份 IPC。
-- [ ] 抽取 `invoke/select`，按原有逻辑保留 running 时允许 load/create、`loadOlder` 不抢输入焦点、恢复通知清除旧连接错误、操作 finally 解锁。pending 以操作/会话为单位管理，不能一个布尔值被并发请求提前清除。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-runtime.test.ts tests/desktop.test.ts`；通过后构建并运行 `tests/desktop-sessions.smoke.mjs`，证明旧 UI 经过新 runtime 仍可用。
+- [ ] 用 fake `DesktopBridge` 编写测试：重复 start 只订阅一次，dispose 只解绑一次；同一个 section getter 引用稳定，未变区不通知；旧 bridge 无 changed 时全量刷新；可选区删除后不留旧值。已实现 `tests/desktop-react-runtime.test.ts`（13 条）。
+- [ ] 断言 `SnapshotMirror.apply` 原地复用 state 的事实：runtime 必须投影出新快照；直接透传同一对象时测试必须失败（先红后绿）。已由“bridge 复用同一对象、旧快照不被改写”用例覆盖。
+- [ ] 增加交错时序：订阅期间先推送后回复初始快照，初始请求拒绝、卸载后回复，以及同一对象被 preload 继续合并时旧 UI 快照不被原地改变。断言最新视图不倒退且 late callback 无通知。已覆盖推送先于回复、首次失败可重试（不重复订阅）、dispose 后回复无通知。
+- [ ] 将 `renderer.ts` 的 snapshot 订阅转交 runtime，通过 `onSnapshot` 暂时驱动旧视图；保留现有 1 frame/50ms 的快照绘制合并，不让过渡适配失去该优化。每个 delta/preset/通知频道移交时同时解除原 owner，不同时绑定两份 IPC。delta/preset/通知频道本任务不动（T20 接管流式），renderer 只在 runtime 回调里重排绘制。
+- [ ] 抽取 `invoke/select` 到 `ui/actions.ts`，按原有逻辑保留 running 时允许 load/create、`loadOlder` 不抢输入焦点、恢复通知清除旧连接错误、操作 finally 解锁。pending 以操作 id 计数（`ui/ui-state.ts`），设置页自己的 busy 另用 `externalBusy`，不再与命令共用一个布尔值。命令回复不写入 runtime 状态（只有初始快照填充），与计划一致。
+- [ ] 说明两处记录在案的取舍：`ui-state.ts` 目前只含 pending（页面/草稿/展开由拥有它们的区域任务补）；统计增量仍由 renderer 局部合并进 `state`，runtime 的 `session` 切片要等 T20 的统计 store 才同步。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-runtime.test.ts tests/desktop.test.ts`；通过后构建并运行 `tests/desktop-sessions.smoke.mjs`，证明旧 UI 经过新 runtime 仍可用。已完成：23/23 与 6/6 通过。
 
 #### T6: 单 provider、Mantine 包装层、翻译与 select 隔离
 

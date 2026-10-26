@@ -7,6 +7,9 @@ import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import type { DesktopBridge, DesktopReply } from './contract.ts';
 import { carrierErrorText } from './carrier-errors.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
+import { createDesktopActions } from './ui/actions.ts';
+import { createDesktopRuntime } from './ui/runtime.ts';
+import { createPendingOperations } from './ui/ui-state.ts';
 import type { Message } from '../../packages/protocol/index.ts';
 import { setupModelSettings } from './renderer-settings.ts';
 import { diffView } from './diff-view.ts';
@@ -68,6 +71,19 @@ function node<K extends keyof HTMLElementTagNameMap>(
   value.textContent = text;
   value.className = className;
   return value;
+}
+/**
+ * The two command actions, declared before the panels that take them.
+ *
+ * They are thin forwarders on purpose: the implementations live in `ui/actions.ts` and are created below, but the
+ * panels above this point are registered at module load and need the name now. The wrapper runs only after a click,
+ * by which time `actions` exists.
+ */
+function invoke(command: CarrierCommand): Promise<CarrierSnapshot | null> {
+  return actions.invoke(command);
+}
+function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
+  return actions.select(command);
 }
 setupSelectMenus();
 const statisticsView = setupStatistics();
@@ -195,7 +211,31 @@ let mcpSettings: ReturnType<typeof setupMcpSettings> | undefined;
 let permissionSettings: ReturnType<typeof setupPermissionSettings> | undefined;
 let modelSettings: ReturnType<typeof setupModelSettings> | undefined;
 let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
-let operation = false;
+/**
+ * A settings form's own busy state, kept apart from the command counter: the settings pages already disable
+ * themselves, and one boolean used to carry both meanings.
+ */
+let externalBusy = false;
+const pendingOperations = createPendingOperations();
+const runtime = createDesktopRuntime(window.yuantu);
+const actions = createDesktopActions({
+  bridge: window.yuantu,
+  getState: () => state,
+  setError: (error) => {
+    localError = error;
+  },
+  requestRender: () => render(),
+  // The composer and the attachment list are initialised below; these callbacks run only after the first command.
+  isSending: () => composerView.isSending(),
+  clearComposer: () => {
+    prompt.value = '';
+    attachmentsView.clear();
+  },
+  focusPrompt: () => prompt.focus(),
+  pending: pendingOperations,
+});
+/** Whether the window should present itself as busy: a command in flight, or a settings form saving. */
+const isOperating = (): boolean => pendingOperations.isOperating() || externalBusy;
 let approvalBusy = new Set<string>();
 let transcriptKey = '';
 /**
@@ -235,25 +275,9 @@ const composerView = setupComposer({
 });
 const taskView = setupTasks(select);
 function renderTasks(): void {
-  taskView(state, operation || composerView.isSending());
+  taskView(state, isOperating() || composerView.isSending());
 }
 
-async function invoke(command: CarrierCommand): Promise<CarrierSnapshot | null> {
-  try {
-    const reply = await window.yuantu.invoke(command);
-    if (!reply.ok) {
-      localError = reply;
-      render();
-      return null;
-    }
-    if (command.type === 'snapshot') state = reply.state;
-    return reply.state;
-  } catch {
-    localError = '桌面连接中断，请重新启动后检查会话记录。';
-    render();
-    return null;
-  }
-}
 /**
  * Which sessions are running and what each waits on, for the session list.
  *
@@ -287,40 +311,6 @@ function sessionActivity(snapshot: CarrierSnapshot): Map<string, SessionActivity
 function continuePausedRun(): void {
   if (!state || state.session.running || state.session.loading) return;
   void select({ type: 'send', prompt: t('ui.continuePrompt') });
-}
-async function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
-  // Opening or creating a session leaves a running one going in the Host; anything else here waits for it.
-  const switching = command.type === 'load' || command.type === 'create';
-  if (
-    operation ||
-    state?.session.loading ||
-    (!switching && (composerView.isSending() || state?.session.running))
-  )
-    return null;
-  if (command.type === 'searchSessions') {
-    localError = null;
-    return invoke(command);
-  }
-  operation = true;
-  localError = null;
-  const previousWorkspace = state?.workspace;
-  const previousSession = state?.session.sessionId;
-  render();
-  try {
-    const next = await invoke(command);
-    if (
-      next &&
-      (next.workspace !== previousWorkspace || next.session.sessionId !== previousSession)
-    ) {
-      prompt.value = '';
-      attachmentsView.clear();
-    }
-    return next;
-  } finally {
-    operation = false;
-    render();
-    if (command.type !== 'loadOlder') prompt.focus();
-  }
 }
 let loadingOlderHistory = false;
 
@@ -358,10 +348,10 @@ const planView = setupPlanPanel({
     card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     card?.querySelector<HTMLElement>('button, input, textarea')?.focus({ preventScroll: true });
   },
-  // The panel's key holds the window's own in-flight command (`operation`) and nothing wider: `isBusy` is the
+  // The panel's key holds the window's own in-flight command (`pendingOperations`) and nothing wider: `isBusy` is the
   // separate question that gates the buttons, and it stays separate so the panel repaints exactly when it did.
-  isOperating: () => operation,
-  isBusy: () => Boolean(state?.session.running || operation),
+  isOperating: () => isOperating(),
+  isBusy: () => Boolean(state?.session.running || isOperating()),
   select,
   setError: (message) => {
     localError = message;
@@ -382,7 +372,7 @@ function renderComposerState(): void {
     !state.ready ||
     !state.configured ||
     session.loading ||
-    operation ||
+    isOperating() ||
     composerView.isStopping() ||
     composerView.isQueueBusy() ||
     attachmentsView.isBusy() ||
@@ -513,7 +503,7 @@ function render(): void {
   const slotContext: PanelSlotContext = { session, workspace: state.workspace };
   for (const mount of slotMounts) mount.render(slotContext);
   const blocked =
-    !state.ready || session.running || session.loading || operation || composerView.isSending();
+    !state.ready || session.running || session.loading || isOperating() || composerView.isSending();
   const older = element<HTMLButtonElement>('load-older-history');
   older.hidden = !(session.historyStart && !childPageOpen());
   older.disabled = blocked;
@@ -564,7 +554,7 @@ function render(): void {
   element('notice').hidden = !notice;
   element('notice').textContent = notice;
   sessionManagement.render(state, blocked);
-  const switchBlocked = !state.ready || session.loading || operation;
+  const switchBlocked = !state.ready || session.loading || isOperating();
   element<HTMLButtonElement>('new-session').disabled = switchBlocked;
   element<HTMLButtonElement>('choose-workspace').disabled =
     blocked ||
@@ -860,7 +850,7 @@ element('error-action').addEventListener('click', () => {
 });
 
 element('load-older-history').addEventListener('click', () => {
-  if (operation || composerView.isSending() || state?.session.running || state?.session.loading)
+  if (isOperating() || composerView.isSending() || state?.session.running || state?.session.loading)
     return;
   let anchor = element('messages').firstElementChild;
   if (anchor instanceof HTMLDetailsElement && anchor.open) {
@@ -918,7 +908,8 @@ function paintPending(): void {
 window.yuantu.subscribeOpenSession?.((sessionId) => {
   if (state?.session.sessionId !== sessionId) void select({ type: 'load', id: sessionId });
 });
-window.yuantu.subscribe((next, changed) => {
+// The runtime owns the bridge subscription; this adapter keeps the old view's frame-coalesced repaint.
+runtime.onSnapshot((next, changed) => {
   const first = !state;
   const wasRunning = state?.session.running === true;
   state = next;
@@ -985,10 +976,10 @@ const sandboxInitialization = setupSandboxInitialization();
 modelSettings = setupModelSettings(
   () =>
     Boolean(
-      operation || composerView.isSending() || state?.session.running || state?.session.loading,
+      isOperating() || composerView.isSending() || state?.session.running || state?.session.loading,
     ),
   (busy) => {
-    operation = busy;
+    externalBusy = busy;
     render();
   },
 );
@@ -997,17 +988,20 @@ if (PRODUCT_SCOPE.mcpManagement)
   mcpSettings = setupMcpSettings(
     () =>
       Boolean(
-        operation || composerView.isSending() || state?.session.running || state?.session.loading,
+        isOperating() ||
+        composerView.isSending() ||
+        state?.session.running ||
+        state?.session.loading,
       ),
     (busy) => {
-      operation = busy;
+      externalBusy = busy;
       render();
     },
     () => state?.workspace,
   );
 permissionSettings = setupPermissionSettings(
   (busy) => {
-    operation = busy;
+    externalBusy = busy;
     render();
   },
   // The chip is drawn by the main process's own answer, which arrives before the Host can accept a change: the
@@ -1015,4 +1009,18 @@ permissionSettings = setupPermissionSettings(
   () => Boolean(state?.ready),
   (mode) => sandboxInitialization.setMode(mode),
 );
-void invoke({ type: 'snapshot' }).then(render);
+// The runtime subscribes first and then asks for the initial snapshot, so nothing published in between is lost.
+void runtime
+  .start()
+  .then(render)
+  .catch((error: unknown) => {
+    // The initial request's failure is the one error with no push behind it: a refused reply is shown as it came,
+    // a transport failure as the connection sentence the old invoke path used.
+    localError =
+      error && typeof error === 'object' && 'ok' in error && error.ok === false
+        ? (error as Extract<DesktopReply, { ok: false }>)
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    render();
+  });
