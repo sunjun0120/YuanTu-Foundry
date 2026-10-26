@@ -39,8 +39,7 @@ import {
 } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
 import { mountSandboxSetup } from './ui/sandbox/mount.tsx';
-import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
-import { setupArchivedSessions } from './renderer-archived-sessions.ts';
+import { mountWorkspaceSettings } from './ui/settings/workspace-mount.tsx';
 import { mountPermissions } from './ui/permissions/mount.tsx';
 import { setupSelectMenus } from './renderer-select-menu.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
@@ -92,8 +91,7 @@ function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
 setupSelectMenus();
 const statisticsView = setupStatistics();
 const workspaceView = setupWorkspace();
-const workspaceMaintenance = setupWorkspaceMaintenance();
-const archivedSessions = setupArchivedSessions({ select });
+const workspaceSettings = mountWorkspaceSettings(window.yuantu, { select });
 /** What a panel-level slot is given: the carrier snapshot a panel draws from, and nothing else. */
 interface PanelSlotContext {
   readonly session: CarrierSnapshot['session'];
@@ -500,8 +498,7 @@ function render(): void {
   // A full paint draws whatever pushes were waiting for the next frame.
   pendingPaint = undefined;
   const session = state.session;
-  workspaceMaintenance.update(state);
-  archivedSessions.update(state);
+  workspaceSettings.update(state);
   // Every panel in a slot renders here, in the order the slot decides — the built-ins included. Nothing below
   // this line calls a panel directly; adding one is a `register`, not an edit to this function.
   const slotContext: PanelSlotContext = { session, workspace: state.workspace };
@@ -1020,6 +1017,7 @@ window.addEventListener(
   'pagehide',
   () => {
     permissionSettings?.dispose();
+    workspaceSettings.dispose();
     sandboxInitialization.dispose();
     disposeModelSettings();
     disposeGeneralSettings();

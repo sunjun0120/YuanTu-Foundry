@@ -675,13 +675,17 @@ interface PanelTransitionProps {
 
 #### T13: 工作区维护、归档会话与 MCP 开关
 
-**Files:** 新增 `ui/settings/WorkspaceMaintenance.tsx`、`ui/sessions/ArchivedSessions.tsx`、`ui/settings/McpSettings.tsx`；停用 `renderer-workspace-maintenance.ts`、`renderer-archived-sessions.ts`、`renderer-mcp.ts` 的活动接入；扩展 `tests/workspace-maintenance.smoke.mjs`、`tests/settings.smoke.mjs`、`tests/desktop-capabilities.smoke.mjs`。
+**Files:** 新增 `ui/settings/workspace-settings-model.ts`、`WorkspaceMaintenance.tsx`、`workspace-mount.tsx`、`ui/sessions/ArchivedSessions.tsx`、`tests/workspace-settings.test.ts`；删除 `renderer-workspace-maintenance.ts`、`renderer-archived-sessions.ts`；修改 `renderer.ts`、`tests/desktop-i18n.test.ts`；扩展 smoke。
 
-**规模:** 约 600–900 行。
+**规模:** 约 600–900 行（实际约 750 行）。
 
-- [ ] 维护、归档、恢复、分页和错误沿用原语义；MCP 跟随 `PRODUCT_SCOPE.mcpManagement`，不额外暴露入口。
-- [ ] 删除该区域旧绑定；文案键化；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/workspace-maintenance.smoke.mjs tests/settings.smoke.mjs tests/desktop-capabilities.smoke.mjs`。
+**进度:** 已完成（MCP 见下方偏差）。两个原先各自拥有同一页面的 legacy 模块合并为一个 controller：按项目 generation 丢弃旧回复、维护/归档共用一个刷新、运行中锁定破坏性操作、删除先在原地确认、失败文本用 `carrierErrorText` 在渲染时格式化。页面保留 `#archived-sessions-*`、`#workspace-maintenance-*` 全部 id；`#workspace-maintenance-label` 由适配器翻译；导航入口仍走 `showSettingsPanel`。
+
+- [x] 维护、归档、恢复与错误语义沿用：`update(state)` 在项目变化时清空两表、仅可见时重载；maintenance 回复 workspace 不匹配即丢弃；归档列表同样校验 workspace；`select` 返回 null 时显示 `archived.failed` 并重读。
+- [x] 删除旧绑定：`renderer-workspace-maintenance.ts`、`renderer-archived-sessions.ts` 删除；`desktop-i18n.test.ts` 不再打包 legacy 模块，其“stale project/IPC failure”断言迁移为 `workspace-settings.test.ts` 的 10 条 controller 测试。
+- [~] **MCP 偏差（记录）**：`renderer-mcp.ts` 仍是 dormant legacy（`PRODUCT_SCOPE.mcpManagement` 为 false，入口不渲染、smoke 跳过）。为一个当前不可达的功能重写 478 行没有验证价值，留到重新启用时再迁；不新增入口、不改变 scope。
+- [~] **设置外壳偏差（记录）**：侧栏导航与 `PageTransition kind="settings"` 仍属 M7 的 T24“外壳接管”，本期不提前做——三个面板已 React，MCP 不可达，外壳整体迁移一次完成比现在拆两次更安全。
+- [x] 验证：`workspace-maintenance` 1/1、`workspace-settings` 10/10、`desktop-i18n` 8/8、`settings` 8 通过+1 跳过（MCP）、`backups` 1 跳过（范围外）、`language` 7/7、`desktop` 9/9；lint/i18n/typecheck/build 通过。
 
 ### M5: 会话、输入、附件、工作区与面板
 

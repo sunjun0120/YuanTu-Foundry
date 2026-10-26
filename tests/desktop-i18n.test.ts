@@ -96,7 +96,7 @@ async function desktopPage(t: test.TestContext) {
   const bundle = await build({
     stdin: {
       contents:
-        "export * from './apps/desktop/i18n.ts'; export {setupSessionList} from './apps/desktop/renderer-session-list.ts'; export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupWorkspaceMaintenance} from './apps/desktop/renderer-workspace-maintenance.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
+        "export * from './apps/desktop/i18n.ts'; export {setupSessionList} from './apps/desktop/renderer-session-list.ts'; export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -484,48 +484,5 @@ test(
       '/plan requires a description.',
       'the refusal is dictionary copy, not a concatenated Chinese sentence',
     );
-  },
-);
-
-test(
-  'workspace management ignores stale project replies and recovers controls after IPC failure',
-  { timeout: 30000, skip: electronSkip },
-  async (t) => {
-    const page = await desktopPage(t);
-    if (!page) return;
-    await page.evaluate(`
-    document.querySelector('#settings-page').hidden=false;
-    window.requests=0; window.rejectRefresh=false;
-    window.yuantu={workspaceMaintenance:async()=>{
-      if (++requests===1) return new Promise(resolve=>window.releaseOld=resolve);
-      if (rejectRefresh) throw new Error('fixture IPC rejected');
-      return {ok:true,workspace:'/new',items:[{binding:{id:'new-binding',executionRoot:'保存',state:'archived'},results:[],problems:[]}]};
-    }};
-    window.management=localeApi.setupWorkspaceMaintenance();
-    management.update({workspace:'/old',ready:true,session:{running:false,loading:false}});
-    document.querySelector('#workspace-maintenance-settings').click();
-    management.update({workspace:'/new',ready:true,session:{running:false,loading:false}});
-  `);
-    await page.waitForSelector('[data-binding-id="new-binding"]');
-    await page.evaluate(
-      `releaseOld({ok:true,workspace:'/old',items:[{binding:{id:'old-binding',executionRoot:'/old',state:'ready'},results:[],problems:[]}]});localeApi.setLocale('en-US');`,
-    );
-    assert.equal(await page.locator('[data-binding-id="old-binding"]').count(), 0);
-    assert.equal(await page.locator('[data-action="restore"]').count(), 1);
-    assert.equal(
-      await page.locator('[data-binding-id="new-binding"] strong').textContent(),
-      '保存',
-    );
-    await page.evaluate(`window.rejectRefresh=true;`);
-    await page.locator('#workspace-maintenance-refresh').click();
-    await page.waitForFunction(
-      `document.querySelector('#workspace-maintenance-feedback').textContent==='fixture IPC rejected'`,
-    );
-    assert.equal(await page.locator('#workspace-maintenance-refresh').isEnabled(), true);
-    assert.equal(await page.locator('[data-action="remove"]').isEnabled(), true);
-    await page.evaluate(
-      `management.update({workspace:'/new',ready:true,session:{running:true,loading:false}});`,
-    );
-    assert.equal(await page.locator('[data-action="remove"]').isDisabled(), true);
   },
 );
