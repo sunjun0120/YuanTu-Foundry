@@ -33,7 +33,7 @@ import { mountApprovals } from './ui/conversation/approvals-mount.tsx';
 import { mountSessionPanels } from './ui/panels/session-panels-mount.tsx';
 import { mountSessionSidebar } from './ui/sessions/session-mount.tsx';
 import type { SessionActivity } from './ui/sessions/session-model.ts';
-import { setupTurnChanges } from './renderer-changes.ts';
+import { mountTurnChanges } from './ui/conversation/turn-changes-mount.tsx';
 import {
   RUN_CANCELLED,
   runStatusText,
@@ -301,7 +301,7 @@ function continuePausedRun(): void {
 }
 let loadingOlderHistory = false;
 
-const turnChangesView = setupTurnChanges({
+const turnChangesView = mountTurnChanges({
   getState: () => state,
   select,
   preview: (path, content, key) => workspaceView.previewChanges(path, content, key),
@@ -885,6 +885,7 @@ window.addEventListener(
     questionsView.dispose();
     approvalsView.dispose();
     subagentView.dispose();
+    turnChangesView.dispose();
     transcriptView.dispose();
     sessionPanels.dispose();
     taskView.dispose();

@@ -34,7 +34,7 @@
 ## 当前门禁与测试证据（最近一次）
 
 - `npx tsc --noEmit`、`npm run lint`、`npm run i18n:check`、`npm run layers:check`、`npm run cycles:check`、`npm run format:check`、`npm run docs:check`、`npm run build` 全绿。
-- 单元/模型测试：desktop-react-stream 7、desktop-react-transcript 7、scroll-anchor 5、turn-changes-model 3、subagent-model 5、question-model 9、approval-model 2、task-view 11、plan-contract 10、session-panels-model 4、background-model 7、statistics-model 9、workspace-panel-loading 12、desktop-react-attachments 10、desktop-react-sessions 10、desktop-react-composer 18、desktop-copy 14、desktop-i18n 5。
+- 单元/模型测试：desktop-react-stream 7、desktop-react-transcript 7、scroll-anchor 5、turn-changes-model 6、subagent-model 5、question-model 9、approval-model 2、task-view 11、plan-contract 10、session-panels-model 4、background-model 7、statistics-model 9、workspace-panel-loading 12、desktop-react-attachments 10、desktop-react-sessions 10、desktop-react-composer 18、desktop-copy 14、desktop-i18n 5。
 - Electron 冒烟：agent 7、desktop 9、workflows 4、desktop-language 7、desktop-layout 4、desktop-capabilities 3、desktop-sessions 6、settings 8（+1 跳过 MCP）、round3 1（+1 跳过 Chromium）、backups 跳过（范围外）。
 
 ## CSS 基线（T24 尚未开始）

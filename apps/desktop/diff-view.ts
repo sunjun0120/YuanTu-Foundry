@@ -26,25 +26,30 @@ export function classifyDiffLine(line: string, inHunk = false): DiffLineClass {
   if (line.startsWith('-')) return 'diff-removed';
   return 'diff-context';
 }
-export function diffView(change: FileChange, expanded = false): HTMLElement {
-  const root = document.createElement('details');
-  root.className = 'file-diff';
-  root.open = expanded;
-  const title = document.createElement('summary');
-  title.textContent = `${t(labels[change.kind])} ${change.path}  +${change.added} −${change.removed}`;
-  root.append(title);
+/** The line a diff fold shows while it is closed: what kind of change it is, the path, and the two counts. */
+export function diffSummaryText(change: FileChange): string {
+  return `${t(labels[change.kind])} ${change.path}  +${change.added} −${change.removed}`;
+}
+/**
+ * What `diffView` puts under its own summary: a batch's child diffs, or the truncation notice and the patch lines.
+ *
+ * It is separate because the turn-change preview draws the summary and the undo controls itself — React owns that
+ * card and its interaction — while the patch body stays the shared builder's account of a diff. Splitting it here
+ * keeps both readers on the same classification, the same readable paths and the same order.
+ */
+export function diffBody(change: FileChange, expanded = false): Node[] {
   if (change.changes?.length) {
     const group = document.createElement('div');
     group.className = 'file-diff-group';
     for (const child of change.changes) group.append(diffView(child, expanded));
-    root.append(group);
-    return root;
+    return [group];
   }
+  const nodes: Node[] = [];
   if (change.truncated) {
     const notice = document.createElement('p');
     notice.className = 'diff-notice';
     notice.textContent = t('diff.incomplete');
-    root.append(notice);
+    nodes.push(notice);
   }
   const pre = document.createElement('pre');
   // The file header only precedes the first hunk; after that, a `-`/`+` line is content whatever it spells.
@@ -58,6 +63,15 @@ export function diffView(change: FileChange, expanded = false): HTMLElement {
     row.textContent = line + '\n';
     pre.append(row);
   }
-  root.append(pre);
+  nodes.push(pre);
+  return nodes;
+}
+export function diffView(change: FileChange, expanded = false): HTMLElement {
+  const root = document.createElement('details');
+  root.className = 'file-diff';
+  root.open = expanded;
+  const title = document.createElement('summary');
+  title.textContent = diffSummaryText(change);
+  root.append(title, ...diffBody(change, expanded));
   return root;
 }

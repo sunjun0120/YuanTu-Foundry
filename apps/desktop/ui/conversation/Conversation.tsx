@@ -208,9 +208,10 @@ function summarySourceFor(
 }
 
 /**
- * A turn's file card. `setupTurnChanges` still builds the card (its rows carry the preview and undo handlers), so the
- * React row is the element the stylesheet sees and the built children move underneath it. The grouped shape keeps its
- * built child cards whole, since those are cached and reused between turns.
+ * A turn's file card. The card is React now (`TurnChanges.tsx`), so the adapter hands the transcript an element per
+ * position whose content lives in a holder inside it; moving that holder under the React row is what leaves the
+ * stylesheet, the cached card and the open previews untouched. The grouped shape keeps its built child cards whole,
+ * because those are cached and reused between turns.
  */
 function TurnChangeCard({ view }: { view: HTMLElement }): ReactNode {
   const host = useLegacyChildren<HTMLElement>(view);

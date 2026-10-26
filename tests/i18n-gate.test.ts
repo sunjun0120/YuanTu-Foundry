@@ -110,9 +110,9 @@ test('an exception that matches nothing is reported, so a rename cannot silently
   const root = await tempRoot(t, 'yuantu-i18n-missing-');
   await put(root, 'apps/desktop/renderer.ts', 'export const x = 1;\n');
   const problems = await scanI18n(root);
-  // Three of the four exceptions matched nothing here, and each one is named: the file it used to cover is now
+  // Two of the three exceptions matched nothing here, and each one is named: the file it used to cover is now
   // guarded by nobody, which is the state the whole gate is written against.
-  assert.equal(problems.length, 3);
+  assert.equal(problems.length, 2);
   for (const problem of problems)
     assert.match(problem, /^scripts\/i18n-gate\.mjs: the exception .* matches no module/);
 });

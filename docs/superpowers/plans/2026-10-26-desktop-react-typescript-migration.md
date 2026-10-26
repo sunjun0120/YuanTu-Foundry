@@ -827,18 +827,16 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 #### T23: 子 agent 与本轮改动
 
-**Files:** 新增 `ui/conversation/Subagents.tsx`、`subagent-model.ts`、`TurnChanges.tsx`、`turn-changes-model.ts`；修改 `renderer-subagents.ts`、`renderer-changes.ts` 接入点；扩展 `tests/desktop-round3.smoke.mjs`、`tests/desktop-sessions.smoke.mjs`。
+**Files:** 新增 `ui/conversation/Subagents.tsx`、`subagent-model.ts`、`TurnChanges.tsx`、`turn-changes-model.ts`、`subagents-mount.tsx`、`turn-changes-mount.tsx`；删除 `renderer-subagents.ts`、`renderer-changes.ts`；扩展 `tests/subagent-model.test.ts`、`tests/turn-changes-model.test.ts`。
 
 **规模:** 约 800–1,100 行。
 
-**进度:** 子 agent 部分已完成：Subagents/subagents-mount 接管目录、详情卡、子会话页、父子独立 live 缓冲、ticker 仅运行中、页面标题/面包屑、滚动恢复与 workspace 操作；删除 850 行
-enderer-subagents.ts；#subagent-list/#subagent-catalog/#subagent-transcript-root 与兼容类保留；
-enderer-changes.ts 的本轮改动卡依赖 transcript 位置，随 T21 一起迁移。#approvals 宿主的 ria-label 已随语言同步（approval.sectionLabel）。验证：subagent-model 5/5、desktop-copy 14/14、desktop-i18n 5/5、desktop-react 4/4、round3 1 通过+1 Chromium 跳过、sessions 6/6、workspace-ui 5/5、agent 7/7、language 7/7、layout 4/4；lint/i18n/layers/cycles/format/typecheck/build 全绿。
+**进度:** 已完成。①子 agent：`Subagents`/`subagents-mount` 接管目录、详情卡、子会话页、父子独立 live 缓冲、ticker 仅运行中、页面标题/面包屑、滚动恢复与 workspace 操作；删除 850 行 `renderer-subagents.ts`。②本轮改动：`TurnChanges`/`turn-changes-mount` 接管卡片、3 行折叠、预览、undo 两段确认、按 afterIndex 分组与 blocked；`diff-view.ts` 拆出 `diffSummaryText`/`diffBody`，补丁正文仍是 DOM 岛；删除 245 行 `renderer-changes.ts`。`#subagent-*`、`.turn-changes*`、`.turn-change-*`、`.file-diff`、`.undo-change` 等兼容类保留。`#approvals` 宿主的 `aria-label` 已随语言同步（`approval.sectionLabel`）。
 
-- [x] 子会话页只呈现对应历史/最终结果；返回父页恢复原阅读位置。子 agent 卡片与文本只接收对应增量，父子不能共享一个 live 缓冲。
-- [ ] 本轮改动、预览联动和结束状态保持；打开/定位仍经 bridge。（ urn-changes-model 已就绪，UI 随 T21 transcript 迁移）
-- [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-round3.smoke.mjs tests/desktop-sessions.smoke.mjs tests/desktop-react.smoke.mjs`。
+- [x] 子会话页只呈现对应历史/最终结果；返回父页恢复原阅读位置。子 agent 卡片与文本只接收对应增量，父子不共享 live 缓冲。
+- [x] 本轮改动、预览联动和结束状态保持；打开/定位仍经 bridge；同 afterIndex 的多个 turn 由 `groupTurnCards` 合并。
+- [x] 文案键化；旧绑定删除；兼容 id 更新。
+- [x] 验证：`subagent-model` 5/5、`turn-changes-model` 6/6、`desktop-copy` 14/14、`desktop` 9/9、`sessions` 6/6、`desktop-react` 4/4、`agent` 7/7、`round3` 1 通过+1 Chromium 跳过；`diff-view` 6/6、`i18n-gate` 14/14、`ui-i18n-coverage` 2/2、`compat-ids` 5/5、`desktop-react-toolchain` 6/6；lint/i18n/layers/cycles/format/docs/references/typecheck/build 全绿。
 
 ### M7: 外壳接管、CSS 退役、清理与验收
 
