@@ -15,6 +15,19 @@ import { _electron as electron } from 'playwright';
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 const uiDir = path.join(projectRoot, 'apps/desktop/ui');
+/** Repo entry points under names a temporary fixture can import; relative paths would not resolve across drives. */
+const REPO_ALIASES = {
+  '@repo/primitives': path.join(uiDir, 'primitives.tsx'),
+  '@repo/app': path.join(uiDir, 'App.tsx'),
+  '@repo/regions': path.join(uiDir, 'legacy/mount-region.tsx'),
+  '@repo/shell': path.join(uiDir, 'layout/DesktopShell.tsx'),
+  '@repo/i18n': path.join(projectRoot, 'apps/desktop/i18n.ts'),
+  '@repo/ui-i18n': path.join(uiDir, 'i18n.ts'),
+  '@repo/runtime': path.join(uiDir, 'runtime.ts'),
+  '@repo/actions': path.join(uiDir, 'actions.ts'),
+  '@repo/state': path.join(uiDir, 'ui-state.ts'),
+  '@repo/select-menu': path.join(projectRoot, 'apps/desktop/renderer-select-menu.ts'),
+};
 
 function installedElectron() {
   const root = path.join(projectRoot, 'node_modules/electron');
@@ -135,6 +148,68 @@ mountRegion('probe', document.getElementById('probe-mount'), <Probe />);
 window.__ui = { setLocale, locale, setExplode };
 `;
 
+/**
+ * The shell probe: one AppShell with the three regions, on a page that has no legacy CSS at all.
+ *
+ * That is the point of a separate fixture — the shell must stand on Mantine's own stylesheet, since the six legacy
+ * sheets are what T24 deletes. The aside is toggled from outside React so the test can check the layout offset it
+ * causes, and the main content is tall so the scroll container can be identified.
+ */
+const SHELL_ENTRY = `
+import { useSyncExternalStore } from 'react';
+import { mountDesktopApp } from '@repo/app';
+import { mountRegion } from '@repo/regions';
+import { DesktopShell } from '@repo/shell';
+import { createDesktopRuntime } from '@repo/runtime';
+import { createDesktopActions } from '@repo/actions';
+import { createPendingOperations } from '@repo/state';
+
+let asideVisible = false;
+const listeners = new Set();
+function setAside(next) {
+  asideVisible = next;
+  for (const listener of listeners) listener();
+}
+function useAside() {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => asideVisible,
+  );
+}
+
+function ShellProbe() {
+  const visible = useAside();
+  return (
+    <DesktopShell
+      navbar={<div id="nav-probe">nav</div>}
+      aside={<div id="aside-probe">aside</div>}
+      asideVisible={visible}
+      main={<div id="main-content" style={{ height: 2400 }}>main</div>}
+    />
+  );
+}
+
+const bridge = { subscribe: () => () => {}, invoke: async () => ({ ok: true, state: {} }) };
+mountDesktopApp({
+  runtime: createDesktopRuntime(bridge),
+  actions: createDesktopActions({
+    bridge,
+    getState: () => null,
+    setError: () => {},
+    requestRender: () => {},
+    isSending: () => false,
+    clearComposer: () => {},
+    focusPrompt: () => {},
+    pending: createPendingOperations(),
+  }),
+});
+mountRegion('shell', document.getElementById('shell-mount'), <ShellProbe />);
+window.__ui = { setAside };
+`;
+
 async function probePage(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-react-smoke-'));
   let app;
@@ -154,17 +229,7 @@ async function probePage(t) {
     jsx: 'automatic',
     define: { 'process.env.NODE_ENV': '"production"' },
     nodePaths: [path.join(projectRoot, 'node_modules')],
-    alias: {
-      '@repo/primitives': path.join(uiDir, 'primitives.tsx'),
-      '@repo/app': path.join(uiDir, 'App.tsx'),
-      '@repo/regions': path.join(uiDir, 'legacy/mount-region.tsx'),
-      '@repo/i18n': path.join(projectRoot, 'apps/desktop/i18n.ts'),
-      '@repo/ui-i18n': path.join(uiDir, 'i18n.ts'),
-      '@repo/runtime': path.join(uiDir, 'runtime.ts'),
-      '@repo/actions': path.join(uiDir, 'actions.ts'),
-      '@repo/state': path.join(uiDir, 'ui-state.ts'),
-      '@repo/select-menu': path.join(projectRoot, 'apps/desktop/renderer-select-menu.ts'),
-    },
+    alias: REPO_ALIASES,
     logLevel: 'silent',
   });
   const fixtureJs = (bundle.outputFiles ?? []).find((file) => file.path.endsWith('.js'))?.text;
@@ -199,6 +264,90 @@ async function probePage(t) {
       ].join('\n'),
     );
   await writeFile(path.join(root, 'index.html'), html);
+  const main = path.join(root, 'main.cjs');
+  await writeFile(
+    main,
+    `const { app, BrowserWindow } = require('electron');\n` +
+      `app.whenReady().then(() => {\n` +
+      `  const win = new BrowserWindow({ show: false, width: 1200, height: 800, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });\n` +
+      `  win.loadFile(${JSON.stringify(path.join(root, 'index.html'))});\n` +
+      `});\n` +
+      `app.on('window-all-closed', () => app.quit());\n`,
+  );
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  try {
+    app = await electron.launch({
+      executablePath: String(electronPath),
+      args: [main, `--user-data-dir=${path.join(root, 'profile')}`],
+      env,
+    });
+  } catch (error) {
+    t.skip(`Electron could not launch on this host: ${error.message}`);
+    return null;
+  }
+  const page = await app.firstWindow();
+  await page.setViewportSize({ width: 1200, height: 800 });
+  return page;
+}
+
+/** A minimal page with the product CSP and only the two stylesheets the React layer owns. */
+async function shellPage(t) {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-shell-smoke-'));
+  let app;
+  t.after(async () => {
+    await app?.close().catch(() => {});
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const entry = path.join(root, 'shell.tsx');
+  await writeFile(entry, SHELL_ENTRY, 'utf8');
+  const bundle = await build({
+    entryPoints: [entry],
+    outfile: path.join(root, 'fixture.js'),
+    bundle: true,
+    write: false,
+    format: 'iife',
+    platform: 'browser',
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"production"' },
+    nodePaths: [path.join(projectRoot, 'node_modules')],
+    alias: REPO_ALIASES,
+    logLevel: 'silent',
+  });
+  const fixtureJs = (bundle.outputFiles ?? []).find((file) => file.path.endsWith('.js'))?.text;
+  assert.ok(fixtureJs, 'the shell bundle should build');
+  await writeFile(path.join(root, 'fixture.js'), fixtureJs, 'utf8');
+  await copyFile(
+    path.join(projectRoot, 'dist/desktop/renderer.css'),
+    path.join(root, 'renderer.css'),
+  );
+  await copyFile(path.join(projectRoot, 'dist/desktop/ui.css'), path.join(root, 'ui.css'));
+  const product = await readFile(path.join(projectRoot, 'apps/desktop/index.html'), 'utf8');
+  const csp = /content="(default-src[^"]+)"/.exec(product)?.[1];
+  const nonce = /<meta name="yuantu-style-nonce" content="([^"]+)"/.exec(product)?.[1];
+  assert.ok(csp && nonce, 'the product document owns the CSP and nonce this fixture must reuse');
+  await writeFile(
+    path.join(root, 'index.html'),
+    [
+      '<!doctype html>',
+      '<html lang="zh-CN" data-theme="dark">',
+      '  <head>',
+      '    <meta charset="UTF-8" />',
+      `    <meta http-equiv="Content-Security-Policy" content="${csp}" />`,
+      `    <meta name="yuantu-style-nonce" content="${nonce}" />`,
+      `    <style nonce="${nonce}">html, body { margin: 0; height: 100%; }</style>`,
+      '    <link rel="stylesheet" href="./renderer.css" />',
+      '    <link rel="stylesheet" href="./ui.css" />',
+      '  </head>',
+      '  <body>',
+      '    <div id="desktop-root"></div>',
+      '    <div id="shell-mount"></div>',
+      '    <script src="./fixture.js"></script>',
+      '  </body>',
+      '</html>',
+    ].join('\n'),
+    'utf8',
+  );
   const main = path.join(root, 'main.cjs');
   await writeFile(
     main,
@@ -366,3 +515,66 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   await page.waitForSelector('#react-copy');
   assert.equal(await page.locator('#react-copy').innerText(), 'New session');
 });
+
+test(
+  'the shell is one AppShell with one main and one scroll container',
+  { skip: electronSkip },
+  async (t) => {
+    const page = await shellPage(t);
+    if (!page) return;
+    await page.waitForSelector('#nav-probe');
+
+    const initial = await page.evaluate(() => {
+      const navbar = document.querySelector('.mantine-AppShell-navbar');
+      const main = document.querySelector('.mantine-AppShell-main');
+      const content = document.querySelector('.desktop-shell-content');
+      return {
+        mains: document.querySelectorAll('main').length,
+        roots: document.querySelectorAll('.mantine-AppShell-root').length,
+        navbarWidth: navbar === null ? 0 : navbar.getBoundingClientRect().width,
+        mainHeight: main === null ? 0 : main.clientHeight,
+        viewport: window.innerHeight,
+        asideWidth: document.getElementById('aside-probe')?.offsetWidth ?? 0,
+        contentScrolls: content !== null && content.scrollHeight > content.clientHeight,
+        windowScroll: document.scrollingElement.scrollHeight - window.innerHeight,
+      };
+    });
+    assert.equal(initial.mains, 1, 'the window has one main landmark');
+    assert.equal(initial.roots, 1, 'the shell is exactly one AppShell');
+    assert.ok(Math.abs(initial.navbarWidth - 264) <= 1, `navbar width ${initial.navbarWidth}`);
+    assert.ok(
+      Math.abs(initial.mainHeight - initial.viewport) <= 1,
+      `main height ${initial.mainHeight} vs viewport ${initial.viewport}`,
+    );
+    assert.equal(initial.asideWidth, 0, 'the aside starts collapsed');
+    assert.equal(initial.contentScrolls, true, 'the main column is the scroll container');
+    assert.equal(initial.windowScroll, 0, 'the window itself does not scroll');
+
+    await page.evaluate(() => window.__ui.setAside(true));
+    await page.waitForFunction(
+      () => (document.getElementById('aside-probe')?.offsetWidth ?? 0) > 0,
+    );
+    const withAside = await page.evaluate(() => ({
+      asideWidth: document.getElementById('aside-probe').offsetWidth,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      mains: document.querySelectorAll('main').length,
+    }));
+    assert.ok(Math.abs(withAside.asideWidth - 360) <= 1, `aside width ${withAside.asideWidth}`);
+    assert.ok(withAside.overflow <= 0, 'the aside offsets content instead of overflowing');
+    assert.equal(withAside.mains, 1);
+
+    // The window's smallest supported width must still be one column with no horizontal scroll.
+    await page.setViewportSize({ width: 820, height: 560 });
+    const small = await page.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      mains: document.querySelectorAll('main').length,
+      mainHeight: document.querySelector('.mantine-AppShell-main').clientHeight,
+    }));
+    assert.ok(small.overflow <= 0, `horizontal overflow ${small.overflow} at 820px`);
+    assert.equal(small.mains, 1);
+    assert.ok(
+      Math.abs(small.mainHeight - 560) <= 1,
+      'the shell keeps the window height when it shrinks',
+    );
+  },
+);

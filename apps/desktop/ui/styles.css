@@ -17,3 +17,27 @@
 #desktop-root {
   display: contents;
 }
+
+/*
+ * The shell's height contract: the window is a fixed-height column whose middle scrolls, the way the old grid was.
+ * The navbar and aside are Mantine's fixed regions; the main column owns the one scroll container so a long
+ * transcript scrolls without moving the navigation.
+ */
+.desktop-shell-main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.desktop-shell-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.desktop-shell-navbar,
+.desktop-shell-aside {
+  height: 100vh;
+  overflow: auto;
+}

@@ -597,16 +597,17 @@ interface PanelTransitionProps {
 
 #### T8: AppShell 布局接管（仍不接管产品外壳）
 
-**Files:** 新增 `ui/layout/DesktopShell.tsx`；修改 `ui/styles.css`、`ui/primitives.tsx`；扩展 `tests/desktop-layout.smoke.mjs`、`tests/desktop-react.smoke.mjs`。
+**Files:** 新增 `ui/layout/DesktopShell.tsx`；修改 `ui/styles.css`；扩展 `tests/desktop-react.smoke.mjs`（专用 shell 夹具，不接产品页）；`tests/desktop-layout.smoke.mjs` 的产品级主题断言已在 T7 加入。
 
-**规模:** 约 500–700 行。
+**规模:** 约 200–320 行。
 
-**Interfaces:** DesktopShell 接收导航/主区/侧区 ReactNode 和既有显隐状态，不持有业务快照。
+**Interfaces:** `DesktopShell({ navbar, main, aside?, navbarWidth?, asideWidth?, navbarVisible?, asideVisible? })`：单一 `AppShell`，`Navbar`/`Main`/`Aside` 三区，`Main` 内部再分 `.desktop-shell-content` 作为唯一滚动容器。
 
-- [ ] 用真实组件夹具（不接产品）验证：单一 AppShell、`Navbar`/`Main`/`Aside` 职责、全窗口高度、各自滚动范围；输入区在 Main 内而不是全窗口 Footer；设置页不嵌套第二个 AppShell。
-- [ ] 断言只有一个 `main` landmark、最小窗口尺寸下无遮挡、侧栏宽度与迁移前一致；应用缩放窗口时无横向溢出。
-- [ ] 确认 T6 落地的 link 顺序在 DesktopShell 夹具下样式完整（`renderer.css` → 六份旧 CSS → `ui.css`）；仍不改变产品页面结构（T24 才接管完整外壳）。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-layout.smoke.mjs tests/desktop-react.smoke.mjs`。
+- [ ] 单一 AppShell：专用夹具页只有 `renderer.css`/`ui.css`（不含六份旧 CSS），断言 `main` landmark 恰 1 个、`.mantine-AppShell-root` 恰 1 个；设置页将来替换 `main` 内容而不是再嵌套一层。
+- [ ] 高度与滚动契约写进 `ui/styles.css`：`.desktop-shell-main` 为 `height:100vh` 的 flex 列，`.desktop-shell-content` 为唯一 `overflow:auto`；导航/侧栏各自 `height:100vh; overflow:auto`。测试断言主列高度等于视口、内容溢出时只有内容区滚动、`document` 自身不滚动。
+- [ ] 导航宽度 264、侧栏宽度 360，侧栏默认折叠；`asideVisible` 为真时侧栏才渲染并让 `Main` 让出 360px（断言无横向溢出）。**取舍**：Mantine 的 `collapsed` 只负责偏移，不隐藏已渲染节点；因此侧栏同时按可见性条件渲染，DOM 与偏移保持一致（首版仅靠 `collapsed` 时侧栏仍占 359px，smoke 抓到）。
+- [ ] 最小窗口宽度（820×560）下仍为单列且无横向溢出，主列保持满高。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs`。已完成：3/3、4/4；typecheck/lint/i18n/layers/format/docs 全绿。
 
 ### M3: 动效
 
