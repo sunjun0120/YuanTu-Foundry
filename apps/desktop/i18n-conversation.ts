@@ -14,6 +14,7 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Manage model connections and choose a model for each conversation.',
   ],
   'settings.noModel': ['尚无模型', 'No models'],
+  'settings.environmentModel': ['{model}（环境变量）', '{model} (environment)'],
   'settings.connectionConfigured': ['已保存密钥；留空则沿用', 'Saved key; leave blank to keep'],
   'settings.currentConfig': ['当前配置：{source}', 'Current configuration: {source}'],
   'settings.savedLocally': ['本机保存', 'Saved locally'],

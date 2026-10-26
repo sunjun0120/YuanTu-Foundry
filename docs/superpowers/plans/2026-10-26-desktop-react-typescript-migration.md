@@ -647,9 +647,11 @@ interface PanelTransitionProps {
 
 #### T11: 模型设置
 
-**Files:** 新增 `ui/settings/ModelSettings.tsx`、`model-settings-model.ts`；停用 `renderer-settings.ts` 的 `setupModelSettings`；扩展 `tests/settings.smoke.mjs`、`tests/desktop-react.smoke.mjs`。
+**Files:** 新增 `ui/settings/ModelSettings.tsx`、`model-settings-model.ts`、`tests/model-settings.test.ts`；停用 `renderer-settings.ts` 的 `setupModelSettings`；扩展 `tests/settings.smoke.mjs`、`tests/desktop-react.smoke.mjs`。
 
 **规模:** 约 700–900 行。
+
+**进度（本提交）:** 数据层与 controller 已完成并有 20 条纯测试：分组/草稿/`ModelGroupInput`/校验、picker 选项（`__settings__` 永不作为 connectionId）、环境模型标签、协议默认 URL、主机边界；controller 的 refresh、保存/测试/发现、连接切换、运行中锁定、拒绝保留草稿、sentinel 守卫、取消/删除最后一行。React 面板、`renderer-settings.ts` 清理与 smoke 迁移待下一步。
 
 - [ ] 保留环境模型只读标签、连接分组、加密不可用时禁用保存、运行中禁用切换和打开模型设置的入口；迁移到 Combobox/Menu 时把设置入口作为独立操作，不能把 `__settings__` 当作真实 connectionId 发出。
 - [ ] 保留当前可见的上下文与模型信息（并行任务的当前模型/上下文展示）；切换锁定与保存失败恢复沿用既有语义。
