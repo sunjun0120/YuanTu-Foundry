@@ -41,3 +41,19 @@
   height: 100vh;
   overflow: auto;
 }
+
+/*
+ * Reduced motion is a CSS contract too: Motion and Mantine read `useReducedMotion`, but a transition a component
+ * applies through a class (or one this file adds later) would keep moving. Scoped to React-owned subtrees so the
+ * legacy interface's own rules are not rewritten from here.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [data-react-owned] *,
+  [data-react-owned] *::before,
+  [data-react-owned] *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

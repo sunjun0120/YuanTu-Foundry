@@ -613,17 +613,18 @@ interface PanelTransitionProps {
 
 #### T9: Motion tokens、PageTransition、PanelTransition 与 reduce
 
-**Files:** 新增 `ui/motion-tokens.ts`、`ui/transitions.tsx`；修改 `ui/providers.tsx`、`ui/styles.css`；新增 `tests/desktop-react-motion.smoke.mjs`（`@test-serial desktop-ui`，加入 `smoke:desktop`）。
+**Files:** 新增 `ui/motion-tokens.ts`、`ui/transitions.tsx`、`ui/reduced-motion.ts`、`tests/desktop-react-motion.smoke.mjs`（`@test-serial desktop-ui`，加入 `smoke:desktop`）；修改 `ui/primitives.tsx`（Dialog）、`ui/layout/DesktopShell.tsx`（AppShell 时长）、`ui/styles.css`（reduce 兜底）、`package.json`。
 
-**规模:** 约 400–600 行（含动效测试）。
+**规模:** 约 450–650 行（含动效测试）。
 
-**Interfaces:** `PageTransitionProps`、`PanelTransitionProps`（架构约定 §7）。
+**Interfaces:** `PageTransitionProps`、`PanelTransitionProps`（架构约定 §7）；`MOTION`/`EASING`/`OFFSET_PX`/`seconds()`/`overlayTransition(reduced)`；`usePrefersReducedMotion()`。
 
-- [ ] 在正常动效模式下先写真实页面测试：页面切换出现退出/进入中间态，结束时仅目标可见；A→B→C 快速切换最终只剩 C；关闭弹层过程中重新打开以最后意图为准，不重复提交命令。
-- [ ] 按动效表实现 PageTransition、PanelTransition、侧栏和组件默认 transitionProps；Motion 使用 `motion/react`。页面退出只影响视图，导航及命令立即生效，最新目标覆盖旧目标；不让退出回调清空草稿或夺回焦点。
-- [ ] 用 `page.emulateMedia({ reducedMotion: 'reduce' })` 验证上述视图立即达到最终状态，再验证运行中从 no-preference 切到 reduce 会取消中间态。覆盖 Motion、Mantine、Collapse、AppShell 和 CSS，不能只测一层。
-- [ ] 真实动效测试保留 `MantineProvider env="default"`，不使用会关闭过渡/portal 的 `env="test"`。用计算样式、相关动画生命周期或帧采样断言开始/结束，并等明确的最终状态；不靠固定 sleep，也不等待全页无限 loading 动画结束。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-i18n.test.ts`，同时验证 CSP 下的实际布局和过渡生效。
+- [ ] 动效表落成 `motion-tokens.ts`：时间只用这一处，Motion 取秒、Mantine/CSS 取毫秒；`overlayTransition(reduced)` 供 Dialog 等 Mantine 弹层。
+- [ ] `PageTransition` 用 `AnimatePresence mode="wait"` + **直接子节点** `motion.div`（退出动画只认 AnimatePresence 的直接子节点），退出中 `inert` + `aria-hidden` 由内层 `display:contents` 包装设置；`PanelTransition` 包 Mantine 9 的 `Collapse`（属性是 `expanded`，不是 `in`）。
+- [ ] **两个实测坑已记录**：(a) 内层若调用 `usePresence()` 却不调用 `safeToRemove`，AnimatePresence 永远不会移除退出节点（新的页面因此一直挂不上），改用 `useIsPresent()`；(b) `motion` 14 的 `useReducedMotion` 只在首次渲染读取一次（源码里 `useState` + TODO），系统偏好在运行中切换不会生效；因此新增自订阅的 `usePrefersReducedMotion`，三个动画所有者（transitions/primitives/DesktopShell）都用它，MotionConfig 仍保留给 Motion 内部。
+- [ ] 真实页面测试用帧采样而非 sleep：断言退出时旧页面 `inert`、进入存在中间透明度、结束时只剩目标；A→B→C 最终只剩 C；`Collapse` 使用 180ms（读计算 `transitionDuration`）；reduce 下无中间透明度、面板时长趋零；运行中切 reduce 立即收敛。**注意**：隐藏的 Electron 窗口会暂停 rAF，动效夹具必须 `show: true`，否则动画永不推进。
+- [ ] CSS 兜底：`ui/styles.css` 的 `prefers-reduced-motion` 块把 React 子树内的 transition/animation 压到 0.01ms（Mantine 的 duration=0 分支不写 transition，计算值来自该兜底）。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-i18n.test.ts`，同时验证 CSP 下的实际布局与过渡。已完成：5/5、3/3、4/4、9/9。
 
 ### M4: 设置页
 

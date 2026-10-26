@@ -14,6 +14,8 @@
  */
 import { Modal, type ModalProps } from '@mantine/core';
 import type { ReactNode } from 'react';
+import { usePrefersReducedMotion } from './reduced-motion.ts';
+import { EASING_CSS, MOTION } from './motion-tokens.ts';
 
 export {
   ActionIcon,
@@ -78,6 +80,8 @@ export function Dialog({
   busy = false,
   size = 'md',
 }: DialogProps): ReactNode {
+  // Mantine's own transition is the overlay's owner; nothing else may animate the same properties on it.
+  const reduced = usePrefersReducedMotion();
   return (
     <Modal
       opened={opened}
@@ -88,6 +92,10 @@ export function Dialog({
       closeOnClickOutside={!busy}
       closeOnEscape={!busy}
       withCloseButton={!busy}
+      transitionProps={{
+        duration: reduced ? 0 : MOTION.modal.enter,
+        timingFunction: EASING_CSS,
+      }}
     >
       {children}
     </Modal>

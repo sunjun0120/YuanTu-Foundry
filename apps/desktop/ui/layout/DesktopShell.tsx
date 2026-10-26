@@ -11,6 +11,8 @@
  */
 import { AppShell } from '@mantine/core';
 import type { ReactNode } from 'react';
+import { EASING_CSS, MOTION } from '../motion-tokens.ts';
+import { usePrefersReducedMotion } from '../reduced-motion.ts';
 
 export interface DesktopShellProps {
   navbar: ReactNode;
@@ -32,10 +34,14 @@ export function DesktopShell({
   navbarVisible = true,
   asideVisible = false,
 }: DesktopShellProps): ReactNode {
+  // The sidebar offset is AppShell's own transition; the shell only supplies the duration, and zero under reduce.
+  const reduced = usePrefersReducedMotion();
   return (
     <AppShell
       className="desktop-shell"
       padding={0}
+      transitionDuration={reduced ? 0 : MOTION.sidebar}
+      transitionTimingFunction={EASING_CSS}
       // `xs` so the desktop layout never collapses inside the window's allowed sizes; the window is not a phone.
       navbar={{ width: navbarWidth, breakpoint: 'xs', collapsed: { desktop: !navbarVisible } }}
       aside={{ width: asideWidth, breakpoint: 'xs', collapsed: { desktop: !asideVisible } }}
