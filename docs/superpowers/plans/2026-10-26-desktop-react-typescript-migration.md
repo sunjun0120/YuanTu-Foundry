@@ -710,9 +710,11 @@ interface PanelTransitionProps {
 
 **规模:** 约 600–800 行。
 
+**进度:** 命令词汇与 slash 语义的数据层已完成（9 条纯测试）：四个命令、`/` 查询、名称/描述/值过滤 + skills、选中后的文本（export 返回 null 表示直接执行）、`/task`→goal 别名、缺描述拒绝并点名、export 携带 sessionId、附件不把消息当命令、goal/plan 携带界面语言。React 菜单与 composer 发送状态待下一步。
+
 - [ ] 行为测试：运行中输入生成 `enqueue(mode: 'follow-up')`，普通发送只提交一次；双击/Enter 重入不重复提交；发送失败仅在来源会话仍匹配、当前草稿为空时恢复文本/附件。
 - [ ] 真实 React 测试覆盖中文 IME：`isComposing` 或输入法兼容事件期间 Enter 不发送；保留 Enter/Shift+Enter、slash 选中优先级和焦点恢复。
-- [ ] 命令菜单与 slash 共用同一命令定义、过滤与导出；菜单命令不能以假选项冒充。
+- [~] 命令菜单与 slash 已共用 `command-model.ts` 的同一命令定义、过滤与导出（数据层完成）；React 菜单渲染待下一步。
 - [ ] 文案键化；旧绑定删除。
 - [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-composer.test.ts tests/desktop-react.smoke.mjs tests/desktop-language.smoke.mjs`。
 
