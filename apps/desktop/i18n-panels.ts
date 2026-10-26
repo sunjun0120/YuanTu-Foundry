@@ -122,7 +122,7 @@ export const panelMessages: Record<string, [string, string]> = {
   'task.status.skipped': ['已跳过', 'Skipped'],
   'task.event.runFinished': ['任一任务执行结束', 'Any run finishes'],
   'task.event.taskCompleted': ['任务通过验收', 'A task passes verification'],
-  'task.event.sessionCreated': ['新建会话', 'A session is created'],
+  'task.event.sessionCreated': ['有会话创建', 'A session is created'],
   'task.trigger.none': ['无自动触发', 'No automatic trigger'],
   'task.trigger.paused': ['已暂停', 'paused'],
   'task.trigger.skipMissed': ['漏跑跳过', 'skip missed'],
