@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import electronPath from 'electron';
+import { electronCrashDiagnosis } from './desktop-launch-diagnosis.mjs';
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -53,4 +54,16 @@ child.once('error', (error) => {
 });
 child.once('close', (code) => {
   process.exitCode = code ?? 1;
+  if (process.platform !== 'win32' || code === 0) return;
+  // A crash before the first window prints nothing of its own; name the cause when it is the integrity label.
+  const labels = spawnSync(
+    path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'icacls.exe'),
+    [electronPath],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+    },
+  ).stdout;
+  const diagnosis = electronCrashDiagnosis(code, electronPath, labels ?? '');
+  if (diagnosis) console.error(diagnosis);
 });
