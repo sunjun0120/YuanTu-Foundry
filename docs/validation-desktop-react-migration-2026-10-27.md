@@ -87,3 +87,11 @@ npm run build
 node scripts/run-tests.mjs tests/desktop-react-stream.test.ts tests/desktop-react-transcript.test.ts tests/scroll-anchor.test.ts tests/turn-changes-model.test.ts tests/subagent-model.test.ts tests/question-model.test.ts tests/approval-model.test.ts tests/task-view.test.ts tests/plan-contract.test.ts tests/session-panels-model.test.ts tests/background-model.test.ts tests/statistics-model.test.ts tests/workspace-panel-loading.test.ts tests/desktop-react-attachments.test.ts tests/desktop-react-sessions.test.ts tests/desktop-react-composer.test.ts tests/desktop-copy.test.ts tests/desktop-i18n.test.ts tests/ui-i18n-coverage.test.ts tests/compat-ids.test.ts tests/render-caches.test.ts tests/diff-view.test.ts tests/i18n-gate.test.ts tests/ui-copy-migration.test.ts
 npm run smoke:desktop
 ```
+
+## 7. 迁移期发现并修复的缺陷
+
+- `SessionSidebar.openMenu` 的 `cancelClose()` 曾被写在注释行内（注释末尾带字面 `\n`），导致上一行的关闭定时器会关掉刚打开的菜单；修复后 `desktop-sessions` 连续 3 次 6/6。
+- `desktop-layout` 的权限模式 `change` 事件同样被注释吞掉，测试实际未切到 observe；恢复 `dispatchEvent` 后 4/4 通过，冒烟强度恢复。
+- `WorkspacePanel` 拖拽漏掉 `body.workspace-resizing`、pointer capture 与焦点；修复并补了按下/松开类名断言。
+- `task.event.sessionCreated` 与 `ui.newSession` 字典值重复导致 `ui-copy-migration` 拒绝迁移；任务事件改为“有会话创建”。
+- 两条历史文档指向已删除模块的路径已修正，`references:check` 恢复通过。
