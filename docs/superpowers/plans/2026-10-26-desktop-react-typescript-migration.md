@@ -775,22 +775,21 @@ interface PanelTransitionProps {
 
 ### M6: 对话流
 
-#### T20: 流式 store 与内容适配器\n\n**进度:** 数据层 + 答案正文已完成。①stream-store（7 条可控时钟测试）；②MarkdownView 用 markdownBlocks 增量渲染、只重绘末尾变化块、不经 dangerouslySetInnerHTML；③live-content 把 #live .message-content 换成 React 根，
+#### T20: 流式 store 与内容适配器
 
-enderer-live 的正文重绘改走它（reasoning 折叠与 120k 截尾/占位/跟随滚动仍由既有代码处理）。**LiveMessage 整体与 reasoning 折叠的 React 化留给 T21 transcript**。
-enderer-live.ts 已改为只绘制：text/reasoning 缓冲与 100ms 合并发布经 stream-store，订阅触发重绘；agent 7/7、round3 通过。
+**进度:** 已完成。①`stream-store`（7 条可控时钟测试）：100 delta/窗口一次发布、text/reasoning 分离、reset、delta 先于 snapshot、新消息/结束、dispose；`renderer-live.ts` 已改为只调度绘制，缓冲与合并全部走 store。②`MarkdownView` 用 `markdownBlocks` 增量渲染、不经 `dangerouslySetInnerHTML`。③`LiveMessage`/`live-message-mount`/`live-model`：reasoning 折叠、占位文案、120k 尾注、跟随滚动、`placeLiveThought` 归属全部 React；`#live` 仅保留为稳定宿主（`hidden` 由 mount 写），内部无 legacy DOM；`live-content.tsx` 删除。
 
-**Files:** 新增 `ui/conversation/stream-store.ts`、`LiveMessage.tsx`、`MarkdownView.tsx`、必要时 `DomContent.tsx`；runtime 增加流式/统计/子 agent store；新增 `tests/desktop-react-stream.test.ts`；扩展 React smoke。
+**Files:** 新增 `ui/conversation/stream-store.ts`、`MarkdownView.tsx`、`LiveMessage.tsx`、`live-message-mount.tsx`、`live-model.ts`；修改 `renderer-live.ts`、`renderer.ts`、`index.html`；删除 `live-content.tsx`；扩展 `tests/desktop-react-stream.test.ts`、`tests/agent.smoke.mjs`。
 
 **规模:** 约 500–700 行。
 
-**Interfaces:** `StreamView` 为 `{ messageId: string; text: string; reasoning: string } | null`；`createStreamStore()` 返回 `ReadableStore<StreamView>`，并提供 `acceptSnapshot(session)`、`acceptDelta(delta)`、`dispose()`。父/子 agent 实例独立，runtime 负责路由；UI 不直接合并 raw delta。
+**Interfaces:** `StreamView` 为 `{ messageId: string; text: string; reasoning: string } | null`；`createStreamStore()` 返回 `ReadableStore<StreamView>` + `acceptSnapshot`/`acceptDelta`/`dispose`；UI 不直接合并 raw delta。
 
-- [ ] 用可控时钟测试：同一 100ms 内 100 个 delta 只发布一次显示快照且文本完整；text/reasoning 分离；reset 替换；delta 先于 snapshot 不丢；终止/新 messageId/切换会话不串流；dispose 后不再发布。
-- [ ] store 同步快照和缓冲时严格复刻现有 `renderer-live.ts` 的 ID、reset 与结束规则；按当前 bridge 能提供的关联信息路由，不擅自扩展 IPC 协议或虚构 delta 的 sessionId 字段。
-- [ ] `MarkdownView` 保留 `markdownBlocks`、复制、外部链接和本地链接的既有校验/动作；只更新末尾变化块，不把模型 HTML 直接交给 `dangerouslySetInnerHTML`。已有 Markdown 的安全处理不能在迁移时绕过。
-- [ ] 在 React smoke 记录历史消息 DOM 身份或 MutationObserver 证据：100 个流式 delta 不替换既有历史消息节点；统计增量不重建 transcript；流式结束后正文与最终历史结果一致。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-stream.test.ts tests/markdown-links.test.ts tests/desktop-react.smoke.mjs tests/desktop-round3.smoke.mjs`。
+- [x] 可控时钟测试：100 delta 只发布一次且文本完整、text/reasoning 分离、reset、delta 先于 snapshot、终止/新 messageId、dispose 后不再发布。
+- [x] store 严格复刻既有 ID/reset/结束规则；不扩展 IPC、不虚构 delta 的 sessionId。
+- [x] `MarkdownView` 保留 `markdownBlocks`/复制/链接动作，只更新末尾变化块，不把模型 HTML 交给 `dangerouslySetInnerHTML`。
+- [~] 专门的 React smoke 未记录 MutationObserver/DOM 身份证据；`agent`/`desktop` 现有断言覆盖流式正文、历史节点与展开折叠，agent 新增“重绘后折叠仍展开”断言。
+- [x] 验证：`desktop-react-stream` 10/10、`markdown-links` 5/5、`agent` 7/7、`language` 7/7、`desktop-react` 4/4、`desktop` 9/9、`sessions` 6/6、`desktop-react-transcript` 7/7；lint/i18n/layers/cycles/format/typecheck/build 全绿。
 
 #### T21: 历史消息、Transcript 与滚动锚点
 

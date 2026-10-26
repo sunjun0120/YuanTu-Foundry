@@ -137,13 +137,9 @@
         <section id="subagent-transcript" class="subagent-page" aria-label="子代理记录" hidden>
           <div id="subagent-transcript-root"></div>
         </section>
-        <div id="live" class="message assistant" hidden>
-          <details id="live-reasoning" class="message-reasoning" hidden>
-            <summary></summary>
-            <pre class="reasoning-content"></pre>
-          </details>
-          <div id="live-content-root"></div>
-        </div>
+        <!-- The live bubble's stable host: the React layer owns the folded thought and the answer body under it,
+             and the transcript borrows the fold into the last process group while the run is still writing. -->
+        <div id="live" class="message assistant" hidden></div>
         <div id="tools" class="tool-progress" hidden></div>
         <div id="goal-root"></div>
         <div id="deliverables-root"></div>

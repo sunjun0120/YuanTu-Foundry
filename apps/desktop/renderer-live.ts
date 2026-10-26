@@ -1,21 +1,20 @@
 /**
- * The live bubble: the answer and the folded thought a running session is still writing.
+ * The live bubble's scheduling seam: read the running message, coalesce its repaint, and follow the tail.
  *
- * Streamed text arrives on the delta channel rather than as a snapshot per token, so it is accumulated in a
- * buffer here and the bubble is repainted from it on a coalesced timer — markdown rendering is far too expensive
- * to run per token. The buffer falls back to the snapshot's own copy whenever the two disagree (right after a
- * session reload, for instance), and it is dropped the moment the run stops or a reload replaces the message, so
- * stale text can never reappear under a new message id.
+ * Streamed text arrives on the delta channel rather than as a snapshot per token. `stream-store.ts` accumulates both
+ * channels and publishes a complete view on its own 100ms budget; this file only decides which values the React
+ * projection draws — the answer and the thinking are read from separate channels, never merged — and when a paint is
+ * worth running. Markdown rendering is far too expensive to run per token.
  *
- * `reasoning` is a second buffer, not a second half of the first: the two channels are painted into different
- * places — the answer into the bubble, the thinking into the fold on the last process group — and mixing them
- * here is how thinking would end up rendered as the answer.
+ * `#live` itself stays the stable host: the transcript borrows the fold inside it and moves it into the last process
+ * group, so the element cannot be re-created by a repaint. Everything under the host is React's.
  *
- * The three methods are the three halves of that: `sync` is what `render()` calls, `delta` is the channel, and
- * `schedule` is the coalesced repaint both of them ask for.
+ * The snapshot fallback remains: when the store has no view for the message the snapshot announces (right after a
+ * session reload, for instance), the snapshot's own copy is what the bubble shows. The store drops that buffer the
+ * moment the run stops or a reload replaces the message, so stale text can never reappear under a new message id.
  */
 import type { CarrierSnapshot, MessageDelta } from '../../packages/carrier/contract.ts';
-import { format, t } from './i18n.ts';
+import type { LiveMessageSurface, LiveMessageView } from './ui/conversation/live-model.ts';
 import { createStreamStore } from './ui/conversation/stream-store.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -23,14 +22,14 @@ function required<T extends HTMLElement = HTMLElement>(id: string): T {
   if (!value) throw new Error(`Missing element: ${id}`);
   return value as T;
 }
+
+/** What the projection shows when there is no running message. */
+const NO_LIVE: LiveMessageView = { present: false, text: '', reasoning: '', phase: undefined };
+
 export function setupLiveMessage(options: {
   getState(): CarrierSnapshot | null;
-  /** Draw the answer body; the React projection lives in the window, which owns its lifetime. */
-  paintLive(text: string): void;
-  /** The folded-thought view, drawn in place so an expanded fold is not closed under the reader. */
-  reasoningView(text: string): HTMLElement;
-  /** Put the live thought into the last process group, or take it back out. */
-  placeLiveThought(thought: HTMLElement, visible: boolean): void;
+  /** The React-owned bubble: the folded thought and the answer body. */
+  live: LiveMessageSurface;
   updateJumpButton(): void;
   /** Whether a sub-agent's page has taken the viewport — the live bubble must not scroll it. */
   isChildPageOpen(): boolean;
@@ -41,21 +40,14 @@ export function setupLiveMessage(options: {
   delta(delta: MessageDelta): void;
   schedule(): void;
 } {
-  const {
-    paintLive,
-    reasoningView,
-    placeLiveThought,
-    updateJumpButton,
-    isChildPageOpen,
-    isLoadingOlder,
-  } = options;
+  const { live, updateJumpButton, isChildPageOpen, isLoadingOlder } = options;
   const conversation = required('conversation');
   let liveKey = '';
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
   // Delta merging and its 100ms publish budget live in the stream store; this file only paints.
   const stream = createStreamStore();
   stream.view.subscribe(() => schedule());
-  /** The text the live bubble should show: the streamed view when it matches, else the snapshot. */
+  /** The answer text the live bubble should show: the streamed view when it matches, else the snapshot. */
   function liveText(): string {
     const live = options.getState()?.session.liveMessage;
     if (!live) return '';
@@ -69,38 +61,29 @@ export function setupLiveMessage(options: {
     const view = stream.view.getSnapshot();
     return view?.messageId === live.id ? view.reasoning : live.reasoning;
   }
-  /** Markdown rendering is far too expensive to run per token, so paints stay coalesced at 100ms. */
-  function livePlaceholder(): string {
-    const phase = options.getState()?.session.statisticsActivity?.phase;
-    return phase === 'reasoning'
-      ? t('ui.modelReasoning')
-      : phase === 'tool_call'
-        ? t('ui.modelToolCall')
-        : t('ui.thinking');
+  /** Everything one paint draws: presence, the two channels, and what phase the placeholder speaks for. */
+  function currentView(): LiveMessageView {
+    const snapshot = options.getState();
+    const live = snapshot?.session.liveMessage;
+    return {
+      present: Boolean(live),
+      text: live ? liveText() : '',
+      reasoning: live ? liveReasoning() : '',
+      phase: snapshot?.session.statisticsActivity?.phase,
+    };
   }
+  /** Markdown rendering is far too expensive to run per token, so paints stay coalesced at 100ms. */
   function schedule(): void {
     if (liveTimer) return;
     liveTimer = setTimeout(() => {
       liveTimer = undefined;
       const nearBottom =
         conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 90;
-      // The folded thought is painted in place rather than replaced: it is a `<details>` the user may have
-      // expanded, and swapping the node would close it under them on every paint.
-      const thought = required('live-reasoning');
-      const reasoning = liveReasoning();
-      thought.hidden = !reasoning;
-      if (reasoning) thought.replaceChildren(...Array.from(reasoningView(reasoning).childNodes));
-      placeLiveThought(thought, Boolean(reasoning));
-      const full = liveText();
-      const live = options.getState()?.session.liveMessage;
-      required('live').hidden = !live || !full;
-      if (live) {
-        const preview =
-          full.length > 120_000
-            ? `${format(t('ui.liveTail'), { count: full.length })}\n\n${full.slice(-120_000)}`
-            : full || livePlaceholder();
-        paintLive(preview);
-      } else paintLive('');
+      const view = currentView();
+      // The host is shown only while there is answer text to read. The thought is hidden by React's own prop and
+      // never dropped: its node is the one a reader may have opened and the transcript may have borrowed.
+      live.setVisible(view.present && view.text !== '');
+      live.paint(view);
       if (
         nearBottom &&
         !isChildPageOpen() &&
@@ -111,28 +94,27 @@ export function setupLiveMessage(options: {
       updateJumpButton();
     }, 100);
   }
-  /** Keep the buffer and the visible bubble in step with the snapshot. */
+  /** Keep the visible bubble in step with the snapshot. */
   function sync(): void {
-    const live = options.getState()?.session.liveMessage;
-    required('live').hidden = !live || !liveText();
-    // The store clears its own buffer once the run stops (or a reload replaced the message), so stale text
-    // can never reappear under a new message id.
-    stream.acceptSnapshot({ liveMessage: live ?? null });
-    if (!live) paintLive('');
-    const nextLive = live?.id ?? '';
+    const message = options.getState()?.session.liveMessage;
+    live.setVisible(Boolean(message) && liveText() !== '');
+    // The store clears its own buffer once the run stops (or a reload replaced the message), so stale text can
+    // never reappear under a new message id.
+    stream.acceptSnapshot({ liveMessage: message ?? null });
+    // A stopped run clears the answer now rather than on the next coalesced paint: the bubble must not keep the
+    // last tokens under a session that is already idle.
+    if (!message) live.paint(NO_LIVE);
+    const nextLive = message?.id ?? '';
     if (nextLive !== liveKey) {
       liveKey = nextLive;
       schedule();
     }
   }
-  // Streamed text arrives on its own channel rather than as a snapshot per token. Accumulating it
-  // here keeps a token cheap: nothing is cloned, nothing is re-serialised, and only the live bubble is
-  // repainted (coalesced) instead of the whole surface. The channel says which of a message's two
-  // streams a slice belongs to — the answer or the thinking — and a slice must never be added to the
-  // wrong one.
+  // Streamed text arrives on its own channel rather than as a snapshot per token. The store buffers even when the
+  // snapshot that announces this message has not arrived yet; the subscription above paints once its publish budget
+  // closes. The channel says which of a message's two streams a slice belongs to, and a slice must never be added to
+  // the wrong one.
   function delta(delta: MessageDelta): void {
-    // The store buffers even when the snapshot that announces this message has not arrived yet; the
-    // subscription above paints once its publish budget closes.
     stream.acceptDelta(delta);
   }
   return { sync, delta, schedule };

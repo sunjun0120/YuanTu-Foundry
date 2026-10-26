@@ -889,6 +889,13 @@ test(
     assert.equal(await live.locator('.reasoning-content').textContent(), thought);
 
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+    // The answer streaming in repainted the bubble (and moved the fold between #live and the process group). The
+    // thought the reader opened must still be the same node, still open.
+    assert.notEqual(
+      await live.getAttribute('open'),
+      null,
+      'a repaint must not close a thought the reader opened',
+    );
     const answered = page.locator('#messages .message.assistant .message-content');
     assert.match(await answered.textContent(), /It is there\./);
     assert.doesNotMatch(

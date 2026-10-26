@@ -24,7 +24,7 @@ import { mountAttachments } from './ui/composer/attachment-mount.tsx';
 import { mountBackground } from './ui/panels/background-mount.tsx';
 import { mountCommandPalette } from './ui/composer/command-mount.tsx';
 import { setupComposer } from './renderer-composer.ts';
-import { mountLiveContent } from './ui/conversation/live-content.tsx';
+import { mountLiveMessage } from './ui/conversation/live-message-mount.tsx';
 import { setupLiveMessage } from './renderer-live.ts';
 import { setupMessages } from './renderer-messages.ts';
 import { mountPlanPanel } from './ui/panels/plan-mount.tsx';
@@ -316,12 +316,13 @@ const transcriptView = mountTranscript({
   onRequestFullAccess: () => permissionSettings?.requestFullAccess(),
 });
 
-const liveContent = mountLiveContent(markdownActions);
+const liveMessage = mountLiveMessage({
+  actions: markdownActions,
+  placeLiveThought: transcriptView.placeLiveThought,
+});
 const liveView = setupLiveMessage({
   getState: () => state,
-  paintLive: (text) => liveContent.update(text),
-  reasoningView: messagesView.reasoningView,
-  placeLiveThought: transcriptView.placeLiveThought,
+  live: liveMessage,
   updateJumpButton,
   isChildPageOpen: childPageOpen,
   isLoadingOlder: () => loadingOlderHistory,
@@ -600,7 +601,8 @@ function render(): void {
      * person scrolls for. The message stays in the session — the model still receives it, the log still holds it,
      * and `export` still writes it — the window simply does not draw it.
      */
-    element('live').prepend(element('live-reasoning'));
+    // The rebuild replaces the group that borrowed the live fold; take it back before React unmounts that group.
+    liveMessage.releaseThought();
     transcriptView.render(session.messages, session.historyStart ?? 0, paused);
   }
   liveView.sync();
@@ -889,7 +891,7 @@ window.addEventListener(
     transcriptView.dispose();
     sessionPanels.dispose();
     taskView.dispose();
-    liveContent.dispose();
+    liveMessage.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();
