@@ -691,9 +691,11 @@ interface PanelTransitionProps {
 
 #### T14: 会话列表、搜索与菜单
 
-**Files:** 新增 `ui/sessions/SessionSidebar.tsx`、`SessionRow.tsx`、`session-actions.ts`；修改 `session-management.ts`、`renderer-session-list.ts` 的接入点；新增 `tests/desktop-react-sessions.test.ts`；扩展 `tests/desktop-sessions.smoke.mjs`、`tests/history.smoke.mjs`。
+**Files:** 新增 `ui/sessions/session-model.ts`、`SessionSidebar.tsx`、`SessionRow.tsx`、`session-actions.ts`；修改 `session-management.ts`、`renderer-session-list.ts` 的接入点；新增 `tests/desktop-react-sessions.test.ts`；扩展 `tests/desktop-sessions.smoke.mjs`、`tests/history.smoke.mjs`。
 
 **规模:** 约 700–900 行。
+
+**进度:** 数据与 controller 已完成（10 条纯测试）：四行窗口/展开/搜索显示全部、running 会话仍可切换、blocked 拒绝选择/菜单/对话框、菜单目标、重命名空名前置拒绝、成功关闭、失败保留原因、搜索命令、loadMore/create/chooseWorkspace 同一条 select 通道。React 侧栏/行/对话框与 smoke 迁移待下一步。
 
 - [ ] 会话列表用稳定 session ID；保留运行/等待交互图标、四行折叠与搜索时显示全部匹配、分页/归档/恢复/重命名/删除/分支、通知切换与上下文展示。
 - [ ] 会话在运行时仍能切换，不能将全局 busy 简化为禁止所有切换；双击/Enter 重入不重复提交。
