@@ -791,7 +791,7 @@ enderer-live 的正文重绘改走它（reasoning 折叠与 120k 截尾/占位/�
 - [ ] 在 React smoke 记录历史消息 DOM 身份或 MutationObserver 证据：100 个流式 delta 不替换既有历史消息节点；统计增量不重建 transcript；流式结束后正文与最终历史结果一致。
 - [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-stream.test.ts tests/markdown-links.test.ts tests/desktop-react.smoke.mjs tests/desktop-round3.smoke.mjs`。
 
-#### T21: 历史消息、Transcript 与滚动锚点\n\n**进度（模型）:** ui/conversation/transcript-model.ts 已完成，5 条纯测试：runtime context 过滤、provisional 被后续回答取代、tool/assistant 操作折叠与回复/用户消息断组、assistant 正文+调用的顺序、ending/card 的插入位置、绝对 startIndex 派生稳定 key。React 列表与滚动锚点待下一步。
+#### T21: 历史消息、Transcript 与滚动锚点\n\n**进度（模型+锚点）:** ui/conversation/transcript-model.ts 已完成，5 条纯测试：runtime context 过滤、provisional 被后续回答取代、tool/assistant 操作折叠与回复/用户消息断组、assistant 正文+调用的顺序、ending/card 的插入位置、绝对 startIndex 派生稳定 key。ui/conversation/scroll-anchor.ts 已完成（3 条纯测试：首个可见节点捕获、节点恢复、节点消失时 scrollHeight 回退）；React 列表待下一步。
 
 **Files:** 新增 `ui/conversation/Conversation.tsx`、`Transcript.tsx`、`Message.tsx`、`transcript-model.ts`、`scroll-anchor.ts`；修改 `renderer-messages.ts`、`renderer-transcript.ts` 接入点；新增 `tests/desktop-react-transcript.test.ts` 与 `tests/desktop-react-transcript.smoke.mjs`（`@test-serial desktop-ui`）；扩展 `tests/desktop.smoke.mjs`、`tests/history.smoke.mjs`。
 
