@@ -1,5 +1,4 @@
-import { setupPlanPanel } from '../apps/desktop/renderer-plan.ts';
-import { setLocale } from '../apps/desktop/i18n.ts';
+import { planView } from '../apps/desktop/ui/panels/plan-view.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -188,69 +187,7 @@ test('cancelled questions cannot approve a plan even if the questioner resolves 
   assert.equal(run.takeApproval(), undefined);
 });
 
-test('plan panel shows its pending question and jumps to it, clearing after answer', (t) => {
-  class Element {
-    textContent = '';
-    className = '';
-    hidden = false;
-    disabled = false;
-    type = '';
-    children: Element[] = [];
-    click?: () => void;
-    append(...children: Element[]) {
-      this.children.push(...children);
-    }
-    replaceChildren(...children: Element[]) {
-      this.children = children;
-    }
-    addEventListener(_event: string, callback: () => void) {
-      this.click = callback;
-    }
-  }
-  const elements = new Map<string, Element>();
-  for (const id of [
-    'plan-panel',
-    'plan-title',
-    'plan-status',
-    'plan-summary',
-    'plan-steps',
-    'plan-reason',
-    'plan-actions',
-  ])
-    elements.set(id, new Element());
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'document');
-  const originalNode = Object.getOwnPropertyDescriptor(globalThis, 'Node');
-  Object.defineProperty(globalThis, 'Node', {
-    configurable: true,
-    value: { TEXT_NODE: 3, ELEMENT_NODE: 1, DOCUMENT_NODE: 9 },
-  });
-  Object.defineProperty(globalThis, 'document', {
-    configurable: true,
-    value: {
-      documentElement: { lang: '' },
-      getElementById: (id: string) => elements.get(id),
-      createElement: () => new Element(),
-    },
-  });
-  t.after(() => {
-    if (originalNode) Object.defineProperty(globalThis, 'Node', originalNode);
-    else Reflect.deleteProperty(globalThis, 'Node');
-    if (original) Object.defineProperty(globalThis, 'document', original);
-    else Reflect.deleteProperty(globalThis, 'document');
-    setLocale('zh-CN');
-  });
-  let pending: string | null = 'question-1',
-    jumped = '';
-  const view = setupPlanPanel({
-    isOperating: () => false,
-    isBusy: () => true,
-    waitingQuestion: () => pending,
-    showQuestion: (id) => {
-      jumped = id;
-    },
-    select: async () => {},
-    setError: () => {},
-  });
+test('plan panel shows its pending question and jumps to it, clearing after answer', () => {
   const plan: Plan = {
     id: 'plan',
     sessionId: 's',
@@ -262,17 +199,73 @@ test('plan panel shows its pending question and jumps to it, clearing after answ
     createdAt: '',
     updatedAt: '',
   };
-  setLocale('zh-CN');
-  view.render(plan);
-  assert.equal(elements.get('plan-status')!.textContent, '规划正在等待你的回答');
-  elements.get('plan-actions')!.children[1]!.click!();
-  assert.equal(jumped, 'question-1');
-  setLocale('en-US');
-  view.render(plan);
-  assert.equal(elements.get('plan-status')!.textContent, 'Planning is waiting for your answer');
-  view.render({ ...plan, status: 'proposed' });
-  assert.equal(elements.get('plan-status')!.textContent, 'Planning is waiting for your answer');
-  pending = null;
-  view.render(plan);
-  assert.equal(elements.get('plan-status')!.textContent, 'Planning in progress');
+  const waiting = planView(plan, true, 'question-1', 'zh-CN');
+  assert.equal(waiting.visible, true);
+  assert.equal(waiting.status, '规划正在等待你的回答');
+  assert.deepEqual(
+    waiting.actions.map((action) => action.kind),
+    ['question'],
+  );
+  assert.equal(waiting.actions[0]?.questionId, 'question-1');
+  assert.equal(waiting.actions[0]?.label, '前往问题');
+
+  assert.equal(
+    planView(plan, true, 'question-1', 'en-US').status,
+    'Planning is waiting for your answer',
+  );
+  // A waiting question still outranks a proposed plan: approval is not the next step while the run waits.
+  assert.equal(
+    planView({ ...plan, status: 'proposed' }, true, 'question-1', 'zh-CN').status,
+    '规划正在等待你的回答',
+  );
+  // Answered and idle, the row says waiting for the next step and offers the action that leaves plan mode.
+  const idle = planView(plan, false, null, 'zh-CN');
+  assert.equal(idle.status, '计划模式 · 等待下一步');
+  assert.deepEqual(
+    idle.actions.map((action) => [action.kind, action.label]),
+    [['discard', '退出计划模式']],
+  );
+  assert.equal(
+    idle.hint,
+    '这次运行没有产出计划。可以直接回复补充信息，让它继续制定；不想再计划就退出计划模式。',
+  );
+});
+
+test('the plan gate offers approval, execution and the stopped states', () => {
+  const plan: Plan = {
+    id: 'plan',
+    sessionId: 's',
+    status: 'proposed',
+    title: 'Plan',
+    summary: 'Summary',
+    steps: [{ description: 'First' } as never],
+    hash: 'digest',
+    createdAt: '',
+    updatedAt: '',
+  };
+  const proposed = planView(plan, true, null, 'zh-CN');
+  assert.equal(proposed.title, 'Plan');
+  assert.deepEqual(proposed.steps, ['First']);
+  assert.deepEqual(
+    proposed.actions.map((action) => [action.kind, action.disabled]),
+    [
+      ['approve', true],
+      ['reject', true],
+    ],
+  );
+  assert.equal(proposed.hint, '批准前不会执行任何写入；执行时代理会再次校验计划内容未变。');
+  const approved = planView({ ...plan, status: 'approved' }, false, null, 'en-US');
+  assert.deepEqual(
+    approved.actions.map((action) => [action.kind, action.disabled]),
+    [['execute', false]],
+  );
+  assert.equal(approved.hint, 'Approved; ready to execute.');
+  assert.deepEqual(planView({ ...plan, status: 'rejected' }, false, null, 'zh-CN').actions, []);
+  assert.equal(
+    planView({ ...plan, status: 'rejected' }, false, null, 'zh-CN').hint,
+    '计划已被拒绝，可重新制定。',
+  );
+  assert.equal(planView({ ...plan, status: 'abandoned' }, false, null, 'zh-CN').visible, true);
+  // No plan at all: the panel is gone, not an empty dialog.
+  assert.equal(planView(null, false, null, 'zh-CN').visible, false);
 });

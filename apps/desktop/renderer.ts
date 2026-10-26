@@ -25,7 +25,7 @@ import { mountCommandPalette } from './ui/composer/command-mount.tsx';
 import { setupComposer } from './renderer-composer.ts';
 import { setupLiveMessage } from './renderer-live.ts';
 import { setupMessages } from './renderer-messages.ts';
-import { setupPlanPanel } from './renderer-plan.ts';
+import { mountPlanPanel } from './ui/panels/plan-mount.tsx';
 import { setupQuestions } from './renderer-questions.ts';
 import { setupSessionPanels } from './renderer-session-panels.ts';
 import { mountSessionSidebar } from './ui/sessions/session-mount.tsx';
@@ -337,7 +337,7 @@ const liveView = setupLiveMessage({
   isLoadingOlder: () => loadingOlderHistory,
 });
 
-const planView = setupPlanPanel({
+const planView = mountPlanPanel({
   waitingQuestion: () => (state?.session.running ? (state.session.questions[0]?.id ?? null) : null),
   showQuestion: (id) => {
     const card = Array.from(document.querySelectorAll<HTMLElement>('.question-card')).find(
@@ -1012,6 +1012,7 @@ window.addEventListener(
   () => {
     backgroundView.dispose();
     statisticsView.dispose();
+    planView.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();
