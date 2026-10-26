@@ -647,16 +647,18 @@ interface PanelTransitionProps {
 
 #### T11: 模型设置
 
-**Files:** 新增 `ui/settings/ModelSettings.tsx`、`model-settings-model.ts`、`tests/model-settings.test.ts`；停用 `renderer-settings.ts` 的 `setupModelSettings`；扩展 `tests/settings.smoke.mjs`、`tests/desktop-react.smoke.mjs`。
+**Files:** 新增 `ui/settings/ModelSettings.tsx`、`model-settings-model.ts`、`model-mount.tsx`、`model-lock.ts`、`tests/model-settings.test.ts`；重写 `renderer-settings.ts`（只保留 picker 与页面开合）；修改 `renderer.ts`、`i18n-conversation.ts`、`ui/styles.css`；扩展 `tests/settings.smoke.mjs`、`tests/desktop-react.smoke.mjs`、`tests/desktop-smoke-support.mjs`、`tests/desktop-copy.test.ts`。
 
-**规模:** 约 700–900 行。
+**规模:** 约 700–900 行（实际约 1200 行，含 531 行数据/controller 与 350 行面板）。
 
-**进度（本提交）:** 数据层与 controller 已完成并有 20 条纯测试：分组/草稿/`ModelGroupInput`/校验、picker 选项（`__settings__` 永不作为 connectionId）、环境模型标签、协议默认 URL、主机边界；controller 的 refresh、保存/测试/发现、连接切换、运行中锁定、拒绝保留草稿、sentinel 守卫、取消/删除最后一行。React 面板、`renderer-settings.ts` 清理与 smoke 迁移待下一步。
+**进度:** 数据层、controller（20 条纯测试）与 React 面板已完成；`renderer-settings.ts` 的表单逻辑已删除，只保留 composer 模型 picker 与设置页开合。
 
-- [ ] 保留环境模型只读标签、连接分组、加密不可用时禁用保存、运行中禁用切换和打开模型设置的入口；迁移到 Combobox/Menu 时把设置入口作为独立操作，不能把 `__settings__` 当作真实 connectionId 发出。
-- [ ] 保留当前可见的上下文与模型信息（并行任务的当前模型/上下文展示）；切换锁定与保存失败恢复沿用既有语义。
-- [ ] 删除该区域旧绑定；兼容 id 更新；文案键化。
-- [ ] 运行 `node scripts/run-tests.mjs tests/settings.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-copy.test.ts`。
+- [x] 环境模型只读标签、连接分组、加密不可用时禁用保存、运行中禁用切换与打开入口：`#settings-source` 仍显示来源与当前模型；`modelLock` 让 picker（legacy）与表单（React）共享同一把锁；保存按钮在 `!encryptionAvailable` 时禁用并说明原因。
+- [x] `__settings__` 仍是动作而非连接：它只出现在 picker 末尾并立即还原值；controller 的 `selectConnection` 显式拒绝 sentinel、空值与当前连接，切换失败只写 `switchStatus`，不换视图、不丢草稿。
+- [x] 删除表单旧绑定：`setupModelSettings` 改为 `setupModelSettingsEntry`（picker/开合），表单绑定与行 DOM 构造全部删除；`environmentModelLabel` 迁到数据层并更新 `desktop-copy.test.ts` 的导入；无中文字面量（i18n gate 通过）。
+- [~] **范围调整（已记录）**：composer picker 仍是原生 `<select>`（`#model`），尚未迁到 Combobox/Menu；把它作为独立按钮、连同设置页开合一起迁，属于 composer/外壳任务（M5/T24）。当前 picker 的 sentinel 处理与原实现一致，不构成回退。
+- [x] smoke 迁移与新增断言：`#settings-protocol`/`#settings-connection` 改为 `chooseSelectOption`/`readSelectOptions`；选项值断言改为可见标签；`[data-field]`、`data-action`、`.model-chevron` 等兼容钩子保留；因行展开/收起现在是 180ms Collapse，相关断言改为等待最终状态。
+- [x] 验证：`settings.smoke` 8 通过+1 跳过（MCP 不在范围）、`model-settings` 20/20、`desktop-copy` 14/14、`desktop-react` 4/4、`desktop-i18n` 9/9、`desktop` 9/9、`layout` 4/4、`language` 7/7、`general-settings-pending` 8/8；typecheck/lint/i18n/layers/format 全绿，build 通过。
 
 #### T12: 权限、沙箱初始化与恢复
 

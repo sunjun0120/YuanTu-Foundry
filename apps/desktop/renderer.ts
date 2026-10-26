@@ -15,7 +15,8 @@ import { mountGeneralSettings } from './ui/settings/mount.tsx';
 import { createDesktopRuntime } from './ui/runtime.ts';
 import { createPendingOperations } from './ui/ui-state.ts';
 import type { Message } from '../../packages/protocol/index.ts';
-import { setupModelSettings } from './renderer-settings.ts';
+import { setupModelSettingsEntry } from './renderer-settings.ts';
+import { mountModelSettings } from './ui/settings/model-mount.tsx';
 import { diffView } from './diff-view.ts';
 import { approvalSummary } from './approval-view.ts';
 import { setupAttachments } from './renderer-attachments.ts';
@@ -212,7 +213,7 @@ let state: CarrierSnapshot | null = null;
 
 let mcpSettings: ReturnType<typeof setupMcpSettings> | undefined;
 let permissionSettings: ReturnType<typeof setupPermissionSettings> | undefined;
-let modelSettings: ReturnType<typeof setupModelSettings> | undefined;
+let modelSettings: ReturnType<typeof setupModelSettingsEntry> | undefined;
 let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
 /**
  * A settings form's own busy state, kept apart from the command counter: the settings pages already disable
@@ -975,7 +976,7 @@ new ResizeObserver(() => {
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
 const sandboxInitialization = setupSandboxInitialization();
-modelSettings = setupModelSettings(
+modelSettings = setupModelSettingsEntry(
   () =>
     Boolean(
       isOperating() || composerView.isSending() || state?.session.running || state?.session.loading,
@@ -1014,9 +1015,11 @@ permissionSettings = setupPermissionSettings(
 // The React root is created once, after the legacy DOM exists, and owns only the containers regions hand it.
 const disposeDesktopUi = mountDesktopApp({ runtime, actions });
 const disposeGeneralSettings = mountGeneralSettings(window.yuantu);
+const disposeModelSettings = mountModelSettings(window.yuantu);
 window.addEventListener(
   'pagehide',
   () => {
+    disposeModelSettings();
     disposeGeneralSettings();
     disposeDesktopUi();
   },

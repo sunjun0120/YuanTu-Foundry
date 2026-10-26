@@ -151,7 +151,7 @@ export function toGroupInput(draft: ModelDraft): ModelGroupInput {
     models: draft.models.map((model) => ({
       connectionId: model.connectionId,
       model: model.model,
-      name: model.name || model.model,
+      name: model.model,
       supportsVision: model.supportsVision,
       maxContextTokens: model.maxContextTokens ?? null,
       maxOutputTokens: model.maxOutputTokens ?? null,

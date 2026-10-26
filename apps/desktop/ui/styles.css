@@ -43,6 +43,15 @@
 }
 
 /*
+ * The legacy `.model-group-bar` expects its first child to be the labelled select stretched across the row; the React
+ * form's first child is Mantine's Select root instead, which does not carry that `label` element's `flex: 1`.
+ */
+.model-group-bar > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
  * Reduced motion is a CSS contract too: Motion and Mantine read `useReducedMotion`, but a transition a component
  * applies through a class (or one this file adds later) would keep moving. Scoped to React-owned subtrees so the
  * legacy interface's own rules are not rewritten from here.

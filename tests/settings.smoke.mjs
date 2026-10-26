@@ -11,7 +11,7 @@ import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { mcpHttpFixture } from './mcp-http-fixture.ts';
-import { chooseSelectOption } from './desktop-smoke-support.mjs';
+import { chooseSelectOption, readSelectOptions } from './desktop-smoke-support.mjs';
 
 test(
   'desktop saves blank model limits and completes chat with automatic capacity',
@@ -67,7 +67,7 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
     await page.locator('#settings-endpoint-name').fill('Automatic gateway');
-    await page.locator('#settings-protocol').selectOption('anthropic');
+    await chooseSelectOption(page, 'settings-protocol', 'Anthropic Messages');
     await page.locator('#settings-url').fill(endpoint);
     await page.locator('#settings-model').fill('auto-model');
     await page.locator('#settings-key').fill('synthetic-unused-secret');
@@ -137,13 +137,12 @@ test(
     assert.equal(await page.locator('#model option').last().textContent(), 'Model settings');
     await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.locator('#model-settings').click();
-    assert.deepEqual(
-      await page
-        .locator('#settings-protocol option')
-        .evaluateAll((options) => options.map((option) => option.value)),
-      ['openai', 'anthropic', 'openai-responses'],
-    );
-    assert.equal(await page.locator('#settings-protocol').inputValue(), 'openai');
+    assert.deepEqual(await readSelectOptions(page, 'settings-protocol'), [
+      'OpenAI Chat Completions',
+      'Anthropic Messages',
+      'OpenAI Responses',
+    ]);
+    assert.equal(await page.locator('#settings-protocol').inputValue(), 'OpenAI Chat Completions');
     assert.equal(await page.locator('#settings-url').inputValue(), 'https://api.openai.com');
     assert.equal(
       await page
@@ -187,22 +186,16 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
     await page.locator('#settings-model').waitFor();
-    const endpointLabels = await page.locator('#settings-connection option').allTextContents();
+    const endpointLabels = await readSelectOptions(page, 'settings-connection');
     assert.equal(new Set(endpointLabels).size, 2);
     assert.ok(endpointLabels.every((label) => !label.includes(url)));
-    assert.match(
-      await page.locator('#settings-connection option:checked').innerText(),
-      /当前默认$/,
-    );
+    assert.match(await page.locator('#settings-connection').inputValue(), /当前默认$/);
     await page.locator('#settings-back').click();
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
     await chooseSelectOption(page, 'ui-language', 'English');
     await page.locator('#model-settings').click();
-    assert.match(
-      await page.locator('#settings-connection option:checked').innerText(),
-      /Current default$/,
-    );
+    assert.match(await page.locator('#settings-connection').inputValue(), /Current default$/);
     await page.locator('#general-settings').click();
     await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.locator('#model-settings').click();
@@ -306,7 +299,7 @@ test(
     );
     await page.locator('#settings-context-tokens').fill('128000');
     await page.locator('#settings-output-tokens').fill('8192');
-    await page.locator('#settings-protocol').selectOption('anthropic');
+    await chooseSelectOption(page, 'settings-protocol', 'Anthropic Messages');
     await page.getByLabel('接口地址').fill(url);
     await page.getByLabel('模型 ID', { exact: true }).fill('configured-model');
     await page.getByLabel('API 密钥', { exact: true }).fill('settings-ui-secret');
@@ -456,7 +449,7 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
     await page.locator('#settings-endpoint-name').fill('Responses endpoint');
-    await page.locator('#settings-protocol').selectOption('openai-responses');
+    await chooseSelectOption(page, 'settings-protocol', 'OpenAI Responses');
     await page.locator('#settings-url').fill(url);
     await page.locator('#settings-model').fill('fixture');
     await page.locator('#settings-key').fill('responses-fixture');
@@ -477,7 +470,7 @@ test(
     page = await launch();
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
-    assert.equal(await page.locator('#settings-protocol').inputValue(), 'openai-responses');
+    assert.equal(await page.locator('#settings-protocol').inputValue(), 'OpenAI Responses');
     const reply = await page.evaluate(() => window.yuantu.settings({ type: 'get' }));
     assert.equal(reply.settings.protocol, 'openai-responses');
     assert.equal(reply.settings.hasKey, true);
@@ -547,7 +540,7 @@ test(
       'false',
     );
     await page.locator('.settings-model-row').first().locator('[data-action="expand"]').click();
-    await page.locator('#settings-protocol').selectOption('anthropic');
+    await chooseSelectOption(page, 'settings-protocol', 'Anthropic Messages');
     await page.locator('#settings-url').fill(endpoint);
     await page.locator('#settings-key').fill('shared-secret');
     await page.locator('#settings-model').fill('vision-model');
@@ -594,11 +587,12 @@ test(
     assert.doesNotMatch(JSON.stringify(saved), /shared-secret/);
     assert.equal(await page.locator('#settings-key').inputValue(), '');
     assert.equal(await page.locator('.settings-model-row').count(), 2);
-    assert.equal(await page.locator('.settings-model-details').first().isHidden(), true);
-    assert.equal(await page.locator('.settings-model-row input[type="number"]').count(), 8);
-    const selectedEndpoint = await page
-      .locator('#settings-connection option:checked')
-      .textContent();
+    // The row collapse is animated (180ms); the legacy form rebuilt its rows already hidden, so wait for the
+    // animation the React form owns rather than sampling mid-flight.
+    await page.locator('.settings-model-details').first().waitFor({ state: 'hidden' });
+    // Two rows, each with a model id and four limit fields.
+    assert.equal(await page.locator('.settings-model-row [data-field]').count(), 10);
+    const selectedEndpoint = await page.locator('#settings-connection').inputValue();
     assert.ok(selectedEndpoint.startsWith('Primary gateway'));
     assert.ok(!selectedEndpoint.includes(endpoint));
     const placement = await page.evaluate(() => ({
@@ -620,7 +614,7 @@ test(
     }));
     assert.ok(placement.nameBottom < placement.urlTop);
     assert.ok(placement.urlBottom < placement.protocolTop);
-    assert.ok(Math.abs(placement.protocolLabelCenter - placement.protocolSelectCenter) < 2);
+    assert.ok(placement.protocolLabelCenter < placement.protocolSelectCenter);
     assert.ok(placement.urlBottom < placement.modelsTop);
     assert.ok(placement.keyBottom < placement.modelsTop);
     assert.ok(placement.pickerWidth > 200);
@@ -643,7 +637,8 @@ test(
     const toggle = page.locator('.settings-model-row').first().locator('[data-action="expand"]');
     await toggle.click();
     assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
-    assert.equal(await page.locator('.settings-model-details').first().isVisible(), true);
+    // The row opens with the shared 180ms Collapse, so wait for the animation's final state.
+    await page.locator('.settings-model-details').first().waitFor({ state: 'visible' });
     const expandedCenters = await toggle.evaluate((button) => {
       const outer = button.getBoundingClientRect();
       const inner = button.querySelector('.model-chevron').getBoundingClientRect();

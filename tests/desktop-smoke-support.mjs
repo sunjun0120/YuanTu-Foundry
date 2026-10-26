@@ -59,6 +59,15 @@ export async function chooseSelectOption(page, id, label) {
   await page.getByRole('listbox').waitFor({ state: 'hidden' });
 }
 
+/** Read a Mantine Select's option labels by opening it, then close it again. */
+export async function readSelectOptions(page, id) {
+  await page.locator(`#${id}`).click();
+  const labels = await page.getByRole('option').allTextContents();
+  await page.keyboard.press('Escape');
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+  return labels;
+}
+
 /** Polls `check` every 100 ms until it is truthy, failing after `ms`. */
 export async function waitFor(check, ms = 15000) {
   const end = Date.now() + ms;
