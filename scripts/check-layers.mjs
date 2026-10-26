@@ -1,15 +1,24 @@
 /**
- * Package layering, gated: a package under `packages/` may import only packages of a strictly lower layer, and an
- * entry under `apps/` may import any package and only apps of a strictly lower layer. No package imports an app.
+ * Package layering and the React boundary, gated.
  *
- * `cycles:check` keeps the *file* graph acyclic over value imports. That says nothing about direction: `protocol`
- * could still borrow a type from `core`, and `storage` a helper from `core`, without any file cycle appearing —
- * which is how the type source ended up depending on the kernel it describes. This gate states the intended
- * direction once and refuses every edge against it, type imports included, because a type borrowed upward is
- * still a dependency a reader has to follow.
+ * Two rules about direction, both stated here once because neither is visible in a single import:
  *
- * Moving a package between layers is a deliberate edit to `LAYERS`, not something an import can do by accident.
+ * 1. **Layers.** A package under `packages/` may import only packages of a strictly lower layer, and an entry under
+ *    `apps/` may import any package and only apps of a strictly lower layer. No package imports an app.
+ *    `cycles:check` keeps the *file* graph acyclic over value imports, which says nothing about direction:
+ *    `protocol` could still borrow a type from `core` without any file cycle appearing — which is how the type
+ *    source ended up depending on the kernel it describes.
+ *
+ * 2. **The React boundary.** Node's test runner strips types from `.ts` but cannot parse `.tsx`, so a plain module
+ *    that reaches a component turns every test importing it into a syntax error. Only `apps/desktop/renderer.ts`
+ *    (the entry that mounts the tree) and the TSX files under `ui/` (which compose each other) may reach a
+ *    component; every other `.ts` module must stay JSX-free. The check is transitive and includes type imports,
+ *    because a type borrowed from a component is still a dependency on JSX.
+ *
+ * Moving a package between layers is a deliberate edit to `LAYERS`, not something an import can do by accident;
+ * widening the React boundary is a deliberate edit to `TSX_BOUNDARY_EXEMPT`.
  */
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import ts from 'typescript';
@@ -33,6 +42,14 @@ const LAYERS = [
  * desktop starts a Host as a child process and talks to it through `packages/carrier`, so it imports no other app.
  */
 const APP_LAYERS = [['shared'], ['agent-host', 'cli', 'desktop']];
+/** The one non-TSX module allowed to reach a component: the entry that mounts the React tree. */
+const TSX_BOUNDARY_EXEMPT = new Set(['apps/desktop/renderer.ts']);
+/** Every module the gates read: TSX is scanned so the boundary check can see its edges. */
+const SOURCE_FILE = /\.(?:ts|mts|mjs|tsx)$/;
+const TSX_FILE = /\.tsx$/;
+/** Extensions a relative specifier may leave out; the repository writes them, a fixture or a future file may not. */
+const EXTENSIONS = ['.ts', '.tsx', '.mts', '.mjs'];
+const INDEX_FILES = ['index.ts', 'index.tsx'];
 
 const root = process.cwd();
 const packagesRoot = path.join(root, 'packages');
@@ -49,7 +66,7 @@ async function sources(dir) {
     if (entry.name === 'node_modules') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) found.push(...(await sources(full)));
-    else if (/\.(?:ts|mts|mjs)$/.test(entry.name)) found.push(full);
+    else if (SOURCE_FILE.test(entry.name)) found.push(full);
   }
   return found;
 }
@@ -95,6 +112,20 @@ function unitOf(file) {
   }
   return undefined;
 }
+
+/** The file a relative specifier names, or undefined when it points outside this tree. */
+function resolveSpecifier(file, specifier) {
+  if (!specifier.startsWith('.')) return undefined;
+  const base = path.resolve(path.dirname(file), specifier);
+  for (const candidate of [
+    base,
+    ...EXTENSIONS.map((extension) => `${base}${extension}`),
+    ...INDEX_FILES.map((name) => path.join(base, name)),
+  ])
+    if (existsSync(candidate)) return candidate;
+  return undefined;
+}
+
 const problems = [];
 for (const [base, prefix] of [
   [packagesRoot, ''],
@@ -108,8 +139,9 @@ for (const [base, prefix] of [
       problems.push(`${prefix ? '' : 'packages/'}${name} has no layer in scripts/check-layers.mjs`);
 }
 
+const files = [...(await sources(packagesRoot)), ...(await sources(appsRoot))];
 let edges = 0;
-for (const file of [...(await sources(packagesRoot)), ...(await sources(appsRoot))]) {
+for (const file of files) {
   const from = unitOf(file);
   if (!rank.has(from)) continue;
   for (const specifier of specifiers(file, await readFile(file, 'utf8'))) {
@@ -124,6 +156,42 @@ for (const file of [...(await sources(packagesRoot)), ...(await sources(appsRoot
         `${path.relative(root, file).replaceAll('\\', '/')} imports ${specifier} (${from} → ${to} goes against the layer order)`,
       );
   }
+}
+
+/**
+ * Who can reach a component, walking importers backwards from every TSX file.
+ *
+ * Marking the components themselves first means "can reach" is the same relation for a `.ts` two hops away and one
+ * that imports the component directly: both are importers of a marked module.
+ */
+const importers = new Map();
+for (const file of files) {
+  for (const specifier of specifiers(file, await readFile(file, 'utf8'))) {
+    const target = resolveSpecifier(file, specifier);
+    if (!target) continue;
+    const list = importers.get(target);
+    if (list) list.push(file);
+    else importers.set(target, [file]);
+  }
+}
+const reachesComponent = new Set();
+const queue = files.filter((file) => TSX_FILE.test(file));
+while (queue.length) {
+  const current = queue.pop();
+  if (reachesComponent.has(current)) continue;
+  reachesComponent.add(current);
+  for (const importer of importers.get(current) ?? [])
+    if (!reachesComponent.has(importer)) queue.push(importer);
+}
+for (const file of files) {
+  if (TSX_FILE.test(file)) continue;
+  const relative = path.relative(root, file).replaceAll('\\', '/');
+  if (TSX_BOUNDARY_EXEMPT.has(relative)) continue;
+  if (!reachesComponent.has(file)) continue;
+  problems.push(
+    `${relative} reaches a .tsx module (only apps/desktop/renderer.ts and TSX files under apps/desktop/ui may; ` +
+      'the Node test runner cannot load a component)',
+  );
 }
 
 if (problems.length) {

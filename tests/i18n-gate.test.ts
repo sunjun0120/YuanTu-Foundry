@@ -252,3 +252,30 @@ test('shared carrier modules cannot introduce untranslated copy, including neste
   assert.ok(problems.some((problem) => problem.startsWith('packages/carrier/service.ts:1:')));
   assert.ok(problems.some((problem) => problem.startsWith('packages/carrier/nested/status.ts:1:')));
 });
+
+/**
+ * The React UI is the first interface directory written after the gate existed.
+ *
+ * `.tsx` holds copy in element text and in attributes, so a scan that only reads `.ts` would let the whole new
+ * layer ship Chinese into an English interface. The two cases below are the mechanism and the exception: JSX text
+ * and attribute values are copy and are reported, while a JSX comment is a comment.
+ */
+test('a .tsx module is scanned for copy like every other interface module', async (t) => {
+  const root = await tree({
+    'apps/desktop/ui/panel.tsx':
+      'export function Panel() {\n  return <button aria-label="搜索会话">新建会话</button>;\n}\n',
+  });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const problems = await scanI18n(root);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /^apps\/desktop\/ui\/panel\.tsx:2: Chinese text/);
+});
+
+test('a JSX comment is a comment, not copy', async (t) => {
+  const root = await tree({
+    'apps/desktop/ui/panel.tsx':
+      'export function Panel() {\n  return <div>{/* 这是注释，不是文案 */}</div>;\n}\n',
+  });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.deepEqual(await scanI18n(root), []);
+});

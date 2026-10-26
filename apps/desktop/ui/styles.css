@@ -1,0 +1,11 @@
+/*
+ * The React layer's own stylesheet.
+ *
+ * Copied to `dist/desktop/ui.css` by `scripts/build-desktop.mjs` and linked after the six legacy sheets:
+ * `renderer.css` (Mantine Core) → the six legacy sheets → `ui.css`. Mantine supplies component styling; this file
+ * carries the project palette, the rules the components inherit through CSS variables, and the styling of the DOM
+ * islands (Markdown, diff, highlighted code) that React owns only by its container.
+ *
+ * It is deliberately not a second theme: the palette is the existing `--surface/--sidebar/--raised/--hover/--line/
+ * --ink/--muted/--accent` set, and Mantine's variables are mapped onto it rather than duplicated here.
+ */

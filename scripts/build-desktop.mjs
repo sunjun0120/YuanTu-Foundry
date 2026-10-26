@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { mkdir, copyFile, writeFile } from 'node:fs/promises';
 import { SCHEMA_VERSION } from '../packages/storage/sqlite.ts';
 import { commonJsModuleUrl } from './commonjs-module-url.mjs';
+import { rendererBuildOptions } from './desktop-renderer-options.mjs';
 
 await mkdir('dist/desktop', { recursive: true });
 await build({
@@ -23,14 +24,7 @@ await build({
   external: ['electron', 'pdfjs-dist/*', '@napi-rs/keyring'],
   sourcemap: true,
 });
-await build({
-  entryPoints: ['apps/desktop/renderer.ts'],
-  outfile: 'dist/desktop/renderer.js',
-  bundle: true,
-  platform: 'browser',
-  target: 'chrome140',
-  sourcemap: true,
-});
+await build(rendererBuildOptions());
 await copyFile('packages/office/automation.ps1', 'dist/desktop/automation.ps1');
 await mkdir('dist/packages/office', { recursive: true });
 await copyFile('packages/office/automation.ps1', 'dist/packages/office/automation.ps1');
@@ -45,6 +39,8 @@ for (const sheet of [
   'layout-workspace.css',
 ])
   await copyFile(`apps/desktop/${sheet}`, `dist/desktop/${sheet}`);
+// The React layer's own stylesheet: the project palette and the rules for the DOM islands React only wraps.
+await copyFile('apps/desktop/ui/styles.css', 'dist/desktop/ui.css');
 // Runs under ordinary bundled Node, including from a copied maintenance directory.
 await build({
   entryPoints: ['apps/desktop/upgrade-worker.ts'],

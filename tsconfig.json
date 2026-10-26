@@ -13,8 +13,9 @@
     "incremental": true,
     "tsBuildInfoFile": ".scratch/cache/typecheck.tsbuildinfo",
     "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["packages/**/*.ts", "apps/**/*.ts", "tests/**/*.ts"]
+  "include": ["packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx", "tests/**/*.ts"]
 }

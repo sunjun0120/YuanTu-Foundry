@@ -58,6 +58,14 @@ const cases = [
     },
   },
   {
+    name: 'a component participates in a value cycle',
+    code: 1,
+    files: {
+      'a.tsx': "import { b } from './b.tsx';\nexport const a = b;",
+      'b.tsx': "import { a } from './a.tsx';\nexport const b = () => a;",
+    },
+  },
+  {
     name: 'CommonJS import-equals participates in a static cycle',
     code: 1,
     files: {

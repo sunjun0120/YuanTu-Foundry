@@ -206,7 +206,7 @@ export function withoutComments(source) {
   }
   return out;
 }
-/** Every `.ts` module under one directory, as repo-relative paths, whatever depth it sits at. */
+/** Every interface module under one directory, as repo-relative paths, whatever depth it sits at. */
 async function modulesUnder(root, directory) {
   const found = [];
   const walk = async (relative) => {
@@ -219,7 +219,7 @@ async function modulesUnder(root, directory) {
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const next = `${relative}/${entry.name}`;
       if (entry.isDirectory()) await walk(next);
-      else if (entry.name.endsWith('.ts')) found.push(next);
+      else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) found.push(next);
     }
   };
   await walk(directory);
