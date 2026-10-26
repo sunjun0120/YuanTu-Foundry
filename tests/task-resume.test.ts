@@ -244,6 +244,35 @@ test('a delegated task tool inherits the parent effect journal', async (t) => {
   assert.equal(store.getTask(session.id, task.id).nextRunAt, undefined);
 });
 
+test('a task command that exits non-zero still settles its effect and can complete', async (t) => {
+  const { root, store, session } = await fixture(t);
+  await writeFile(path.join(root, 'marker.txt'), 'ok');
+  const task = store.createTask(session.id, {
+    title: 'Probe then finish',
+    acceptance: [
+      {
+        description: 'marker exists',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
+    ],
+  });
+  const agent = new Agent({
+    store,
+    tools: createTools(root),
+    approve: async () => true,
+    provider: scripted([{ name: 'run_command', input: { command: 'node -e "process.exit(1)"' } }]),
+  });
+  const result = await agent.run({
+    sessionId: session.id,
+    taskId: task.id,
+    taskTrigger: 'manual',
+    prompt: 'probe the workspace, then report',
+  });
+  assert.equal(result.status, 'completed', result.error);
+  assert.notEqual(store.getTask(session.id, task.id).approvalOutcomeUnknown, true);
+});
+
 test('a permissioned task tool records its effect before execution and pauses after an uncertain result', async (t) => {
   const { root, store, session } = await fixture(t);
   const task = store.createTask(session.id, {

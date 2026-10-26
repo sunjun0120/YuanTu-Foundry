@@ -433,7 +433,15 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
                 : {}),
             });
             const intent = programEffects.get(inner.id);
-            if (intent && state === 'known' && result && !result.isError && taskEffectScope) {
+            // The same known-outcome rule as a direct call: a command that ran and exited is settled, while an
+            // errored external tool may have reached the other side and stays pending for review.
+            if (
+              intent &&
+              state === 'known' &&
+              result &&
+              (!result.isError || result.commandExecuted === true) &&
+              taskEffectScope
+            ) {
               store.completeTaskEffect(taskEffectScope.sessionId, taskEffectScope.taskId, intent);
               programEffects.delete(inner.id);
             }
@@ -630,7 +638,17 @@ export function createToolBatch(options: RunToolBatchOptions): RunToolBatch {
           runId,
           pipeline: tools.pipelineInvariant,
         });
-        if (effectId && !result.isError && taskEffectScope)
+        /**
+         * A command that ran and answered — even with a non-zero exit code — has a known outcome.
+         *
+         * `isError` alone would leave every failed test, missing-file probe or failing build in the task's
+         * effect ledger as `pending`, and a task whose command merely exited 1 would end `needs_review` with
+         * "side effect outcome unknown" after all of its steps and acceptance checks had passed. The journal's
+         * unknown outcome is for a call that never answered (a crash mid-operation); `commandExecuted` is the
+         * result's own statement that the command did answer, so the effect has settled.
+         */
+        const effectSettled = !result.isError || result.commandExecuted === true;
+        if (effectId && effectSettled && taskEffectScope)
           store.completeTaskEffect(taskEffectScope.sessionId, taskEffectScope.taskId, effectId);
         emit('tool.finished', {
           callId: call.id,
