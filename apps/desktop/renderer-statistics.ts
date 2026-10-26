@@ -1,71 +1,34 @@
+/**
+ * The two pills under the composer, and the two popovers behind them.
+ *
+ * The figures and their wording live in `ui/panels/statistics-model.ts`; this file is the legacy DOM seam around them:
+ * the two triggers, hover/pin/close behaviour, positioning, and the snapshot/delta entry points the renderer calls.
+ * When this surface moves to React, the model stays and this file becomes props.
+ */
 import type { SessionSnapshot, StatisticsDelta } from '../../packages/client/session-controller.ts';
-import { emptyStatistics } from '../../packages/protocol/statistics.ts';
-import type { SessionStatistics } from '../../packages/protocol/statistics.ts';
-import { locale, onLocaleChange } from './i18n.ts';
-import { formatExactTokens, formatTokens } from './token-format.ts';
+import { locale, onLocaleChange, t } from './i18n.ts';
+import { statisticsView } from './ui/panels/statistics-model.ts';
 
-/**
- * The two readings under the composer, and the two panels behind them.
- *
- * Both surfaces are DSH's, copied rather than reinvented: the same figures, in the same order, under the same
- * names, with the same number formatting — because these numbers are read next to DSH's own and two answers to
- * "how fast did this session run" would be worse than one. What is *not* copied is content DSH does not show:
- * no explanatory footnotes, no per-panel caveats, no third pill, no occupancy bar. A reader who wants the
- * reasoning reads the code that computes the figures, which is where it belongs.
- *
- * The aggregation itself (what counts as a step, which spans the model time covers, how the cache hit is
- * divided) lives in `packages/protocol/statistics.ts` and the run that fills it in, not here: this module only
- * formats.
- */
-/**
- * The throughput reading, or `null` when this session never measured a decode span.
- *
- * The panel used to print `输出速度（TPS）未知` for a completed session: `decodeMs` was positive but the timing
- * was not trustworthy (`decodeKnown` false), so the row existed and said it knew nothing. A measurement the
- * product does not have is not a reading — the row is absent instead, the same rule every other optional figure
- * in these panels already follows.
- */
-/**
- * The smallest decode sample a rate is printed for. A 24-token answer timed over 0.1 s read as "231 tok/s" —
- * arithmetic, not a measurement — so below a second of decoding or fifty tokens the row is left out.
- */
-const MIN_DECODE_MS = 1_000;
-/** A request this large is paid again on every later turn; past it the pill suggests a new session. */
-const LONG_CONTEXT_TOKENS = 400_000;
-const MIN_DECODE_TOKENS = 50;
-export function throughputReading(stats: SessionStatistics): string | null {
-  if (!(stats.decodeMs > 0) || stats.decodeKnown !== true) return null;
-  if (stats.decodeMs < MIN_DECODE_MS || stats.decodeTokens < MIN_DECODE_TOKENS) return null;
-  const tps = stats.decodeTokens / (stats.decodeMs / 1_000);
-  return (tps >= 10 ? String(Math.round(tps)) : String(Math.round(tps * 10) / 10)) + ' tok/s';
-}
+export { throughputReading } from './ui/panels/statistics-model.ts';
+
 export function setupStatistics() {
   const host = document.getElementById('composer-statistics')!;
-  const text = (zh: string, en: string) => (locale() === 'en-US' ? en : zh);
   const icons = [
     '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 14a8 8 0 1 1 14 0M10 11l4-5"/><circle cx="10" cy="11" r="1.4"/></svg>',
     '<svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="4" rx="6" ry="2.5"/><path d="M4 4v11c0 3.3 12 3.3 12 0V4M4 9c0 3.3 12 3.3 12 0"/></svg>',
   ];
-  /** Row labels, per panel, in the order DSH prints them. */
+  /** Row keys, per panel, in the order DSH prints them. */
   const labels = [
+    ['statistics.modelTime', 'statistics.toolsApprovals', 'statistics.ttft', 'statistics.tps'],
     [
-      ['模型用时', 'LLM time'],
-      ['工具与确认用时', 'Tools + approvals'],
-      ['首 token 平均（TTFT）', 'Avg time to first token (TTFT)'],
-      ['输出速度（TPS）', 'Tokens per second (TPS)'],
-    ],
-    [
-      ['缓存命中', 'Cache hit'],
-      ['未缓存输入', 'Uncached input'],
-      ['缓存读取', 'Cached input'],
-      ['缓存写入', 'Cache write'],
-      ['输出', 'Output'],
+      'statistics.cacheHit',
+      'statistics.uncachedInput',
+      'statistics.cachedInput',
+      'statistics.cacheWrite',
+      'statistics.output',
     ],
   ];
-  const titles = [
-    ['会话统计', 'Session statistics'],
-    ['Token 用量', 'Token usage'],
-  ];
+  const titles = ['statistics.sessionTitle', 'statistics.tokensTitle'];
   let current: SessionSnapshot | undefined;
   let opened = -1;
   let pinned = false;
@@ -93,13 +56,6 @@ export function setupStatistics() {
     const total = document.createElement('strong');
     heading.append(title, total);
     const body = document.createElement('dl');
-    /**
-     * One label/value pair per row the schema can print, kept rather than rebuilt.
-     *
-     * Which rows are *in* the list is decided per render and the pairs are moved into it then, so a row a
-     * session has no figure for is absent from the panel exactly as it is in DSH — not an empty line, and not
-     * a zero standing in for a measurement nobody took.
-     */
     const values = rows.map(() => {
       const name = document.createElement('dt');
       const value = document.createElement('dd');
@@ -174,175 +130,34 @@ export function setupStatistics() {
   window.addEventListener('resize', position);
   document.addEventListener('scroll', position, true);
 
-  const exactCount = (value: number) => formatExactTokens(value) + ' tok';
-  /**
-   * Compact duration, DSH's own two-step shape: tenths of a second under a minute, whole minutes and seconds
-   * above it. `4.2秒` / `102分35秒`, never `102 分 35 秒` — the space is the part a reader notices.
-   */
-  function duration(ms: number) {
-    const seconds = ms / 1000;
-    if (seconds < 60)
-      return text(`${Math.round(seconds * 10) / 10}秒`, `${Math.round(seconds * 10) / 10}s`);
-    const whole = Math.round(seconds);
-    return text(
-      `${Math.floor(whole / 60)}分${whole % 60}秒`,
-      `${Math.floor(whole / 60)}m${whole % 60}s`,
-    );
-  }
-  /** Whole tokens from ten up, one decimal below: `180 tok/s`, `4.2 tok/s`. */
-  /**
-   * The prompt-side total the cache hit is a share of: every billing bucket, not just the uncached part.
-   *
-   * `inputTokens` is what the provider billed, so it already is the sum of the three buckets — reading it
-   * directly is the same number DSH's `billedInputTokens` adds up, and the total the pill shows is that plus
-   * the output.
-   */
-  const billedInputTokens = (stats: SessionStatistics) => stats.inputTokens;
-  /**
-   * Cache-hit share of the prompt, DSH's rounding rule included.
-   *
-   * An ordinary integer percentage, except that a partial hit never *displays* as a full one: when rounding
-   * would print 100 for a session that still missed a token, the precision is extended just far enough to
-   * show the miss. A true 100% is printed as 100, and a session with no billed prompt has no share at all.
-   */
-  function cacheHitPercent(stats: SessionStatistics): string | null {
-    const promptTokens = billedInputTokens(stats);
-    if (promptTokens === 0) return null;
-    const cacheReadTokens = stats.cachedInputTokens;
-    const missed = promptTokens - cacheReadTokens;
-    /**
-     * Nothing is missing from a total smaller than its own part, and the loop below must not be able to run forever.
-     *
-     * `gap` is multiplied by ten until it passes a positive bound, so a negative `missed` — a cache-read bucket
-     * larger than the billed input, which `isSessionStatistics` accepts because it validates each field on its own
-     * and cannot see a relationship between two of them — drove it further negative on every pass. That ran
-     * synchronously on the paint path, with no timer and no yield, so the window stopped painting for good. This
-     * is the guard the shape needs: above 100% there is no percentage to print, and "100" is the closest true one.
-     */
-    if (missed <= 0) return '100';
-    const rounded = Math.round((cacheReadTokens / promptTokens) * 100);
-    if (rounded < 100) return String(rounded);
-    // Rounding already said "full" while a token is missing, so print enough nines to show the miss.
-    let places = 1;
-    let gap = missed * 200;
-    const denominatorTens = Math.floor(promptTokens / 10);
-    while (gap <= denominatorTens) {
-      gap *= 10;
-      places += 1;
-    }
-    const denominatorOnes = promptTokens % 10;
-    let loss = 5;
-    for (let candidate = 1; candidate < 5; candidate += 1) {
-      const factor = candidate * 2 + 1;
-      if (gap <= factor * denominatorTens + Math.floor((factor * denominatorOnes) / 10)) {
-        loss = candidate;
-        break;
-      }
-    }
-    return `99.${'9'.repeat(places - 1)}${10 - loss}`;
-  }
-  /**
-   * The prompt tokens that were neither read from nor written to the cache.
-   *
-   * Both cache buckets are parts of the billed input, so both have to come out: subtracting only the read
-   * bucket counted a cache write as "uncached input" and made the row disagree with `缓存命中` beside it.
-   */
-  function uncachedInputTokens(stats: SessionStatistics): number {
-    // Clamped for the same reason the percentage above is guarded: the fields are validated one at a time, so a
-    // relationship between them can be impossible, and "-1200 uncached" is not a count of anything.
-    return Math.max(0, stats.inputTokens - stats.cachedInputTokens - stats.cacheWriteInputTokens);
-  }
-  /**
-   * The usage pill: this run first, then the session, and what the session number includes.
-   *
-   * A person who ran `node -v` in a long session read "本会话 521K tok" as the price of that command. The run's
-   * own share comes first when it differs from the session's, the session figure says it is cumulative and
-   * counts cache reads, and a context large enough to make every later turn expensive says so.
-   */
-  function usagePill(total: number, cacheHit: string | null): string {
-    const run = current?.runStatistics;
-    const runTotal = run ? billedInputTokens(run) + run.outputTokens : 0;
-    const parts: string[] = [];
-    if (run && runTotal > 0 && runTotal < total)
-      parts.push(text(`本次 ${formatTokens(runTotal)}`, `This run ${formatTokens(runTotal)}`));
-    parts.push(
-      text(
-        `本会话累计 ${formatTokens(total)} tok（含缓存读取）`,
-        `Session total ${formatTokens(total)} tok (incl. cache reads)`,
-      ),
-    );
-    if (cacheHit !== null) parts.push(text(`缓存命中 ${cacheHit}%`, `Cache hit ${cacheHit}%`));
-    const context = current?.budget?.inputTokens ?? 0;
-    if (context >= LONG_CONTEXT_TOKENS)
-      parts.push(
-        text(
-          '上下文已较长，新建会话可降低后续开销',
-          'Long context: a new session lowers the cost of later turns',
-        ),
-      );
-    return parts.join(' · ');
-  }
   function render() {
-    const stats = current?.statistics ?? emptyStatistics();
-    const total = billedInputTokens(stats) + stats.outputTokens;
-    const cacheHit = cacheHitPercent(stats);
-    const tps = throughputReading(stats);
-    const counts = text(
-      `本会话累计 ${stats.turns} 轮 ${stats.steps} 步`,
-      `This session: ${stats.turns} turns ${stats.steps} steps`,
-    );
-    // Every figure a panel prints is optional. A session with no step and no token has no reading at all, so
-    // neither pill is on screen; a session with steps but no timed figure keeps its counts as a plain reading
-    // instead of a button over an empty dialog, which is DSH's rule and the honest one.
-    const timed =
-      stats.modelMs > 0 || stats.toolMs > 0 || stats.firstTokenCount > 0 || stats.decodeMs > 0;
-    items[0]!.wrapper.hidden = stats.steps === 0;
-    items[0]!.openable = timed;
-    items[1]!.wrapper.hidden = total === 0;
-    items[1]!.openable = true;
-    items[0]!.summary.textContent = counts + (tps === null ? '' : ' · ' + tps);
-    items[0]!.button.setAttribute('aria-label', items[0]!.summary.textContent);
-    items[1]!.summary.textContent = usagePill(total, cacheHit);
-    items[1]!.button.setAttribute('aria-label', items[1]!.summary.textContent);
+    const view = statisticsView(current, locale());
+    const sections = [view.session, view.tokens];
     items.forEach((item, index) => {
-      const title = text(...(titles[index]! as [string, string]));
+      const section = sections[index] ?? null;
+      item.wrapper.hidden = index === 0 ? !view.sessionVisible : !view.tokensVisible;
+      item.openable = section !== null;
+      item.summary.textContent = index === 0 ? view.counts : view.usage;
+      item.button.setAttribute('aria-label', item.summary.textContent ?? '');
+      const title = t(titles[index]!);
       item.panel.setAttribute('aria-label', title);
       item.title.textContent = title;
-    });
-    // Only the usage panel has a headline value: the time panel's own total is its pill.
-    items[0]!.total.textContent = '';
-    items[1]!.total.textContent = exactCount(total);
-    const rows = [
-      [
-        stats.modelMs > 0 ? duration(stats.modelMs) : '',
-        stats.toolMs > 0 ? duration(stats.toolMs) : '',
-        stats.firstTokenCount > 0 ? duration(stats.firstTokenMs / stats.firstTokenCount) : '',
-        stats.decodeMs > 0 ? (tps ?? '') : '',
-      ],
-      [
-        cacheHit === null ? '' : cacheHit + '%',
-        exactCount(uncachedInputTokens(stats)),
-        exactCount(stats.cachedInputTokens),
-        stats.cacheWriteInputTokens !== 0 ? exactCount(stats.cacheWriteInputTokens) : '',
-        exactCount(stats.outputTokens),
-      ],
-    ];
-    items.forEach((item, index) => {
+      item.total.textContent = section?.total ? `${section.total} tok` : '';
       const shown: HTMLElement[] = [];
-      item.values.forEach((row, rowIndex) => {
-        const value = rows[index]![rowIndex]!;
-        if (value === '') return;
-        row.name.textContent = text(...(labels[index]![rowIndex]! as [string, string]));
-        row.value.textContent = value;
-        shown.push(row.name, row.value);
-      });
+      for (const row of section?.rows ?? []) {
+        const at = labels[index]!.indexOf(row.key);
+        if (at < 0) continue;
+        const pair = item.values[at]!;
+        pair.name.textContent = t(row.key);
+        pair.value.textContent =
+          index === 1 && row.key !== 'statistics.cacheHit' ? `${row.value} tok` : row.value;
+        shown.push(pair.name, pair.value);
+      }
       item.body.replaceChildren(...shown);
     });
-    // A pill that just went off screen, or lost the figure its panel is made of, must not leave its dialog
-    // behind: the panel is a reading of the pill, so it goes when the pill does. The row goes with the last
-    // pill too — reserved empty space under the composer is something a reader keeps looking at for nothing.
+    // A pill that just went off screen, or lost the figure its panel is made of, must not leave its dialog behind.
     if (opened >= 0 && (items[opened]!.wrapper.hidden || !items[opened]!.openable)) close();
-    host.hidden = items[0]!.wrapper.hidden && items[1]!.wrapper.hidden;
+    host.hidden = view.hidden;
     position();
   }
   onLocaleChange(render);
@@ -357,17 +172,22 @@ export function setupStatistics() {
       render();
     },
     /**
-     * Usage and activity, delivered without a snapshot. Only the numbers changed, so patching them and
-     * repainting two popovers is the whole cost of the update.
+     * Usage and activity, delivered without a snapshot. Only the numbers changed, so patching them and repainting
+     * two popovers is the whole cost of the update — and a delta for another session is not this reading.
      */
     delta(delta: StatisticsDelta) {
-      if (!current || current.sessionId !== delta.sessionId) return;
-      current = {
-        ...current,
-        statistics: delta.statistics,
-        ...(delta.runStatistics !== undefined ? { runStatistics: delta.runStatistics } : {}),
-        statisticsActivity: delta.activity,
-      };
+      const next = (
+        current?.sessionId === delta.sessionId
+          ? {
+              ...current,
+              statistics: delta.statistics,
+              ...(delta.runStatistics !== undefined ? { runStatistics: delta.runStatistics } : {}),
+              statisticsActivity: delta.activity,
+            }
+          : null
+      ) as SessionSnapshot | null;
+      if (!next) return;
+      current = next;
       render();
     },
   };
