@@ -766,7 +766,7 @@ interface PanelTransitionProps {
 
 **规模:** 约 900–1,200 行。
 
-**进度:** 计划面板已完成 React 化：新增 `ui/panels/plan-view.ts`（纯模型：等待问题优先于状态、`planning` busy/idle 两种状态、proposed/approved/rejected/abandoned 的动作与提示、`discard` vs `exitMode` 标签）、`PlanPanel.tsx`、`plan-mount.tsx`；删除 `renderer-plan.ts`；`#plan-panel`/`#plan-title`/`#plan-status`/`#plan-summary`/`#plan-steps`/`#plan-reason`/`#plan-actions` 与 `.plan-*` 类保留；`tests/plan-contract.test.ts` 的 FakeDocument 段落改为 2 条纯模型测试（10/10）。任务数据层（drafts + task-view）已完成。剩余：任务列表/编辑器/会话辅助面板。
+**进度:** 计划面板、会话辅助面板已完成 React 化，任务卡片数据层已完成。①计划：`plan-view` + `PlanPanel`/`plan-mount`，删除 `renderer-plan.ts`，`#plan-*`/`.plan-*` 保留，`plan-contract` 10/10。②待办/目标/交付物：`session-panels-model` + 三个面板 + `session-panels-mount`，删除 `renderer-session-panels.ts`，`#todos-panel`/`#goal-*`/`#deliverables`/`.todo*`/`.goal-*`/`.deliverable*` 保留，专项 4/4，`desktop-i18n` 移除依赖已删模块的段落（4/4）。③任务卡片模型：`task-view` 扩到 11 条纯测试（时间线 next/last、审批三态、confirm 资格、start/retry/verify/confirm 动作与 unavailable、尝试历史）。剩余：任务列表/编辑器 UI（`renderer-tasks.ts` + editors）。
 
 - [x] `TaskConfirmDrafts` 已抽为纯 `.ts` 并保留原断言；任务文案/证据/步骤模型已抽并接入 format；计划面板 UI 已替换。
 - [ ] 任务进度更新不覆盖编辑中的确认选择或自由文本；剩余任务列表/编辑器的 React 化（待办/目标/交付物/计划已完成）。

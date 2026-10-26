@@ -7,6 +7,11 @@ import {
   evidenceReading,
   stepJournalReading,
   taskEventReading,
+  taskActions,
+  taskApprovalView,
+  taskAttemptsReading,
+  taskCanConfirm,
+  taskScheduleReading,
   taskStatusReading,
   triggerSummaryReading,
 } from '../apps/desktop/ui/panels/task-view.ts';
@@ -204,4 +209,109 @@ test('acceptance rows carry the live selection and what cannot be confirmed agai
       [1, 'second', true, true, false],
     ],
   );
+});
+
+test('the timeline adds the next and last moments to the trigger sentence', () => {
+  const reading = taskScheduleReading(
+    task({
+      trigger: { kind: 'interval', everyMinutes: 5, enabled: true } as never,
+      nextRunAt: '2026-10-26T01:05:00.000Z',
+      lastRunAt: '2026-10-26T01:00:00.000Z',
+    }),
+    'zh-CN',
+  );
+  assert.match(reading, /^每 5 分钟 · 下次 /);
+  assert.match(reading, / · 上次 /);
+  assert.doesNotMatch(taskScheduleReading(task(), 'zh-CN'), /下次|上次/);
+});
+
+test('an approval reads its state and only a pending one can be answered', () => {
+  const pending = taskApprovalView(
+    task({
+      pendingApproval: {
+        id: 'a1',
+        state: 'pending',
+        kind: 'command',
+        tool: 'run_command',
+        description: 'rm -rf build',
+      } as never,
+    }),
+    'zh-CN',
+  );
+  assert.equal(pending.label, '等待操作审批');
+  assert.equal(pending.detail, 'command · run_command');
+  assert.equal(pending.canRespond, true);
+  const rejected = taskApprovalView(
+    task({
+      pendingApproval: {
+        id: 'a1',
+        state: 'rejected',
+        kind: 'command',
+        tool: 'run_command',
+        description: 'x',
+      } as never,
+    }),
+    'zh-CN',
+  );
+  assert.equal(rejected.label, '已拒绝，自动触发已暂停');
+  assert.equal(rejected.canRespond, false);
+  assert.equal(taskApprovalView(task(), 'zh-CN').visible, false);
+});
+
+test('confirmation needs a run, evidence, and a task that is past pending', () => {
+  const base = task({
+    status: 'needs_review',
+    latestRunId: 'run',
+    verification: { passed: true, checks: [] } as never,
+    acceptance: [{ description: 'manual', met: false }] as never,
+  });
+  assert.equal(taskCanConfirm(base), true);
+  assert.equal(taskCanConfirm({ ...base, status: 'in_progress' }), false);
+  assert.equal(taskCanConfirm({ ...base, latestRunId: undefined }), false);
+});
+
+test('actions choose start or retry, gate verification, and offer confirm only when it applies', () => {
+  const fresh = task({ acceptance: [{ description: 'manual', met: false }] as never });
+  assert.deepEqual(
+    taskActions(fresh, new Set(), 'zh-CN')
+      .filter((action) => ['start', 'retry', 'verify', 'confirm'].includes(action.kind))
+      .map((action) => [action.kind, action.unavailable]),
+    [
+      ['start', false],
+      ['verify', true],
+    ],
+  );
+  const verified = task({
+    status: 'needs_review',
+    latestRunId: 'run',
+    verification: { passed: true, checks: [] } as never,
+    acceptance: [{ description: 'manual', met: false }] as never,
+  });
+  assert.deepEqual(
+    taskActions(verified, new Set(), 'zh-CN')
+      .filter((action) => ['start', 'retry', 'confirm'].includes(action.kind))
+      .map((action) => [action.kind, action.unavailable]),
+    [
+      ['retry', false],
+      ['confirm', true],
+    ],
+  );
+  const chosen = taskActions(verified, new Set([0]), 'zh-CN').find(
+    (action) => action.kind === 'confirm',
+  );
+  assert.equal(chosen?.unavailable, false);
+});
+
+test('attempt history keeps the trigger, resume and error on one line', () => {
+  const reading = taskAttemptsReading(
+    [
+      { kind: 'automatic', status: 'completed', startedAt: 't1', trigger: 'cron', resume: true },
+      { kind: 'manual', status: 'failed', startedAt: 't2', error: 'boom' },
+    ],
+    'zh-CN',
+  );
+  assert.equal(reading.title, '历史尝试 (2)');
+  assert.equal(reading.rows[0]?.text, 'automatic · completed · t1 · cron · 续跑');
+  assert.equal(reading.rows[1]?.text, 'manual · failed · t2 · boom');
+  assert.equal(taskAttemptsReading([], 'zh-CN').visible, false);
 });
