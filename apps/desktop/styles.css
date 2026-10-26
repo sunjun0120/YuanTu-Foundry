@@ -964,21 +964,11 @@ h1 {
   line-height: 1.8;
   font-size: 13px;
 }
-.message-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 1.5px;
-  color: #75917f;
-  margin-bottom: 10px;
-}
 .user {
   margin-left: 42px;
   background: #eef2ef;
   padding: 16px 20px;
   border-radius: 9px 9px 0 9px;
-}
-.user .message-label {
-  color: #86928a;
 }
 .message-content {
   white-space: pre-wrap;

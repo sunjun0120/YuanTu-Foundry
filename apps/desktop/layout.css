@@ -368,26 +368,6 @@ body[data-page='background'] {
 .background-status.starting {
   color: var(--accent);
 }
-.background-meta {
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 8px;
-  overflow-wrap: anywhere;
-}
-.background-log {
-  max-height: 260px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 12px 0 0;
-  padding: 12px;
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--ink);
-  font:
-    12px/1.6 Consolas,
-    monospace;
-}
 .background-actions {
   display: flex;
   justify-content: flex-end;
@@ -485,16 +465,6 @@ body[data-page='background'] {
 .header-divider {
   color: var(--muted);
 }
-#project-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 12px;
-}
-.header-context {
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
 #chat-page #conversation {
   padding: 32px max(28px, calc((100% - 780px) / 2));
   scrollbar-color: var(--line) transparent;
@@ -544,10 +514,6 @@ body[data-page='background'] {
   color: var(--ink);
   font-size: var(--ui-font-size);
   line-height: 1.85;
-}
-#chat-page .message-label,
-#chat-page .message-model {
-  color: var(--muted);
 }
 #chat-page .message.user {
   background: var(--raised);

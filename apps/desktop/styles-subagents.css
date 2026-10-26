@@ -559,12 +559,6 @@ body[data-subagent-page='open'] #chat-page #jump-to-latest {
   margin-top: 10px;
 }
 
-.message-model {
-  display: block;
-  font-size: 11px;
-  opacity: 0.7;
-  margin-bottom: 6px;
-}
 .undo-change,
 .confirm-undo {
   margin: 8px;

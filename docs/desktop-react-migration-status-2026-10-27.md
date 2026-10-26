@@ -41,15 +41,15 @@
 
 | 文件                 | 行数 | !important |
 | -------------------- | ---- | ---------- |
-| styles.css           | 1413 | 12         |
+| styles.css           | 1403 | 12         |
 | styles-panels.css    | 452  | 0          |
-| styles-subagents.css | 1011 | 0          |
-| layout.css           | 1405 | 0          |
+| styles-subagents.css | 1005 | 0          |
+| layout.css           | 1371 | 0          |
 | layout-surfaces.css  | 1339 | 14         |
 | layout-workspace.css | 413  | 3          |
-| 合计                 | 6033 | 29         |
+| 合计                 | 5983 | 29         |
 
-计划 T24 要求完成时旧 CSS 合计 ≤ 1,200 行；当前仍是 6,033 行，T24 的删除工作尚未开始。
+计划 T24 要求完成时旧 CSS 合计 ≤ 1,200 行；当前 5,983 行（T24 起步删除已移除的 #project-name/.header-context/.message-label/.message-model/.background-meta/.background-log 规则），外壳接管与其余删除尚未开始。
 
 ## 推进顺序（剩余）
 

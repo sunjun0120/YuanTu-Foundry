@@ -28,7 +28,7 @@
 1. **T21 动画项**：思考/工具组/验证证据尚未统一使用 `PanelTransition`，没有专门的 transcript 动画冒烟；流式行为由现有 Electron 冒烟覆盖。
 2. **T20 React 冒烟证据**：未记录 MutationObserver/DOM 身份证据；现有 agent/desktop 断言覆盖流式正文与折叠状态。
 3. **DOM 岛（按任务范围保留）**：消息/工具卡/markdown 内容仍由 `renderer-messages.ts` 构建；diff 正文仍由 `diff-view.diffBody` 构建；任务编辑/触发设置表单仍是 `renderer-tasks-editors.ts`；`turn-changes` 卡片内容通过 portal 承载。
-4. **T24 应用外壳接管与旧 CSS 退役：未开始**。六份旧 CSS 仍为 6,033 行 / 29 个 `!important`（目标 ≤1,200）；`body` 仍是旧的页面 grid；`index.html` 仍保留整页静态结构；`renderer.ts` 仍创建多个 region 挂载点。
+4. **T24 应用外壳接管与旧 CSS 退役：仅起步**。六份旧 CSS 仍为 6,023 行 / 29 个 `!important`（T24 起步只删了已移除的 `#project-name`/`.header-context` 规则；目标 ≤1,200 远未达到）；`body` 仍是旧的页面 grid；`index.html` 仍保留整页静态结构；`renderer.ts` 仍创建多个 region 挂载点。
 5. **T25 Slot/遗留清理：未开始**。`RegionHost`/portal 适配仍在；旧整页 render 仍在；兼容 id 登记表未清零；i18n walker 与原生 select upgrader 仍为 legacy 区域服务。
 6. **T26 完整验收：未完成**。本记录只覆盖可自动化的检查，未做浅/深/系统主题、中英文、字号与窗口尺寸的截图对照，也没有动效的开始/中间/结束帧证据或打包资源校验。
 

@@ -843,7 +843,7 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 **Files:** 完成 `ui/App.tsx`、`ui/layout/DesktopShell.tsx`；精简 `renderer.ts`、`index.html`；按 §10 调整六份旧 CSS 与 `ui/styles.css`；扩展 `tests/desktop-layout.smoke.mjs`、`tests/desktop-react-motion.smoke.mjs`。
 
-**规模:** 约 800–1,200 行（其中 CSS 删除远大于新增）。
+**规模:** 约 800–1,200 行（其中 CSS 删除远大于新增）。\n\n**进度:** 仅起步。删除已移除的 #project-name、.header-context、.message-label、.message-model、.background-meta、.background-log 规则后旧 CSS 为 5,983 行（layout.css 1,371、styles.css 1,403、styles-subagents.css 1,005）；外壳接管、body grid 替换、PageTransition 与 ≤1,200 行预算均未完成。
 
 - [ ] 移除 RegionHost/portal 区域适配，由同一根内的 App/DesktopShell 接管 `index.html` 的整页结构；保留单 provider 和所有业务状态。移除旧 body grid 的干扰，修复 AppShell 偏移、高度、overflow 及 portal 样式，核对 HTML 只有一个 `main` landmark。
 - [ ] 接通产品中的 PageTransition 与各面板过渡，覆盖聊天/设置/设置分类/已有侧栏显隐和消息容器首次出现。验证返回聊天恢复锚点、草稿和附件，动画中快速切换或关闭窗口不遗留过期回调。
