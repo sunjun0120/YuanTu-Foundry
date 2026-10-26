@@ -102,3 +102,171 @@ test('the goal/plan commands carry the interface language they were typed in', (
   setLocale('zh-CN');
   assert.equal(t('ui.createPlan').length > 0, true);
 });
+
+// ---- sending state (composer-model) ----
+import type { CarrierCommand, CarrierSnapshot } from '../packages/carrier/contract.ts';
+import type { DocumentAttachment } from '../apps/desktop/attachment-contract.ts';
+import type { ImageAttachment } from '../packages/protocol/index.ts';
+import { createComposerController } from '../apps/desktop/ui/composer/composer-model.ts';
+
+function composerFixture(
+  options: { running?: boolean; fail?: boolean; defer?: boolean; slash?: 'command' | 'error' } = {},
+) {
+  let prompt = '';
+  const session = { sessionId: 's1' as string | null, running: options.running ?? false };
+  const state = { session, workspace: '/w' } as unknown as CarrierSnapshot;
+  const calls: CarrierCommand[] = [];
+  const errors: (string | null)[] = [];
+  const images: ImageAttachment[] = [];
+  const documents: DocumentAttachment[] = [];
+  let release: ((value: CarrierSnapshot | null) => void) | undefined;
+  const controller = createComposerController({
+    getState: () => state,
+    invoke: async (command) => {
+      calls.push(command);
+      if (!options.defer) return options.fail ? null : ({} as CarrierSnapshot);
+      return new Promise<CarrierSnapshot | null>((resolve) => {
+        release = resolve;
+      });
+    },
+    requestRender: () => {},
+    setError: (message) => errors.push(message),
+    attachments: {
+      images: () => [...images],
+      documents: () => [...documents],
+      hasAny: () => images.length + documents.length > 0,
+      clear: () => {
+        images.length = 0;
+        documents.length = 0;
+      },
+      restore: (nextImages, nextDocuments) => {
+        images.push(...nextImages);
+        documents.push(...nextDocuments);
+      },
+    },
+    commands: {
+      submitSlash: () =>
+        options.slash === 'command'
+          ? { command: { type: 'compact' } }
+          : options.slash === 'error'
+            ? { error: 'refused' }
+            : null,
+    },
+    getPrompt: () => prompt,
+    setPrompt: (text) => {
+      prompt = text;
+    },
+    isPromptDisabled: () => false,
+    focusPrompt: () => {},
+  });
+  return {
+    controller,
+    calls,
+    errors,
+    images,
+    documents,
+    session,
+    setPrompt: (text: string) => (prompt = text),
+    prompt: () => prompt,
+    release: () => release,
+  };
+}
+
+test('an ordinary send submits once, clears the composer and is not "sending" afterwards', async () => {
+  const fixture = composerFixture();
+  fixture.setPrompt('hello');
+  await fixture.controller.submit();
+  assert.deepEqual(fixture.calls, [{ type: 'send', prompt: 'hello', images: [] }]);
+  assert.equal(fixture.prompt(), '');
+  assert.equal(fixture.controller.isSending(), false);
+});
+
+test('a message typed while the run is live is queued as a follow-up', async () => {
+  const fixture = composerFixture({ running: true, defer: true });
+  fixture.setPrompt('later');
+  const pending = fixture.controller.submit();
+  assert.deepEqual(fixture.calls, [
+    { type: 'enqueue', prompt: 'later', images: [], mode: 'follow-up' },
+  ]);
+  assert.equal(fixture.controller.isQueueBusy(), true);
+  fixture.release()?.({} as CarrierSnapshot);
+  await pending;
+  assert.equal(fixture.controller.isQueueBusy(), false);
+});
+
+test('a second submit while the first is in flight sees an empty composer and sends nothing', async () => {
+  const fixture = composerFixture({ defer: true });
+  fixture.setPrompt('once');
+  const first = fixture.controller.submit();
+  const second = fixture.controller.submit();
+  fixture.release()?.({} as CarrierSnapshot);
+  await Promise.all([first, second]);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test('a failed send gives the text and attachments back to the session that wrote it', async () => {
+  const fixture = composerFixture({ fail: true });
+  fixture.setPrompt('keep me');
+  fixture.images.push({ mimeType: 'image/png', data: 'AAAA', name: 'a.png' } as never);
+  await fixture.controller.submit();
+  assert.equal(fixture.prompt(), 'keep me');
+  assert.equal(fixture.images.length, 1);
+  assert.equal(fixture.controller.isSending(), false);
+});
+
+test('a failure that lands after a session switch restores nothing', async () => {
+  const fixture = composerFixture({ defer: true });
+  fixture.setPrompt('from s1');
+  const pending = fixture.controller.submit();
+  fixture.session.sessionId = 's2';
+  fixture.release()?.(null);
+  await pending;
+  assert.equal(fixture.prompt(), '');
+  assert.equal(fixture.controller.isSending(), false);
+});
+
+test('"sending" belongs to the session that sent', async () => {
+  const fixture = composerFixture({ defer: true });
+  fixture.setPrompt('hello');
+  const pending = fixture.controller.submit();
+  assert.equal(fixture.controller.isSending(), true);
+  fixture.session.sessionId = 's2';
+  assert.equal(fixture.controller.isSending(), false);
+  fixture.release()?.({} as CarrierSnapshot);
+  await pending;
+});
+
+test('a slash command is sent through the same invoke channel and shows its refusal', async () => {
+  const ok = composerFixture({ slash: 'command' });
+  ok.setPrompt('/compact');
+  await ok.controller.submit();
+  assert.deepEqual(ok.calls, [{ type: 'compact' }]);
+
+  const refused = composerFixture({ slash: 'error' });
+  refused.setPrompt('/plan');
+  await refused.controller.submit();
+  assert.deepEqual(refused.calls, []);
+  assert.deepEqual(refused.errors, ['refused']);
+});
+
+test('stop asks once and only while a run is live', async () => {
+  const idle = composerFixture();
+  await idle.controller.stop();
+  assert.deepEqual(idle.calls, []);
+  const running = composerFixture({ running: true, defer: true });
+  const first = running.controller.stop();
+  await running.controller.stop();
+  running.release()?.({} as CarrierSnapshot);
+  await first;
+  assert.deepEqual(running.calls, [{ type: 'cancel' }]);
+});
+
+test('clearing the queue raises the busy flag around the command', async () => {
+  const fixture = composerFixture({ defer: true });
+  const pending = fixture.controller.clearQueue();
+  assert.equal(fixture.controller.isQueueBusy(), true);
+  fixture.release()?.({} as CarrierSnapshot);
+  await pending;
+  assert.equal(fixture.controller.isQueueBusy(), false);
+  assert.deepEqual(fixture.calls, [{ type: 'clearQueue' }]);
+});
