@@ -38,7 +38,7 @@ import {
   providerDegradedText,
 } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
-import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
+import { mountSandboxSetup } from './ui/sandbox/mount.tsx';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
 import { setupArchivedSessions } from './renderer-archived-sessions.ts';
 import { setupPermissionSettings } from './renderer-permissions.ts';
@@ -975,7 +975,7 @@ new ResizeObserver(() => {
   );
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
-const sandboxInitialization = setupSandboxInitialization();
+const sandboxInitialization = mountSandboxSetup(window.yuantu);
 modelSettings = setupModelSettingsEntry(
   () =>
     Boolean(
@@ -1019,6 +1019,7 @@ const disposeModelSettings = mountModelSettings(window.yuantu);
 window.addEventListener(
   'pagehide',
   () => {
+    sandboxInitialization.dispose();
     disposeModelSettings();
     disposeGeneralSettings();
     disposeDesktopUi();

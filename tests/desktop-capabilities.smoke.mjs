@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
-import { choosePermissionPreset, waitFor } from './desktop-smoke-support.mjs';
+import { choosePermissionPreset, chooseSelectOption, waitFor } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 
 // ---- merged from capabilities.smoke.mjs ----
@@ -131,8 +131,8 @@ test(
     assert.equal(await page.locator('#messages img').count(), 1);
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
-    await page.locator('#settings-protocol').selectOption('openai');
-    assert.equal(await page.locator('#settings-protocol').inputValue(), 'openai');
+    await chooseSelectOption(page, 'settings-protocol', 'OpenAI Chat Completions');
+    assert.equal(await page.locator('#settings-protocol').inputValue(), 'OpenAI Chat Completions');
   },
 );
 

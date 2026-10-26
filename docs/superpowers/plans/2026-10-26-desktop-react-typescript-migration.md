@@ -662,14 +662,16 @@ interface PanelTransitionProps {
 
 #### T12: 权限、沙箱初始化与恢复
 
-**Files:** 新增 `ui/settings/PermissionSettings.tsx`、`SandboxSetup.tsx`；停用 `renderer-permissions.ts`、`renderer-sandbox-setup.ts` 的活动接入；迁移 `tests/sandbox-setup-renderer.test.ts` 中的纯逻辑到 `.ts` model；扩展 smoke。
+**Files:** 新增 `ui/settings/PermissionSettings.tsx`、`ui/sandbox/{sandbox-setup-model.ts,SandboxPrompt.tsx,mount.tsx}`；停用 `renderer-permissions.ts`、`renderer-sandbox-setup.ts` 的活动接入；迁移 `tests/sandbox-setup-renderer.test.ts` 为纯 controller 测试；扩展 smoke。
 
 **规模:** 约 600–800 行。
 
-- [ ] 权限预设、初始化、恢复继续调用既有专用 bridge，不改沙箱策略；ready/busy 边界与原行为一致（`runStatusText`、`commandsNeedSandboxAccounts` 的逻辑先抽到纯 `.ts`）。
-- [ ] 保留权限菜单的受控选值、禁用与 `#permission-trigger`/`#permission-menu` 的 smoke 语义（经 T4 方式迁移到 role/option 断言）。
-- [ ] 文案键化；删除旧绑定。
-- [ ] 运行 `node scripts/run-tests.mjs tests/sandbox-setup-renderer.test.ts tests/settings.smoke.mjs tests/desktop-capabilities.smoke.mjs`。
+**进度:** 沙箱初始化与恢复已完成（本提交）：`commandsNeedSandboxAccounts` 移入 `ui/sandbox/sandbox-setup-model.ts`，新增 controller（状态/提示文案/可见性/操作）、React `SandboxPrompt`（保留 `#sandbox-prompt*` id 与 composer 外观）、`mountSandboxSetup` 接缝；`renderer-sandbox-setup.ts` 删除，`index.html` 的静态提示替换为容器；renderer 继续通过 `setMode` 把权限 chip 的会话沙箱模式传进来。旧 DOM 测试改写为 12 条 controller 测试（就绪/未初始化/命令不可用、模式矩阵、dismiss 后重新提示、损坏后端只 verify 一次、拒绝后可重试、无 bridge、较弱沙箱确认/失败、dispose）。**权限 chip 与完全访问对话框仍是 legacy**，其 controller/组件与文案键化留到下一步。
+
+- [~] 权限预设、初始化、恢复继续调用既有专用 bridge，不改沙箱策略；`commandsNeedSandboxAccounts` 已抽出；`runStatusText` 断言保留在改写后的测试里。权限预设部分待迁移。
+- [ ] 权限菜单的受控选值、禁用与 `#permission-trigger`/`#permission-menu` 的 smoke 语义迁到 React（role/option）。
+- [ ] 权限文案键化；删除 `renderer-permissions.ts` 的旧绑定；沙箱提示已全部走字典。
+- [x] 运行 `node scripts/run-tests.mjs tests/sandbox-setup-renderer.test.ts tests/windows-account-settings.smoke.mjs tests/settings.smoke.mjs tests/desktop-capabilities.smoke.mjs`。已完成：12/12、1/1、8 通过+1 跳过、3/3；另 desktop 9/9、layout 4/4。
 
 #### T13: 工作区维护、归档会话与 MCP 开关
 
