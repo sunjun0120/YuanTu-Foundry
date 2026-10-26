@@ -766,10 +766,12 @@ interface PanelTransitionProps {
 
 **规模:** 约 900–1,200 行。
 
-- [ ] 先抽取 `TaskConfirmDrafts` 为纯 `.ts` 并保留原断言，再替换 UI；定时/触发任务、确认草稿、执行证据、待办、目标、计划、交付文件与问题跳转逐一保留。
+**进度:** 第一步已完成：`TaskConfirmDrafts`/`acceptanceDefinitionKey` 抽到纯 `apps/desktop/task-confirm-drafts.ts`，`renderer-tasks.ts` 只导入类；`tests/task-confirm-selection.test.ts` 13/13 原样通过（断言未改）。任务/编辑/计划/交付 UI 的 React 化待下一步。
+
+- [~] `TaskConfirmDrafts` 已抽为纯 `.ts` 并保留原断言；剩余：替换 UI，并逐一保留定时/触发任务、确认草稿、执行证据、待办、目标、计划、交付文件与问题跳转。
 - [ ] 任务进度更新不覆盖编辑中的确认选择或自由文本。
 - [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/task-confirm-selection.test.ts tests/plan-contract.test.ts tests/workflows.smoke.mjs tests/desktop-react.smoke.mjs`。
+- [ ] 运行 `node scripts/run-tests.mjs tests/task-confirm-selection.test.ts tests/plan-contract.test.ts tests/workflows.smoke.mjs tests/desktop-react.smoke.mjs`。已完成 `task-confirm-selection` 13/13。
 
 ### M6: 对话流
 

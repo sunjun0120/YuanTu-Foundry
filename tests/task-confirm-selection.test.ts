@@ -14,11 +14,8 @@ import assert from 'node:assert/strict';
 import type { Acceptance, Task } from '../packages/protocol/index.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../packages/carrier/contract.ts';
 import { setLocale } from '../apps/desktop/i18n.ts';
-import {
-  acceptanceDefinitionKey,
-  setupTasks,
-  TaskConfirmDrafts,
-} from '../apps/desktop/renderer-tasks.ts';
+import { setupTasks } from '../apps/desktop/renderer-tasks.ts';
+import { acceptanceDefinitionKey, TaskConfirmDrafts } from '../apps/desktop/task-confirm-drafts.ts';
 
 /**
  * The four DOM behaviours `renderer-tasks.ts` uses: create an element, read named properties, append children,
