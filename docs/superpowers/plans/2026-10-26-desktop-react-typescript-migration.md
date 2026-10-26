@@ -738,11 +738,13 @@ interface PanelTransitionProps {
 
 **规模:** 约 800–1,100 行。
 
-- [ ] 用原测试覆盖目录/预览失败能重试、同路径 update 不重复读取、切换工作区拒收旧结果；控制并发请求 token（workspace + request generation），不能只在组件卸载时设一个 cancelled。
-- [ ] 保留目录/文件预览限制和安全边界；改动预览继续复用既有 diff 数据，open/reveal 交给 `DesktopBridge.files/openWorkspacePath`，不在 renderer 使用 Node 文件 API。
-- [ ] 运行结束触发工作区刷新一次；保留原树展开状态与滚动位置。
+**进度:** 数据/controller 已完成（8 条纯测试，替换原 FakeDocument 测试）：目录读取的拒绝/拒绝回答统一进 failures、同路径两次读取以 per-path token 决出胜者、两个目录任意顺序写入、同一 workspace 不重读不清空、refresh/workspace 变更丢弃旧回答、关闭重开文件丢弃第一次读取、预览拒绝落在 tab 上而不是永远 reading。React 面板/树/预览与 renderer-workspace 接线待下一步。
+
+- [x] 目录/预览失败可重试、同路径不重复读取、切换工作区拒收旧结果；并发 token 为 workspace generation + refresh round + per-path/per-tab token，不依赖组件卸载。
+- [ ] 保留目录/文件预览限制与安全边界；改动预览复用 diff；open/reveal 走 `DesktopBridge.files/openWorkspacePath`，不在 renderer 用 Node 文件 API。（现仍由 legacy 面板执行，controller 未触碰文件系统）
+- [ ] 运行结束触发工作区刷新一次；保留树展开与滚动位置。（React 面板迁移时接线）
 - [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/workspace-panel-loading.test.ts tests/workspace-ui.smoke.mjs tests/backups.smoke.mjs`。
+- [ ] 运行 `node scripts/run-tests.mjs tests/workspace-panel-loading.test.ts tests/workspace-ui.smoke.mjs tests/backups.smoke.mjs`。已完成 `workspace-panel-loading` 8/8。
 
 #### T18: 后台进程与统计
 
