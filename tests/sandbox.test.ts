@@ -141,10 +141,10 @@ test('SSE idle timeout resets on received chunks and stops stalled streams', asy
 });
 test('initial model response cannot wait indefinitely for headers', async (t) => {
   const url = await httpFixture(t, () => {});
-  await assert.rejects(fetchModel(url, { method: 'POST', body: '{}' }, 40), /idle timeout/i);
+  await assert.rejects(fetchModel(url, { method: 'POST', body: '{}' }, 40), /headers timeout/i);
 });
 
-test('provider reports initial response idle timeout to the run', async (t) => {
+test('provider reports initial response headers timeout to the run', async (t) => {
   const url = await httpFixture(t, () => {});
   const provider = new OpenAIProvider({
     apiKey: 'fixture',
@@ -161,6 +161,6 @@ test('provider reports initial response idle timeout to the run', async (t) => {
       signal: new AbortController().signal,
       onText: () => {},
     }),
-    /idle timeout/i,
+    /headers timeout/i,
   );
 });
