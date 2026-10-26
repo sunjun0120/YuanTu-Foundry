@@ -136,7 +136,7 @@ export function failureForStatus(response: Response): RunFailure {
  * the log, and where the wait is interrupted by a Stop along with everything else. What stays here is the one
  * thing that belongs to the transport: the wait for the response headers.
  *
- * That wait is a different clock from the stream's idle timeout, and the evaluation configures them differently
+ * That wait is a different clock from the stream's idle timeout, and the evaluation configures them
  * independently because a reasoning model may think for a minute before its first byte, so a
  * 30-second bound on time-to-first-byte cuts exactly the requests that were working. Nothing has been produced
  * when this fires — the body was never opened — which lets the zero-byte policy in `run-request.ts` consider

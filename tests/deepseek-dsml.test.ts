@@ -120,6 +120,64 @@ test('DSML preserves multiline string bytes and decodes nonstring JSON values', 
   );
 });
 
+test('leading whitespace and a single newline do not turn DSML calls into final answers', async (t) => {
+  for (const prefix of ['\n', ' ', '\r\n  ', 'Reading now.\n']) {
+    const provider = await endpoint(t, prefix + block());
+    const result = await provider.complete(request());
+    assert.equal(result.finishReason, 'tool_calls');
+    assert.equal(result.toolCalls.length, 1);
+    assert.equal(result.text, prefix);
+  }
+});
+
+test('known DSML examples stream before the terminal frame and survive a broken stream', async (t) => {
+  for (const text of [
+    'Here is a literal:\n\n```xml\n' + block() + '\n```',
+    'An incomplete marker <｜｜DSML',
+  ]) {
+    const url = await httpFixture(t, (_body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text } }] })}\n\n`);
+    });
+    const provider = new OpenAIProvider({
+      apiKey: 'fixture',
+      model: 'DeepSeek-V4.1-Flash-1017',
+      baseUrl: url,
+    });
+    let shown = '';
+    await assert.rejects(
+      provider.complete(
+        request({
+          onText: (part) => {
+            shown += part;
+          },
+        }),
+      ),
+      /Incomplete model stream/,
+    );
+    assert.equal(
+      shown,
+      text,
+      'ordinary partial text remains available for persistence and blocks a duplicate retry',
+    );
+  }
+  const text = 'Example:\n\n```xml\n' + block() + '\n```';
+  const provider = await endpoint(t, text);
+  let shown = '',
+    atLastTextProgress = '';
+  await provider.complete(
+    request({
+      onText: (part) => {
+        shown += part;
+      },
+      onProgress: (p) => {
+        if (p.phase === 'text') atLastTextProgress = shown;
+      },
+    }),
+  );
+  assert.equal(atLastTextProgress, text, 'a known example is not held until the terminal frame');
+});
+
 test('DSML validates every call before returning any executable batch', async (t) => {
   const valid = await endpoint(t, block(readCall + '\n' + readCall));
   const response = await valid.complete(request());
@@ -166,6 +224,10 @@ test('DSML examples and non-DeepSeek routes keep their text without executing it
     'Inline: ' + block(),
     '> ' + block().replaceAll('\n', '\n> '),
     '```\ncode\n```\n\n' + block(),
+    '"Example:\n\n' + block() + '"',
+    "'Example:\n\n" + block() + "'",
+    '    ' + block(),
+    '\t' + block(),
     'ordinary <｜｜DSML',
   ]) {
     const provider = await endpoint(t, text);

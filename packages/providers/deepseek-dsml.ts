@@ -6,18 +6,23 @@ const MARKER = '<｜｜DSML｜｜';
 const OPEN = `${MARKER} calls>`;
 const CLOSE = '</｜｜DSML｜｜ calls>';
 const PARAMETER_END = '</｜｜DSML｜｜ parameter>';
-const schemas = new Ajv({ strict: true, allErrors: true, addUsedSchema: false });
 
 /** Keep ordinary text streaming, holding only a possible DSML suffix until its meaning is known. */
 export class DsmlContentBuffer {
   private pending = '';
   private held = false;
+  private passthrough = false;
 
-  push(part: string): string {
+  push(part: string, completeText: string): string {
+    if (this.passthrough) return part;
     this.pending += part;
     if (this.held) return '';
     const marker = this.pending.indexOf(MARKER);
     if (marker >= 0) {
+      if (dsmlStart(completeText) === undefined) {
+        this.passthrough = true;
+        return this.flush();
+      }
       const text = this.pending.slice(0, marker);
       this.pending = this.pending.slice(marker);
       this.held = true;
@@ -35,6 +40,11 @@ export class DsmlContentBuffer {
     this.pending = '';
     return text;
   }
+
+  /** A failed stream still owns ordinary text ending with a fragment of the marker. */
+  flushOrdinary(): string {
+    return this.held ? '' : this.flush();
+  }
 }
 
 /**
@@ -45,8 +55,8 @@ export function dsmlStart(text: string): number | undefined {
   const start = text.indexOf(MARKER);
   if (start < 0) return;
   const prefix = text.slice(0, start);
-  if (prefix && !/\n[\t ]*\n$/.test(prefix)) return;
-  if (/^ {0,3}(?:`{3,}|~{3,})/m.test(prefix)) return;
+  if (prefix && !/^(?: {0,3}\r?\n)* {0,3}$/.test(prefix) && !/\r?\n {0,3}$/.test(prefix)) return;
+  if (/^ {0,3}(?:`{3,}|~{3,}|["'])/m.test(prefix)) return;
   return start;
 }
 
@@ -63,6 +73,8 @@ export function parseDsml(
   const block = text.slice(start).trimEnd();
   if (!block.startsWith(OPEN) || !block.endsWith(CLOSE)) fail('incomplete calls block');
   const body = block.slice(OPEN.length, -CLOSE.length);
+  // Ajv caches schema objects internally. A batch-local compiler cannot retain each run's fresh schemas.
+  const schemas = new Ajv({ strict: true, allErrors: true, addUsedSchema: false });
   const calls: ToolCall[] = [];
   let cursor = 0;
   const whitespace = () => {

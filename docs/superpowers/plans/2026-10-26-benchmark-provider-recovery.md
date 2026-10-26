@@ -29,10 +29,10 @@
 
 **Interfaces:** An internal parser returns `{ text: string; toolCalls: ToolCall[] } | undefined` for a final response using the current `ToolSpec[]`; a content buffer emits ordinary text while holding a possible DSML suffix. The OpenAI provider applies route, finish reason and tool-choice guards and wraps invalid DSML in a named non-retryable failure carrying usage.
 
-- [ ] Write provider regressions for fragmented read/edit calls, JSON parameters, multi-call atomic validation, ordinary examples, disabled/unknown tools, malformed/duplicate parameters, native-call conflicts, filtered/truncated turns and native replay. Assert end-to-end file effects and approval denial.
-- [ ] Run the new tests against unchanged production code; confirm the expected missing tool-call failures.
-- [ ] Implement the restricted parser and streaming integration; normalize replay into standard Chat tool calls.
-- [ ] Run the new tests plus provider/cache/tool regressions and replay all seven real terminal DSML messages offline.
+- [x] Write provider regressions for fragmented read/edit calls, JSON parameters, multi-call atomic validation, ordinary examples, disabled/unknown tools, malformed/duplicate parameters, native-call conflicts, filtered/truncated turns and native replay. Assert end-to-end file effects and approval denial.
+- [x] Run the new tests against unchanged production code; confirm the expected missing tool-call failures.
+- [x] Implement the restricted parser and streaming integration; normalize replay into standard Chat tool calls.
+- [x] Run the new tests plus provider/cache/tool regressions and replay all seven real terminal DSML messages offline.
 
 ### Task 2: Correct header-timeout diagnosis and future benchmark configuration
 
@@ -40,14 +40,14 @@
 
 **Interfaces:** Preserve failure code `timeout` and zero-byte counters; name the response-header phase in its message. Existing `controlledEnvironment` consumes explicit manifest fields and existing run logic owns the retry allowance.
 
-- [ ] Add a delayed-header fixture that recovers on exactly one zero-byte retry, plus bounded exhaustion/cancellation checks; verify the new diagnosis fails before implementation.
-- [ ] Correct the header diagnostic and update future-run example/documentation; retain old manifests' fallback semantics.
-- [ ] Run timeout/retry and SWE-bench harness regressions.
+- [x] Add a delayed-header fixture that recovers on exactly one zero-byte retry, plus bounded exhaustion/cancellation checks; verify the new diagnosis fails before implementation.
+- [x] Correct the header diagnostic and update future-run example/documentation; retain old manifests' fallback semantics.
+- [x] Run timeout/retry and SWE-bench harness regressions.
 
 ### Task 3: Verify and record
 
 **Files:** Add `docs/2026-10-26-benchmark-provider-recovery.md` with evidence and remaining live-validation limits.
 
-- [ ] Review only this task's diff, including schema/approval boundaries and streaming consistency.
+- [x] Review only this task's diff, including schema/approval boundaries and streaming consistency.
 - [ ] Run format, docs/references/layers/cycles/i18n/typecheck/lint/isolation gates, full tests, build and compiled-client smoke.
 - [ ] Record real results; report any unrelated failure by name. Do not infer a new benchmark score from offline replay.
