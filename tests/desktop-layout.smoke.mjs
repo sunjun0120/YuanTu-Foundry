@@ -198,7 +198,8 @@ test(
      */
     await page.locator('#permission-mode').evaluate((el) => {
       el.value = 'observe';
-      // React attaches its listener at the root, so the change must bubble to be seen.\n      el.dispatchEvent(new Event('change', { bubbles: true }));
+      // React attaches its listener at the root, so the change must bubble to be seen.
+      el.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await page.waitForFunction(
       () =>
