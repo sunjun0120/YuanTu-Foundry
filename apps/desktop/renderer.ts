@@ -20,7 +20,7 @@ import { mountModelSettings } from './ui/settings/model-mount.tsx';
 import { diffView } from './diff-view.ts';
 import { approvalSummary } from './approval-view.ts';
 import { mountAttachments } from './ui/composer/attachment-mount.tsx';
-import { setupBackgroundView } from './renderer-background.ts';
+import { mountBackground } from './ui/panels/background-mount.tsx';
 import { mountCommandPalette } from './ui/composer/command-mount.tsx';
 import { setupComposer } from './renderer-composer.ts';
 import { setupLiveMessage } from './renderer-live.ts';
@@ -257,7 +257,7 @@ const commandsView = mountCommandPalette({
   requestComposerUpdate: renderComposerState,
   invoke,
 });
-const backgroundView = setupBackgroundView({ getState: () => state, invoke });
+const backgroundView = mountBackground({ getState: () => state, invoke });
 const attachmentsView = mountAttachments({
   getState: () => state,
   requestRender: render,
@@ -1015,6 +1015,7 @@ const disposeModelSettings = mountModelSettings(window.yuantu);
 window.addEventListener(
   'pagehide',
   () => {
+    backgroundView.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();

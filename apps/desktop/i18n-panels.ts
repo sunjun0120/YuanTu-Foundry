@@ -111,6 +111,12 @@ export const panelMessages: Record<string, [string, string]> = {
     '已用 {used}/{max} 次 · 待处理 {pending}',
     'Used {used}/{max} · Pending {pending}',
   ],
+  'background.durationHours': [
+    '{hours}小时{minutes}分{seconds}秒',
+    '{hours}h {minutes}m {seconds}s',
+  ],
+  'background.durationMinutes': ['{minutes}分{seconds}秒', '{minutes}m {seconds}s'],
+  'background.durationSeconds': ['{seconds}秒', '{seconds}s'],
   'background.stop': ['停止任务', 'Stop task'],
   'background.running': ['运行中', 'Running'],
   'background.starting': ['启动中', 'Starting'],

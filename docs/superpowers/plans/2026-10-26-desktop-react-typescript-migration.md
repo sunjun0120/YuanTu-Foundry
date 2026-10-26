@@ -753,12 +753,12 @@ interface PanelTransitionProps {
 
 **规模:** 约 600–800 行。
 
-**进度:** 统计数据/文案模型已完成并接入（9 条纯测试）：`throughputReading`（decodeKnown + 1s/50tok 阈值）、`cacheHitPercent`（部分命中不显示 100、bucket 大于 total 的守卫）、`uncachedInputTokens`（减两个缓存桶并 clamp）、duration/counts/usage pill、`statisticsView`（空会话无读数、无测量值的行缺席、cache write 为 0 省略、有 steps 无计时仍显示纯计数）、`applyStatisticsDelta`（只更新匹配会话、保留 runStatistics）。全部文案键化到 `statistics.*`；`renderer-statistics.ts` 已改为模型 + DOM 壳（行/文案/总数/可见性全部来自 `statisticsView`），`desktop-copy` 的 `throughputReading` 导入仍兼容。React 后台面板待下一步（统计弹层仍由 legacy DOM 壳承载，数据已就绪）。
+**进度:** 统计模型与后台面板已完成。统计（9 条纯测试）：`throughputReading`、`cacheHitPercent`、`uncachedInputTokens`、duration/counts/usage pill、`statisticsView`、`applyStatisticsDelta`；`renderer-statistics.ts` 已是模型 + DOM 壳。后台（7 条纯测试）：当前会话过滤、running>failed>cancelled>completed>idle、header 计数、exit code/取消、elapsed 三语形、shell 识别、停止资格；React `BackgroundPanel`/`background-mount` 已接管 header 弹层，`renderer-background.ts` 删除，`#open-background`/`#background-label`/`#background-popover`/`#background-list` 保留。**剩余：统计弹层的 React 壳**（数据与文案已就绪，现由 legacy DOM 壳绘制）。
 
 - [x] 独立统计频道的数据语义：`StatisticsDelta` 只更新匹配会话；`decodeKnown` 与原 TPS 最小样本阈值保留，不新增推算数据；长上下文提示文案沿用既有规则。
-- [ ] 后台进程列表、停止与通知跳转保持；后台任务更新不替换当前输入框。
-- [x] 文案键化：`statistics.*` 全部入字典（标签、标题、计数、用量 pill、长上下文、时长）；`renderer-statistics.ts` 的内联 pair 删除。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-round3.smoke.mjs tests/desktop-copy.test.ts tests/desktop-react.smoke.mjs`。已跑 `desktop-round3`（1 通过 + 1 Chromium 跳过）、`desktop-copy` 14/14、`statistics-model` 9/9、`agent` 7/7、`language` 7/7。
+- [x] 后台进程列表、停止与通知跳转保持：列表按当前会话过滤、停止按钮只在运行中的行、退出码/取消/状态点、hover/focus 弹层与外部点击/Escape 关闭；后台更新只改工具栏弹层，不触碰输入框。
+- [x] 文案键化：`statistics.*` 与 `background.*` 全部入字典；`renderer-statistics.ts` 的内联 pair 删除。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-round3.smoke.mjs tests/desktop-copy.test.ts tests/desktop-react.smoke.mjs`。已跑 `desktop-layout` 4/4（含后台弹层开/关与静态结构）、`desktop-round3`（1 通过 + 1 Chromium 跳过）、`desktop-copy` 14/14、`statistics-model` 9/9、`background-model` 7/7、`agent` 7/7、`language` 7/7、`settings` 8 通过 + 1 跳过（MCP）。
 
 #### T19: 任务与会话辅助面板
 

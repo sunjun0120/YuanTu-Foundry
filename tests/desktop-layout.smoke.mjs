@@ -398,17 +398,19 @@ test(
 test('background tasks live in a conditional header popover without workspace context', async () => {
   const [html, renderer, css] = await Promise.all([
     readFile('apps/desktop/index.html', 'utf8'),
-    readFile('apps/desktop/renderer-background.ts', 'utf8'),
+    readFile('apps/desktop/ui/panels/BackgroundPanel.tsx', 'utf8'),
     readFile('apps/desktop/layout-surfaces.css', 'utf8'),
   ]);
   const header = html.match(/<main id="chat-page">[\s\S]*?<header>([\s\S]*?)<\/header>/)?.[1] ?? '';
-  assert.match(header, /id="open-background"/);
-  assert.match(header, /id="background-popover"/);
-  assert.ok(header.indexOf('id="open-background"') > header.indexOf('id="open-subagents"'));
+  // The popover is React now: the header owns a root, and the button/popover ids live in the component.
+  assert.match(header, /id="background-root"/);
+  assert.match(renderer, /id="open-background"/);
+  assert.match(renderer, /id="background-popover"/);
+  assert.ok(header.indexOf('id="background-root"') > header.indexOf('id="open-subagents"'));
   assert.doesNotMatch(header, /id="project-name"|header-context/);
   assert.doesNotMatch(html, /id="background-page"/);
   assert.doesNotMatch(header, /id="background-policy"|id="background-popover-footer"/);
-  assert.match(renderer, /backgroundPopover\.contains\(event\.target as Node\)/);
+  assert.match(renderer, /popover\.current\?\.contains\(event\.target as Node\)/);
   assert.match(css, /\.background-popover\s*\{/);
   assert.match(css, /position:\s*absolute/);
 });
