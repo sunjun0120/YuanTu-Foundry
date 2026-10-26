@@ -79,6 +79,7 @@ export interface FindingsReading {
   heading: string;
   findings: { statement: string; evidence: string }[];
   unverified: string | null;
+  blockers: string | null;
 }
 
 export function subagentFindings(report: SubAgentSummaryReport, lang: UiLanguage): FindingsReading {
@@ -93,6 +94,9 @@ export function subagentFindings(report: SubAgentSummaryReport, lang: UiLanguage
     })),
     unverified: report.unverified?.length
       ? `${translate('subagent.unverified', lang)}: ${report.unverified.join('; ')}`
+      : null,
+    blockers: report.blockers?.length
+      ? `${translate('subagent.blockers', lang)}: ${report.blockers.join('; ')}`
       : null,
   };
 }

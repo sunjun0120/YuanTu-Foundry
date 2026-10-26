@@ -3,7 +3,7 @@ import '@mantine/core/styles.css';
 import { mountTasks } from './ui/panels/tasks-mount.tsx';
 import { mountStatistics } from './ui/panels/statistics-mount.tsx';
 import { mountWorkspace } from './ui/workspace/workspace-mount.tsx';
-import { setupSubAgents } from './renderer-subagents.ts';
+import { mountSubagents } from './ui/conversation/subagents-mount.tsx';
 import { setupMcpSettings } from './renderer-mcp.ts';
 import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import type { DesktopBridge, DesktopReply } from './contract.ts';
@@ -167,11 +167,11 @@ slots.register('message.actions', {
   order: 20,
   render: (frame, context) => frame.replaceChildren(messagesView.messageCopyView(context.message)),
 });
-const subagentView = setupSubAgents(
-  () => state,
-  (command) => invoke(command),
-  messagesView.messageView,
-);
+const subagentView = mountSubagents({
+  getState: () => state,
+  send: (command) => invoke(command),
+  renderMessage: messagesView.messageView,
+});
 const prompt = element<HTMLTextAreaElement>('prompt');
 const sendButton = element<HTMLButtonElement>('send');
 const conversation = element('conversation');
@@ -891,6 +891,7 @@ window.addEventListener(
     planView.dispose();
     questionsView.dispose();
     approvalsView.dispose();
+    subagentView.dispose();
     sessionPanels.dispose();
     taskView.dispose();
     liveContent.dispose();

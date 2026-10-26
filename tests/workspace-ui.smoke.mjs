@@ -98,13 +98,13 @@ test('every result status the Host can report has its own sentence', async () =>
 });
 
 test('the card renders the state from the binding, not from a guess', async () => {
-  const renderer = await read('apps/desktop/renderer-subagents.ts');
+  const cards = await read('apps/desktop/ui/conversation/Subagents.tsx');
   // The label is chosen from `kind`, the state rides on a data attribute, and a problem is shown rather than
   // swallowed — the three things that keep the card honest about a workspace it did not create.
-  assert.match(renderer, /view\.workspace\.kind === 'worktree'/);
-  assert.match(renderer, /dataset\.state = view\.workspace\.state/);
-  assert.match(renderer, /subagent\.workspace\.problem/);
-  assert.match(renderer, /subagent\.workspace\.result\./);
+  assert.match(cards, /view\.workspace\.kind === 'worktree'/);
+  assert.match(cards, /data-state=\{view\.workspace\.state\}/);
+  assert.match(cards, /subagent\.workspace\.problem/);
+  assert.match(cards, /subagent\.workspace\.result\./);
   // The controller's session reads live in `session-history.ts`.
   const reads = await read('packages/client/session-history.ts');
   // The view is filled from the Host's own answers, and a Host that cannot answer leaves the field *absent* rather

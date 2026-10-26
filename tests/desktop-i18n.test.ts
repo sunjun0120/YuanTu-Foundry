@@ -97,7 +97,7 @@ async function desktopPage(t: test.TestContext) {
     stdin: {
       contents: [
         "export * from './apps/desktop/i18n.ts';",
-        "export {setupSubAgents} from './apps/desktop/renderer-subagents.ts';",
+        "export {mountSubagents} from './apps/desktop/ui/conversation/subagents-mount.tsx';",
         "export {mountQuestions} from './apps/desktop/ui/conversation/questions-mount.tsx';",
         "export {RegionHost} from './apps/desktop/ui/legacy/mount-region.tsx';",
         "export {createElement} from 'react';",
@@ -289,20 +289,33 @@ for (const surface of ['workspace']) {
       } else {
         const child = {id:'child',childSessionId:'child-session',index:0,total:1,role:'general',objective:'fixture',status:'completed',rounds:1,toolCalls:0,text:'done',workspace:{kind:'worktree',executionRoot:'/fixture',state:'ready'}};
         state.subagentTranscript={subagentId:child.id,childSessionId:child.childSessionId,objective:child.objective,status:'completed',messages:[],truncated:false};
-        const view = localeApi.setupSubAgents(()=>state, command => command.type==='subagentWorkspace' ? invoke() : undefined, () => document.createElement('div'));
+        const root = localeApi.createRoot(document.getElementById('desktop-root'));
+        const view = localeApi.mountSubagents({
+          getState:()=>state,
+          send: command => command.type==='subagentWorkspace' ? invoke() : undefined,
+          renderMessage: () => document.createElement('div')
+        });
+        root.render(localeApi.createElement(localeApi.RegionHost));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         update = () => view.update([child]); update();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         document.querySelector('.subagent-view').click(); update();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         button = () => document.querySelector('[data-workspace-action="archive"]');
       }
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       button().click();
+      await new Promise(resolve => requestAnimationFrame(resolve));
       const pendingDisabled = button().disabled;
       rejectAction(new Error('fixture IPC rejected'));
       await new Promise(resolve => setTimeout(resolve,20));
       const recovered = !button().disabled;
       button().click();
+      await new Promise(resolve => requestAnimationFrame(resolve));
       const retried = calls === 2;
       state.session.running = true;
       update();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       rejectAction(new Error('fixture IPC rejected again'));
       await new Promise(resolve => setTimeout(resolve,20));
       return {pendingDisabled,recovered,retried,busyDisabled:button()?.disabled};

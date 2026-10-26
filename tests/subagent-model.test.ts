@@ -75,6 +75,7 @@ test('findings pair every statement with its evidence and keep the unverified no
         { statement: 'plain', evidence: 'seen' },
       ],
       unverified: ['the build'],
+      blockers: ['the signing key'],
     } as never,
     'zh-CN',
   );
@@ -83,4 +84,5 @@ test('findings pair every statement with its evidence and keep the unverified no
   assert.equal(reading.findings[0]?.evidence, '依据: read the file [a.md, b.md]');
   assert.equal(reading.findings[1]?.evidence, '依据: seen');
   assert.match(reading.unverified ?? '', /^未核实: the build$/);
+  assert.match(reading.blockers ?? '', /^阻塞: the signing key$/);
 });

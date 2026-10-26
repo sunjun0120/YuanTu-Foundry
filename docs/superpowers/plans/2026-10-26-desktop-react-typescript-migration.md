@@ -828,8 +828,12 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 **规模:** 约 800–1,100 行。
 
-- [ ] 子会话页只呈现对应历史/最终结果；返回父页恢复原阅读位置。子 agent 卡片与文本只接收对应增量，父子不能共享一个 live 缓冲。
-- [ ] 本轮改动、预览联动和结束状态保持；打开/定位仍经 bridge。
+**进度:** 子 agent 部分已完成：Subagents/subagents-mount 接管目录、详情卡、子会话页、父子独立 live 缓冲、ticker 仅运行中、页面标题/面包屑、滚动恢复与 workspace 操作；删除 850 行
+enderer-subagents.ts；#subagent-list/#subagent-catalog/#subagent-transcript-root 与兼容类保留；
+enderer-changes.ts 的本轮改动卡依赖 transcript 位置，随 T21 一起迁移。#approvals 宿主的 ria-label 已随语言同步（approval.sectionLabel）。验证：subagent-model 5/5、desktop-copy 14/14、desktop-i18n 5/5、desktop-react 4/4、round3 1 通过+1 Chromium 跳过、sessions 6/6、workspace-ui 5/5、agent 7/7、language 7/7、layout 4/4；lint/i18n/layers/cycles/format/typecheck/build 全绿。
+
+- [x] 子会话页只呈现对应历史/最终结果；返回父页恢复原阅读位置。子 agent 卡片与文本只接收对应增量，父子不能共享一个 live 缓冲。
+- [ ] 本轮改动、预览联动和结束状态保持；打开/定位仍经 bridge。（ urn-changes-model 已就绪，UI 随 T21 transcript 迁移）
 - [ ] 文案键化；旧绑定删除；兼容 id 更新。
 - [ ] 运行 `node scripts/run-tests.mjs tests/desktop-round3.smoke.mjs tests/desktop-sessions.smoke.mjs tests/desktop-react.smoke.mjs`。
 

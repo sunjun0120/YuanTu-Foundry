@@ -135,15 +135,7 @@
         <!-- A sub-agent's own record, opened as a page: the header's title goes back to the conversation
              that delegated it, which is the navigation DSH uses for the same view. -->
         <section id="subagent-transcript" class="subagent-page" aria-label="子代理记录" hidden>
-          <details id="subagent-transcript-process" class="subagent-process">
-            <summary id="subagent-transcript-process-title">执行过程</summary>
-            <p id="subagent-transcript-note" class="subagent-transcript-note"></p>
-            <div id="subagent-transcript-messages" class="subagent-transcript-messages"></div>
-          </details>
-          <section id="subagent-transcript-result" class="subagent-result">
-            <h2 id="subagent-transcript-result-title">最终结果</h2>
-            <div id="subagent-transcript-result-body"></div>
-          </section>
+          <div id="subagent-transcript-root"></div>
         </section>
         <div id="live" class="message assistant" hidden>
           <details id="live-reasoning" class="message-reasoning" hidden>

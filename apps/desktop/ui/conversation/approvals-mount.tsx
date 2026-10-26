@@ -5,10 +5,11 @@
  * language, exactly the legacy one. The busy set is the pending re-entry guard: a decision already in flight disables
  * every button on that card until the command settles.
  */
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import type { Approval } from '../../../../packages/protocol/index.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
-import { locale } from '../../i18n.ts';
+import { locale, t } from '../../i18n.ts';
+import { useLocale } from '../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import { mountRegion } from '../legacy/mount-region.tsx';
@@ -33,6 +34,11 @@ function ApprovalsHost({
   decide(id: string, allow: boolean, remember: boolean): void;
 }): ReactNode {
   const state = useReadable(store);
+  const lang = useLocale();
+  // The container is outside this portal: its accessible name follows the language like the rest of the page.
+  useEffect(() => {
+    document.getElementById('approvals')?.setAttribute('aria-label', t('approval.sectionLabel'));
+  }, [lang]);
   return (
     <>
       {approvalEntries(state.approvals).map((entry) => (
