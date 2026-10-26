@@ -1,4 +1,6 @@
 import { memoryContext } from '../knowledge/context.ts';
+import { redactSecrets } from '../platform/redact.ts';
+import { contextTail } from '../protocol/context.ts';
 import { admitGoalRound, type Goal } from '../protocol/goals.ts';
 import type { CompletionStep, Task } from '../protocol/index.ts';
 import { discoverSkills } from '../resources/skills.ts';
@@ -48,7 +50,7 @@ export interface RunAnnouncements {
   /** Admit this run as one round of the session's goal and announce it, when there is a goal. */
   admitGoal(): void;
   /** Announce every snapshot the visible conversation does not already hold. */
-  snapshots(round: number): Promise<void>;
+  snapshots(round: number, route?: { model: string | null; protocol?: string }): Promise<void>;
 }
 export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnnouncements {
   const { store, sessionId, workspace, emit, task, completion } = options;
@@ -77,17 +79,33 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
     }
     goal(admitted);
   };
-  const snapshots = async (round: number): Promise<void> => {
+  const snapshots: RunAnnouncements['snapshots'] = async (round, route) => {
     const surface = store.contextSurface(sessionId);
-    const messages = store.messages(sessionId).slice(surface?.coveredMessages ?? 0);
+    const history = store.messages(sessionId);
+    const messages = history.slice(surface?.coveredMessages ?? 0);
     const announce = (source: RuntimeSnapshotSource, body: string): void => {
       const text = body.trim();
       if (!text) return;
-      if (lastRuntimeSnapshot(messages, source) === runtimeSnapshotText(source, text)) return;
+      const visible =
+        source === 'model' ? contextTail(history, surface?.coveredMessages ?? 0) : messages;
+      if (lastRuntimeSnapshot(visible, source) === runtimeSnapshotText(source, text)) return;
       const content = runtimeSnapshotMessage(source, text);
       store.append(sessionId, { role: 'user', content });
       emit('context.injected', { source, round, notes: 1, content });
     };
+    // A missing identity only needs announcing when it supersedes an earlier known one. Embedders that
+    // never declared a model retain their existing context; a switch to an unknown route cannot reuse a
+    // stale identity, even if a compaction has already covered the earlier announcement.
+    if (route && (route.model !== null || lastRuntimeSnapshot(history, 'model') !== undefined))
+      announce(
+        'model',
+        'Current request model (host-reported API configuration):\n' +
+          JSON.stringify({
+            model: route.model === null ? null : redactSecrets(route.model),
+            ...(route.protocol ? { protocol: redactSecrets(route.protocol) } : {}),
+          }) +
+          '\nUse this snapshot when asked which model you are using. This is the API model ID, not independent verification of a gateway’s underlying model. A null model means the current ID is unknown; do not reuse an earlier ID or infer it from workspace files.',
+      );
     // The task first: it is the objective this run is carrying out. Its steps are re-read so a step checkpointed
     // during the run is what the next round is told, and "picking up or starting over" is read from that same list.
     if (options.taskId) {

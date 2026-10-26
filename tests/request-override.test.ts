@@ -98,6 +98,17 @@ test('a round can be re-aimed, and the override reaches the provider with the ro
   assert.equal(requests[0]!.reasoningEffort, undefined);
   assert.equal(requests[1]!.model, 'small-model');
   assert.equal(requests[1]!.reasoningEffort, 'low');
+  const modelSnapshots = (request: ModelRequest) =>
+    request.messages.filter((message) =>
+      message.content.startsWith('<runtime-context source="model">'),
+    );
+  const configured = modelSnapshots(requests[0]!).at(-1);
+  const overridden = modelSnapshots(requests[1]!).at(-1);
+  assert.ok(configured, 'the configured model is visible');
+  assert.ok(overridden, 'the overridden model is visible');
+  assert.match(configured.content, /"model":"configured-model"/);
+  assert.match(overridden.content, /"model":"small-model"/);
+  assert.equal(requests[0]!.system, requests[1]!.system);
   // The second round's hook context sees the effort the round before it chose: that is what makes the dispatch
   // a waterfall rather than a vote.
   assert.deepEqual(seen, [undefined, undefined]);
@@ -171,6 +182,11 @@ test('a run that switches back records the switch back', async (t) => {
   assert.equal(requests[0]!.model, 'small-model');
   // The switch back sends no override: the run's own model is the adapter's business.
   assert.equal(requests[1]!.model, undefined);
+  const newestModel = requests[1]!.messages.findLast((message) =>
+    message.content.startsWith('<runtime-context source="model">'),
+  );
+  assert.ok(newestModel, 'the restored model is visible');
+  assert.match(newestModel.content, /"model":"configured-model"/);
 });
 
 test('the three protocols put the level where each of them expects it', async (t) => {

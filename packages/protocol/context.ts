@@ -44,6 +44,18 @@ export function contextTail(history: Message[], covered: number): Message[] {
         break;
       }
   }
+  // The current model is request state rather than historical prose. Keep its latest announcement
+  // available even when this very request compacts it, including provider-overflow recovery retries.
+  // Do this before budgeting so the retained snapshot is counted in the request's size.
+  if (covered) {
+    const model = history.findLast(
+      (message) =>
+        message.role === 'user' &&
+        message.content.startsWith(`<${RUNTIME_CONTEXT_TAG} source="model">\n`) &&
+        message.content.endsWith(`\n</${RUNTIME_CONTEXT_TAG}>`),
+    );
+    if (model && !tail.includes(model)) tail.unshift(model);
+  }
   return tail;
 }
 /**

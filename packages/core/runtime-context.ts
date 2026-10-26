@@ -30,6 +30,7 @@ import { RUNTIME_CONTEXT_TAG } from '../protocol/context.ts';
 export const RUNTIME_SNAPSHOT_SOURCES = [
   'task',
   'completion',
+  'model',
   'memory',
   'skills',
   'workspace-outline',
@@ -57,6 +58,8 @@ const PREAMBLE: Record<RuntimeSnapshotSource, string> = {
    */
   completion:
     'Machine-written snapshot of this run’s completion contract: the objective, the constraints, the criteria and how the work stands against them. If this conversation holds more than one, the last is the current one.',
+  model:
+    'Machine-written snapshot of the current request’s host-reported model configuration. If this conversation holds more than one, the last is the current one.',
   memory:
     'Machine-written snapshot of saved memory, announced when it changed. If this conversation holds more than one, the last is the current one.',
   skills:

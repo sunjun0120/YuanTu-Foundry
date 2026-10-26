@@ -782,7 +782,10 @@ export class Agent {
           const { cacheKeyOf } = roundAim;
           // The state the round is about to be asked about, before the round's own injections: a policy note is a
           // message to the model, while a snapshot is the world it is being asked about.
-          await announcements.snapshots(round);
+          await announcements.snapshots(round, {
+            model: roundAim.model ?? provider.route?.model ?? null,
+            protocol: this.options.modelInfo?.protocol ?? provider.route?.protocol,
+          });
           if (preStep.inject.length)
             injectContext(store, input.sessionId, emit, preStep.inject.join('\n\n'), {
               source: 'pre-step',

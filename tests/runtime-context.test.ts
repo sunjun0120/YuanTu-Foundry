@@ -14,19 +14,29 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
+import { estimateInputTokens } from '../packages/core/budget.ts';
 import {
   RUNTIME_SNAPSHOT_SOURCES,
   lastRuntimeSnapshot,
   runtimeSnapshotMessage,
   runtimeSnapshotText,
 } from '../packages/core/runtime-context.ts';
-import { isMachineContext, isRuntimeContext } from '../packages/protocol/context.ts';
+import { contextTail, isMachineContext, isRuntimeContext } from '../packages/protocol/context.ts';
 import { resetRepoMapCache } from '../packages/tools/repo-map.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
+import { RunFailure } from '../packages/protocol/failure.ts';
+import { ToolRegistry } from '../packages/tools/registry.ts';
 import { capacityResolver, modelInfoFor } from '../apps/shared/runtime.ts';
 import { parseArgs } from '../apps/shared/args.ts';
-import type { Message, ModelResponse, Provider, Questioner } from '../packages/protocol/index.ts';
+import type {
+  AgentEvent,
+  Message,
+  ModelRequest,
+  ModelResponse,
+  Provider,
+  Questioner,
+} from '../packages/protocol/index.ts';
 
 /**
  * A workspace with one file the outline can describe, and a store the tests own so a "second process" can be
@@ -78,6 +88,195 @@ const snapshotsIn = (messages: readonly Message[], source: string) =>
         message.content.startsWith(`<runtime-context source="${source}">`),
     )
     .map((message) => message.content);
+
+test('the host model reaches the conversation without changing the system prompt or repeating it', async (t) => {
+  const { root, store, sessionId } = await fixture(t, recorder().provider);
+  const { requests, provider } = recorder((round) =>
+    round === 1 ? toolCall('list-model', 'list_files', { path: '.' }) : reply('Done'),
+  );
+  const options = {
+    store,
+    provider,
+    tools: createTools(root),
+    approve: async () => true,
+    modelInfo: { model: 'deepseek-flash', protocol: 'openai', connectionId: 'private-connection' },
+  };
+  await new Agent(options).run({ sessionId, prompt: 'Which model are you using?' });
+  await new Agent(options).run({ sessionId, prompt: 'And now?' });
+
+  assert.equal(requests.length, 3);
+  for (const request of requests) {
+    const snapshots = snapshotsIn(request.messages, 'model');
+    assert.equal(snapshots.length, 1, 'unchanged rounds and runs reuse the recorded snapshot');
+    assert.match(snapshots[0]!, /"model":"deepseek-flash"/);
+    assert.match(snapshots[0]!, /"protocol":"openai"/);
+    assert.match(snapshots[0]!, /host-reported/);
+    assert.doesNotMatch(snapshots[0]!, /private-connection|connectionId/);
+    assert.doesNotMatch(request.system, /deepseek-flash/);
+  }
+  assert.equal(new Set(requests.map((request) => request.system)).size, 1);
+});
+
+test('a resumed session announces a switched model and restores it after compaction', async (t) => {
+  const { root, db, store, sessionId } = await fixture(t, recorder().provider);
+  const { requests, provider } = recorder();
+  await new Agent({
+    store,
+    provider,
+    tools: createTools(root),
+    approve: async () => true,
+    modelInfo: { model: 'model-a', protocol: 'openai' },
+  }).run({ sessionId, prompt: 'First model' });
+  store.close();
+  const reopened = new SessionStore(db);
+  try {
+    const options = {
+      store: reopened,
+      provider,
+      tools: createTools(root),
+      approve: async () => true,
+      modelInfo: { model: 'model-b', protocol: 'anthropic' },
+    };
+    await new Agent(options).run({ sessionId, prompt: 'Switched model' });
+    const switched = snapshotsIn(requests[1]!.messages, 'model');
+    assert.equal(switched.length, 2);
+    assert.match(switched.at(-1)!, /"model":"model-b","protocol":"anthropic"/);
+
+    const messages = reopened.messages(sessionId);
+    const snapshotAt = messages.findLastIndex(
+      (message) => snapshotsIn([message], 'model').length > 0,
+    );
+    assert.ok(snapshotAt >= 0);
+    reopened.applyCompaction(sessionId, {
+      coveredMessages: snapshotAt + 1,
+      summary: 'Earlier work, including the model switch.',
+    });
+    await new Agent(options).run({ sessionId, prompt: 'Which model now?' });
+    const restored = snapshotsIn(requests[2]!.messages, 'model');
+    assert.equal(restored.length, 1);
+    assert.match(restored[0]!, /"model":"model-b","protocol":"anthropic"/);
+    assert.equal(new Set(requests.map((request) => request.system)).size, 1);
+  } finally {
+    reopened.close();
+  }
+});
+
+test('model context uses the provider route when the embedder supplies no model metadata', async (t) => {
+  const { root, store, sessionId } = await fixture(t, recorder().provider);
+  const { requests, provider } = recorder();
+  const routedProvider: Provider = {
+    ...provider,
+    route: { model: 'provider-model', protocol: 'openai-responses' },
+  };
+  await new Agent({
+    store,
+    provider: routedProvider,
+    tools: createTools(root),
+    approve: async () => true,
+  }).run({ sessionId, prompt: 'Which model?' });
+  const snapshot = snapshotsIn(requests[0]!.messages, 'model');
+  assert.equal(snapshot.length, 1);
+  assert.match(snapshot[0]!, /"model":"provider-model","protocol":"openai-responses"/);
+});
+
+test('unknown model metadata supersedes the model from an earlier run', async (t) => {
+  const { root, store, sessionId } = await fixture(t, recorder().provider);
+  const { requests, provider } = recorder();
+  const options = { store, provider, tools: createTools(root), approve: async () => true };
+  await new Agent({ ...options, modelInfo: { model: 'old-model', protocol: 'openai' } }).run({
+    sessionId,
+    prompt: 'Known model',
+  });
+  await new Agent(options).run({ sessionId, prompt: 'Unknown model' });
+  const snapshot = snapshotsIn(requests[1]!.messages, 'model').at(-1);
+  assert.ok(snapshot);
+  assert.match(snapshot, /"model":null/);
+  assert.doesNotMatch(snapshot, /old-model/);
+});
+
+test('model snapshots redact credentials in provider route labels', async (t) => {
+  const previous = process.env.YUANTU_API_KEY;
+  const secret = 'model-context-"secret\\fixture';
+  process.env.YUANTU_API_KEY = secret;
+  t.after(() => {
+    if (previous === undefined) delete process.env.YUANTU_API_KEY;
+    else process.env.YUANTU_API_KEY = previous;
+  });
+  const { root, store, sessionId } = await fixture(t, recorder().provider);
+  const { requests, provider } = recorder();
+  await new Agent({
+    store,
+    provider: { ...provider, route: { model: `route-${secret}`, protocol: 'openai' } },
+    tools: createTools(root),
+    approve: async () => true,
+  }).run({ sessionId, prompt: 'Which model?' });
+  const snapshot = snapshotsIn(requests[0]!.messages, 'model').at(-1);
+  assert.ok(snapshot);
+  assert.match(snapshot, /"model":"route-\[redacted\]"/);
+  assert.doesNotMatch(snapshot, /model-context-/);
+});
+
+test('compaction retains the newest model snapshot even when it covers the announcement', () => {
+  const old = runtimeSnapshotMessage('model', '{"model":"old-model"}');
+  const current = runtimeSnapshotMessage('model', '{"model":"current-model"}');
+  const history: Message[] = [
+    { role: 'user', content: old },
+    { role: 'user', content: current },
+    { role: 'assistant', content: 'Earlier answer', toolCalls: [] },
+    { role: 'user', content: 'Continue' },
+    { role: 'assistant', content: 'Newest answer', toolCalls: [] },
+  ];
+  for (const cut of [3, 4, 5]) {
+    const retained = snapshotsIn(contextTail(history, cut), 'model');
+    assert.deepEqual(retained, [current], 'the request after compaction still knows its model');
+  }
+  assert.deepEqual(snapshotsIn(contextTail(history, 1), 'model'), [current]);
+});
+
+test('an overflow resend retains model context and includes it in the forecast', async (t) => {
+  const { store, sessionId } = await fixture(t, recorder().provider);
+  const requests: ModelRequest[] = [];
+  const events: AgentEvent[] = [];
+  const provider: Provider = {
+    async complete(request) {
+      requests.push(request);
+      if (requests.length === 2)
+        throw new RunFailure('context-window-exceeded', 'Fixture context overflow');
+      return reply('Done');
+    },
+  };
+  const options = {
+    store,
+    provider,
+    summaryProvider: { complete: async () => reply('Earlier work was completed.') },
+    tools: new ToolRegistry(),
+    approve: async () => true,
+    modelInfo: { model: 'overflow-model', protocol: 'openai' },
+    maxContextTokens: 100_000,
+    maxOutputTokens: 128,
+    onEvent: (event: AgentEvent) => events.push(event),
+  };
+  const first = await new Agent(options).run({ sessionId, prompt: 'Earlier work' });
+  assert.equal(first.status, 'completed', first.error);
+  const second = await new Agent(options).run({ sessionId, prompt: 'Continue' });
+  assert.equal(second.status, 'completed', second.error);
+  assert.equal(requests.length, 3, 'one initial request, one refusal and one resend');
+  assert.ok(events.some((event) => event.type === 'context.overflow' && event.data.recovered));
+  const resent = requests[2]!;
+  const model = snapshotsIn(resent.messages, 'model');
+  assert.equal(model.length, 1);
+  assert.match(model[0]!, /"model":"overflow-model"/);
+  const forecast = events.findLast((event) => event.type === 'context.forecast');
+  assert.ok(forecast);
+  const withModel = estimateInputTokens(resent.system, resent.messages, resent.tools);
+  const withoutModel = estimateInputTokens(
+    resent.system,
+    resent.messages.filter((message) => !model.includes(message.content)),
+    resent.tools,
+  );
+  assert.equal(forecast.data.rawInputTokens, withModel, 'the forecast measures the actual resend');
+  assert.ok(withModel > withoutModel, 'retained model context consumes the request budget');
+});
 
 test('a redacted model label keeps the configured request budget', async (t) => {
   const previousKey = process.env.YUANTU_API_KEY;
@@ -181,7 +380,7 @@ test('the newest announcement of a source is the one the conversation is read ba
   // borrowed, and the completion contract is the one added for a definition a compaction could otherwise swallow.
   assert.deepEqual(
     [...RUNTIME_SNAPSHOT_SOURCES],
-    ['task', 'completion', 'memory', 'skills', 'workspace-outline'],
+    ['task', 'completion', 'model', 'memory', 'skills', 'workspace-outline'],
   );
 });
 

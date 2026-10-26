@@ -51,7 +51,7 @@ export const conversationMessages: Record<string, [string, string]> = {
   'settings.url': ['接口地址', 'API endpoint'],
   'settings.urlNote': ['填写根地址或以 /v1 结尾的地址。', 'Enter a root URL or one ending in /v1.'],
   'settings.modelId': ['模型 ID', 'Model ID'],
-  'settings.modelNote': ['填写接口支持的模型 ID', 'Enter a model ID supported by the endpoint'],
+  'settings.modelNote': ['填写接口支持的模型', 'Enter a model supported by the endpoint'],
   'settings.apiKey': ['API 密钥', 'API key'],
   'settings.apiKeyNote': [
     '密钥使用系统加密存储。更换接口地址时需重新输入密钥。',
