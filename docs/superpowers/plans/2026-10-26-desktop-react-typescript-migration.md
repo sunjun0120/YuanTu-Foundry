@@ -12,6 +12,8 @@
 
 **状态与基线:** 2026-10-26 编写；同日 17:2x 完成 v2 修订前的技术核对。HEAD 为 `b87583a5f31e42e6649ba350d8269d9a6bc3c38f`，工作区存在其他任务的未提交修改（见[第 3 节](#3-接手前的-dirty-工作区)）。本文尚未执行任何产品代码迁移，也未运行迁移验收。
 
+**执行状态（2026-10-27）:** M1–M6（T1–T23）已完成并逐任务提交；T21 记录在案的动画/专用冒烟缺口、T20 的 DOM 身份冒烟缺口、任务编辑器与消息/补丁正文 DOM 岛仍保留。**M7 未完成**：T24 仅开始 CSS 退役（六份旧 CSS 6,033 → 5,983 行，目标 ≤1,200），T25 未开始，T26 仅完成自动化证据；完整证据与未达标项见 [`docs/validation-desktop-react-migration-2026-10-27.md`](../../validation-desktop-react-migration-2026-10-27.md)。
+
 **核对结论（2026-10-26）:** 计划引用的依赖与 API 均存在且兼容——`react@19.3.1`、`@mantine/core@9.7.4`（peer `react ^19.2.0`，含 `getStyleNonce`/`forceColorScheme`/`cssVariablesResolver`/`env`）、`motion@14.6.0`（有 `./react` 导出）、`eslint-plugin-react-hooks@7.1.1`（peer 含 `eslint ^10.0.0`）、Electron `43.5.0`、Node `v24.19.0`；`npm run typecheck` 在 dirty 状态下通过。CSP 样式 nonce 机制已在 Electron 43.5.0 上实测通过（方法与结果见[架构约定 §8](#8-样式产物与-csp-接入)），实测夹具已删除，未改动仓库。
 
 ## 修订摘要（v2，相对 2026-10-26 v1）
@@ -487,15 +489,15 @@ interface PanelTransitionProps {
 
 **Interfaces:** 产出可由 esbuild 打包的 `.tsx` 组件、覆盖 `.tsx` 的类型/依赖/i18n 检查；构建输出路径不变。
 
-- [ ] 增加工具链夹具断言：TSX 文件被层级/i18n 扫描；TSX 到 TS/TSX 的 value/type import 按现有规则处理；循环被拒绝。先确认现有 gate 的 `.tsx` 漏扫测试失败。
-- [ ] 安装同一 React 19 版本的 `react`/`react-dom` 与对应 `@types`，增加同一稳定版本的 `@mantine/core`/`@mantine/hooks`、`motion` 和开发依赖 `eslint-plugin-react-hooks`。核对时可用版本：react 19.3.1、`@mantine/core` 9.7.4（peer `react ^19.2.0`）、motion 14.6.0、eslint-plugin-react-hooks 7.1.1（peer 含 eslint 10）；执行时用 `npm view` 复核并以 `--save-exact` 保存实际版本、提交 lockfile；不使用 `--force`，不另装 `framer-motion` 或旧方案的 `radix-ui`。
-- [ ] 设置 TypeScript `jsx: "react-jsx"`；`tsconfig.json`（typecheck）的 include 显式覆盖 `apps/**/*.tsx`。`tsconfig.build.json` 的 exclude 只加入 `apps/desktop/ui` 与 `apps/desktop/renderer.ts`：前者防止 tsc 输出无消费者的 React UI，后者防止 tsc 跟着 import 把 TSX 编进 `dist/apps/desktop/`（tsc 会继续编译被 include 文件 import 到的 excluded 文件）；仓库内无 `dist/apps/desktop` 的消费者，执行时用 `rg` 复核。**`apps/desktop/renderer-globals.d.ts` 必须留在 build 内**：`Window.yuantu` 的全局声明原先写在 `renderer.ts` 里，排除 `renderer.ts` 后其他 `setup*` 模块会实测报 `Property 'yuantu' does not exist on type 'Window'`；因此 T1 先把声明移入该 `.d.ts`，并暂时保留 `renderer.ts` 内的同名声明（相同的接口声明由 TS 合并），T6/T24 重写入口时删除重复。renderer 产物只由 esbuild 生成：配置放进 `scripts/desktop-renderer-options.mjs`（automatic JSX + `process.env.NODE_ENV` 生产值），`build-desktop.mjs` 与工具链测试共用这一份选项；React 调试夹具单独使用开发值，不能误带入发布包。
-- [ ] 在 `scripts/check-layers.mjs` 增加 TSX 边界规则：除 `apps/desktop/renderer.ts` 与 `apps/desktop/ui/**/*.tsx` 外，任何 `.ts` 不得经由 value 或 type import 的传递链到达 `.tsx`。用夹具确认违规被拒绝；当前直接 import 旧 renderer 模块的 Node 测试至少包括 `general-settings-pending`、`plan-contract`、`sandbox-setup-renderer`、`workspace-panel-loading`、`task-confirm-selection`（`setup*`），以及 `desktop-copy`、`tool-arguments`、`session-projections`（helper）；执行时以 `rg "apps/desktop/renderer" tests` 重新核对，后续任务迁移这些模块时先把被测逻辑抽到纯 `.ts`。
-- [ ] 用工具链夹具验证 Mantine CSS import 产生本地 `renderer.css`；在 `scripts/build-desktop.mjs` 增加 `ui/styles.css` → `dist/desktop/ui.css` 的复制（T6 首次需要）；`index.html` 的 link 顺序由 T6 追加；检查安装包资源包含新 CSS。不引入 Vite/PostCSS 开发服务器，不依赖外部字体/CDN。
-- [ ] ESLint 的 files 覆盖 `.tsx`，启用 Hooks 规则与依赖检查，保留 promise 规则；核对 `projectService: true` 能在 tsconfig include `.tsx` 后正常工作。
-- [ ] i18n 的递归扫描包含 `.tsx`；新 `ui/` 目录不加入原 renderer 的宽泛中文豁免。纯文字注释处理与 JSX 注释/字符串扫描补夹具，不能把 `ui/` 全排除来过检查。
-- [ ] 新增 `tests/layers-gate.test.ts`：在临时树上验证层级方向、`apps/` 只向下依赖、`.tsx` 边界与违规报错信息；确认该 gate 此前没有被任何测试覆盖。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-toolchain.test.ts tests/layers-gate.test.ts tests/i18n-gate.test.ts tests/import-cycles.test.ts`、`npm run typecheck`、`npm run lint`、`npm run layers:check`、`npm run cycles:check`、`npm run i18n:check`、`npm run build`，均应退出 0。此时应用仍走原界面，不以空 React 根替换产品。
+- [x] 增加工具链夹具断言：TSX 文件被层级/i18n 扫描；TSX 到 TS/TSX 的 value/type import 按现有规则处理；循环被拒绝。先确认现有 gate 的 `.tsx` 漏扫测试失败。
+- [x] 安装同一 React 19 版本的 `react`/`react-dom` 与对应 `@types`，增加同一稳定版本的 `@mantine/core`/`@mantine/hooks`、`motion` 和开发依赖 `eslint-plugin-react-hooks`。核对时可用版本：react 19.3.1、`@mantine/core` 9.7.4（peer `react ^19.2.0`）、motion 14.6.0、eslint-plugin-react-hooks 7.1.1（peer 含 eslint 10）；执行时用 `npm view` 复核并以 `--save-exact` 保存实际版本、提交 lockfile；不使用 `--force`，不另装 `framer-motion` 或旧方案的 `radix-ui`。
+- [x] 设置 TypeScript `jsx: "react-jsx"`；`tsconfig.json`（typecheck）的 include 显式覆盖 `apps/**/*.tsx`。`tsconfig.build.json` 的 exclude 只加入 `apps/desktop/ui` 与 `apps/desktop/renderer.ts`：前者防止 tsc 输出无消费者的 React UI，后者防止 tsc 跟着 import 把 TSX 编进 `dist/apps/desktop/`（tsc 会继续编译被 include 文件 import 到的 excluded 文件）；仓库内无 `dist/apps/desktop` 的消费者，执行时用 `rg` 复核。**`apps/desktop/renderer-globals.d.ts` 必须留在 build 内**：`Window.yuantu` 的全局声明原先写在 `renderer.ts` 里，排除 `renderer.ts` 后其他 `setup*` 模块会实测报 `Property 'yuantu' does not exist on type 'Window'`；因此 T1 先把声明移入该 `.d.ts`，并暂时保留 `renderer.ts` 内的同名声明（相同的接口声明由 TS 合并），T6/T24 重写入口时删除重复。renderer 产物只由 esbuild 生成：配置放进 `scripts/desktop-renderer-options.mjs`（automatic JSX + `process.env.NODE_ENV` 生产值），`build-desktop.mjs` 与工具链测试共用这一份选项；React 调试夹具单独使用开发值，不能误带入发布包。
+- [x] 在 `scripts/check-layers.mjs` 增加 TSX 边界规则：除 `apps/desktop/renderer.ts` 与 `apps/desktop/ui/**/*.tsx` 外，任何 `.ts` 不得经由 value 或 type import 的传递链到达 `.tsx`。用夹具确认违规被拒绝；当前直接 import 旧 renderer 模块的 Node 测试至少包括 `general-settings-pending`、`plan-contract`、`sandbox-setup-renderer`、`workspace-panel-loading`、`task-confirm-selection`（`setup*`），以及 `desktop-copy`、`tool-arguments`、`session-projections`（helper）；执行时以 `rg "apps/desktop/renderer" tests` 重新核对，后续任务迁移这些模块时先把被测逻辑抽到纯 `.ts`。
+- [x] 用工具链夹具验证 Mantine CSS import 产生本地 `renderer.css`；在 `scripts/build-desktop.mjs` 增加 `ui/styles.css` → `dist/desktop/ui.css` 的复制（T6 首次需要）；`index.html` 的 link 顺序由 T6 追加；检查安装包资源包含新 CSS。不引入 Vite/PostCSS 开发服务器，不依赖外部字体/CDN。
+- [x] ESLint 的 files 覆盖 `.tsx`，启用 Hooks 规则与依赖检查，保留 promise 规则；核对 `projectService: true` 能在 tsconfig include `.tsx` 后正常工作。
+- [x] i18n 的递归扫描包含 `.tsx`；新 `ui/` 目录不加入原 renderer 的宽泛中文豁免。纯文字注释处理与 JSX 注释/字符串扫描补夹具，不能把 `ui/` 全排除来过检查。
+- [x] 新增 `tests/layers-gate.test.ts`：在临时树上验证层级方向、`apps/` 只向下依赖、`.tsx` 边界与违规报错信息；确认该 gate 此前没有被任何测试覆盖。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react-toolchain.test.ts tests/layers-gate.test.ts tests/i18n-gate.test.ts tests/import-cycles.test.ts`、`npm run typecheck`、`npm run lint`、`npm run layers:check`、`npm run cycles:check`、`npm run i18n:check`、`npm run build`，均应退出 0。此时应用仍走原界面，不以空 React 根替换产品。
 
 #### T2: i18n 文案键化
 
@@ -505,15 +507,15 @@ interface PanelTransitionProps {
 
 **Interfaces:** `node scripts/migrate-ui-copy.mjs [--dry-run|--write] [--import-specifier <path>] <file-or-directory>...`；字面量/模板字面量/JSX 文本/JSX 属性 → `t(key[, values])` 的机械转换；冲突与未命中逐条报告到 stderr，有任一条时退出码 1；`--import-specifier` 供仓库外的夹具指定 import 路径。字典侧新增 `dictionaryEntries(): [key, zh, en][]` 与 `hasTranslation(key)`，与 `translate` 读同一张表。
 
-- [ ] 先写失败测试：`ui/**` 出现中文字面量必须被 i18n gate 报告；`ui/**` 里引用不存在的 key 必须被覆盖测试报告；`index.html` 的静态中文随后续区域迁移逐块消失，T24 兜底清零（覆盖率测试在过程中允许显式清单，清单只减不增）。
-- [ ] 实现脚本：用 TypeScript compiler API 解析，只处理 `ui/**` 与显式传入的 `index.html` 片段；从 `messages` 构建 zh→key 反查表（与 `domText` 同源），模板字面量 `${x}` 转 `{x}` 并生成 `values`；保留引号风格，默认 dry-run，`--write` 才落盘，结束后提示运行 prettier。
-- [ ] 冲突与未命中：同一中文多个 key 时报告并**不替换**（旧文案保留，等人工决定）；脚本绝不自行发明 key 或改写文案；未命中的字符串原样保留并在 stderr 指名文件与文本。
-- [ ] 动态文案改为字典模板：`i18n.ts` 里 8 个手写英文的 `.replace` 改为 `format(t('key'), values)`——`◇ MCP 服务` 用 `mcp.title`，会话操作/会话 id/项目规则/会话改动/正在执行分别用 `ui.sessionActionsFor`、`ui.sessionShort`、`ui.projectResources`、`ui.sessionChanges`、`ui.runningTool`，`当前工作区：` 与 `已停用` 用本任务新增的两个 key。**匹配仍是渲染后中文**（walker 的机制），但英文不再有第二份字面量；每条由 `tests/ui-copy-migration.test.ts` 断言 `format` 结果与迁移前一致。生产者的 `t()` 化（彻底去掉正则）随后续区域任务进行，最后一个生产者迁移时删除对应模式。
-- [ ] walker 隔离：`translateDocument` 跳过 `[data-react-owned]` 子树（文本与属性都跳过），用 `excludedContent` 统一表达。真实 DOM 断言随第一个真实 React 夹具落地（T6 的 `desktop-react.smoke.mjs`）：React 节点在语言切换后文本/属性不变；本任务之前没有 React 节点可测，不以假 DOM 代替。
-- [ ] 覆盖率测试：`tests/ui-i18n-coverage.test.ts` 先在自己的夹具上证明“能报告中文文案与不存在的 key”，再对 `apps/desktop/ui` 断言零问题；避免一个永远为空的检查冒充门禁。
-- [ ] 迁移脚本测试：覆盖 JSX 文本、JSX 属性、模板字面量（含占位符顺序）、普通 `.ts` 字符串、dry-run 不改文件、未命中/冲突原样保留并退出 1、import 只插一次。
-- [ ] 脚本只处理 `.ts/.tsx`：`index.html` 的静态文案随各区域迁移被 React 标记替换，不经过本脚本（T24 兜底核对）。本任务以一次 `apps/desktop` 的 dry-run 记录覆盖率：当前 705 处可机械替换、256 处需人工判断（多为“历史尝试”“续跑”这类片段，不应单独成 key），不写入产品代码。
-- [ ] 运行 `node scripts/run-tests.mjs tests/ui-i18n-coverage.test.ts tests/ui-copy-migration.test.ts tests/i18n-gate.test.ts`、`npm run i18n:check`、`npm run lint`、`npm run typecheck`。
+- [x] 先写失败测试：`ui/**` 出现中文字面量必须被 i18n gate 报告；`ui/**` 里引用不存在的 key 必须被覆盖测试报告；`index.html` 的静态中文随后续区域迁移逐块消失，T24 兜底清零（覆盖率测试在过程中允许显式清单，清单只减不增）。
+- [x] 实现脚本：用 TypeScript compiler API 解析，只处理 `ui/**` 与显式传入的 `index.html` 片段；从 `messages` 构建 zh→key 反查表（与 `domText` 同源），模板字面量 `${x}` 转 `{x}` 并生成 `values`；保留引号风格，默认 dry-run，`--write` 才落盘，结束后提示运行 prettier。
+- [x] 冲突与未命中：同一中文多个 key 时报告并**不替换**（旧文案保留，等人工决定）；脚本绝不自行发明 key 或改写文案；未命中的字符串原样保留并在 stderr 指名文件与文本。
+- [x] 动态文案改为字典模板：`i18n.ts` 里 8 个手写英文的 `.replace` 改为 `format(t('key'), values)`——`◇ MCP 服务` 用 `mcp.title`，会话操作/会话 id/项目规则/会话改动/正在执行分别用 `ui.sessionActionsFor`、`ui.sessionShort`、`ui.projectResources`、`ui.sessionChanges`、`ui.runningTool`，`当前工作区：` 与 `已停用` 用本任务新增的两个 key。**匹配仍是渲染后中文**（walker 的机制），但英文不再有第二份字面量；每条由 `tests/ui-copy-migration.test.ts` 断言 `format` 结果与迁移前一致。生产者的 `t()` 化（彻底去掉正则）随后续区域任务进行，最后一个生产者迁移时删除对应模式。
+- [x] walker 隔离：`translateDocument` 跳过 `[data-react-owned]` 子树（文本与属性都跳过），用 `excludedContent` 统一表达。真实 DOM 断言随第一个真实 React 夹具落地（T6 的 `desktop-react.smoke.mjs`）：React 节点在语言切换后文本/属性不变；本任务之前没有 React 节点可测，不以假 DOM 代替。
+- [x] 覆盖率测试：`tests/ui-i18n-coverage.test.ts` 先在自己的夹具上证明“能报告中文文案与不存在的 key”，再对 `apps/desktop/ui` 断言零问题；避免一个永远为空的检查冒充门禁。
+- [x] 迁移脚本测试：覆盖 JSX 文本、JSX 属性、模板字面量（含占位符顺序）、普通 `.ts` 字符串、dry-run 不改文件、未命中/冲突原样保留并退出 1、import 只插一次。
+- [x] 脚本只处理 `.ts/.tsx`：`index.html` 的静态文案随各区域迁移被 React 标记替换，不经过本脚本（T24 兜底核对）。本任务以一次 `apps/desktop` 的 dry-run 记录覆盖率：当前 705 处可机械替换、256 处需人工判断（多为“历史尝试”“续跑”这类片段，不应单独成 key），不写入产品代码。
+- [x] 运行 `node scripts/run-tests.mjs tests/ui-i18n-coverage.test.ts tests/ui-copy-migration.test.ts tests/i18n-gate.test.ts`、`npm run i18n:check`、`npm run lint`、`npm run typecheck`。
 
 #### T3: 样式 nonce 与 CSP 接入（主方案：静态 nonce）
 
@@ -523,13 +525,13 @@ interface PanelTransitionProps {
 
 **Interfaces:** `UI_STYLE_NONCE` 常量；`STYLE_NONCE_META`；`styleNonceFromDocument(document): string`（从 meta 读取并与常量校验，缺失或不一致即抛错）；可选轮换时 `renderUiDocument(template: string, nonce: string): string` 与 `installUiDocumentLoader(session: Session, pagePath: string): Promise<() => void>`。
 
-- [ ] 静态 nonce 三方一致：`index.html` 的 CSP `style-src 'self' data: 'nonce-…'`、同名 meta、`UI_STYLE_NONCE` 常量必须相同；CSP 不含 `unsafe-inline`/`unsafe-eval`，只出现一个 nonce，其余指令（`script-src 'self'` 等）逐字保持。
-- [ ] 真实 Electron 夹具用**产品 `index.html`**（CSP 与 meta 原样）加载 Mantine 树：AppShell、Grid/Stack、Popover（Floating UI 定位）、响应式 `Box`（触发 `InlineStyles`）、以及 `deduplicateInlineStyles` 下 React 19 的 `<style data-precedence>` 提升。断言 CSS 变量、global classes、内联响应式规则都生效且都带 nonce；无 nonce 的 `<style>` 与 inline script 被拒；启动后无 `securitypolicyviolation`。
-- [ ] 负向控制已实测：只把 CSP 里的 nonce 去掉（meta 与常量不变），上述测试立即失败（响应式 Box 宽度 1185px 而非 200px），证明测试不是恒真；恢复后 2/2 通过。
-- [ ] `ui/nonce.ts` 写常量、meta 读取函数与威胁模型注释（§8 第 4 条）；provider 在 T6 用 `getStyleNonce` 返回该常量，本任务先让夹具直接消费它。
-- [ ] 记录可选轮换路径的实测结论与实施条件（§8 第 5 条）；默认不实现，不创建 `main-ui-document.ts`，不改 `main.ts`。若后续启用，必须同时实现纯函数测试与 `loadFile` 下的 nonce 轮换断言。
-- [ ] 新测试必须使用真实 CSP，不复用“剥掉 CSP meta 再注入夹具”的旧做法；`desktop-i18n.test.ts` 等旧夹具可暂时保留剥离做法，T6 迁移时再收紧。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-csp.test.ts`、`npm run build`，构建后运行 `tests/desktop-language.smoke.mjs` 确认产品页在新增 CSP 下仍正常。
+- [x] 静态 nonce 三方一致：`index.html` 的 CSP `style-src 'self' data: 'nonce-…'`、同名 meta、`UI_STYLE_NONCE` 常量必须相同；CSP 不含 `unsafe-inline`/`unsafe-eval`，只出现一个 nonce，其余指令（`script-src 'self'` 等）逐字保持。
+- [x] 真实 Electron 夹具用**产品 `index.html`**（CSP 与 meta 原样）加载 Mantine 树：AppShell、Grid/Stack、Popover（Floating UI 定位）、响应式 `Box`（触发 `InlineStyles`）、以及 `deduplicateInlineStyles` 下 React 19 的 `<style data-precedence>` 提升。断言 CSS 变量、global classes、内联响应式规则都生效且都带 nonce；无 nonce 的 `<style>` 与 inline script 被拒；启动后无 `securitypolicyviolation`。
+- [x] 负向控制已实测：只把 CSP 里的 nonce 去掉（meta 与常量不变），上述测试立即失败（响应式 Box 宽度 1185px 而非 200px），证明测试不是恒真；恢复后 2/2 通过。
+- [x] `ui/nonce.ts` 写常量、meta 读取函数与威胁模型注释（§8 第 4 条）；provider 在 T6 用 `getStyleNonce` 返回该常量，本任务先让夹具直接消费它。
+- [x] 记录可选轮换路径的实测结论与实施条件（§8 第 5 条）；默认不实现，不创建 `main-ui-document.ts`，不改 `main.ts`。若后续启用，必须同时实现纯函数测试与 `loadFile` 下的 nonce 轮换断言。
+- [x] 新测试必须使用真实 CSP，不复用“剥掉 CSP meta 再注入夹具”的旧做法；`desktop-i18n.test.ts` 等旧夹具可暂时保留剥离做法，T6 迁移时再收紧。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react-csp.test.ts`、`npm run build`，构建后运行 `tests/desktop-language.smoke.mjs` 确认产品页在新增 CSP 下仍正常。
 
 #### T4: smoke 共享 helper 与兼容 id 基建
 
@@ -539,11 +541,11 @@ interface PanelTransitionProps {
 
 **Interfaces:** `CompatId { id, region, reason, removal }`；`COMPAT_IDS: readonly CompatId[]`；`MIGRATION_COMPLETE`（T24 置 true）；`compatId(id: string): string`（只返回值，强制在测试里做，避免线上一抛毁掉窗口）；`compatIdUsages(source): readonly string[]`。
 
-- [ ] 建立登记表与类型：`{ id, region, reason, removal }`，region 使用任务编号（如 `T10`）；起始为空表，区域迁移到 React 开始渲染某个旧 id 时才登记。
-- [ ] `compatId()` 不做运行时校验：缺登记必须是红构建，不能在用户窗口里抛错；`compatIdUsages()` 与测试共用同一套解析规则。
-- [ ] 测试：id 唯一、字段非空、region 形如 `T\d+`；**双向一致**——`ui/**` 中 `compatId('…')` 的每个值都已登记，每个登记值都确实被渲染；每个登记值仍被 `tests/` 中至少一个文件引用；“迁移完成时表为空”由 `MIGRATION_COMPLETE` 控制，T24 置 true 后该断言生效（不写 `skip`）。
-- [ ] 明确交接规则并写入文档：每个区域任务的交付必须包含“新增/删除的兼容 id 清单 + 对应 smoke 文件”；id 的删除与该断言的替换在同一个提交。
-- [ ] 运行 `node scripts/run-tests.mjs tests/compat-ids.test.ts`、`npm run typecheck`、`npm run lint`、`npm run layers:check`、`npm run i18n:check`。
+- [x] 建立登记表与类型：`{ id, region, reason, removal }`，region 使用任务编号（如 `T10`）；起始为空表，区域迁移到 React 开始渲染某个旧 id 时才登记。
+- [x] `compatId()` 不做运行时校验：缺登记必须是红构建，不能在用户窗口里抛错；`compatIdUsages()` 与测试共用同一套解析规则。
+- [x] 测试：id 唯一、字段非空、region 形如 `T\d+`；**双向一致**——`ui/**` 中 `compatId('…')` 的每个值都已登记，每个登记值都确实被渲染；每个登记值仍被 `tests/` 中至少一个文件引用；“迁移完成时表为空”由 `MIGRATION_COMPLETE` 控制，T24 置 true 后该断言生效（不写 `skip`）。
+- [x] 明确交接规则并写入文档：每个区域任务的交付必须包含“新增/删除的兼容 id 清单 + 对应 smoke 文件”；id 的删除与该断言的替换在同一个提交。
+- [x] 运行 `node scripts/run-tests.mjs tests/compat-ids.test.ts`、`npm run typecheck`、`npm run lint`、`npm run layers:check`、`npm run i18n:check`。
 
 ### M2: runtime、provider、主题与布局外壳
 
@@ -555,13 +557,13 @@ interface PanelTransitionProps {
 
 **Interfaces:** 架构约定中的 `DesktopRuntime`、`ReadableStore`、`useReadable/useSection` 和 `invoke/select`，提供稳定实例与幂等资源清理。
 
-- [ ] 用 fake `DesktopBridge` 编写测试：重复 start 只订阅一次，dispose 只解绑一次；同一个 section getter 引用稳定，未变区不通知；旧 bridge 无 changed 时全量刷新；可选区删除后不留旧值。已实现 `tests/desktop-react-runtime.test.ts`（13 条）。
-- [ ] 断言 `SnapshotMirror.apply` 原地复用 state 的事实：runtime 必须投影出新快照；直接透传同一对象时测试必须失败（先红后绿）。已由“bridge 复用同一对象、旧快照不被改写”用例覆盖。
-- [ ] 增加交错时序：订阅期间先推送后回复初始快照，初始请求拒绝、卸载后回复，以及同一对象被 preload 继续合并时旧 UI 快照不被原地改变。断言最新视图不倒退且 late callback 无通知。已覆盖推送先于回复、首次失败可重试（不重复订阅）、dispose 后回复无通知。
-- [ ] 将 `renderer.ts` 的 snapshot 订阅转交 runtime，通过 `onSnapshot` 暂时驱动旧视图；保留现有 1 frame/50ms 的快照绘制合并，不让过渡适配失去该优化。每个 delta/preset/通知频道移交时同时解除原 owner，不同时绑定两份 IPC。delta/preset/通知频道本任务不动（T20 接管流式），renderer 只在 runtime 回调里重排绘制。
-- [ ] 抽取 `invoke/select` 到 `ui/actions.ts`，按原有逻辑保留 running 时允许 load/create、`loadOlder` 不抢输入焦点、恢复通知清除旧连接错误、操作 finally 解锁。pending 以操作 id 计数（`ui/ui-state.ts`），设置页自己的 busy 另用 `externalBusy`，不再与命令共用一个布尔值。命令回复不写入 runtime 状态（只有初始快照填充），与计划一致。
-- [ ] 说明两处记录在案的取舍：`ui-state.ts` 目前只含 pending（页面/草稿/展开由拥有它们的区域任务补）；统计增量仍由 renderer 局部合并进 `state`，runtime 的 `session` 切片要等 T20 的统计 store 才同步。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-runtime.test.ts tests/desktop.test.ts`；通过后构建并运行 `tests/desktop-sessions.smoke.mjs`，证明旧 UI 经过新 runtime 仍可用。已完成：23/23 与 6/6 通过。
+- [x] 用 fake `DesktopBridge` 编写测试：重复 start 只订阅一次，dispose 只解绑一次；同一个 section getter 引用稳定，未变区不通知；旧 bridge 无 changed 时全量刷新；可选区删除后不留旧值。已实现 `tests/desktop-react-runtime.test.ts`（13 条）。
+- [x] 断言 `SnapshotMirror.apply` 原地复用 state 的事实：runtime 必须投影出新快照；直接透传同一对象时测试必须失败（先红后绿）。已由“bridge 复用同一对象、旧快照不被改写”用例覆盖。
+- [x] 增加交错时序：订阅期间先推送后回复初始快照，初始请求拒绝、卸载后回复，以及同一对象被 preload 继续合并时旧 UI 快照不被原地改变。断言最新视图不倒退且 late callback 无通知。已覆盖推送先于回复、首次失败可重试（不重复订阅）、dispose 后回复无通知。
+- [x] 将 `renderer.ts` 的 snapshot 订阅转交 runtime，通过 `onSnapshot` 暂时驱动旧视图；保留现有 1 frame/50ms 的快照绘制合并，不让过渡适配失去该优化。每个 delta/preset/通知频道移交时同时解除原 owner，不同时绑定两份 IPC。delta/preset/通知频道本任务不动（T20 接管流式），renderer 只在 runtime 回调里重排绘制。
+- [x] 抽取 `invoke/select` 到 `ui/actions.ts`，按原有逻辑保留 running 时允许 load/create、`loadOlder` 不抢输入焦点、恢复通知清除旧连接错误、操作 finally 解锁。pending 以操作 id 计数（`ui/ui-state.ts`），设置页自己的 busy 另用 `externalBusy`，不再与命令共用一个布尔值。命令回复不写入 runtime 状态（只有初始快照填充），与计划一致。
+- [x] 说明两处记录在案的取舍：`ui-state.ts` 目前只含 pending（页面/草稿/展开由拥有它们的区域任务补）；统计增量仍由 renderer 局部合并进 `state`，runtime 的 `session` 切片要等 T20 的统计 store 才同步。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react-runtime.test.ts tests/desktop.test.ts`；通过后构建并运行 `tests/desktop-sessions.smoke.mjs`，证明旧 UI 经过新 runtime 仍可用。已完成：23/23 与 6/6 通过。
 
 #### T6: 单 provider、Mantine 包装层、翻译与 select 隔离
 
@@ -571,14 +573,14 @@ interface PanelTransitionProps {
 
 **Interfaces:** `mountRegion(key: string, container: HTMLElement, element: ReactNode): () => void` 注册同一 React 根内的 portal，返回幂等注销函数；`RegionHost` 订阅注册表；`useLocale(): UiLanguage`；`DesktopProviders({ runtime, actions, children })`；`mountDesktopApp({ runtime, actions }): () => void`；`Dialog` 包装 Mantine Modal；`selectValue('')` 适配旧空值。
 
-- [ ] 用 esbuild 编译 TSX 探针并在真实 Electron 中加载产品 `index.html`（保留 CSP/meta/link 顺序）；夹具写入隔离目录，测试带 `@test-serial desktop-ui`。已完成 `tests/desktop-react.smoke.mjs`。
-- [ ] 按 §8 接入静态 nonce 的 provider；`renderer.css` 由 esbuild 输出、`ui.css` 由构建复制，`index.html` 顺序为 `renderer.css` → 六份旧 CSS → `ui.css`；smoke 断言构建产物存在与顺序。
-- [ ] 中→英→中、动态 placeholder 与 React 自有中文原文保留：walker 只翻译旧节点，`[data-react-owned]` 子树（含 React 渲染的中文原文）不被改写；select upgrader 不包裹 React 区域的 `<select>`。已由 smoke 断言，并做过负向控制（去掉 `data-react-owned` 标记后该用例失败）。
-- [ ] 一个 provider/RegionHost，`createPortal` 挂载各区域；注销区域不重建 provider；非 React 区域继续由 walker 翻译、对应 `setup*` 由区域任务停止。已实现（区域本身在 T10 起迁入）。
-- [ ] `primitives.tsx` 以 Mantine 再导出为主（尺寸/圆角等默认值留给 T7 的 theme `components`），只保留两个真正需要项目契约的：`Dialog`（busy 时禁用 Esc/遮罩关闭）与 `selectValue`；未引入第二套 Select。
-- [ ] **记录在案的取舍**：主题默认值与 `resolveColorScheme` 属 T7，本任务 provider 只接 `getStyleNonce` 与 `MotionConfig reducedMotion="user"`（tokens 在 T9）；`InlineStyles` 等组件的业务 class/关键 ID 由迁入区域时经 T4 登记表处理；`tests/desktop-smoke-support.mjs` 的交互 helper 迁移随控件迁移（T12/T13）进行，现在改会让仍用原生控件的 smoke 失效。
-- [ ] 在真实页面验证 ErrorBoundary 的本地化错误与重试、Dialog 的 Escape 关闭、Mantine 按钮/输入样式与 CSS 变量生效；方向键/Tab/下拉分组等键盘细节随对应控件迁入时逐个补测。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-i18n.test.ts tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-sessions.smoke.mjs`，依赖 dist 的 smoke 先 `npm run build`。已完成：2/2、9/9、4/4、7/7、6/6。
+- [x] 用 esbuild 编译 TSX 探针并在真实 Electron 中加载产品 `index.html`（保留 CSP/meta/link 顺序）；夹具写入隔离目录，测试带 `@test-serial desktop-ui`。已完成 `tests/desktop-react.smoke.mjs`。
+- [x] 按 §8 接入静态 nonce 的 provider；`renderer.css` 由 esbuild 输出、`ui.css` 由构建复制，`index.html` 顺序为 `renderer.css` → 六份旧 CSS → `ui.css`；smoke 断言构建产物存在与顺序。
+- [x] 中→英→中、动态 placeholder 与 React 自有中文原文保留：walker 只翻译旧节点，`[data-react-owned]` 子树（含 React 渲染的中文原文）不被改写；select upgrader 不包裹 React 区域的 `<select>`。已由 smoke 断言，并做过负向控制（去掉 `data-react-owned` 标记后该用例失败）。
+- [x] 一个 provider/RegionHost，`createPortal` 挂载各区域；注销区域不重建 provider；非 React 区域继续由 walker 翻译、对应 `setup*` 由区域任务停止。已实现（区域本身在 T10 起迁入）。
+- [x] `primitives.tsx` 以 Mantine 再导出为主（尺寸/圆角等默认值留给 T7 的 theme `components`），只保留两个真正需要项目契约的：`Dialog`（busy 时禁用 Esc/遮罩关闭）与 `selectValue`；未引入第二套 Select。
+- [x] **记录在案的取舍**：主题默认值与 `resolveColorScheme` 属 T7，本任务 provider 只接 `getStyleNonce` 与 `MotionConfig reducedMotion="user"`（tokens 在 T9）；`InlineStyles` 等组件的业务 class/关键 ID 由迁入区域时经 T4 登记表处理；`tests/desktop-smoke-support.mjs` 的交互 helper 迁移随控件迁移（T12/T13）进行，现在改会让仍用原生控件的 smoke 失效。
+- [x] 在真实页面验证 ErrorBoundary 的本地化错误与重试、Dialog 的 Escape 关闭、Mantine 按钮/输入样式与 CSS 变量生效；方向键/Tab/下拉分组等键盘细节随对应控件迁入时逐个补测。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-i18n.test.ts tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-sessions.smoke.mjs`，依赖 dist 的 smoke 先 `npm run build`。已完成：2/2、9/9、4/4、7/7、6/6。
 
 #### T7: 主题与 UI 设置单一数据源
 
@@ -588,12 +590,12 @@ interface PanelTransitionProps {
 
 **Interfaces:** `resolveColorScheme(appearance, systemDark): 'light' | 'dark'`；`resolveFontSize(name): 13 | 14 | 16`；`createDesktopTheme(base): MantineThemeOverride`；`desktopCssVariablesResolver: CSSVariablesResolver`；`appearanceFromDocument(doc)`/`fontSizeFromDocument(doc)`。provider 订阅 `data-theme`/`data-font-size`（legacy 设置控制器写的同一份），`forceColorScheme` 驱动 Mantine，**不新建设置 store、不写 localStorage**。
 
-- [ ] 主题状态单一来源：provider 用 `MutationObserver` 读 `data-theme`/`data-font-size`，`system` 经 `useMediaQuery('(prefers-color-scheme: dark)')` 解析；显式 light/dark 不随系统变化。已由 `tests/desktop-react-theme.test.ts`（4 条纯函数）与 React smoke 覆盖。
-- [ ] palette 映射进 `desktopCssVariablesResolver`：`--mantine-color-body/text/dimmed/default/default-hover/default-border/anchor` 与 primary filled 指向既有 `--surface/--ink/--muted/--raised/--hover/--line/--accent`；默认变量先取自 `defaultCssVariablesResolver` 再覆盖。**注意**：覆盖必须同时写进 `variables`、`light`、`dark` 三个块，Mantine 的 per-scheme 块会重新定义 `--mantine-color-body`（首版只写 shared 块时弹层背景是 Mantine 默认 `#242424`，smoke 立即报错）。
-- [ ] 字号：`createDesktopTheme(base)` 从 13/14/16 推导 `fontSizes`（xs=base-2 … xl=base+6），provider 以 `useMemo` 随属性重建；smoke 断言 `--mantine-font-size-md` 在 large/small 下分别为 16px/13px。
-- [ ] 不重复持久化：`forceColorScheme` 让 Mantine 忽略 colour-scheme manager；smoke 断言 `localStorage['mantine-color-scheme-value']` 为空。启动读取失败仍走既有设置 controller 的默认值，provider 只反映 DOM 属性，不额外发 `uiSettings` 请求。
-- [ ] portal 一致性：暗色下打开 Dialog，断言 `.mantine-Modal-content` 背景与 `var(--surface)` 探针一致、无第二个 provider。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-theme.test.ts tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs`。已完成：4/4、2/2、4/4、7/7。
+- [x] 主题状态单一来源：provider 用 `MutationObserver` 读 `data-theme`/`data-font-size`，`system` 经 `useMediaQuery('(prefers-color-scheme: dark)')` 解析；显式 light/dark 不随系统变化。已由 `tests/desktop-react-theme.test.ts`（4 条纯函数）与 React smoke 覆盖。
+- [x] palette 映射进 `desktopCssVariablesResolver`：`--mantine-color-body/text/dimmed/default/default-hover/default-border/anchor` 与 primary filled 指向既有 `--surface/--ink/--muted/--raised/--hover/--line/--accent`；默认变量先取自 `defaultCssVariablesResolver` 再覆盖。**注意**：覆盖必须同时写进 `variables`、`light`、`dark` 三个块，Mantine 的 per-scheme 块会重新定义 `--mantine-color-body`（首版只写 shared 块时弹层背景是 Mantine 默认 `#242424`，smoke 立即报错）。
+- [x] 字号：`createDesktopTheme(base)` 从 13/14/16 推导 `fontSizes`（xs=base-2 … xl=base+6），provider 以 `useMemo` 随属性重建；smoke 断言 `--mantine-font-size-md` 在 large/small 下分别为 16px/13px。
+- [x] 不重复持久化：`forceColorScheme` 让 Mantine 忽略 colour-scheme manager；smoke 断言 `localStorage['mantine-color-scheme-value']` 为空。启动读取失败仍走既有设置 controller 的默认值，provider 只反映 DOM 属性，不额外发 `uiSettings` 请求。
+- [x] portal 一致性：暗色下打开 Dialog，断言 `.mantine-Modal-content` 背景与 `var(--surface)` 探针一致、无第二个 provider。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react-theme.test.ts tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs`。已完成：4/4、2/2、4/4、7/7。
 
 #### T8: AppShell 布局接管（仍不接管产品外壳）
 
@@ -603,11 +605,11 @@ interface PanelTransitionProps {
 
 **Interfaces:** `DesktopShell({ navbar, main, aside?, navbarWidth?, asideWidth?, navbarVisible?, asideVisible? })`：单一 `AppShell`，`Navbar`/`Main`/`Aside` 三区，`Main` 内部再分 `.desktop-shell-content` 作为唯一滚动容器。
 
-- [ ] 单一 AppShell：专用夹具页只有 `renderer.css`/`ui.css`（不含六份旧 CSS），断言 `main` landmark 恰 1 个、`.mantine-AppShell-root` 恰 1 个；设置页将来替换 `main` 内容而不是再嵌套一层。
-- [ ] 高度与滚动契约写进 `ui/styles.css`：`.desktop-shell-main` 为 `height:100vh` 的 flex 列，`.desktop-shell-content` 为唯一 `overflow:auto`；导航/侧栏各自 `height:100vh; overflow:auto`。测试断言主列高度等于视口、内容溢出时只有内容区滚动、`document` 自身不滚动。
-- [ ] 导航宽度 264、侧栏宽度 360，侧栏默认折叠；`asideVisible` 为真时侧栏才渲染并让 `Main` 让出 360px（断言无横向溢出）。**取舍**：Mantine 的 `collapsed` 只负责偏移，不隐藏已渲染节点；因此侧栏同时按可见性条件渲染，DOM 与偏移保持一致（首版仅靠 `collapsed` 时侧栏仍占 359px，smoke 抓到）。
-- [ ] 最小窗口宽度（820×560）下仍为单列且无横向溢出，主列保持满高。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs`。已完成：3/3、4/4；typecheck/lint/i18n/layers/format/docs 全绿。
+- [x] 单一 AppShell：专用夹具页只有 `renderer.css`/`ui.css`（不含六份旧 CSS），断言 `main` landmark 恰 1 个、`.mantine-AppShell-root` 恰 1 个；设置页将来替换 `main` 内容而不是再嵌套一层。
+- [x] 高度与滚动契约写进 `ui/styles.css`：`.desktop-shell-main` 为 `height:100vh` 的 flex 列，`.desktop-shell-content` 为唯一 `overflow:auto`；导航/侧栏各自 `height:100vh; overflow:auto`。测试断言主列高度等于视口、内容溢出时只有内容区滚动、`document` 自身不滚动。
+- [x] 导航宽度 264、侧栏宽度 360，侧栏默认折叠；`asideVisible` 为真时侧栏才渲染并让 `Main` 让出 360px（断言无横向溢出）。**取舍**：Mantine 的 `collapsed` 只负责偏移，不隐藏已渲染节点；因此侧栏同时按可见性条件渲染，DOM 与偏移保持一致（首版仅靠 `collapsed` 时侧栏仍占 359px，smoke 抓到）。
+- [x] 最小窗口宽度（820×560）下仍为单列且无横向溢出，主列保持满高。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs`。已完成：3/3、4/4；typecheck/lint/i18n/layers/format/docs 全绿。
 
 ### M3: 动效
 
@@ -619,12 +621,12 @@ interface PanelTransitionProps {
 
 **Interfaces:** `PageTransitionProps`、`PanelTransitionProps`（架构约定 §7）；`MOTION`/`EASING`/`OFFSET_PX`/`seconds()`/`overlayTransition(reduced)`；`usePrefersReducedMotion()`。
 
-- [ ] 动效表落成 `motion-tokens.ts`：时间只用这一处，Motion 取秒、Mantine/CSS 取毫秒；`overlayTransition(reduced)` 供 Dialog 等 Mantine 弹层。
-- [ ] `PageTransition` 用 `AnimatePresence mode="wait"` + **直接子节点** `motion.div`（退出动画只认 AnimatePresence 的直接子节点），退出中 `inert` + `aria-hidden` 由内层 `display:contents` 包装设置；`PanelTransition` 包 Mantine 9 的 `Collapse`（属性是 `expanded`，不是 `in`）。
-- [ ] **两个实测坑已记录**：(a) 内层若调用 `usePresence()` 却不调用 `safeToRemove`，AnimatePresence 永远不会移除退出节点（新的页面因此一直挂不上），改用 `useIsPresent()`；(b) `motion` 14 的 `useReducedMotion` 只在首次渲染读取一次（源码里 `useState` + TODO），系统偏好在运行中切换不会生效；因此新增自订阅的 `usePrefersReducedMotion`，三个动画所有者（transitions/primitives/DesktopShell）都用它，MotionConfig 仍保留给 Motion 内部。
-- [ ] 真实页面测试用帧采样而非 sleep：断言退出时旧页面 `inert`、进入存在中间透明度、结束时只剩目标；A→B→C 最终只剩 C；`Collapse` 使用 180ms（读计算 `transitionDuration`）；reduce 下无中间透明度、面板时长趋零；运行中切 reduce 立即收敛。**注意**：隐藏的 Electron 窗口会暂停 rAF，动效夹具必须 `show: true`，否则动画永不推进。
-- [ ] CSS 兜底：`ui/styles.css` 的 `prefers-reduced-motion` 块把 React 子树内的 transition/animation 压到 0.01ms（Mantine 的 duration=0 分支不写 transition，计算值来自该兜底）。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-i18n.test.ts`，同时验证 CSP 下的实际布局与过渡。已完成：5/5、3/3、4/4、9/9。
+- [x] 动效表落成 `motion-tokens.ts`：时间只用这一处，Motion 取秒、Mantine/CSS 取毫秒；`overlayTransition(reduced)` 供 Dialog 等 Mantine 弹层。
+- [x] `PageTransition` 用 `AnimatePresence mode="wait"` + **直接子节点** `motion.div`（退出动画只认 AnimatePresence 的直接子节点），退出中 `inert` + `aria-hidden` 由内层 `display:contents` 包装设置；`PanelTransition` 包 Mantine 9 的 `Collapse`（属性是 `expanded`，不是 `in`）。
+- [x] **两个实测坑已记录**：(a) 内层若调用 `usePresence()` 却不调用 `safeToRemove`，AnimatePresence 永远不会移除退出节点（新的页面因此一直挂不上），改用 `useIsPresent()`；(b) `motion` 14 的 `useReducedMotion` 只在首次渲染读取一次（源码里 `useState` + TODO），系统偏好在运行中切换不会生效；因此新增自订阅的 `usePrefersReducedMotion`，三个动画所有者（transitions/primitives/DesktopShell）都用它，MotionConfig 仍保留给 Motion 内部。
+- [x] 真实页面测试用帧采样而非 sleep：断言退出时旧页面 `inert`、进入存在中间透明度、结束时只剩目标；A→B→C 最终只剩 C；`Collapse` 使用 180ms（读计算 `transitionDuration`）；reduce 下无中间透明度、面板时长趋零；运行中切 reduce 立即收敛。**注意**：隐藏的 Electron 窗口会暂停 rAF，动效夹具必须 `show: true`，否则动画永不推进。
+- [x] CSS 兜底：`ui/styles.css` 的 `prefers-reduced-motion` 块把 React 子树内的 transition/animation 压到 0.01ms（Mantine 的 duration=0 分支不写 transition，计算值来自该兜底）。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-i18n.test.ts`，同时验证 CSP 下的实际布局与过渡。已完成：5/5、3/3、4/4、9/9。
 
 ### M4: 设置页
 
@@ -820,9 +822,9 @@ enderer-questions.ts；计划批准卡由 Questions 渲染（短提示 + Markdow
 enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描器把 split('count') 当 () 的误报，并补 ui.todos 键。验证：approval-model 2/2、question-model 9/9、desktop-copy 14/14、desktop-i18n 5/5、ui-i18n-coverage 2/2、agent 7/7、desktop 9/9、sessions 6/6；lint/i18n/layers/cycles/format/typecheck/build 全绿。
 
 - [x] 问题草稿按 request ID/问题 ID 保存；快照、统计或语言刷新不清除选择、翻页和自由文本；请求完成后释放草稿。审批请求去重及 pending 防重入维持原逻辑。
-- [ ] 保留并行修改后的计划批准卡：短提示与 Markdown 正文分别展示，digest 不进入 UI，编号步骤独立成行且保持当前小字号；选择/提交不重置当前问题的卡内滚动或会话锚点，换到另一问题才重置卡内阅读位置。沿用 `localizedQuestion` 的原始选项值，不把翻译后的 label 发回内核。
-- [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-copy.test.ts tests/desktop-i18n.test.ts tests/desktop-react.smoke.mjs`。
+- [x] 保留并行修改后的计划批准卡：短提示与 Markdown 正文分别展示，digest 不进入 UI，编号步骤独立成行且保持当前小字号；选择/提交不重置当前问题的卡内滚动或会话锚点，换到另一问题才重置卡内阅读位置。沿用 `localizedQuestion` 的原始选项值，不把翻译后的 label 发回内核。
+- [x] 文案键化；旧绑定删除；兼容 id 更新。
+- [x] 运行 `node scripts/run-tests.mjs tests/desktop-copy.test.ts tests/desktop-i18n.test.ts tests/desktop-react.smoke.mjs`。
 
 #### T23: 子 agent 与本轮改动
 
