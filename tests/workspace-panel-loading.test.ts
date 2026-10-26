@@ -199,3 +199,62 @@ test('a rejected preview read is reported on the tab, not left reading', async (
   assert.equal(tab?.error, '预览不可读');
   assert.equal(tab?.shown, null);
 });
+
+test('a diff preview is shown without reading the file and can be replaced', async () => {
+  const { controller, requests } = bridge();
+  controller.setWorkspace('/proj');
+  const first = {} as Element;
+  first.textContent = 'diff one';
+  controller.previewChanges('a.txt', first, 'change-1');
+  const state = controller.store.getSnapshot();
+  assert.equal(state.open, true);
+  assert.equal(state.selected, 'a.txt');
+  assert.equal(requests.length, 0);
+  assert.equal(controller.tab('a.txt')?.changeKey, 'change-1');
+
+  const second = {} as Element;
+  second.textContent = 'diff two';
+  assert.equal(controller.refreshChangePreview('change-1', second), true);
+  assert.equal(controller.tab('a.txt')?.changePreview, second);
+  assert.equal(controller.refreshChangePreview('missing', second), false);
+  // The same element is not a change; the pane keeps its scroll instead of being rebuilt.
+  assert.equal(controller.refreshChangePreview('change-1', second), true);
+  assert.equal(requests.length, 0);
+});
+
+test('clearing change previews removes those tabs and deselects the open one', async () => {
+  const { controller } = bridge();
+  controller.setWorkspace('/proj');
+  controller.previewChanges('a.txt', {} as Element, 'change-1');
+  controller.clearChangePreviews();
+  assert.equal(controller.tab('a.txt'), undefined);
+  assert.equal(controller.store.getSnapshot().selected, null);
+});
+
+test('closing the active tab activates its neighbour', async () => {
+  const { controller, requests } = bridge();
+  controller.setWorkspace('/proj');
+  const first = controller.showFile('a.txt');
+  await flush();
+  const second = controller.showFile('b.txt');
+  await flush();
+  requests[1]!.resolve({ ok: true, preview: { kind: 'text', text: 'b' } as never });
+  requests[0]!.resolve({ ok: true, preview: { kind: 'text', text: 'a' } as never });
+  await Promise.all([first, second]);
+  controller.activate('a.txt');
+  controller.closeTab('a.txt');
+  assert.equal(controller.store.getSnapshot().selected, 'b.txt');
+});
+
+test('opening a path that showed a diff reads the file again', async () => {
+  const { controller, requests } = bridge();
+  controller.setWorkspace('/proj');
+  controller.previewChanges('a.txt', {} as Element, 'change-1');
+  const pending = controller.showFile('a.txt');
+  await flush();
+  assert.equal(requests.length, 1);
+  requests[0]!.resolve({ ok: true, preview: { kind: 'text', text: 'current' } as never });
+  await pending;
+  assert.equal(controller.tab('a.txt')?.changePreview, undefined);
+  assert.equal((controller.tab('a.txt')?.shown as { text?: string } | null)?.text, 'current');
+});

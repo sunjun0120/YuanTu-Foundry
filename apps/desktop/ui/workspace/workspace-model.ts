@@ -30,6 +30,8 @@ export interface WorkspaceTab {
   token: number;
   scrollTop: number;
   changeKey?: string;
+  /** A diff preview built by the transcript; drawn instead of a read when present. */
+  changePreview?: Element | null;
   /** A blob URL for a generated Office page; released when the tab is closed or reloaded. */
   documentUrl?: string;
 }
@@ -51,11 +53,20 @@ export interface WorkspaceController {
   setOpen(open: boolean): void;
   setFullscreen(fullscreen: boolean): void;
   select(path: string | null): void;
+  /** Show a tab (or the tree with `null`) without reading anything. */
+  activate(path: string | null): void;
+  backToTree(): void;
   loadDirectory(path: string): Promise<void>;
   toggleDirectory(path: string): void;
   refresh(): void;
   showFile(path: string): Promise<void>;
   closeTab(path: string): void;
+  setTabScroll(path: string, top: number): void;
+  /** Show a diff the transcript already built, without reading the file. */
+  previewChanges(path: string, content: Element, key: string): void;
+  /** Replace the diff under `key`; `false` when no tab is showing it. */
+  refreshChangePreview(key: string, content: Element): boolean;
+  clearChangePreviews(): void;
   tab(path: string): WorkspaceTab | undefined;
   /** The directories a poll would compare: the root and every expanded directory. */
   pollPaths(): string[];
@@ -180,6 +191,7 @@ export function createWorkspaceController(deps: {
       tabs = new Map();
       listingTokens.clear();
       selected = null;
+      fullscreen = false;
       publish();
       if (open) void loadDirectory('');
       return true;
@@ -194,6 +206,14 @@ export function createWorkspaceController(deps: {
     },
     select(path) {
       selected = path;
+      publish();
+    },
+    activate(path) {
+      selected = path;
+      publish();
+    },
+    backToTree() {
+      selected = null;
       publish();
     },
     loadDirectory,
@@ -219,7 +239,12 @@ export function createWorkspaceController(deps: {
     },
     async showFile(path) {
       let tab = tabs.get(path);
-      const fresh = !tab;
+      // A diff preview is not the file: opening the path itself reads the current bytes.
+      const fresh = !tab || Boolean(tab.changePreview);
+      if (tab) {
+        delete tab.changePreview;
+        delete tab.changeKey;
+      }
       if (!tab) {
         tab = { path, shown: null, error: null, reading: false, token: 0, scrollTop: 0 };
         tabs = new Map(tabs).set(path, tab);
@@ -229,11 +254,51 @@ export function createWorkspaceController(deps: {
       if (fresh) await readTab(tab);
     },
     closeTab(path) {
+      const paths = [...tabs.keys()];
+      const index = paths.indexOf(path);
+      const wasActive = selected === path;
       const tab = tabs.get(path);
       if (tab?.documentUrl) URL.revokeObjectURL(tab.documentUrl);
       tabs = new Map(tabs);
       tabs.delete(path);
-      if (selected === path) selected = null;
+      if (wasActive) selected = paths[index + 1] ?? paths[index - 1] ?? null;
+      publish();
+    },
+    setTabScroll(path, top) {
+      const tab = tabs.get(path);
+      if (!tab) return;
+      tab.scrollTop = top;
+    },
+    previewChanges(path, content, key) {
+      let tab = tabs.get(path);
+      if (!tab) {
+        tab = { path, shown: null, error: null, reading: false, token: 0, scrollTop: 0 };
+        tabs = new Map(tabs).set(path, tab);
+      }
+      // A read in flight for this path would replace the diff when it lands; the diff is the newer intent.
+      tab.token++;
+      tab.reading = false;
+      tab.changePreview = content;
+      tab.changeKey = key;
+      selected = path;
+      if (!open) open = true;
+      publish();
+    },
+    refreshChangePreview(key, content) {
+      const tab = [...tabs.values()].find((entry) => entry.changeKey === key);
+      if (!tab) return false;
+      if (tab.changePreview === content) return true;
+      tab.changePreview = content;
+      publish();
+      return true;
+    },
+    clearChangePreviews() {
+      for (const [path, tab] of tabs) {
+        if (!tab.changePreview) continue;
+        tabs = new Map(tabs);
+        tabs.delete(path);
+        if (selected === path) selected = null;
+      }
       publish();
     },
     tab: (path) => tabs.get(path),
