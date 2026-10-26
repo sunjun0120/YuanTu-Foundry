@@ -16,8 +16,6 @@
  */
 import type { CarrierSnapshot, MessageDelta } from '../../packages/carrier/contract.ts';
 import { format, t } from './i18n.ts';
-import type { MarkdownActions } from './markdown.ts';
-import { mountLiveContent } from './ui/conversation/live-content.tsx';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -26,8 +24,8 @@ function required<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 export function setupLiveMessage(options: {
   getState(): CarrierSnapshot | null;
-  /** The hub's bridge-backed markdown actions. */
-  markdownActions: MarkdownActions;
+  /** Draw the answer body; the React projection lives in the window, which owns its lifetime. */
+  paintLive(text: string): void;
   /** The folded-thought view, drawn in place so an expanded fold is not closed under the reader. */
   reasoningView(text: string): HTMLElement;
   /** Put the live thought into the last process group, or take it back out. */
@@ -43,7 +41,7 @@ export function setupLiveMessage(options: {
   schedule(): void;
 } {
   const {
-    markdownActions,
+    paintLive,
     reasoningView,
     placeLiveThought,
     updateJumpButton,
@@ -53,8 +51,6 @@ export function setupLiveMessage(options: {
   const conversation = required('conversation');
   let liveKey = '';
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
-  /** The answer body is React now; the block-level incremental parsing lives in `MarkdownView`. */
-  const liveContent = mountLiveContent(markdownActions);
   /**
    * Streamed text accumulated from the delta channel. Snapshots no longer arrive per token, so the
    * live bubble reads from this buffer and falls back to the snapshot's own copy (which the controller
@@ -106,8 +102,8 @@ export function setupLiveMessage(options: {
           full.length > 120_000
             ? `${format(t('ui.liveTail'), { count: full.length })}\n\n${full.slice(-120_000)}`
             : full || livePlaceholder();
-        liveContent.update(preview);
-      } else liveContent.update('');
+        paintLive(preview);
+      } else paintLive('');
       if (
         nearBottom &&
         !isChildPageOpen() &&
@@ -126,7 +122,7 @@ export function setupLiveMessage(options: {
     // reappear under a new message id.
     if (!live) {
       liveDelta = null;
-      liveContent.update('');
+      paintLive('');
     } else if (liveDelta && liveDelta.id !== live.id) liveDelta = null;
     const nextLive = live?.id ?? '';
     if (nextLive !== liveKey) {

@@ -125,6 +125,7 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.questionClose': ['关闭', 'Close'],
   'ui.questionPrevious': ['上一题', 'Previous question'],
   'ui.questionNext': ['下一题', 'Next question'],
+  'ui.todos': ['任务', 'Tasks'],
   'ui.todosTitle': ['任务', 'Tasks'],
   'ui.todosSummary': [
     '{completed} 已完成 · {inProgress} 进行中 · {pending} 待处理',

@@ -40,9 +40,11 @@ async function check(dir: string): Promise<Problem[]> {
     const lines = withoutComments(await readFile(file, 'utf8')).split('\n');
     for (const [index, line] of lines.entries()) {
       if (HAN.test(line)) problems.push({ file, line: index + 1, kind: 'copy', text: line.trim() });
-      for (const match of line.matchAll(/(?:t|translate)\(\s*'([^']+)'/g))
+      // Only a standalone call counts: split('count') and createElement('button') both contain `t('...`.
+      for (const match of line.matchAll(/(?<![\w$.])(?:t|translate)\(\s*'([^']+)'/g)) {
         if (!hasTranslation(match[1]!))
           problems.push({ file, line: index + 1, kind: 'key', text: match[1]! });
+      }
     }
   }
   return problems;

@@ -18,15 +18,16 @@ import type { Message } from '../../packages/protocol/index.ts';
 import { setupModelSettingsEntry } from './renderer-settings.ts';
 import { mountModelSettings } from './ui/settings/model-mount.tsx';
 import { diffView } from './diff-view.ts';
-import { approvalSummary } from './approval-view.ts';
 import { mountAttachments } from './ui/composer/attachment-mount.tsx';
 import { mountBackground } from './ui/panels/background-mount.tsx';
 import { mountCommandPalette } from './ui/composer/command-mount.tsx';
 import { setupComposer } from './renderer-composer.ts';
+import { mountLiveContent } from './ui/conversation/live-content.tsx';
 import { setupLiveMessage } from './renderer-live.ts';
 import { setupMessages } from './renderer-messages.ts';
 import { mountPlanPanel } from './ui/panels/plan-mount.tsx';
-import { setupQuestions } from './renderer-questions.ts';
+import { mountQuestions } from './ui/conversation/questions-mount.tsx';
+import { mountApprovals } from './ui/conversation/approvals-mount.tsx';
 import { mountSessionPanels } from './ui/panels/session-panels-mount.tsx';
 import { mountSessionSidebar } from './ui/sessions/session-mount.tsx';
 import type { SessionActivity } from './ui/sessions/session-model.ts';
@@ -44,7 +45,6 @@ import { mountPermissions } from './ui/permissions/mount.tsx';
 import { setupSelectMenus } from './renderer-select-menu.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { environmentBlockedCode } from '../../packages/tools/environment-blocked.ts';
-import { approvalKey as identicalApprovalKey } from '../../packages/client/approval-key.ts';
 import { localizedRunError, runErrorWantsModelSettings } from './renderer-error-text.ts';
 import { SlotRegistry, mountSlot, type SlotMount } from './slots.ts';
 declare global {
@@ -65,16 +65,6 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
  * run result, the CLI prints it, and a second spelling of "the user stopped this" is a second thing to keep in
  * step. Defined beside `visibleRunError`, which is the other reader of the same marker.
  */
-function node<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  text = '',
-  className = '',
-): HTMLElementTagNameMap[K] {
-  const value = document.createElement(tag);
-  value.textContent = text;
-  value.className = className;
-  return value;
-}
 /**
  * The two command actions, declared before the panels that take them.
  *
@@ -234,7 +224,6 @@ const actions = createDesktopActions({
 });
 /** Whether the window should present itself as busy: a command in flight, or a settings form saving. */
 const isOperating = (): boolean => pendingOperations.isOperating() || externalBusy;
-let approvalBusy = new Set<string>();
 let transcriptKey = '';
 /**
  * Where the shown window of history began at the last paint, for the session it belonged to.
@@ -246,7 +235,6 @@ let transcriptKey = '';
 let paintedWindow: { sessionId: string | null; historyStart: number; end: number } | null = null;
 /** Set once older history was prepended; cleared by a new message at the end or by another session. */
 let holdReadingPosition = false;
-let approvalKey = '';
 const commandsView = mountCommandPalette({
   getState: () => state,
   requestRender: render,
@@ -327,9 +315,10 @@ const transcriptView = setupTranscript({
   onRequestFullAccess: () => permissionSettings?.requestFullAccess(),
 });
 
+const liveContent = mountLiveContent(markdownActions);
 const liveView = setupLiveMessage({
   getState: () => state,
-  markdownActions,
+  paintLive: (text) => liveContent.update(text),
   reasoningView: messagesView.reasoningView,
   placeLiveThought: transcriptView.placeLiveThought,
   updateJumpButton,
@@ -618,127 +607,7 @@ function render(): void {
   subagentView.update(session.subagents);
   transcriptView.updateRunning();
   element('tools').hidden = true;
-  // An approval does not change once raised, so its id stands for it: the key no longer serializes every diff.
-  const nextApprovalKey = JSON.stringify([
-    session.approvals.map((item) => item.id),
-    [...approvalBusy],
-    locale(),
-  ]);
-  if (nextApprovalKey !== approvalKey) {
-    approvalKey = nextApprovalKey;
-    // Identical requests waiting together are one card: the controller answers every copy with one click.
-    const copies = new Map<string, number>();
-    for (const item of session.approvals) {
-      const key = identicalApprovalKey(item.approval);
-      copies.set(key, (copies.get(key) ?? 0) + 1);
-    }
-    const drawn = new Set<string>();
-    const shown = session.approvals.filter((item) => {
-      const key = identicalApprovalKey(item.approval);
-      if (drawn.has(key)) return false;
-      drawn.add(key);
-      return true;
-    });
-    element('approvals').replaceChildren(
-      ...shown.map((item) => {
-        const panel = node('section', '', 'approval');
-        const summary = approvalSummary(item.approval);
-        const count = copies.get(identicalApprovalKey(item.approval)) ?? 1;
-        panel.append(
-          node('div', t('ui.approvalRequired'), 'approval-label'),
-          node('h2', summary.title),
-          node('p', summary.why, 'approval-why'),
-        );
-        if (count > 1)
-          panel.append(
-            node(
-              'p',
-              format(t('approval.identicalCount'), { count: String(count) }),
-              'approval-meta',
-            ),
-          );
-        if (summary.subject) panel.append(node('pre', summary.subject, 'approval-subject'));
-        if (summary.directory)
-          panel.append(
-            node(
-              'p',
-              format(t('approval.directory'), { directory: summary.directory }),
-              'approval-meta',
-            ),
-          );
-        if (summary.boundary) panel.append(node('p', summary.boundary, 'approval-meta'));
-        if (summary.projectConfig)
-          panel.append(node('p', summary.projectConfig, 'approval-meta approval-config'));
-        if (item.approval.subagent)
-          panel.append(
-            node(
-              'p',
-              format(t('subagent.attribution'), {
-                objective: item.approval.subagent.objective.slice(0, 120),
-              }),
-              'subagent-badge',
-            ),
-          );
-        if (item.approval.change) panel.append(diffView(item.approval.change, true));
-        const raw = node('details', '', 'approval-raw');
-        raw.open = !item.approval.change && !summary.subject;
-        raw.append(
-          node('summary', t('approval.raw')),
-          node('p', item.approval.description),
-          node('pre', JSON.stringify(item.approval.toolCall.arguments, null, 2)),
-        );
-        panel.append(raw);
-        const actions = node('div', '', 'approval-actions');
-        /*
-         * A command approval offers a third answer: allow this exact call for the rest of the session.
-         *
-         * It is not offered for file changes (a diff is read once and approved once) or external services.
-         * The command case is the one where the same call repeats — a test command retried five times used to
-         * cost five identical clicks.
-         */
-        const decisions = [
-          { allow: false, remember: false },
-          { allow: true, remember: false },
-          ...(item.approval.kind === 'command' ? [{ allow: true, remember: true }] : []),
-        ];
-        for (const decision of decisions) {
-          const button = node(
-            'button',
-            t(
-              decision.remember
-                ? 'approval.allowSession'
-                : decision.allow
-                  ? 'approval.allow'
-                  : 'approval.deny',
-            ),
-            decision.remember || !decision.allow ? 'secondary' : 'primary',
-          );
-          if (decision.remember) {
-            button.title = t('approval.allowSessionNote');
-            button.setAttribute('aria-label', t('approval.allowSessionNote'));
-          }
-          button.disabled = approvalBusy.has(item.id);
-          button.addEventListener('click', () => {
-            approvalBusy.add(item.id);
-            localError = null;
-            render();
-            void invoke({
-              type: 'approve',
-              id: item.id,
-              allow: decision.allow,
-              ...(decision.remember ? { remember: true } : {}),
-            }).finally(() => {
-              approvalBusy.delete(item.id);
-              render();
-            });
-          });
-          actions.append(button);
-        }
-        panel.append(actions);
-        return panel;
-      }),
-    );
-  }
+  approvalsView.render(session.approvals);
   questionsView.render(session.questions);
   sessionPanels.todos(session.todos);
   sessionPanels.goal(session.goal);
@@ -804,7 +673,14 @@ const sessionPanels = mountSessionPanels(
     : undefined,
 );
 
-const questionsView = setupQuestions({
+const approvalsView = mountApprovals({
+  invoke,
+  setError: (message) => {
+    localError = message;
+  },
+});
+
+const questionsView = mountQuestions({
   markdownActions,
   invoke,
   setError: (message) => {
@@ -1013,8 +889,11 @@ window.addEventListener(
     backgroundView.dispose();
     statisticsView.dispose();
     planView.dispose();
+    questionsView.dispose();
+    approvalsView.dispose();
     sessionPanels.dispose();
     taskView.dispose();
+    liveContent.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();

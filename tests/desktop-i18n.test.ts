@@ -95,8 +95,14 @@ async function desktopPage(t: test.TestContext) {
   );
   const bundle = await build({
     stdin: {
-      contents:
-        "export * from './apps/desktop/i18n.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
+      contents: [
+        "export * from './apps/desktop/i18n.ts';",
+        "export {setupSubAgents} from './apps/desktop/renderer-subagents.ts';",
+        "export {mountQuestions} from './apps/desktop/ui/conversation/questions-mount.tsx';",
+        "export {RegionHost} from './apps/desktop/ui/legacy/mount-region.tsx';",
+        "export {createElement} from 'react';",
+        "export {createRoot} from 'react-dom/client';",
+      ].join('\n'),
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -104,6 +110,8 @@ async function desktopPage(t: test.TestContext) {
     format: 'iife',
     globalName: 'localeApi',
     platform: 'browser',
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"production"' },
   });
   await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
   return page;
@@ -118,6 +126,7 @@ async function planApprovalPage(t: test.TestContext) {
       content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
     });
   await page.evaluate(String.raw`
+    (async () => {
     localeApi.setLocale('zh-CN');
     document.documentElement.dataset.theme='dark';
     document.querySelector('#welcome').hidden=true;
@@ -125,18 +134,24 @@ async function planApprovalPage(t: test.TestContext) {
     window.planQuestions=[{id:'approval',request:{questions:[{
       id:'approve',header:'Plan approval',
       question:['Approve this plan and start carrying it out in this run?','','# 弹幕游戏','','使用 HTML + Canvas 2D 实现。','',
-        ...Array.from({length:4},(_,i)=>(i+1)+'. '+['检查静态资源约定','创建游戏页面','实现核心循环','验证交付结果'][i]+'：'+('保留现有配置，完成本步骤后验证结果。'.repeat(12))),
+        ...Array.from({length:4},(_,i)=>(i+1)+'. '+['检查静态资源约定','创建游戏页面','实现核心循环','验证交付结果'][i]+'：'+('保留现有配置，完成本步骤后验证结果。'.repeat(12))).flatMap((line,index)=>index?['',line]:[line]),
         '','Plan digest: f04f4f93e4c9…'].join('\n'),
       options:[{label:'Approve and execute',description:'Lift read-only mode now and carry out the plan in this run.'},{label:'Keep planning'}]
     }]}}];
-    window.questionView=localeApi.setupQuestions({
+    window.questionView=localeApi.mountQuestions({
       markdownActions:{copy:async()=>{},open:async()=>{}},
       invoke:command=>{window.answerCommand=command;return new Promise(resolve=>window.finishAnswer=resolve)},
       setError:()=>{},requestRender:()=>questionView.render(planQuestions)
     });
     questionView.render(planQuestions);
+    // The panel now draws through the one React root, like every migrated region: mount the region host into the
+    // product's #desktop-root and wait for the portal to commit before measuring scroll positions.
+    window.questionRoot=localeApi.createRoot(document.getElementById('desktop-root'));
+    questionRoot.render(localeApi.createElement(localeApi.RegionHost));
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     const conversation=document.querySelector('#conversation');
     conversation.scrollTop=conversation.scrollHeight;
+    })()
   `);
   return page;
 }
@@ -153,6 +168,8 @@ test(
     );
     const steps = page.locator('#questions .question-plan ol > li');
     assert.equal(await steps.count(), 4);
+    // Blank lines between numbered items must not split the plan into one list per item: the numbers would restart.
+    assert.equal(await page.locator('#questions .question-plan ol').count(), 1);
     const appearance = await steps.evaluateAll((nodes) =>
       nodes.map((node) => ({
         top: node.getBoundingClientRect().top,
@@ -206,6 +223,49 @@ test(
       { id: 'approve', selected: ['Approve and execute'] },
     ]);
     await page.evaluate('finishAnswer(null)');
+  },
+);
+
+test(
+  'switching to another question starts its card at the top, and only switching does',
+  { timeout: 30000, skip: electronSkip },
+  async (t) => {
+    const page = await planApprovalPage(t);
+    if (!page) return;
+    await page.evaluate(String.raw`
+      (() => {
+        // Both questions are long enough to scroll inside the card's max-height, so "the card is at its top" is
+        // an assertion that can fail rather than a value the browser clamps for a small question.
+        const long = '这一题需要足够长才能在卡片里滚动，才能分辨换题后是否真的回到了顶端。'.repeat(60);
+        window.pagedQuestions=[{id:'paged',request:{questions:[
+          {id:'one',header:'第一题',question:long,options:[{label:'继续'}]},
+          {id:'two',header:'第二题',question:long,options:[{label:'返回'}]}
+        ]}}];
+        questionView.render(pagedQuestions);
+      })()
+    `);
+    const card = page.locator('.question-card');
+    const count = card.locator('.question-count');
+    await count.filter({ hasText: '1/2' }).waitFor();
+    await card.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    assert.ok((await card.evaluate((element) => element.scrollTop)) > 100);
+    await card.locator('.question-next').click();
+    await count.filter({ hasText: '2/2' }).waitFor();
+    assert.ok(
+      (await card.evaluate((element) => element.scrollTop)) < 4,
+      'the second question opens at its top',
+    );
+    await card.evaluate((element) => {
+      element.scrollTop = 200;
+    });
+    await card.locator('.question-prev').click();
+    await count.filter({ hasText: '1/2' }).waitFor();
+    assert.ok(
+      (await card.evaluate((element) => element.scrollTop)) < 4,
+      'going back to the first question also starts at its top',
+    );
   },
 );
 

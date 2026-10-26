@@ -414,6 +414,28 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.allowOnce': ['允许一次', 'Allow once'],
   'ui.deny': ['拒绝', 'Deny'],
   'ui.undoChange': ['撤销此修改', 'Undo this change'],
+  /**
+   * The one question the product writes itself, in plan mode.
+   *
+   * The kernel sends this question in English because it also writes it for the model; only the fixed header, the
+   * short prompt, the two options and their descriptions are translated here, for display. The option *value* the
+   * renderer sends back stays the kernel's label — `plan-tools.ts` matches it exactly.
+   */
+  'question.plan.header': ['计划批准', 'Plan approval'],
+  'question.plan.intro': [
+    '批准这份计划，并在本轮开始执行吗？',
+    'Approve this plan and start carrying it out in this run?',
+  ],
+  'question.plan.approve': ['批准并执行', 'Approve and execute'],
+  'question.plan.keepPlanning': ['继续修改计划', 'Keep planning'],
+  'question.plan.approveDescription': [
+    '现在就解除只读模式，在本轮执行这份计划。',
+    'Lift read-only mode now and carry out the plan in this run.',
+  ],
+  'question.plan.keepPlanningDescription': [
+    '先不开始工作，继续停留在计划模式。',
+    'Do not start work: stay in planning mode.',
+  ],
   'plan.title': ['计划', 'Plan'],
   'plan.status.planning': ['正在制定计划', 'Planning in progress'],
   'plan.waitingAnswer': ['规划正在等待你的回答', 'Planning is waiting for your answer'],

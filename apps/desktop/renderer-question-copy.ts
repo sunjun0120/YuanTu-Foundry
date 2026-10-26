@@ -11,16 +11,18 @@
  * the kernel's label, because `plan-tools.ts` matches it exactly. A question the model wrote is never reworded —
  * it is the model's text, not the product's.
  */
+import { translate } from './i18n.ts';
+
 const PLAN_HEADER = 'Plan approval';
 const PLAN_INTRO = 'Approve this plan and start carrying it out in this run?';
+/** The kernel's option labels are the keys of the product's own two translations. */
 const PLAN_LABELS: Record<string, string> = {
-  'Approve and execute': '批准并执行',
-  'Keep planning': '继续修改计划',
+  'Approve and execute': 'question.plan.approve',
+  'Keep planning': 'question.plan.keepPlanning',
 };
 const PLAN_DESCRIPTIONS: Record<string, string> = {
-  'Lift read-only mode now and carry out the plan in this run.':
-    '现在就解除只读模式，在本轮执行这份计划。',
-  'Do not start work: stay in planning mode.': '先不开始工作，继续停留在计划模式。',
+  'Lift read-only mode now and carry out the plan in this run.': 'question.plan.approveDescription',
+  'Do not start work: stay in planning mode.': 'question.plan.keepPlanningDescription',
 };
 /** The digest exists so the approved plan can be checked against the one that was read; it is not for the reader. */
 const PLAN_DIGEST = /^Plan digest: .*$/m;
@@ -44,11 +46,24 @@ export function localizedQuestion(
   if (!isPlan) return { header, question, label: identity, description: identity };
   const [intro = '', ...lines] = question.replace(PLAN_DIGEST, '').trim().split('\n');
   const plan = lines.join('\n').trim();
+  const language = english ? 'en-US' : 'zh-CN';
   return {
-    header: english ? header : '计划批准',
-    question: english ? intro : intro.replace(PLAN_INTRO, '批准这份计划，并在本轮开始执行吗？'),
+    header: english ? header : translate('question.plan.header', language),
+    question: english
+      ? intro
+      : intro.replace(PLAN_INTRO, translate('question.plan.intro', language)),
     ...(plan ? { plan } : {}),
-    label: english ? identity : (value) => PLAN_LABELS[value] ?? value,
-    description: english ? identity : (value) => PLAN_DESCRIPTIONS[value] ?? value,
+    label: english
+      ? identity
+      : (value) => {
+          const key = PLAN_LABELS[value];
+          return key ? translate(key, language) : value;
+        },
+    description: english
+      ? identity
+      : (value) => {
+          const key = PLAN_DESCRIPTIONS[value];
+          return key ? translate(key, language) : value;
+        },
   };
 }

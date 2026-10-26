@@ -813,7 +813,11 @@ enderer-live 的正文重绘改走它（reasoning 折叠与 120k 截尾/占位/�
 
 **规模:** 约 600–850 行。
 
-- [ ] 问题草稿按 request ID/问题 ID 保存；快照、统计或语言刷新不清除选择、翻页和自由文本；请求完成后释放草稿。审批请求去重及 pending 防重入维持原逻辑。
+**进度:** 已完成。question-model（草稿按 request ID/问题 ID、分页/选择/自由文本、完成后释放、pending 防重入）+ Questions/questions-mount；Approvals 也从 renderer 内联块移出（pproval-model 去重/计数/命令三选项，busy 防重入），删除
+enderer-questions.ts；计划批准卡由 Questions 渲染（短提示 + Markdown 正文、digest 不入 UI、编号步骤单列表、切问题才重置卡内滚动）；选项值保持原始 label。同时修复 T20 遗留的
+enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描器把 split('count') 当 () 的误报，并补 ui.todos 键。验证：approval-model 2/2、question-model 9/9、desktop-copy 14/14、desktop-i18n 5/5、ui-i18n-coverage 2/2、agent 7/7、desktop 9/9、sessions 6/6；lint/i18n/layers/cycles/format/typecheck/build 全绿。
+
+- [x] 问题草稿按 request ID/问题 ID 保存；快照、统计或语言刷新不清除选择、翻页和自由文本；请求完成后释放草稿。审批请求去重及 pending 防重入维持原逻辑。
 - [ ] 保留并行修改后的计划批准卡：短提示与 Markdown 正文分别展示，digest 不进入 UI，编号步骤独立成行且保持当前小字号；选择/提交不重置当前问题的卡内滚动或会话锚点，换到另一问题才重置卡内阅读位置。沿用 `localizedQuestion` 的原始选项值，不把翻译后的 label 发回内核。
 - [ ] 文案键化；旧绑定删除；兼容 id 更新。
 - [ ] 运行 `node scripts/run-tests.mjs tests/desktop-copy.test.ts tests/desktop-i18n.test.ts tests/desktop-react.smoke.mjs`。
