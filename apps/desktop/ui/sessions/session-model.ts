@@ -162,7 +162,8 @@ export function createSessionSidebarController(deps: {
     store,
     update(input) {
       const state = store.getSnapshot();
-      const query = input.sessionQuery ?? state.query;
+      // A snapshot must not overwrite what the person is typing: sync the query only while the box is closed.
+      const query = state.searchOpen ? state.query : (input.sessionQuery ?? '');
       update({
         sessions: input.sessions,
         currentId: input.currentId,
@@ -193,7 +194,8 @@ export function createSessionSidebarController(deps: {
       update({ searchOpen: true, query: '' });
     },
     closeSearch() {
-      update({ searchOpen: false });
+      // Closing the box discards the query; the list is re-read unfiltered by the caller.
+      update({ searchOpen: false, query: '' });
     },
     setQuery(query) {
       update({ query });

@@ -61,10 +61,6 @@ export const EXCLUSIONS = [
     why: 'the dictionary itself and its parts: this is where the words are supposed to be',
   },
   {
-    pattern: /^apps\/desktop\/session-management\.ts$/,
-    why: 'looks like a main-process module but imports document and is only reached from renderer.ts',
-  },
-  {
     pattern: /^apps\/desktop\/attachment-contract\.ts$/,
     why: 'composes the prompts sent to the model; instructions rather than something a person reads',
   },

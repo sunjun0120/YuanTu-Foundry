@@ -9,6 +9,7 @@ import electronPath from 'electron';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
+import { chooseSelectOption } from './desktop-smoke-support.mjs';
 
 test(
   'desktop pages older history while preserving existing message nodes and the reading position',
@@ -228,7 +229,7 @@ test(
     assert.ok(result.delta < 4, `visible internal step moved: ${JSON.stringify(result)}`);
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
-    await page.locator('#ui-language').selectOption('en-US');
+    await chooseSelectOption(page, 'ui-language', 'English');
     await page.locator('#settings-back').click();
     assert.equal(
       await page.locator('#messages > .process-group').evaluate((group) => group.open),

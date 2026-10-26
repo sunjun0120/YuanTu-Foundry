@@ -691,17 +691,18 @@ interface PanelTransitionProps {
 
 #### T14: 会话列表、搜索与菜单
 
-**Files:** 新增 `ui/sessions/session-model.ts`、`SessionSidebar.tsx`、`SessionRow.tsx`、`session-actions.ts`；修改 `session-management.ts`、`renderer-session-list.ts` 的接入点；新增 `tests/desktop-react-sessions.test.ts`；扩展 `tests/desktop-sessions.smoke.mjs`、`tests/history.smoke.mjs`。
+**Files:** 新增 `ui/sessions/session-model.ts`、`SessionSidebar.tsx`、`SessionRow.tsx`、`SessionDialog.tsx`、`session-mount.tsx`；删除 `renderer-session-list.ts`、`session-management.ts`；修改 `renderer.ts`、`index.html`、`i18n-workspace.ts`、`scripts/i18n-gate.mjs`、`tests/desktop-i18n.test.ts`；新增 `tests/desktop-react-sessions.test.ts`；扩展 `tests/desktop-sessions.smoke.mjs`、`tests/history.smoke.mjs`。
 
-**规模:** 约 700–900 行。
+**规模:** 约 700–900 行（实际约 950 行）。
 
-**进度:** 数据与 controller 已完成（10 条纯测试）：四行窗口/展开/搜索显示全部、running 会话仍可切换、blocked 拒绝选择/菜单/对话框、菜单目标、重命名空名前置拒绝、成功关闭、失败保留原因、搜索命令、loadMore/create/chooseWorkspace 同一条 select 通道。React 侧栏/行/对话框与 smoke 迁移待下一步。
+**进度:** 已完成。侧栏、行、菜单与重命名/删除对话框都迁到 React；`index.html` 的搜索行/列表/对话框替换为 `#session-sidebar-root` 与 `#session-dialog-root`；`new-session`/`choose-workspace` 仍是 legacy 按钮，由适配器接到同一 controller。
 
-- [ ] 会话列表用稳定 session ID；保留运行/等待交互图标、四行折叠与搜索时显示全部匹配、分页/归档/恢复/重命名/删除/分支、通知切换与上下文展示。
-- [ ] 会话在运行时仍能切换，不能将全局 busy 简化为禁止所有切换；双击/Enter 重入不重复提交。
-- [ ] 完整导出仍发送 sessionId 与建议文件名，由 Host 分页获取全会话；不能导出当前可见消息窗口冒充全会话。
-- [ ] 删除旧绑定；文案键化；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-sessions.test.ts tests/desktop-sessions.smoke.mjs tests/history.smoke.mjs tests/desktop-language.smoke.mjs`。
+- [x] 稳定 session ID、运行/等待图标、四行折叠、搜索显示全部匹配、分页（load-more）、重命名/删除、新建会话与更换工作区。**范围说明**：归档/恢复/分支/通知切换/上下文展示在当前 legacy 会话模块中已不存在（现存只有列表、搜索、重命名、删除），迁移保持现状；导出属于命令/对话模块，不在本任务。
+- [x] 运行中仍可切换：只有 `blocked`（Host 未就绪）拒绝行操作，`activity` 只画状态；双击/Enter 不会重复提交（controller 的命令通道与 `blocked` 守卫）。
+- [ ] 完整导出（sessionId + 建议文件名、Host 分页）不在会话侧栏模块内，随 T15/T20 的命令/导出路径验证。
+- [x] 删除旧绑定：`renderer-session-list.ts`、`session-management.ts` 删除；文案全部键化（新增 `session.nameLabel`/`session.cancel`，复用 `ui.*` 既有键）；兼容 id/class 保留（`#sessions`、`.session-item`、`.session-more`、`#session-menu`、`#load-more-sessions`、`.session-toggle`、`#session-dialog*`）。`desktop-i18n.test.ts` 不再打包 legacy 列表。
+- [x] **两个实测坑**：(a) 会话菜单必须 portal 到 `body`——放在滚动侧栏里会被 aside 裁剪；(b) 关闭计时不能只看固定延迟：现在每次到期先检查指针是否仍在 trigger/menu 上（`:hover`），是则续期，避免慢窗口里 hover→click 之间菜单先消失（smoke 两次抓到）。
+- [x] 验证：`desktop-sessions` 6/6（连跑两次）、`history` 2/2、`language` 7/7、`agent` 7/7、`desktop` 9/9、`settings` 8 通过+1 跳过（MCP）、`desktop-i18n` 8/8、`desktop-react-sessions` 10/10；lint/i18n/typecheck/build 通过。
 
 #### T15: 输入区与命令菜单
 

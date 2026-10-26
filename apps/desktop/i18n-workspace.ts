@@ -88,6 +88,8 @@ export const workspaceMessages: Record<string, [string, string]> = {
   ],
   'session.saveName': ['保存名称', 'Save name'],
   'session.confirmDelete': ['确认删除', 'Confirm delete'],
+  'session.nameLabel': ['会话名称', 'Session name'],
+  'session.cancel': ['取消', 'Cancel'],
   'session.enterName': ['请输入会话名称。', 'Enter a session name.'],
   'session.operationFailed': [
     '操作未完成，请关闭此窗口查看错误并重试。',

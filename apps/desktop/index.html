@@ -38,43 +38,7 @@
           更换目录 <span aria-hidden="true">↗</span>
         </button>
       </div>
-      <div id="session-search-row" class="session-search-row">
-        <div id="recent-sessions-label" class="section-label">
-          最近会话 <span id="session-count">0</span>
-        </div>
-        <button
-          id="open-session-search"
-          aria-expanded="false"
-          aria-controls="session-search"
-          type="button"
-          aria-label="搜索会话"
-          title="搜索会话"
-        >
-          <span class="search-icon" aria-hidden="true"></span>
-        </button>
-        <input
-          id="session-search"
-          type="search"
-          maxlength="200"
-          placeholder="搜索会话或消息"
-          aria-label="搜索会话"
-          hidden
-        />
-        <button
-          id="clear-session-search"
-          type="button"
-          aria-label="清除并关闭搜索"
-          title="清除并关闭搜索"
-          hidden
-        >
-          ×
-        </button>
-      </div>
-      <p id="session-search-note" class="session-search-note" hidden>
-        内容搜索不可用，仅显示名称匹配。
-      </p>
-      <p id="session-search-empty" class="session-empty" hidden>无匹配会话</p>
-      <nav id="sessions" aria-label="会话列表"></nav>
+      <div id="session-sidebar-root"></div>
       <div class="sidebar-footer">
         <button id="open-settings" class="settings-entry" type="button">
           <span aria-hidden="true">⚙</span> <span id="settings-label">设置</span>
@@ -372,19 +336,7 @@
       </section>
     </aside>
     <div id="workspace-tooltip" class="workspace-tooltip" role="tooltip" hidden></div>
-    <dialog id="session-dialog" aria-labelledby="session-dialog-title">
-      <form id="session-dialog-form">
-        <h2 id="session-dialog-title"></h2>
-        <p id="session-dialog-description"></p>
-        <label id="session-title-label" for="session-title-input">会话名称</label>
-        <input id="session-title-input" maxlength="120" autocomplete="off" />
-        <p id="session-dialog-error" role="alert" hidden></p>
-        <div class="session-dialog-actions">
-          <button id="session-dialog-cancel" type="button">取消</button>
-          <button id="session-dialog-confirm" type="submit" class="primary">确认</button>
-        </div>
-      </form>
-    </dialog>
+    <div id="session-dialog-root"></div>
     <div id="full-access-root"></div>
     <section id="settings-page" class="settings-page" aria-label="设置页面" hidden>
       <aside class="settings-sidebar">

@@ -28,7 +28,8 @@ import { setupMessages } from './renderer-messages.ts';
 import { setupPlanPanel } from './renderer-plan.ts';
 import { setupQuestions } from './renderer-questions.ts';
 import { setupSessionPanels } from './renderer-session-panels.ts';
-import { setupSessionList, type SessionActivity } from './renderer-session-list.ts';
+import { mountSessionSidebar } from './ui/sessions/session-mount.tsx';
+import type { SessionActivity } from './ui/sessions/session-model.ts';
 import { setupTranscript } from './renderer-transcript.ts';
 import { setupTurnChanges } from './renderer-changes.ts';
 import {
@@ -37,7 +38,6 @@ import {
   visibleRunError,
   providerDegradedText,
 } from './renderer-status.ts';
-import { setupSessionManagement } from './session-management.ts';
 import { mountSandboxSetup } from './ui/sandbox/mount.tsx';
 import { mountWorkspaceSettings } from './ui/settings/workspace-mount.tsx';
 import { mountPermissions } from './ui/permissions/mount.tsx';
@@ -554,7 +554,6 @@ function render(): void {
     : '';
   element('notice').hidden = !notice;
   element('notice').textContent = notice;
-  sessionManagement.render(state, blocked);
   const switchBlocked = !state.ready || session.loading || isOperating();
   element<HTMLButtonElement>('new-session').disabled = switchBlocked;
   element<HTMLButtonElement>('choose-workspace').disabled =
@@ -589,14 +588,15 @@ function render(): void {
    * row menu checks its own `blocked` when clicked. Disabling them rebuilt every row twice per switch and dimmed
    * the whole sidebar for the length of the read — the blink that made a switch look like a reload.
    */
-  sessionListView.render(
-    state.sessions,
-    session.sessionId,
-    !state.ready,
-    state.sessionsHasMore === true,
-    sessionActivity(state),
-    Boolean(state.sessionQuery?.trim()),
-  );
+  sessionSidebar.update({
+    sessions: state.sessions,
+    currentId: session.sessionId,
+    blocked: !state.ready,
+    hasMore: state.sessionsHasMore === true,
+    searching: Boolean(state.sessionQuery?.trim()),
+    activity: sessionActivity(state),
+    sessionQuery: state.sessionQuery,
+  });
   // Message timestamps are locale-formatted, so they follow the language too.
   const paused = session.error === RUN_CANCELLED;
   const changesIdentity = turnChangesView.update(blocked);
@@ -815,11 +815,7 @@ const questionsView = setupQuestions({
   requestRender: render,
 });
 
-const sessionManagement = setupSessionManagement({ select });
-const sessionListView = setupSessionList({
-  select,
-  createMenuButton: sessionManagement.createMenuButton,
-});
+const sessionSidebar = mountSessionSidebar({ select });
 prompt.addEventListener('input', () => {
   commandsView.onInput();
 });
@@ -1017,6 +1013,7 @@ window.addEventListener(
   'pagehide',
   () => {
     permissionSettings?.dispose();
+    sessionSidebar.dispose();
     workspaceSettings.dispose();
     sandboxInitialization.dispose();
     disposeModelSettings();
