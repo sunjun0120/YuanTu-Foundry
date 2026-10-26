@@ -1,7 +1,7 @@
 // Mantine's static stylesheet: esbuild emits it beside the bundle as `renderer.css`, which the page links first.
 import '@mantine/core/styles.css';
 import { setupTasks } from './renderer-tasks.ts';
-import { setupStatistics } from './renderer-statistics.ts';
+import { mountStatistics } from './ui/panels/statistics-mount.tsx';
 import { mountWorkspace } from './ui/workspace/workspace-mount.tsx';
 import { setupSubAgents } from './renderer-subagents.ts';
 import { setupMcpSettings } from './renderer-mcp.ts';
@@ -89,7 +89,7 @@ function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
   return actions.select(command);
 }
 setupSelectMenus();
-const statisticsView = setupStatistics();
+const statisticsView = mountStatistics();
 const workspaceView = mountWorkspace({ files: (command) => window.yuantu.files(command) });
 const workspaceSettings = mountWorkspaceSettings(window.yuantu, { select });
 /** What a panel-level slot is given: the carrier snapshot a panel draws from, and nothing else. */
@@ -148,10 +148,7 @@ const messagesView = setupMessages({ markdownActions, mountMessageSlot });
  * moving one into the slot changed where it sits and who decides the order, not what it renders.
  */
 const slots = new SlotRegistry<DesktopSlotContexts>();
-slots.register('composer.above', {
-  order: 10,
-  render: (_frame, context) => statisticsView.update(context.session),
-});
+
 slots.register('sidebar.right', {
   order: 10,
   render: (_frame, context) => workspaceView.update(context.workspace),
@@ -190,7 +187,6 @@ const sendButton = element<HTMLButtonElement>('send');
 const conversation = element('conversation');
 /** Mounted once: a slot's frames are stable across renders, so re-rendering cannot stack a panel twice. */
 const slotMounts: SlotMount<PanelSlotContext>[] = [
-  mountSlot(document, element('composer-statistics'), slots, 'composer.above'),
   mountSlot(document, element('workspace-root'), slots, 'sidebar.right'),
 ];
 /**
@@ -503,6 +499,7 @@ function render(): void {
   // this line calls a panel directly; adding one is a `register`, not an edit to this function.
   const slotContext: PanelSlotContext = { session, workspace: state.workspace };
   for (const mount of slotMounts) mount.render(slotContext);
+  statisticsView.update(state.session);
   const blocked =
     !state.ready || session.running || session.loading || isOperating() || composerView.isSending();
   const older = element<HTMLButtonElement>('load-older-history');
@@ -518,8 +515,6 @@ function render(): void {
   element('chat-title').textContent = title;
   element('chat-title').title = title;
   element<HTMLTextAreaElement>('prompt').placeholder = t('ui.promptPlaceholder');
-  element('background-label').textContent = t('background.title');
-  element('background-popover').setAttribute('aria-label', t('background.title'));
   backgroundView.render();
 
   renderTasks();
@@ -1016,6 +1011,7 @@ window.addEventListener(
   'pagehide',
   () => {
     backgroundView.dispose();
+    statisticsView.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();

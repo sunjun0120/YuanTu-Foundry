@@ -99,6 +99,7 @@ export const conversationMessages: Record<string, [string, string]> = {
   'ui.workspace': ['工作区', 'Workspace'],
   'ui.changeFolder': ['更换目录', 'Change folder'],
   'ui.recentSessions': ['最近会话', 'Recent sessions'],
+  'statistics.hostLabel': ['会话用量统计', 'Session usage statistics'],
   'statistics.sessionTitle': ['会话统计', 'Session statistics'],
   'statistics.tokensTitle': ['Token 用量', 'Token usage'],
   'statistics.modelTime': ['模型用时', 'LLM time'],

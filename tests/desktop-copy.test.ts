@@ -7,7 +7,7 @@ import {
   visibleRunError,
   type SessionRunStatus,
 } from '../apps/desktop/renderer-status.ts';
-import { throughputReading } from '../apps/desktop/renderer-statistics.ts';
+import { throughputReading } from '../apps/desktop/ui/panels/statistics-model.ts';
 import { environmentModelLabel } from '../apps/desktop/ui/settings/model-settings-model.ts';
 import {
   localizedRunError,
