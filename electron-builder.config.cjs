@@ -47,6 +47,14 @@ module.exports = {
   // A copied standalone Node is architecture-specific; never silently cross-package it.
   beforePack: async (context) => {
     if (context.electronPlatformName === 'win32') {
+      if (process.platform === 'win32') {
+        // NSIS validates TEMP before running installer hooks; custom system locations can fail with exit code 2.
+        // Change only this build process's environment, keeping its temporary files in the workspace.
+        const temporary = require('node:path').resolve('.scratch/packaging/nsis-temp');
+        await require('node:fs/promises').mkdir(temporary, { recursive: true });
+        process.env.TEMP = temporary;
+        process.env.TMP = temporary;
+      }
       const { validatePackagedWindowsRuntime } =
         await import('./scripts/windows-runtime-product.mjs');
       await validatePackagedWindowsRuntime(

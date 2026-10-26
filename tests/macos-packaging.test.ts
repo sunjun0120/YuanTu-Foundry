@@ -155,7 +155,7 @@ test('macOS package commands perform preflight first and bind explicit targets t
 });
 
 test(
-  'builder prepack hook leaves Windows packaging alone and rejects macOS builds on a foreign host',
+  'builder prepack hook prepares Windows runtime and temporary storage and rejects macOS builds on a foreign host',
   { skip: process.platform === 'darwin' && 'asserts the non-macOS failure path' },
   async (t) => {
     assert.equal(typeof config.beforePack, 'function');
@@ -188,12 +188,26 @@ test(
         `
       import assert from 'node:assert/strict';
       import { createRequire } from 'node:module';
+      import { writeFile, readFile } from 'node:fs/promises';
+      import path from 'node:path';
       const config = createRequire(${JSON.stringify(import.meta.url)})('../electron-builder.config.cjs');
       await config.beforePack({ electronPlatformName: 'win32', arch: 1 });
+      if (process.platform === 'win32') {
+        assert.equal(process.env.TEMP, process.env.TMP);
+        const relative = path.relative(process.cwd(), process.env.TEMP);
+        assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+        const file = path.join(process.env.TEMP, 'nsis-write-probe.tmp');
+        await writeFile(file, 'NSIS temporary file');
+        assert.equal(await readFile(file, 'utf8'), 'NSIS temporary file');
+      }
       await assert.rejects(config.beforePack({ electronPlatformName: 'darwin', arch: 3 }), /macOS/);
     `,
       ],
-      { cwd: root, encoding: 'utf8' },
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, TEMP: path.join(root, 'missing'), TMP: path.join(root, 'missing') },
+      },
     );
     assert.equal(child.status, 0, child.stderr || child.stdout);
   },
