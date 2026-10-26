@@ -196,11 +196,13 @@ test(
       await record(found, 'full-access-dialog');
       await page.locator('#full-access-cancel').click();
 
-      // Every settings section, enumerated so a new one is covered for free.
+      // Every visible settings section, enumerated so a new one is covered for free. Hidden internal entries
+      // are not part of the visible interface; the workspace-maintenance page has its own smoke test.
       await page.locator('#open-settings').click();
       const sections = await page.locator('.settings-sidebar nav button').count();
       for (let index = 0; index < sections; index++) {
         const button = page.locator('.settings-sidebar nav button').nth(index);
+        if (!(await button.isVisible())) continue;
         const label = ((await button.textContent()) ?? '').trim();
         await button.click();
         await record(found, `settings:${label}`);

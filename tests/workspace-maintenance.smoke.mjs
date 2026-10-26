@@ -90,17 +90,9 @@ test(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.ready,
     );
     await page.locator('#open-settings').click();
-    await page.locator('#workspace-maintenance-settings').click();
-    assert.ok(
-      await page
-        .locator('#workspace-maintenance-label')
-        .evaluate(
-          (element) =>
-            element.getBoundingClientRect().height <=
-            Number.parseFloat(getComputedStyle(element).fontSize) * 2,
-        ),
-      'the navigation label stays on one line',
-    );
+    assert.equal(await page.locator('#workspace-maintenance-settings').isVisible(), false);
+    // The entry is hidden; open the retained page programmatically to exercise its recovery flow.
+    await page.locator('#workspace-maintenance-settings').evaluate((entry) => entry.click());
     const row = page.locator(`[data-binding-id="${binding.id}"]`);
     await row.waitFor();
     assert.equal(await row.locator('strong').textContent(), binding.executionRoot);

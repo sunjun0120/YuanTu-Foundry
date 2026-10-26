@@ -81,16 +81,8 @@ export function setupSessionManagement(actions: {
       titleInput.select();
     } else el('session-dialog-cancel').focus();
   };
-  /** Archiving needs no confirmation: nothing is lost, and the settings page brings it back. */
-  const archive = () => {
-    if (!target || blocked) return;
-    const { id } = target;
-    hideMenu();
-    void actions.select({ type: 'archiveSession', id, archived: true });
-  };
   for (const [kind, label] of [
     ['rename', t('session.rename')],
-    ['archive', t('session.archive')],
     ['delete', t('session.delete')],
   ] as const) {
     const button = document.createElement('button');
@@ -99,7 +91,7 @@ export function setupSessionManagement(actions: {
     button.setAttribute('role', 'menuitem');
     button.dataset.action = kind;
     if (kind === 'delete') button.className = 'danger-text';
-    button.addEventListener('click', () => (kind === 'archive' ? archive() : open(kind)));
+    button.addEventListener('click', () => open(kind));
     menu.append(button);
   }
   el('session-dialog-cancel').addEventListener('click', () => {
