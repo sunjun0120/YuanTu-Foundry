@@ -1,13 +1,88 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import { connectClient, listeningHost, waitForStderr } from './listening-host-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 
 // ---- the Host continues a goal on its own ----
+
+test(
+  'an external condition present before round two lets the goal complete and persist its result',
+  { timeout: 30_000 },
+  async (t) => {
+    let workspace = '';
+    let step = 0;
+    const url = await httpFixture(t, async (body, res) => {
+      step++;
+      const calls = {
+        1: {
+          id: 'goal',
+          name: 'create_goal',
+          input: { objective: 'Copy the trigger to the result', max_goal_rounds: 2 },
+        },
+        2: { id: 'missing', name: 'read_file', input: { path: 'goal-trigger.txt' } },
+        4: { id: 'trigger', name: 'read_file', input: { path: 'goal-trigger.txt' } },
+        5: {
+          id: 'result',
+          name: 'write_file',
+          input: { path: 'goal-result.txt', content: 'GOAL-TRIGGER-4471\n' },
+        },
+        6: {
+          id: 'verify',
+          name: 'verify_work',
+          input: {
+            commands: [
+              {
+                command: process.execPath,
+                args: [
+                  '-e',
+                  "if(require('node:fs').readFileSync('goal-result.txt','utf8')!=='GOAL-TRIGGER-4471\\n')process.exit(1)",
+                ],
+              },
+            ],
+            inputs: ['goal-result.txt'],
+          },
+        },
+        7: { id: 'complete', name: 'update_goal', input: { action: 'complete' } },
+      };
+      if (step === 4) {
+        assert.match(JSON.stringify(body.messages), /round 2 of 2/);
+        // Release the external condition before the second round's first read, not after the run RPC returns.
+        await writeFile(path.join(workspace, 'goal-trigger.txt'), 'GOAL-TRIGGER-4471\n');
+      }
+      const call = calls[step as keyof typeof calls];
+      sendFrames(res, frames(call ? 'Working' : 'Round finished', call ? [call] : []));
+    });
+    const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+    workspace = host.root;
+    const { client } = await connectClient(host);
+    t.after(() => client.stop().catch(() => {}));
+    await client.start();
+    let runs = 0;
+    client.subscribe((event) => {
+      if (event.type === 'run.started') runs++;
+      if (event.type === 'approval.required')
+        void client.request('approval.respond', {
+          approvalId: String(event.data.approvalId),
+          allow: true,
+        });
+    });
+    const session = await client.request('session.create', {});
+    const result = await client.run(session.id, 'Wait for the external trigger and copy it');
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(runs, 2);
+    assert.equal(
+      await readFile(path.join(workspace, 'goal-result.txt'), 'utf8'),
+      'GOAL-TRIGGER-4471\n',
+    );
+    const goal = await client.request('goal.get', { sessionId: session.id });
+    assert.equal(goal?.status, 'completed');
+    assert.equal(goal?.roundsStarted, 2);
+  },
+);
 
 test('query convergence does not restart itself through an active goal', async (t) => {
   let requests = 0;

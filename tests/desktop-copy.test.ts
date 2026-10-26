@@ -260,6 +260,15 @@ test('a refusal the kernel writes in English gets one sentence in the interface 
       'Windows sandbox workspace authorization is incomplete for D:\\work; the command has not started. propagate-workspace-acl (D:\\work): Windows error 5',
       /授权/,
     ],
+    [
+      'Windows sandbox workspace authorization is incomplete for D:\\work; the command has not started. lock-grant-record: Cannot acquire sandbox grant journal lock: Access denied (os error 5)',
+      /其他 Agent Host.*权限/,
+    ],
+    [
+      'Windows sandbox capability state could not be accessed for D:\\work; the command has not started. EPERM',
+      /状态目录.*权限/,
+    ],
+    ['Browser launch failed: profile directory is locked', /浏览器.*详细错误/],
   ] as const;
   for (const [content, expected] of refusals)
     assert.match(toolFailureNote(tool(content)) ?? '', expected);
@@ -373,6 +382,27 @@ test('a provider failure is explained in the interface language', () => {
   assert.match(
     localizedRunError('Incomplete model stream: missing terminal event', false) ?? '',
     /断开/,
+  );
+  // Stream/protocol failures used to reach the banner verbatim in English.
+  assert.match(
+    localizedRunError(
+      'Model stream interrupted; check endpoint and network configuration',
+      false,
+    ) ?? '',
+    /中途断开/,
+  );
+  assert.match(localizedRunError('Invalid JSON in model stream', false) ?? '', /无法解析/);
+  assert.match(
+    localizedRunError(
+      'Model endpoint omitted token usage; enable streaming usage support',
+      false,
+    ) ?? '',
+    /用量/,
+  );
+  assert.match(
+    localizedRunError('Model request failed; check endpoint and network configuration', false) ??
+      '',
+    /无法连接/,
   );
   assert.match(
     localizedRunError(

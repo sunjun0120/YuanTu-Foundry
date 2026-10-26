@@ -2,7 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import {
@@ -584,12 +584,126 @@ test('a workspace keeps one capability SID, distinct from every other workspace'
   const a = await capabilityFor('C:\\work\\a');
   assert.match(a, /^S-1-5-21(-\d{1,10}){4}$/);
   assert.equal(await capabilityFor('c:\\WORK\\A'), a);
-  assert.notEqual(await capabilityFor('C:\\work\\b'), a);
+  const b = await capabilityFor('C:\\work\\b');
+  assert.notEqual(b, a);
   // A fresh process reads the same SID back.
   configureAccountBackend({ state });
   assert.equal(await capabilityFor('C:\\work\\a'), a);
-  const file = JSON.parse(await readFile(path.join(state, 'cap-sids.json'), 'utf8'));
-  assert.equal(Object.keys(file.workspaces).length, 2);
+  assert.equal(await capabilityFor('C:\\work\\b'), b);
+});
+
+test('independent Hosts agree on a capability and retain every workspace mapping', async (t) => {
+  const state = await tempRoot(t, 'yuantu-account-multiprocess-');
+  const moduleUrl = new URL('../packages/tools/sandbox-account.ts', import.meta.url).href;
+  const workers = Array.from({ length: 4 }, (_, index) => {
+    const uniqueRoot = path.join(state, `workspace-${index}`);
+    const child = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+      import { capabilityFor, configureAccountBackend } from ${JSON.stringify(moduleUrl)};
+      configureAccountBackend({ state: process.argv[1] });
+      const unique = await capabilityFor(process.argv[2]);
+      process.send({ ready: true });
+      process.once('message', async () => {
+        const shared = await capabilityFor(process.argv[3]);
+        process.send({ unique, shared });
+        process.disconnect();
+      });
+    `,
+        state,
+        uniqueRoot,
+        path.join(state, 'shared'),
+      ],
+      {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      },
+    );
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => (stderr += chunk));
+    const result = new Promise<{ unique: string; shared: string }>((resolve, reject) => {
+      child.on('message', (message) => {
+        if ('shared' in (message as object)) resolve(message as { unique: string; shared: string });
+      });
+      child.once('error', reject);
+      child.once('exit', (code) => {
+        if (code) reject(new Error(stderr));
+      });
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      child.once('message', () => resolve());
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error(stderr || 'worker exited before ready')));
+    });
+    t.after(() => {
+      if (child.exitCode === null) child.kill();
+    });
+    return { child, uniqueRoot, ready, result };
+  });
+  await Promise.all(workers.map((worker) => worker.ready));
+  const results = await Promise.all(
+    workers.map((worker) => {
+      worker.child.send('go');
+      return worker.result;
+    }),
+  );
+  assert.equal(
+    new Set(results.map((result) => result.shared)).size,
+    1,
+    'one workspace must have one SID across Hosts',
+  );
+  for (const [index, worker] of workers.entries()) {
+    configureAccountBackend({ state });
+    assert.equal(await capabilityFor(worker.uniqueRoot), results[index]!.unique);
+  }
+  configureAccountBackend({ state });
+  assert.equal(await capabilityFor(path.join(state, 'shared')), results[0]!.shared);
+});
+
+test('a capability assigned by an earlier version survives migration', async (t) => {
+  const { state } = await backend(t);
+  const root = path.resolve('legacy-workspace');
+  const sid = 'S-1-5-21-11-22-33-44';
+  await writeFile(
+    path.join(state, 'cap-sids.json'),
+    JSON.stringify({
+      version: 1,
+      workspaces: { [root.toLowerCase()]: sid },
+    }),
+  );
+  assert.equal(await capabilityFor(root), sid);
+  configureAccountBackend({ state });
+  assert.equal(await capabilityFor(root), sid);
+});
+
+test('an unreadable legacy capability registry cannot silently replace an existing identity', async (t) => {
+  const { state } = await backend(t);
+  const root = path.join(state, 'legacy-workspace');
+  const legacy = path.join(state, 'cap-sids.json');
+  await writeFile(legacy, '{broken');
+  await assert.rejects(capabilityFor(root), /capability state could not be accessed/);
+  const sid = 'S-1-5-21-11-22-33-44';
+  await writeFile(
+    legacy,
+    JSON.stringify({ version: 1, workspaces: { [root.toLowerCase()]: sid } }),
+  );
+  assert.equal(await capabilityFor(root), sid);
+});
+
+test('a failed capability publication cannot return an unpersisted SID on retry', async (t) => {
+  const { state } = await backend(t);
+  const directory = path.join(state, 'capabilities');
+  await writeFile(directory, 'not a directory');
+  const root = path.join(state, 'workspace');
+  for (let attempt = 0; attempt < 2; attempt++)
+    await assert.rejects(capabilityFor(root), /capability state could not be accessed/);
+  await rm(directory);
+  const sid = await capabilityFor(root);
+  configureAccountBackend({ state });
+  assert.equal(await capabilityFor(root), sid);
 });
 
 test(

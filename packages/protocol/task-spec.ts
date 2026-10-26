@@ -209,7 +209,7 @@ export function initialTaskDraft(
 ): TaskDraft {
   const text = DRAFT_TEXT[language] ?? DRAFT_TEXT['zh-CN'];
   return normalizeTaskDraft({
-    title: (kind === 'goal' ? 'Goal: ' : 'Plan: ') + prompt.split(/\r?\n/, 1)[0]!.slice(0, 180),
+    title: (kind === 'goal' ? '' : 'Plan: ') + prompt.split(/\r?\n/, 1)[0]!.slice(0, 180),
     description: prompt,
     steps: text.steps.map((description) => ({ description })),
     acceptance: [{ description: text.acceptance, met: false }],

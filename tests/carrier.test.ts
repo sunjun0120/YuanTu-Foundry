@@ -120,6 +120,57 @@ test('goal and plan commands accept only supported optional draft languages', ()
   }
 });
 
+test('a created task is published while its model proposal is still pending', async (t) => {
+  let finishProposal: (() => void) | undefined;
+  const url = await httpFixture(t, (_body, res) => {
+    finishProposal = () =>
+      sendFrames(
+        res,
+        frames(
+          JSON.stringify({
+            title: 'Reviewed draft',
+            description: 'Review output',
+            steps: [{ description: 'Review output' }],
+            acceptance: [{ description: 'Human review', met: false }],
+          }),
+        ),
+      );
+  });
+  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const socket = await connectSocket(host.port);
+  const carrier = connectedCarrier({
+    transport: socketTransport(socket),
+    authToken: host.authToken,
+    env: {
+      YUANTU_API_KEY: 'fixture',
+      YUANTU_MODEL: 'fixture',
+      YUANTU_MAX_CONTEXT_TOKENS: '128000',
+    },
+  });
+  host.beforeStop(() => carrier.stop());
+  await carrier.start();
+  await carrier.dispatch({ type: 'create' });
+  const published: string[] = [];
+  t.after(
+    carrier.subscribe((snapshot) => {
+      for (const task of snapshot.tasks) published.push(task.title);
+    }),
+  );
+  const drafting = carrier.dispatch({ type: 'goal', prompt: 'Review output' });
+  try {
+    await waitFor(() => !!finishProposal, 'proposal request');
+    assert.ok(
+      published.length > 0,
+      'the task panel must receive the saved draft before the model answers',
+    );
+    assert.equal(carrier.snapshot.tasks[0]?.status, 'pending');
+  } finally {
+    finishProposal?.();
+    await drafting;
+  }
+  assert.equal(carrier.snapshot.tasks[0]?.title, 'Reviewed draft');
+});
+
 test('the carrier package imports neither Electron nor the shell that consumes it', async () => {
   const directory = path.join(projectRoot, 'packages', 'carrier');
   const files = (await readdir(directory)).filter((name) => name.endsWith('.ts')).sort();

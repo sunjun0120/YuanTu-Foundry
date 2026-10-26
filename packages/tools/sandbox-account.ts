@@ -10,7 +10,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,7 +79,7 @@ export function configureAccountBackend(change: Partial<Configuration>): void {
   configuration = { ...configuration, ...change };
   grants.clear();
   readRefreshes.clear();
-  capabilities = undefined;
+  capabilities.clear();
   status = undefined;
   statusFailure = undefined;
 }
@@ -220,27 +220,30 @@ interface CapabilityFile {
   version: 1;
   workspaces: Record<string, string>;
 }
-let capabilities: Promise<CapabilityFile> | undefined;
-let capabilityWrites: Promise<void> = Promise.resolve();
+const capabilities = new Map<string, Promise<string>>();
 
 function capabilityFile(): string {
   return path.join(configuration.state, 'cap-sids.json');
 }
 
 async function loadCapabilities(): Promise<CapabilityFile> {
+  let raw: string;
   try {
-    const value = JSON.parse(await readFile(capabilityFile(), 'utf8')) as CapabilityFile;
-    if (
-      value?.version === 1 &&
-      value.workspaces &&
-      typeof value.workspaces === 'object' &&
-      Object.values(value.workspaces).every((sid) => typeof sid === 'string' && SID.test(sid))
-    )
-      return value;
-  } catch {
-    /* Missing or unreadable: start over; grants are refreshed with the new SID. */
+    raw = await readFile(capabilityFile(), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, workspaces: {} };
+    throw error;
   }
-  return { version: 1, workspaces: {} };
+  const value = JSON.parse(raw) as CapabilityFile;
+  if (
+    value?.version !== 1 ||
+    !value.workspaces ||
+    typeof value.workspaces !== 'object' ||
+    Array.isArray(value.workspaces) ||
+    !Object.values(value.workspaces).every((sid) => typeof sid === 'string' && SID.test(sid))
+  )
+    throw new Error(`Invalid legacy sandbox capability registry: ${capabilityFile()}`);
+  return value;
 }
 
 function freshCapability(): string {
@@ -252,21 +255,67 @@ function freshCapability(): string {
 /** The workspace's capability SID, created once per canonical workspace path and kept. */
 export async function capabilityFor(root: string): Promise<string> {
   const key = path.resolve(root).toLowerCase();
-  capabilities ??= loadCapabilities();
-  const file = await capabilities;
-  const existing = file.workspaces[key];
-  if (existing) return existing;
-  const sid = freshCapability();
-  file.workspaces[key] = sid;
-  const write = capabilityWrites.then(async () => {
-    await mkdir(configuration.state, { recursive: true });
-    const temporary = `${capabilityFile()}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify(file));
-    await rename(temporary, capabilityFile());
-  });
-  capabilityWrites = write.catch(() => undefined);
-  await write;
-  return sid;
+  let pending = capabilities.get(key);
+  if (!pending) {
+    pending = persistCapability(key).catch((cause: unknown) => {
+      capabilities.delete(key);
+      throw new Error(
+        `Windows sandbox capability state could not be accessed for ${root}; the command has not started. ` +
+          `Check permissions on the sandbox state directory (${configuration.state}). ${failureDetail(cause)}`,
+        { cause },
+      );
+    });
+    capabilities.set(key, pending);
+  }
+  return pending;
+}
+
+/**
+ * Immutable per-workspace records avoid replacing a shared JSON map while another Host reads or writes it.
+ * Publishing a hard link is atomic and never overwrites the winner. Every contender then reads that winner,
+ * so two Hosts cannot authorize the same workspace under different SIDs. Old mappings retain their identity.
+ */
+async function persistCapability(key: string): Promise<string> {
+  const directory = path.join(configuration.state, 'capabilities');
+  const file = path.join(directory, `${createHash('sha256').update(key).digest('hex')}.json`);
+  const read = async () => {
+    const record = JSON.parse(await readFile(file, 'utf8')) as {
+      version?: number;
+      root?: string;
+      sid?: unknown;
+    };
+    if (
+      record.version !== 1 ||
+      record.root !== key ||
+      typeof record.sid !== 'string' ||
+      !SID.test(record.sid)
+    )
+      throw new Error(`Invalid sandbox capability record: ${file}`);
+    return record.sid;
+  };
+  try {
+    return await read();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const legacy = await loadCapabilities();
+  const sid = legacy.workspaces[key] ?? freshCapability();
+  await mkdir(directory, { recursive: true });
+  const temporary = path.join(directory, `${randomBytes(16).toString('hex')}.tmp`);
+  try {
+    await writeFile(temporary, JSON.stringify({ version: 1, root: key, sid }), {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    try {
+      await link(temporary, file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    return await read();
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 interface GrantFlight {
