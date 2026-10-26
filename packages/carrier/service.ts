@@ -913,6 +913,7 @@ export class CarrierService {
       configured: this.snapshot.configured,
       setTasks: (tasks) => {
         this.tasks = deepFreeze(tasks);
+        this.publish();
       },
       setRestoring: (restoring) => {
         this.restoring = restoring;

@@ -67,8 +67,16 @@ export function toolFailureNote(message: {
     content.startsWith('Sandboxed commands are blocked at Windows sandbox account initialization')
   )
     return t('ui.toolSandboxInitialization');
+  if (
+    content.startsWith('Windows sandbox workspace authorization is incomplete') &&
+    /lock-grant-record|Cannot acquire sandbox grant journal lock/.test(content)
+  )
+    return t('ui.toolSandboxStateLocked');
+  if (content.startsWith('Windows sandbox capability state could not be accessed'))
+    return t('ui.toolSandboxCapabilityState');
   if (content.startsWith('Windows sandbox workspace authorization is incomplete'))
     return t('ui.toolSandboxAuthorization');
+  if (content.startsWith('Browser launch failed:')) return t('ui.toolBrowserLaunchFailed');
   // A permission preset refused this call; nobody was asked. The card must not read as "you denied it".
   if (content.startsWith("Blocked by the session's permission policy"))
     return t('ui.toolPermissionPolicy');

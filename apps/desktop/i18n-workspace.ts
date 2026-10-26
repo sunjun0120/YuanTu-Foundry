@@ -5,6 +5,18 @@
  */
 /** Sessions, diffs, the welcome screen, workspace files and model settings. */
 export const workspaceMessages: Record<string, [string, string]> = {
+  'ui.toolSandboxStateLocked': [
+    '无法取得沙箱授权日志锁，命令没有启动。请等待其他 Agent Host 或沙箱维护操作结束后重试；如果仍失败，检查状态目录权限。下面保留了详细错误。',
+    'The sandbox grant journal lock could not be acquired, so the command did not start. Wait for other Agent Hosts or sandbox maintenance to finish and retry; if it persists, check the state directory permissions. Details are preserved below.',
+  ],
+  'ui.toolSandboxCapabilityState': [
+    '无法保存或读取沙箱工作区身份，命令没有启动。请检查沙箱状态目录的权限。下面保留了详细错误。',
+    'The sandbox workspace identity could not be saved or read, so the command did not start. Check the sandbox state directory permissions. Details are preserved below.',
+  ],
+  'ui.toolBrowserLaunchFailed': [
+    '浏览器启动失败。请查看下面的详细错误，确认浏览器安装、用户配置目录和运行权限。',
+    'The browser failed to start. Check the detailed error below for the browser installation, profile directory, and execution permissions.',
+  ],
   'ui.providerDegraded': [
     '该模型端点并行调用工具时丢失参数，已改为逐个调用',
     'This model endpoint dropped parallel tool arguments; tools now run one at a time.',
@@ -28,6 +40,22 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.modelStreamIncomplete': [
     '模型流在正常结束前断开，本轮没有完成。可以重试；如果反复出现，换一个模型。',
     'The model stream ended before it finished, so the turn did not complete. Retry; if it repeats, switch models.',
+  ],
+  'ui.modelStreamInterrupted': [
+    '模型流中途断开，回答可能不完整。可以重试；如果反复出现，检查网络与接口配置，或换一个模型。',
+    'The model stream was interrupted, so the answer may be incomplete. Retry; if it repeats, check the network and endpoint configuration, or switch models.',
+  ],
+  'ui.modelStreamInvalidJson': [
+    '模型流返回了无法解析的数据，本轮没有完成。可以重试；如果反复出现，换一个模型。',
+    'The model stream contained unparseable data, so the turn did not complete. Retry; if it repeats, switch models.',
+  ],
+  'ui.modelUsageMissing': [
+    '模型没有返回用量信息，本轮无法可靠计量。可以重试；如果反复出现，换一个模型。',
+    'The endpoint omitted token usage, so this turn cannot be measured reliably. Retry; if it repeats, switch models.',
+  ],
+  'ui.modelRequestFailed': [
+    '无法连接模型接口。请检查网络和接口地址，然后重试。',
+    'The model endpoint could not be reached. Check the network and endpoint, then retry.',
   ],
   'ui.outputLimitReached': [
     '模型输出达到本轮上限，回答可能不完整。可以重试、缩小任务，或在模型设置中提高输出上限。',

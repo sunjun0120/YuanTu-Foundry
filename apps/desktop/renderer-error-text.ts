@@ -58,9 +58,19 @@ export function localizedRunError(error: string, english: boolean): string | nul
           ? 'ui.modelStreamMalformed'
           : /Incomplete model stream: missing terminal event/.test(error)
             ? 'ui.modelStreamIncomplete'
-            : /Model output limit reached/.test(error)
-              ? 'ui.outputLimitReached'
-              : null;
+            : /^Model stream interrupted\b/.test(error)
+              ? 'ui.modelStreamInterrupted'
+              : /^Invalid JSON in model stream\b/.test(error)
+                ? 'ui.modelStreamInvalidJson'
+                : /omitted token usage/i.test(error)
+                  ? 'ui.modelUsageMissing'
+                  : /^Model request failed\b|^Model (?:stream|connection) idle timeout\b/.test(
+                        error,
+                      )
+                    ? 'ui.modelRequestFailed'
+                    : /Model output limit reached/.test(error)
+                      ? 'ui.outputLimitReached'
+                      : null;
   return key ? translate(key, english ? 'en-US' : 'zh-CN') : httpFailure(error, english);
 }
 

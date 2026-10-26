@@ -106,8 +106,9 @@ export class BrowserSession {
     let playwright: typeof import('playwright');
     try {
       playwright = await import('playwright');
-    } catch {
-      throw new Error(MISSING);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(`${MISSING}\nPlaywright import failed: ${detail}`, { cause });
     }
     signal.throwIfAborted();
     const viewport = { width: 1280, height: 800 };
@@ -130,8 +131,12 @@ export class BrowserSession {
         close = () => browser.close();
         newPage = () => browser.newPage({ viewport });
       }
-    } catch {
-      throw new Error(MISSING);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      const guidance = /Executable doesn't exist/i.test(detail)
+        ? '\nInstall Chromium for the user running Agent Host with "npx playwright install chromium".'
+        : '';
+      throw new Error(`Browser launch failed: ${detail}${guidance}`, { cause });
     }
     this.closeLaunched = close;
     try {
