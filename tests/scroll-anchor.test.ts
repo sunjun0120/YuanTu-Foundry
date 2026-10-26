@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureAnchor, restoreAnchor } from '../apps/desktop/ui/conversation/scroll-anchor.ts';
+import {
+  captureAnchor,
+  captureHistoryAnchor,
+  restoreAnchor,
+} from '../apps/desktop/ui/conversation/scroll-anchor.ts';
 
 /**
  * The reading position survives a rebuild: the first visible message is remembered by node and screen position, and a
@@ -63,4 +67,36 @@ test('a missing node falls back to the height inserted above the reader', () => 
     scrollHeight: 1000,
   });
   assert.equal(element.scrollTop, 240);
+});
+
+test('history loading anchors the visible step of an open fold, not only the fold boundary', () => {
+  const firstStep = nodeBox(-40, 30);
+  const secondStep = nodeBox(40, 120);
+  const steps = {
+    children: [firstStep, secondStep],
+    getBoundingClientRect: () => ({ top: 0, bottom: 400 }),
+  };
+  const group = {
+    open: true,
+    getBoundingClientRect: () => ({ top: -200, bottom: 400 }),
+    querySelector: (selector: string) => (selector.includes('process-steps') ? steps : null),
+  };
+  const messages = { firstElementChild: group } as unknown as HTMLElement;
+  const conversation = container([], { scrollTop: 200, scrollHeight: 2000, top: 0 });
+  const anchor = captureHistoryAnchor(conversation, messages);
+  assert.equal(anchor.node, firstStep as unknown as Element);
+  assert.equal(anchor.nodeTop, -40);
+  assert.equal(anchor.scrollTop, 200);
+});
+
+test('a closed fold anchors its own boundary', () => {
+  const group = {
+    open: false,
+    getBoundingClientRect: () => ({ top: 20, bottom: 60 }),
+    querySelector: () => null,
+  };
+  const messages = { firstElementChild: group } as unknown as HTMLElement;
+  const conversation = container([], { scrollTop: 0, scrollHeight: 1000, top: 0 });
+  const anchor = captureHistoryAnchor(conversation, messages);
+  assert.equal(anchor.node, group as unknown as Element);
 });

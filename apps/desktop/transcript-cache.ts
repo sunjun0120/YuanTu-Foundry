@@ -37,17 +37,3 @@ export class TranscriptCache<T> {
     return views;
   }
 }
-
-/** Move only changed positions; untouched nodes retain selection, focus and open folds. */
-export function reconcileChildren(parent: HTMLElement, children: HTMLElement[]): void {
-  let current = parent.firstChild;
-  for (const child of children) {
-    if (current !== child) parent.insertBefore(child, current);
-    current = child.nextSibling;
-  }
-  while (current) {
-    const next = current.nextSibling;
-    parent.removeChild(current);
-    current = next;
-  }
-}

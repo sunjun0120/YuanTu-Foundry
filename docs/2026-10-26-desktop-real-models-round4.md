@@ -63,7 +63,7 @@
 
 ### 4.1 P2（已确认的回归，产品意图待定）：会话归档与工作区维护入口被隐藏
 
-工作区未提交的 `apps/desktop/index.html` 把 `#workspace-maintenance-settings` 设为 `hidden`，`apps/desktop/session-management.ts` 又移除了会话菜单的“归档”。两者合起来使：
+工作区未提交的 `apps/desktop/index.html` 把 `#workspace-maintenance-settings` 设为 `hidden`，`apps/desktop/ui/sessions/session-model.ts` 又移除了会话菜单的“归档”。两者合起来使：
 
 - 无法再从界面归档会话；
 - 已有归档会话无法从“归档管理/工作区维护”页面恢复；

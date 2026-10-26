@@ -19,12 +19,42 @@ export function captureAnchor(container: HTMLElement, selector = ':scope > *'): 
   const node = candidates.find(
     (candidate) => candidate.getBoundingClientRect().bottom > bounds.top,
   );
+  return anchorAt(container, node ?? null);
+}
+
+/** Remember one already-chosen node, for callers whose idea of "the first visible thing" is more specific. */
+export function anchorAt(container: HTMLElement, node: Element | null): ScrollAnchor {
   return {
-    node: node ?? null,
+    node,
     nodeTop: node ? node.getBoundingClientRect().top : null,
     scrollTop: container.scrollTop,
     scrollHeight: container.scrollHeight,
   };
+}
+
+/**
+ * The reading position of a history load: the first visible transcript row, or — when that row is an open process
+ * group — the first step inside it.
+ *
+ * The group's own top is the wrong anchor once the reader has scrolled into its steps: older steps are inserted above
+ * that step, not above the group, so holding the group still would move the words the reader is looking at.
+ */
+export function captureHistoryAnchor(
+  conversation: HTMLElement,
+  messages: HTMLElement,
+): ScrollAnchor {
+  let node = messages.firstElementChild as HTMLElement | null;
+  const open = (node as { open?: boolean } | null)?.open === true;
+  if (node && open) {
+    const steps = node.querySelector<HTMLElement>(':scope > .process-steps');
+    const visible = steps
+      ? [...steps.children].find(
+          (step) => step.getBoundingClientRect().bottom > steps.getBoundingClientRect().top,
+        )
+      : undefined;
+    if (visible) node = visible as HTMLElement;
+  }
+  return anchorAt(conversation, node);
 }
 
 export function restoreAnchor(container: HTMLElement, anchor: ScrollAnchor): void {

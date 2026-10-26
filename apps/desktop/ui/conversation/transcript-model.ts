@@ -41,6 +41,11 @@ export interface TranscriptModel {
   messageCount: number;
   /** The fold the next live thought joins: the last group, or none. */
   tail: number | null;
+  /**
+   * Every step key to the group key that currently holds it, fed back on the next call so a group that gains steps
+   * above keeps the same key — and therefore the same DOM node, open state and scroll position.
+   */
+  groupKeys: Map<string, string>;
 }
 
 /**
@@ -73,6 +78,7 @@ export function transcriptModel(
   messages: Message[],
   startIndex: number,
   turnChanges: Map<number, unknown> = new Map(),
+  previousGroups: ReadonlyMap<string, string> = new Map(),
 ): TranscriptModel {
   const rows = transcriptRows(messages, startIndex);
   const endings = [...(snapshot?.session.runEndings ?? [])]
@@ -80,6 +86,7 @@ export function transcriptModel(
     .sort((a, b) => a.afterIndex - b.afterIndex);
   const cards = [...turnChanges.keys()].sort((a, b) => a - b);
   const segments: TranscriptSegment[] = [];
+  const groups: Extract<TranscriptSegment, { kind: 'group' }>[] = [];
   let group: Extract<TranscriptSegment, { kind: 'group' }> | null = null;
   let nextEnding = 0;
   let nextCard = 0;
@@ -88,7 +95,8 @@ export function transcriptModel(
   };
   const addStep = (step: TranscriptStep): void => {
     if (!group) {
-      group = { kind: 'group', key: `group:${step.key}`, steps: [] };
+      group = { kind: 'group', key: '', steps: [] };
+      groups.push(group);
       segments.push(group);
     }
     group.steps.push(step);
@@ -135,10 +143,30 @@ export function transcriptModel(
       }
     }
   }
+  /**
+   * A group key is inherited from any step it already held. Consecutive tool results have no stable first step when
+   * history is prepended above them, but they do have stable later ones; keeping the old key is what lets React reuse
+   * the group (and the reader's open fold and scroll position) instead of replacing it with a new node.
+   */
+  const used = new Set<string>();
+  const groupKeys = new Map<string, string>();
+  for (const entry of groups) {
+    const inherited = entry.steps
+      .map((step) => previousGroups.get(step.key))
+      .find((key): key is string => key !== undefined);
+    let key = inherited ?? `group:${entry.steps[0]!.key}`;
+    // A boundary revealed inside a previously contiguous interval divides one old group into two: only the first
+    // keeps the inherited key, the later ones must stay distinct or React would see duplicate list keys.
+    while (used.has(key)) key = `${key}~`;
+    used.add(key);
+    entry.key = key;
+    for (const step of entry.steps) groupKeys.set(step.key, key);
+  }
   return {
     rows,
     segments,
     messageCount: startIndex + messages.length,
     tail: group === null ? null : segments.indexOf(group),
+    groupKeys,
   };
 }

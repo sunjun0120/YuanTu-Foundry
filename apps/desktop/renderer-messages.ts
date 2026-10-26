@@ -7,6 +7,10 @@
  * two satellites (`messageTimeView`, `messageCopyView`) are contributions to `message.footer` and
  * `message.actions` rather than lines inside the bubble: the slot owns *where* they appear and in what order,
  * and these own what they say.
+ *
+ * The transcript's React rows (`ui/conversation/Conversation.tsx`) own each row's outer element and move this
+ * builder's children underneath it. A tool card, Markdown and a diff preview are therefore still built here; only
+ * the row identity, ordering and folds moved to React.
  */
 import type { ImageAttachment, Message } from '../../packages/protocol/index.ts';
 import { splitAttachmentPrompt } from './attachment-contract.ts';

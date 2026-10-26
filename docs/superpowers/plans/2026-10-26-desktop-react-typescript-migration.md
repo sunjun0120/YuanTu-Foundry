@@ -791,21 +791,23 @@ enderer-live 的正文重绘改走它（reasoning 折叠与 120k 截尾/占位/�
 - [ ] 在 React smoke 记录历史消息 DOM 身份或 MutationObserver 证据：100 个流式 delta 不替换既有历史消息节点；统计增量不重建 transcript；流式结束后正文与最终历史结果一致。
 - [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-stream.test.ts tests/markdown-links.test.ts tests/desktop-react.smoke.mjs tests/desktop-round3.smoke.mjs`。
 
-#### T21: 历史消息、Transcript 与滚动锚点\n\n**进度（模型+锚点）:** ui/conversation/transcript-model.ts 已完成，5 条纯测试：runtime context 过滤、provisional 被后续回答取代、tool/assistant 操作折叠与回复/用户消息断组、assistant 正文+调用的顺序、ending/card 的插入位置、绝对 startIndex 派生稳定 key。ui/conversation/scroll-anchor.ts 已完成（3 条纯测试：首个可见节点捕获、节点恢复、节点消失时 scrollHeight 回退）；React 列表待下一步。
+#### T21: 历史消息、Transcript 与滚动锚点
 
-**Files:** 新增 `ui/conversation/Conversation.tsx`、`Transcript.tsx`、`Message.tsx`、`transcript-model.ts`、`scroll-anchor.ts`；修改 `renderer-messages.ts`、`renderer-transcript.ts` 接入点；新增 `tests/desktop-react-transcript.test.ts` 与 `tests/desktop-react-transcript.smoke.mjs`（`@test-serial desktop-ui`）；扩展 `tests/desktop.smoke.mjs`、`tests/history.smoke.mjs`。
+**进度:** 已完成主体。`transcript-model`（7 条纯测试：runtime context、provisional、操作折叠/断组、ending/card、绝对 key、prepend 继承 group key、重复 key 守卫）+ `scroll-anchor`（5 条：capture/restore、节点消失回退、`captureHistoryAnchor` 对展开工具组内部步骤）+ `Conversation.tsx`/`transcript-mount.tsx`/`completion-view.ts`；React 接管 `#messages` 行、process-group、run-paused、turn-card 位置、完成块、DOM 身份与 per-key 展开/滚动；`renderer-transcript.ts`（560 行）删除，`renderer-messages.ts` 保留为 DOM 岛构建器。`renderer.ts` 的 load-older 改用 capture/restoreAnchor。**未做：** 统一 `PanelTransition` 的折叠动画与专用 `desktop-react-transcript.smoke.mjs`（现有 Electron 冒烟覆盖行为）；`turn-changes` 卡片仍由 `renderer-changes.ts` 构建。
+
+**Files:** 新增 `ui/conversation/Conversation.tsx`、`transcript-mount.tsx`、`completion-view.ts`、`transcript-model.ts`、`scroll-anchor.ts`；修改 `renderer-messages.ts`、`renderer.ts`；删除 `renderer-transcript.ts`；扩展 `tests/desktop-react-transcript.test.ts`、`tests/scroll-anchor.test.ts`、`tests/desktop.smoke.mjs`、`tests/history.smoke.mjs`。
 
 **规模:** 约 900–1,200 行。
 
 **Interfaces:** `transcript-model.ts` 输出带稳定 key 和来源绝对消息下标的视图描述，React 只消费描述；`scroll-anchor.ts` 提供 `captureAnchor(container)`、`restoreAnchor(container, anchor)`，提交后恢复且缺失锚点时有 scrollHeight 差值回退。
 
-- [ ] 纯 model 测试验证进程组、内部 runtime-context 消息过滤、历史 prepend 后 key 不变、失败/取消/验证状态文案继续调用既有 helper；时间与复制操作仍属于各自消息。
-- [ ] 在真实页面验证 prepend 旧消息保持可见锚点：消息和展开工具组内部均测，允许像素取整误差但不能跳到底；用户滚离尾部后新 delta 不抢滚动，子 agent 页打开时父流也不抢滚动。
-- [ ] 保持思考、工具组和验证证据的展开状态，以及未变化节点上的文字选择/焦点。key 不包含全局语言、messageRevision 或流式文本；语言变化通过 props 更新文案，不无故重挂整棵树。
-- [ ] 保留自动验证 presentation：`verified` 不出现提示；环境限制、未验证、受限等展示和证据可展开；不丢原始命令、退出码或输出，不改完成判定。
-- [ ] 思考、工具组、验证证据使用统一 PanelTransition，打开状态只响应用户操作；流式更新不重复播放高度动画。补测面板关闭途中重新打开、reduce 模式下即时展开，以及动画期间阅读锚点不跳。
-- [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-transcript.test.ts tests/desktop-react-transcript.smoke.mjs tests/desktop.smoke.mjs tests/desktop-round3.smoke.mjs tests/history.smoke.mjs`。
+- [x] 纯 model 测试验证进程组、runtime-context 过滤、历史 prepend 后 key 不变；完成/失败/取消文案继续走既有 helper；时间与复制仍属各自消息。
+- [x] 真实页面验证 prepend 旧消息保持可见锚点（消息与展开工具组内部；history.smoke 通过）；用户滚离尾部不抢滚动、子 agent 页打开时父流不抢滚动（agent/desktop 冒烟）。
+- [x] 保持思考、工具组与验证证据的展开状态；per-key open/scroll 映射跨重建保留；key 不含 locale/messageRevision/流式文本，语言变化经 props 更新。
+- [x] 保留自动验证 presentation：`verified` 不出现提示；环境限制、未验证、受限等展示和证据可展开；原始命令、退出码或输出不丢，完成判定未改（`completion-view.ts`）。
+- [~] 思考/工具组/验证证据的统一 PanelTransition 与专门动画补测未做；当前沿用既有原生 details 行为，流式冒烟已覆盖不抢滚动与展开状态。
+- [x] 文案键化；`renderer-transcript.ts` 删除；兼容 id/class 保留（`#messages > .message`、`.process-group`、`.run-paused`）。
+- [x] 验证：`desktop-react-transcript` 7/7、`scroll-anchor` 5/5、`render-caches` 2/2、`desktop` 9/9、`history` 2/2、`agent` 7/7、`sessions` 6/6、`desktop-i18n` 5/5、`desktop-react` 4/4；另 `language` 7/7、`layout` 4/4、`round3` 1 通过+1 Chromium 跳过、`copy` 14/14。
 
 #### T22: 问题、审批与计划批准卡
 

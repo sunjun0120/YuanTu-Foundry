@@ -296,10 +296,11 @@ test('a project configuration edit is named as one in the approval card', () => 
 
 test('a stopped run offers a way on, and a tool card never shows an internal call id', async () => {
   // The paused line is a sentence today; the only way to carry on was to retype the request.
-  const transcript = await readFile('apps/desktop/renderer-transcript.ts', 'utf8');
-  assert.match(transcript, /onContinue\?\(\): void/);
-  assert.match(transcript, /node\('button', t\('ui\.continueRun'\)/);
-  assert.match(transcript, /function pausedNotice\(\)/);
+  const mount = await readFile('apps/desktop/ui/conversation/transcript-mount.tsx', 'utf8');
+  assert.match(mount, /onContinue\?\(\): void/);
+  const transcript = await readFile('apps/desktop/ui/conversation/Conversation.tsx', 'utf8');
+  assert.match(transcript, /function PausedNotice/);
+  assert.match(transcript, /t\('ui\.continueRun'\)/);
   // An interrupted tool used to read `操作未完成 · call_01_K3UyNHn…`: the call id is an internal handle.
   const messages = await readFile('apps/desktop/renderer-messages.ts', 'utf8');
   assert.doesNotMatch(messages, /message\.toolCallId\s*\)/);

@@ -4,6 +4,8 @@ import { mountTasks } from './ui/panels/tasks-mount.tsx';
 import { mountStatistics } from './ui/panels/statistics-mount.tsx';
 import { mountWorkspace } from './ui/workspace/workspace-mount.tsx';
 import { mountSubagents } from './ui/conversation/subagents-mount.tsx';
+import { mountTranscript } from './ui/conversation/transcript-mount.tsx';
+import { captureHistoryAnchor, restoreAnchor } from './ui/conversation/scroll-anchor.ts';
 import { setupMcpSettings } from './renderer-mcp.ts';
 import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import type { DesktopBridge, DesktopReply } from './contract.ts';
@@ -31,7 +33,6 @@ import { mountApprovals } from './ui/conversation/approvals-mount.tsx';
 import { mountSessionPanels } from './ui/panels/session-panels-mount.tsx';
 import { mountSessionSidebar } from './ui/sessions/session-mount.tsx';
 import type { SessionActivity } from './ui/sessions/session-model.ts';
-import { setupTranscript } from './renderer-transcript.ts';
 import { setupTurnChanges } from './renderer-changes.ts';
 import {
   RUN_CANCELLED,
@@ -307,7 +308,7 @@ const turnChangesView = setupTurnChanges({
   refreshPreview: (key, content) => workspaceView.refreshChangePreview(key, content),
   clearPreviews: () => workspaceView.clearChangePreviews(),
 });
-const transcriptView = setupTranscript({
+const transcriptView = mountTranscript({
   getState: () => state,
   messageView: messagesView.messageView,
   turnChanges: () => turnChangesView.cards(),
@@ -723,20 +724,12 @@ element('error-action').addEventListener('click', () => {
 element('load-older-history').addEventListener('click', () => {
   if (isOperating() || composerView.isSending() || state?.session.running || state?.session.loading)
     return;
-  let anchor = element('messages').firstElementChild;
-  if (anchor instanceof HTMLDetailsElement && anchor.open) {
-    const steps = anchor.querySelector<HTMLElement>('.process-steps');
-    if (steps)
-      anchor =
-        Array.from(steps.children).find(
-          (step) => step.getBoundingClientRect().bottom > steps.getBoundingClientRect().top,
-        ) ?? anchor;
-  }
-  const top = anchor?.getBoundingClientRect().top;
+  // The anchor is the first visible row, or the visible step when that row is an open process group: older steps are
+  // inserted above the step being read, not above the fold's own boundary.
+  const anchor = captureHistoryAnchor(conversation, element('messages'));
   loadingOlderHistory = true;
   void select({ type: 'loadOlder' }).finally(() => {
-    if (anchor?.isConnected && top !== undefined)
-      conversation.scrollTop += anchor.getBoundingClientRect().top - top;
+    restoreAnchor(conversation, anchor);
     loadingOlderHistory = false;
   });
 });
@@ -892,6 +885,7 @@ window.addEventListener(
     questionsView.dispose();
     approvalsView.dispose();
     subagentView.dispose();
+    transcriptView.dispose();
     sessionPanels.dispose();
     taskView.dispose();
     liveContent.dispose();

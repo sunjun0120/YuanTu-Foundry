@@ -109,3 +109,38 @@ test('the same messages at a later start index keep their keys tied to the absol
   assert.equal(user?.index, 40);
   assert.equal(model.messageCount, 41);
 });
+
+test('a fold that gains older steps above it keeps its group key', () => {
+  const tools = (count: number) =>
+    Array.from({ length: count }, (_, index) => message({ role: 'tool', content: `r${index}` }));
+  const before = transcriptModel(snapshot(), tools(2), 10);
+  const group = before.segments[0];
+  assert.equal(group?.kind === 'group' ? group.key : '', 'group:10:result');
+  // Older history lands above the same interval: the first step changes, but steps 10 and 11 did not.
+  const after = transcriptModel(snapshot(), tools(4), 8, new Map(), before.groupKeys);
+  assert.equal(after.segments.length, 1);
+  assert.equal(after.segments[0]?.kind === 'group' ? after.segments[0].key : '', 'group:10:result');
+  assert.deepEqual(
+    after.segments[0]?.kind === 'group' ? after.segments[0].steps.map((step) => step.key) : [],
+    ['8:result', '9:result', '10:result', '11:result'],
+  );
+});
+
+test('a boundary revealed inside a fold keeps both groups distinct', () => {
+  const tools = (count: number) =>
+    Array.from({ length: count }, (_, index) => message({ role: 'tool', content: `r${index}` }));
+  const before = transcriptModel(snapshot(), tools(3), 0);
+  const after = transcriptModel(
+    snapshot(),
+    [tools(1)[0]!, message({ role: 'user', content: 'ask' }), tools(1)[0]!],
+    0,
+    new Map(),
+    before.groupKeys,
+  );
+  const groups = after.segments.flatMap((segment) =>
+    segment.kind === 'group' ? [segment.key] : [],
+  );
+  assert.equal(groups.length, 2);
+  assert.equal(new Set(groups).size, 2, `duplicate group keys: ${groups.join(',')}`);
+  assert.equal(groups[0], 'group:0:result');
+});

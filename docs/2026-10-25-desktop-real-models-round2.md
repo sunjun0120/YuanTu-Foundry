@@ -161,7 +161,7 @@ README 第 584 行仍写：
 
 ### 4.6 P2：`/export` 已从桌面移除，文档仍说可用
 
-README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行；实际 `apps/desktop/renderer-commands.ts:220` 的正则只有 `compact|goal|plan`，命令面板只列 `/compact`、`/goal`、`/plan` 和技能。`renderer-export.ts` 与 carrier 的 `export` 命令仍在，但没有入口。
+README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行；实际命令词汇（迁移后为 `apps/desktop/ui/composer/command-model.ts`）的正则只有 `compact|goal|plan`，命令面板只列 `/compact`、`/goal`、`/plan` 和技能。`renderer-export.ts` 与 carrier 的 `export` 命令仍在，但没有入口。
 
 **影响。** 用户输入 `/export` 会把它当成普通消息发给模型，既不导出，也消耗一次调用；文档与 UI 不一致。
 
