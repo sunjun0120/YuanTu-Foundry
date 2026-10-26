@@ -90,6 +90,13 @@ export const panelMessages: Record<string, [string, string]> = {
   'general.fontSmall': ['小', 'Small'],
   'general.fontMedium': ['标准', 'Standard'],
   'general.fontLarge': ['大', 'Large'],
+  'task.manual': ['人工确认', 'Manual'],
+  'task.staleWarning': [
+    '任务已更新；请取消后重新编辑。当前输入仍保留。',
+    'Task changed. Cancel and reopen to edit the latest version. Your input is preserved.',
+  ],
+  'task.approval.approve': ['批准并续跑', 'Approve and resume'],
+  'task.approval.reject': ['拒绝并暂停', 'Reject and pause'],
   'task.next': ['下次', 'Next'],
   'task.last': ['上次', 'Last'],
   'task.waiting': ['等待中', 'Waiting'],

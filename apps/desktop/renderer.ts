@@ -1,6 +1,6 @@
 // Mantine's static stylesheet: esbuild emits it beside the bundle as `renderer.css`, which the page links first.
 import '@mantine/core/styles.css';
-import { setupTasks } from './renderer-tasks.ts';
+import { mountTasks } from './ui/panels/tasks-mount.tsx';
 import { mountStatistics } from './ui/panels/statistics-mount.tsx';
 import { mountWorkspace } from './ui/workspace/workspace-mount.tsx';
 import { setupSubAgents } from './renderer-subagents.ts';
@@ -271,7 +271,7 @@ const composerView = setupComposer({
   attachments: attachmentsView,
   commands: commandsView,
 });
-const taskView = setupTasks(select);
+const taskView = mountTasks(select);
 function renderTasks(): void {
   taskView(state, isOperating() || composerView.isSending());
 }
@@ -1014,6 +1014,7 @@ window.addEventListener(
     statisticsView.dispose();
     planView.dispose();
     sessionPanels.dispose();
+    taskView.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();

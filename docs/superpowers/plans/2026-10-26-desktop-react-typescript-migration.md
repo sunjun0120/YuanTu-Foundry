@@ -766,12 +766,12 @@ interface PanelTransitionProps {
 
 **规模:** 约 900–1,200 行。
 
-**进度:** 计划面板、会话辅助面板已完成 React 化，任务卡片数据层已完成。①计划：`plan-view` + `PlanPanel`/`plan-mount`，删除 `renderer-plan.ts`，`#plan-*`/`.plan-*` 保留，`plan-contract` 10/10。②待办/目标/交付物：`session-panels-model` + 三个面板 + `session-panels-mount`，删除 `renderer-session-panels.ts`，`#todos-panel`/`#goal-*`/`#deliverables`/`.todo*`/`.goal-*`/`.deliverable*` 保留，专项 4/4，`desktop-i18n` 移除依赖已删模块的段落（4/4）。③任务卡片模型：`task-view` 扩到 11 条纯测试（时间线 next/last、审批三态、confirm 资格、start/retry/verify/confirm 动作与 unavailable、尝试历史）。剩余：任务列表/编辑器 UI（`renderer-tasks.ts` + editors）。
+**进度:** T19 完成。①计划：`plan-view` + `PlanPanel`/`plan-mount`，删除 `renderer-plan.ts`，`#plan-*`/`.plan-*` 保留，`plan-contract` 10/10。②待办/目标/交付物：`session-panels-model` + 三个面板 + `session-panels-mount`，删除 `renderer-session-panels.ts`，`#todos-panel`/`#goal-*`/`#deliverables` 保留，专项 4/4。③任务：`task-view` 11 条纯测试 + `TasksPanel`/`tasks-mount`，删除 `renderer-tasks.ts`；卡片、状态、时间线、审批、证据、步骤日志、尝试历史、动作全部由模型驱动。**范围说明：编辑/触发设置表单仍是 `renderer-tasks-editors.ts` 的 legacy DOM，作为宿主节点嵌在卡片里**（字段/校验/保存协议原样保留，busy/stale 由卡片宿主更新）；表单本身留待后续单独迁移。`#tasks-panel`/`#task-list` 与 `.task-*` 兼容类不变。
 
-- [x] `TaskConfirmDrafts` 已抽为纯 `.ts` 并保留原断言；任务文案/证据/步骤模型已抽并接入 format；计划面板 UI 已替换。
-- [ ] 任务进度更新不覆盖编辑中的确认选择或自由文本；剩余任务列表/编辑器的 React 化（待办/目标/交付物/计划已完成）。
-- [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/task-confirm-selection.test.ts tests/plan-contract.test.ts tests/workflows.smoke.mjs tests/desktop-react.smoke.mjs`。已完成 `task-confirm-selection` 13/13、`task-view` 6/6、`plan-contract` 10/10、`workflows` 4/4。
+- [x] `TaskConfirmDrafts` 已抽为纯 `.ts`；任务文案/证据/步骤/动作模型已抽并接入；计划/会话辅助/任务列表 UI 已替换（编辑器表单为宿主节点，见上）。
+- [x] 任务进度更新不覆盖编辑中的确认选择或自由文本：编辑中冻结列表、只更新 busy/stale；`TaskConfirmDrafts` 按 session/run/definition 保留勾选。
+- [x] 文案键化：`task.*`（状态、触发、证据、步骤、动作、审批、时间线、尝试）全部入字典；`renderer-tasks.ts` 删除。
+- [x] 验证：`task-confirm-selection` 5/5（FakeDocument 用例改为纯 drafts 断言 + 步骤重建保留）、`task-view` 11/11、`plan-contract` 10/10、`session-panels-model` 4/4、`workflows` 4/4（编辑、触发、执行、人工确认全流程）、`agent` 7/7、`language` 7/7、`layout` 4/4、`desktop` 9/9、`desktop-i18n` 4/4、`settings` 8 通过+1 跳过（MCP）；lint/i18n/layers/cycles/format/docs/typecheck/build 全绿。
 
 ### M6: 对话流
 
