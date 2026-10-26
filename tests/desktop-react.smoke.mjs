@@ -89,6 +89,7 @@ function Probe() {
     <Stack gap="sm" p="md">
       <Text id="react-copy">{t('ui.newSession')}</Text>
       <Text id="react-raw">新建会话</Text>
+      <div id="surface-probe" style={{ background: 'var(--surface)', width: 16, height: 16 }} />
       <TextInput id="react-input" label={t('ui.settings')} placeholder={t('ui.searchSessions')} />
       <Select
         id="react-select"
@@ -274,6 +275,72 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   assert.equal(mounted.reactUpgraded, false, 'a select inside a React region is left alone');
   assert.equal(mounted.reactStillSelect, 'SELECT');
 
+  // Appearance: the provider follows the same `data-theme` the settings controller writes, not a store of its own.
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark';
+  });
+  await page.waitForFunction(
+    () => document.documentElement.getAttribute('data-mantine-color-scheme') === 'dark',
+  );
+  await page.locator('#react-button').click();
+  await page.waitForSelector('#dialog-body');
+  const darkColours = await page.evaluate(() => ({
+    surface: getComputedStyle(document.getElementById('surface-probe')).backgroundColor,
+    modal: getComputedStyle(document.querySelector('.mantine-Modal-content')).backgroundColor,
+    stored: localStorage.getItem('mantine-color-scheme-value'),
+  }));
+  assert.equal(darkColours.modal, darkColours.surface, 'the portal body uses the project surface');
+  assert.equal(darkColours.stored, null, 'the appearance is not copied into localStorage');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.getElementById('dialog-body') === null);
+
+  // `system` follows the OS; an explicit choice does not.
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'system';
+  });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.waitForFunction(
+    () => document.documentElement.getAttribute('data-mantine-color-scheme') === 'dark',
+  );
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.waitForFunction(
+    () => document.documentElement.getAttribute('data-mantine-color-scheme') === 'light',
+  );
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark';
+  });
+  await page.emulateMedia({ colorScheme: 'light' });
+  assert.equal(
+    await page.evaluate(() => document.documentElement.getAttribute('data-mantine-color-scheme')),
+    'dark',
+    'an explicit dark choice ignores the system preference',
+  );
+
+  // Text size scales Mantine's variables from the same attribute the settings page writes.
+  const fontSizeVariable = () =>
+    page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--mantine-font-size-md').trim(),
+    );
+  await page.evaluate(() => {
+    document.documentElement.dataset.fontSize = 'large';
+  });
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.documentElement)
+        .getPropertyValue('--mantine-font-size-md')
+        .trim() === '16px',
+  );
+  await page.evaluate(() => {
+    document.documentElement.dataset.fontSize = 'small';
+  });
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.documentElement)
+        .getPropertyValue('--mantine-font-size-md')
+        .trim() === '13px',
+  );
+  assert.equal(await fontSizeVariable(), '13px');
+
   // Language: the walker translates the legacy node, React re-renders through useLocale, and the walker leaves
   // the React-owned raw text exactly as React rendered it.
   assert.equal(await page.locator('#legacy-copy').innerText(), '新建会话');
@@ -288,12 +355,6 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   await page.waitForFunction(
     () => document.getElementById('legacy-copy').textContent === '新建会话',
   );
-
-  // The dialog is Mantine's modal: opens from React, closes on Escape.
-  await page.locator('#react-button').click();
-  await page.waitForSelector('#dialog-body');
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => document.getElementById('dialog-body') === null);
 
   // The error boundary says what happened in the interface language and offers the retry that remounts the region.
   await page.evaluate(() => window.__ui.setLocale('en-US'));

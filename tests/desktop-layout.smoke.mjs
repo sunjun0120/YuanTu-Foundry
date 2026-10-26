@@ -79,6 +79,13 @@ test(
       0,
     );
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'system');
+    // The React provider follows the same appearance attribute the legacy controller writes: with `system`, that
+    // means the media query, and the public attribute Mantine exposes must agree with it.
+    const scheme = await page.evaluate(() => ({
+      mantine: document.documentElement.dataset.mantineColorScheme,
+      expected: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+    }));
+    assert.equal(scheme.mantine, scheme.expected);
     const logo = async (theme) => {
       const nativeModelOpacity = await page.locator('#model').evaluate((el) => {
         const disabled = el.disabled;

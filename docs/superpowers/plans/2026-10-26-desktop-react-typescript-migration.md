@@ -582,15 +582,18 @@ interface PanelTransitionProps {
 
 #### T7: 主题与 UI 设置单一数据源
 
-**Files:** 新增 `ui/theme.ts`（含 `desktopTheme`、`desktopCssVariablesResolver`、`resolveColorScheme`）；修改 `ui/providers.tsx`、`ui/styles.css`；扩展 `tests/desktop-react.smoke.mjs`、`tests/desktop-layout.smoke.mjs`。
+**Files:** 新增 `ui/theme.ts`（`createDesktopTheme`、`desktopCssVariablesResolver`、`resolveColorScheme`/`resolveFontSize`、两个 document 读取函数）、`tests/desktop-react-theme.test.ts`；修改 `ui/providers.tsx`；扩展 `tests/desktop-react.smoke.mjs`、`tests/desktop-layout.smoke.mjs`。
 
-**规模:** 约 350–500 行。
+**规模:** 约 250–400 行。
 
-- [ ] 先写真实页面测试：light/dark/system 三种主题下 `data-mantine-color-scheme`、`data-theme`、body 背景与文字颜色一致；系统偏好变化（`page.emulateMedia({ colorScheme })`）在 `system` 下跟随、在显式 light/dark 下不跟随。
-- [ ] 把既有 `--surface/--sidebar/--raised/--hover/--line/--ink/--muted/--accent` 映射进 Mantine resolver；保留品牌图、字体与 13/14/16px 字号；断言字号切换后正文与控件可读、不破版。
-- [ ] 主题数据只来自 `uiSettings`：反复切换设置不产生 localStorage 分叉、不重复持久化；启动读取失败采用既有默认值并显示错误，不白屏。
-- [ ] portal 内组件（Dialog/Drawer/Popover）颜色、边框、文字与主页面一致；断言弹层没有第二套 provider。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs`。
+**Interfaces:** `resolveColorScheme(appearance, systemDark): 'light' | 'dark'`；`resolveFontSize(name): 13 | 14 | 16`；`createDesktopTheme(base): MantineThemeOverride`；`desktopCssVariablesResolver: CSSVariablesResolver`；`appearanceFromDocument(doc)`/`fontSizeFromDocument(doc)`。provider 订阅 `data-theme`/`data-font-size`（legacy 设置控制器写的同一份），`forceColorScheme` 驱动 Mantine，**不新建设置 store、不写 localStorage**。
+
+- [ ] 主题状态单一来源：provider 用 `MutationObserver` 读 `data-theme`/`data-font-size`，`system` 经 `useMediaQuery('(prefers-color-scheme: dark)')` 解析；显式 light/dark 不随系统变化。已由 `tests/desktop-react-theme.test.ts`（4 条纯函数）与 React smoke 覆盖。
+- [ ] palette 映射进 `desktopCssVariablesResolver`：`--mantine-color-body/text/dimmed/default/default-hover/default-border/anchor` 与 primary filled 指向既有 `--surface/--ink/--muted/--raised/--hover/--line/--accent`；默认变量先取自 `defaultCssVariablesResolver` 再覆盖。**注意**：覆盖必须同时写进 `variables`、`light`、`dark` 三个块，Mantine 的 per-scheme 块会重新定义 `--mantine-color-body`（首版只写 shared 块时弹层背景是 Mantine 默认 `#242424`，smoke 立即报错）。
+- [ ] 字号：`createDesktopTheme(base)` 从 13/14/16 推导 `fontSizes`（xs=base-2 … xl=base+6），provider 以 `useMemo` 随属性重建；smoke 断言 `--mantine-font-size-md` 在 large/small 下分别为 16px/13px。
+- [ ] 不重复持久化：`forceColorScheme` 让 Mantine 忽略 colour-scheme manager；smoke 断言 `localStorage['mantine-color-scheme-value']` 为空。启动读取失败仍走既有设置 controller 的默认值，provider 只反映 DOM 属性，不额外发 `uiSettings` 请求。
+- [ ] portal 一致性：暗色下打开 Dialog，断言 `.mantine-Modal-content` 背景与 `var(--surface)` 探针一致、无第二个 provider。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-theme.test.ts tests/desktop-react.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs`。已完成：4/4、2/2、4/4、7/7。
 
 #### T8: AppShell 布局接管（仍不接管产品外壳）
 
