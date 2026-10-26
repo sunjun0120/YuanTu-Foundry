@@ -533,18 +533,17 @@ interface PanelTransitionProps {
 
 #### T4: smoke 共享 helper 与兼容 id 基建
 
-**Files:** 新增 `ui/legacy/compat-ids.ts`、`tests/compat-ids.test.ts`；修改 `tests/desktop-smoke-support.mjs`、`tests/desktop-layout.smoke.mjs`（首个受影响套件）、`tests/desktop-i18n.test.ts`（CSP 夹具）。
+**Files:** 新增 `ui/legacy/compat-ids.ts`、`tests/compat-ids.test.ts`；本任务不改任何 smoke（产品的控件仍是原生实现，改 helper 会立刻让现有断言失败）；helper 与首个套件的迁移随控件迁移在 T6 进行。
 
-**规模:** 约 200–350 行。
+**规模:** 约 150–250 行。
 
-**Interfaces:** `compatId(id: CompatIdKey): string`；`COMPAT_IDS: readonly CompatId[]`；测试断言唯一性、owner 与清理条件。
+**Interfaces:** `CompatId { id, region, reason, removal }`；`COMPAT_IDS: readonly CompatId[]`；`MIGRATION_COMPLETE`（T24 置 true）；`compatId(id: string): string`（只返回值，强制在测试里做，避免线上一抛毁掉窗口）；`compatIdUsages(source): readonly string[]`。
 
-- [ ] 建立登记表与类型：`{ id, region, reason, removal }`，region 使用任务编号（如 `T10`）。
-- [ ] 测试：id 全局唯一；已标记迁移的 region 不得由 legacy 渲染；每个登记项必须被 `tests/` 中至少一个引用命中；另有一条“M7 时表为空”的断言——在 M7 之前用显式 `PENDING_CLEANUP` 常量表达待清项，T24 清空该常量并删除这些登记项后，断言自然转为通过（不写 `skip`）。
-- [ ] 改造 `desktop-smoke-support.mjs` 的 `choosePermissionPreset`：改为点击真实 combobox/option 并断言最终可见值与发送的 command；保留原有行为断言，不允许只改成“不抛错”。
-- [ ] 把首个受影响套件（`desktop-layout.smoke.mjs` 中读源码/算布局的部分）改为不依赖旧 `#id` 文本断言的部分先迁移，剩余留在登记表。
-- [ ] 约定并写入文档：每个区域任务的交付必须包含“新增/删除的兼容 id 清单 + 对应 smoke 文件”。
-- [ ] 运行 `node scripts/run-tests.mjs tests/compat-ids.test.ts tests/desktop-layout.smoke.mjs`（依赖 dist，先 `npm run build`）。
+- [ ] 建立登记表与类型：`{ id, region, reason, removal }`，region 使用任务编号（如 `T10`）；起始为空表，区域迁移到 React 开始渲染某个旧 id 时才登记。
+- [ ] `compatId()` 不做运行时校验：缺登记必须是红构建，不能在用户窗口里抛错；`compatIdUsages()` 与测试共用同一套解析规则。
+- [ ] 测试：id 唯一、字段非空、region 形如 `T\d+`；**双向一致**——`ui/**` 中 `compatId('…')` 的每个值都已登记，每个登记值都确实被渲染；每个登记值仍被 `tests/` 中至少一个文件引用；“迁移完成时表为空”由 `MIGRATION_COMPLETE` 控制，T24 置 true 后该断言生效（不写 `skip`）。
+- [ ] 明确交接规则并写入文档：每个区域任务的交付必须包含“新增/删除的兼容 id 清单 + 对应 smoke 文件”；id 的删除与该断言的替换在同一个提交。
+- [ ] 运行 `node scripts/run-tests.mjs tests/compat-ids.test.ts`、`npm run typecheck`、`npm run lint`、`npm run layers:check`、`npm run i18n:check`。
 
 ### M2: runtime、provider、主题与布局外壳
 
