@@ -775,7 +775,7 @@ interface PanelTransitionProps {
 
 ### M6: 对话流
 
-#### T20: 流式 store 与内容适配器
+#### T20: 流式 store 与内容适配器\n\n**进度（数据层）:** ui/conversation/stream-store.ts 已完成，7 条可控时钟测试：100 delta/单窗口只发布一次且文本完整、text/reasoning 分离、reset 只替换本通道、delta 先于 snapshot 不丢、新 messageId 不继承、run 结束清空、dispose 停止发布。UI（LiveMessage/MarkdownView）待下一步。
 
 **Files:** 新增 `ui/conversation/stream-store.ts`、`LiveMessage.tsx`、`MarkdownView.tsx`、必要时 `DomContent.tsx`；runtime 增加流式/统计/子 agent store；新增 `tests/desktop-react-stream.test.ts`；扩展 React smoke。
 
