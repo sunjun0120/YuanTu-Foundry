@@ -500,6 +500,10 @@ export const ENVIRONMENT = {
     description: '上下文压缩摘要使用的模型 id（同一端点；未设置则用主模型），其窗口不应小于主模型',
   },
   YUANTU_MCP_OAUTH_DIR: { kind: 'string', description: 'MCP OAuth 令牌目录' },
+  YUANTU_DESKTOP_EXECUTABLE: {
+    kind: 'string',
+    description: '桌面程序（Electron）路径，由桌面设置；Windows 沙箱拒绝授权包含它的工作区',
+  },
   YUANTU_STATE_DIR: {
     kind: 'string',
     description: '普通用户状态根目录（绝对路径，默认 ~/.yuantu）',

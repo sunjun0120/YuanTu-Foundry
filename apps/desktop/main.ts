@@ -198,6 +198,8 @@ function hostEnvironment(config?: ProviderConfig): NodeJS.ProcessEnv {
     ...sandboxEnvironment.environment(),
     YUANTU_PERMISSION_POLICY: permissionSettingsStore.file,
     YUANTU_MCP_OAUTH_DIR: mcpOAuthDirectory(),
+    // The Host runs on its own Node; this is how its Windows sandbox learns which Electron must stay out of a grant.
+    YUANTU_DESKTOP_EXECUTABLE: process.execPath,
   };
 }
 function modelSettingsView() {

@@ -122,7 +122,7 @@ test('the wait for headers is its own clock, and not the stream idle timeout', a
   });
   const failed = await timedOut.agent.run({ sessionId: timedOut.session.id, prompt: 'hi' });
   assert.equal(failed.status, 'failed');
-  assert.match(failed.error ?? '', /Model connection idle timeout/);
+  assert.match(failed.error ?? '', /Model response headers timeout/);
 });
 
 test('a header wait that runs out is a failure of the header clock, not of the stream', async (t) => {
@@ -135,7 +135,74 @@ test('a header wait that runs out is a failure of the header clock, not of the s
   });
   const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'hi' });
   assert.equal(result.status, 'failed');
-  assert.match(result.error ?? '', /Model connection idle timeout/);
+  assert.match(result.error ?? '', /Model response headers timeout/);
+});
+
+test('a header timeout is re-sent once with the same request and its own durable allowance', async (t) => {
+  const neverResponds = (_url?: unknown, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+    });
+  const ctx = await fixture(t, [neverResponds, answer], {
+    providerConfig: { responseHeadersTimeoutMs: 40, streamIdleTimeoutMs: 5_000 },
+    extra: { zeroByteRetries: 1, maxModelRetries: 0 },
+  });
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'hi' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, 'Done');
+  assert.equal(ctx.bodies.length, 2);
+  assert.deepEqual(ctx.bodies[0], ctx.bodies[1]);
+  const retries = ctx.store.events(ctx.session.id).filter((e) => e.type === 'llm.zero-byte-retry');
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0]!.data.attempt, 1);
+  assert.equal(ctx.store.events(ctx.session.id).filter((e) => e.type === 'llm.retry').length, 0);
+});
+
+test('header timeouts stop after the empty retry allowance is spent', async (t) => {
+  const neverResponds = (_url?: unknown, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+    });
+  const ctx = await fixture(t, [neverResponds, neverResponds, answer], {
+    providerConfig: { responseHeadersTimeoutMs: 40 },
+    extra: { zeroByteRetries: 1, maxModelRetries: 0 },
+  });
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'hi' });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'timeout');
+  assert.match(result.error ?? '', /Model response headers timeout/);
+  assert.equal(ctx.bodies.length, 2);
+});
+
+test('cancelling the header wait preserves the caller reason and never retries', async (t) => {
+  let started!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const neverResponds = (_url?: unknown, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+      started();
+    });
+  const ctx = await fixture(t, [neverResponds, answer], {
+    providerConfig: { responseHeadersTimeoutMs: 5_000 },
+    extra: { zeroByteRetries: 1, maxModelRetries: 0 },
+  });
+  const controller = new AbortController();
+  const running = ctx.agent.run({
+    sessionId: ctx.session.id,
+    prompt: 'hi',
+    signal: controller.signal,
+  });
+  await pending;
+  controller.abort(new Error('Stopped by fixture caller'));
+  const result = await running;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(ctx.bodies.length, 1);
+  assert.equal(
+    ctx.store.events(ctx.session.id).filter((e) => e.type === 'llm.zero-byte-retry').length,
+    0,
+  );
 });
 
 test('an empty attempt is re-sent once on its own allowance and recorded as such', async (t) => {

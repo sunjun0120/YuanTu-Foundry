@@ -1130,6 +1130,30 @@ export function windowsSandboxAvailable(
   });
   return availability;
 }
+/**
+ * Refuses a workspace that contains the program running it: the desktop's Electron, or this Host's own Node.
+ *
+ * The grant labels every object in the workspace Low integrity, and Windows starts an executable carrying that label
+ * at Low integrity. Chromium cannot start there — it crashes before any window exists — so a development checkout
+ * opened as its own workspace would stop the desktop from launching while a lease is held, and for good if the grant
+ * is never restored. Checked before anything is probed or granted, so a refusal changes no permission.
+ */
+async function refuseRunningProgram(root: string): Promise<void> {
+  const canonical = await realpath(root);
+  for (const candidate of [process.env.YUANTU_DESKTOP_EXECUTABLE, process.execPath]) {
+    if (!candidate) continue;
+    const executable = await realpath(candidate).catch(() => undefined);
+    if (!executable) continue;
+    const relative = path.relative(canonical, executable);
+    if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep))
+      continue;
+    throw new EnvironmentBlockedError(
+      'windows-sandbox-workspace-contains-desktop',
+      `The workspace ${canonical} contains the running program ${executable}; the Windows sandbox would label it Low integrity, and Electron cannot start at Low integrity. No permission was changed and no command was started.`,
+      'Open a workspace that does not contain the YuanTu installation or development checkout, or switch this session to another execution environment.',
+    );
+  }
+}
 /** Starts one command under the restricted token, granting the workspace and a private scratch directory. */
 async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
   insideWorkspace(request.root, request.cwd);
@@ -1139,6 +1163,7 @@ async function windowsPrepare(request: SandboxRequest): Promise<SandboxPlan> {
     );
   if (request.config.network === 'denied')
     throw new Error('Windows basic sandbox cannot deny network access');
+  await refuseRunningProgram(request.root);
   const unavailable = await windowsSandboxAvailable();
   if (unavailable) throw new Error(unavailable);
   const canonical = await realpath(request.root);

@@ -136,11 +136,11 @@ export function failureForStatus(response: Response): RunFailure {
  * the log, and where the wait is interrupted by a Stop along with everything else. What stays here is the one
  * thing that belongs to the transport: the wait for the response headers.
  *
- * That wait is a different clock from the stream's idle timeout, and the evaluation configures them differently
- * (120 s for headers, 30 s for idle) because a reasoning model may think for a minute before its first byte, so a
+ * That wait is a different clock from the stream's idle timeout, and the evaluation configures them
+ * independently because a reasoning model may think for a minute before its first byte, so a
  * 30-second bound on time-to-first-byte cuts exactly the requests that were working. Nothing has been produced
- * when this fires — the body was never opened — which is what makes the failure re-sendable at no duplicated
- * cost (see the zero-byte re-send in `run-request.ts`).
+ * when this fires — the body was never opened — which lets the zero-byte policy in `run-request.ts` consider
+ * one bounded re-send. The endpoint may still bill the original request.
  */
 export async function fetchModel(
   url: string,
@@ -154,8 +154,8 @@ export async function fetchModel(
   const timer = setTimeout(
     () =>
       connection.abort(
-        new RunFailure('timeout', 'Model connection idle timeout', {
-          cause: new Error(`No response within ${connectTimeoutMs}ms`),
+        new RunFailure('timeout', 'Model response headers timeout', {
+          cause: new Error(`No response headers within ${connectTimeoutMs}ms`),
           // No response object ever existed, so nothing of the body was read: this failure is empty by
           // construction, which is what the step boundary reads to decide whether a zero-byte retry applies.
           details: {

@@ -613,7 +613,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 73 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 74 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -664,6 +664,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_SUBAGENT_MODELS` | `string` | 额外的可委派模型 id（逗号分隔），供 list_subagent_models 列出 |
 | `YUANTU_SUMMARY_MODEL` | `string` | 上下文压缩摘要使用的模型 id（同一端点；未设置则用主模型），其窗口不应小于主模型 |
 | `YUANTU_MCP_OAUTH_DIR` | `string` | MCP OAuth 令牌目录 |
+| `YUANTU_DESKTOP_EXECUTABLE` | `string` | 桌面程序（Electron）路径，由桌面设置；Windows 沙箱拒绝授权包含它的工作区 |
 | `YUANTU_STATE_DIR` | `string` | 普通用户状态根目录（绝对路径，默认 ~/.yuantu） |
 | `YUANTU_WORKTREE_DIR` | `string` | 子代理隔离工作树的根目录（绝对路径；默认在用户数据目录下，位于仓库之外且不含受保护的路径片段） |
 | `YUANTU_CREDENTIALS_FILE` | `string` | 凭据文件路径（默认 ~/.yuantu/credentials.json；环境变量中的密钥优先于它） |
@@ -718,7 +719,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 55 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 15 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 300 个 | `tests/*.test.ts` |
+| 行为测试文件 | 303 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
