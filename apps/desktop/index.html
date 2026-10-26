@@ -289,47 +289,7 @@
         <button type="button" id="clear-queue" class="text-button" hidden>清空待执行消息</button>
       </footer>
     </main>
-    <aside id="workspace-panel" class="workspace-panel" aria-label="工作区文件" hidden>
-      <div
-        id="workspace-resize"
-        class="workspace-resize"
-        role="separator"
-        aria-orientation="vertical"
-        tabindex="0"
-      ></div>
-      <header class="workspace-panel-header">
-        <div id="workspace-tabs" class="workspace-tabs" role="tablist"></div>
-        <div class="workspace-panel-actions">
-          <button id="workspace-fullscreen" type="button" aria-pressed="false">
-            <svg
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.7"
-              aria-hidden="true"
-            >
-              <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />
-            </svg>
-          </button>
-          <button id="workspace-refresh" type="button"></button>
-          <button id="workspace-close" type="button"></button>
-        </div>
-      </header>
-      <div id="workspace-location" class="workspace-location"></div>
-      <div
-        id="workspace-tree"
-        class="workspace-tree"
-        role="group"
-        aria-label="工作区文件树"
-        tabindex="-1"
-      ></div>
-      <section id="workspace-preview" class="workspace-preview" aria-label="文件预览" hidden>
-        <div id="workspace-preview-body" class="workspace-preview-body"></div>
-      </section>
-    </aside>
-    <div id="workspace-tooltip" class="workspace-tooltip" role="tooltip" hidden></div>
+    <div id="workspace-root"></div>
     <div id="session-dialog-root"></div>
     <div id="full-access-root"></div>
     <section id="settings-page" class="settings-page" aria-label="设置页面" hidden>

@@ -54,11 +54,15 @@ body[data-workspace-view='open'] {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
+  /* The last tab's close button has a right margin; without trailing padding the scroll range stops short of it. */
+  padding-right: 32px;
 }
 #workspace-panel .workspace-file-tab {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  /* Tabs share the strip rather than overflow it: a row of documents stays whole, and each label truncates. */
+  flex: 0 1 auto;
+  min-width: 72px;
   max-width: 176px;
   border-radius: 8px;
 }
@@ -79,6 +83,7 @@ body[data-workspace-view='open'] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #workspace-panel .workspace-tab svg {
   width: 16px;

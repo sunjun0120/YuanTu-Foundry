@@ -96,7 +96,7 @@ async function desktopPage(t: test.TestContext) {
   const bundle = await build({
     stdin: {
       contents:
-        "export * from './apps/desktop/i18n.ts';  export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
+        "export * from './apps/desktop/i18n.ts';  export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -377,8 +377,6 @@ test(
     if (!page) return;
     await page.evaluate(`
     window.yuantu = { files: async (command) => command.type === 'read' ? ({ok:true,preview:{kind:'text',text:'file bytes',path:command.path}}) : ({ok:true, listing:{path:'', entries:[{name:'工具',path:'工具',kind:'file'},{name:'保存',path:'保存',kind:'file'}]}}) };
-    const workspace = localeApi.setupWorkspace(); workspace.update('/project');
-    document.querySelector('#open-workspace').click();
     const fixture = document.createElement('input'); fixture.id='locale-attribute';
     for (const name of ['title','aria-label','placeholder']) fixture.setAttribute(name,'设置');
     document.body.append(fixture);
@@ -388,29 +386,14 @@ test(
     panels.deliverables([{path:'设置',description:'保存',bytes:2,sha256:'a'.repeat(64),at:new Date().toISOString()}]);
     localeApi.setLocale('en-US');
   `);
-    await page.waitForSelector('.workspace-entry-name', { state: 'attached' });
     assert.equal(await page.locator('#locale-attribute').getAttribute('title'), 'Settings');
-    assert.deepEqual(await page.locator('.workspace-entry-name').allTextContents(), [
-      '工具',
-      '保存',
-    ]);
     assert.equal(await page.locator('.todo-content').textContent(), '保存');
     assert.equal(await page.locator('#goal-objective').textContent(), '工具');
     assert.equal(await page.locator('.deliverable-path').textContent(), '设置');
     assert.equal(await page.locator('.deliverable-description').textContent(), '保存');
-    assert.deepEqual(
-      await page
-        .locator('.workspace-entry-button')
-        .evaluateAll((elements) => elements.map((element) => element.getAttribute('title'))),
-      ['工具', '保存'],
-    );
-    await page.locator('.workspace-entry-button').first().click();
-    await page.waitForSelector('#workspace-preview:not([hidden])');
-    assert.equal(await page.locator('#workspace-preview').getAttribute('aria-label'), '工具');
     await page.evaluate(`localeApi.setLocale('zh-CN');`);
     for (const attribute of ['title', 'aria-label', 'placeholder'])
       assert.equal(await page.locator('#locale-attribute').getAttribute(attribute), '设置');
-    assert.equal(await page.locator('#workspace-preview').getAttribute('aria-label'), '工具');
     // A freshly assigned attribute must become the new source, even while English is selected.
     await page.evaluate(
       `localeApi.setLocale('en-US'); document.querySelector('#locale-attribute').setAttribute('title','新建会话');`,

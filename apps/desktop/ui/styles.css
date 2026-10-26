@@ -71,3 +71,7 @@
 #full-access-root {
   display: contents;
 }
+/* The workspace panel is a grid column of the app shell; the React host must not become the grid item itself. */
+#workspace-root {
+  display: contents;
+}

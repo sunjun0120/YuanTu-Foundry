@@ -2,7 +2,7 @@
 import '@mantine/core/styles.css';
 import { setupTasks } from './renderer-tasks.ts';
 import { setupStatistics } from './renderer-statistics.ts';
-import { setupWorkspace } from './renderer-workspace.ts';
+import { mountWorkspace } from './ui/workspace/workspace-mount.tsx';
 import { setupSubAgents } from './renderer-subagents.ts';
 import { setupMcpSettings } from './renderer-mcp.ts';
 import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
@@ -90,7 +90,7 @@ function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
 }
 setupSelectMenus();
 const statisticsView = setupStatistics();
-const workspaceView = setupWorkspace();
+const workspaceView = mountWorkspace({ files: (command) => window.yuantu.files(command) });
 const workspaceSettings = mountWorkspaceSettings(window.yuantu, { select });
 /** What a panel-level slot is given: the carrier snapshot a panel draws from, and nothing else. */
 interface PanelSlotContext {
@@ -191,7 +191,7 @@ const conversation = element('conversation');
 /** Mounted once: a slot's frames are stable across renders, so re-rendering cannot stack a panel twice. */
 const slotMounts: SlotMount<PanelSlotContext>[] = [
   mountSlot(document, element('composer-statistics'), slots, 'composer.above'),
-  mountSlot(document, element('workspace-panel'), slots, 'sidebar.right'),
+  mountSlot(document, element('workspace-root'), slots, 'sidebar.right'),
 ];
 /**
  * Mount a message-level slot into a container this view just built.
@@ -1015,6 +1015,7 @@ const disposeModelSettings = mountModelSettings(window.yuantu);
 window.addEventListener(
   'pagehide',
   () => {
+    workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();
     commandsView.dispose();

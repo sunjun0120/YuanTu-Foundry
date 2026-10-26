@@ -738,13 +738,14 @@ interface PanelTransitionProps {
 
 **规模:** 约 800–1,100 行。
 
-**进度:** 数据/controller 已完成（12 条纯测试，替换原 FakeDocument 测试）：目录读取拒绝/rejected 统一进 failures、per-path token 决出同路径胜者、两目录任意顺序、同 workspace 幂等、refresh/workspace 变更丢弃旧回答、关闭重开丢弃第一次读取、预览拒绝落 tab、diff 预览（不读文件、可替换/同元素不重建、clear 清 tab、关闭激活邻居、diff 后再打开重新读）。React 面板/树/预览与 renderer-workspace 接线待下一步。
+**进度:** 已完成。数据/controller（12 条纯测试）+ React `WorkspacePanel`/`FileTree`/`FilePreview`/`workspace-mount`；删除 898 行 `renderer-workspace.ts`。`#workspace-panel`、树/预览/tabs/resize/tooltip 等 id 全部保留；`renderer.ts` 的 `setupWorkspace` 换成 `mountWorkspace`，slot 挂载点改到 `#workspace-root`。
 
 - [x] 目录/预览失败可重试、同路径不重复读取、切换工作区拒收旧结果；并发 token 为 workspace generation + refresh round + per-path/per-tab token，不依赖组件卸载。
-- [x] 改动预览复用既有 diff 数据（`previewChanges`/`refreshChangePreview`/`clearChangePreviews` 维护 `changePreview`，同一元素不重建以保留滚动）；文件系统仍由既有 `files` bridge，controller 不触碰 Node API。
-- [ ] 运行结束触发工作区刷新一次；保留树展开与滚动位置。（`setTabScroll` 已就绪，React 面板接线时完成）
-- [ ] 文案键化；旧绑定删除；兼容 id 更新。
-- [ ] 运行 `node scripts/run-tests.mjs tests/workspace-panel-loading.test.ts tests/workspace-ui.smoke.mjs tests/backups.smoke.mjs`。已完成 `workspace-panel-loading` 12/12。
+- [x] 改动预览复用既有 diff 数据（`previewChanges`/`refreshChangePreview`/`clearChangePreviews` 维护 `changePreview`，同一元素不重建以保留滚动）；文件系统全部走 `files` bridge（open/reveal 仍走 `openWorkspacePath`），controller 不触碰 Node API；图片/HTML 预览继续按原限制与 sandbox。
+- [x] 运行结束由 `renderer.ts` 调用 `workspaceView.refresh()` 一次；窗口 focus 刷新；4 秒廉价 listing 比较（无变化不重绘）；展开状态、树滚动、每 tab 的阅读位置保留（离开 tab 前同步记录 scroll）。
+- [x] 文案键化（全部 `workspace.*`，无新增中文字面量）；旧绑定删除；兼容 id 全部保留。
+- [x] **实测坑**：React 宿主 `#workspace-root` 必须 `display: contents`，否则它成为 grid item、面板高度随内容涨到 4993px，预览不再滚动；tabs 在满行时改为共享宽度（`flex: 0 1 auto` + 省略号）而不是横向溢出；新增 Home/End/←/→ 的 roving tab 焦点（冒烟断言）。
+- [x] 验证：`workspace-panel-loading` 12/12、`desktop-sessions` 6/6（工作区段落原样通过：拖拽/键盘宽度、树、文本/markdown/图片/二进制、tab 关闭邻居、滚动位置、全屏/ Escape、窄窗）、`desktop-i18n` 7/7（去掉 legacy workspace 断言后）、`desktop` 9/9、`agent` 7/7、`workflows` 4/4、`language` 7/7、`capabilities` 3/3、`desktop-copy` 14/14；lint/i18n/typecheck/format/build 通过。
 
 #### T18: 后台进程与统计
 

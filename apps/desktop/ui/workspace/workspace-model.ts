@@ -70,6 +70,8 @@ export interface WorkspaceController {
   tab(path: string): WorkspaceTab | undefined;
   /** The directories a poll would compare: the root and every expanded directory. */
   pollPaths(): string[];
+  /** Compare the shown directories with a cheap listing; refresh only when something changed. */
+  pollForChanges(): Promise<boolean>;
   dispose(): void;
 }
 
@@ -198,6 +200,8 @@ export function createWorkspaceController(deps: {
     },
     setOpen(next) {
       open = next;
+      // Closing the panel leaves fullscreen with it; reopening starts docked.
+      if (!next) fullscreen = false;
       publish();
     },
     setFullscreen(next) {
@@ -303,6 +307,22 @@ export function createWorkspaceController(deps: {
     },
     tab: (path) => tabs.get(path),
     pollPaths: () => ['', ...expanded],
+    async pollForChanges() {
+      if (!open || (typeof document !== 'undefined' && document.hidden)) return false;
+      for (const path of ['', ...expanded]) {
+        const reply = await deps.files(path ? { type: 'list', path } : { type: 'list' });
+        if (!reply.ok || !('listing' in reply)) continue;
+        const previous = listings.get(path);
+        if (
+          previous &&
+          JSON.stringify(previous.entries) !== JSON.stringify(reply.listing.entries)
+        ) {
+          this.refresh();
+          return true;
+        }
+      }
+      return false;
+    },
     dispose() {
       disposed = true;
     },
