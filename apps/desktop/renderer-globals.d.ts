@@ -17,3 +17,11 @@ declare global {
     yuantu: DesktopBridge;
   }
 }
+
+/**
+ * Stylesheet imports are esbuild's, not TypeScript's.
+ *
+ * `renderer.ts` imports `@mantine/core/styles.css` so esbuild emits `renderer.css` beside the bundle; TypeScript has
+ * no runtime for that import and would otherwise reject the specifier.
+ */
+declare module '*.css';

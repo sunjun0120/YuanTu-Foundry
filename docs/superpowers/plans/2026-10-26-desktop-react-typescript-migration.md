@@ -565,20 +565,20 @@ interface PanelTransitionProps {
 
 #### T6: 单 provider、Mantine 包装层、翻译与 select 隔离
 
-**Files:** 新增 `ui/legacy/mount-region.tsx`、`ui/providers.tsx`、`ui/styles.css`、`ui/primitives.tsx`、`ui/i18n.ts`、`ui/ErrorBoundary.tsx`；最小修改 `main.ts`（仅当 T3 启用轮换路径）、`index.html`（`desktop-root` 容器与 CSS link）、`scripts/build-desktop.mjs`、`i18n.ts`、`renderer-select-menu.ts`；新增 `tests/desktop-react.smoke.mjs`（`@test-serial desktop-ui`），将新 smoke 加入 `smoke:desktop`；扩展 `tests/desktop-i18n.test.ts`，调整 `tests/desktop-smoke-support.mjs` 及相关交互 helper。
+**Files:** 新增 `ui/legacy/mount-region.tsx`、`ui/providers.tsx`、`ui/primitives.tsx`、`ui/i18n.ts`、`ui/ErrorBoundary.tsx`、`ui/App.tsx`；修改 `ui/styles.css`、`index.html`（`desktop-root` 容器与 CSS link）、`renderer-globals.d.ts`（`*.css` 声明）、`i18n-workspace.ts`（`ui.renderFailed`/`ui.retry`）、`i18n.ts`（walker 隔离已在 T2）、`renderer-select-menu.ts`、`renderer.ts`（挂载 React 根、导入 Mantine 样式）；新增 `tests/desktop-react.smoke.mjs`（`@test-serial desktop-ui`），加入 `smoke:desktop`；`main.ts` 不修改（静态 nonce）。
 
-**规模:** 约 700–1,000 行。
+**规模:** 约 600–850 行。
 
-**Interfaces:** `mountRegion(container: HTMLElement, element: ReactNode): () => void` 注册同一 React 根内的 portal，返回幂等注销函数；`useLocale(): UiLanguage` 订阅已有 `onLocaleChange`。项目 `Select` 以 Mantine 风格的 `value: string | null`、`onChange(value: string | null): void` 受控，边界适配旧空值；`Dialog` 包装 Mantine Modal。provider 接 `getStyleNonce`（T3）。
+**Interfaces:** `mountRegion(key: string, container: HTMLElement, element: ReactNode): () => void` 注册同一 React 根内的 portal，返回幂等注销函数；`RegionHost` 订阅注册表；`useLocale(): UiLanguage`；`DesktopProviders({ runtime, actions, children })`；`mountDesktopApp({ runtime, actions }): () => void`；`Dialog` 包装 Mantine Modal；`selectValue('')` 适配旧空值。
 
-- [ ] 参考现有 `desktop-i18n.test.ts`，用 esbuild 编译 TSX 夹具并在真实 Electron 中加载；测试文件带 `@test-serial desktop-ui`，所有夹具写入隔离目录。不让 Node 原生执行器直接 import `.tsx`，不扩展手写 FakeNode 来模拟 React reconciler。
-- [ ] 按 §8 接入静态 nonce 的 provider 侧；`renderer.css` 由 esbuild 输出、`ui/styles.css` 由构建复制为 `ui.css`，并在 `index.html` 追加 link（顺序 `renderer.css` → 六份旧 CSS → `ui.css`）；安装包资源复核。
-- [ ] 添加中→英→中、动态 label/title/aria-label 和模型中文原文保留测试。断言 React 文本节点只由 React 更新，旧 walker 不改写 `data-react-owned` 的节点或属性。
-- [ ] 修改旧 walker/upgrader 的隔离规则；React 区域和弹层目标同时标记。建立一个 provider/RegionHost，以 createPortal 挂载各区域，注销区域不重建 provider；保留非 React 区域原有翻译并停止对应 setup。
-- [ ] 实现 Button/Input/Textarea/Select/Combobox/Menu/Dialog/Drawer/Popover/Tooltip/Tabs 的项目包装；应用统一默认尺寸、主题变量和必要的业务 class/关键 ID（经 T4 登记表）。原生 `<select>` 如需过渡，放在 React 所有区域内且不再升级；不为测试保留第二个可交互隐藏控件。
-- [ ] 随控件迁移更新 smoke 的交互 helper：原生 select 的 `selectOption`/`.value` 读取改为操作真实 combobox/option 并断言可见选值；保留最终模型/权限预设和命令参数的行为断言，不能仅改成点击不抛错。
-- [ ] 在真实页面验证方向键/Enter/Escape/Tab、焦点返回、禁用项、下拉分组，以及首次打开弹层的主题和定位；组件 render 抛错时 ErrorBoundary 能展示本地化错误并允许重试。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-i18n.test.ts tests/desktop-layout.smoke.mjs`；依赖产品 dist 的 smoke 运行前先 `npm run build`。
+- [ ] 用 esbuild 编译 TSX 探针并在真实 Electron 中加载产品 `index.html`（保留 CSP/meta/link 顺序）；夹具写入隔离目录，测试带 `@test-serial desktop-ui`。已完成 `tests/desktop-react.smoke.mjs`。
+- [ ] 按 §8 接入静态 nonce 的 provider；`renderer.css` 由 esbuild 输出、`ui.css` 由构建复制，`index.html` 顺序为 `renderer.css` → 六份旧 CSS → `ui.css`；smoke 断言构建产物存在与顺序。
+- [ ] 中→英→中、动态 placeholder 与 React 自有中文原文保留：walker 只翻译旧节点，`[data-react-owned]` 子树（含 React 渲染的中文原文）不被改写；select upgrader 不包裹 React 区域的 `<select>`。已由 smoke 断言，并做过负向控制（去掉 `data-react-owned` 标记后该用例失败）。
+- [ ] 一个 provider/RegionHost，`createPortal` 挂载各区域；注销区域不重建 provider；非 React 区域继续由 walker 翻译、对应 `setup*` 由区域任务停止。已实现（区域本身在 T10 起迁入）。
+- [ ] `primitives.tsx` 以 Mantine 再导出为主（尺寸/圆角等默认值留给 T7 的 theme `components`），只保留两个真正需要项目契约的：`Dialog`（busy 时禁用 Esc/遮罩关闭）与 `selectValue`；未引入第二套 Select。
+- [ ] **记录在案的取舍**：主题默认值与 `resolveColorScheme` 属 T7，本任务 provider 只接 `getStyleNonce` 与 `MotionConfig reducedMotion="user"`（tokens 在 T9）；`InlineStyles` 等组件的业务 class/关键 ID 由迁入区域时经 T4 登记表处理；`tests/desktop-smoke-support.mjs` 的交互 helper 迁移随控件迁移（T12/T13）进行，现在改会让仍用原生控件的 smoke 失效。
+- [ ] 在真实页面验证 ErrorBoundary 的本地化错误与重试、Dialog 的 Escape 关闭、Mantine 按钮/输入样式与 CSS 变量生效；方向键/Tab/下拉分组等键盘细节随对应控件迁入时逐个补测。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react.smoke.mjs tests/desktop-i18n.test.ts tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-sessions.smoke.mjs`，依赖 dist 的 smoke 先 `npm run build`。已完成：2/2、9/9、4/4、7/7、6/6。
 
 #### T7: 主题与 UI 设置单一数据源
 

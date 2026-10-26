@@ -19,6 +19,8 @@ let open: { close(focus: boolean): void; popup: HTMLElement } | null = null;
 function upgrade(select: HTMLSelectElement): void {
   if (upgraded.has(select) || select.multiple || select.size > 1 || 'native' in select.dataset)
     return;
+  // A select inside a React region belongs to React: wrapping it in a button would move the node React owns.
+  if (select.closest('[data-react-owned]')) return;
   upgraded.add(select);
   const wrap = document.createElement('span');
   const trigger = document.createElement('button');

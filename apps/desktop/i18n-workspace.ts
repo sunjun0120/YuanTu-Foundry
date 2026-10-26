@@ -67,6 +67,11 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.sessionActionsFor': ['会话操作：{name}', 'Session actions: {name}'],
   'ui.currentWorkspacePrefix': ['当前工作区：', 'Current workspace: '],
   'ui.disabled': ['已停用', 'Disabled'],
+  'ui.renderFailed': [
+    '界面渲染失败；可以重试。',
+    'The interface failed to render. You can try again.',
+  ],
+  'ui.retry': ['重试', 'Retry'],
   'session.actions': ['会话操作', 'Session actions'],
   'session.rename': ['重命名', 'Rename'],
   'session.archive': ['归档', 'Archive'],

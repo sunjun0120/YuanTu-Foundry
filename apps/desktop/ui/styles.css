@@ -9,3 +9,11 @@
  * It is deliberately not a second theme: the palette is the existing `--surface/--sidebar/--raised/--hover/--line/
  * --ink/--muted/--accent` set, and Mantine's variables are mapped onto it rather than duplicated here.
  */
+
+/*
+ * The root is a portal host, not a layout box: regions draw into legacy containers, so the root itself must not
+ * introduce a block in the page flow while the old body grid is still in charge (T24 removes that grid).
+ */
+#desktop-root {
+  display: contents;
+}

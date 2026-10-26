@@ -1,3 +1,5 @@
+// Mantine's static stylesheet: esbuild emits it beside the bundle as `renderer.css`, which the page links first.
+import '@mantine/core/styles.css';
 import { setupTasks } from './renderer-tasks.ts';
 import { setupStatistics } from './renderer-statistics.ts';
 import { setupWorkspace } from './renderer-workspace.ts';
@@ -8,6 +10,7 @@ import type { DesktopBridge, DesktopReply } from './contract.ts';
 import { carrierErrorText } from './carrier-errors.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import { createDesktopActions } from './ui/actions.ts';
+import { mountDesktopApp } from './ui/App.tsx';
 import { createDesktopRuntime } from './ui/runtime.ts';
 import { createPendingOperations } from './ui/ui-state.ts';
 import type { Message } from '../../packages/protocol/index.ts';
@@ -1009,6 +1012,9 @@ permissionSettings = setupPermissionSettings(
   () => Boolean(state?.ready),
   (mode) => sandboxInitialization.setMode(mode),
 );
+// The React root is created once, after the legacy DOM exists, and owns only the containers regions hand it.
+const disposeDesktopUi = mountDesktopApp({ runtime, actions });
+window.addEventListener('pagehide', disposeDesktopUi, { once: true });
 // The runtime subscribes first and then asks for the initial snapshot, so nothing published in between is lost.
 void runtime
   .start()
