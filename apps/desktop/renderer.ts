@@ -816,6 +816,7 @@ const sessionPanels = setupSessionPanels(
 );
 
 const questionsView = setupQuestions({
+  markdownActions,
   invoke,
   setError: (message) => {
     localError = message;

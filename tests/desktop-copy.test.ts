@@ -319,8 +319,8 @@ test('the plan approval question is read in Chinese, and the digest stays out of
   const copy = localizedQuestion('Plan approval', question, false);
   assert.equal(copy.header, '计划批准');
   assert.match(copy.question, /批准这份计划，并在本轮开始执行吗？/);
-  assert.match(copy.question, /# README 补充/);
-  assert.doesNotMatch(copy.question, /Plan digest/);
+  assert.equal(copy.plan, '# README 补充\n\n1. 读取 README');
+  assert.doesNotMatch(copy.plan, /Plan digest/);
   assert.equal(copy.label('Approve and execute'), '批准并执行');
   assert.equal(copy.label('Keep planning'), '继续修改计划');
   assert.equal(
@@ -335,6 +335,8 @@ test('the plan approval question is read in Chinese, and the digest stays out of
   // The English interface keeps the kernel's wording.
   const english = localizedQuestion('Plan approval', question, true);
   assert.equal(english.header, 'Plan approval');
+  assert.equal(english.question, 'Approve this plan and start carrying it out in this run?');
+  assert.equal(english.plan, '# README 补充\n\n1. 读取 README');
   assert.equal(english.label('Approve and execute'), 'Approve and execute');
 });
 

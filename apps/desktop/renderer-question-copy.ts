@@ -28,6 +28,8 @@ const PLAN_DIGEST = /^Plan digest: .*$/m;
 export interface QuestionCopy {
   header: string;
   question: string;
+  /** The plan body is ordinary reading content, separate from the short approval prompt. */
+  plan?: string;
   /** The label as it should be read. The value sent back is the caller's original string. */
   label(original: string): string;
   description(original: string): string;
@@ -38,17 +40,15 @@ export function localizedQuestion(
   question: string,
   english: boolean,
 ): QuestionCopy {
-  if (english) return { header, question, label: identity, description: identity };
   const isPlan = header.trim() === PLAN_HEADER;
   if (!isPlan) return { header, question, label: identity, description: identity };
+  const [intro = '', ...lines] = question.replace(PLAN_DIGEST, '').trim().split('\n');
+  const plan = lines.join('\n').trim();
   return {
-    header: '计划批准',
-    question: question
-      .replace(PLAN_DIGEST, '')
-      .replace(PLAN_INTRO, '批准这份计划，并在本轮开始执行吗？')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim(),
-    label: (value) => PLAN_LABELS[value] ?? value,
-    description: (value) => PLAN_DESCRIPTIONS[value] ?? value,
+    header: english ? header : '计划批准',
+    question: english ? intro : intro.replace(PLAN_INTRO, '批准这份计划，并在本轮开始执行吗？'),
+    ...(plan ? { plan } : {}),
+    label: english ? identity : (value) => PLAN_LABELS[value] ?? value,
+    description: english ? identity : (value) => PLAN_DESCRIPTIONS[value] ?? value,
   };
 }

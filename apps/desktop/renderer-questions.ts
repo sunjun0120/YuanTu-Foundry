@@ -11,6 +11,7 @@ import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/con
 import type { PendingQuestion } from '../../packages/client/session-controller.ts';
 import { format, locale, t } from './i18n.ts';
 import { localizedQuestion } from './renderer-question-copy.ts';
+import { renderMarkdown, type MarkdownActions } from './markdown.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -29,6 +30,7 @@ function node<K extends keyof HTMLElementTagNameMap>(
 }
 
 export function setupQuestions(actions: {
+  markdownActions: MarkdownActions;
   invoke(command: CarrierCommand): Promise<CarrierSnapshot | null>;
   setError(message: string | null): void;
   requestRender(): void;
@@ -71,7 +73,16 @@ export function setupQuestions(actions: {
     ]);
     if (nextKey === questionKey) return;
     questionKey = nextKey;
-    required('questions').replaceChildren(
+    const container = required('questions');
+    // A selection or the submitting state redraws the card while the person is reading its bottom.
+    // Keep that position only for the same question; paging to a different question starts at its top.
+    const scroll = new Map(
+      Array.from(container.querySelectorAll<HTMLElement>('.question-card'), (card) => [
+        card.dataset.questionId!,
+        { question: card.dataset.activeQuestion, top: card.scrollTop },
+      ]),
+    );
+    container.replaceChildren(
       ...questions.map((item) => {
         const draft = questionState(item.id);
         const total = item.request.questions.length;
@@ -87,6 +98,8 @@ export function setupQuestions(actions: {
         const collapsed = questionCollapsed.has(item.id);
         const card = node('section', '', 'question-card');
         card.dataset.questionId = item.id;
+        card.dataset.activeQuestion = question.id;
+        if (copy.plan) card.classList.add('question-plan-card');
         const head = node('div', '', 'question-head');
         const headings = node('div', '', 'question-headings');
         headings.append(
@@ -112,6 +125,11 @@ export function setupQuestions(actions: {
         card.append(head);
         const body = node('div', '', 'question-body');
         body.hidden = collapsed;
+        if (copy.plan) {
+          const plan = renderMarkdown(copy.plan, actions.markdownActions);
+          plan.classList.add('question-plan');
+          body.append(plan);
+        }
         if (item.request.subagent)
           headings.append(
             node(
@@ -233,6 +251,11 @@ export function setupQuestions(actions: {
         return card;
       }),
     );
+    for (const card of container.querySelectorAll<HTMLElement>('.question-card')) {
+      const previous = scroll.get(card.dataset.questionId!);
+      if (previous && previous.question === card.dataset.activeQuestion)
+        card.scrollTop = previous.top;
+    }
   }
   /**
    * Ending a question without an answer: the model is told nobody answered and proceeds on its own assumption.

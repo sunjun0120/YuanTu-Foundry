@@ -680,6 +680,45 @@ body[data-page='background'] {
 .question-body {
   margin-top: 14px;
 }
+.question-headings {
+  min-width: 0;
+}
+.question-plan-card .question-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+.question-plan {
+  margin-bottom: 16px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.question-plan :is(h1, h2, h3, h4, h5, h6) {
+  margin: 14px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.question-plan > :first-child {
+  margin-top: 0;
+}
+.question-plan p {
+  margin: 6px 0;
+}
+.question-plan :is(ol, ul) {
+  margin: 10px 0;
+  padding-left: 24px;
+}
+.question-plan li {
+  margin: 8px 0;
+  padding-left: 3px;
+}
+.question-plan li::marker {
+  color: var(--muted);
+}
 .question-options {
   display: flex;
   flex-direction: column;

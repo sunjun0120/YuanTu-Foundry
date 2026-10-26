@@ -96,7 +96,7 @@ async function desktopPage(t: test.TestContext) {
   const bundle = await build({
     stdin: {
       contents:
-        "export * from './apps/desktop/i18n.ts'; export {setupSessionList} from './apps/desktop/renderer-session-list.ts'; export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupWorkspaceMaintenance} from './apps/desktop/renderer-workspace-maintenance.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts';",
+        "export * from './apps/desktop/i18n.ts'; export {setupSessionList} from './apps/desktop/renderer-session-list.ts'; export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupWorkspaceMaintenance} from './apps/desktop/renderer-workspace-maintenance.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -108,6 +108,106 @@ async function desktopPage(t: test.TestContext) {
   await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
   return page;
 }
+
+async function planApprovalPage(t: test.TestContext) {
+  const page = await desktopPage(t);
+  if (!page) return null;
+  await page.setViewportSize({ width: 1100, height: 700 });
+  for (const file of ['styles.css', 'styles-panels.css', 'layout.css', 'layout-surfaces.css'])
+    await page.addStyleTag({
+      content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
+    });
+  await page.evaluate(String.raw`
+    localeApi.setLocale('zh-CN');
+    document.documentElement.dataset.theme='dark';
+    document.querySelector('#welcome').hidden=true;
+    document.querySelector('#messages').style.height='1800px';
+    window.planQuestions=[{id:'approval',request:{questions:[{
+      id:'approve',header:'Plan approval',
+      question:['Approve this plan and start carrying it out in this run?','','# 弹幕游戏','','使用 HTML + Canvas 2D 实现。','',
+        ...Array.from({length:4},(_,i)=>(i+1)+'. '+['检查静态资源约定','创建游戏页面','实现核心循环','验证交付结果'][i]+'：'+('保留现有配置，完成本步骤后验证结果。'.repeat(12))),
+        '','Plan digest: f04f4f93e4c9…'].join('\n'),
+      options:[{label:'Approve and execute',description:'Lift read-only mode now and carry out the plan in this run.'},{label:'Keep planning'}]
+    }]}}];
+    window.questionView=localeApi.setupQuestions({
+      markdownActions:{copy:async()=>{},open:async()=>{}},
+      invoke:command=>{window.answerCommand=command;return new Promise(resolve=>window.finishAnswer=resolve)},
+      setError:()=>{},requestRender:()=>questionView.render(planQuestions)
+    });
+    questionView.render(planQuestions);
+    const conversation=document.querySelector('#conversation');
+    conversation.scrollTop=conversation.scrollHeight;
+  `);
+  return page;
+}
+
+test(
+  'plan approval separates the prompt from the plan and displays each numbered step on its own line',
+  { timeout: 30000, skip: electronSkip },
+  async (t) => {
+    const page = await planApprovalPage(t);
+    if (!page) return;
+    assert.equal(
+      await page.locator('#questions .question-title').innerText(),
+      '批准这份计划，并在本轮开始执行吗？',
+    );
+    const steps = page.locator('#questions .question-plan ol > li');
+    assert.equal(await steps.count(), 4);
+    const appearance = await steps.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        top: node.getBoundingClientRect().top,
+        bottom: node.getBoundingClientRect().bottom,
+        size: parseFloat(getComputedStyle(node).fontSize),
+        weight: Number(getComputedStyle(node).fontWeight),
+      })),
+    );
+    assert.ok(appearance.every((step) => step.size <= 14 && step.weight <= 400));
+    assert.ok(appearance.slice(1).every((step, index) => step.top >= appearance[index]!.bottom));
+    assert.equal(await page.locator('#questions .question-plan h1').innerText(), '弹幕游戏');
+    assert.doesNotMatch(await page.locator('#questions').innerText(), /Plan digest/);
+  },
+);
+
+test(
+  'selecting and submitting plan approval preserves the card and conversation scroll positions',
+  { timeout: 30000, skip: electronSkip },
+  async (t) => {
+    const page = await planApprovalPage(t);
+    if (!page) return;
+    const option = page.locator('.question-option').first();
+    await option.scrollIntoViewIfNeeded();
+    const scroll = () =>
+      page.evaluate(() => ({
+        card: document.querySelector('.question-card')!.scrollTop,
+        conversation: document.querySelector('#conversation')!.scrollTop,
+      }));
+    const before = await scroll();
+    assert.ok(before.card > 100, 'the plan must require scrolling to reach approval');
+    assert.ok(before.conversation > 100, 'the conversation must already be scrolled');
+    await option.click();
+    const selected = await scroll();
+    assert.ok(Math.abs(selected.card - before.card) < 4, JSON.stringify({ before, selected }));
+    assert.ok(Math.abs(selected.conversation - before.conversation) < 4);
+    assert.equal(
+      await page.locator('.question-option.selected').innerText(),
+      await option.innerText(),
+    );
+    await page.locator('.question-submit').scrollIntoViewIfNeeded();
+    const submitting = await scroll();
+    await page.locator('.question-submit').click();
+    const submitted = await scroll();
+    assert.ok(
+      Math.abs(submitted.card - submitting.card) < 4,
+      JSON.stringify({ submitting, submitted }),
+    );
+    assert.ok(Math.abs(submitted.conversation - submitting.conversation) < 4);
+    assert.equal(await page.locator('.question-submit').isDisabled(), true);
+    assert.deepEqual(await page.evaluate('answerCommand.answers'), [
+      { id: 'approve', selected: ['Approve and execute'] },
+    ]);
+    await page.evaluate('finishAnswer(null)');
+  },
+);
 
 test(
   'background entry follows current jobs even after a previous session had jobs',
