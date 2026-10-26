@@ -1,11 +1,11 @@
 /**
  * Which settings section is showing, decided in one place instead of by each section.
  *
- * The page has three panels and three modules that could each hide the other two — `renderer-settings.ts`
- * (model), `renderer-general-settings.ts` (general) and `renderer-mcp.ts` (MCP) — and every one of them used to
- * write its own list of the panels to hide. That shape is what turns "add a section" into "update every
- * switcher, and a missed update is two panels drawn at once", which is exactly what `tests/desktop.smoke.mjs`
- * asserts cannot happen ("must display exactly one settings panel").
+ * The page has four panels and several modules that could each hide the others — `renderer-settings.ts` (model),
+ * `ui/settings/mount.tsx` (general, now React) and `renderer-mcp.ts` (MCP) — and every one of them used to write
+ * its own list of the panels to hide. That shape is what turns "add a section" into "update every switcher, and a
+ * missed update is two panels drawn at once", which is exactly what `tests/desktop.smoke.mjs` asserts cannot happen
+ * ("must display exactly one settings panel").
  *
  * So the ids are data here, and a section shows itself by naming itself. The map is panel id to the sidebar
  * button that selects it, because the two are not always spelled alike: the MCP button exists only after that

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
-import { artifactPath } from './desktop-smoke-support.mjs';
+import { artifactPath, chooseSelectOption } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
@@ -213,7 +213,7 @@ test(
     const before = await collect();
     // The language picker lives in the first section; the walk left another one open.
     await page.locator('.settings-sidebar nav button').first().click();
-    await page.locator('#ui-language').selectOption('en-US');
+    await chooseSelectOption(page, 'ui-language', 'English');
     await page.waitForFunction(() => document.documentElement.lang === 'en-US');
     const after = await collect();
     await toChat();
@@ -255,13 +255,13 @@ test(
     // The same retained error is translated again when the user changes language.
     await page.locator('#open-settings').click();
     await page.locator('.settings-sidebar nav button').first().click();
-    await page.locator('#ui-language').selectOption('zh-CN');
+    await chooseSelectOption(page, 'ui-language', 'Chinese');
     await waitForPage(page, () => document.documentElement.lang === 'zh-CN');
     await toChat();
     assert.match(await page.locator('#error').textContent(), /不属于当前会话/);
     await page.locator('#open-settings').click();
     await page.locator('.settings-sidebar nav button').first().click();
-    await page.locator('#ui-language').selectOption('en-US');
+    await chooseSelectOption(page, 'ui-language', 'English');
     await waitForPage(page, () => document.documentElement.lang === 'en-US');
     await toChat();
     assert.match(await page.locator('#error').textContent(), /does not belong/);

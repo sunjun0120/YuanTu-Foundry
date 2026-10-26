@@ -11,6 +11,7 @@ import { carrierErrorText } from './carrier-errors.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import { createDesktopActions } from './ui/actions.ts';
 import { mountDesktopApp } from './ui/App.tsx';
+import { mountGeneralSettings } from './ui/settings/mount.tsx';
 import { createDesktopRuntime } from './ui/runtime.ts';
 import { createPendingOperations } from './ui/ui-state.ts';
 import type { Message } from '../../packages/protocol/index.ts';
@@ -36,7 +37,6 @@ import {
   providerDegradedText,
 } from './renderer-status.ts';
 import { setupSessionManagement } from './session-management.ts';
-import { setupGeneralSettings } from './renderer-general-settings.ts';
 import { setupSandboxInitialization } from './renderer-sandbox-setup.ts';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
 import { setupArchivedSessions } from './renderer-archived-sessions.ts';
@@ -974,7 +974,6 @@ new ResizeObserver(() => {
   );
   updateJumpButton();
 }).observe(element('chat-page').querySelector('.composer-area')!);
-setupGeneralSettings();
 const sandboxInitialization = setupSandboxInitialization();
 modelSettings = setupModelSettings(
   () =>
@@ -1014,7 +1013,15 @@ permissionSettings = setupPermissionSettings(
 );
 // The React root is created once, after the legacy DOM exists, and owns only the containers regions hand it.
 const disposeDesktopUi = mountDesktopApp({ runtime, actions });
-window.addEventListener('pagehide', disposeDesktopUi, { once: true });
+const disposeGeneralSettings = mountGeneralSettings(window.yuantu);
+window.addEventListener(
+  'pagehide',
+  () => {
+    disposeGeneralSettings();
+    disposeDesktopUi();
+  },
+  { once: true },
+);
 // The runtime subscribes first and then asks for the initial snapshot, so nothing published in between is lost.
 void runtime
   .start()

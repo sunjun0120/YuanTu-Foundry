@@ -82,7 +82,7 @@ export const panelMessages: Record<string, [string, string]> = {
     'Inspect upgrade.json and upgrade.log under upgrades in the user profile. After closing the application and all Hosts/CLIs, use maintenance-node.exe and upgrade-worker.cjs in that directory to run rollback <absolute upgrade.json path> --offline. Retain recovery copies and the current database; do not open a newer schema with an old application.',
   ],
   'ui.addAttachment': ['添加图片或文件', 'Add images or files'],
-  'general.languageZh': ['中文', '中文'],
+  'general.languageZh': ['中文', 'Chinese'],
   'general.languageEn': ['English', 'English'],
   'general.appearanceSystem': ['跟随系统', 'System'],
   'general.appearanceLight': ['浅色', 'Light'],
@@ -196,6 +196,8 @@ export const panelMessages: Record<string, [string, string]> = {
   'mcp.revoking': ['正在撤销授权…', 'Revoking authorization...'],
   'mcp.revoked': ['MCP 授权已撤销。', 'MCP authorization revoked.'],
   'general.title': ['通用设置', 'General'],
+  'ui.settingsPage': ['偏好设置', 'Preferences'],
+  'ui.settingsMenu': ['设置分类', 'Settings sections'],
   'general.description': [
     '调整界面语言、外观和阅读字号。',
     'Adjust the interface language, appearance, and text size.',

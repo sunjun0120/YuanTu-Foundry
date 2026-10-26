@@ -43,6 +43,22 @@ export async function choosePermissionPreset(page, preset) {
   );
 }
 
+/**
+ * Choose a value from a Mantine `Select` by the label a person reads.
+ *
+ * A Mantine Select is not a `<select>`: the input is read-only and shows the option's *label*, and the options live
+ * in a portal the select opens. `selectOption()` therefore cannot drive it — clicking the field and then the option
+ * is what a person does.
+ *
+ * The wait is on the list closing, not on the field's value: choosing a language changes that option's label in the
+ * same save (中文 becomes "Chinese"), so a value comparison would wait forever.
+ */
+export async function chooseSelectOption(page, id, label) {
+  await page.locator(`#${id}`).click();
+  await page.getByRole('option', { name: label, exact: true }).click();
+  await page.getByRole('listbox').waitFor({ state: 'hidden' });
+}
+
 /** Polls `check` every 100 ms until it is truthy, failing after `ms`. */
 export async function waitFor(check, ms = 15000) {
   const end = Date.now() + ms;

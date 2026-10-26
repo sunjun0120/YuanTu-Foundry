@@ -27,6 +27,8 @@ const REPO_ALIASES = {
   '@repo/actions': path.join(uiDir, 'actions.ts'),
   '@repo/state': path.join(uiDir, 'ui-state.ts'),
   '@repo/select-menu': path.join(projectRoot, 'apps/desktop/renderer-select-menu.ts'),
+  '@repo/settings': path.join(uiDir, 'settings/GeneralSettings.tsx'),
+  '@repo/settings-model': path.join(uiDir, 'settings/settings-model.ts'),
 };
 
 function installedElectron() {
@@ -210,6 +212,67 @@ mountRegion('shell', document.getElementById('shell-mount'), <ShellProbe />);
 window.__ui = { setAside };
 `;
 
+/**
+ * The general settings form over a bridge whose saves are refused.
+ *
+ * The controller's save queue is unit-tested, but the wiring between it and the controls is not: a refused save has
+ * to reach the screen as a message and put the control back to the stored value. Only a real render can show that.
+ */
+const SETTINGS_ENTRY = `
+import { useEffect, useMemo } from 'react';
+import { mountDesktopApp } from '@repo/app';
+import { mountRegion } from '@repo/regions';
+import { createDesktopRuntime } from '@repo/runtime';
+import { createDesktopActions } from '@repo/actions';
+import { createPendingOperations } from '@repo/state';
+import { GeneralSettings } from '@repo/settings';
+import { createGeneralSettingsController } from '@repo/settings-model';
+
+const stored = {
+  language: 'zh-CN',
+  appearance: 'system',
+  fontSize: 'medium',
+  notifications: true,
+};
+const bridge = { subscribe: () => () => {}, invoke: async () => ({ ok: true, state: {} }) };
+mountDesktopApp({
+  runtime: createDesktopRuntime(bridge),
+  actions: createDesktopActions({
+    bridge,
+    getState: () => null,
+    setError: () => {},
+    requestRender: () => {},
+    isSending: () => false,
+    clearComposer: () => {},
+    focusPrompt: () => {},
+    pending: createPendingOperations(),
+  }),
+});
+
+function SettingsProbe() {
+  const controller = useMemo(
+    () =>
+      createGeneralSettingsController({
+        bridge: {
+          uiSettings: async (command) =>
+            command.type === 'get'
+              ? { ok: true, kind: 'settings', settings: stored }
+              : { ok: false, error: 'save refused by test' },
+        },
+        apply: () => {},
+      }),
+    [],
+  );
+  useEffect(() => {
+    void controller.load();
+    return () => controller.dispose();
+  }, [controller]);
+  return <GeneralSettings controller={controller} />;
+}
+
+mountRegion('settings', document.getElementById('settings-mount'), <SettingsProbe />);
+`;
+
 async function probePage(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-react-smoke-'));
   let app;
@@ -373,6 +436,88 @@ async function shellPage(t) {
   const page = await app.firstWindow();
   await page.setViewportSize({ width: 1200, height: 800 });
   return page;
+}
+
+/** A one-panel page for the settings form; the product document's CSP and nonce are reused. */
+async function settingsPage(t) {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settings-smoke-'));
+  let app;
+  t.after(async () => {
+    await app?.close().catch(() => {});
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const entry = path.join(root, 'settings.tsx');
+  await writeFile(entry, SETTINGS_ENTRY, 'utf8');
+  const bundle = await build({
+    entryPoints: [entry],
+    outfile: path.join(root, 'fixture.js'),
+    bundle: true,
+    write: false,
+    format: 'iife',
+    platform: 'browser',
+    jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"production"' },
+    nodePaths: [path.join(projectRoot, 'node_modules')],
+    alias: REPO_ALIASES,
+    logLevel: 'silent',
+  });
+  const fixtureJs = (bundle.outputFiles ?? []).find((file) => file.path.endsWith('.js'))?.text;
+  assert.ok(fixtureJs, 'the settings bundle should build');
+  await writeFile(path.join(root, 'fixture.js'), fixtureJs, 'utf8');
+  await copyFile(
+    path.join(projectRoot, 'dist/desktop/renderer.css'),
+    path.join(root, 'renderer.css'),
+  );
+  await copyFile(path.join(projectRoot, 'dist/desktop/ui.css'), path.join(root, 'ui.css'));
+  const product = await readFile(path.join(projectRoot, 'apps/desktop/index.html'), 'utf8');
+  const csp = /content="(default-src[^"]+)"/.exec(product)?.[1];
+  const nonce = /<meta name="yuantu-style-nonce" content="([^"]+)"/.exec(product)?.[1];
+  assert.ok(csp && nonce, 'the product document owns the CSP and nonce this fixture must reuse');
+  await writeFile(
+    path.join(root, 'index.html'),
+    [
+      '<!doctype html>',
+      '<html lang="zh-CN" data-theme="dark">',
+      '  <head>',
+      '    <meta charset="UTF-8" />',
+      `    <meta http-equiv="Content-Security-Policy" content="${csp}" />`,
+      `    <meta name="yuantu-style-nonce" content="${nonce}" />`,
+      `    <style nonce="${nonce}">html, body { margin: 0; padding: 16px; }</style>`,
+      '    <link rel="stylesheet" href="./renderer.css" />',
+      '    <link rel="stylesheet" href="./ui.css" />',
+      '  </head>',
+      '  <body>',
+      '    <div id="desktop-root"></div>',
+      '    <div id="settings-mount"></div>',
+      '    <script src="./fixture.js"></script>',
+      '  </body>',
+      '</html>',
+    ].join('\n'),
+    'utf8',
+  );
+  const main = path.join(root, 'main.cjs');
+  await writeFile(
+    main,
+    `const { app, BrowserWindow } = require('electron');\n` +
+      `app.whenReady().then(() => {\n` +
+      `  const win = new BrowserWindow({ show: true, width: 900, height: 700, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });\n` +
+      `  win.loadFile(${JSON.stringify(path.join(root, 'index.html'))});\n` +
+      `});\n` +
+      `app.on('window-all-closed', () => app.quit());\n`,
+  );
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  try {
+    app = await electron.launch({
+      executablePath: String(electronPath),
+      args: [main, `--user-data-dir=${path.join(root, 'profile')}`],
+      env,
+    });
+  } catch (error) {
+    t.skip(`Electron could not launch on this host: ${error.message}`);
+    return null;
+  }
+  return app.firstWindow();
 }
 
 test('the build ships both stylesheets in the documented order', async () => {
@@ -576,5 +721,26 @@ test(
       Math.abs(small.mainHeight - 560) <= 1,
       'the shell keeps the window height when it shrinks',
     );
+  },
+);
+
+test(
+  'a refused general-settings save shows its reason and rolls the control back',
+  { skip: electronSkip },
+  async (t) => {
+    const page = await settingsPage(t);
+    if (!page) return;
+    await page.waitForSelector('#ui-appearance');
+    assert.equal(await page.locator('#ui-appearance').inputValue(), '跟随系统');
+    await page.locator('#ui-appearance').click();
+    await page.getByRole('option', { name: '深色', exact: true }).click();
+    const alert = page.locator('[data-settings-error]');
+    await alert.waitFor();
+    assert.match(await alert.innerText(), /save refused by test/);
+    // The form must never show a value that is not stored: the refusal puts the control back.
+    await page.waitForFunction(
+      () => document.querySelector('#ui-appearance')?.value === '跟随系统',
+    );
+    assert.equal(await page.locator('#ui-appearance').inputValue(), '跟随系统');
   },
 );

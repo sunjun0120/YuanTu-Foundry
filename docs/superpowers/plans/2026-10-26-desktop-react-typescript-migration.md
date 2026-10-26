@@ -630,18 +630,20 @@ interface PanelTransitionProps {
 
 #### T10: 设置骨架与通用设置
 
-**Files:** 新增 `ui/settings/SettingsPage.tsx`、`GeneralSettings.tsx`、`settings-model.ts`；修改 `renderer-general-settings.ts`、`renderer-panels.ts` 的接入点并停用对应 setup；迁移 `tests/general-settings-pending.test.ts` 到纯 controller 测试；扩展 `tests/desktop-react.smoke.mjs`、`tests/settings.smoke.mjs`、`tests/desktop-language.smoke.mjs`。
+**Files:** 新增 `ui/settings/SettingsPage.tsx`、`GeneralSettings.tsx`、`settings-model.ts`、`mount.tsx`（legacy 接缝）；删除 `renderer-general-settings.ts`；修改 `renderer.ts`、`renderer-panels.ts` 注释、`i18n-panels.ts`（新增 `ui.settingsPage`/`ui.settingsMenu`，English 下 `general.languageZh` 用 `Chinese`）；迁移 `tests/general-settings-pending.test.ts` 到纯 controller 测试；新增 `tests/desktop-smoke-support.mjs` 的 `chooseSelectOption`；扩展 `tests/desktop-react.smoke.mjs`、`settings.smoke.mjs`、`desktop-language.smoke.mjs`、`desktop-layout.smoke.mjs`。
 
-**规模:** 约 600–900 行。
+**规模:** 约 650–950 行。
 
-**Interfaces:** `SettingsPage` 通过 runtime/actions 访问 bridge；活动面板沿用 `SettingsPanelId` 的四种 ID，始终恰好显示一个。保存 controller 接受 `UiSettings` 并返回稳定可订阅状态，组件不自建持久化协议。
+**Interfaces:** `SettingsPage({ controller, environment })`、`GeneralSettings({ controller })`；controller 接受 `UiSettings` 并暴露稳定可订阅状态（draft/persisted/saving/error/loaded），组件不自建持久化协议；`mountGeneralSettings(bridge)` 负责容器清空、chrome 翻译、导航接线与环境列表刷新，返回 dispose。
 
-- [ ] 先保留现有“保存拒绝/抛错恢复、连续修改串行落盘、失败后可再次修改”断言，迁移为纯 controller 测试；用真实 React 页面验证表单回滚和错误消息。
-- [ ] GeneralSettings 复用既有 `uiSettings`；保存时区分最新 draft 与 persisted。初始读取、StrictMode effect 重挂载和设置页来回开关不触发重复自动保存，不覆盖用户读取期间已做的修改。
-- [ ] 设置导航接入 `PageTransition kind="settings"`，只让一个面板可交互；分类切换保存草稿/错误/焦点规则，返回聊天恢复阅读位置。语言或主题变化不重启动画、不重挂表单，不改变 pending 请求状态。
-- [ ] 删除该区域的旧事件绑定与整表 `replaceChildren`；兼容 id 按 T4 登记并在 smoke 迁移后删除。
-- [ ] 文案键化该区域；`rg` 确认 `ui/settings` 无中文字面量。
-- [ ] 运行 `node scripts/run-tests.mjs tests/general-settings-pending.test.ts tests/desktop-react.smoke.mjs tests/desktop-i18n.test.ts tests/settings.smoke.mjs tests/desktop-language.smoke.mjs`。
+- [x] 纯 controller 测试 8 条：读取填充、立即应用、串行落盘（in-flight 期间的修改合并为一次且用最新值）、拒绝回滚+错误、**rejected promise 释放 in-flight 并可重试**（旧用例的核心缺陷）、无变化不发请求、读取失败、dispose 忽略迟到回复。
+- [x] React 侧新增 `desktop-react.smoke` 第 4 条：保存被拒时错误消息上屏且控件回滚到 persisted（真实 Electron + 真实 CSP）。
+- [x] 初始读取/重挂载不重复保存：controller 持有 in-flight 与 pending，组件只读 draft 并调用 `change`；`StrictMode` 下 effect 只 `load()` 一次（已 dispose 保护）。
+- [x] 删除旧 `setupGeneralSettings` 与整表 `replaceChildren`；通用面板容器由 React 独占，环境问题列表也由 React 渲染（打开面板与启动时各读一次 bridge，保存可能改变该列表）。`renderer-panels.ts` 仍保留为跨面板唯一开关，React 适配器调用同一 `showSettingsPanel`。
+- [x] 新控件用 Mantine `Select`/`Switch`；smoke 增加 `chooseSelectOption`（点击字段再点 option，等 listbox 关闭——语言切换会同时改动该选项自身的标签，不能等 input value）。同步改写 layout/language/settings 的选择器交互与布局断言（标签在上、列表在 portal）。
+- [x] `renderer-general-settings.ts` 删除后无残留引用；`rg`/i18n gate 确认 `ui/settings` 无中文字面量。
+- [~] **范围调整（已记录）**：设置外壳（侧栏导航 + 另外三个面板）仍是 legacy，`PageTransition kind="settings"` 与唯一可交互面板延后到 T13 全部面板 React 后一起做——现在改用 React 外壳会把尚未迁移的模型/权限面板变成空白，属于功能回退，不是迁移。`DesktopShell` 的单一 AppShell 规则不变。
+- [x] 运行 `node scripts/run-tests.mjs tests/general-settings-pending.test.ts tests/desktop-react.smoke.mjs tests/desktop-i18n.test.ts tests/settings.smoke.mjs tests/desktop-language.smoke.mjs`。已完成：8/8、4/4、9/9、8 通过+1 跳过（MCP 不在本期范围）、7/7；另 layout 4/4、desktop 9/9。
 
 #### T11: 模型设置
 

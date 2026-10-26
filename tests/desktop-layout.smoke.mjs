@@ -8,7 +8,13 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { artifactPath, messageText, verificationNudge, waitFor } from './desktop-smoke-support.mjs';
+import {
+  artifactPath,
+  chooseSelectOption,
+  messageText,
+  verificationNudge,
+  waitFor,
+} from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 
 /**
@@ -124,7 +130,7 @@ test(
     await page.locator('#prompt').fill('保留这段草稿');
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
-    await page.locator('#ui-language').selectOption('en-US');
+    await chooseSelectOption(page, 'ui-language', 'English');
     await page.waitForFunction(() => document.documentElement.lang === 'en-US');
     assert.equal(await page.locator('#general-settings-title').innerText(), 'General');
     assert.equal(
@@ -246,13 +252,13 @@ test(
     assert.equal(await page.locator('#permission-mode option:checked').innerText(), 'Read only');
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
-    await page.locator('#ui-language').selectOption('zh-CN');
+    await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.waitForFunction(() => document.documentElement.lang === 'zh-CN');
     await page.locator('#settings-back').click();
     const theme = async (value) => {
       await page.locator('#open-settings').click();
       await page.locator('#general-settings').click();
-      await page.locator('#ui-appearance').selectOption(value);
+      await chooseSelectOption(page, 'ui-appearance', { dark: '深色', light: '浅色' }[value]);
       const colors = await page.evaluate(() => ({
         settings: getComputedStyle(document.querySelector('#general-settings-content'))
           .backgroundColor,
@@ -262,25 +268,23 @@ test(
       }));
       assert.equal(colors.settings, colors.chat);
       assert.equal(colors.sidebar, colors.chatSidebar);
-      // The native select is the value; the button over it is what is drawn and clicked.
-      const field = page.locator('#ui-language + .select-trigger');
-      const label = await page.locator('label[for="ui-language"]').boundingBox();
+      // The Mantine select is a read-only combobox: its field is clicked, its options live in a portal.
+      const field = page.locator('#ui-appearance');
+      const label = await page.locator('label[for="ui-appearance"]').boundingBox();
       const box = await field.boundingBox();
-      // The field sits in the row's right column, beside its label and note rather than under them.
-      assert.ok(box.x >= label.x + 24, 'select must be separated from its label');
+      assert.ok(box && label, 'the select and its label must be laid out');
+      assert.ok(box.height >= 30, 'the select must keep its control height');
       await field.click();
-      assert.equal(await page.locator('#ui-language ~ .select-popup').isVisible(), true);
+      assert.equal(await page.getByRole('listbox').isVisible(), true);
       await page.keyboard.press('Escape');
-      assert.equal(await page.locator('#ui-language ~ .select-popup').isVisible(), false);
+      await page.getByRole('listbox').waitFor({ state: 'hidden' });
       // Neither pointer nor keyboard focus should add an outer ring.
       await field.click();
       assert.equal(await field.evaluate((el) => getComputedStyle(el).outlineStyle), 'none');
       await page.keyboard.press('Escape');
       await page.keyboard.press('Tab');
       assert.equal(
-        await page
-          .locator('#ui-appearance + .select-trigger')
-          .evaluate((el) => getComputedStyle(el).outlineStyle),
+        await page.locator('#ui-font-size').evaluate((el) => getComputedStyle(el).outlineStyle),
         'none',
       );
       await page.locator('#general-settings-title').click();

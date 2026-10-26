@@ -11,6 +11,7 @@ import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { mcpHttpFixture } from './mcp-http-fixture.ts';
+import { chooseSelectOption } from './desktop-smoke-support.mjs';
 
 test(
   'desktop saves blank model limits and completes chat with automatic capacity',
@@ -131,10 +132,10 @@ test(
     // The command-isolation form is gone: the composer's chip is the only control that writes either knob.
     assert.equal(await page.locator('#sandbox-settings').count(), 0);
     assert.equal(await page.locator('#model option').last().textContent(), '模型设置');
-    await page.locator('#ui-language').selectOption('en-US');
+    await chooseSelectOption(page, 'ui-language', 'English');
     assert.equal(await page.locator('#general-settings-title').textContent(), 'General');
     assert.equal(await page.locator('#model option').last().textContent(), 'Model settings');
-    await page.locator('#ui-language').selectOption('zh-CN');
+    await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.locator('#model-settings').click();
     assert.deepEqual(
       await page
@@ -196,14 +197,14 @@ test(
     await page.locator('#settings-back').click();
     await page.locator('#open-settings').click();
     await page.locator('#general-settings').click();
-    await page.locator('#ui-language').selectOption('en-US');
+    await chooseSelectOption(page, 'ui-language', 'English');
     await page.locator('#model-settings').click();
     assert.match(
       await page.locator('#settings-connection option:checked').innerText(),
       /Current default$/,
     );
     await page.locator('#general-settings').click();
-    await page.locator('#ui-language').selectOption('zh-CN');
+    await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.locator('#model-settings').click();
     if (process.env.YUANTU_QA_DIR)
       await page.screenshot({ path: artifactPath('settings-page.png') });
@@ -655,7 +656,7 @@ test(
     await toggle.click();
     if (process.env.YUANTU_QA_DIR) {
       await page.locator('#general-settings').click();
-      await page.locator('#ui-appearance').selectOption('dark');
+      await chooseSelectOption(page, 'ui-appearance', '深色');
       await page.locator('#model-settings').click();
       await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
       await page.screenshot({ path: artifactPath('catalog.png') });
