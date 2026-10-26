@@ -47,3 +47,43 @@
 - Mantine 统一控件带来的外观差异（按钮/输入/弹层）属于计划预期变化；行为断言均以原契约为准。
 - 任务编辑器表单、消息内容、diff 正文仍是 legacy DOM 岛；这是计划中允许的过渡形态，但不是 T24/T25 完成后的终态。
 - `#live` 仍是静态宿主：其 `hidden` 属性由 React 适配器写入，内部节点全部 React；把宿主本身移入 React 树需要 T24 的外壳改造。
+
+## 5. M7 剩余工作拆解（供后续继续）
+
+### T24 外壳接管与 CSS 退役
+
+1. **页面结构**：把 `index.html` 的 `body` 网格、`#chat-sidebar`/`#chat-page`/`#workspace-root` 静态骨架迁入 `ui/layout/DesktopShell`；保留现有 region 容器（可先作为 `DesktopShell` 的 children）以缩小一次性改动。
+2. **唯一根**：`renderer.ts` 只创建 runtime/actions 与一个 `createRoot`；删除 `RegionHost` 之外的多个 `mountRegion` 入口（区域组件改为同根子树）。
+3. **过渡**：接通 `PageTransition` 到聊天/设置/设置分类/侧栏显隐；验证返回聊天恢复锚点、草稿与附件，快速反向切换不留下过期回调。
+4. **CSS**：按迁移区域逐块删除 `#id` 规则；每删一块先跑 `desktop`/`desktop-sessions`/`settings` 冒烟，维护 §10 的六文件行数与 `!important` 预算（当前 5,983 / 29，目标 ≤1,200）。
+5. **验收命令**：`node scripts/run-tests.mjs tests/desktop-layout.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-launcher.smoke.mjs`，并检查 React warning / 未处理 Promise / CSP violation。
+
+### T25 Slot 与遗留清理
+
+1. 删除 `RegionHost`/portal 适配与旧整页 render；把 slot 语义迁入 `ui/slots.tsx`（五种 context、排序稳定、注销幂等、卸载无残留）。
+2. 移除全局 select upgrader 与翻译 walker 的 legacy 依赖；旧 i18n 豁免若无匹配项一并删除。
+3. 兼容 id 登记表清零（§11），`tests/compat-ids.test.ts` 只保留“表为空”断言。
+4. 用 `rg` 清点剩余 `setup*`、`document.getElementById`、`replaceChildren`、`MutationObserver`、`addEventListener` 引用，逐项说明归属。
+
+### T26 完整验收
+
+1. 真实 Electron：浅/深/系统主题、中英文、字号、窗口尺寸截图对照；记录 Mantine 控件带来的预期差异。
+2. 动效：正常与 reduced-motion 两套，覆盖页面切换、设置分类、侧栏、菜单/弹窗、折叠、新消息首次出现；记录开始/中间/结束帧与最终焦点/草稿/锚点断言。
+3. 打包：确认 `renderer.css/ui.css` 存在、离线无外部请求、真实 CSP 下无样式拒绝或脚本放行变化。
+
+## 6. 复现验证
+
+```powershell
+npm run typecheck
+npm run lint
+npm run i18n:check
+npm run layers:check
+npm run cycles:check
+npm run format:check
+npm run docs:check
+npm run references:check
+npm run test:isolation:check
+npm run build
+node scripts/run-tests.mjs tests/desktop-react-stream.test.ts tests/desktop-react-transcript.test.ts tests/scroll-anchor.test.ts tests/turn-changes-model.test.ts tests/subagent-model.test.ts tests/question-model.test.ts tests/approval-model.test.ts tests/task-view.test.ts tests/plan-contract.test.ts tests/session-panels-model.test.ts tests/background-model.test.ts tests/statistics-model.test.ts tests/workspace-panel-loading.test.ts tests/desktop-react-attachments.test.ts tests/desktop-react-sessions.test.ts tests/desktop-react-composer.test.ts tests/desktop-copy.test.ts tests/desktop-i18n.test.ts tests/ui-i18n-coverage.test.ts tests/compat-ids.test.ts tests/render-caches.test.ts tests/diff-view.test.ts tests/i18n-gate.test.ts tests/ui-copy-migration.test.ts
+npm run smoke:desktop
+```
