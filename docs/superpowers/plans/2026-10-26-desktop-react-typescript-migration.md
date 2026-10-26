@@ -662,16 +662,16 @@ interface PanelTransitionProps {
 
 #### T12: 权限、沙箱初始化与恢复
 
-**Files:** 新增 `ui/settings/PermissionSettings.tsx`、`ui/sandbox/{sandbox-setup-model.ts,SandboxPrompt.tsx,mount.tsx}`；停用 `renderer-permissions.ts`、`renderer-sandbox-setup.ts` 的活动接入；迁移 `tests/sandbox-setup-renderer.test.ts` 为纯 controller 测试；扩展 smoke。
+**Files:** 新增 `ui/permissions/{permission-model.ts,PermissionChip.tsx,FullAccessDialog.tsx,mount.tsx}`、`ui/sandbox/{sandbox-setup-model.ts,SandboxPrompt.tsx,mount.tsx}`；停用并删除 `renderer-permissions.ts`、`renderer-sandbox-setup.ts`；迁移 `tests/sandbox-setup-renderer.test.ts` 为纯 controller 测试；扩展 smoke 与字典。
 
-**规模:** 约 600–800 行。
+**规模:** 约 600–800 行（实际约 1100 行）。
 
-**进度:** 沙箱初始化与恢复已完成（本提交）：`commandsNeedSandboxAccounts` 移入 `ui/sandbox/sandbox-setup-model.ts`，新增 controller（状态/提示文案/可见性/操作）、React `SandboxPrompt`（保留 `#sandbox-prompt*` id 与 composer 外观）、`mountSandboxSetup` 接缝；`renderer-sandbox-setup.ts` 删除，`index.html` 的静态提示替换为容器；renderer 继续通过 `setMode` 把权限 chip 的会话沙箱模式传进来。旧 DOM 测试改写为 12 条 controller 测试（就绪/未初始化/命令不可用、模式矩阵、dismiss 后重新提示、损坏后端只 verify 一次、拒绝后可重试、无 bridge、较弱沙箱确认/失败、dispose）。**权限 chip 与完全访问对话框仍是 legacy**，其 controller/组件与文案键化留到下一步。
+**进度:** 已完成。沙箱提示与权限 chip/完全访问对话框都迁到 React；`index.html` 的静态控件替换为 `#permission-root`、`#full-access-root`、`#sandbox-prompt-root` 三个容器（`display: contents` 不改变布局）；`renderer.ts` 只保留 `updateBusy`/`refresh`/`requestFullAccess`/`setMode` 四个 seam。
 
-- [~] 权限预设、初始化、恢复继续调用既有专用 bridge，不改沙箱策略；`commandsNeedSandboxAccounts` 已抽出；`runStatusText` 断言保留在改写后的测试里。权限预设部分待迁移。
-- [ ] 权限菜单的受控选值、禁用与 `#permission-trigger`/`#permission-menu` 的 smoke 语义迁到 React（role/option）。
-- [ ] 权限文案键化；删除 `renderer-permissions.ts` 的旧绑定；沙箱提示已全部走字典。
-- [x] 运行 `node scripts/run-tests.mjs tests/sandbox-setup-renderer.test.ts tests/windows-account-settings.smoke.mjs tests/settings.smoke.mjs tests/desktop-capabilities.smoke.mjs`。已完成：12/12、1/1、8 通过+1 跳过、3/3；另 desktop 9/9、layout 4/4。
+- [x] 预设切换继续调用 `presets` 专用 bridge，不改沙箱策略；`unconfined` 仍走同一确认对话框并带 `acknowledgeHost`；失败后读回真实 pair 而不是画旧值；`custom` 只是读法、不是可选目标。
+- [x] `#permission-trigger`/`#permission-menu`/`#full-access-*`/`#permission-custom` 语义保留（菜单 `role=menuitemradio` + `aria-checked`、`#permission-mode` 机器可读值）。**实现取舍**：隐藏的 `#permission-mode` 不是 React 受控 select，而是用 ref 镜像值 + 原生 `change` 监听——React 的受控 select 会安装 value tracker，测试里 `el.value = …; dispatchEvent(change)` 会被当作“未变化”而忽略（layout smoke 抓到）。菜单打开时焦点落在当前行，Escape/外部点击关闭，方向键在行间移动。
+- [x] 权限文案全部键化（`permission.*` 约 40 个键），删除 `renderer-permissions.ts`；沙箱提示沿用 `sandboxSetup.*`。
+- [x] 验证：`sandbox-setup-renderer` 12/12、`windows-account-settings` 1/1、`settings` 8 通过+1 跳过（MCP 不在范围）、`capabilities` 3/3、`agent` 7/7、`desktop` 9/9、`layout` 4/4、`language` 7/7；lint/i18n/layers/format/docs/typecheck 全绿，build 通过。
 
 #### T13: 工作区维护、归档会话与 MCP 开关
 

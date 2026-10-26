@@ -9,7 +9,7 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
-import { choosePermissionPreset } from './desktop-smoke-support.mjs';
+import { choosePermissionPreset, chooseSelectOption } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 /**
  * This suite asserts the product's own sandbox default, so it must not run on the isolation harness's override.
@@ -317,7 +317,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   // output and stay in whatever language they were written in, so only the chrome is checked.
   await page.locator('#open-settings').click();
   await page.locator('.settings-sidebar nav button').first().click();
-  await page.locator('#ui-language').selectOption('en-US');
+  await chooseSelectOption(page, 'ui-language', 'English');
   // The choice saves itself, which makes the language survive the restart below, so the restored cards
   // can be checked for the right locale rather than whichever language the app happens to start in.
   await page.waitForFunction(async () => {

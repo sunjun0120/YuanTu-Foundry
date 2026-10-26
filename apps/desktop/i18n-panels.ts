@@ -323,4 +323,101 @@ export const panelMessages: Record<string, [string, string]> = {
   'settings.defaultLimit': ['默认（留空恢复）', 'Default (clear to reset)'],
   'settings.autoCompactTokens': ['自动压缩阈值 Token', 'Automatic compaction threshold tokens'],
   'settings.streamIdleTimeoutMs': ['流空闲超时（毫秒）', 'Stream idle timeout (milliseconds)'],
+  'permission.aria': ['权限与隔离', 'Permissions and isolation'],
+  'permission.heading': ['应如何批准操作？', 'How should actions be approved?'],
+  'permission.label.observe': ['仅可查看', 'Read only'],
+  'permission.label.guarded': ['请求批准', 'Ask for approval'],
+  'permission.label.auto': ['帮我批准', 'Approve for me'],
+  'permission.label.unconfined': ['完全访问权限', 'Full access'],
+  'permission.label.custom': ['自定义', 'Custom'],
+  'permission.summary.observe': [
+    '只读取和搜索，不修改文件、不运行命令',
+    'Read and search only; no edits, no commands',
+  ],
+  'permission.summary.guarded': [
+    '修改文件和运行命令时始终询问',
+    'Always ask before editing files or running commands',
+  ],
+  'permission.summary.auto': [
+    '仅对检测到的风险操作请求批准',
+    'Only ask for operations detected as risky',
+  ],
+  'permission.summary.unconfined': [
+    '不受限地访问互联网和本机所有文件',
+    'Unrestricted internet and local file access',
+  ],
+  'permission.boundary.observe': [
+    '只读：不修改文件、不执行命令；读取与搜索工作区无需确认。',
+    'Read only: no file changes and no commands; reading and searching the workspace need no confirmation.',
+  ],
+  'permission.boundary.guarded': [
+    '写入与命令逐项确认。',
+    'Writes and commands are confirmed one by one. ',
+  ],
+  'permission.boundary.auto': [
+    '工作区写入和普通命令自动批准；删除、推送、提权、下载执行等风险命令及联网工具仍会询问。',
+    'Workspace writes and ordinary commands are approved automatically; risky commands (deleting, pushing, raising privileges, downloading and running code) and network tools still ask. ',
+  ],
+  'permission.boundary.unconfined': [
+    '不再逐项确认；命令直接在本机运行，没有任何系统隔离。',
+    'No confirmations; commands run directly on this machine with no operating-system isolation.',
+  ],
+  'permission.sandbox.seatbelt': [
+    '命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
+    'Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
+  ],
+  'permission.sandbox.windows': [
+    '命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。这是较弱的隔离模式。',
+    'Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network. This is the weaker isolation mode.',
+  ],
+  'permission.sandbox.account': [
+    '命令在专用低权限沙箱账户中运行：只能写入工作区，网络默认断开，读取受白名单限制。',
+    'Commands run as a dedicated low-privilege sandbox account: writes stay in the workspace, the network is off by default, and reads are limited to the allowlist.',
+  ],
+  'permission.chip.unknown': ['权限未读取', 'Permissions unknown'],
+  'permission.chip.weak': ['较弱沙箱', 'Weaker sandbox'],
+  'permission.unknownTitle': [
+    '未能读取当前会话的权限设置，点击重试。',
+    "This session's permissions could not be read. Click to try again.",
+  ],
+  'permission.weakHint': [
+    '选择任一选项即切回账户沙箱。',
+    'Choose any option to return to the account sandbox.',
+  ],
+  'permission.custom.weak': [
+    '当前：较弱沙箱（受限令牌）。读取和网络不受限制。',
+    'Current: weaker sandbox (restricted token). Reads and the network are not confined.',
+  ],
+  'permission.custom.weakBroken': [
+    '较弱沙箱在这台电脑上无法运行：',
+    'The weaker sandbox cannot run on this computer: ',
+  ],
+  'permission.failure': ['预设切换失败。', 'Unable to apply the preset.'],
+  'permission.dialog.title': ['要开启完全访问权限吗？', 'Enable full access?'],
+  'permission.dialog.description': [
+    '智能体将能够在未经你许可的情况下，在这台计算机上的任何位置运行命令、使用互联网，以及创建和编辑文件。这包括但不限于：',
+    'The agent will be able to run commands anywhere on this computer, use the internet, and create and edit files, without asking for your permission. This includes, but is not limited to:',
+  ],
+  'permission.dialog.risk': [
+    '这会带来敏感数据丢失或泄露、提示注入等风险。你可以随时在权限菜单中切回其他模式。',
+    'This brings risks such as losing or leaking sensitive data and prompt injection. You can switch back from the permissions menu at any time.',
+  ],
+  'permission.dialog.close': ['关闭', 'Close'],
+  'permission.dialog.cancel': ['取消', 'Cancel'],
+  'permission.dialog.confirm': ['确认', 'Confirm'],
+  'permission.risk.filesName': ['文件和文件夹', 'Files and folders'],
+  'permission.risk.filesLine': [
+    '读取、创建、修改、上传或删除此计算机上任意位置的文件',
+    'Read, create, change, upload or delete files anywhere on this computer',
+  ],
+  'permission.risk.commandsName': ['终端命令', 'Terminal commands'],
+  'permission.risk.commandsLine': [
+    '运行命令、安装软件和更改系统设置，不在沙箱中隔离',
+    'Run commands, install software and change system settings, outside any sandbox',
+  ],
+  'permission.risk.networkName': ['互联网', 'Internet'],
+  'permission.risk.networkLine': [
+    '访问网站、下载内容并向外部发送数据',
+    'Visit websites, download content and send data out',
+  ],
 };

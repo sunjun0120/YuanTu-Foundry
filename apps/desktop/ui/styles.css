@@ -66,3 +66,8 @@
     scroll-behavior: auto !important;
   }
 }
+/* Two React-owned containers that must not disturb the composer/dialog layout they replace. */
+#permission-root,
+#full-access-root {
+  display: contents;
+}

@@ -41,7 +41,7 @@ import { setupSessionManagement } from './session-management.ts';
 import { mountSandboxSetup } from './ui/sandbox/mount.tsx';
 import { setupWorkspaceMaintenance } from './renderer-workspace-maintenance.ts';
 import { setupArchivedSessions } from './renderer-archived-sessions.ts';
-import { setupPermissionSettings } from './renderer-permissions.ts';
+import { mountPermissions } from './ui/permissions/mount.tsx';
 import { setupSelectMenus } from './renderer-select-menu.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { environmentBlockedCode } from '../../packages/tools/environment-blocked.ts';
@@ -212,7 +212,7 @@ function mountMessageSlot(
 let state: CarrierSnapshot | null = null;
 
 let mcpSettings: ReturnType<typeof setupMcpSettings> | undefined;
-let permissionSettings: ReturnType<typeof setupPermissionSettings> | undefined;
+let permissionSettings: ReturnType<typeof mountPermissions> | undefined;
 let modelSettings: ReturnType<typeof setupModelSettingsEntry> | undefined;
 let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
 /**
@@ -1002,16 +1002,16 @@ if (PRODUCT_SCOPE.mcpManagement)
     },
     () => state?.workspace,
   );
-permissionSettings = setupPermissionSettings(
-  (busy) => {
+permissionSettings = mountPermissions(window.yuantu, {
+  onBusy: (busy) => {
     externalBusy = busy;
     render();
   },
   // The chip is drawn by the main process's own answer, which arrives before the Host can accept a change: the
   // rungs stay locked until the desktop says it is ready, instead of a click failing with a startup message.
-  () => Boolean(state?.ready),
-  (mode) => sandboxInitialization.setMode(mode),
-);
+  isReady: () => Boolean(state?.ready),
+  onSandboxMode: (mode) => sandboxInitialization.setMode(mode),
+});
 // The React root is created once, after the legacy DOM exists, and owns only the containers regions hand it.
 const disposeDesktopUi = mountDesktopApp({ runtime, actions });
 const disposeGeneralSettings = mountGeneralSettings(window.yuantu);
@@ -1019,6 +1019,7 @@ const disposeModelSettings = mountModelSettings(window.yuantu);
 window.addEventListener(
   'pagehide',
   () => {
+    permissionSettings?.dispose();
     sandboxInitialization.dispose();
     disposeModelSettings();
     disposeGeneralSettings();
