@@ -2,7 +2,7 @@
 
 > 日期：2026-10-24。仓库：`E:\agent-desktop\YuanTu-Foundry`，基线 `a8d3bca`（工作区干净）。
 > 方式：驱动真实 Electron 桌面进程（真实主进程、IPC、Host 子进程、渲染层），使用系统 `safeStorage` 解密的四条真实模型连接；不是模拟 provider，也不是只跑单元测试。
-> 产物：完整结果 `results-main.json` / `results-coding.json`、截图与日志在本机 `.scratch/desktop-real-acceptance/`（该目录被 Git 忽略）；本报告引用的截图已复制到 `docs/assets/2026-10-24-desktop-real-model-acceptance/`。
+> 产物：完整结果 `results-main.json` / `results-coding.json`、截图与日志在本机 `.scratch/desktop-real-acceptance/`（该目录被 Git 忽略）。截图未随仓库提交，本报告只引用检查指标、错误文本与日志。
 
 ## 1. 结论摘要
 
@@ -110,9 +110,7 @@
 
 **建议。** 把 `environmentProblems` 放到启动失败横幅和设置入口；或在主进程过滤未知 `YUANTU_*`，只告警不致命。
 
-**证据。** `unknown-env.png`、`ENV-02` 指标中的完整错误文本。
-
-![未知环境变量导致的启动失败](assets/2026-10-24-desktop-real-model-acceptance/unknown-env.png)
+**证据。** `ENV-02` 指标中的完整错误文本。
 
 ### 5.3 运行中关闭窗口，原会话没有任何“已中断”标记（中）
 
@@ -124,9 +122,7 @@
 
 **建议。** 在 `run.cancelled`/窗口退出路径写入一条 `interrupted` 的 assistant 占位或运行级提示；重开会话时显示“上次运行在关闭窗口时中断”。
 
-**证据。** `probe-crash.log`、`probe-crash-view.log`、`crash-recovered-session.png`（补充探针，不计入 42 项主表）。
-
-![运行中关闭后重开的会话](assets/2026-10-24-desktop-real-model-acceptance/crash-recovered-session.png)
+**证据。** `probe-crash.log`、`probe-crash-view.log`（补充探针，不计入 42 项主表）。
 
 ### 5.4 只读预设把策略拒绝写成“用户拒绝”（低）
 
@@ -154,24 +150,18 @@
 
 ## 6. 桌面外壳
 
-| 检查                          | 结果                                                                                                 | 证据                   |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------- |
-| 冷启动到可输入                | 1.15 s                                                                                               | `startup.png`          |
-| 1280×800 / 1024×720 / 900×640 | 三种尺寸均无横向溢出，输入区完整；侧栏 272→230 px                                                    | `layout-*.png`（本机） |
-| 英文界面                      | 切到 `en-US` 后可见文本剩余 CJK = 0（语言选择器里的“简体中文”按母语名保留）                          | `english-settings.png` |
-| 外观/字号                     | 深色→浅色生效；字号 large 后输入区 14→16 px，根属性 `data-font-size=large`                           | —                      |
-| 页面重载                      | 会话 id 与内容恢复，无错误横幅                                                                       | `after-reload.png`     |
-| 工作区切换                    | 切到另一个目录再切回，工作区标题与输入区状态正确                                                     | —                      |
-| 渲染层安全                    | `window.require`/`window.process` 均为 `undefined`；非法 IPC 返回 `ok:false`；DOM 无 `sk-…` 密钥模式 | —                      |
-| 进程/内存                     | 4 个进程，主进程 117 MB，总工作集 534 MB                                                             | —                      |
+| 检查                          | 结果                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 冷启动到可输入                | 1.15 s                                                                                               |
+| 1280×800 / 1024×720 / 900×640 | 三种尺寸均无横向溢出，输入区完整；侧栏 272→230 px                                                    |
+| 英文界面                      | 切到 `en-US` 后可见文本剩余 CJK = 0（语言选择器里的“简体中文”按母语名保留）                          |
+| 外观/字号                     | 深色→浅色生效；字号 large 后输入区 14→16 px，根属性 `data-font-size=large`                           |
+| 页面重载                      | 会话 id 与内容恢复，无错误横幅                                                                       |
+| 工作区切换                    | 切到另一个目录再切回，工作区标题与输入区状态正确                                                     |
+| 渲染层安全                    | `window.require`/`window.process` 均为 `undefined`；非法 IPC 返回 `ok:false`；DOM 无 `sk-…` 密钥模式 |
+| 进程/内存                     | 4 个进程，主进程 117 MB，总工作集 534 MB                                                             |
 
-标题栏、窗口尺寸、主题、语言、字体和布局都是真实 Chromium 渲染；截图见 `startup.png` 与 `english-settings.png`。
-
-![启动后的真实桌面](assets/2026-10-24-desktop-real-model-acceptance/startup.png)
-
-英文设置页（切换语言后真实渲染）：
-
-![英文设置页](assets/2026-10-24-desktop-real-model-acceptance/english-settings.png)
+标题栏、窗口尺寸、主题、语言、字体和布局都是真实 Chromium 渲染。
 
 ## 7. 核心会话与工具
 
@@ -189,22 +179,6 @@
 | 计划模式            | 通过 | 3 步计划，标题/摘要/步骤完整；拒绝后 plan 面板关闭；172.7 s（含 60 s 提问超时） |
 | 工作区文件预览      | 通过 | 文件树 → README 预览，内容含 `ALPHA-7319`                                       |
 
-文件改动的审批与差异预览（请求批准预设）：
-
-![文件编辑审批与差异](assets/2026-10-24-desktop-real-model-acceptance/write-approval.png)
-
-自动批准模式下的 diff 与撤销入口：
-
-![编辑差异与撤销](assets/2026-10-24-desktop-real-model-acceptance/edit-diff.png)
-
-视觉附件与回答：
-
-![视觉识别](assets/2026-10-24-desktop-real-model-acceptance/vision-answer.png)
-
-计划面板：
-
-![计划面板](assets/2026-10-24-desktop-real-model-acceptance/plan-panel.png)
-
 ## 8. 权限与沙箱
 
 | 检查                     | 结果                 | 观察                                                                 |
@@ -215,10 +189,6 @@
 | 未初始化原生沙箱执行命令 | 告警（环境边界）     | 审批后 Host 拒绝；模型解释需初始化，未伪造输出                       |
 | 完全访问权限             | 通过                 | 确认对话框 209 字符；取消保持“请求批准”；确认后自动写入成功          |
 | 弱沙箱回退（补充探针）   | 通过（后端拒绝执行） | 确认后 chip=“较弱沙箱”，提示消失；`node -e` 被受限令牌的写入检查拒绝 |
-
-完全访问权限的确认对话框（真实窗口）：
-
-![完全访问权限确认](assets/2026-10-24-desktop-real-model-acceptance/full-access-dialog.png)
 
 ## 9. 会话、重载与重启
 
@@ -242,8 +212,6 @@
 | deepseek-flash           | 通过        | 10.2 s | 6    | 6                | 55,904 / 481    | 0.9 s            |
 
 三个通过模型的最终回答都明确写出“`return a - b` 改为 `return a + b`、未改 `test.js`、`TEST_PASS`”，与磁盘和独立测试结果一致；没有出现修改测试来“骗过”验证的情况。
-
-![编码任务完成后的自动校验与已编辑文件](assets/2026-10-24-desktop-real-model-acceptance/coding-deepseek-flash.png)
 
 ## 11. 覆盖与未覆盖
 
@@ -353,18 +321,3 @@ Windows 原生沙箱的管理员初始化是本机环境的硬前置条件；在
 | CODING-GPT-6-Astra              | 编码 | 失败 | 并行工具参数为空，86.5 s                               |
 | CODING-GLM-5.3                  | 编码 | 通过 | TEST_PASS，64.0 s                                      |
 | CODING-deepseek-flash           | 编码 | 通过 | TEST_PASS，10.2 s                                      |
-
-## 附录 B：证据索引
-
-| 截图                          | 内容                                   |
-| ----------------------------- | -------------------------------------- |
-| `startup.png`                 | 应用启动后的中文深色桌面               |
-| `english-settings.png`        | 英文设置页（0 残留中文）               |
-| `write-approval.png`          | 请求批准预设下的文件修改审批与 diff    |
-| `edit-diff.png`               | 自动批准模式下的编辑差异与撤销入口     |
-| `full-access-dialog.png`      | 完全访问权限的风险确认                 |
-| `plan-panel.png`              | 计划面板与三步计划                     |
-| `vision-answer.png`           | 图片附件与视觉回答                     |
-| `coding-deepseek-flash.png`   | 编码任务完成后的自动校验与已编辑文件   |
-| `unknown-env.png`             | 未知 `YUANTU_*` 变量导致的启动失败     |
-| `crash-recovered-session.png` | 运行中关闭后重开的会话（缺少中断标记） |

@@ -3,7 +3,7 @@
 > 日期：2026-10-25。仓库：`E:\agent-desktop\YuanTu-Foundry`，基线 `91fa342`（工作区干净），`dist/desktop` 构建于同日 18:16。
 > 方式：Playwright 驱动真实 Electron 主进程、IPC、Host 子进程与渲染层；使用系统 `safeStorage` 解密的六条真实模型连接；不是 mock provider，也不是只跑单元测试。
 > 隔离：复制 `model-settings.json` 与 `Local State` 到 `.scratch/desktop-real-models-round2/profile*`，每个套件独立 `--user-data-dir`、独立工作区与状态目录；未写入真实 `%APPDATA%\YuanTu Agent` 的会话和设置。
-> 产物：原始检查 `results/*.json`、截图与日志在 `.scratch/desktop-real-models-round2/`（Git 忽略）；本报告引用的截图已复制到 `docs/assets/2026-10-25-desktop-real-models-round2/`。报告中不包含任何密钥。
+> 产物：原始检查 `results/*.json`、截图与日志在 `.scratch/desktop-real-models-round2/`（Git 忽略）。截图未随仓库提交；报告中不包含任何密钥。
 
 ## 1. 结论摘要
 
@@ -77,8 +77,6 @@
 | Claude-Opus-5.5          | 失败 | 15.9s  | 0                               | 0 / 0           | —        |
 | Kimi-K3                  | 通过 | 83.8s  | 7                               | 33,282 / 1,111  | 71.1s    |
 
-![GPT-6-Astra 完成编码任务](assets/2026-10-25-desktop-real-models-round2/coding-gpt.png)
-
 ## 4. 产品问题
 
 ### 4.1 P1：计划审批问题卡无法提交，`/plan` 进入死锁
@@ -97,9 +95,7 @@
 - `/plan` 的 `managing` 标志覆盖整个计划运行，而该运行正阻塞在问题卡上；`questionAnswer` 也走同一 `dispatch`，于是被同一条忙碌检查拒绝。
 - 结果是一个确定的互相等待：问题等待 `questionAnswer`，`questionAnswer` 等待 `plan` 结束，`plan` 等待问题回答。
 
-**证据。** CDP 读取到问题卡真实存在、选项已选中、提交按钮可用；点击后 `#error` 变为“会话操作正在进行，请稍候。”，`session.questions` 仍保留该问题。截图：`assets/2026-10-25-desktop-real-models-round2/plan-question-busy.png`。
-
-![计划审批问题卡与会话忙碌错误](assets/2026-10-25-desktop-real-models-round2/plan-question-busy.png)
+**证据。** CDP 读取到问题卡真实存在、选项已选中、提交按钮可用；点击后 `#error` 变为“会话操作正在进行，请稍候。”，`session.questions` 仍保留该问题。
 
 **影响。** 模型选择“当面批准”这条更自然的路径时，计划模式完全不可用；用户会反复点击、以为按钮坏了。用 `submit_plan` 提交、再从计划面板批准/执行/拒绝的路径是正常的（AGENT-01/02 通过）。
 
@@ -133,7 +129,7 @@ max_completion_tokens: request.maxOutputTokens,
 
 **现象。** 深色主题中，`create_goal` 成功后的目标面板是白底浅色卡片，标题和状态文字明显偏淡，和其余深色界面割裂；`todos`、`deliverables` 面板在 `layout.css` / `layout-surfaces.css` 里有主题覆盖，目标面板没有。
 
-**证据。** `assets/2026-10-25-desktop-real-models-round2/goal-panel-dark.png`；源码 `apps/desktop/styles-panels.css:344-349` 写死 `border: #dcdcd2; background: #fbfbf7`，且没有 `#chat-page .goal-panel` 的深色覆盖。对比同文件的 `.todos-panel`、`.deliverables-panel` 都被后续样式覆盖。
+**证据。** 源码 `apps/desktop/styles-panels.css:344-349` 写死 `border: #dcdcd2; background: #fbfbf7`，且没有 `#chat-page .goal-panel` 的深色覆盖。对比同文件的 `.todos-panel`、`.deliverables-panel` 都被后续样式覆盖。
 
 **建议。** 与另外两个面板一致，改为 `var(--surface)` / `var(--line)` 等主题变量，或补一条深色覆盖。
 
@@ -145,7 +141,7 @@ max_completion_tokens: request.maxOutputTokens,
 
 同一状态的完成区却用中文写着“验收未通过，需检查”。中文界面同时出现英文失败句。
 
-**证据。** `assets/2026-10-25-desktop-real-models-round2/needs-review-banner.png`；字符串来自 `packages/core/agent.ts:942`，桌面把它作为运行错误原样显示。`ui.completionReason.missing-verification` 已有中文词条，但这条运行错误没有走该映射。
+**证据。** 字符串来自 `packages/core/agent.ts:942`，桌面把它作为运行错误原样显示。`ui.completionReason.missing-verification` 已有中文词条，但这条运行错误没有走该映射。
 
 **影响。** 普通编辑在未调用 `verify_work` 时就会触发；用户看到英文“工作结束”句，容易误以为应用出错或任务失败。
 
@@ -165,7 +161,7 @@ README 第 584 行仍写：
 
 ### 4.6 P2：`/export` 已从桌面移除，文档仍说可用
 
-README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行；实际 `apps/desktop/renderer-commands.ts:220` 的正则只有 `compact|goal|plan`，命令面板只列 `/compact`、`/goal`、`/plan` 和技能（截图 `command-menu.png`）。`renderer-export.ts` 与 carrier 的 `export` 命令仍在，但没有入口。
+README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被解析执行；实际 `apps/desktop/renderer-commands.ts:220` 的正则只有 `compact|goal|plan`，命令面板只列 `/compact`、`/goal`、`/plan` 和技能。`renderer-export.ts` 与 carrier 的 `export` 命令仍在，但没有入口。
 
 **影响。** 用户输入 `/export` 会把它当成普通消息发给模型，既不导出，也消耗一次调用；文档与 UI 不一致。
 
@@ -183,7 +179,7 @@ README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被�
 
 ### 4.8 P3：长问题卡顶部被裁切，计划内容从中间开始
 
-计划审批问题卡的卡片顶部 `y≈-21px`，初始视口只显示“改动任何已有内容…”之后的部分，问题标题和计划前半段被顶栏/红条遮住；用户需要先向上滚动才能读完整计划。截图 `plan-question-busy.png` 中第一行就是半句。
+计划审批问题卡的卡片顶部 `y≈-21px`，初始视口只显示“改动任何已有内容…”之后的部分，问题标题和计划前半段被顶栏/红条遮住；用户需要先向上滚动才能读完整计划，初始渲染的第一行就是半句。
 
 **建议。** 问题卡容器限制最大高度并允许内部滚动；卡片顶部滚动到可见区域（`scrollIntoView({block:'start'})`），或给长问题一个“展开全文”入口。
 
@@ -202,20 +198,20 @@ README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被�
 - 最简提示“只回复两个字：收到。”也失败；4 个矩阵场景和编码任务全部失败，0 工具调用、0 token。
 - 原始错误（解码后）：“请求内容触发安全策略，无法处理”。同一密钥、同一端点的**最小**原始请求（无系统提示、无工具）返回 200 “OK”，说明是桌面的大系统提示/工具目录触发了网关过滤器。
 - 桌面只给通用 400 建议，见 §4.9。
-- 证据：`claude-400.png`、`results/repro-claude.json`。
+- 证据：`results/repro-claude.json`。
 
 ### 5.2 GLM-5.3：图片请求 >5 分钟无响应，UI 停在“正在推理…”
 
 - 96×96 红色 PNG + “这张图片是什么颜色？”：90 秒时 `running=true`、0 条助手消息、状态“正在推理…”；停止按钮有效（“已停止”）。
 - 矩阵中同一请求在 300 秒仍运行，测试超时；随后切换模型才取消。
-- 同一连接的文字请求 20 秒左右可用。证据：`glm-vision-waiting.png`、`results/repro-glm-vision.json`。
+- 同一连接的文字请求 20 秒左右可用。证据：`results/repro-glm-vision.json`。
 
 ### 5.3 GPT-6-Astra：并行工具调用仍然失败
 
 - 同一轮要求两个 `read_file`：40.7 秒后运行失败，`code=tool-arguments-dropped`，错误“Tool arguments missing after one re-send with parallel tool calls disabled; still missing required arguments”。
 - 桌面已经做了正确的缓解：检测到整批必需参数为空，关闭并行再重发一次，记录 `provider.degraded`；仍失败后以“运行失败”结束，横幅已本地化。相比上一轮“显示完成但什么都没做”，这是改进，但连接仍不能做并行工具调用。
 - 单工具路径可用，且编码任务通过（115 秒）。
-- 证据：`gpt-parallel-failed.png`、`results/repro-gpt-parallel.json`。
+- 证据：`results/repro-gpt-parallel.json`。
 
 ### 5.4 Kimi-K3：偶发工具流 ID 冲突
 
@@ -227,13 +223,13 @@ README 第 584 行写只有 `compact`、`export`、`goal`、`plan` 四个会被�
 
 ## 6. 上一轮问题的回归验证
 
-| 上一轮问题                                   | 本轮结果                                                                                                                                       | 证据                                                      |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| 5.1 GPT-6-Astra 并行工具参数丢失             | **仍在**；桌面现在会明确失败并重发一次，横幅本地化，不再是“完成但没做”                                                                         | `gpt-parallel-failed.png`                                 |
-| 5.2 未知 `YUANTU_*` 导致启动失败但原因藏起来 | **已修复**：首屏横幅“Agent Host 无法启动：启动环境里有不合法的设置…”；通用设置页显示环境问题                                                   | `unknown-env-banner.png`、SHELL-14                        |
-| 5.3 运行中关闭后没有中断标记                 | **已修复**：Host 崩溃后显示“运行因应用异常退出而中断。”和恢复横幅；关窗后显示“已停止，未产生回答。”                                            | `close-during-run-marker.png`、`host-crash-recovered.png` |
-| 5.4 只读把策略拒绝写成“用户拒绝”             | **已改为能力白名单**：只读会话不暴露 `write_file`/`edit_file`，文件不存在，模型回答“当前会话没有写入工具”；不再出现“Permission denied by user” | `readonly-mode.png`、core-fixes FIX-03                    |
-| 5.5 Windows 原生沙箱未初始化导致命令不可用   | **本机已可用**：默认“帮我批准”（native）下 `node -e` 直接输出 42，没有出现沙箱提示；完全访问也可用。隔离强度未实测                             | SANDBOX-01/03                                             |
+| 上一轮问题                                   | 本轮结果                                                                                                                                       | 证据                              |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| 5.1 GPT-6-Astra 并行工具参数丢失             | **仍在**；桌面现在会明确失败并重发一次，横幅本地化，不再是“完成但没做”                                                                         | `results/repro-gpt-parallel.json` |
+| 5.2 未知 `YUANTU_*` 导致启动失败但原因藏起来 | **已修复**：首屏横幅“Agent Host 无法启动：启动环境里有不合法的设置…”；通用设置页显示环境问题                                                   | `SHELL-14`                        |
+| 5.3 运行中关闭后没有中断标记                 | **已修复**：Host 崩溃后显示“运行因应用异常退出而中断。”和恢复横幅；关窗后显示“已停止，未产生回答。”                                            | `results/recovery.json`           |
+| 5.4 只读把策略拒绝写成“用户拒绝”             | **已改为能力白名单**：只读会话不暴露 `write_file`/`edit_file`，文件不存在，模型回答“当前会话没有写入工具”；不再出现“Permission denied by user” | `core-fixes FIX-03`               |
+| 5.5 Windows 原生沙箱未初始化导致命令不可用   | **本机已可用**：默认“帮我批准”（native）下 `node -e` 直接输出 42，没有出现沙箱提示；完全访问也可用。隔离强度未实测                             | SANDBOX-01/03                     |
 
 ## 7. 已覆盖与未覆盖
 
@@ -289,7 +285,7 @@ node .scratch\desktop-real-models-round2\probe-sandbox.mjs
 ```
 
 - 结果：`results/*.json`（矩阵 `model-matrix.json`、编码 `coding-results.json`、恢复 `recovery.json` 等）。
-- 截图：`evidence/`；关键截图已复制到 `docs/assets/2026-10-25-desktop-real-models-round2/`。
+- 截图：`evidence/`（本机生成，未随仓库提交）。
 - 全量门禁基线：`npm run typecheck`、`npm run lint` 通过；`npm test` 在并发桌面负载下出现 1 个 `windows-shell.test.ts` 取消命令失败（853 通过 / 1 失败 / 4 跳过，fail-fast 后 44/296 文件有汇总），单独重跑 `tests/windows-shell.test.ts` 7/7 通过，判断为重负载下的偶发，不作为产品缺陷。
 
 ## 9. 结论与建议顺序
