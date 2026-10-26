@@ -778,6 +778,7 @@ interface PanelTransitionProps {
 #### T20: 流式 store 与内容适配器\n\n**进度:** 数据层 + 答案正文已完成。①stream-store（7 条可控时钟测试）；②MarkdownView 用 markdownBlocks 增量渲染、只重绘末尾变化块、不经 dangerouslySetInnerHTML；③live-content 把 #live .message-content 换成 React 根，
 
 enderer-live 的正文重绘改走它（reasoning 折叠与 120k 截尾/占位/跟随滚动仍由既有代码处理）。**LiveMessage 整体与 reasoning 折叠的 React 化留给 T21 transcript**。
+enderer-live.ts 已改为只绘制：text/reasoning 缓冲与 100ms 合并发布经 stream-store，订阅触发重绘；agent 7/7、round3 通过。
 
 **Files:** 新增 `ui/conversation/stream-store.ts`、`LiveMessage.tsx`、`MarkdownView.tsx`、必要时 `DomContent.tsx`；runtime 增加流式/统计/子 agent store；新增 `tests/desktop-react-stream.test.ts`；扩展 React smoke。
 

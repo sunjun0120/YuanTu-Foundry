@@ -16,6 +16,7 @@
  */
 import type { CarrierSnapshot, MessageDelta } from '../../packages/carrier/contract.ts';
 import { format, t } from './i18n.ts';
+import { createStreamStore } from './ui/conversation/stream-store.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -51,26 +52,22 @@ export function setupLiveMessage(options: {
   const conversation = required('conversation');
   let liveKey = '';
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
-  /**
-   * Streamed text accumulated from the delta channel. Snapshots no longer arrive per token, so the
-   * live bubble reads from this buffer and falls back to the snapshot's own copy (which the controller
-   * also keeps current) whenever the two disagree — for example right after a session reload.
-   *
-   * `reasoning` is a second buffer, not a second half of the first: the two channels are painted into
-   * different places, and mixing them here is how thinking would end up rendered as the answer.
-   */
-  let liveDelta: { id: string; text: string; reasoning: string } | null = null;
-  /** The text the live bubble should show: the streamed buffer when it matches, else the snapshot. */
+  // Delta merging and its 100ms publish budget live in the stream store; this file only paints.
+  const stream = createStreamStore();
+  stream.view.subscribe(() => schedule());
+  /** The text the live bubble should show: the streamed view when it matches, else the snapshot. */
   function liveText(): string {
     const live = options.getState()?.session.liveMessage;
     if (!live) return '';
-    return liveDelta?.id === live.id ? liveDelta.text : live.text;
+    const view = stream.view.getSnapshot();
+    return view?.messageId === live.id ? view.text : live.text;
   }
-  /** The same rule for the folded thought, read from its own buffer. */
+  /** The same rule for the folded thought, read from its own channel. */
   function liveReasoning(): string {
     const live = options.getState()?.session.liveMessage;
     if (!live) return '';
-    return liveDelta?.id === live.id ? liveDelta.reasoning : live.reasoning;
+    const view = stream.view.getSnapshot();
+    return view?.messageId === live.id ? view.reasoning : live.reasoning;
   }
   /** Markdown rendering is far too expensive to run per token, so paints stay coalesced at 100ms. */
   function livePlaceholder(): string {
@@ -118,12 +115,10 @@ export function setupLiveMessage(options: {
   function sync(): void {
     const live = options.getState()?.session.liveMessage;
     required('live').hidden = !live || !liveText();
-    // Drop the buffer once the run stops (or a reload replaced the message) so stale text can never
-    // reappear under a new message id.
-    if (!live) {
-      liveDelta = null;
-      paintLive('');
-    } else if (liveDelta && liveDelta.id !== live.id) liveDelta = null;
+    // The store clears its own buffer once the run stops (or a reload replaced the message), so stale text
+    // can never reappear under a new message id.
+    stream.acceptSnapshot({ liveMessage: live ?? null });
+    if (!live) paintLive('');
     const nextLive = live?.id ?? '';
     if (nextLive !== liveKey) {
       liveKey = nextLive;
@@ -136,22 +131,9 @@ export function setupLiveMessage(options: {
   // streams a slice belongs to — the answer or the thinking — and a slice must never be added to the
   // wrong one.
   function delta(delta: MessageDelta): void {
-    const live = options.getState()?.session.liveMessage;
-    const channel = delta.channel === 'reasoning' ? 'reasoning' : 'text';
-    if (!live || live.id !== delta.messageId) {
-      // The snapshot that announces this message has not been rendered yet. Buffer the slice; render()
-      // shows it from the buffer as soon as that snapshot arrives, and later deltas take the cheap
-      // path. Calling render() here would be wrong — with no live message it clears the buffer.
-      liveDelta = { id: delta.messageId, text: '', reasoning: '' };
-      liveDelta[channel] = delta.reset ? '' : delta.text;
-      return;
-    }
-    if (liveDelta?.id !== delta.messageId)
-      liveDelta = { id: delta.messageId, text: '', reasoning: '' };
-    // A reset means the attempt that produced what is buffered was thrown away, so the buffer is replaced
-    // rather than appended to. The answer's buffer can only be reset while it is still empty.
-    liveDelta[channel] = delta.reset ? delta.text : liveDelta[channel] + delta.text;
-    schedule();
+    // The store buffers even when the snapshot that announces this message has not arrived yet; the
+    // subscription above paints once its publish budget closes.
+    stream.acceptDelta(delta);
   }
   return { sync, delta, schedule };
 }
