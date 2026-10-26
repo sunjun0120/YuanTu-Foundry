@@ -857,6 +857,8 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 **规模:** 约 600–900 行（含测试迁移）。
 
+**进度:** 未开始。`renderer.ts` 仍创建多个 region 挂载点、旧整页 render 仍在、`RegionHost`/portal 适配仍在、兼容 id 登记表未清零、select upgrader 与翻译 walker 仍为 legacy 区域服务。本任务依赖 T24 的外壳接管，不能在剩余轮次内安全完成。
+
 **Interfaces:** `renderer.ts` 只创建 runtime/actions、启动唯一 `createRoot`、在 DesktopProviders 内挂载 App、退出时 `root.unmount/runtime.dispose`。Slot 保持架构约定的五种 context 和注册/注销语义。
 
 - [ ] 先用测试锁定 Slot 排序、同序稳定、动态注册、注销幂等、不重复挂载，以及 message/panel 的类型不能混用；React root 卸载后无订阅和定时器残留。
@@ -871,6 +873,8 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 **Files:** 按需更新 `README.md`、桌面架构相关现有文档、由 `npm run docs:generate` 更新的事实表，以及新增 `docs/validation-desktop-react-migration-YYYY-MM-DD.md`（实施当天替换日期）。
 
 **规模:** 文档与证据为主，约 1–2 天。
+
+**进度:** 部分完成。`docs/validation-desktop-react-migration-2026-10-27.md` 已逐模块记录实现/证据/未达标项；完整桌面冒烟 72 通过 / 0 失败 / 3 跳过、最终定向批次 190 通过。**未完成**：真实 Electron 的主题/中英文/字号/窗口尺寸截图对照、动效帧证据、打包资源与 CSP 的最终核验；因此本任务不能标记完成。
 
 - [ ] 对照完整模块表逐行填写实际目标文件与结果，确认隐藏功能的处理。检查 Electron/main/preload、协议、数据文件和模型/沙箱行为没有随迁移漂移。
 - [ ] 使用真实 Electron 检查浅/深/系统主题、中英文、各字号和当前测试覆盖的窗口尺寸；与迁移前截图比较，记录 Mantine 统一控件引起的预期变化，以及实际修复的布局偏移。保留原有信息结构、品牌和可用空间，不以像素不同直接判失败或忽略真实遮挡。
