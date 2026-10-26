@@ -517,19 +517,19 @@ interface PanelTransitionProps {
 
 #### T3: 样式 nonce 与 CSP 接入（主方案：静态 nonce）
 
-**Files:** 修改 `apps/desktop/index.html`（CSP + meta）、新增 `apps/desktop/ui/nonce.ts`、`ui/providers.tsx`（T6 建立后接 `getStyleNonce`，本任务先建常量与测试）、新增 `tests/desktop-react-csp.test.ts`（`@test-serial desktop-ui`，真实 Electron）；`apps/desktop/main-ui-document.ts` 与 `main.ts` 仅在实施可选轮换路径时创建/修改。
+**Files:** 修改 `apps/desktop/index.html`（CSP + meta）；新增 `apps/desktop/ui/nonce.ts`、`tests/desktop-react-csp.test.ts`（`@test-serial desktop-ui`，真实 Electron）；`ui/providers.tsx` 的 `getStyleNonce` 接线在 T6（本任务不建 providers），`apps/desktop/main-ui-document.ts` 与 `main.ts` 仅在实施可选轮换路径时创建/修改。
 
-**规模:** 约 250–400 行（含 Electron 夹具）。
+**规模:** 约 300–450 行（含 Electron 夹具）。
 
-**Interfaces:** `UI_STYLE_NONCE` 常量；`styleNonceFromDocument(document): string`（从 meta 读取并与常量校验）；可选轮换时 `renderUiDocument(template: string, nonce: string): string` 与 `installUiDocumentLoader(session: Session, pagePath: string): Promise<() => void>`。
+**Interfaces:** `UI_STYLE_NONCE` 常量；`STYLE_NONCE_META`；`styleNonceFromDocument(document): string`（从 meta 读取并与常量校验，缺失或不一致即抛错）；可选轮换时 `renderUiDocument(template: string, nonce: string): string` 与 `installUiDocumentLoader(session: Session, pagePath: string): Promise<() => void>`。
 
-- [ ] 先写真实 Electron 失败测试：当前 CSP 下 Mantine 的运行时 `<style>` 被拒；加入静态 nonce 后生效；无 nonce 的 `<style>` 与 inline script 仍被拒。
-- [ ] 修改 `index.html`：`style-src 'self' data: 'nonce-<值>'` + `<meta name="yuantu-style-nonce">`；`script-src`、`img-src`、`connect-src` 等保持原值。
-- [ ] `ui/nonce.ts` 导出常量、读取函数与威胁模型注释（§8 第 4 条）；`ui/providers.tsx` 在 T6 接入 `getStyleNonce`，本任务先断言常量与 HTML 一致（三方一致性测试）。
-- [ ] CSP 夹具覆盖（夹具内直接用 MantineProvider + 最小组件组合，不依赖尚未建立的项目组件）：AppShell 响应式样式、provider CSS 变量、Grid/Stack 布局、Popover/Combobox 定位、`InlineStyles`（Box 嵌套 styles）、开启 `deduplicateInlineStyles` 的 React 19 style hoisting；每条断言“样式生效 + 无 `securitypolicyviolation` + 未出现 style 属性类违规”。
+- [ ] 静态 nonce 三方一致：`index.html` 的 CSP `style-src 'self' data: 'nonce-…'`、同名 meta、`UI_STYLE_NONCE` 常量必须相同；CSP 不含 `unsafe-inline`/`unsafe-eval`，只出现一个 nonce，其余指令（`script-src 'self'` 等）逐字保持。
+- [ ] 真实 Electron 夹具用**产品 `index.html`**（CSP 与 meta 原样）加载 Mantine 树：AppShell、Grid/Stack、Popover（Floating UI 定位）、响应式 `Box`（触发 `InlineStyles`）、以及 `deduplicateInlineStyles` 下 React 19 的 `<style data-precedence>` 提升。断言 CSS 变量、global classes、内联响应式规则都生效且都带 nonce；无 nonce 的 `<style>` 与 inline script 被拒；启动后无 `securitypolicyviolation`。
+- [ ] 负向控制已实测：只把 CSP 里的 nonce 去掉（meta 与常量不变），上述测试立即失败（响应式 Box 宽度 1185px 而非 200px），证明测试不是恒真；恢复后 2/2 通过。
+- [ ] `ui/nonce.ts` 写常量、meta 读取函数与威胁模型注释（§8 第 4 条）；provider 在 T6 用 `getStyleNonce` 返回该常量，本任务先让夹具直接消费它。
 - [ ] 记录可选轮换路径的实测结论与实施条件（§8 第 5 条）；默认不实现，不创建 `main-ui-document.ts`，不改 `main.ts`。若后续启用，必须同时实现纯函数测试与 `loadFile` 下的 nonce 轮换断言。
-- [ ] 确认测试夹具不再用“剥掉 CSP meta”的方式证明通过；`desktop-i18n.test.ts` 等旧夹具可暂时保留剥离做法，但新测试必须使用真实 CSP。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-csp.test.ts tests/desktop-i18n.test.ts`、`npm run build`。
+- [ ] 新测试必须使用真实 CSP，不复用“剥掉 CSP meta 再注入夹具”的旧做法；`desktop-i18n.test.ts` 等旧夹具可暂时保留剥离做法，T6 迁移时再收紧。
+- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-csp.test.ts`、`npm run build`，构建后运行 `tests/desktop-language.smoke.mjs` 确认产品页在新增 CSP 下仍正常。
 
 #### T4: smoke 共享 helper 与兼容 id 基建
 
