@@ -499,19 +499,20 @@ interface PanelTransitionProps {
 
 #### T2: i18n 文案键化
 
-**Files:** 新增 `scripts/migrate-ui-copy.mjs`、`tests/ui-copy-migration.test.ts`、`tests/ui-i18n-coverage.test.ts`；修改 `apps/desktop/i18n.ts`（去掉硬编码正则、补 walker 跳过规则所需的导出）、`package.json`（`copy:migrate` 脚本）、必要时 `apps/desktop/i18n-*.ts` 补 key。
+**Files:** 新增 `scripts/migrate-ui-copy.mjs`、`tests/ui-copy-migration.test.ts`、`tests/ui-i18n-coverage.test.ts`；修改 `apps/desktop/i18n.ts`（导出 `dictionaryEntries`/`hasTranslation`、walker 跳过 `[data-react-owned]`、动态文案改由字典模板生成）、`apps/desktop/i18n-workspace.ts`（补 `ui.sessionActionsFor`/`ui.currentWorkspacePrefix`/`ui.disabled` 三个动态 key）、`package.json`（`copy:migrate` 脚本）。
 
-**规模:** 脚本约 300 行 + 测试约 200 行；实际文案转换随后续区域任务分摊。
+**规模:** 脚本约 330 行 + 测试约 230 行；实际文案转换随后续区域任务分摊。
 
-**Interfaces:** `node scripts/migrate-ui-copy.mjs [--dry-run|--write] <path...>`；字面量→`t(key[, values])` 的机械转换；冲突/未命中报告在 stdout 与 `.scratch/` 报告文件。
+**Interfaces:** `node scripts/migrate-ui-copy.mjs [--dry-run|--write] [--import-specifier <path>] <file-or-directory>...`；字面量/模板字面量/JSX 文本/JSX 属性 → `t(key[, values])` 的机械转换；冲突与未命中逐条报告到 stderr，有任一条时退出码 1；`--import-specifier` 供仓库外的夹具指定 import 路径。字典侧新增 `dictionaryEntries(): [key, zh, en][]` 与 `hasTranslation(key)`，与 `translate` 读同一张表。
 
 - [ ] 先写失败测试：`ui/**` 出现中文字面量必须被 i18n gate 报告；`ui/**` 里引用不存在的 key 必须被覆盖测试报告；`index.html` 的静态中文随后续区域迁移逐块消失，T24 兜底清零（覆盖率测试在过程中允许显式清单，清单只减不增）。
 - [ ] 实现脚本：用 TypeScript compiler API 解析，只处理 `ui/**` 与显式传入的 `index.html` 片段；从 `messages` 构建 zh→key 反查表（与 `domText` 同源），模板字面量 `${x}` 转 `{x}` 并生成 `values`；保留引号风格，默认 dry-run，`--write` 才落盘，结束后提示运行 prettier。
-- [ ] 冲突与未命中：同一中文多个 key 时优先 `ui.*`，否则写入报告并要求人工决定；脚本绝不自行发明 key 或改写文案。
-- [ ] 替换 `i18n.ts` 里 8 条硬编码正则（MCP 服务、会话操作、会话 id、项目规则、会话改动、正在执行、当前工作区、已停用）为显式模板 + `format()`，并补断言：这些动态文案在 en-US 下不再依赖正则。
-- [ ] walker 隔离：`translateDocument` 跳过 `[data-react-owned]` 子树（文本与属性都跳过），并补一条真实 DOM 测试：React 拥有的节点在语言切换后文本/属性不变。
-- [ ] 覆盖率测试：提取 `ui/**` 的 `t('…')` key 与 `format` 占位符，断言字典存在、占位符匹配；断言 `ui/**` 无产品中文字面量（注释除外）。
-- [ ] 在 M1 结束前用脚本对 `index.html` 做一次试验性转换并丢弃结果（只验证脚本可运行与报告质量）；正式转换随后续区域任务进行，T24 兜底核对。
+- [ ] 冲突与未命中：同一中文多个 key 时报告并**不替换**（旧文案保留，等人工决定）；脚本绝不自行发明 key 或改写文案；未命中的字符串原样保留并在 stderr 指名文件与文本。
+- [ ] 动态文案改为字典模板：`i18n.ts` 里 8 个手写英文的 `.replace` 改为 `format(t('key'), values)`——`◇ MCP 服务` 用 `mcp.title`，会话操作/会话 id/项目规则/会话改动/正在执行分别用 `ui.sessionActionsFor`、`ui.sessionShort`、`ui.projectResources`、`ui.sessionChanges`、`ui.runningTool`，`当前工作区：` 与 `已停用` 用本任务新增的两个 key。**匹配仍是渲染后中文**（walker 的机制），但英文不再有第二份字面量；每条由 `tests/ui-copy-migration.test.ts` 断言 `format` 结果与迁移前一致。生产者的 `t()` 化（彻底去掉正则）随后续区域任务进行，最后一个生产者迁移时删除对应模式。
+- [ ] walker 隔离：`translateDocument` 跳过 `[data-react-owned]` 子树（文本与属性都跳过），用 `excludedContent` 统一表达。真实 DOM 断言随第一个真实 React 夹具落地（T6 的 `desktop-react.smoke.mjs`）：React 节点在语言切换后文本/属性不变；本任务之前没有 React 节点可测，不以假 DOM 代替。
+- [ ] 覆盖率测试：`tests/ui-i18n-coverage.test.ts` 先在自己的夹具上证明“能报告中文文案与不存在的 key”，再对 `apps/desktop/ui` 断言零问题；避免一个永远为空的检查冒充门禁。
+- [ ] 迁移脚本测试：覆盖 JSX 文本、JSX 属性、模板字面量（含占位符顺序）、普通 `.ts` 字符串、dry-run 不改文件、未命中/冲突原样保留并退出 1、import 只插一次。
+- [ ] 脚本只处理 `.ts/.tsx`：`index.html` 的静态文案随各区域迁移被 React 标记替换，不经过本脚本（T24 兜底核对）。本任务以一次 `apps/desktop` 的 dry-run 记录覆盖率：当前 705 处可机械替换、256 处需人工判断（多为“历史尝试”“续跑”这类片段，不应单独成 key），不写入产品代码。
 - [ ] 运行 `node scripts/run-tests.mjs tests/ui-i18n-coverage.test.ts tests/ui-copy-migration.test.ts tests/i18n-gate.test.ts`、`npm run i18n:check`、`npm run lint`、`npm run typecheck`。
 
 #### T3: 样式 nonce 与 CSP 接入（主方案：静态 nonce）

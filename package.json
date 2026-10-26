@@ -57,6 +57,7 @@
     "cycles:check": "node scripts/check-import-cycles.mjs",
     "layers:check": "node scripts/check-layers.mjs",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "copy:migrate": "node scripts/migrate-ui-copy.mjs",
     "audit:check": "node scripts/check-audit.mjs",
     "smoke:client": "node scripts/run-tests.mjs tests/compiled-client.smoke.mjs",
     "check": "npm run format:check && npm run docs:check && npm run references:check && npm run cycles:check && npm run layers:check && npm run i18n:check && npm run typecheck && npm run lint && npm run test:isolation:check && npm test && npm run build && npm run smoke:client",

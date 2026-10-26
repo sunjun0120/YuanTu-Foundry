@@ -38,6 +38,20 @@ export function translate(key: string, lang: UiLanguage, values?: TranslationVal
 export function t(key: string, values?: TranslationValues): string {
   return translate(key, language, values);
 }
+/**
+ * The dictionary as data, for the tooling that cannot go through `t`.
+ *
+ * The copy migrator (`scripts/migrate-ui-copy.mjs`) needs the reverse index `zh → key` to rewrite a literal into
+ * a `t('key')` call, and the coverage test needs the same list to refuse a `t('…')` the dictionary does not own.
+ * Both must read the one table `translate` reads, or a string could exist in the tooling's copy and nowhere else.
+ */
+export function dictionaryEntries(): readonly (readonly [string, string, string])[] {
+  return Object.entries(messages).map(([key, pair]) => [key, pair[0], pair[1]] as const);
+}
+/** Whether the dictionary owns `key`; a `t()` miss renders the key itself, which is what the coverage test refuses. */
+export function hasTranslation(key: string): boolean {
+  return Object.hasOwn(messages, key);
+}
 export function locale(): UiLanguage {
   return language;
 }
@@ -64,24 +78,43 @@ const originals = new WeakMap<Node, string>();
 const applied = new WeakMap<Node, string>();
 const attributeSources = new WeakMap<Element, Map<string, { original: string; applied: string }>>();
 const translatedAttributes = ['placeholder', 'aria-label', 'title'];
-const excludedContent = 'script,style,pre,code,.message-content,[translate="no"]';
+/**
+ * A React island's subtree: the component renders its own translated strings through `t`, so the walker must not
+ * rewrite text or attributes inside it. The selector is part of `excludedContent` rather than a second walk
+ * because both loops already ask "is this node outside the walker's reach".
+ */
+const reactOwned = '[data-react-owned]';
+const excludedContent = `script,style,pre,code,.message-content,[translate="no"],${reactOwned}`;
 let observing = false;
+/**
+ * One rendered line of legacy DOM, in the interface language.
+ *
+ * The dictionary is the only source of the English text: a dynamic line (a session name after its prefix, a tool
+ * run, the resource counts) is formatted from the key that already owns that sentence, instead of a second
+ * English literal living here. The patterns remain until each producer renders through `t()` — the region tasks
+ * do that as they migrate, and the pattern for a line goes away with its last producer.
+ */
 function translatedText(value: string): string {
   if (language === 'zh-CN') return value;
   const m = value.match(/^(\s*)(.*?)(\s*)$/s)!;
   let body = domText.get(m[2]!) ?? m[2]!;
   body = body
-    .replace(/^◇\s+MCP 服务$/, '◇ MCP Services')
-    .replace(/^会话操作[：:]\s*(.+)$/, 'Session actions: $1')
-    .replace(/^会话 ([a-f0-9]{1,8})$/i, 'Session $1')
+    .replace(/^◇\s+MCP 服务$/, () => `◇ ${t('mcp.title')}`)
+    .replace(/^会话操作[：:]\s*(.+)$/, (_line, name: string) =>
+      format(t('ui.sessionActionsFor'), { name }),
+    )
+    .replace(/^会话 ([a-f0-9]{1,8})$/i, (_line, id: string) => format(t('ui.sessionShort'), { id }))
     .replace(
       /^项目规则 (\d+) · 技能 (\d+) · 扩展 (\d+)$/,
-      'Project rules $1 · Skills $2 · Extensions $3',
+      (_line, instructions: string, skills: string, extensions: string) =>
+        format(t('ui.projectResources'), { instructions, skills, extensions }),
     )
-    .replace(/^会话改动 · (\d+) 次文件操作$/, 'Session changes · $1 file operations')
-    .replace(/^正在执行 (.+)$/, 'Running $1')
-    .replace(/^当前工作区：/, 'Current workspace: ')
-    .replace(/ · 已停用 · /g, ' · Disabled · ');
+    .replace(/^会话改动 · (\d+) 次文件操作$/, (_line, count: string) =>
+      format(t('ui.sessionChanges'), { count }),
+    )
+    .replace(/^正在执行 (.+)$/, (_line, name: string) => format(t('ui.runningTool'), { name }))
+    .replace(/^当前工作区：/, () => t('ui.currentWorkspacePrefix'))
+    .replace(/ · 已停用 · /g, () => ` · ${t('ui.disabled')} · `);
   return m[1] + body + m[3];
 }
 function translateDocument(root: Node): void {

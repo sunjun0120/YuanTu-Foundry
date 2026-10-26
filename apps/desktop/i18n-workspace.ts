@@ -61,6 +61,12 @@ export const workspaceMessages: Record<string, [string, string]> = {
     '模型输出达到本轮上限，回答可能不完整。可以重试、缩小任务，或在模型设置中提高输出上限。',
     'The model reached this turn’s output limit, so the answer may be incomplete. Retry, narrow the task, or raise the output cap in model settings.',
   ],
+  // The walker's dynamic line, matched against rendered text: the session menu is titled with the session it
+  // belongs to, and a workspace path follows the prefix in the same node. Both read the dictionary so the
+  // English copy is not a second literal in `i18n.ts`.
+  'ui.sessionActionsFor': ['会话操作：{name}', 'Session actions: {name}'],
+  'ui.currentWorkspacePrefix': ['当前工作区：', 'Current workspace: '],
+  'ui.disabled': ['已停用', 'Disabled'],
   'session.actions': ['会话操作', 'Session actions'],
   'session.rename': ['重命名', 'Rename'],
   'session.archive': ['归档', 'Archive'],
