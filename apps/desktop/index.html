@@ -153,20 +153,8 @@
           <div class="message-content"></div>
         </div>
         <div id="tools" class="tool-progress" hidden></div>
-        <section id="goal-panel" class="goal-panel" aria-label="会话目标" hidden>
-          <div class="goal-panel-header">
-            <h2 id="goal-title">会话目标</h2>
-            <span id="goal-status" class="goal-status"></span>
-          </div>
-          <p id="goal-objective" class="goal-objective" translate="no"></p>
-          <p id="goal-meta" class="goal-meta"></p>
-        </section>
-        <section id="deliverables-panel" class="deliverables-panel" aria-label="交付物" hidden>
-          <div class="deliverables-panel-header">
-            <h2 id="deliverables-title">交付物</h2>
-          </div>
-          <ul id="deliverables" class="deliverables"></ul>
-        </section>
+        <div id="goal-root"></div>
+        <div id="deliverables-root"></div>
         <div id="approvals" aria-label="待审批操作"></div>
         <div id="questions" aria-label="需要你的回答"></div>
       </section>
@@ -185,17 +173,7 @@
         <div class="run-status">
           <span id="run-status" role="status">正在连接…</span><span id="session-short"></span>
         </div>
-        <details id="todos-panel" class="todos-panel" aria-label="任务" hidden>
-          <summary>
-            <span class="todos-icon" aria-hidden="true">☷</span
-            ><strong id="todos-title">任务</strong
-            ><span id="todos-summary" class="todos-summary"></span
-            ><span class="todos-chevron" aria-hidden="true"></span>
-          </summary>
-          <div class="todos-body">
-            <ul id="todos" class="todos"></ul>
-          </div>
-        </details>
+        <div id="todos-root"></div>
         <div id="sandbox-prompt-root"></div>
         <form id="composer">
           <div id="attachments-root"></div>

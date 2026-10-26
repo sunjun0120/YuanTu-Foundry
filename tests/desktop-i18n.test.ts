@@ -96,7 +96,7 @@ async function desktopPage(t: test.TestContext) {
   const bundle = await build({
     stdin: {
       contents:
-        "export * from './apps/desktop/i18n.ts';  export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
+        "export * from './apps/desktop/i18n.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -209,116 +209,7 @@ test(
   },
 );
 
-test(
-  'background entry follows current jobs even after a previous session had jobs',
-  { timeout: 30000, skip: electronSkip },
-  async (t) => {
-    const page = await desktopPage(t);
-    if (!page) return;
-    const states = await page.evaluate<
-      Record<
-        'initial' | 'active' | 'switched' | 'completed' | 'cleared',
-        { hidden: boolean; popoverHidden: boolean; expanded: string }
-      >
-    >(`(() => {
-    Object.defineProperty(window,'localStorage',{configurable:true,value:{getItem:()=> '1',setItem(){}}});
-    let state=null;
-    const view=localeApi.setupBackgroundView({getState:()=>state,invoke:async()=>null});
-    const read=()=>({hidden:document.querySelector('#open-background').hidden,popoverHidden:document.querySelector('#background-popover').hidden,expanded:document.querySelector('#open-background').getAttribute('aria-expanded')});
-    view.render();const initial=read();
-    state={session:{sessionId:'first'},background:[{id:'job',sessionId:'first',command:'node fixture',status:'running',exitCode:null,createdAt:new Date().toISOString()}]};
-    view.render();document.querySelector('#open-background').click();const active=read();
-    state={session:{sessionId:'second'},background:state.background};view.render();const switched=read();
-    state.background=[{id:'done',sessionId:'second',command:'node quick',status:'completed',exitCode:0,createdAt:new Date().toISOString()}];view.render();const completed=read();
-    state.background=[];view.render();const cleared=read();
-    return {initial,active,switched,completed,cleared};
-  })()`);
-    assert.deepEqual(states.initial, { hidden: true, popoverHidden: true, expanded: 'false' });
-    assert.equal(states.active.hidden, false);
-    assert.equal(states.active.popoverHidden, false);
-    assert.deepEqual(states.switched, states.initial);
-    assert.equal(states.completed.hidden, false);
-    assert.deepEqual(states.cleared, states.initial);
-  },
-);
-
-test(
-  'background rows share subagent status markers and the entry has no icon',
-  { timeout: 30000, skip: electronSkip },
-  async (t) => {
-    const page = await desktopPage(t);
-    if (!page) return;
-    await page.setViewportSize({ width: 1100, height: 550 });
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    for (const file of [
-      'styles.css',
-      'styles-subagents.css',
-      'styles-panels.css',
-      'layout.css',
-      'layout-surfaces.css',
-      'layout-workspace.css',
-    ])
-      await page.addStyleTag({
-        content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
-      });
-    await page.evaluate(`
-    localeApi.setLocale('zh-CN');
-    document.documentElement.dataset.theme='dark';
-    window.backgroundState={session:{sessionId:'s',running:false,loading:false},background:[
-      {id:'active',sessionId:'s',command:'node scripts/run-tests.mjs',status:'running',exitCode:null,createdAt:new Date().toISOString()},
-      {id:'done',sessionId:'s',command:'powershell.exe -NoProfile -Command fixture',status:'completed',exitCode:0,createdAt:new Date(Date.now()-3000).toISOString(),finishedAt:new Date().toISOString()}
-    ]};
-    window.backgroundTestView=localeApi.setupBackgroundView({getState:()=>backgroundState,invoke:async()=>null});
-    window.subagentTestView=localeApi.setupSubAgents(()=>backgroundState,()=>{},()=>document.createElement('div'));
-    subagentTestView.update(['running','completed'].map((status,index)=>({id:'child-'+index,childSessionId:'child-session-'+index,index,total:2,role:'general',objective:'fixture',status,rounds:1,toolCalls:0,text:''})));
-    backgroundTestView.render();
-    document.querySelector('#open-background').click();
-  `);
-    const read = () =>
-      page.evaluate(`(() => {
-    const top=document.querySelector('#open-background');
-    const icons=[...document.querySelectorAll('.background-dot')];
-    const reference=[...document.querySelectorAll('#subagent-catalog .subagent-row-dot')];
-    const appearance=icon=>{const style=getComputedStyle(icon);return [style.width,style.height,style.backgroundColor,style.animationName]};
-    return {top:top.dataset.status,entryIcons:top.querySelectorAll('.background-icon,.background-chevron').length,
-      labels:icons.map(icon=>icon.getAttribute('aria-label')),
-      animations:icons.map(icon=>getComputedStyle(icon).animationName),
-      shared:icons.every(icon=>icon.classList.contains('subagent-row-dot')),
-      appearance:icons.map(appearance),reference:reference.map(appearance)};
-  })()`) as Promise<{
-        top: string;
-        entryIcons: number;
-        labels: string[];
-        animations: string[];
-        shared: boolean;
-        appearance: string[][];
-        reference: string[][];
-      }>;
-    const active = await read();
-    assert.equal(active.top, 'running');
-    assert.equal(active.entryIcons, 0);
-    assert.equal(active.shared, true);
-    assert.deepEqual(active.appearance, active.reference);
-    assert.deepEqual(active.labels, ['运行中', '已完成']);
-    assert.notEqual(active.animations[0], 'none');
-    assert.equal(active.animations[1], 'none');
-    await page.evaluate(
-      `backgroundState.background[0].status='completed';backgroundState.background[0].exitCode=0;backgroundTestView.render();`,
-    );
-    const finished = await read();
-    assert.equal(finished.top, 'completed');
-    assert.equal(finished.entryIcons, 0);
-    assert.deepEqual(finished.labels, ['已完成', '已完成']);
-    assert.deepEqual(finished.animations, ['none', 'none']);
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.evaluate(
-      `backgroundState.background[0].status='running';backgroundTestView.render();`,
-    );
-    assert.equal((await read()).animations[0], 'none');
-  },
-);
-
-for (const surface of ['background', 'workspace']) {
+for (const surface of ['workspace']) {
   test(
     `failed IPC restores ${surface} actions for retry`,
     { timeout: 30000, skip: electronSkip },
@@ -376,21 +267,12 @@ test(
     const page = await desktopPage(t);
     if (!page) return;
     await page.evaluate(`
-    window.yuantu = { files: async (command) => command.type === 'read' ? ({ok:true,preview:{kind:'text',text:'file bytes',path:command.path}}) : ({ok:true, listing:{path:'', entries:[{name:'工具',path:'工具',kind:'file'},{name:'保存',path:'保存',kind:'file'}]}}) };
     const fixture = document.createElement('input'); fixture.id='locale-attribute';
     for (const name of ['title','aria-label','placeholder']) fixture.setAttribute(name,'设置');
     document.body.append(fixture);
-    const panels = localeApi.setupSessionPanels(() => ({session:{sessionId:'abc123',messages:[{role:'user',content:'ask'},{role:'assistant',content:'',toolCalls:[{name:'todo_write'}]}]}}));
-    panels.todos([{content:'保存',status:'pending'}]);
-    panels.goal({objective:'工具',status:'active',roundsStarted:0,maxGoalRounds:3});
-    panels.deliverables([{path:'设置',description:'保存',bytes:2,sha256:'a'.repeat(64),at:new Date().toISOString()}]);
     localeApi.setLocale('en-US');
   `);
     assert.equal(await page.locator('#locale-attribute').getAttribute('title'), 'Settings');
-    assert.equal(await page.locator('.todo-content').textContent(), '保存');
-    assert.equal(await page.locator('#goal-objective').textContent(), '工具');
-    assert.equal(await page.locator('.deliverable-path').textContent(), '设置');
-    assert.equal(await page.locator('.deliverable-description').textContent(), '保存');
     await page.evaluate(`localeApi.setLocale('zh-CN');`);
     for (const attribute of ['title', 'aria-label', 'placeholder'])
       assert.equal(await page.locator('#locale-attribute').getAttribute(attribute), '设置');
@@ -405,5 +287,3 @@ test(
     assert.equal(await page.locator('#locale-attribute').getAttribute('title'), '新建会话');
   },
 );
-
-// The command vocabulary's language/alias/refusal rules are covered by tests/desktop-react-composer.test.ts.

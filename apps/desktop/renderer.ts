@@ -27,7 +27,7 @@ import { setupLiveMessage } from './renderer-live.ts';
 import { setupMessages } from './renderer-messages.ts';
 import { mountPlanPanel } from './ui/panels/plan-mount.tsx';
 import { setupQuestions } from './renderer-questions.ts';
-import { setupSessionPanels } from './renderer-session-panels.ts';
+import { mountSessionPanels } from './ui/panels/session-panels-mount.tsx';
 import { mountSessionSidebar } from './ui/sessions/session-mount.tsx';
 import type { SessionActivity } from './ui/sessions/session-model.ts';
 import { setupTranscript } from './renderer-transcript.ts';
@@ -793,7 +793,7 @@ function openWorkspaceFile(path: string, action: 'open' | 'reveal'): void {
       render();
     });
 }
-const sessionPanels = setupSessionPanels(
+const sessionPanels = mountSessionPanels(
   () => state,
   (path) => void workspaceView.open(path),
   window.yuantu.openWorkspacePath
@@ -1013,6 +1013,7 @@ window.addEventListener(
     backgroundView.dispose();
     statisticsView.dispose();
     planView.dispose();
+    sessionPanels.dispose();
     workspaceView.dispose();
     permissionSettings?.dispose();
     attachmentsView.dispose();

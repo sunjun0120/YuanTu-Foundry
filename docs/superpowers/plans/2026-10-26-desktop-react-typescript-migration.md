@@ -769,7 +769,7 @@ interface PanelTransitionProps {
 **进度:** 计划面板已完成 React 化：新增 `ui/panels/plan-view.ts`（纯模型：等待问题优先于状态、`planning` busy/idle 两种状态、proposed/approved/rejected/abandoned 的动作与提示、`discard` vs `exitMode` 标签）、`PlanPanel.tsx`、`plan-mount.tsx`；删除 `renderer-plan.ts`；`#plan-panel`/`#plan-title`/`#plan-status`/`#plan-summary`/`#plan-steps`/`#plan-reason`/`#plan-actions` 与 `.plan-*` 类保留；`tests/plan-contract.test.ts` 的 FakeDocument 段落改为 2 条纯模型测试（10/10）。任务数据层（drafts + task-view）已完成。剩余：任务列表/编辑器/会话辅助面板。
 
 - [x] `TaskConfirmDrafts` 已抽为纯 `.ts` 并保留原断言；任务文案/证据/步骤模型已抽并接入 format；计划面板 UI 已替换。
-- [ ] 任务进度更新不覆盖编辑中的确认选择或自由文本；任务列表/编辑器/待办/目标/交付文件与问题跳转的 React 化。
+- [ ] 任务进度更新不覆盖编辑中的确认选择或自由文本；剩余任务列表/编辑器的 React 化（待办/目标/交付物/计划已完成）。
 - [ ] 文案键化；旧绑定删除；兼容 id 更新。
 - [ ] 运行 `node scripts/run-tests.mjs tests/task-confirm-selection.test.ts tests/plan-contract.test.ts tests/workflows.smoke.mjs tests/desktop-react.smoke.mjs`。已完成 `task-confirm-selection` 13/13、`task-view` 6/6、`plan-contract` 10/10、`workflows` 4/4。
 
