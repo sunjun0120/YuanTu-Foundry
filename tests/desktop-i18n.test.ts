@@ -96,7 +96,7 @@ async function desktopPage(t: test.TestContext) {
   const bundle = await build({
     stdin: {
       contents:
-        "export * from './apps/desktop/i18n.ts';  export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupCommandPalette} from './apps/desktop/renderer-commands.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
+        "export * from './apps/desktop/i18n.ts';  export {setupWorkspace} from './apps/desktop/renderer-workspace.ts'; export {setupSessionPanels} from './apps/desktop/renderer-session-panels.ts'; export {setupBackgroundView} from './apps/desktop/renderer-background.ts'; export {setupSubAgents} from './apps/desktop/renderer-subagents.ts'; export {setupQuestions} from './apps/desktop/renderer-questions.ts';",
       resolveDir: projectRoot,
     },
     bundle: true,
@@ -423,61 +423,4 @@ test(
   },
 );
 
-test(
-  'the draft commands carry the interface language, and their refusal is translated',
-  { timeout: 30000, skip: electronSkip },
-  async (t) => {
-    /**
-     * A task draft's default steps are generated content rather than dictionary copy — they land in the fields the
-     * person edits — so the window has to say which language to write them in. This is the window's half of that:
-     * the command it hands the carrier carries the locale the interface is showing, and the refusal for a command
-     * typed without a description comes out of the dictionary rather than being concatenated in Chinese.
-     */
-    const page = await desktopPage(t);
-    if (!page) return;
-    const result = (await page.evaluate(`
-      (() => {
-        const palette = localeApi.setupCommandPalette({
-          getState: () => ({ session: { sessionId: 'export-session', messages: [] } }),
-          requestRender: () => {},
-          requestComposerUpdate: () => {},
-          invoke: async () => null,
-        });
-        localeApi.setLocale('en-US');
-        const english = palette.submitSlash('/plan tidy the settings page', false);
-        const refusal = palette.submitSlash('/plan', false);
-        const exported = palette.submitSlash('/export', false);
-        localeApi.setLocale('zh-CN');
-        const chinese = palette.submitSlash('/goal ship it', false);
-        const draft = palette.submitSlash('/task ship it', false);
-        const removed = ['model', 'permissions', 'stop', 'refresh-resources', 'new-session']
-          .map(name => palette.submitSlash('/' + name, false));
-        return { english, refusal, exported, chinese, draft, removed };
-      })()
-    `)) as {
-      english: { command: { language: string; type: string; prompt: string } };
-      refusal: { error: string };
-      exported: { command: { type: string; suggestedName: string; sessionId: string } };
-      chinese: { command: { language: string; type: string } };
-      draft: { command: { type: string; prompt: string } };
-      removed: unknown[];
-    };
-    assert.deepEqual(result.removed, [null, null, null, null, null]);
-    assert.equal(result.exported.command.type, 'export');
-    assert.equal(result.exported.command.suggestedName, 'yuantu-session.md');
-    assert.equal(result.exported.command.sessionId, 'export-session');
-    // `/task` is the advertised name; `/goal` remains the compatibility alias for the same draft command.
-    assert.equal(result.draft.command.type, 'goal');
-    assert.equal(result.draft.command.prompt, 'ship it');
-    assert.equal(result.chinese.command.type, 'goal');
-    assert.equal(result.english.command.language, 'en-US');
-    assert.equal(result.english.command.type, 'plan');
-    assert.equal(result.english.command.prompt, 'tidy the settings page');
-    assert.equal(result.chinese.command.language, 'zh-CN');
-    assert.equal(
-      result.refusal.error,
-      '/plan requires a description.',
-      'the refusal is dictionary copy, not a concatenated Chinese sentence',
-    );
-  },
-);
+// The command vocabulary's language/alias/refusal rules are covered by tests/desktop-react-composer.test.ts.

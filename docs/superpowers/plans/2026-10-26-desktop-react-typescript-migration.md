@@ -706,17 +706,18 @@ interface PanelTransitionProps {
 
 #### T15: 输入区与命令菜单
 
-**Files:** 新增 `ui/composer/Composer.tsx`、`composer-model.ts`、`CommandPalette.tsx`、`command-model.ts`；修改 `renderer-composer.ts`、`renderer-commands.ts` 接入点；新增 `tests/desktop-react-composer.test.ts`；扩展 `tests/desktop-react.smoke.mjs`、`tests/desktop-language.smoke.mjs`。
+**Files:** 新增 `ui/composer/CommandPalette.tsx`、`command-model.ts`、`command-mount.tsx`；删除 `renderer-commands.ts`；修改 `renderer-composer.ts`（仅类型导入）、`renderer.ts`、`index.html`、`tests/desktop-i18n.test.ts`；新增 `tests/desktop-react-composer.test.ts`；扩展 `tests/desktop-language.smoke.mjs`、`tests/workflows.smoke.mjs`。
 
 **规模:** 约 600–800 行。
 
-**进度:** 命令词汇与 slash 语义的数据层已完成（9 条纯测试）：四个命令、`/` 查询、名称/描述/值过滤 + skills、选中后的文本（export 返回 null 表示直接执行）、`/task`→goal 别名、缺描述拒绝并点名、export 携带 sessionId、附件不把消息当命令、goal/plan 携带界面语言。React 菜单与 composer 发送状态待下一步。
+**进度:** 命令词汇/过滤/slash 数据层（9 条纯测试）与 React 命令菜单已完成；`renderer-commands.ts` 删除，菜单挂到 `#command-menu-root`，adapter 负责 textarea 的值与 `aria-activedescendant`。**composer 表单本体（发送/排队/停止状态、IME）仍是 legacy**，待附件迁移后随输入区一起迁。
 
-- [ ] 行为测试：运行中输入生成 `enqueue(mode: 'follow-up')`，普通发送只提交一次；双击/Enter 重入不重复提交；发送失败仅在来源会话仍匹配、当前草稿为空时恢复文本/附件。
-- [ ] 真实 React 测试覆盖中文 IME：`isComposing` 或输入法兼容事件期间 Enter 不发送；保留 Enter/Shift+Enter、slash 选中优先级和焦点恢复。
-- [~] 命令菜单与 slash 已共用 `command-model.ts` 的同一命令定义、过滤与导出（数据层完成）；React 菜单渲染待下一步。
-- [ ] 文案键化；旧绑定删除。
-- [ ] 运行 `node scripts/run-tests.mjs tests/desktop-react-composer.test.ts tests/desktop-react.smoke.mjs tests/desktop-language.smoke.mjs`。
+- [ ] 行为测试：运行中输入生成 `enqueue(mode: 'follow-up')`，普通发送只提交一次；双击/Enter 重入不重复提交；发送失败仅在来源会话仍匹配、当前草稿为空时恢复文本/附件。（发送状态仍在 `renderer-composer.ts`，下一步随输入区迁移）
+- [ ] 真实 React 测试覆盖中文 IME：`isComposing` 或输入法兼容事件期间 Enter 不发送；保留 Enter/Shift+Enter、slash 选中优先级和焦点恢复。（现由 `renderer.ts` 的 keydown + `isComposing` 守卫保留）
+- [x] 命令菜单与 slash 共用同一 `command-model.ts` 定义、过滤与导出；菜单行来自同一命令词汇，导出携带真实 sessionId。
+- [x] 文案键化（复用既有 `ui.*`/`command.*`）；旧绑定删除（`renderer-commands.ts`）；`desktop-i18n` 的 slash 语言/别名/拒绝断言迁移到 `desktop-react-composer.test.ts`。
+- [x] **实测坑**：菜单可用性不能从 `textarea.disabled` 读——一次会话切换会在按键期间先禁用再启用，读到的 `true` 让菜单永久关闭；输入事件本身证明输入框可用。`desktop-language` 抓到。
+- [x] 验证：`desktop-language` 7/7、`workflows` 4/4、`agent` 7/7、`desktop` 9/9、`settings` 8 通过+1 跳过（MCP）、`desktop-i18n` 7/7、`desktop-react-composer` 9/9；lint/i18n/typecheck/format 通过。
 
 #### T16: 附件
 

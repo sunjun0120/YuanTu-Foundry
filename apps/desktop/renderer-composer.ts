@@ -14,7 +14,7 @@
 import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
 import { attachmentPrompt, type DocumentAttachment } from './attachment-contract.ts';
 import type { ImageAttachment } from '../../packages/protocol/index.ts';
-import { type SlashOutcome } from './renderer-commands.ts';
+import { type SlashOutcome } from './ui/composer/command-model.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);

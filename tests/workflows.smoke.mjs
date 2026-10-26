@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { choosePermissionPreset } from './desktop-smoke-support.mjs';
+import { choosePermissionPreset, chooseSelectOption } from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 
@@ -583,7 +583,7 @@ test(
     const openLanguage = async (locale) => {
       await page.locator('#open-settings').click();
       await page.locator('.settings-sidebar nav button').first().click();
-      await page.locator('#ui-language').selectOption(locale);
+      await chooseSelectOption(page, 'ui-language', locale === 'en-US' ? 'English' : 'Chinese');
       await page.locator('#settings-back').click();
     };
     await openLanguage('en-US');

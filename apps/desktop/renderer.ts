@@ -21,7 +21,7 @@ import { diffView } from './diff-view.ts';
 import { approvalSummary } from './approval-view.ts';
 import { setupAttachments } from './renderer-attachments.ts';
 import { setupBackgroundView } from './renderer-background.ts';
-import { setupCommandPalette } from './renderer-commands.ts';
+import { mountCommandPalette } from './ui/composer/command-mount.tsx';
 import { setupComposer } from './renderer-composer.ts';
 import { setupLiveMessage } from './renderer-live.ts';
 import { setupMessages } from './renderer-messages.ts';
@@ -251,7 +251,7 @@ let paintedWindow: { sessionId: string | null; historyStart: number; end: number
 /** Set once older history was prepended; cleared by a new message at the end or by another session. */
 let holdReadingPosition = false;
 let approvalKey = '';
-const commandsView = setupCommandPalette({
+const commandsView = mountCommandPalette({
   getState: () => state,
   requestRender: render,
   requestComposerUpdate: renderComposerState,
@@ -560,7 +560,10 @@ function render(): void {
     blocked ||
     (session.otherRuns?.length ?? 0) > 0 ||
     state.sessions.some((item) => item.activeRun);
-  commandsView.render();
+  commandsView.update({
+    skills: state.resources.skills ?? [],
+    disabled: element<HTMLTextAreaElement>('prompt').disabled,
+  });
   renderComposerState();
   /**
    * There is no enqueue-mode control any more: a message typed while the run is live is queued for after the
@@ -1013,6 +1016,7 @@ window.addEventListener(
   'pagehide',
   () => {
     permissionSettings?.dispose();
+    commandsView.dispose();
     sessionSidebar.dispose();
     workspaceSettings.dispose();
     sandboxInitialization.dispose();

@@ -123,3 +123,23 @@ export function slashOutcome(
           : { type: 'plan', prompt: argument, language: locale() };
   return { command };
 }
+export interface CommandPaletteState {
+  text: string;
+  skills: readonly SkillInfo[];
+  selected: number;
+  dismissed: boolean;
+  disabled: boolean;
+}
+
+export interface CommandPaletteController {
+  readonly store: import('../stores.ts').ReadableStore<CommandPaletteState>;
+  /** A keystroke in the composer: reset the menu and filter for the new line. */
+  onInput(): void;
+  /** `true` when the palette consumed the key (arrows, Enter on a row, Escape). */
+  onKeydown(event: KeyboardEvent): boolean;
+  choose(item: PaletteItem): void;
+  /** The composer's submit path asks this before treating the line as a message. */
+  submitSlash(text: string, hasAttachments: boolean): SlashOutcome | null;
+  update(input: { skills: readonly SkillInfo[]; disabled: boolean }): void;
+  dispose(): void;
+}
