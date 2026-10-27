@@ -108,6 +108,11 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
   };
 
   const visible = registry?.workspaces.filter((workspace) => !workspace.removed) ?? [];
+  const waiting = visible.flatMap((workspace) =>
+    (runtime[workspace.id]?.sessions ?? [])
+      .filter((session) => session.waiting > 0)
+      .map((session) => ({ workspace, session })),
+  );
   const activePath =
     visible.find((workspace) => workspace.id === registry?.activeWorkspaceId)?.canonicalPath ?? '';
   return (
@@ -116,6 +121,20 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
         {activePath}
       </div>
       <div className="section-label">{t('projects.title')}</div>
+      {waiting.length ? (
+        <button
+          type="button"
+          className="project-waiting-summary"
+          disabled={!canChange}
+          onClick={() => {
+            const first = waiting[0];
+            if (first) void openSession(first.workspace.id, first.session.id);
+          }}
+        >
+          {t('projects.waitingSummary', { count: waiting.length })}
+          <span aria-hidden="true">!</span>
+        </button>
+      ) : null}
       {visible.length ? (
         <ul className="project-list">
           {visible.map((workspace) => {

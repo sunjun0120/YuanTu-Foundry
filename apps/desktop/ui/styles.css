@@ -977,6 +977,20 @@ summary:focus-visible {
   margin-top: 10px;
 }
 
+.project-waiting-summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--goal-active);
+  font-size: 11px;
+}
+
 .workspace {
   font-size: 11px;
   color: #596660;

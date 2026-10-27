@@ -348,6 +348,7 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'projects.unavailable': ['不可用', 'Unavailable'],
   'projects.running': ['运行中', 'Running'],
   'projects.waiting': ['等待处理 {count} 项', 'Waiting on {count}'],
+  'projects.waitingSummary': ['{count} 项等待处理', '{count} waiting'],
   'projects.expand': ['展开项目会话', 'Expand project sessions'],
   'projects.collapse': ['收起项目会话', 'Collapse project sessions'],
   'workspace.treeLabel': ['工作区文件树', 'Workspace file tree'],
