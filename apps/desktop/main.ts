@@ -95,6 +95,26 @@ import {
 let window: BrowserWindow | null = null;
 let browserViews: BrowserViews | null = null;
 let projectWorkspaces: ProjectWorkspaces | null = null;
+/** The last workspace/session pair written to the registry; a snapshot burst must not rewrite the file. */
+let recordedLastSession = '';
+async function noteLastSession(state: CarrierSnapshot): Promise<void> {
+  const workspaces = projectWorkspaces;
+  const sessionId = state.session.sessionId;
+  if (!workspaces || !state.ready || !sessionId) return;
+  const key = `${state.workspace}\n${sessionId}`;
+  if (key === recordedLastSession) return;
+  recordedLastSession = key;
+  try {
+    const registry = await workspaces.list();
+    const entry = registry.workspaces.find(
+      (workspace) => !workspace.removed && samePath(workspace.canonicalPath, state.workspace),
+    );
+    if (entry && entry.lastSessionId !== sessionId)
+      await workspaces.setLastSession(entry.id, sessionId);
+  } catch {
+    /* The session is still usable when the registry is momentarily unreadable or unwritable. */
+  }
+}
 let service: CarrierService | null = null;
 let openingService: CarrierService | null = null;
 let unsubscribe: (() => void) | undefined;
@@ -296,6 +316,7 @@ function attach(next: CarrierService): CarrierService {
   service = next;
   unsubscribe = next.subscribe((state) => {
     runNotifier.update(state);
+    void noteLastSession(state);
     if (state.ready && state.session.sessionId) choices.follow(state.session.sessionId);
     pendingState = state;
     pendingFlush ??= setImmediate(flushState);
@@ -649,8 +670,24 @@ void app
                 ok: true,
                 registry: await projectWorkspaces.rename(command.id, command.displayName),
               };
-            case 'remove':
+            case 'remove': {
+              const registry = await projectWorkspaces.list();
+              const target = registry.workspaces.find(
+                (workspace) => workspace.id === command.id && !workspace.removed,
+              );
+              if (target && service && samePath(service.snapshot.workspace, target.canonicalPath)) {
+                const state = service.snapshot;
+                if (
+                  !state.ready ||
+                  state.session.running ||
+                  state.session.loading ||
+                  (state.session.otherRuns?.length ?? 0) > 0 ||
+                  state.sessions.some((item) => item.activeRun)
+                )
+                  throw new Error('Wait for the current operation to finish');
+              }
               return { ok: true, registry: await projectWorkspaces.remove(command.id) };
+            }
             case 'collapse':
               return {
                 ok: true,
