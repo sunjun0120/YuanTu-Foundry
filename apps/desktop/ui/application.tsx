@@ -547,7 +547,8 @@ export function connectDesktop(runtime: DesktopRuntime) {
       const nearBottom =
         conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 90;
       const title =
-        state.sessions.find((item) => item.id === session.sessionId)?.title || t('ui.newSession');
+        state.sessions.find((item) => item.id === session.sessionId)?.title ||
+        t('ui.untitledSession');
       updateChrome({ workspace: state.workspace, title });
       backgroundView.render();
 
@@ -615,9 +616,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
       });
       renderRunStatus();
       updateChrome({
-        sessionShort: session.sessionId
-          ? t('ui.sessionShort', { id: session.sessionId.slice(0, 8) })
-          : '',
         welcomeVisible: !Boolean(session.messages.length || session.running),
       });
       /**

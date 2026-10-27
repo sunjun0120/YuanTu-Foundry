@@ -144,7 +144,7 @@ test('the legacy dynamic lines read their English from the dictionary', async (t
   t.after(() => setLocale('zh-CN'));
   setLocale('en-US');
   assert.equal(format(translate('ui.sessionActionsFor'), { name: 'abc' }), 'Session actions: abc');
-  assert.equal(format(translate('ui.sessionShort'), { id: 'abc123' }), 'Session abc123');
+  assert.equal(translate('ui.untitledSession'), 'New session');
   assert.equal(
     format(translate('ui.projectResources'), { instructions: '3', skills: '2', extensions: '1' }),
     'Project rules 3 · Skills 2 · Extensions 1',

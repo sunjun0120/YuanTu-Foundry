@@ -960,6 +960,7 @@ test(
     );
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     await page.getByRole('heading', { name: '从一个任务开始。' }).waitFor();
+    await page.locator('#chat-title').getByText('新增会话', { exact: true }).waitFor();
     await app.close();
     app = undefined;
     page = await launch();

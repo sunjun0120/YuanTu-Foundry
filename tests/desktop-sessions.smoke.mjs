@@ -62,6 +62,11 @@ test(
       return page;
     };
     let page = await launch();
+    assert.equal(await page.locator('#session-short').count(), 0);
+    assert.doesNotMatch(
+      await page.locator('.composer-area').innerText(),
+      /(?:Session|会话) [0-9a-f]{8}/,
+    );
     const row = (id) => page.locator(`[data-session-id="${id}"]`);
     const more = (id) => page.locator(`[data-menu-session-id="${id}"]`);
     const idle = () =>

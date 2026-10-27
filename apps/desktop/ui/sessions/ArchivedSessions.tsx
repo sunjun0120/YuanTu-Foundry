@@ -68,7 +68,7 @@ function ArchivedRow({
   pending: boolean;
   confirmation: string | null;
 }): ReactNode {
-  const title = item.title || item.id.slice(0, 8);
+  const title = item.title || t('ui.untitledSession');
   const confirming = confirmation === item.id;
   const disabled = blocked || pending;
   return (

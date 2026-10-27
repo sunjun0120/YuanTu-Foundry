@@ -1064,11 +1064,6 @@ pre {
   padding: 10px 2px;
 }
 
-.session-short {
-  color: #a1aba4;
-  font-family: Consolas, monospace;
-}
-
 .composer {
   border: 1px solid #dce3dc;
   border-radius: 10px;
@@ -4132,11 +4127,6 @@ body {
   padding: 9px 14px;
   color: var(--muted);
   font-size: 11px;
-}
-
-.chat-page .session-short {
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .chat-page .composer {

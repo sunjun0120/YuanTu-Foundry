@@ -23,7 +23,6 @@ export const chrome = createStore({
   queueVisible: false,
   queueDisabled: false,
   runStatus: '',
-  sessionShort: '',
   welcomeVisible: true,
   olderVisible: false,
   olderDisabled: true,

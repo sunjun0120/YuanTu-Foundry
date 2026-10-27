@@ -377,9 +377,6 @@ export function ProductShell(): ReactNode {
                   <span id="run-status" role="status">
                     {status.runStatus || t('shell.connecting')}
                   </span>
-                  <span id="session-short" className="session-short">
-                    {status.sessionShort}
-                  </span>
                 </div>
                 <div id="todos-root">
                   <ViewSlot name="todos-root" />

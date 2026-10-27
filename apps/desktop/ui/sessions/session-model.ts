@@ -96,9 +96,9 @@ export function sessionAge(createdAt: string | number, language: string): string
   return then.toLocaleDateString(language, { month: 'short', day: 'numeric' });
 }
 
-/** The row's title: its own, or a short id; never an empty button. */
+/** The row's title: its own, or the untitled-session label; never an empty button. */
 export function sessionTitle(item: Pick<SessionInfo, 'id' | 'title'>): string {
-  return item.title || t('ui.sessionShort', { id: item.id.slice(0, 8) });
+  return item.title || t('ui.untitledSession');
 }
 
 export function visibleSessions(
@@ -127,7 +127,7 @@ export function sessionTooltip(
   activity: SessionActivity | undefined,
 ): string {
   const label = sessionStatusLabel(activity);
-  return `${item.title || item.id}${label ? `\n${label}` : ''}`;
+  return `${sessionTitle(item)}${label ? `\n${label}` : ''}`;
 }
 
 export function createSessionSidebarController(deps: {
@@ -226,7 +226,7 @@ export function createSessionSidebarController(deps: {
         dialog: {
           kind,
           targetId: sessionId,
-          title: item.title || t('ui.sessionShort', { id: sessionId.slice(0, 8) }),
+          title: item.title || t('ui.untitledSession'),
           value: item.title || '',
           error: '',
           saving: false,
