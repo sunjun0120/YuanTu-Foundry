@@ -27,16 +27,24 @@
 
 因 `npm test` 失败，后续 `npm run build` 与 `npm run smoke:client` 未在本轮 `check` 中执行；它们在之前的定向构建/冒烟中已分别通过。
 
-## 3. 定向验证（本轮及此前）
+## 3. 完整桌面冒烟
+
+`npm run smoke:desktop`（18 个套件）通过：
+
+- 78 个测试：77 通过，1 跳过，0 失败。
+- 跳过项：`desktop-round3` 的“opens Chromium and saves a screenshot”，原因是本机未安装 Chromium。
+- 总 wall time 约 312 秒。
+- 覆盖 `desktop.smoke`、`desktop-i18n`、`desktop-sessions`、`settings`、`workspace-ui`、`desktop-browser` 等；项目列表/`#choose-workspace`/`#workspace` 兼容钩子均由这些套件实际执行。
+
+## 4. 定向验证（本轮及此前）
 
 - `desktop-sessions.smoke.mjs` 6、`desktop-layout.smoke.mjs` 4、`desktop-browser.smoke.mjs` 1 通过。
 - `project-workspaces-store` 6、`project-workspaces-path` 5、`workspace-host-manager` 5、`browser-url` 2、`workspace-panel-loading` 14 通过。
 - 项目列表重命名、注册表启动写入、浏览器 guest 隔离与关闭销毁均有 smoke 断言。
 
-## 4. 未完成
+## 5. 未完成
 
-- 完整 `npm run check` 的绿跑（需在低负载下重跑，或先稳定 `windows-shell` 取消用例）。
-- 完整 `npm run smoke:desktop`（新增 `desktop-browser.smoke.mjs` 后尚未整套执行）。
+- 完整 `npm run check` 的绿跑（需在低负载下重跑，或先稳定 `windows-shell` 取消用例）；完整 `smoke:desktop` 已通过。
 - Phase 6 的 Host 路由集成：`WorkspaceHostManager` 已有单测，但 `main.ts` 仍是单 `service` 全局。
 - Phase 7 剩余：每工作区独立会话列表、两级折叠、触摸/键盘完整行为、运行中移除保护。
 - 打包/安装场景与跨平台手工记录。
