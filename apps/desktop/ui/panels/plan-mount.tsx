@@ -11,7 +11,7 @@ import { locale } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
 import { createStore, type ReadableStore } from '../stores.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { PlanPanel } from './PlanPanel.tsx';
 import { planView } from './plan-view.ts';
 
@@ -71,7 +71,7 @@ export function mountPlanPanel(actions: {
   };
   const host = document.getElementById('plan-root');
   const disposeRegion = host
-    ? mountRegion('plan', host, <PlanPanelHost store={store} onAction={dispatch} />)
+    ? registerView('plan', <PlanPanelHost store={store} onAction={dispatch} />)
     : () => {};
   return {
     render(plan) {

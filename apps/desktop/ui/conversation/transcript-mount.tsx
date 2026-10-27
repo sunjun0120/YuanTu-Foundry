@@ -18,7 +18,7 @@ import type { Message } from '../../../../packages/protocol/index.ts';
 import { locale } from '../../i18n.ts';
 import { TranscriptCache } from '../../transcript-cache.ts';
 import { useReadable } from '../context.tsx';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore, type WritableStore } from '../stores.ts';
 import {
   Conversation,
@@ -353,9 +353,8 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     }
   }
 
-  const disposeRegion = mountRegion(
+  const disposeRegion = registerView(
     'transcript',
-    host,
     <TranscriptHost store={store} registry={registry} onContinue={options.onContinue} />,
   );
 

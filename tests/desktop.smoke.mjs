@@ -144,6 +144,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     for (const fixture of sessions) {
@@ -271,6 +272,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
@@ -414,6 +416,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(12000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).first().click();
@@ -562,6 +565,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await choosePermissionPreset(page, 'guarded');
@@ -626,6 +630,7 @@ for (const transition of ['Host recovery', 'model replacement']) {
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(15_000);
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
       const applied = await page.evaluate(() =>
@@ -735,6 +740,7 @@ require(${JSON.stringify(entry)});
         timeout: 15_000,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(15_000);
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
       await assert.rejects(
@@ -833,6 +839,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(15_000);
       await page.getByRole('button', { name: '发送', exact: true }).waitFor();
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
@@ -1136,6 +1143,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(12000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await choosePermissionPreset(page, 'guarded');

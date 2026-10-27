@@ -149,6 +149,7 @@ test('desktop shows, attributes and can open a sub-agent run', { timeout: 180000
   });
   app = await launch();
   let page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   page.setDefaultTimeout(20000);
   const idle = () =>
     page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
@@ -438,6 +439,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
@@ -591,6 +593,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(15000);
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
       return page;
@@ -789,6 +792,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Inspect');
@@ -869,6 +873,7 @@ test(
     });
     app = await launch();
     let page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(20000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Check the note file');
@@ -1023,6 +1028,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Read and search the note');
@@ -1180,6 +1186,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(20000);
     try {
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);

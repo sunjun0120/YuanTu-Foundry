@@ -9,7 +9,7 @@ import type { DesktopBridge } from '../../contract.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import { onLocaleChange, t } from '../../i18n.ts';
 import { showSettingsPanel } from '../../renderer-panels.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { WorkspaceMaintenance } from './WorkspaceMaintenance.tsx';
 import { createWorkspaceSettingsController } from './workspace-settings-model.ts';
 
@@ -22,16 +22,14 @@ export function mountWorkspaceSettings(
 } {
   const content = document.getElementById('workspace-maintenance-content');
   if (!content) return { update() {}, dispose() {} };
-  content.replaceChildren();
   const controller = createWorkspaceSettingsController({
     maintenance: (command) => bridge.workspaceMaintenance(command),
     archived: bridge.archivedSessions ? () => bridge.archivedSessions!() : undefined,
     select: deps.select,
     isVisible: () => content.hidden === false,
   });
-  const disposeRegion = mountRegion(
+  const disposeRegion = registerView(
     'workspace-settings',
-    content,
     <WorkspaceMaintenance controller={controller} />,
   );
   const label = document.getElementById('workspace-maintenance-label');

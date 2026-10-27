@@ -56,6 +56,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(8000);
       await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
@@ -255,6 +256,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('选择主题颜色');
@@ -327,6 +329,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('杀死宿主进程');
@@ -430,6 +433,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('看一下截图');
@@ -539,6 +543,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).click();
@@ -711,6 +716,7 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
     env,
   });
   const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   page.setDefaultTimeout(15_000);
   await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
 

@@ -12,7 +12,7 @@ import { flushSync } from 'react-dom';
 import type { ReactNode } from 'react';
 import type { MarkdownActions } from '../../markdown.ts';
 import { useReadable } from '../context.tsx';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import { LiveMessage } from './LiveMessage.tsx';
 import type { LiveMessageSurface, LiveMessageView } from './live-model.ts';
@@ -39,7 +39,7 @@ export function mountLiveMessage(options: {
   const store = createStore<LiveMessageView>(EMPTY_VIEW);
   const host = document.getElementById('live');
   const dispose = host
-    ? mountRegion('live-message', host, <LiveMessageHost store={store} actions={options.actions} />)
+    ? registerView('live-message', <LiveMessageHost store={store} actions={options.actions} />)
     : () => {};
   return {
     paint(view) {

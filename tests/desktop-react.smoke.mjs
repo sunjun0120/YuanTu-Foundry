@@ -19,7 +19,6 @@ const uiDir = path.join(projectRoot, 'apps/desktop/ui');
 const REPO_ALIASES = {
   '@repo/primitives': path.join(uiDir, 'primitives.tsx'),
   '@repo/app': path.join(uiDir, 'App.tsx'),
-  '@repo/regions': path.join(uiDir, 'legacy/mount-region.tsx'),
   '@repo/shell': path.join(uiDir, 'layout/DesktopShell.tsx'),
   '@repo/i18n': path.join(projectRoot, 'apps/desktop/i18n.ts'),
   '@repo/ui-i18n': path.join(uiDir, 'i18n.ts'),
@@ -70,7 +69,6 @@ import { createRoot } from 'react-dom/client';
 import { useSyncExternalStore, useState } from 'react';
 import { Button, Dialog, Select, Stack, Text, TextInput } from '@repo/primitives';
 import { mountDesktopApp } from '@repo/app';
-import { mountRegion } from '@repo/regions';
 import { locale, setLocale, t } from '@repo/i18n';
 import { useLocale } from '@repo/ui-i18n';
 import { createDesktopRuntime } from '@repo/runtime';
@@ -144,9 +142,8 @@ const actions = createDesktopActions({
   focusPrompt: () => {},
   pending: createPendingOperations(),
 });
-mountDesktopApp({ runtime, actions });
+mountDesktopApp({ children: <div id="probe-mount" data-react-owned=""><Probe /></div>, runtime, actions });
 setupSelectMenus();
-mountRegion('probe', document.getElementById('probe-mount'), <Probe />);
 window.__ui = { setLocale, locale, setExplode };
 `;
 
@@ -160,7 +157,6 @@ window.__ui = { setLocale, locale, setExplode };
 const SHELL_ENTRY = `
 import { useSyncExternalStore } from 'react';
 import { mountDesktopApp } from '@repo/app';
-import { mountRegion } from '@repo/regions';
 import { DesktopShell } from '@repo/shell';
 import { createDesktopRuntime } from '@repo/runtime';
 import { createDesktopActions } from '@repo/actions';
@@ -195,7 +191,7 @@ function ShellProbe() {
 }
 
 const bridge = { subscribe: () => () => {}, invoke: async () => ({ ok: true, state: {} }) };
-mountDesktopApp({
+mountDesktopApp({ children: <ShellProbe />,
   runtime: createDesktopRuntime(bridge),
   actions: createDesktopActions({
     bridge,
@@ -208,7 +204,6 @@ mountDesktopApp({
     pending: createPendingOperations(),
   }),
 });
-mountRegion('shell', document.getElementById('shell-mount'), <ShellProbe />);
 window.__ui = { setAside };
 `;
 
@@ -221,7 +216,6 @@ window.__ui = { setAside };
 const SETTINGS_ENTRY = `
 import { useEffect, useMemo } from 'react';
 import { mountDesktopApp } from '@repo/app';
-import { mountRegion } from '@repo/regions';
 import { createDesktopRuntime } from '@repo/runtime';
 import { createDesktopActions } from '@repo/actions';
 import { createPendingOperations } from '@repo/state';
@@ -235,7 +229,7 @@ const stored = {
   notifications: true,
 };
 const bridge = { subscribe: () => () => {}, invoke: async () => ({ ok: true, state: {} }) };
-mountDesktopApp({
+mountDesktopApp({ children: <SettingsProbe />,
   runtime: createDesktopRuntime(bridge),
   actions: createDesktopActions({
     bridge,
@@ -270,7 +264,6 @@ function SettingsProbe() {
   return <GeneralSettings controller={controller} />;
 }
 
-mountRegion('settings', document.getElementById('settings-mount'), <SettingsProbe />);
 `;
 
 async function probePage(t) {
@@ -323,7 +316,6 @@ async function probePage(t) {
         '    <div id="desktop-root"></div>',
         '    <div id="legacy-copy">新建会话</div>',
         '    <select id="legacy-native-select"><option value="a">A</option></select>',
-        '    <div id="probe-mount"></div>',
       ].join('\n'),
     );
   await writeFile(path.join(root, 'index.html'), html);
@@ -350,6 +342,7 @@ async function probePage(t) {
     return null;
   }
   const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   await page.setViewportSize({ width: 1200, height: 800 });
   return page;
 }
@@ -434,6 +427,7 @@ async function shellPage(t) {
     return null;
   }
   const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   await page.setViewportSize({ width: 1200, height: 800 });
   return page;
 }
@@ -560,7 +554,7 @@ test('the React layer mounts into the product document', { skip: electronSkip },
     reactUpgraded: document.getElementById('react-native-select').closest('.select-menu') !== null,
     reactStillSelect: document.getElementById('react-native-select').tagName,
   }));
-  assert.equal(mounted.display, 'contents', 'the portal host must not become a layout box');
+  assert.equal(mounted.display, 'block', 'the application root owns the window layout');
   assert.equal(mounted.owned, true, 'the mounted container is marked as React-owned');
   assert.notEqual(mounted.bodyVariable, '', 'the provider injects its CSS variables');
   assert.notEqual(mounted.buttonBackground, 'rgba(0, 0, 0, 0)', 'Mantine styles the button');

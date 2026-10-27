@@ -82,6 +82,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).first().click();
@@ -191,6 +192,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator(`[data-session-id="${session.id}"]`).first().click();

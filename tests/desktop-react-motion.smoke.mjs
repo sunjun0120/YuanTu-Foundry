@@ -18,7 +18,6 @@ const ALIASES = {
   '@repo/transitions': path.join(uiDir, 'transitions.tsx'),
   '@repo/reduced-motion': path.join(uiDir, 'reduced-motion.ts'),
   '@repo/app': path.join(uiDir, 'App.tsx'),
-  '@repo/regions': path.join(uiDir, 'legacy/mount-region.tsx'),
   '@repo/runtime': path.join(uiDir, 'runtime.ts'),
   '@repo/actions': path.join(uiDir, 'actions.ts'),
   '@repo/state': path.join(uiDir, 'ui-state.ts'),
@@ -64,7 +63,6 @@ import { usePrefersReducedMotion } from '@repo/reduced-motion';
 import { Dialog } from '@repo/primitives';
 import { PageTransition, PanelTransition } from '@repo/transitions';
 import { mountDesktopApp } from '@repo/app';
-import { mountRegion } from '@repo/regions';
 import { createDesktopRuntime } from '@repo/runtime';
 import { createDesktopActions } from '@repo/actions';
 import { createPendingOperations } from '@repo/state';
@@ -96,7 +94,7 @@ function MotionProbe() {
 }
 
 const bridge = { subscribe: () => () => {}, invoke: async () => ({ ok: true, state: {} }) };
-mountDesktopApp({
+mountDesktopApp({ children: <MotionProbe />,
   runtime: createDesktopRuntime(bridge),
   actions: createDesktopActions({
     bridge,
@@ -109,7 +107,6 @@ mountDesktopApp({
     pending: createPendingOperations(),
   }),
 });
-mountRegion('motion', document.getElementById('probe-mount'), <MotionProbe />);
 `;
 
 async function motionPage(t) {
@@ -191,6 +188,7 @@ async function motionPage(t) {
     return null;
   }
   const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForSelector('#view-a');
   return page;
 }

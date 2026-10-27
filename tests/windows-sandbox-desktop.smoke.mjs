@@ -157,6 +157,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
         timeout: 20000,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       if (packagedApp) {
         const installed = await app.evaluate(({ app }) => ({
           packaged: app.isPackaged,

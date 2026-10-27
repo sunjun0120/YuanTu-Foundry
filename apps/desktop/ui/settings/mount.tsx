@@ -14,7 +14,7 @@
 import type { DesktopBridge } from '../../contract.ts';
 import { onLocaleChange, setLocale, t } from '../../i18n.ts';
 import { showSettingsPanel } from '../../renderer-panels.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore } from '../stores.ts';
 import type { UiSettings } from '../../ui-settings.ts';
 import { SettingsPage } from './SettingsPage.tsx';
@@ -43,8 +43,6 @@ export function mountGeneralSettings(bridge: DesktopBridge): () => void {
   };
   page?.addEventListener('pointerdown', pointer, true);
   page?.addEventListener('keydown', keyboard, true);
-
-  content.replaceChildren();
   const controller = createGeneralSettingsController({
     bridge: { uiSettings: (command) => bridge.uiSettings(command) },
     apply: applyUiSettings,
@@ -66,9 +64,8 @@ export function mountGeneralSettings(bridge: DesktopBridge): () => void {
   onLocaleChange(translateChrome);
   translateChrome();
 
-  const disposeRegion = mountRegion(
+  const disposeRegion = registerView(
     'general-settings',
-    content,
     <SettingsPage controller={controller} environment={environment} />,
   );
   const show = (): void => {

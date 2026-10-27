@@ -99,7 +99,9 @@ async function desktopPage(t: test.TestContext) {
         "export * from './apps/desktop/i18n.ts';",
         "export {mountSubagents} from './apps/desktop/ui/conversation/subagents-mount.tsx';",
         "export {mountQuestions} from './apps/desktop/ui/conversation/questions-mount.tsx';",
-        "export {RegionHost} from './apps/desktop/ui/legacy/mount-region.tsx';",
+        "export {ProductShell} from './apps/desktop/ui/layout/ProductShell.tsx';",
+        "export {MantineProvider} from '@mantine/core';",
+        "export {flushSync} from 'react-dom';",
         "export {createElement} from 'react';",
         "export {createRoot} from 'react-dom/client';",
       ].join('\n'),
@@ -114,6 +116,10 @@ async function desktopPage(t: test.TestContext) {
     define: { 'process.env.NODE_ENV': '"production"' },
   });
   await page.addScriptTag({ content: bundle.outputFiles[0]!.text });
+  await page.evaluate(`(() => {
+    window.localeRoot = localeApi.createRoot(document.getElementById('desktop-root'));
+    localeApi.flushSync(() => localeRoot.render(localeApi.createElement(localeApi.MantineProvider, null, localeApi.createElement(localeApi.ProductShell))));
+  })()`);
   return page;
 }
 
@@ -121,10 +127,19 @@ async function planApprovalPage(t: test.TestContext) {
   const page = await desktopPage(t);
   if (!page) return null;
   await page.setViewportSize({ width: 1100, height: 700 });
+  await page.addStyleTag({
+    content: await readFile(
+      path.join(projectRoot, 'node_modules/@mantine/core/styles.css'),
+      'utf8',
+    ),
+  });
   for (const file of ['styles.css', 'styles-panels.css', 'layout.css', 'layout-surfaces.css'])
     await page.addStyleTag({
       content: await readFile(path.join(projectRoot, 'apps/desktop', file), 'utf8'),
     });
+  await page.addStyleTag({
+    content: await readFile(path.join(projectRoot, 'apps/desktop/ui/styles.css'), 'utf8'),
+  });
   await page.evaluate(String.raw`
     (async () => {
     localeApi.setLocale('zh-CN');
@@ -146,8 +161,7 @@ async function planApprovalPage(t: test.TestContext) {
     questionView.render(planQuestions);
     // The panel now draws through the one React root, like every migrated region: mount the region host into the
     // product's #desktop-root and wait for the portal to commit before measuring scroll positions.
-    window.questionRoot=localeApi.createRoot(document.getElementById('desktop-root'));
-    questionRoot.render(localeApi.createElement(localeApi.RegionHost));
+    window.questionRoot=localeRoot;
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     const conversation=document.querySelector('#conversation');
     conversation.scrollTop=conversation.scrollHeight;
@@ -289,13 +303,12 @@ for (const surface of ['workspace']) {
       } else {
         const child = {id:'child',childSessionId:'child-session',index:0,total:1,role:'general',objective:'fixture',status:'completed',rounds:1,toolCalls:0,text:'done',workspace:{kind:'worktree',executionRoot:'/fixture',state:'ready'}};
         state.subagentTranscript={subagentId:child.id,childSessionId:child.childSessionId,objective:child.objective,status:'completed',messages:[],truncated:false};
-        const root = localeApi.createRoot(document.getElementById('desktop-root'));
+        const root = localeRoot;
         const view = localeApi.mountSubagents({
           getState:()=>state,
           send: command => command.type==='subagentWorkspace' ? invoke() : undefined,
           renderMessage: () => document.createElement('div')
         });
-        root.render(localeApi.createElement(localeApi.RegionHost));
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         update = () => view.update([child]); update();
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));

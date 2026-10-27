@@ -6,11 +6,12 @@
  * racing each other (`modelLock`). The picker's `__settings__` entry stays an **action**: it opens the settings page
  * and is restored before any command could carry it as a connection id.
  */
-import { locale, onLocaleChange, t } from './i18n.ts';
+import { onLocaleChange, t } from './i18n.ts';
 import { showSettingsPanel } from './renderer-panels.ts';
 import type { ModelSettingsView } from './settings-contract.ts';
 import { modelLock } from './ui/settings/model-lock.ts';
-import { pickerOptions } from './ui/settings/model-settings-model.ts';
+import { modelPicker } from './ui/settings/model-picker-state.ts';
+import { showPage } from './ui/navigation.ts';
 
 export function setupModelSettingsEntry(
   isBusy: () => boolean,
@@ -19,7 +20,6 @@ export function setupModelSettingsEntry(
   const byId = <T extends HTMLElement = HTMLElement>(id: string): T =>
     document.getElementById(id) as T;
   const page = byId('settings-page');
-  const picker = byId<HTMLSelectElement>('model');
   const switchStatus = byId<HTMLElement>('model-switch-status');
   let view: ModelSettingsView | null = null;
   let pending = false;
@@ -27,7 +27,7 @@ export function setupModelSettingsEntry(
 
   function updateBusy(): void {
     const locked = pending || isBusy() || modelLock.getSnapshot().form;
-    picker.disabled = locked;
+    modelPicker.set({ ...modelPicker.getSnapshot(), locked });
     byId<HTMLButtonElement>('settings-back').disabled = locked;
     byId<HTMLButtonElement>('open-settings').disabled = locked;
   }
@@ -40,16 +40,7 @@ export function setupModelSettingsEntry(
   modelLock.subscribe(updateBusy);
 
   function updatePicker(next: ModelSettingsView): void {
-    picker.replaceChildren();
-    for (const option of pickerOptions(next, {
-      noModel: t('settings.noModel'),
-      environment: locale() === 'en-US',
-    }))
-      picker.add(new Option(option.label, option.value));
-    // An action, not a connection: never left in the select's value.
-    picker.add(new Option(t('settings.modelEntry'), '__settings__'));
-    picker.value = next.connectionId || '';
-    picker.title = next.model || t('settings.addModelConnection');
+    modelPicker.set({ ...modelPicker.getSnapshot(), view: next });
   }
   async function refreshPicker(): Promise<void> {
     try {
@@ -76,6 +67,7 @@ export function setupModelSettingsEntry(
     byId('chat-sidebar').hidden = true;
     page.hidden = false;
     document.body.dataset.page = 'settings';
+    showPage('settings');
     byId(target === 'model' ? 'model-settings' : 'general-settings').dispatchEvent(
       new Event('click'),
     );
@@ -90,6 +82,7 @@ export function setupModelSettingsEntry(
     byId('chat-page').hidden = false;
     byId('chat-sidebar').hidden = false;
     document.body.dataset.page = 'chat';
+    showPage('chat');
     window.dispatchEvent(new CustomEvent('yuantu-settings-close'));
     byId('conversation').scrollTop = conversationScroll;
     byId<HTMLButtonElement>('open-settings').focus();
@@ -104,15 +97,12 @@ export function setupModelSettingsEntry(
   byId('settings-back').addEventListener('click', backToChat);
   byId('model-settings').addEventListener('click', showModelPanel);
 
-  picker.addEventListener('change', () => {
-    const id = picker.value;
+  const choose = (id: string): void => {
     if (id === '__settings__') {
-      picker.value = view?.connectionId || '';
       openSettings('model');
       return;
     }
     if (pending || isBusy() || !id || id === view?.connectionId) {
-      picker.value = view?.connectionId || '';
       return;
     }
     switchStatus.hidden = false;
@@ -126,16 +116,15 @@ export function setupModelSettingsEntry(
           updatePicker(reply.settings);
           switchStatus.hidden = true;
         } else {
-          picker.value = view?.connectionId || '';
           switchStatus.textContent = reply.error;
         }
       })
       .catch(() => {
-        picker.value = view?.connectionId || '';
         switchStatus.textContent = t('settings.connectionError');
       })
       .finally(() => busy(false));
-  });
+  };
+  modelPicker.set({ ...modelPicker.getSnapshot(), choose });
 
   void refreshPicker();
   return { updateBusy };

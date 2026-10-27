@@ -7,7 +7,7 @@
  */
 import type { DesktopBridge } from '../../contract.ts';
 import type { SandboxMode } from '../../sandbox-settings.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { FullAccessDialog } from './FullAccessDialog.tsx';
 import { PermissionChip } from './PermissionChip.tsx';
 import { createPermissionController } from './permission-model.ts';
@@ -39,14 +39,13 @@ export function mountPermissions(
   });
   const windowsHost = /Windows/i.test(navigator.userAgent);
   const disposeChip = chipHost
-    ? mountRegion(
+    ? registerView(
         'permission-chip',
-        chipHost,
         <PermissionChip controller={controller} windowsHost={windowsHost} />,
       )
     : () => {};
   const disposeDialog = dialogHost
-    ? mountRegion('permission-dialog', dialogHost, <FullAccessDialog controller={controller} />)
+    ? registerView('permission-dialog', <FullAccessDialog controller={controller} />)
     : () => {};
   return {
     updateBusy: () => controller.updateBusy(),

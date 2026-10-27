@@ -7,7 +7,7 @@
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import { createStore } from '../stores.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { BackgroundPanel, type BackgroundState } from './BackgroundPanel.tsx';
 
 export interface BackgroundHandle {
@@ -27,9 +27,8 @@ export function mountBackground(deps: {
   };
   const host = document.getElementById('background-root');
   const disposeRegion = host
-    ? mountRegion(
+    ? registerView(
         'background',
-        host,
         <BackgroundPanel store={store} invoke={deps.invoke} setOpen={setOpen} />,
       )
     : () => {};

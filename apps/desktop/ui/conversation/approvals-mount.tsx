@@ -12,7 +12,7 @@ import { locale, t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { ApprovalCard } from './Approvals.tsx';
 import { approvalEntries } from './approval-model.ts';
 
@@ -75,7 +75,7 @@ export function mountApprovals(deps: {
   };
   const host = document.getElementById('approvals');
   const disposeRegion = host
-    ? mountRegion('approvals', host, <ApprovalsHost store={store} decide={decide} />)
+    ? registerView('approvals', <ApprovalsHost store={store} decide={decide} />)
     : () => {};
   return {
     render(approvals) {

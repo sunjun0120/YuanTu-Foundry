@@ -8,7 +8,7 @@
 import type { FilesCommand, FilesReply } from '../../files-contract.ts';
 import { locale, t } from '../../i18n.ts';
 import { workspaceIcon } from '../../workspace-icons.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { WorkspacePanel } from './WorkspacePanel.tsx';
 import { createWorkspaceController } from './workspace-model.ts';
 
@@ -45,9 +45,8 @@ export function mountWorkspace(deps: {
     },
   };
   const disposeRegion = host
-    ? mountRegion(
+    ? registerView(
         'workspace',
-        host,
         <WorkspacePanel controller={controller} markdownActions={markdownActions} />,
       )
     : () => {};

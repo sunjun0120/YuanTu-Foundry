@@ -118,6 +118,7 @@ test(
     };
     app = await launch();
     let page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(async () =>
       JSON.stringify(await window.yuantu.invoke({ type: 'snapshot' })).includes(
         'Unsupported session database version',

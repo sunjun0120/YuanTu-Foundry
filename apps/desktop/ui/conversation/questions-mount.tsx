@@ -16,7 +16,7 @@ import { locale, onLocaleChange, translate } from '../../i18n.ts';
 import type { MarkdownActions } from '../../markdown.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import { Questions, type QuestionPanelActions } from './Questions.tsx';
 import {
@@ -147,9 +147,8 @@ export function mountQuestions(actions: QuestionMountActions): QuestionHandle {
     stopLocale = onLocaleChange(label);
   }
   const disposeRegion = host
-    ? mountRegion(
+    ? registerView(
         'questions',
-        host,
         <QuestionsHost
           store={store}
           actions={panelActions}

@@ -7,7 +7,7 @@
  */
 import type { DesktopBridge } from '../../contract.ts';
 import type { SandboxMode } from '../../sandbox-settings.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { SandboxPrompt } from './SandboxPrompt.tsx';
 import { createSandboxSetupController } from './sandbox-setup-model.ts';
 
@@ -22,11 +22,7 @@ export function mountSandboxSetup(bridge: DesktopBridge): {
     presets: bridge.presets,
     confirm: (message) => window.confirm(message),
   });
-  const disposeRegion = mountRegion(
-    'sandbox-prompt',
-    host,
-    <SandboxPrompt controller={controller} />,
-  );
+  const disposeRegion = registerView('sandbox-prompt', <SandboxPrompt controller={controller} />);
   void controller.start();
   return {
     setMode: (mode) => controller.setMode(mode),

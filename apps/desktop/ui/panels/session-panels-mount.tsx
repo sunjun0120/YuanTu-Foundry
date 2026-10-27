@@ -11,7 +11,7 @@ import type { Goal } from '../../../../packages/protocol/goals.ts';
 import type { PresentedFile } from '../../../../packages/protocol/deliverables.ts';
 import { useReadable } from '../context.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { DeliverablesPanel, GoalPanel, TodosPanel } from './SessionPanels.tsx';
 
 export interface SessionPanelsState {
@@ -63,7 +63,7 @@ export function mountSessionPanels(
   const mounts: (() => void)[] = [];
   const mount = (id: string, node: ReactNode): void => {
     const host = document.getElementById(id);
-    if (host) mounts.push(mountRegion(id, host, node));
+    if (host) mounts.push(registerView(id, node));
   };
   mount('todos-root', <TodosHost store={store} />);
   mount('goal-root', <GoalHost store={store} />);

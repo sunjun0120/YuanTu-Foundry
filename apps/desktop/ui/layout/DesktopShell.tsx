@@ -50,8 +50,10 @@ export function DesktopShell({
       <AppShell.Main className="desktop-shell-main">
         <div className="desktop-shell-content">{main}</div>
       </AppShell.Main>
-      {aside && asideVisible ? (
-        <AppShell.Aside className="desktop-shell-aside">{aside}</AppShell.Aside>
+      {aside ? (
+        <AppShell.Aside className="desktop-shell-aside" hidden={!asideVisible}>
+          {aside}
+        </AppShell.Aside>
       ) : null}
     </AppShell>
   );

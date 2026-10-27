@@ -20,6 +20,8 @@
  * `YUANTU_*` variables it reads — see §7-8 of the ledger). A switcher owned by whichever panel happened to be
  * added last is a switcher the next removal has to go looking for.
  */
+import { showPanel } from './ui/navigation.ts';
+
 const PANELS = {
   'workspace-maintenance-content': 'workspace-maintenance-settings',
   'general-settings-content': 'general-settings',
@@ -29,6 +31,7 @@ const PANELS = {
 export type SettingsPanelId = keyof typeof PANELS;
 
 export function showSettingsPanel(panelId: SettingsPanelId): void {
+  showPanel(panelId);
   for (const [id, buttonId] of Object.entries(PANELS)) {
     const panel = document.getElementById(id);
     if (panel) panel.hidden = id !== panelId;

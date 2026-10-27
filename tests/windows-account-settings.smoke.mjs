@@ -34,6 +34,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const prompt = page.locator('#sandbox-prompt');

@@ -19,7 +19,7 @@ import { memo } from '../../renderer-memo.ts';
 import { collectTurnChanges, type TurnChangedFile, type TurnChanges } from '../../turn-changes.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import {
   TurnChangesView,
@@ -183,10 +183,8 @@ export function mountTurnChanges(options: TurnChangesMountOptions): TurnChangesH
     },
   };
 
-  const region = document.createElement('div');
-  const disposeRegion = mountRegion(
+  const disposeRegion = registerView(
     'turn-changes',
-    region,
     <TurnChangesHost store={store} actions={actions} />,
   );
 

@@ -24,7 +24,7 @@ import { isRuntimeContext } from '../../../../packages/protocol/context.ts';
 import { locale, onLocaleChange, translate } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import {
   SubagentCards,
@@ -128,7 +128,6 @@ export function mountSubagents(deps: SubagentsMountOptions): SubagentsHandle {
   }
   const conversation = required('conversation');
   const viewer = required('subagent-transcript');
-  const transcriptRoot = required('subagent-transcript-root');
   const crumbChild = required('subagent-transcript-title');
   const crumbSep = required('chat-breadcrumb-sep');
   const chatTitle = required('chat-title');
@@ -137,7 +136,6 @@ export function mountSubagents(deps: SubagentsMountOptions): SubagentsHandle {
   const triggerPulse = required('subagents-pulse');
   const popover = required('subagents-popover');
   const catalog = required('subagent-catalog');
-  const list = required('subagent-list');
   const anchor = document.querySelector<HTMLElement>('.subagent-anchor');
   if (!anchor) throw new Error('Missing element: .subagent-anchor');
   const store = createStore<SubagentsState>({
@@ -343,11 +341,10 @@ export function mountSubagents(deps: SubagentsMountOptions): SubagentsHandle {
   });
 
   const disposeRegions = [
-    mountRegion('subagents-catalog', catalog, <CatalogHost store={store} onOpen={openChild} />),
-    mountRegion('subagents-list', list, <CardsHost store={store} onOpen={openChild} />),
-    mountRegion(
+    registerView('subagents-catalog', <CatalogHost store={store} onOpen={openChild} />),
+    registerView('subagents-list', <CardsHost store={store} onOpen={openChild} />),
+    registerView(
       'subagents-page',
-      transcriptRoot,
       <PageHost
         store={store}
         conversation={conversation}

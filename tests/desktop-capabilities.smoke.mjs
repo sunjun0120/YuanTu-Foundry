@@ -82,6 +82,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     assert.equal(await page.locator('#skill-select').count(), 0);
@@ -199,6 +200,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Use the external echo tool');
@@ -339,6 +341,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     // Absent, not empty: no plan yet is a different statement from an empty plan.

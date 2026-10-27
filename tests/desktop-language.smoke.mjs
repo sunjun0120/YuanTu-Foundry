@@ -48,6 +48,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     await waitForPage(
       page,
       async (id) => {
@@ -157,6 +158,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(8000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
 
@@ -319,6 +321,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('登录后跳回首页，请修复');
@@ -385,6 +388,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     const pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.setDefaultTimeout(15_000);
@@ -464,6 +468,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
     await waitForPage(page, () => !document.querySelector('#prompt').disabled);
     await page.locator(`[data-session-id="${parent.id}"]`).click();
@@ -566,6 +571,7 @@ test('a child page opens while that child is still running', { timeout: 60_000 }
     env,
   });
   const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   page.setDefaultTimeout(15_000);
   await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
   await page.locator('#prompt').fill('请委派一个子代理');
@@ -630,6 +636,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     const question = '你不能读写文件吗';

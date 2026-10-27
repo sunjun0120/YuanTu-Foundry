@@ -335,6 +335,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(30_000);
     page.on('console', (message) =>
       consoleLog.push(`${message.type()}: ${message.text()}`.slice(0, 300)),

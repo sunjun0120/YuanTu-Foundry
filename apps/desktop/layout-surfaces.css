@@ -6,7 +6,7 @@
   background: var(--surface);
   color: var(--ink);
 }
-:root[data-theme] #settings-page .settings-sidebar {
+:root[data-theme] .desktop-shell .settings-sidebar {
   background: var(--sidebar);
   border-color: var(--line);
 }
@@ -40,22 +40,22 @@
 :root[data-theme] #settings-page :is(input, textarea)::placeholder {
   color: var(--muted);
 }
-:root[data-theme] #settings-page .settings-sidebar nav button,
+:root[data-theme] .desktop-shell .settings-sidebar nav button,
 :root[data-theme] #settings-back {
   background: transparent;
   color: var(--muted);
 }
-:root[data-theme] #settings-page .settings-sidebar nav button {
+:root[data-theme] .desktop-shell .settings-sidebar nav button {
   justify-content: flex-start;
   text-align: left;
 }
-:root[data-theme] #settings-page .settings-sidebar nav button > span {
+:root[data-theme] .desktop-shell .settings-sidebar nav button > span {
   flex: 0 0 20px;
   width: 20px;
   text-align: center;
 }
-:root[data-theme] #settings-page .settings-sidebar nav button[aria-current='page'],
-:root[data-theme] #settings-page .settings-sidebar nav button:hover,
+:root[data-theme] .desktop-shell .settings-sidebar nav button[aria-current='page'],
+:root[data-theme] .desktop-shell .settings-sidebar nav button:hover,
 :root[data-theme] #settings-back:hover {
   background: var(--raised);
   color: var(--ink);

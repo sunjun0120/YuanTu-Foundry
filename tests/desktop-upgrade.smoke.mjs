@@ -79,6 +79,7 @@ test(
       // Keep this isolated evidence directory and snapshots for inspection; do not prune rollback evidence.
     });
     let page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     const saved = await page.evaluate(
       (url) =>

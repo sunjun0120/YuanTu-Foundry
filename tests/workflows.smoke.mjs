@@ -76,6 +76,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     const idle = () =>
       page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
@@ -211,6 +212,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     const idle = () =>
       page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
@@ -456,6 +458,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(20000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await choosePermissionPreset(page, 'guarded');
@@ -553,6 +556,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(20000);
     const idle = () =>
       page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);

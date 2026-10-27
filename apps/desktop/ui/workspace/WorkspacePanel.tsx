@@ -11,6 +11,7 @@ import { t } from '../../i18n.ts';
 import type { MarkdownActions } from '../../markdown.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
+import { navigation } from '../navigation.ts';
 import { FilePreview } from './FilePreview.tsx';
 import { FileTree } from './FileTree.tsx';
 import { Icon } from './Icon.tsx';
@@ -58,8 +59,14 @@ export function WorkspacePanel({
   const tab = selected === null ? undefined : state.tabs.get(selected);
 
   useEffect(() => {
+    navigation.set({
+      ...navigation.getSnapshot(),
+      workspaceOpen: state.open,
+      workspaceFullscreen: fullscreen,
+      workspaceWidth: actualWidth,
+    });
     document.body.style.setProperty('--workspace-width', `${actualWidth}px`);
-  }, [actualWidth]);
+  }, [actualWidth, state.open, fullscreen]);
 
   useEffect(() => {
     document.body.dataset.workspaceView = !state.open
@@ -79,7 +86,7 @@ export function WorkspacePanel({
       element.removeAttribute('role');
       element.removeAttribute('aria-modal');
     }
-  }, [state.open, fullscreen]);
+  }, [state.open, fullscreen, actualWidth]);
 
   // A newly opened file is scrolled into the tab strip; tabs are compact, and the row shares its width first.
   useLayoutEffect(() => {

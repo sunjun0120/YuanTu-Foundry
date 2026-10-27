@@ -7,7 +7,7 @@
  * bridge becomes a prop and this file disappears.
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { createStore } from '../stores.ts';
 import { CommandPalette } from './CommandPalette.tsx';
 import {
@@ -128,10 +128,6 @@ export function mountCommandPalette(deps: {
   };
 
   if (host)
-    disposeRegion = mountRegion(
-      'command-palette',
-      host,
-      <CommandPalette controller={controller} />,
-    );
+    disposeRegion = registerView('command-palette', <CommandPalette controller={controller} />);
   return controller;
 }

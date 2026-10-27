@@ -8,7 +8,7 @@
 import type { CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import type { DocumentAttachment } from '../../attachment-contract.ts';
 import type { ImageAttachment } from '../../../../packages/protocol/index.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { Attachments } from './Attachments.tsx';
 import { attachmentFailureText, createAttachmentsController } from './attachment-model.ts';
 
@@ -62,7 +62,7 @@ export function mountAttachments(deps: {
     onChange: deps.requestRender,
   });
   const disposeRegion = host
-    ? mountRegion('attachments', host, <Attachments controller={controller} />)
+    ? registerView('attachments', <Attachments controller={controller} />)
     : () => {};
   const attachButton = document.getElementById('attach-image');
   const openPicker = (): void => imageInput?.click();

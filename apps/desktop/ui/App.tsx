@@ -7,19 +7,17 @@
  * unmounting the rest of the window. The shell (`DesktopShell`/`AppShell`) replaces this at T24.
  */
 import { createRoot } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import type { ReactNode } from 'react';
 import type { DesktopActions } from './actions.ts';
 import { ErrorBoundary } from './ErrorBoundary.tsx';
-import { RegionHost } from './legacy/mount-region.tsx';
+import { desktopViews } from './views.tsx';
 import { DesktopProviders } from './providers.tsx';
 import type { DesktopRuntime } from './runtime.ts';
+import { ProductShell } from './layout/ProductShell.tsx';
 
-export function App(): ReactNode {
-  return (
-    <ErrorBoundary>
-      <RegionHost />
-    </ErrorBoundary>
-  );
+export function App({ children }: { children?: ReactNode }): ReactNode {
+  return <ErrorBoundary>{children ?? <ProductShell />}</ErrorBoundary>;
 }
 
 /**
@@ -31,18 +29,22 @@ export function App(): ReactNode {
 export function mountDesktopApp(options: {
   runtime: DesktopRuntime;
   actions: DesktopActions;
+  children?: ReactNode;
 }): () => void {
   const container = document.getElementById('desktop-root');
   if (!container) throw new Error('the desktop document has no #desktop-root');
   container.dataset.reactOwned = '';
   const root = createRoot(container);
-  root.render(
-    <DesktopProviders runtime={options.runtime} actions={options.actions}>
-      <App />
-    </DesktopProviders>,
+  flushSync(() =>
+    root.render(
+      <DesktopProviders runtime={options.runtime} actions={options.actions}>
+        <App>{options.children}</App>
+      </DesktopProviders>,
+    ),
   );
   return () => {
     root.unmount();
+    desktopViews.clear();
     delete container.dataset.reactOwned;
   };
 }

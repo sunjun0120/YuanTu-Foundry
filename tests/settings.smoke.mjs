@@ -62,6 +62,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
@@ -122,6 +123,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(8000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
@@ -131,10 +133,16 @@ test(
     assert.equal(await page.locator('#model-settings-content').isHidden(), true);
     // The command-isolation form is gone: the composer's chip is the only control that writes either knob.
     assert.equal(await page.locator('#sandbox-settings').count(), 0);
-    assert.equal(await page.locator('#model option').last().textContent(), '模型设置');
+    const modelActionLabel = async () => {
+      await page.locator('#settings-back').click();
+      const options = await readSelectOptions(page, 'model');
+      await page.locator('#open-settings').click();
+      return options.at(-1);
+    };
+    assert.equal(await modelActionLabel(), '模型设置');
     await chooseSelectOption(page, 'ui-language', 'English');
     assert.equal(await page.locator('#general-settings-title').textContent(), 'General');
-    assert.equal(await page.locator('#model option').last().textContent(), 'Model settings');
+    assert.equal(await modelActionLabel(), 'Model settings');
     await chooseSelectOption(page, 'ui-language', 'Chinese');
     await page.locator('#model-settings').click();
     assert.deepEqual(await readSelectOptions(page, 'settings-protocol'), [
@@ -203,7 +211,7 @@ test(
       await page.screenshot({ path: artifactPath('settings-page.png') });
     await page.locator('#settings-back').click();
     assert.equal(await page.locator('#prompt').inputValue(), '保留这份草稿');
-    await page.locator('#model').selectOption(saved.a.settings.connectionId);
+    await chooseSelectOption(page, 'model', 'model-a');
     await waitForPage(
       page,
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.model === 'model-a',
@@ -279,6 +287,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(10000);
       await page.getByRole('button', { name: '设置', exact: true }).waitFor();
       await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
@@ -441,6 +450,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(10000);
       await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
@@ -521,6 +531,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await page.locator('.workspace-resources').count(), 0);
@@ -664,7 +675,7 @@ test(
       await page.screenshot({ path: artifactPath('catalog-top.png') });
     }
     await page.locator('#settings-back').click();
-    await page.locator('#model').selectOption(saved.connections[1].connectionId);
+    await chooseSelectOption(page, 'model', 'text-model');
     await waitForPage(
       page,
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.model === 'text-model',
@@ -732,6 +743,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     const seeded = await page.evaluate(() =>
@@ -772,7 +784,7 @@ test(
     assert.equal(saved.connections[0].autoCompactTokens, 100000);
     assert.equal(saved.connections[0].streamIdleTimeoutMs, 180000);
     assert.equal(saved.connections[0].name, 'old-model');
-    assert.equal(await page.locator('#model option:checked').textContent(), 'old-model');
+    assert.equal(await page.locator('#model').inputValue(), 'old-model');
     await page.locator('[data-action="expand"]').click();
     await page.locator('[data-field="autoCompactTokens"]').fill('90000');
     await page.locator('[data-field="streamIdleTimeoutMs"]').fill('60000');
@@ -835,6 +847,7 @@ test(
         env: { ...env, ...extra },
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(10000);
       // The chip is enabled by this process, so it can be clicked before the Host can accept the change; every
       // step below assumes the pair can actually move.
@@ -1044,6 +1057,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(10000);
       await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
       return page;
@@ -1176,7 +1190,7 @@ test(
     }, other);
     const switched = await page.evaluate(() => window.yuantu.invoke({ type: 'chooseWorkspace' }));
     assert.equal(switched.ok, true);
-    await page.locator('#model').selectOption('__settings__');
+    await chooseSelectOption(page, 'model', '模型设置');
     await page.waitForFunction(
       (target) => document.querySelector('#mcp-workspace').textContent.includes(target),
       other,
@@ -1237,6 +1251,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15000);
     await page.locator('#error-text').waitFor({ state: 'visible' });
     const banner = await page.locator('#error-text').textContent();

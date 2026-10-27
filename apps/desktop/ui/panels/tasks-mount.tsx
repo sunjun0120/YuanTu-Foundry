@@ -9,7 +9,7 @@ import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carri
 import { TaskConfirmDrafts } from '../../task-confirm-drafts.ts';
 import { useReadable } from '../context.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { scheduleEditor, taskEditor, type EditorHost } from '../../renderer-tasks-editors.ts';
 import { TaskCards, type TaskCardActions, type TaskEditing } from './TasksPanel.tsx';
 
@@ -149,7 +149,7 @@ export function mountTasks(
 
   const root = document.getElementById('task-list');
   const disposeRegion = root
-    ? mountRegion('tasks', root, <TasksHost store={store} actions={actions} />)
+    ? registerView('tasks', <TasksHost store={store} actions={actions} />)
     : () => {};
   const handle = render as TasksHandle;
   handle.dispose = () => disposeRegion();

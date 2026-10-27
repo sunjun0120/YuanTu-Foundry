@@ -7,7 +7,7 @@
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import type { SessionInfo } from '../../../../packages/protocol/index.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { SessionDialog } from './SessionDialog.tsx';
 import { SessionSidebar } from './SessionSidebar.tsx';
 import { createSessionSidebarController, type SessionActivity } from './session-model.ts';
@@ -32,10 +32,10 @@ export function mountSessionSidebar(deps: {
   const dialogHost = document.getElementById('session-dialog-root');
   const controller = createSessionSidebarController({ select: deps.select });
   const disposeList = listHost
-    ? mountRegion('session-sidebar', listHost, <SessionSidebar controller={controller} />)
+    ? registerView('session-sidebar', <SessionSidebar controller={controller} />)
     : () => {};
   const disposeDialog = dialogHost
-    ? mountRegion('session-dialog', dialogHost, <SessionDialog controller={controller} />)
+    ? registerView('session-dialog', <SessionDialog controller={controller} />)
     : () => {};
   const create = document.getElementById('new-session');
   const workspace = document.getElementById('choose-workspace');

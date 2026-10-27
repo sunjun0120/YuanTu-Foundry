@@ -79,6 +79,25 @@ function invoke(command: CarrierCommand): Promise<CarrierSnapshot | null> {
 function select(command: CarrierCommand): Promise<CarrierSnapshot | null> {
   return actions.select(command);
 }
+// Create the product hosts before the controllers bind. Runtime/actions are stable instances shared by every view.
+const runtime = createDesktopRuntime(window.yuantu);
+const pendingOperations = createPendingOperations();
+const actions = createDesktopActions({
+  bridge: window.yuantu,
+  getState: () => state,
+  setError: (error) => {
+    localError = error;
+  },
+  requestRender: () => render(),
+  isSending: () => composerView.isSending(),
+  clearComposer: () => {
+    prompt.value = '';
+    attachmentsView.clear();
+  },
+  focusPrompt: () => prompt.focus(),
+  pending: pendingOperations,
+});
+const disposeDesktopUi = mountDesktopApp({ runtime, actions });
 setupSelectMenus();
 const statisticsView = mountStatistics();
 const workspaceView = mountWorkspace({ files: (command) => window.yuantu.files(command) });
@@ -205,24 +224,6 @@ let localError: string | Extract<DesktopReply, { ok: false }> | null = null;
  * themselves, and one boolean used to carry both meanings.
  */
 let externalBusy = false;
-const pendingOperations = createPendingOperations();
-const runtime = createDesktopRuntime(window.yuantu);
-const actions = createDesktopActions({
-  bridge: window.yuantu,
-  getState: () => state,
-  setError: (error) => {
-    localError = error;
-  },
-  requestRender: () => render(),
-  // The composer and the attachment list are initialised below; these callbacks run only after the first command.
-  isSending: () => composerView.isSending(),
-  clearComposer: () => {
-    prompt.value = '';
-    attachmentsView.clear();
-  },
-  focusPrompt: () => prompt.focus(),
-  pending: pendingOperations,
-});
 /** Whether the window should present itself as busy: a command in flight, or a settings form saving. */
 const isOperating = (): boolean => pendingOperations.isOperating() || externalBusy;
 let transcriptKey = '';
@@ -875,7 +876,6 @@ permissionSettings = mountPermissions(window.yuantu, {
   onSandboxMode: (mode) => sandboxInitialization.setMode(mode),
 });
 // The React root is created once, after the legacy DOM exists, and owns only the containers regions hand it.
-const disposeDesktopUi = mountDesktopApp({ runtime, actions });
 const disposeGeneralSettings = mountGeneralSettings(window.yuantu);
 const disposeModelSettings = mountModelSettings(window.yuantu);
 window.addEventListener(

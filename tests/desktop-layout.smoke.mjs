@@ -76,8 +76,13 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+    assert.equal(await page.locator('#desktop-root .mantine-AppShell-root').count(), 1);
+    assert.equal(await page.getByRole('main').count(), 1);
+    assert.equal(await page.locator('#desktop-root #chat-sidebar').count(), 1);
+    assert.equal(await page.locator('#desktop-root #conversation').count(), 1);
     assert.equal(
       await page
         .locator('#composer-verification, #plan-verification, .verification-editor')
@@ -93,22 +98,8 @@ test(
     }));
     assert.equal(scheme.mantine, scheme.expected);
     const logo = async (theme) => {
-      const nativeModelOpacity = await page.locator('#model').evaluate((el) => {
-        const disabled = el.disabled;
-        try {
-          return [false, true].map((state) => {
-            el.disabled = state;
-            return getComputedStyle(el).opacity;
-          });
-        } finally {
-          el.disabled = disabled;
-        }
-      });
-      assert.deepEqual(
-        nativeModelOpacity,
-        ['0', '0'],
-        'native model select must stay transparent when enabled or disabled in ' + theme,
-      );
+      assert.equal(await page.getByRole('combobox', { name: '切换模型' }).isVisible(), true);
+      assert.equal(await page.locator('select#model').count(), 0);
       assert.equal(
         await page.locator('#chat-page').evaluate((el) => getComputedStyle(el).backgroundColor),
         theme === 'dark' ? 'rgb(20, 20, 22)' : 'rgb(255, 255, 255)',
@@ -398,11 +389,11 @@ test(
 
 test('background tasks live in a conditional header popover without workspace context', async () => {
   const [html, renderer, css] = await Promise.all([
-    readFile('apps/desktop/index.html', 'utf8'),
+    readFile('apps/desktop/ui/layout/ProductShell.tsx', 'utf8'),
     readFile('apps/desktop/ui/panels/BackgroundPanel.tsx', 'utf8'),
     readFile('apps/desktop/layout-surfaces.css', 'utf8'),
   ]);
-  const header = html.match(/<main id="chat-page">[\s\S]*?<header>([\s\S]*?)<\/header>/)?.[1] ?? '';
+  const header = html.match(/id="chat-page"[\s\S]*?<header>([\s\S]*?)<\/header>/)?.[1] ?? '';
   // The popover is React now: the header owns a root, and the button/popover ids live in the component.
   assert.match(header, /id="background-root"/);
   assert.match(renderer, /id="open-background"/);
@@ -445,6 +436,7 @@ test(
       await rm(root, { recursive: true, force: true });
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(await page.locator('#open-background').isHidden(), true);
     assert.equal(await page.locator('#project-name').count(), 0);
@@ -546,6 +538,7 @@ test(
       env,
     });
     const page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator('#prompt').fill('Start a background command');
@@ -756,6 +749,7 @@ test(
       env,
     });
     const reopened = await app.firstWindow();
+    await reopened.waitForLoadState('domcontentloaded');
     await reopened.waitForFunction(() => !document.querySelector('#prompt').disabled);
     // Clearing removed the jobs from the session record too, so the reopened window lists none — and the trigger
     // that exists only to open that list stays hidden.

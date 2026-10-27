@@ -41,6 +41,7 @@ async function desktop(t, endpoint) {
     env,
   });
   const page = await app.firstWindow();
+  await page.waitForLoadState('domcontentloaded');
   page.setDefaultTimeout(15_000);
   await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
   return { page, root };

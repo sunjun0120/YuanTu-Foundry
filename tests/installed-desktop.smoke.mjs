@@ -175,6 +175,7 @@ test(
         console.error(`VERIFY_NATIVE_ERROR: ${title}: ${message}`);
     });
     let page = await app.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
     try {
       await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     } catch (error) {

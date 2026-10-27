@@ -43,6 +43,7 @@ test(
         env,
       });
       const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
       page.setDefaultTimeout(10000);
       await page.waitForFunction(() => !document.querySelector('#open-settings').disabled);
       await page.locator('#open-settings').click();

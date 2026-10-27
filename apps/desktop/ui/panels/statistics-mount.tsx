@@ -8,7 +8,7 @@ import type { SessionSnapshot } from '../../../../packages/client/session-contro
 import type { StatisticsDelta } from '../../../../packages/carrier/contract.ts';
 import { applyStatisticsDelta } from './statistics-model.ts';
 import { createStore } from '../stores.ts';
-import { mountRegion } from '../legacy/mount-region.tsx';
+import { registerView } from '../views.tsx';
 import { Statistics } from './Statistics.tsx';
 
 export interface StatisticsHandle {
@@ -20,9 +20,7 @@ export interface StatisticsHandle {
 export function mountStatistics(): StatisticsHandle {
   const store = createStore<SessionSnapshot | null>(null);
   const host = document.getElementById('composer-statistics');
-  const disposeRegion = host
-    ? mountRegion('statistics', host, <Statistics store={store} />)
-    : () => {};
+  const disposeRegion = host ? registerView('statistics', <Statistics store={store} />) : () => {};
   return {
     update(snapshot) {
       if (store.getSnapshot() !== snapshot) store.set(snapshot);
