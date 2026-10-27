@@ -1,3 +1,4 @@
+// @test-serial windows-sandbox: cancellation is measured while PowerShell starts; run alone so CPU contention cannot mask it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdir, writeFile } from 'node:fs/promises';
