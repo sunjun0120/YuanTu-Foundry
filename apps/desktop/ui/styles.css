@@ -1740,7 +1740,7 @@ select {
 }
 
 .subagent-process > summary::before {
-  content: 'â€?;
+  content: 'â€º';
   display: inline-block;
   font-size: 20px;
   line-height: 1;
@@ -4720,8 +4720,8 @@ body {
 }
 
 /*
- * The two readings share one line whenever the column is wide enough. They wrap as whole pills when it is not â€?the
- * minimum window with the workspace panel open leaves 264px, less than the pair needs â€?rather than run past the
+ * The two readings share one line whenever the column is wide enough. They wrap as whole pills when it is not â€” the
+ * minimum window with the workspace panel open leaves 264px, less than the pair needs â€” rather than run past the
  * composer and paint over the panel. `white-space` keeps a reading itself unbroken in either case.
  */
 .chat-page .composer-statistics {
@@ -6591,8 +6591,8 @@ body[data-workspace-view='fullscreen'] .desktop-shell-aside {
 
 /*
  * One scrollbar language for the whole window: no rail, no buttons, a rounded thumb inset from the edge. The colour is
- * derived from the theme's muted ink so every scrolling region â€?session list, transcript, settings, file tree and
- * preview â€?matches. `scrollbar-color`/`scrollbar-width` are the non-WebKit fallback; Chromium uses the pseudo-elements.
+ * derived from the theme's muted ink so every scrolling region â€” session list, transcript, settings, file tree and
+ * preview â€” matches. `scrollbar-color`/`scrollbar-width` are the non-WebKit fallback; Chromium uses the pseudo-elements.
  */
 *::-webkit-scrollbar {
   width: 10px;
