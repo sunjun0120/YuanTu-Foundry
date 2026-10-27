@@ -1,24 +1,15 @@
 /**
  * Which settings section is showing, decided in one place instead of by each section.
  *
- * The page has four panels and several modules that could each hide the others — `renderer-settings.ts` (model),
- * `ui/settings/mount.tsx` (general, now React) and `renderer-mcp.ts` (MCP) — and every one of them used to write
- * its own list of the panels to hide. That shape is what turns "add a section" into "update every switcher, and a
- * missed update is two panels drawn at once", which is exactly what `tests/desktop.smoke.mjs` asserts cannot happen
- * ("must display exactly one settings panel").
+ * The page has four panels: three React sections inside `#settings-page`, plus the dormant `#mcp-panel` that
+ * `renderer-mcp.ts` appends only while `PRODUCT_SCOPE.mcpManagement` is on. Each panel used to hide the others itself,
+ * which turns "add a section" into "update every switcher, and a missed update is two panels drawn at once" — exactly
+ * what `tests/desktop.smoke.mjs` asserts cannot happen ("must display exactly one settings panel").
  *
- * So the ids are data here, and a section shows itself by naming itself. The map is panel id to the sidebar
- * button that selects it, because the two are not always spelled alike: the MCP button exists only after that
- * module has run, and the panel it opens is `mcp-panel`.
- *
- * Hiding is by id rather than by walking one container's children because the panels live in two different
- * parents — two in `index.html`'s settings page, `mcp-panel` appended to it by `renderer-mcp.ts`. An entry whose
- * panel does not exist yet is simply skipped, so this answers correctly whichever module runs first.
- *
- * It lives in a module of its own rather than beside one of the three panels it switches: it was written inside
- * the environment section's module, and that section is gone (the desktop does not keep a page listing the
- * `YUANTU_*` variables it reads — see §7-8 of the ledger). A switcher owned by whichever panel happened to be
- * added last is a switcher the next removal has to go looking for.
+ * So the ids are data here, and a section shows itself by naming itself. The map is panel id to the sidebar button that
+ * selects it, because the two are not always spelled alike (`mcp-settings` opens `mcp-panel`). Hiding is by id rather
+ * than by walking one container's children, because the dormant panel is appended outside the React page; an entry
+ * whose panel does not exist yet is simply skipped.
  */
 import { showPanel } from '../navigation.ts';
 

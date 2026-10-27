@@ -17,17 +17,12 @@ import { MarkdownView } from './MarkdownView.tsx';
 import { liveBodyText, liveReasoningPreview, type LiveMessageView } from './live-model.ts';
 
 /**
- * The fold, marked as React-owned so the translation walker leaves it alone after the transcript moves it out of
- * `#live` and into `.process-steps`.
+ * The fold. React owns it, so the transcript can move the same node into the last process group while the run is
+ * live; a rebuilt node would lose the reader's open state with it.
  */
 function ReasoningFold({ reasoning }: { reasoning: string }): ReactNode {
   return (
-    <details
-      id="live-reasoning"
-      className="message-reasoning"
-      data-react-owned=""
-      hidden={reasoning === ''}
-    >
+    <details id="live-reasoning" className="message-reasoning" hidden={reasoning === ''}>
       <summary className="process-summary process-reasoning">
         <span className="process-icon" data-kind="reasoning" aria-hidden="true">
           <svg

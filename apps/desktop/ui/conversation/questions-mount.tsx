@@ -5,14 +5,13 @@
  * import and the teardown. Drafts live in the adapter rather than in React state: the host component is a projection
  * of `questionCards`, so a snapshot or a language change recomputes the labels without touching what was chosen.
  *
- * The container is handed to the single React root through `mountRegion`, the same seam every migrated region uses.
- * Its static `aria-label` is translated here because the i18n walker deliberately stops at `data-react-owned`: once
- * React owns the region, an attribute left in `index.html` would never follow the language again.
+ * The container and its accessible name belong to the shell (`ui/layout/ProductShell.tsx`), which renders `#questions`
+ * with `t('ui.questionLabel')`; the panel only contributes its rows, so there is no second owner to keep in step with
+ * the language.
  */
 import type { ReactNode } from 'react';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import type { PendingQuestion } from '../../../../packages/client/session-controller.ts';
-import { locale, onLocaleChange, translate } from '../../i18n.ts';
 import type { MarkdownActions } from '../../markdown.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
@@ -138,14 +137,6 @@ export function mountQuestions(actions: QuestionMountActions): QuestionHandle {
     },
   };
   const host = document.getElementById('questions');
-  let stopLocale: (() => void) | undefined;
-  if (host) {
-    const label = (): void => {
-      host.setAttribute('aria-label', translate('ui.questionLabel', locale()));
-    };
-    label();
-    stopLocale = onLocaleChange(label);
-  }
   const disposeRegion = host
     ? registerView(
         'questions',
@@ -172,7 +163,6 @@ export function mountQuestions(actions: QuestionMountActions): QuestionHandle {
     dispose() {
       if (disposed) return;
       disposed = true;
-      stopLocale?.();
       disposeRegion();
     },
   };

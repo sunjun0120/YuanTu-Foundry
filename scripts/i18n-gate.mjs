@@ -54,7 +54,7 @@ const WORKER_NAME = /worker[^/\\]*\.ts$/;
 export const EXCLUSIONS = [
   {
     pattern: /^apps\/desktop\/renderer[^/]*\.ts$/,
-    why: 'the renderer is translated at render time: its Chinese source text is the mechanism, and the DOM walker checks what a person ends up seeing',
+    why: 'the renderer translates at render time: the remaining DOM islands (messages, tool cards, diff bodies, the dormant MCP panel) choose a string by locale(), so their Chinese source text is the mechanism rather than copy that escaped the dictionary',
   },
   {
     pattern: /^apps\/desktop\/i18n(-[a-z-]+)?\.ts$/,

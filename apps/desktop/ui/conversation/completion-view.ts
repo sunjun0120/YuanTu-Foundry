@@ -13,6 +13,10 @@
 import type { CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import { locale, t } from '../../i18n.ts';
 
+/**
+ * The element the block is redrawn inside. The completion notice is rehosted into the transcript row, which React owns,
+ * so the read is of a seat the shell already rendered rather than of a page this module builds.
+ */
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
   if (!value) throw new Error(`Missing element: ${id}`);

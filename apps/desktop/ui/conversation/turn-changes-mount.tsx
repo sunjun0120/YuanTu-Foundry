@@ -96,6 +96,7 @@ export function mountTurnChanges(options: TurnChangesMountOptions): TurnChangesH
       const shell = document.createElement('section');
       shell.className = 'turn-changes';
       const holder = document.createElement('div');
+      // The marker is what the reduced-motion rule in `ui/styles.css` uses to reach React-rendered subtrees.
       holder.dataset.reactOwned = '';
       shell.append(holder);
       slot = { shell, holder };
@@ -163,7 +164,7 @@ export function mountTurnChanges(options: TurnChangesMountOptions): TurnChangesH
     if (!preview) {
       const element = document.createElement('section');
       element.className = 'turn-change-preview';
-      // Everything inside is React's: the translation walker must not rewrite a label it already owns.
+      // React renders everything inside; the marker puts it under the reduced-motion fallback as well.
       element.dataset.reactOwned = '';
       preview = { turnKey, path, element, file: current };
       opened.set(key, preview);

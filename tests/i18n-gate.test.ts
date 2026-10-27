@@ -18,9 +18,9 @@ import { tempRoot } from './temp-fixture.ts';
  */
 const EXCLUDED = [
   'apps/desktop/renderer.ts',
-  'apps/desktop/renderer-tasks.ts',
+  'apps/desktop/renderer-messages.ts',
   'apps/desktop/i18n.ts',
-  'apps/desktop/session-management.ts',
+  'apps/desktop/i18n-panels.ts',
   'apps/desktop/attachment-contract.ts',
 ];
 /**
