@@ -12,6 +12,7 @@ import type { MarkdownActions } from '../../markdown.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
 import { navigation } from '../navigation.ts';
+import { BrowserPane } from './BrowserPane.tsx';
 import { FilePreview } from './FilePreview.tsx';
 import { FileTree } from './FileTree.tsx';
 import { Icon } from './Icon.tsx';
@@ -42,6 +43,7 @@ export function WorkspacePanel({
   const [width, setWidth] = useState(() => Math.min(560, window.innerWidth * 0.42));
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [tooltip, setTooltip] = useState<{ text: string; left: number; top: number } | null>(null);
+  const [newTabError, setNewTabError] = useState('');
   const panel = useRef<HTMLElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
@@ -176,6 +178,7 @@ export function WorkspacePanel({
   };
 
   const active = state.active;
+  const activeBrowser = active.kind === 'browser' ? state.browserTabs.get(active.id) : undefined;
   const separator = workspacePath(selected, state.workspace);
   const projectName = workspaceName(state.workspace);
   const tabs: ReactNode[] = [
@@ -249,6 +252,47 @@ export function WorkspacePanel({
           onClick={() => {
             rememberScroll();
             controller.closeTab(file.path);
+          }}
+        >
+          <Icon kind="close" />
+        </button>
+      </div>,
+    );
+  }
+  for (const id of state.browserOrder) {
+    const browser = state.browserTabs.get(id);
+    if (!browser) continue;
+    const isActive = active.kind === 'browser' && active.id === id;
+    tabs.push(
+      <div
+        key={id}
+        className={`workspace-file-tab workspace-browser-tab${isActive ? ' active' : ''}`}
+        data-browser-tab={id}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-controls={`browser-${id}`}
+          aria-selected={isActive}
+          tabIndex={isActive ? 0 : -1}
+          title={browser.url || t('browser.untitled')}
+          className="workspace-tab"
+          onClick={() => {
+            rememberScroll();
+            controller.activateBrowser(id);
+          }}
+        >
+          <Icon kind="globe" />
+          <span>{browser.title || t('browser.untitled')}</span>
+        </button>
+        <button
+          type="button"
+          className="workspace-tab-close"
+          aria-label={t('workspace.closeTab', { name: browser.title || t('browser.untitled') })}
+          data-tooltip={t('workspace.closeTab', { name: browser.title || t('browser.untitled') })}
+          onClick={() => {
+            rememberScroll();
+            controller.closeBrowserTab(id);
           }}
         >
           <Icon kind="close" />
@@ -432,15 +476,29 @@ export function WorkspacePanel({
               id="workspace-new-browser"
               type="button"
               className="workspace-new-tab-option"
-              disabled
-              title={t('workspace.browserComing')}
+              onClick={() => {
+                setNewTabError('');
+                void controller
+                  .openBrowser()
+                  .catch((error: unknown) =>
+                    setNewTabError(error instanceof Error ? error.message : String(error)),
+                  );
+              }}
             >
               <Icon kind="globe" />
               <span className="workspace-new-tab-title">{t('workspace.browserTab')}</span>
               <span className="workspace-new-tab-hint">{t('workspace.browserTabHint')}</span>
             </button>
           </div>
+          {newTabError ? (
+            <p className="workspace-new-tab-error" role="alert">
+              {newTabError}
+            </p>
+          ) : null}
         </section>
+        {active.kind === 'browser' && activeBrowser ? (
+          <BrowserPane id={active.id} state={activeBrowser} />
+        ) : null}
         <FileTree
           state={state}
           controller={controller}

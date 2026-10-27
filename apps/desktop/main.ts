@@ -43,6 +43,8 @@ import type {
   OpenWorkspacePathReply,
 } from './contract.ts';
 import { workspaceFilePath } from './workspace-file-path.ts';
+import { BrowserViews } from './browser-views.ts';
+import { parseBrowserCommand, type BrowserReply } from './browser-contract.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -85,6 +87,7 @@ import {
  * `session-choices.ts`) and see this state through `ctx` — live getters, never copies.
  */
 let window: BrowserWindow | null = null;
+let browserViews: BrowserViews | null = null;
 let service: CarrierService | null = null;
 let openingService: CarrierService | null = null;
 let unsubscribe: (() => void) | undefined;
@@ -361,6 +364,8 @@ app.on('before-quit', (event) => {
     } catch (error) {
       dialog.showErrorBox(mainText('desktop.exitFailureTitle'), safeError(error));
     } finally {
+      browserViews?.destroyAll();
+      browserViews = null;
       quitAllowed = true;
       app.quit();
     }
@@ -532,8 +537,30 @@ void app
       callback(false),
     );
     window.webContents.session.setPermissionCheckHandler(() => false);
+    browserViews = new BrowserViews(window, (event) => {
+      if (window && !window.isDestroyed()) window.webContents.send('yuantu:browser-event', event);
+    });
+    // The guest is a child view, not part of the page: hiding or minimising the window must hide it too, and a
+    // restored window asks the renderer to re-measure rather than trusting the bounds it sent before the hide.
+    window.on('hide', () => browserViews?.hideAll());
+    window.on('minimize', () => browserViews?.hideAll());
+    window.on('show', () => browserViews?.requestLayout());
+    window.on('restore', () => browserViews?.requestLayout());
+    window.on('closed', () => {
+      browserViews?.destroyAll();
+      browserViews = null;
+    });
     const initial = attach(createService(workspace));
     registerAttachmentIpc(ctx, () => uiSettingsStore.view.language);
+    ipcMain.handle('yuantu:browser', async (event, input: unknown): Promise<BrowserReply> => {
+      try {
+        assertSender(event);
+        if (!browserViews || quitting || !window) throw new Error(mainText('desktop.quitting'));
+        return browserViews.handle(parseBrowserCommand(input));
+      } catch (error) {
+        return { ok: false, error: safeError(error) };
+      }
+    });
     ipcMain.handle(
       'yuantu:workspace-maintenance',
       async (event, input: unknown): Promise<WorkspaceMaintenanceReply> => {

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopBridge, DesktopWireReply } from './contract.ts';
+import type { BrowserEvent } from './browser-contract.ts';
 import { SnapshotMirror, type SnapshotPatch } from './snapshot-patch.ts';
 import type { PermissionPresetView } from './permission-presets.ts';
 import type {
@@ -12,6 +13,12 @@ import type {
 const mirror = new SnapshotMirror();
 const bridge: DesktopBridge = {
   workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
+  browser: (command) => ipcRenderer.invoke('yuantu:browser', command),
+  subscribeBrowser(listener) {
+    const receive = (_event: Electron.IpcRendererEvent, event: BrowserEvent) => listener(event);
+    ipcRenderer.on('yuantu:browser-event', receive);
+    return () => ipcRenderer.removeListener('yuantu:browser-event', receive);
+  },
   archivedSessions: () => ipcRenderer.invoke('yuantu:archived-sessions'),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
   files: (command) => ipcRenderer.invoke('yuantu:files', command),

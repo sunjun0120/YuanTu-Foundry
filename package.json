@@ -35,7 +35,7 @@
     "check:windows-sandbox": "node scripts/check-windows-sandbox.mjs",
     "check:windows-desktop-sandbox": "npm run build && node scripts/check-windows-sandbox.mjs --desktop",
     "desktop": "npm run build && node scripts/start-desktop.mjs",
-    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/desktop-round3.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-i18n.test.ts tests/desktop-react.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react-navigation.smoke.mjs tests/desktop-capabilities.smoke.mjs tests/desktop-launcher.smoke.mjs tests/desktop-sessions.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs tests/workspace-ui.smoke.mjs",
+    "smoke:desktop": "node scripts/run-tests.mjs tests/desktop.smoke.mjs tests/desktop-round3.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-language.smoke.mjs tests/desktop-i18n.test.ts tests/desktop-react.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react-navigation.smoke.mjs tests/desktop-capabilities.smoke.mjs tests/desktop-launcher.smoke.mjs tests/desktop-sessions.smoke.mjs tests/settings.smoke.mjs tests/history.smoke.mjs tests/workflows.smoke.mjs tests/agent.smoke.mjs tests/knowledge.smoke.mjs tests/workspace-ui.smoke.mjs tests/desktop-browser.smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check . --log-level warn",
     "typecheck": "tsc --noEmit",

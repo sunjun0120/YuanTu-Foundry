@@ -1740,7 +1740,7 @@ select {
 }
 
 .subagent-process > summary::before {
-  content: 'â€º';
+  content: 'â€?;
   display: inline-block;
   font-size: 20px;
   line-height: 1;
@@ -4720,8 +4720,8 @@ body {
 }
 
 /*
- * The two readings share one line whenever the column is wide enough. They wrap as whole pills when it is not â€” the
- * minimum window with the workspace panel open leaves 264px, less than the pair needs â€” rather than run past the
+ * The two readings share one line whenever the column is wide enough. They wrap as whole pills when it is not â€?the
+ * minimum window with the workspace panel open leaves 264px, less than the pair needs â€?rather than run past the
  * composer and paint over the panel. `white-space` keeps a reading itself unbroken in either case.
  */
 .chat-page .composer-statistics {
@@ -5955,6 +5955,131 @@ textarea {
   font-size: 11px;
 }
 
+.workspace-panel .workspace-new-tab-error {
+  margin: 0;
+  color: var(--goal-blocked);
+  font-size: 12px;
+}
+
+.workspace-panel .workspace-browser-tab {
+  min-width: 120px;
+}
+
+.workspace-panel .browser-pane {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.workspace-panel .browser-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  align-items: center;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.workspace-panel .browser-toolbar button {
+  display: flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.workspace-panel .browser-toolbar button:hover:enabled,
+.workspace-panel .browser-toolbar button:focus-visible {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.workspace-panel .browser-toolbar button:disabled {
+  opacity: 0.35;
+}
+
+.workspace-panel .browser-address {
+  min-width: 0;
+  flex: 1;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.workspace-panel .browser-note {
+  margin: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-panel .browser-address-error {
+  color: var(--goal-blocked);
+}
+
+.workspace-panel .browser-surface {
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace-panel .browser-status {
+  position: absolute;
+  inset: 43px 0 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: center;
+}
+
+.workspace-panel .browser-status h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.workspace-panel .browser-status p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-panel .browser-status-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.workspace-panel .browser-status-actions button {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 12px;
+}
+
 .workspace-panel .workspace-file-tab {
   display: flex;
   align-items: center;
@@ -6466,8 +6591,8 @@ body[data-workspace-view='fullscreen'] .desktop-shell-aside {
 
 /*
  * One scrollbar language for the whole window: no rail, no buttons, a rounded thumb inset from the edge. The colour is
- * derived from the theme's muted ink so every scrolling region â€” session list, transcript, settings, file tree and
- * preview â€” matches. `scrollbar-color`/`scrollbar-width` are the non-WebKit fallback; Chromium uses the pseudo-elements.
+ * derived from the theme's muted ink so every scrolling region â€?session list, transcript, settings, file tree and
+ * preview â€?matches. `scrollbar-color`/`scrollbar-width` are the non-WebKit fallback; Chromium uses the pseudo-elements.
  */
 *::-webkit-scrollbar {
   width: 10px;

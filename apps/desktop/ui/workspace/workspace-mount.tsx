@@ -29,6 +29,7 @@ export function mountWorkspace(deps: {
   const controller = createWorkspaceController({
     files: deps.files,
     locale: () => locale(),
+    browser: window.yuantu.browser ? (command) => window.yuantu.browser(command) : undefined,
   });
   const markdownActions = {
     async copy(text: string) {
@@ -51,6 +52,24 @@ export function mountWorkspace(deps: {
       )
     : () => {};
   const opener = document.getElementById('open-workspace') as HTMLButtonElement | null;
+  const unsubscribeBrowser = window.yuantu.subscribeBrowser?.((event) => {
+    if (event.type === 'state') {
+      controller.updateBrowser(event.state);
+      return;
+    }
+    if (event.type === 'open') {
+      void (async () => {
+        try {
+          const id = await controller.openBrowser();
+          await window.yuantu.browser({ type: 'navigate', id, url: event.url });
+        } catch {
+          /* The main process refuses an extra tab at the limit; the source state already carries the notice. */
+        }
+      })();
+      return;
+    }
+    if (event.type === 'layout-request') window.dispatchEvent(new Event('yuantu-browser-layout'));
+  });
   if (opener) {
     opener.replaceChildren(workspaceIcon('expand'));
     opener.dataset.tooltip = t('workspace.openTitle');
@@ -107,6 +126,7 @@ export function mountWorkspace(deps: {
       clearInterval(poll);
       window.removeEventListener('focus', onFocus);
       opener?.removeEventListener('click', toggle);
+      unsubscribeBrowser?.();
       disposeRegion();
       controller.dispose();
     },

@@ -14,6 +14,12 @@
  * a refusal: it is caught and written into the same map, not dropped on the floor.
  */
 import type { FilesReply } from '../../files-contract.ts';
+import {
+  MAX_BROWSER_TABS,
+  type BrowserCommand,
+  type BrowserReply,
+  type BrowserState,
+} from '../../browser-contract.ts';
 import type {
   WorkspaceEntry,
   WorkspaceListing,
@@ -55,6 +61,9 @@ export interface WorkspaceState {
   listings: ReadonlyMap<string, WorkspaceListing>;
   failures: ReadonlyMap<string, string>;
   tabs: ReadonlyMap<string, WorkspaceTab>;
+  /** Browser tabs are window-level: a workspace switch keeps them, unlike file tabs. */
+  browserTabs: ReadonlyMap<string, BrowserState>;
+  browserOrder: readonly string[];
 }
 
 export interface WorkspaceController {
@@ -66,6 +75,11 @@ export interface WorkspaceController {
   openNewTab(): void;
   /** Activate the fixed files tab, reading the root directory when it has not been read yet. */
   openFiles(): void;
+  /** Create a browser tab in the main process and activate it. */
+  openBrowser(): Promise<string>;
+  activateBrowser(id: string): void;
+  updateBrowser(state: BrowserState): void;
+  closeBrowserTab(id: string): void;
   select(path: string | null): void;
   /** Show a tab (or the tree with `null`) without reading anything. */
   activate(path: string | null): void;
@@ -112,6 +126,7 @@ export function visibleEntries(listing: WorkspaceListing | undefined): Workspace
 export function createWorkspaceController(deps: {
   files(command: unknown): Promise<FilesReply>;
   locale(): UiLanguage;
+  browser?(command: BrowserCommand): Promise<BrowserReply>;
 }): WorkspaceController {
   let workspace = '';
   let open = false;
@@ -125,6 +140,9 @@ export function createWorkspaceController(deps: {
   let failures = new Map<string, string>();
   let expanded = new Set<string>(['']);
   let tabs = new Map<string, WorkspaceTab>();
+  let browserTabs = new Map<string, BrowserState>();
+  let browserOrder: string[] = [];
+  let browserSequence = 0;
   const listingTokens = new Map<string, number>();
   const store = createStore<WorkspaceState>({
     workspace,
@@ -137,6 +155,8 @@ export function createWorkspaceController(deps: {
     listings,
     failures,
     tabs,
+    browserTabs,
+    browserOrder,
   });
   let disposed = false;
   const publish = (): void => {
@@ -152,12 +172,26 @@ export function createWorkspaceController(deps: {
         listings,
         failures,
         tabs,
+        browserTabs,
+        browserOrder,
       });
   };
   const setActive = (next: PanelTab): void => {
     active = next;
     selected = next.kind === 'file' ? next.path : null;
   };
+  const emptyBrowserState = (id: string): BrowserState => ({
+    id,
+    url: '',
+    title: '',
+    loading: false,
+    started: false,
+    error: null,
+    crashed: false,
+    canGoBack: false,
+    canGoForward: false,
+    notice: null,
+  });
 
   async function loadDirectory(path: string): Promise<void> {
     const at = generation;
@@ -250,6 +284,43 @@ export function createWorkspaceController(deps: {
       setActive({ kind: 'files' });
       publish();
       if (open && !listings.has('')) void loadDirectory('');
+    },
+    async openBrowser() {
+      if (!deps.browser) throw new Error('Browser is unavailable');
+      if (browserOrder.length >= MAX_BROWSER_TABS) throw new Error('Browser tab limit reached');
+      const id = `browser-${++browserSequence}`;
+      const reply = await deps.browser({ type: 'create', id });
+      if (!reply.ok) throw new Error(reply.error);
+      browserTabs = new Map(browserTabs).set(id, reply.state ?? emptyBrowserState(id));
+      browserOrder = [...browserOrder, id];
+      open = true;
+      setActive({ kind: 'browser', id });
+      publish();
+      return id;
+    },
+    updateBrowser(state) {
+      if (!browserTabs.has(state.id)) return;
+      browserTabs = new Map(browserTabs).set(state.id, state);
+      publish();
+    },
+    activateBrowser(id) {
+      if (!browserTabs.has(id)) return;
+      open = true;
+      setActive({ kind: 'browser', id });
+      publish();
+    },
+    closeBrowserTab(id) {
+      if (!browserTabs.has(id)) return;
+      void deps.browser?.({ type: 'destroy', id });
+      const index = browserOrder.indexOf(id);
+      browserTabs = new Map(browserTabs);
+      browserTabs.delete(id);
+      browserOrder = browserOrder.filter((entry) => entry !== id);
+      if (active.kind === 'browser' && active.id === id) {
+        const next = browserOrder[index] ?? browserOrder[index - 1];
+        setActive(next ? { kind: 'browser', id: next } : { kind: 'new' });
+      }
+      publish();
     },
     select(path) {
       setActive(path === null ? { kind: 'files' } : { kind: 'file', path });
@@ -376,6 +447,7 @@ export function createWorkspaceController(deps: {
     },
     dispose() {
       disposed = true;
+      for (const id of browserOrder) void deps.browser?.({ type: 'destroy', id });
     },
   };
 }

@@ -751,7 +751,7 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   assert.equal(await page.locator('#workspace-panel').isVisible(), true);
   assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
   assert.equal(await page.locator('#workspace-new-tab').getAttribute('aria-selected'), 'true');
-  assert.equal(await page.locator('#workspace-new-browser').isDisabled(), true);
+  assert.equal(await page.locator('#workspace-new-browser').isEnabled(), true);
   await page.locator('#workspace-new-tab-plus').click();
   assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
   await page.locator('#workspace-new-files').click();

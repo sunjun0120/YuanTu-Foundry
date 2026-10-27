@@ -8,6 +8,7 @@
  * reply envelope the IPC handlers answer with.
  */
 import type { AttachmentReply } from './attachment-contract.ts';
+import type { BrowserCommand, BrowserEvent, BrowserReply } from './browser-contract.ts';
 import type { FilesCommand, FilesReply } from './files-contract.ts';
 import type {
   WorkspaceMaintenanceCommand,
@@ -56,6 +57,9 @@ export type WorkspaceFileAction = 'open' | 'reveal';
 export type OpenWorkspacePathReply = { ok: true } | { ok: false; error: string };
 export interface DesktopBridge {
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
+  /** The panel browser's main-process views; the guest itself never crosses this bridge. */
+  browser(command: BrowserCommand): Promise<BrowserReply>;
+  subscribeBrowser(listener: (event: BrowserEvent) => void): () => void;
   /** Read on demand by the settings page; unarchiving and deleting go through `invoke`. */
   archivedSessions?(): Promise<ArchivedSessionsReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
