@@ -749,6 +749,13 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await page.locator('#open-workspace').click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'open');
   assert.equal(await page.locator('#workspace-panel').isVisible(), true);
+  assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
+  assert.equal(await page.locator('#workspace-new-tab').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#workspace-new-browser').isDisabled(), true);
+  await page.locator('#workspace-new-tab-plus').click();
+  assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
+  await page.locator('#workspace-new-files').click();
+  assert.equal(await page.locator('#workspace-tree-tab').getAttribute('aria-selected'), 'true');
   const row = (name) => page.locator(`#workspace-tree .workspace-entry-button[title="${name}"]`);
   await row('notes.txt').waitFor();
   const resizeHandle = page.locator('#workspace-resize');
@@ -1114,6 +1121,7 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
     'open',
     'reopening does not retain fullscreen',
   );
+  assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
   await page.locator('#workspace-tree-tab').click();
   // A file whose extension promises an image is not one: the kind comes from the bytes.
   await row('logo.png').click();
@@ -1171,6 +1179,8 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
     extraFiles.at(-1),
   );
   await page.keyboard.press('Home');
+  assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
+  await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('#workspace-tree').isVisible(), true);
   for (const name of extraFiles) await tab(name).locator('.workspace-tab-close').click();
   await page.locator('#workspace-close').click();

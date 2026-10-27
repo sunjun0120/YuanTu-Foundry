@@ -22,6 +22,12 @@ import type {
 import type { UiLanguage } from '../../ui-settings.ts';
 import { createStore, type ReadableStore } from '../stores.ts';
 
+export type PanelTab =
+  | { kind: 'new' }
+  | { kind: 'files' }
+  | { kind: 'file'; path: string }
+  | { kind: 'browser'; id: string };
+
 export interface WorkspaceTab {
   path: string;
   shown: WorkspacePreview | null;
@@ -40,7 +46,11 @@ export interface WorkspaceState {
   workspace: string;
   open: boolean;
   fullscreen: boolean;
+  /** The fixed new/files tabs or the active file tab; `selected` is the file path derived from it. */
+  active: PanelTab;
   selected: string | null;
+  /** Open file tabs in open order; the fixed new/files tabs are not in this list. */
+  tabOrder: readonly string[];
   expanded: ReadonlySet<string>;
   listings: ReadonlyMap<string, WorkspaceListing>;
   failures: ReadonlyMap<string, string>;
@@ -52,6 +62,10 @@ export interface WorkspaceController {
   setWorkspace(workspace: string): boolean;
   setOpen(open: boolean): void;
   setFullscreen(fullscreen: boolean): void;
+  /** Activate the fixed new-tab page. */
+  openNewTab(): void;
+  /** Activate the fixed files tab, reading the root directory when it has not been read yet. */
+  openFiles(): void;
   select(path: string | null): void;
   /** Show a tab (or the tree with `null`) without reading anything. */
   activate(path: string | null): void;
@@ -102,7 +116,9 @@ export function createWorkspaceController(deps: {
   let workspace = '';
   let open = false;
   let fullscreen = false;
+  let active: PanelTab = { kind: 'new' };
   let selected: string | null = null;
+  let tabOrder: string[] = [];
   let generation = 0;
   let listingRound = 0;
   let listings = new Map<string, WorkspaceListing>();
@@ -114,7 +130,9 @@ export function createWorkspaceController(deps: {
     workspace,
     open,
     fullscreen,
+    active,
     selected,
+    tabOrder,
     expanded,
     listings,
     failures,
@@ -123,7 +141,22 @@ export function createWorkspaceController(deps: {
   let disposed = false;
   const publish = (): void => {
     if (!disposed)
-      store.set({ workspace, open, fullscreen, selected, expanded, listings, failures, tabs });
+      store.set({
+        workspace,
+        open,
+        fullscreen,
+        active,
+        selected,
+        tabOrder,
+        expanded,
+        listings,
+        failures,
+        tabs,
+      });
+  };
+  const setActive = (next: PanelTab): void => {
+    active = next;
+    selected = next.kind === 'file' ? next.path : null;
   };
 
   async function loadDirectory(path: string): Promise<void> {
@@ -191,8 +224,9 @@ export function createWorkspaceController(deps: {
       failures = new Map();
       expanded = new Set(['']);
       tabs = new Map();
+      tabOrder = [];
       listingTokens.clear();
-      selected = null;
+      setActive({ kind: 'new' });
       fullscreen = false;
       publish();
       if (open) void loadDirectory('');
@@ -208,16 +242,25 @@ export function createWorkspaceController(deps: {
       fullscreen = next;
       publish();
     },
+    openNewTab() {
+      setActive({ kind: 'new' });
+      publish();
+    },
+    openFiles() {
+      setActive({ kind: 'files' });
+      publish();
+      if (open && !listings.has('')) void loadDirectory('');
+    },
     select(path) {
-      selected = path;
+      setActive(path === null ? { kind: 'files' } : { kind: 'file', path });
       publish();
     },
     activate(path) {
-      selected = path;
+      setActive(path === null ? { kind: 'files' } : { kind: 'file', path });
       publish();
     },
     backToTree() {
-      selected = null;
+      setActive({ kind: 'files' });
       publish();
     },
     loadDirectory,
@@ -252,20 +295,24 @@ export function createWorkspaceController(deps: {
       if (!tab) {
         tab = { path, shown: null, error: null, reading: false, token: 0, scrollTop: 0 };
         tabs = new Map(tabs).set(path, tab);
+        tabOrder = [...tabOrder, path];
       }
-      selected = path;
+      setActive({ kind: 'file', path });
       publish();
       if (fresh) await readTab(tab);
     },
     closeTab(path) {
-      const paths = [...tabs.keys()];
-      const index = paths.indexOf(path);
+      const index = tabOrder.indexOf(path);
       const wasActive = selected === path;
       const tab = tabs.get(path);
       if (tab?.documentUrl) URL.revokeObjectURL(tab.documentUrl);
       tabs = new Map(tabs);
       tabs.delete(path);
-      if (wasActive) selected = paths[index + 1] ?? paths[index - 1] ?? null;
+      tabOrder = tabOrder.filter((entry) => entry !== path);
+      if (wasActive) {
+        const next = tabOrder[index] ?? tabOrder[index - 1];
+        setActive(next ? { kind: 'file', path: next } : { kind: 'files' });
+      }
       publish();
     },
     setTabScroll(path, top) {
@@ -278,13 +325,14 @@ export function createWorkspaceController(deps: {
       if (!tab) {
         tab = { path, shown: null, error: null, reading: false, token: 0, scrollTop: 0 };
         tabs = new Map(tabs).set(path, tab);
+        tabOrder = [...tabOrder, path];
       }
       // A read in flight for this path would replace the diff when it lands; the diff is the newer intent.
       tab.token++;
       tab.reading = false;
       tab.changePreview = content;
       tab.changeKey = key;
-      selected = path;
+      setActive({ kind: 'file', path });
       if (!open) open = true;
       publish();
     },
@@ -297,12 +345,15 @@ export function createWorkspaceController(deps: {
       return true;
     },
     clearChangePreviews() {
+      let activeRemoved = false;
       for (const [path, tab] of tabs) {
         if (!tab.changePreview) continue;
+        if (selected === path) activeRemoved = true;
         tabs = new Map(tabs);
         tabs.delete(path);
-        if (selected === path) selected = null;
+        tabOrder = tabOrder.filter((entry) => entry !== path);
       }
+      if (activeRemoved) setActive({ kind: 'files' });
       publish();
     },
     tab: (path) => tabs.get(path),

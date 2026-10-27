@@ -18,6 +18,8 @@ const PATHS = {
   fullscreen: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
   restore: 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5',
   refresh: 'M20 7v5h-5M20 12a8 8 0 1 0-2 6M20 7l-3-3',
+  plus: 'M12 5v14M5 12h14',
+  globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c3 3 3 15 0 18M3 12h18',
 } as const;
 
 export type IconKind = keyof typeof PATHS;

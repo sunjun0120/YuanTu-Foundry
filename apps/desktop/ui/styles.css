@@ -5851,7 +5851,108 @@ textarea {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  padding-right: 32px;
+  padding-right: 8px;
+}
+
+.workspace-panel .workspace-new-tab {
+  display: flex;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-panel .workspace-new-tab:hover,
+.workspace-panel .workspace-new-tab:focus-visible {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.workspace-panel .workspace-new-tab svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workspace-panel .workspace-new-tab-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding: 32px clamp(20px, 4vw, 44px);
+}
+
+.workspace-panel .workspace-new-tab-page[hidden] {
+  display: none;
+}
+
+.workspace-panel .workspace-new-tab-page h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.workspace-panel .workspace-new-tab-context {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-panel .workspace-new-tab-options {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.workspace-panel .workspace-new-tab-option {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--ink);
+  text-align: left;
+}
+
+.workspace-panel .workspace-new-tab-option:hover:enabled,
+.workspace-panel .workspace-new-tab-option:focus-visible {
+  border-color: var(--accent);
+}
+
+.workspace-panel .workspace-new-tab-option:disabled {
+  opacity: 0.6;
+}
+
+.workspace-panel .workspace-new-tab-option svg {
+  grid-row: 1 / span 2;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.workspace-panel .workspace-new-tab-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workspace-panel .workspace-new-tab-hint {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .workspace-panel .workspace-file-tab {

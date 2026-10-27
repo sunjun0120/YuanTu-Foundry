@@ -57,16 +57,19 @@ export function mountWorkspace(deps: {
     opener.setAttribute('aria-label', t('workspace.title'));
   }
   const toggle = (): void => {
-    const open = controller.store.getSnapshot().open;
-    controller.setOpen(!open);
-    if (!open) {
-      const state = controller.store.getSnapshot();
-      if (state.workspace && !state.listings.has('')) void controller.loadDirectory('');
+    const state = controller.store.getSnapshot();
+    if (state.open) {
+      controller.setOpen(false);
+      return;
     }
+    controller.setOpen(true);
+    // R7: the top entry opens the chooser, not the file tree; files load only when that entry is chosen.
+    controller.openNewTab();
   };
   opener?.addEventListener('click', toggle);
   const onFocus = (): void => {
-    if (controller.store.getSnapshot().open) controller.refresh();
+    const state = controller.store.getSnapshot();
+    if (state.open && state.active.kind !== 'new') controller.refresh();
   };
   window.addEventListener('focus', onFocus);
   // A cheap listing comparison, not a watcher: a poll that finds no change draws nothing and leaves scroll/tabs alone.

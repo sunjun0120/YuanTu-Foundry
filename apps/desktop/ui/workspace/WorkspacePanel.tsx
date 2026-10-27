@@ -175,40 +175,61 @@ export function WorkspacePanel({
     });
   };
 
+  const active = state.active;
   const separator = workspacePath(selected, state.workspace);
+  const projectName = workspaceName(state.workspace);
   const tabs: ReactNode[] = [
+    <button
+      key="new"
+      id="workspace-new-tab"
+      type="button"
+      role="tab"
+      aria-controls="workspace-new-tab-page"
+      aria-selected={active.kind === 'new'}
+      tabIndex={active.kind === 'new' ? 0 : -1}
+      className="workspace-tab"
+      onClick={() => {
+        rememberScroll();
+        controller.openNewTab();
+      }}
+    >
+      <Icon kind="plus" />
+      <span>{t('workspace.newTab')}</span>
+    </button>,
     <button
       key="tree"
       id="workspace-tree-tab"
       type="button"
       role="tab"
       aria-controls="workspace-tree"
-      aria-selected={selected === null}
-      tabIndex={selected === null ? 0 : -1}
+      aria-selected={active.kind === 'files'}
+      tabIndex={active.kind === 'files' ? 0 : -1}
       className="workspace-tab"
       onClick={() => {
         rememberScroll();
-        controller.backToTree();
+        controller.openFiles();
       }}
     >
       <Icon kind="folder" />
       <span>{t('workspace.open')}</span>
     </button>,
   ];
-  for (const file of state.tabs.values()) {
-    const active = selected === file.path;
+  for (const path of state.tabOrder) {
+    const file = state.tabs.get(path);
+    if (!file) continue;
+    const isActive = active.kind === 'file' && active.path === path;
     tabs.push(
       <div
         key={file.path}
-        className={`workspace-file-tab${active ? ' active' : ''}`}
+        className={`workspace-file-tab${isActive ? ' active' : ''}`}
         data-path={file.path}
       >
         <button
           type="button"
           role="tab"
           aria-controls="workspace-preview"
-          aria-selected={active}
-          tabIndex={active ? 0 : -1}
+          aria-selected={isActive}
+          tabIndex={isActive ? 0 : -1}
           title={file.path}
           translate="no"
           className="workspace-tab"
@@ -249,9 +270,9 @@ export function WorkspacePanel({
           event.stopPropagation();
           event.preventDefault();
           if (fullscreen) controller.setFullscreen(false);
-          else if (selected !== null) {
+          else if (active.kind === 'file') {
             rememberScroll();
-            controller.backToTree();
+            controller.openNewTab();
           } else {
             controller.setOpen(false);
             document.getElementById('open-workspace')?.focus();
@@ -325,6 +346,17 @@ export function WorkspacePanel({
           >
             {tabs}
           </div>
+          <button
+            id="workspace-new-tab-plus"
+            type="button"
+            className="workspace-new-tab"
+            aria-label={t('workspace.newTab')}
+            data-tooltip={t('workspace.newTab')}
+            title={t('workspace.newTab')}
+            onClick={() => controller.openNewTab()}
+          >
+            <Icon kind="plus" />
+          </button>
           <div className="workspace-panel-actions">
             <button
               id="workspace-fullscreen"
@@ -373,17 +405,53 @@ export function WorkspacePanel({
         >
           {separator}
         </div>
+        <section
+          id="workspace-new-tab-page"
+          className="workspace-new-tab-page"
+          aria-label={t('workspace.newTab')}
+          hidden={active.kind !== 'new'}
+        >
+          <h2>{t('workspace.newTab')}</h2>
+          {state.workspace ? (
+            <p className="workspace-new-tab-context">
+              {t('workspace.currentWorkspace', { name: projectName })}
+            </p>
+          ) : null}
+          <div className="workspace-new-tab-options">
+            <button
+              id="workspace-new-files"
+              type="button"
+              className="workspace-new-tab-option"
+              onClick={() => controller.openFiles()}
+            >
+              <Icon kind="folder" />
+              <span className="workspace-new-tab-title">{t('workspace.filesTab')}</span>
+              <span className="workspace-new-tab-hint">{t('workspace.filesTabHint')}</span>
+            </button>
+            <button
+              id="workspace-new-browser"
+              type="button"
+              className="workspace-new-tab-option"
+              disabled
+              title={t('workspace.browserComing')}
+            >
+              <Icon kind="globe" />
+              <span className="workspace-new-tab-title">{t('workspace.browserTab')}</span>
+              <span className="workspace-new-tab-hint">{t('workspace.browserTabHint')}</span>
+            </button>
+          </div>
+        </section>
         <FileTree
           state={state}
           controller={controller}
-          hidden={selected !== null}
+          hidden={active.kind !== 'files'}
           onBeforeSelect={rememberScroll}
         />
         <section
           id="workspace-preview"
           className="workspace-preview"
           aria-label={selected ?? t('workspace.imageAlt')}
-          hidden={selected === null}
+          hidden={active.kind !== 'file'}
         >
           <div
             id="workspace-preview-body"
@@ -419,4 +487,10 @@ export function workspacePath(selected: string | null, workspace: string): strin
   if (selected && workspace)
     return `${workspace.replace(/[\\/]$/, '')}${separator}${selected.replaceAll('/', separator)}`;
   return selected ?? workspace;
+}
+
+/** The workspace's last path segment, for the new-tab page's context line. */
+export function workspaceName(workspace: string): string {
+  const normalized = workspace.replace(/[\\/]+$/u, '');
+  return normalized.split(/[\\/]/u).pop() || normalized;
 }

@@ -246,6 +246,38 @@ test('closing the active tab activates its neighbour', async () => {
   assert.equal(controller.store.getSnapshot().selected, 'b.txt');
 });
 
+test('the fixed chooser and files tabs coexist with files in open order', () => {
+  const { controller } = bridge();
+  controller.setWorkspace('/proj');
+  assert.deepEqual(controller.store.getSnapshot().active, { kind: 'new' });
+  controller.openFiles();
+  assert.deepEqual(controller.store.getSnapshot().active, { kind: 'files' });
+  controller.previewChanges('a.txt', {} as Element, 'change-a');
+  controller.previewChanges('b.txt', {} as Element, 'change-b');
+  assert.deepEqual(controller.store.getSnapshot().tabOrder, ['a.txt', 'b.txt']);
+  controller.activate('a.txt');
+  assert.deepEqual(controller.store.getSnapshot().tabOrder, ['a.txt', 'b.txt']);
+  controller.openNewTab();
+  assert.deepEqual(controller.store.getSnapshot().active, { kind: 'new' });
+  controller.closeTab('a.txt');
+  assert.deepEqual(controller.store.getSnapshot().tabOrder, ['b.txt']);
+  assert.deepEqual(controller.store.getSnapshot().active, { kind: 'new' });
+});
+
+test('a workspace switch clears files and returns to the chooser', () => {
+  const { controller } = bridge();
+  controller.setWorkspace('/first');
+  controller.previewChanges('a.txt', {} as Element, 'change-a');
+  void controller.showFile('b.txt');
+  assert.deepEqual(controller.store.getSnapshot().tabOrder, ['a.txt', 'b.txt']);
+  controller.setWorkspace('/second');
+  const state = controller.store.getSnapshot();
+  assert.deepEqual(state.active, { kind: 'new' });
+  assert.equal(state.selected, null);
+  assert.deepEqual(state.tabOrder, []);
+  assert.equal(state.tabs.size, 0);
+});
+
 test('opening a path that showed a diff reads the file again', async () => {
   const { controller, requests } = bridge();
   controller.setWorkspace('/proj');
