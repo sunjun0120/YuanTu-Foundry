@@ -568,9 +568,13 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 ### Electron 桌面
 
-主进程负责窗口、单实例锁、设置存储、IPC 与 Host 子进程的生命周期；preload 用 `contextBridge` 暴露一组 invoke 通道与五条订阅通道（整快照、助手流式文本、子代理增量、统计增量、权限预设）；渲染层只与 `window.yuantu` 交互。窗口开启 `contextIsolation`、`sandbox`、`nodeIntegration: false`，并拒绝所有窗口打开与导航、拒绝一切会话权限请求，也没有应用菜单加速键——外链只能走系统浏览器，且只接受无凭据的 `http`/`https`。
+主进程负责窗口、单实例锁、设置存储、IPC 与 Host 子进程的生命周期；preload 用 `contextBridge` 暴露工作区命令与状态订阅，渲染层只与 `window.yuantu` 交互。应用窗口开启 `contextIsolation`、`sandbox`、`nodeIntegration: false`，拒绝自身页面导航和弹窗，外部打开只接受无凭据的 `http`/`https`。
 
-渲染层**没有框架也没有状态库**：整个界面是一份 `CarrierSnapshot` 加五条订阅，重绘按区块的 key 做差量，locale 也进 key，因此一次流式增量只改动真正变了的那一块。对话区只画对话：`<runtime-context source="…">`（`workspace-outline` / `memory` / `skills` / `task`）这类**机器写给模型的快照**留在会话与日志里、也照旧发给模型，但不作为消息画出来——它们不是谁说的话，而人滚屏是为了看问答；识别由 `packages/core/runtime-context.ts` 的 `isRuntimeSnapshot()` 提供（与写快照的那一端共用同一个包装标签）。`<compacted-summary>` 不在此列：那是这场对话自己的摘要，读者要看的正是它。
+界面使用 React、TypeScript、Mantine 与 Motion，业务状态由 `CarrierSnapshot` 和流式订阅投影，按区块 key 更新。对话区只画对话：`<runtime-context source="…">`（`workspace-outline` / `memory` / `skills` / `task`）这类**机器写给模型的快照**留在会话与日志里、也照旧发给模型，但不作为消息画出来；识别由 `packages/core/runtime-context.ts` 的 `isRuntimeSnapshot()` 提供（与写快照的那一端共用同一个包装标签）。`<compacted-summary>` 仍作为对话摘要显示。
+
+左侧“项目”可添加本地工作区、重命名显示名称及从列表移除，项目整体与各工作区可分别折叠并保存状态。每个工作区保留自己的 Host、会话数据库、搜索和权限；切换工作区不停止后台任务，“待处理”可直接回答其他工作区的审批和问题。移除只更新项目列表，磁盘文件和历史保留；运行、排队或等待处理时禁止移除。最后一项移除后保持空列表，可重新添加原目录恢复历史。首次默认目录为 `<userData>/workspace`，安装目录及其子目录不能注册为工作区。
+
+右侧展开和 `+` 进入固定“新建标签页”，提供工作区文件与内置浏览器入口。浏览器使用独立 `WebContentsView`，无 Node 或应用桥接；其 cookie/localStorage 保存在应用数据目录的 `Partitions/yuantu-browser`，网页标签跨工作区保留、退出应用后不恢复，浏览数据仍保留。它与 Agent 的 `browser_*` 工具独立，网页内容不会自动发送给模型。当前不支持下载、POST 新窗口及依赖 opener 回传的登录；在系统浏览器重试需要用户重新操作，不会重放 POST 或共享登录态。源码预览复用语法高亮，超过 64 KiB 的可见文本回退纯文本。
 
 | 面板       | 内容                                                                                                                                                                                                             |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -721,8 +725,8 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
-| 桌面冒烟套件 | 18 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 334 个 | `tests/*.test.ts` |
+| 桌面冒烟套件 | 19 | `smoke:desktop` 的清单 |
+| 行为测试文件 | 335 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

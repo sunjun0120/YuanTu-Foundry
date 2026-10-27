@@ -256,6 +256,39 @@ test('a failed reply is shown as the error and never becomes state', async () =>
   assert.deepEqual(fixture.error(), failure);
 });
 
+test('a failed command from a previous workspace cannot replace the current error banner', async () => {
+  let release!: (reply: DesktopReply) => void;
+  const fixture = actionFixture(
+    () =>
+      new Promise<DesktopReply>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = fixture.actions.invoke({ type: 'approve', id: 'same', allow: false });
+  fixture.state.workspace = '/b';
+  release({ ok: false, error: 'old workspace failure' });
+  await pending;
+  assert.equal(fixture.error(), null);
+});
+
+test('a late session switch reply cannot clear another workspace composer', async () => {
+  let release!: (reply: DesktopReply) => void;
+  const fixture = actionFixture(
+    () =>
+      new Promise<DesktopReply>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = fixture.actions.select({ type: 'load', id: 'second-in-a' });
+  fixture.state.workspace = '/b';
+  release({
+    ok: true,
+    state: snapshot({ workspace: '/w', session: { sessionId: 'second-in-a' } }),
+  });
+  await pending;
+  assert.equal(fixture.calls.cleared, 0);
+});
+
 test('a switch to another session clears the draft, a same-session command does not', async () => {
   const fixture = actionFixture(async () => ({
     ok: true,

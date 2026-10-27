@@ -14,6 +14,7 @@ export const chrome = createStore({
   notice: '',
   canCreate: false,
   canChangeWorkspace: false,
+  canSelectProject: false,
   promptDisabled: true,
   sendDisabled: true,
   sendMode: 'send' as 'send' | 'stop',

@@ -763,10 +763,66 @@ summary:focus-visible {
 
 .project-sidebar {
   padding: 0 10px 14px;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.project-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .project-sidebar > .section-label {
   margin: 18px 0 9px;
+}
+
+.project-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 0 9px;
+}
+.project-group-toggle,
+.project-add-button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  min-height: 28px;
+  cursor: pointer;
+}
+.project-group-toggle {
+  font-size: 12px;
+  text-align: left;
+}
+.project-add-button {
+  min-width: 28px;
+}
+.workspace-interactions h3 {
+  margin: 18px 0 8px;
+  font-size: 14px;
+}
+.workspace-interactions .approval {
+  margin-bottom: 12px;
+}
+@media (pointer: coarse) {
+  .project-actions {
+    opacity: 1;
+  }
+  .project-actions button,
+  .project-disclosure,
+  .project-add-button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .project-name,
+  .project-sessions button,
+  .project-group-toggle {
+    min-height: 44px;
+  }
 }
 
 .project-list {
@@ -855,6 +911,11 @@ summary:focus-visible {
   margin: 1px 0 3px 10px;
   padding: 0;
   list-style: none;
+}
+
+.project-row > .project-session-content {
+  flex: 0 0 100%;
+  min-width: 0;
 }
 
 .project-sessions button {

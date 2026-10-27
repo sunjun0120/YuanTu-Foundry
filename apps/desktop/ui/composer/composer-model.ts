@@ -52,6 +52,10 @@ export function createComposerController(deps: {
 }): ComposerController {
   /** One entry per send in flight, so a send made in another session is not "sending" here. */
   const sendingSessions: (string | null)[] = [];
+  const identity = (): string => {
+    const state = deps.getState();
+    return JSON.stringify([state?.workspace ?? '', state?.session.sessionId ?? null]);
+  };
   /** The slash path sends one shell-owned command; it is "sending" while that request is in flight. */
   let sending = false;
   let stopping = false;
@@ -81,7 +85,7 @@ export function createComposerController(deps: {
         }
         return;
       }
-      const fromSession = deps.getState()?.session.sessionId ?? null;
+      const fromSession = identity();
       const documents = deps.attachments.documents();
       let outgoingText: string;
       try {
@@ -104,7 +108,7 @@ export function createComposerController(deps: {
         : { type: 'send', prompt: outgoingText, images };
       try {
         const ok = await deps.invoke(command);
-        if (!ok && !deps.getPrompt() && deps.getState()?.session.sessionId === fromSession) {
+        if (!ok && !deps.getPrompt() && identity() === fromSession) {
           deps.setPrompt(text);
           deps.attachments.restore(images, documents);
         }
@@ -148,8 +152,7 @@ export function createComposerController(deps: {
       deps.requestRender();
       deps.focusPrompt();
     },
-    isSending: () =>
-      sending || sendingSessions.includes(deps.getState()?.session.sessionId ?? null),
+    isSending: () => sending || sendingSessions.includes(identity()),
     isStopping: () => stopping,
     isQueueBusy: () => queueBusy,
   };

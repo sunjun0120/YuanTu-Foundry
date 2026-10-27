@@ -548,7 +548,9 @@ test('SWE real Host fixture reads, edits, denies commands and emits an applicabl
   hanging = true;
   const cancelled = await runSweSample(
     {
-      manifest: { ...manifest, instanceTimeoutMs: 5000 },
+      // This deadline includes starting the standalone Host. Leave time for that under parallel load so the
+      // timeout exercises cancellation of the held model response, rather than expiring before session.create.
+      manifest: { ...manifest, instanceTimeoutMs: 30_000 },
       frozen,
       record,
       directory,

@@ -14,6 +14,7 @@ import { createSessionSidebarController, type SessionActivity } from './session-
 
 export interface SessionSidebarHandle {
   update(input: {
+    workspaceKey?: string;
     sessions: SessionInfo[];
     currentId: string | null;
     blocked: boolean;

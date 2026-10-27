@@ -22,6 +22,7 @@ export interface ProjectWorkspacesFile {
   schemaVersion: number;
   initialized: boolean;
   activeWorkspaceId: string | null;
+  projectsCollapsed?: boolean;
   workspaces: ProjectWorkspace[];
 }
 
@@ -36,6 +37,8 @@ export class ProjectWorkspacesError extends Error {
 
 export type ProjectWorkspaceCommand =
   | { type: 'list' }
+  | { type: 'groupCollapse'; collapsed: boolean }
+  | { type: 'prepare'; id: string }
   | { type: 'add'; path?: string }
   | { type: 'select'; id: string }
   | { type: 'rename'; id: string; displayName: string }
@@ -56,6 +59,9 @@ export type ProjectWorkspaceReply =
       registry: ProjectWorkspacesFile;
       runtime?: Record<string, ProjectRuntimeView>;
       cancelled?: boolean;
+      addedId?: string;
+      target?: import('./workspace-routing.ts').WorkspaceTarget;
+      activation?: Extract<import('./workspace-routing.ts').WorkspaceEvent, { type: 'state' }>;
     }
   | { ok: false; error: string };
 
@@ -63,6 +69,10 @@ export function parseProjectWorkspaceCommand(input: unknown): ProjectWorkspaceCo
   if (!record(input) || typeof input.type !== 'string') throw new Error('Invalid project command');
   const type = input.type;
   if (type === 'list') return { type };
+  if (type === 'groupCollapse') {
+    if (typeof input.collapsed !== 'boolean') throw new Error('Invalid collapse state');
+    return { type, collapsed: input.collapsed };
+  }
   if (type === 'add') {
     if (input.path !== undefined && typeof input.path !== 'string')
       throw new Error('Invalid workspace path');
@@ -72,6 +82,7 @@ export function parseProjectWorkspaceCommand(input: unknown): ProjectWorkspaceCo
     throw new Error('Invalid workspace id');
   switch (type) {
     case 'select':
+    case 'prepare':
     case 'remove':
       return { type, id: input.id };
     case 'rename':
@@ -124,6 +135,8 @@ export function parseProjectWorkspaces(value: unknown): ProjectWorkspacesFile {
     throw new ProjectWorkspacesError('invalid', 'Workspace registry active id is invalid');
   if (!Array.isArray(value.workspaces))
     throw new ProjectWorkspacesError('invalid', 'Workspace registry list is invalid');
+  if (value.projectsCollapsed !== undefined && typeof value.projectsCollapsed !== 'boolean')
+    throw new ProjectWorkspacesError('invalid', 'Workspace registry collapse state is invalid');
   const seen = new Set<string>();
   const workspaces: ProjectWorkspace[] = value.workspaces.map((entry) => {
     if (
@@ -162,6 +175,9 @@ export function parseProjectWorkspaces(value: unknown): ProjectWorkspacesFile {
     schemaVersion: value.schemaVersion,
     initialized: value.initialized,
     activeWorkspaceId: value.activeWorkspaceId,
+    ...(value.projectsCollapsed !== undefined
+      ? { projectsCollapsed: value.projectsCollapsed }
+      : {}),
     workspaces,
   };
 }

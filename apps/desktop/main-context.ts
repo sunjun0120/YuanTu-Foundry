@@ -16,6 +16,8 @@ import type { SandboxEnvironment } from './sandbox-environment.ts';
 export interface MainContext {
   readonly window: BrowserWindow | null;
   readonly service: CarrierService | null;
+  readonly services?: readonly CarrierService[];
+  stopServices?(): Promise<void>;
   openingService: CarrierService | null;
   switching: boolean;
   quitting: boolean;

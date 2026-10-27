@@ -233,7 +233,9 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
   function render(messages: Message[], startIndex: number, runPaused: boolean): void {
     if (disposed) return;
     const snapshot = options.getState();
-    const nextSessionId = snapshot?.session.sessionId ?? null;
+    const nextSessionId = snapshot?.session.sessionId
+      ? `${snapshot.workspace}:${snapshot.session.sessionId}`
+      : null;
     const sessionChanged = nextSessionId !== sessionId;
     if (sessionChanged) {
       sessionId = nextSessionId;

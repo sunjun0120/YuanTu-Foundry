@@ -19,12 +19,13 @@ export interface HostEntry<H> {
   lastUsed: number;
 }
 
-export interface WorkspaceHostManagerOptions {
+export interface WorkspaceHostManagerOptions<H extends ManagedHost = ManagedHost> {
   now?: () => number;
   /** An inactive Host unused for this long may be released. */
   idleMs?: number;
   /** How many idle Hosts to keep around for fast switching. */
   keepIdle?: number;
+  isBusy?: (host: H) => boolean;
 }
 
 export const DEFAULT_HOST_IDLE_MS = 5 * 60_000;
@@ -36,37 +37,59 @@ export class WorkspaceHostManager<H extends ManagedHost> {
   private readonly idleMs: number;
   private readonly keepIdle: number;
   private readonly entries = new Map<string, HostEntry<H>>();
+  private readonly starting = new Map<string, { path: string; promise: Promise<HostEntry<H>> }>();
+  private readonly startingHosts = new Set<H>();
+  private readonly isBusy: (host: H) => boolean;
   private activeId: string | null = null;
   private epoch = 0;
   private disposed = false;
 
   constructor(
     create: (workspaceId: string, workspacePath: string) => H,
-    options: WorkspaceHostManagerOptions = {},
+    options: WorkspaceHostManagerOptions<H> = {},
   ) {
     this.create = create;
     this.now = options.now ?? Date.now;
     this.idleMs = options.idleMs ?? DEFAULT_HOST_IDLE_MS;
     this.keepIdle = Math.max(0, options.keepIdle ?? DEFAULT_KEEP_IDLE_HOSTS);
+    this.isBusy = options.isBusy ?? (() => false);
   }
 
   /** Start (or reuse) the Host for this workspace and make it the active one. */
-  async ensure(workspaceId: string, workspacePath: string): Promise<HostEntry<H>> {
+  async ensure(workspaceId: string, workspacePath: string, activate = true): Promise<HostEntry<H>> {
     this.assertLive();
     const existing = this.entries.get(workspaceId);
     if (existing) {
       if (existing.workspacePath !== workspacePath)
         throw new Error('Workspace id is already bound to another directory');
       existing.lastUsed = this.now();
-      this.activeId = workspaceId;
+      if (activate) this.activeId = workspaceId;
       return existing;
     }
+    const pending = this.starting.get(workspaceId);
+    if (pending && pending.path !== workspacePath)
+      throw new Error('Workspace id is already bound to another directory');
+    const promise = pending?.promise ?? this.start(workspaceId, workspacePath);
+    if (!pending) this.starting.set(workspaceId, { path: workspacePath, promise });
+    try {
+      const entry = await promise;
+      if (activate) this.activeId = workspaceId;
+      return entry;
+    } finally {
+      if (this.starting.get(workspaceId)?.promise === promise) this.starting.delete(workspaceId);
+    }
+  }
+  private async start(workspaceId: string, workspacePath: string): Promise<HostEntry<H>> {
     const host = this.create(workspaceId, workspacePath);
+    this.startingHosts.add(host);
     try {
       await host.start();
+      if (this.disposed) throw new Error('Workspace Host manager is disposed');
     } catch (error) {
       await host.stop().catch(() => {});
       throw error;
+    } finally {
+      this.startingHosts.delete(host);
     }
     const entry: HostEntry<H> = {
       workspaceId,
@@ -76,12 +99,14 @@ export class WorkspaceHostManager<H extends ManagedHost> {
       lastUsed: this.now(),
     };
     this.entries.set(workspaceId, entry);
-    this.activeId = workspaceId;
     return entry;
   }
 
   get(workspaceId: string): HostEntry<H> | undefined {
     return this.entries.get(workspaceId);
+  }
+  isStarting(workspaceId: string): boolean {
+    return this.starting.has(workspaceId);
   }
 
   /** Take ownership of a Host the caller already started (the startup Host, before the window was ready). */
@@ -105,6 +130,10 @@ export class WorkspaceHostManager<H extends ManagedHost> {
     return this.activeId;
   }
 
+  values(): HostEntry<H>[] {
+    return [...this.entries.values()];
+  }
+
   /** Selecting a workspace touches its Host so an idle release does not race the switch. */
   activate(workspaceId: string): HostEntry<H> {
     const entry = this.entries.get(workspaceId);
@@ -119,14 +148,30 @@ export class WorkspaceHostManager<H extends ManagedHost> {
     this.assertLive();
     const cutoff = this.now() - idle;
     const idleEntries = [...this.entries.values()]
-      .filter((entry) => entry.workspaceId !== this.activeId && entry.lastUsed <= cutoff)
+      .filter(
+        (entry) =>
+          entry.workspaceId !== this.activeId &&
+          entry.lastUsed <= cutoff &&
+          !this.isBusy(entry.host),
+      )
       .sort((a, b) => b.lastUsed - a.lastUsed);
-    const released = idleEntries.slice(this.keepIdle);
-    for (const entry of released) await this.stop(entry.workspaceId);
-    return released.map((entry) => entry.workspaceId);
+    const released: string[] = [];
+    for (const entry of idleEntries.slice(this.keepIdle)) {
+      if (
+        this.entries.get(entry.workspaceId) !== entry ||
+        entry.workspaceId === this.activeId ||
+        this.isBusy(entry.host) ||
+        entry.lastUsed > cutoff
+      )
+        continue;
+      await this.stop(entry.workspaceId);
+      released.push(entry.workspaceId);
+    }
+    return released;
   }
 
   async stop(workspaceId: string): Promise<void> {
+    if (this.isStarting(workspaceId)) throw new Error('Workspace Host is still starting');
     const entry = this.entries.get(workspaceId);
     if (!entry) return;
     this.entries.delete(workspaceId);
@@ -139,7 +184,12 @@ export class WorkspaceHostManager<H extends ManagedHost> {
     const entries = [...this.entries.values()];
     this.entries.clear();
     this.activeId = null;
-    await Promise.allSettled(entries.map((entry) => entry.host.stop()));
+    const hosts = new Set([...entries.map((entry) => entry.host), ...this.startingHosts]);
+    const results = await Promise.allSettled([...hosts].map((host) => host.stop()));
+    const failures = results
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason as unknown);
+    if (failures.length) throw new AggregateError(failures, failures.map(String).join('; '));
   }
 
   private assertLive(): void {

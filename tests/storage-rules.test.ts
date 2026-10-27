@@ -234,7 +234,10 @@ test('task status transitions are refused by name', () => {
 test('a persisted task revision always moves forward even when the clock does not', () => {
   const future = new Date(Date.now() + 60_000).toISOString();
   assert.ok(Date.parse(nextTaskTimestamp(future)) > Date.parse(future));
-  assert.ok(Date.parse(nextTaskTimestamp()) > Date.now() - 1);
+  const before = Date.now();
+  const created = Date.parse(nextTaskTimestamp());
+  assert.ok(created >= before);
+  assert.ok(created <= Date.now());
   assert.throws(() => nextTaskTimestamp('not a date'), /Invalid persisted task timestamp/);
 });
 

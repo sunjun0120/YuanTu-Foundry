@@ -16,6 +16,17 @@ async function fixture(t: test.TestContext) {
   return { root, file, store: new ProjectWorkspacesStore(file) };
 }
 
+test('the project group collapse survives restart independently of workspace collapse', async (t) => {
+  const { file, store } = await fixture(t);
+  const state = await store.initialize('/repo/one');
+  const id = state.workspaces[0]!.id;
+  await store.setProjectsCollapsed(true);
+  await store.setCollapsed(id, false);
+  const restored = await new ProjectWorkspacesStore(file).snapshot();
+  assert.equal(restored.projectsCollapsed, true);
+  assert.equal(restored.workspaces[0]?.collapsed, false);
+});
+
 test('a fresh registry initializes once, then keeps the list and the active entry', async (t) => {
   const { file, store } = await fixture(t);
   assert.deepEqual(await store.snapshot(), {

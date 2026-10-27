@@ -129,9 +129,9 @@ export class ProjectWorkspaces {
     return this.store.snapshot();
   }
 
-  async add(input: string, displayName?: string): Promise<ProjectWorkspacesFile> {
+  async add(input: string, displayName?: string, select = true): Promise<ProjectWorkspacesFile> {
     const canonical = canonicalWorkspace(input, { installDirectory: this.installDirectory });
-    return this.store.add(canonical, displayName);
+    return this.store.add(canonical, displayName, select);
   }
 
   select(id: string): Promise<ProjectWorkspacesFile> {
@@ -148,6 +148,9 @@ export class ProjectWorkspaces {
 
   setCollapsed(id: string, collapsed: boolean): Promise<ProjectWorkspacesFile> {
     return this.store.setCollapsed(id, collapsed);
+  }
+  setProjectsCollapsed(collapsed: boolean): Promise<ProjectWorkspacesFile> {
+    return this.store.setProjectsCollapsed(collapsed);
   }
 
   setLastSession(id: string, sessionId: string | null): Promise<ProjectWorkspacesFile> {

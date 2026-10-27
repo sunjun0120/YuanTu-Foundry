@@ -827,7 +827,7 @@ test(
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, badRoot);
     await page.getByRole('button', { name: '更换目录' }).click();
-    await page.locator('#error').waitFor();
+    await page.locator('.project-error[role="alert"]').waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
       await page.getByRole('textbox', { name: '任务描述' }).inputValue(),

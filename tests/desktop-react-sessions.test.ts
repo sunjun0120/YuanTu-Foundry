@@ -52,6 +52,23 @@ function fixture(options: { fail?: boolean } = {}) {
   return { controller, commands, fill };
 }
 
+test('workspace switches isolate sidebar drafts and close a dialog for a colliding session id', () => {
+  const { controller } = fixture();
+  const input = { sessions: [session('same')], currentId: 'same', blocked: false };
+  controller.update({ ...input, workspaceKey: 'a' });
+  controller.openSearch();
+  controller.setQuery('only A');
+  controller.toggleExpanded();
+  controller.openDialog('rename', 'same');
+  controller.update({ ...input, workspaceKey: 'b' });
+  assert.equal(controller.store.getSnapshot().dialog, null);
+  assert.equal(controller.store.getSnapshot().query, '');
+  assert.equal(controller.store.getSnapshot().expanded, false);
+  controller.update({ ...input, workspaceKey: 'a' });
+  assert.equal(controller.store.getSnapshot().query, 'only A');
+  assert.equal(controller.store.getSnapshot().expanded, true);
+});
+
 test('an untitled session shows the untitled label, never its id', () => {
   assert.equal(sessionTitle(session('abcdef12')), t('ui.untitledSession'));
   assert.equal(sessionTooltip(session('abcdef12'), undefined), t('ui.untitledSession'));

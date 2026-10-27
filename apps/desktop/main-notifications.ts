@@ -17,6 +17,7 @@ export function createRunNotifier(
   getWindow: () => BrowserWindow | null | undefined,
   /** The general-settings switch, read at each notice so a change applies at once. */
   enabled: () => boolean,
+  openSession?: (sessionId: string) => void,
 ): {
   reset(): void;
   update(state: CarrierSnapshot): void;
@@ -59,7 +60,8 @@ export function createRunNotifier(
       if (window.isMinimized()) window.restore();
       window.show();
       window.focus();
-      if (!window.webContents.isDestroyed())
+      if (openSession) openSession(notice.sessionId);
+      else if (!window.webContents.isDestroyed())
         window.webContents.send('yuantu:open-session', notice.sessionId);
     });
     notification.show();

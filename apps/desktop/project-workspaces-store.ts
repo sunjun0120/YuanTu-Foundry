@@ -101,7 +101,7 @@ export class ProjectWorkspacesStore {
     });
   }
 
-  add(canonicalPath: string, displayName?: string): Promise<ProjectWorkspacesFile> {
+  add(canonicalPath: string, displayName?: string, select = true): Promise<ProjectWorkspacesFile> {
     return this.operation(async () => {
       await this.ensure();
       const next = clone(this.state);
@@ -112,12 +112,12 @@ export class ProjectWorkspacesStore {
         if (existing.removed) existing.removed = false;
         if (displayName !== undefined) existing.displayName = normalizeDisplayName(displayName);
         next.initialized = true;
-        next.activeWorkspaceId = existing.id;
+        if (select) next.activeWorkspaceId = existing.id;
         return this.persist(next);
       }
       const entry = this.createEntry(next, canonicalPath, displayName);
       next.initialized = true;
-      next.activeWorkspaceId = entry.id;
+      if (select) next.activeWorkspaceId = entry.id;
       return this.persist(next);
     });
   }
@@ -167,6 +167,13 @@ export class ProjectWorkspacesStore {
       if (!entry) throw new ProjectWorkspacesError('missing', 'Workspace is not in the list');
       entry.collapsed = collapsed;
       return this.persist(next);
+    });
+  }
+
+  setProjectsCollapsed(collapsed: boolean): Promise<ProjectWorkspacesFile> {
+    return this.operation(async () => {
+      await this.ensure();
+      return this.persist({ ...clone(this.state), projectsCollapsed: collapsed });
     });
   }
 

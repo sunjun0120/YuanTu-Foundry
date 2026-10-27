@@ -152,6 +152,7 @@ export function createPermissionController(deps: {
       update({ ready: deps.isReady() });
     },
     refresh() {
+      update({ confirming: undefined, menuOpen: false });
       void read();
     },
     requestFullAccess() {

@@ -57,8 +57,17 @@ export async function manualUpgrade(ctx: MainContext): Promise<void> {
   const window = ctx.window;
   if (!window || !app.isPackaged || process.platform !== 'win32') return;
   let stopped = false;
+  const hostsBusy = (): boolean =>
+    (ctx.services ?? (ctx.service ? [ctx.service] : [])).some(
+      (host) =>
+        !host.snapshot.ready ||
+        host.busy ||
+        (host.snapshot.session?.otherRuns?.length ?? 0) > 0 ||
+        (host.snapshot.session?.queue?.length ?? 0) > 0 ||
+        Boolean(host.snapshot.sessions?.some((session) => session.activeRun)),
+    );
   try {
-    if (!ctx.service?.snapshot.ready || ctx.service.busy || ctx.switching || ctx.quitting)
+    if (!ctx.service?.snapshot.ready || hostsBusy() || ctx.switching || ctx.quitting)
       throw new Error(mainText('upgrade.busy'));
     const current = await desktopRelease();
     const selected = await dialog.showOpenDialog(window, {
@@ -93,7 +102,7 @@ export async function manualUpgrade(ctx: MainContext): Promise<void> {
     });
     if (confirm.response !== 1) return;
     const service = ctx.service;
-    if (!service || service.busy || ctx.switching || ctx.quitting)
+    if (!service || hostsBusy() || ctx.switching || ctx.quitting)
       throw new Error(mainText('upgrade.busy'));
     ctx.switching = true;
     const staged = (await execute(runtime.nodePath, helper, [
@@ -113,8 +122,9 @@ export async function manualUpgrade(ctx: MainContext): Promise<void> {
     ctx.quitting = true;
     ctx.settingsAbort.abort();
     await Promise.all([...ctx.profileWrites]);
-    await service.stop();
     stopped = true;
+    if (ctx.stopServices) await ctx.stopServices();
+    else await service.stop();
     await execute(node, copiedHelper, [
       'prepare',
       stagedFile,

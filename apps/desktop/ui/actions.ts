@@ -39,17 +39,22 @@ export interface DesktopActions {
 
 export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
   async function invoke(command: CarrierCommand): Promise<CarrierSnapshot | null> {
+    const workspace = deps.getState()?.workspace;
     try {
       const reply = await deps.bridge.invoke(command);
       if (!reply.ok) {
-        deps.setError(reply);
-        deps.requestRender();
+        if (workspace === deps.getState()?.workspace) {
+          deps.setError(reply);
+          deps.requestRender();
+        }
         return null;
       }
       return reply.state;
     } catch {
-      deps.setError(t('ui.connectionInterrupted'));
-      deps.requestRender();
+      if (workspace === deps.getState()?.workspace) {
+        deps.setError(t('ui.connectionInterrupted'));
+        deps.requestRender();
+      }
       return null;
     }
   }
@@ -77,6 +82,7 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
       const next = await invoke(command);
       if (
         next &&
+        deps.getState()?.workspace === previousWorkspace &&
         (next.workspace !== previousWorkspace || next.session.sessionId !== previousSession)
       )
         deps.clearComposer();
@@ -84,7 +90,8 @@ export function createDesktopActions(deps: DesktopActionDeps): DesktopActions {
     } finally {
       deps.pending.end(pendingId);
       deps.requestRender();
-      if (command.type !== 'loadOlder') deps.focusPrompt();
+      if (command.type !== 'loadOlder' && deps.getState()?.workspace === previousWorkspace)
+        deps.focusPrompt();
     }
   }
 

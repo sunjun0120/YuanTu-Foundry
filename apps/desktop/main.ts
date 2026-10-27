@@ -53,6 +53,7 @@ import {
 } from './project-workspaces-contract.ts';
 import { ProjectWorkspaces, resolveStartupWorkspace, samePath } from './main-project-workspaces.ts';
 import { WorkspaceHostManager } from './workspace-host-manager.ts';
+import { workspaceTarget, type WorkspaceTarget, type WorkspaceEvent } from './workspace-routing.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -61,6 +62,7 @@ import { startupEnvironmentCheck, startupEnvironmentProblems } from './startup-e
 import { ModelSettingsStore, testModelConnection } from './model-settings.ts';
 import { parseSettingsCommand, type SettingsReply } from './settings-contract.ts';
 import type { ProviderConfig } from '../../packages/providers/config.ts';
+import type { ModelCatalogConfiguration } from '../../packages/protocol/model-configuration.ts';
 import { discoverModels } from '../../packages/providers/discovery.ts';
 import { parseUiSettingsCommand, type UiSettingsReply } from './ui-settings.ts';
 import { mainText, setMainLocale } from './i18n.ts';
@@ -102,38 +104,140 @@ let workspaceHosts: WorkspaceHostManager<CarrierService> | null = null;
 /** Background workspace state for the left sidebar: running and waiting counts, not a second renderer snapshot. */
 const workspaceRuntime = new Map<string, ProjectRuntimeView>();
 const workspaceWatchers = new Map<string, () => void>();
-function watchHost(workspaceId: string, host: CarrierService): void {
+const workspaceRoutes = new Map<
+  string,
+  {
+    host: CarrierService;
+    target: WorkspaceTarget;
+    sender: SnapshotSender;
+    choices: SessionChoices;
+    empty?: boolean;
+  }
+>();
+let nextHostEpoch = 0;
+let selectionVersion = 0;
+function sendWorkspace(event: WorkspaceEvent): void {
+  if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
+    window.webContents.send('yuantu:workspace-event', event);
+}
+function routeFor(host: CarrierService) {
+  const route = [...workspaceRoutes.values()].find((entry) => entry.host === host);
+  if (!route) throw new Error('Workspace Host is no longer registered');
+  return route;
+}
+function routedService(target: unknown, allowEmpty = false): CarrierService {
+  const scope = workspaceTarget(target);
+  const route = workspaceRoutes.get(scope.workspaceId);
+  if (!route || route.target.hostEpoch !== scope.hostEpoch)
+    throw new Error('Workspace Host has changed; retry the operation');
+  if (route.empty && !allowEmpty) throw new Error('Add a workspace before using project commands');
+  return route.host;
+}
+function workspaceSnapshot(host: CarrierService): CarrierSnapshot {
+  const route = routeFor(host);
+  return route.empty ? { ...host.snapshot, workspace: '' } : host.snapshot;
+}
+function watchHost(workspaceId: string, host: CarrierService, empty = false): void {
   workspaceWatchers.get(workspaceId)?.();
+  const target = { workspaceId, hostEpoch: ++nextHostEpoch };
+  const sender = new SnapshotSender();
+  const notifier = createRunNotifier(
+    () => window,
+    () => uiSettingsStore?.view.notifications !== false,
+    (sessionId) => {
+      if (window && !window.isDestroyed())
+        window.webContents.send('yuantu:open-workspace-session', { ...target, sessionId });
+    },
+  );
+  const hostChoices = new SessionChoices({
+    service: () => host,
+    window: () => (service === host ? window : null),
+    sandbox: () => sandboxEnvironment,
+    publish: (view) => {
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
+        window.webContents.send('yuantu:workspace-presets', { ...target, view });
+    },
+  });
+  workspaceRoutes.set(workspaceId, { host, target, sender, choices: hostChoices, empty });
+  let pending: CarrierSnapshot | undefined;
+  let timer: ReturnType<typeof setImmediate> | undefined;
+  let lastPid: number | null = null;
+  let recovered = false;
+  const flush = () => {
+    if (timer) clearImmediate(timer);
+    timer = undefined;
+    if (!pending) return;
+    const patch = sender.diff(workspaceSnapshot(host));
+    pending = undefined;
+    if (Object.keys(patch.sections).length)
+      sendWorkspace({
+        ...target,
+        type: 'state',
+        patch,
+        ...(recovered && service === host ? { active: true, selection: selectionVersion } : {}),
+      });
+    recovered = false;
+  };
+  const stops = [
+    host.subscribeDelta((delta) => {
+      flush();
+      sendWorkspace({ ...target, type: 'delta', delta });
+    }),
+    host.subscribeSubAgentDelta((delta) => {
+      flush();
+      sendWorkspace({ ...target, type: 'subagent', delta });
+    }),
+    host.subscribeStatisticsDelta((delta) => {
+      flush();
+      sendWorkspace({ ...target, type: 'statistics', delta });
+    }),
+  ];
   workspaceWatchers.set(
     workspaceId,
-    host.subscribe((state) => {
-      const other = state.session.otherRuns ?? [];
-      workspaceRuntime.set(workspaceId, {
-        ready: state.ready,
-        running: state.session.running || other.length > 0,
-        waiting:
-          state.session.approvals.length +
-          state.session.questions.length +
-          other.reduce((count, run) => count + run.approvals.length + run.questions.length, 0),
-        sessions: state.sessions
-          .filter((session) => !session.parentSessionId)
-          .slice(0, 20)
-          .map((session) => {
-            const otherRun = other.find((run) => run.sessionId === session.id);
-            const waiting =
-              (session.id === state.session.sessionId
-                ? state.session.approvals.length + state.session.questions.length
-                : 0) + (otherRun ? otherRun.approvals.length + otherRun.questions.length : 0);
-            return {
-              id: session.id,
-              title: session.title ?? '',
-              running: Boolean(session.activeRun),
-              waiting,
-            };
-          }),
+    (() => {
+      const stop = host.subscribe((state) => {
+        if (state.hostPid && lastPid && state.hostPid !== lastPid) {
+          target.hostEpoch = ++nextHostEpoch;
+          sender.reset();
+          recovered = true;
+        }
+        if (state.hostPid) lastPid = state.hostPid;
+        pending = state;
+        timer ??= setImmediate(flush);
+        if (state.ready && state.session.sessionId) hostChoices.follow(state.session.sessionId);
+        const other = state.session.otherRuns ?? [];
+        workspaceRuntime.set(workspaceId, {
+          ready: state.ready,
+          running: state.session.running || other.length > 0,
+          waiting:
+            state.session.approvals.length +
+            state.session.questions.length +
+            other.reduce((count, run) => count + run.approvals.length + run.questions.length, 0),
+          sessions: state.sessions
+            .filter((session) => !session.parentSessionId)
+            .slice(0, 20)
+            .map((session) => {
+              const otherRun = other.find((run) => run.sessionId === session.id);
+              const waiting =
+                (session.id === state.session.sessionId
+                  ? state.session.approvals.length + state.session.questions.length
+                  : 0) + (otherRun ? otherRun.approvals.length + otherRun.questions.length : 0);
+              return {
+                id: session.id,
+                title: session.title ?? '',
+                running: Boolean(session.activeRun),
+                waiting,
+              };
+            }),
+        });
+        notifier.update(state);
       });
-      runNotifier.update(state);
-    }),
+      return () => {
+        stop();
+        stops.forEach((dispose) => dispose());
+        if (timer) clearImmediate(timer);
+      };
+    })(),
   );
 }
 /** The last workspace/session pair written to the registry; a snapshot burst must not rewrite the file. */
@@ -161,10 +265,6 @@ let openingService: CarrierService | null = null;
 let unsubscribe: (() => void) | undefined;
 /** What the window's mirror already holds; publishes and replies send only what differs from it. */
 const snapshotSender = new SnapshotSender();
-const runNotifier = createRunNotifier(
-  () => window,
-  () => uiSettingsStore?.view.notifications !== false,
-);
 let unsubscribeDelta: (() => void) | undefined;
 let unsubscribeSubAgentDelta: (() => void) | undefined;
 let unsubscribeStatisticsDelta: (() => void) | undefined;
@@ -211,6 +311,18 @@ const ctx: MainContext = {
   get service() {
     return service;
   },
+  get services() {
+    return [
+      ...new Set(
+        [...workspaceRoutes.values()].filter((route) => !route.empty).map((route) => route.host),
+      ),
+    ];
+  },
+  async stopServices() {
+    if (workspaceHosts) await workspaceHosts.stopAll();
+    else await service?.stop();
+    await openingService?.stop();
+  },
   get openingService() {
     return openingService;
   },
@@ -252,7 +364,7 @@ const ctx: MainContext = {
   attach,
   assertSender,
 };
-const choices = new SessionChoices({
+let choices = new SessionChoices({
   service: () => service,
   window: () => window,
   sandbox: () => sandboxEnvironment,
@@ -315,6 +427,14 @@ function createService(workspace: string, config?: ProviderConfig): CarrierServi
     audit: process.env.FOUNDRY_TEST_DESKTOP_AUDIT === '1',
   });
 }
+async function configureModelCatalog(catalog: ModelCatalogConfiguration): Promise<void> {
+  const hosts = new Set(
+    [...workspaceRoutes.values()].map((route) => route.host).filter((host) => host.snapshot.ready),
+  );
+  const results = await Promise.allSettled([...hosts].map((host) => host.configureModels(catalog)));
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed?.status === 'rejected') throw failed.reason;
+}
 /**
  * The newest published state not yet sent to the window.
  *
@@ -338,10 +458,6 @@ function flushState(): void {
  * before pushes were batched: the window's listeners are told about a change only by a push, so a reply that
  * absorbed it would leave the page undrawn, and sent after the reply it would carry older values.
  */
-function replyPatch(state: CarrierSnapshot) {
-  flushState();
-  return snapshotSender.diff(state);
-}
 function attach(next: CarrierService): CarrierService {
   // What the previous service published is no longer the state to show.
   if (pendingFlush) clearImmediate(pendingFlush);
@@ -352,12 +468,24 @@ function attach(next: CarrierService): CarrierService {
   unsubscribeSubAgentDelta?.();
   unsubscribeStatisticsDelta?.();
   // A replacement Host starts with launch defaults, even when it loads the same session.
-  choices.reset();
-  runNotifier.reset();
+  const route = [...workspaceRoutes.values()].find((entry) => entry.host === next);
+  if (route) choices = route.choices;
   service = next;
+  if (route) choices.push();
+  if (route) {
+    route.sender.reset();
+    sendWorkspace({
+      ...route.target,
+      type: 'state',
+      active: true,
+      selection: selectionVersion,
+      patch: route.sender.diff(workspaceSnapshot(next)),
+    });
+  }
   unsubscribe = next.subscribe((state) => {
-    runNotifier.update(state);
-    void noteLastSession(state);
+    const recording = noteLastSession(state);
+    profileWrites.add(recording);
+    void recording.finally(() => profileWrites.delete(recording));
     if (state.ready && state.session.sessionId) choices.follow(state.session.sessionId);
     pendingState = state;
     pendingFlush ??= setImmediate(flushState);
@@ -424,10 +552,14 @@ app.on('before-quit', (event) => {
         'sandbox setup confirmation',
       );
       const results = workspaceHosts
-        ? await Promise.allSettled([withinQuitDeadline(workspaceHosts.stopAll(), 'Host shutdown')])
+        ? await Promise.allSettled([
+            withinQuitDeadline(workspaceHosts.stopAll(), 'Host shutdown'),
+            withinQuitDeadline(Promise.all([...profileWrites]), 'Profile writes'),
+          ])
         : await Promise.allSettled([
             withinQuitDeadline(service?.stop(), 'Host shutdown'),
             withinQuitDeadline(openingService?.stop(), 'Host shutdown'),
+            withinQuitDeadline(Promise.all([...profileWrites]), 'Profile writes'),
           ]);
       const failure = results.find((result) => result.status === 'rejected');
       if (!setupSettled) throw new Error(mainText('sandboxSetup.exitUnconfirmed'));
@@ -631,21 +763,68 @@ void app
       browserViews?.destroyAll();
       browserViews = null;
     });
-    workspaceHosts = new WorkspaceHostManager((id, hostPath) => {
-      const host = createService(hostPath);
-      watchHost(id, host);
-      return host;
-    });
+    workspaceHosts = new WorkspaceHostManager(
+      (id, hostPath) => {
+        const host = createService(hostPath);
+        watchHost(id, host);
+        return host;
+      },
+      {
+        isBusy: (host) =>
+          host.busy ||
+          host.snapshot.session.running ||
+          host.snapshot.session.queue.length > 0 ||
+          host.snapshot.session.approvals.length > 0 ||
+          host.snapshot.session.questions.length > 0 ||
+          (host.snapshot.session.otherRuns?.length ?? 0) > 0 ||
+          host.snapshot.sessions.some((session) => Boolean(session.activeRun)),
+      },
+    );
+    const idleTimer = setInterval(() => {
+      if (quitting || switching) return;
+      const retiring = new Map(workspaceRoutes);
+      void workspaceHosts
+        ?.releaseIdle()
+        .then((released) => {
+          for (const id of released) {
+            if (workspaceRoutes.get(id) !== retiring.get(id)) continue;
+            workspaceWatchers.get(id)?.();
+            workspaceWatchers.delete(id);
+            workspaceRoutes.delete(id);
+            workspaceRuntime.delete(id);
+          }
+        })
+        .catch((error: unknown) =>
+          console.error('[desktop] Idle Host cleanup failed:', safeError(error)),
+        );
+    }, 60_000);
+    idleTimer.unref();
     const initial = attach(createService(workspace));
+    let resolveInitial!: () => void;
+    let rejectInitial!: (error: unknown) => void;
+    const initialReady = new Promise<void>((resolve, reject) => {
+      resolveInitial = resolve;
+      rejectInitial = reject;
+    });
+    void initialReady.catch(() => {});
     workspaceHosts.adopt(started.registry.activeWorkspaceId ?? 'default', workspace, initial);
-    watchHost(started.registry.activeWorkspaceId ?? 'default', initial);
+    watchHost(
+      started.registry.activeWorkspaceId ?? 'default',
+      initial,
+      !started.registry.activeWorkspaceId,
+    );
+    attach(initial);
     /**
      * Switch the visible Host to another workspace's.
      *
      * The new Host starts before it becomes visible; the previous Host is kept in the manager so its run can finish
      * in the background. The caller owns `switching` and has checked that no approval still waits on the old view.
      */
-    const replaceHost = async (selected: string): Promise<void> => {
+    const replaceHost = async (
+      selected: string,
+      version = ++selectionVersion,
+      selectId?: string,
+    ): Promise<void> => {
       const registry = projectWorkspaces ? await projectWorkspaces.list() : null;
       const entry = registry?.workspaces.find(
         (workspaceEntry) =>
@@ -653,11 +832,27 @@ void app
       );
       // Before the Host exists: its first run is when an untrusted hook would otherwise execute.
       await reviewWorkspaceHooks(selected);
+      const created = !workspaceHosts!.get(entry?.id ?? '');
       const runtime = await workspaceHosts!.ensure(
         entry?.id ?? `unregistered:${selected}`,
         selected,
+        false,
       );
-      if (!quitting) attach(runtime.host);
+      if (runtime.host === initial && !initial.snapshot.ready) await initialReady;
+      await runtime.host.configureModels(settingsStore.runtimeCatalog);
+      if (
+        created &&
+        entry?.lastSessionId &&
+        runtime.host.snapshot.sessions.some((session) => session.id === entry.lastSessionId)
+      ) {
+        await runtime.host.dispatch({ type: 'load', id: entry.lastSessionId });
+      }
+      if (!quitting && version === selectionVersion && selectId)
+        await projectWorkspaces!.select(selectId);
+      if (!quitting && version === selectionVersion) {
+        workspaceHosts!.activate(runtime.workspaceId);
+        attach(runtime.host);
+      }
     };
     registerAttachmentIpc(ctx, () => uiSettingsStore.view.language);
     ipcMain.handle('yuantu:browser', async (event, input: unknown): Promise<BrowserReply> => {
@@ -677,15 +872,46 @@ void app
           if (!projectWorkspaces || quitting) throw new Error(mainText('desktop.quitting'));
           const command = parseProjectWorkspaceCommand(input);
           if (command.type === 'add') {
-            if (command.path)
-              return { ok: true, registry: await projectWorkspaces.add(command.path) };
+            const register = async (folder: string): Promise<ProjectWorkspaceReply> => {
+              const registry = await projectWorkspaces!.add(folder, undefined, false);
+              const addedId = registry.workspaces.find(
+                (entry) => !entry.removed && samePath(entry.canonicalPath, realpathSync(folder)),
+              )?.id;
+              return { ok: true, registry, addedId };
+            };
+            if (command.path) return register(command.path);
             if (!window) throw new Error(mainText('desktop.quitting'));
             const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
             if (picked.canceled || !picked.filePaths[0])
               return { ok: true, registry: await projectWorkspaces.list(), cancelled: true };
-            return { ok: true, registry: await projectWorkspaces.add(picked.filePaths[0]) };
+            return register(picked.filePaths[0]);
           }
           switch (command.type) {
+            case 'groupCollapse':
+              return {
+                ok: true,
+                registry: await projectWorkspaces.setProjectsCollapsed(command.collapsed),
+              };
+            case 'prepare': {
+              if (switching) throw new Error('Workspace operation is in progress');
+              const registry = await projectWorkspaces.list();
+              const entry = registry.workspaces.find(
+                (entry) => entry.id === command.id && !entry.removed,
+              );
+              if (!entry) throw new Error('Workspace is not in the list');
+              if (!workspaceHosts?.get(entry.id)) {
+                await reviewWorkspaceHooks(entry.canonicalPath);
+                await workspaceHosts!.ensure(entry.id, entry.canonicalPath, false);
+                await workspaceHosts!
+                  .get(entry.id)!
+                  .host.configureModels(settingsStore.runtimeCatalog);
+              }
+              return {
+                ok: true,
+                registry: await projectWorkspaces.list(),
+                runtime: Object.fromEntries(workspaceRuntime),
+              };
+            }
             case 'list':
               return {
                 ok: true,
@@ -693,29 +919,44 @@ void app
                 runtime: Object.fromEntries(workspaceRuntime),
               };
             case 'select': {
+              if (switching) throw new Error('Workspace operation is in progress');
+              const version = ++selectionVersion;
               const registry = await projectWorkspaces.list();
               const entry = registry.workspaces.find(
                 (workspace) => workspace.id === command.id && !workspace.removed,
               );
               if (!entry) throw new Error('Workspace is not in the list');
-              if (service && !samePath(service.snapshot.workspace, entry.canonicalPath)) {
-                const state = service.snapshot;
-                if (
-                  !state.ready ||
-                  state.session.running ||
-                  state.session.loading ||
-                  (state.session.otherRuns?.length ?? 0) > 0 ||
-                  state.sessions.some((item) => item.activeRun)
-                )
+              if (
+                service &&
+                (routeFor(service).empty ||
+                  !samePath(service.snapshot.workspace, entry.canonicalPath))
+              ) {
+                if (service.sessionOperation)
                   throw new Error('Wait for the current operation to finish');
-                switching = true;
-                try {
-                  await replaceHost(entry.canonicalPath);
-                } finally {
-                  switching = false;
-                }
+                await replaceHost(entry.canonicalPath, version, entry.id);
+              } else {
+                await projectWorkspaces.select(command.id);
               }
-              return { ok: true, registry: await projectWorkspaces.select(command.id) };
+              if (version !== selectionVersion)
+                throw new Error('Workspace selection was superseded');
+              const selectedRoute = routeFor(service!);
+              selectedRoute.sender.reset();
+              const activation = {
+                ...selectedRoute.target,
+                type: 'state' as const,
+                active: true,
+                selection: version,
+                patch: selectedRoute.sender.diff(service!.snapshot),
+              };
+              const selectedRegistry = await projectWorkspaces.list();
+              if (version !== selectionVersion)
+                throw new Error('Workspace selection was superseded');
+              return {
+                ok: true,
+                registry: selectedRegistry,
+                target: selectedRoute.target,
+                activation,
+              };
             }
             case 'rename':
               return {
@@ -723,13 +964,14 @@ void app
                 registry: await projectWorkspaces.rename(command.id, command.displayName),
               };
             case 'remove': {
-              const registry = await projectWorkspaces.list();
-              const target = registry.workspaces.find(
-                (workspace) => workspace.id === command.id && !workspace.removed,
-              );
-              if (target && service && samePath(service.snapshot.workspace, target.canonicalPath)) {
-                const state = service.snapshot;
+              if (switching) throw new Error('Workspace operation is in progress');
+              if (workspaceHosts?.isStarting(command.id))
+                throw new Error('Workspace Host is still starting');
+              const targetHost = workspaceHosts?.get(command.id)?.host;
+              if (targetHost) {
+                const state = targetHost.snapshot;
                 if (
+                  targetHost.busy ||
                   !state.ready ||
                   state.session.running ||
                   state.session.loading ||
@@ -738,7 +980,30 @@ void app
                 )
                   throw new Error('Wait for the current operation to finish');
               }
-              return { ok: true, registry: await projectWorkspaces.remove(command.id) };
+              switching = true;
+              ++selectionVersion;
+              try {
+                const registry = await projectWorkspaces.remove(command.id);
+                await workspaceHosts?.stop(command.id);
+                workspaceWatchers.get(command.id)?.();
+                workspaceWatchers.delete(command.id);
+                workspaceRoutes.delete(command.id);
+                workspaceRuntime.delete(command.id);
+                const next = registry.workspaces.find(
+                  (entry) => entry.id === registry.activeWorkspaceId,
+                );
+                if (targetHost === service) {
+                  if (next) await replaceHost(next.canonicalPath);
+                  else {
+                    const empty = createService(workspace);
+                    watchHost('empty', empty, true);
+                    attach(empty);
+                  }
+                }
+                return { ok: true, registry };
+              } finally {
+                switching = false;
+              }
             }
             case 'collapse':
               return {
@@ -761,7 +1026,10 @@ void app
       async (event, input: unknown): Promise<WorkspaceMaintenanceReply> => {
         try {
           assertSender(event);
-          const command = parseWorkspaceMaintenanceCommand(input);
+          const envelope = input as { target?: unknown; command?: unknown };
+          const command = parseWorkspaceMaintenanceCommand(envelope?.command);
+          const service = envelope.target ? routedService(envelope.target) : null;
+          const choices = service ? routeFor(service).choices : undefined;
           if (!service || quitting || switching) throw new Error(mainText('desktop.quitting'));
           const current = service;
           const workspace = current.snapshot.workspace;
@@ -774,7 +1042,7 @@ void app
               service: current,
               command,
               workspace,
-              policyReady: choices.following,
+              policyReady: choices?.following,
               isCurrent: () =>
                 !quitting &&
                 current === service &&
@@ -789,21 +1057,27 @@ void app
         }
       },
     );
-    ipcMain.handle('yuantu:archived-sessions', async (event): Promise<ArchivedSessionsReply> => {
-      try {
-        assertSender(event);
-        if (!service || quitting) throw new Error(mainText('desktop.quitting'));
-        const current = service;
-        const workspace = current.snapshot.workspace;
-        return { ok: true, workspace, sessions: await current.archivedSessions() };
-      } catch (error) {
-        return carrierErrorReply(error);
-      }
-    });
+    ipcMain.handle(
+      'yuantu:archived-sessions',
+      async (event, input: unknown): Promise<ArchivedSessionsReply> => {
+        try {
+          assertSender(event);
+          const service = routedService((input as { target?: unknown })?.target);
+          if (!service || quitting) throw new Error(mainText('desktop.quitting'));
+          const current = service;
+          const workspace = current.snapshot.workspace;
+          return { ok: true, workspace, sessions: await current.archivedSessions() };
+        } catch (error) {
+          return carrierErrorReply(error);
+        }
+      },
+    );
     ipcMain.handle('yuantu:files', async (event, input: unknown): Promise<FilesReply> => {
       try {
         assertSender(event);
-        const command = parseFilesCommand(input);
+        const envelope = input as { target?: unknown; command?: unknown };
+        const command = parseFilesCommand(envelope?.command);
+        const service = envelope.target ? routedService(envelope.target) : null;
         if (!service || quitting) throw new Error(mainText('desktop.quitting'));
         /**
          * A round trip to the Host, and nothing else.
@@ -835,6 +1109,9 @@ void app
       async (event, input: unknown): Promise<OpenWorkspacePathReply> => {
         try {
           assertSender(event);
+          const envelope = input as { target?: unknown; command?: unknown };
+          const service = routedService(envelope?.target);
+          input = envelope.command;
           if (!service || quitting) throw new Error(mainText('desktop.quitting'));
           if (!input || typeof input !== 'object') throw new Error('Invalid path request');
           const { path: requested, action } = input as {
@@ -872,7 +1149,13 @@ void app
       async (event, input: unknown): Promise<PermissionPresetReply> => {
         try {
           assertSender(event);
-          const command = parsePermissionPresetCommand(input);
+          const envelope = input as { target?: unknown; command?: unknown };
+          const command = parsePermissionPresetCommand(envelope?.command);
+          const service = envelope.target
+            ? routedService(envelope.target, command.type === 'get')
+            : ctx.service;
+          if (!service) throw new Error('Workspace is not ready');
+          const choices = routeFor(service).choices;
           if (command.type === 'get') {
             // After a switch that failed half way and could not be undone, a read is the retry: the pair in force
             // is unknown until one known pair has been written again.
@@ -950,7 +1233,12 @@ void app
           if (quitting) throw new Error(mainText('desktop.quitting'));
           if (command.type === 'status') return { ok: true, view: await sandboxSetup.status() };
           if (command.type === 'verify') return { ok: true, view: await sandboxSetup.verify() };
-          if (switching || !service || service.busy) throw new Error(mainText('settingsMain.busy'));
+          if (
+            switching ||
+            !service ||
+            ctx.services?.some((host) => host.busy || !host.snapshot.ready)
+          )
+            throw new Error(mainText('settingsMain.busy'));
           switching = true;
           try {
             sandboxInitializing =
@@ -1002,7 +1290,11 @@ void app
       let submittedKey = '';
       try {
         assertSender(event);
-        const command = parseSettingsCommand(input);
+        const envelope = input as { target?: unknown; command?: unknown };
+        const command = parseSettingsCommand(envelope?.command);
+        const service = envelope.target
+          ? routedService(envelope.target, command.type === 'get')
+          : ctx.service;
         if (quitting) throw new Error(mainText('desktop.quitting'));
         if (command.type === 'get') return { ok: true, settings: modelSettingsView() };
         submittedKey = 'values' in command ? command.values.apiKey : '';
@@ -1022,7 +1314,7 @@ void app
           try {
             await settingsStore.withRuntime(
               () => settingsStore.delete(command.connectionId),
-              (catalog) => service!.configureModels(catalog),
+              configureModelCatalog,
             );
             return {
               ok: true,
@@ -1075,7 +1367,7 @@ void app
               preparedGroup
                 ? settingsStore.savePreparedGroup(preparedGroup)
                 : settingsStore.save(config),
-            (catalog) => service!.configureModels(catalog),
+            configureModelCatalog,
           );
           return {
             ok: true,
@@ -1095,33 +1387,64 @@ void app
     ipcMain.handle('yuantu:command', async (event, input: unknown): Promise<DesktopWireReply> => {
       try {
         assertSender(event);
-        const command = parseCarrierCommand(input);
+        const envelope = input as { target?: unknown; command?: unknown };
+        const command = parseCarrierCommand(envelope?.command);
+        const current = envelope.target
+          ? routedService(envelope.target, command.type === 'snapshot')
+          : command.type === 'snapshot'
+            ? service
+            : null;
+        if (!current || quitting) throw new Error('Workspace target is required');
+        const route = routeFor(current);
+        const capturedTarget = { ...route.target };
+        const choices = route.choices;
+        const reply = (): DesktopWireReply => {
+          if (route.target.hostEpoch !== capturedTarget.hostEpoch)
+            throw new Error('Workspace Host has changed');
+          return {
+            ok: true,
+            target: capturedTarget,
+            patch: route.sender.diff(workspaceSnapshot(current)),
+            ...(!envelope.target ? { active: true, selection: selectionVersion } : {}),
+          };
+        };
         // The window asks for a snapshot when it starts; whatever it held before, it gets every section.
-        if (command.type === 'snapshot') snapshotSender.reset();
+        if (command.type === 'snapshot') route.sender.reset();
+        if (command.type === 'snapshot' && !envelope.target) {
+          for (const other of workspaceRoutes.values()) {
+            if (other === route) continue;
+            other.sender.reset();
+            sendWorkspace({
+              ...other.target,
+              type: 'state',
+              patch: other.sender.diff(workspaceSnapshot(other.host)),
+            });
+          }
+        }
         if (command.type === 'sandbox')
           throw new Error('Change the sandbox through a confirmed permission preset.');
         if (!service || quitting) throw new Error('Desktop is shutting down');
         if (command.type === 'copyText') {
           clipboard.writeText(command.text);
-          return { ok: true, patch: replyPatch(service.snapshot) };
+          return reply();
         }
         if (command.type === 'openLink') {
           await shell.openExternal(command.url);
-          return { ok: true, patch: replyPatch(service.snapshot) };
+          return reply();
         }
         if (command.type === 'export') {
           const language = uiSettingsStore.view.language;
           const content =
             'sessionId' in command
               ? conversationMarkdown({
-                  ...(await service.exportTranscript(command.sessionId)),
+                  ...(await current.exportTranscript(command.sessionId)),
                   language,
                 })
               : command.content;
           const result = await dialog.showSaveDialog(window!, {
             title: mainText('desktop.exportTitle'),
             defaultPath: path.join(
-              service.snapshot.workspace,
+              current.snapshot.workspace,
               safeExportName(command.suggestedName),
             ),
             filters: [
@@ -1131,19 +1454,13 @@ void app
           });
           if (!result.canceled && result.filePath)
             await writeFile(result.filePath, content, 'utf8');
-          return { ok: true, patch: replyPatch(service.snapshot) };
+          return reply();
         }
         if (switching && command.type !== 'snapshot') throw new Error('Workspace is changing');
         if (command.type === 'chooseWorkspace') {
-          const state = service.snapshot;
+          const state = current.snapshot;
           // Changing the workspace replaces the Host, so a run of any session — not only the visible one — holds it.
-          if (
-            !state.ready ||
-            state.session.running ||
-            state.session.loading ||
-            (state.session.otherRuns?.length ?? 0) > 0 ||
-            state.sessions.some((item) => item.activeRun)
-          )
+          if (!state.ready || state.session.loading || current.sessionOperation)
             throw new Error('Wait for the current operation to finish');
           switching = true;
           try {
@@ -1156,17 +1473,28 @@ void app
               const selected = realpathSync(result.filePaths[0]);
               // The picker is also the "add workspace" flow: register it before starting the Host.
               await projectWorkspaces?.add(selected);
-              if (selected !== state.workspace) await replaceHost(selected);
+              if (selected !== state.workspace || routeFor(current).empty)
+                await replaceHost(selected);
             }
-            return { ok: true, patch: replyPatch(service.snapshot) };
+            const activeRoute = routeFor(service!);
+            return {
+              ok: true,
+              target: activeRoute.target,
+              active: true,
+              selection: selectionVersion,
+              patch: activeRoute.sender.diff(service!.snapshot),
+            };
           } finally {
             switching = false;
           }
         }
         if (command.type !== 'snapshot') await choices.following;
-        const state = await service.dispatch(command);
+        if (switching && command.type !== 'snapshot') throw new Error('Workspace is changing');
+        if (routedService(capturedTarget, command.type === 'snapshot') !== current)
+          throw new Error('Workspace Host has changed');
+        await current.dispatch(command);
         if (command.type !== 'snapshot') await choices.following;
-        return { ok: true, patch: replyPatch(state) };
+        return reply();
       } catch (error) {
         return carrierErrorReply(error);
       }
@@ -1177,14 +1505,16 @@ void app
     // Asked once the window is visible and before the Host starts, so the prompt has a parent and an
     // untrusted SessionStart hook has not had a chance to run.
     if (!quitting) await reviewWorkspaceHooks(workspace);
-    if (!quitting)
+    if (!quitting && started.registry.activeWorkspaceId)
       await initial
         .start()
         .then(async () => {
+          resolveInitial();
           await confirmUpgradeStartup();
           console.info('[desktop] host.ready');
         })
         .catch((error) => {
+          rejectInitial(error);
           if (app.commandLine.hasSwitch('upgrade-journal'))
             dialog.showErrorBox(
               mainText('upgrade.failed'),
@@ -1193,6 +1523,7 @@ void app
         });
   })
   .catch((error) => {
+    console.error('[desktop] Startup failed:', safeError(error));
     dialog.showErrorBox(
       mainText('desktop.startFailureTitle'),
       // A launch that skipped the script has one recovery, and the dictionary already owns its sentence; the

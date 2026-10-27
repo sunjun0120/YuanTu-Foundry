@@ -585,6 +585,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
       const switchBlocked = !state.ready || session.loading || isOperating();
       updateChrome({
         canCreate: !switchBlocked,
+        canSelectProject: !state.workspace || !switchBlocked,
         canChangeWorkspace: !(
           blocked ||
           (session.otherRuns?.length ?? 0) > 0 ||
@@ -624,6 +625,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
        * the whole sidebar for the length of the read — the blink that made a switch look like a reload.
        */
       sessionSidebar.update({
+        workspaceKey: state.workspace,
         sessions: state.sessions,
         currentId: session.sessionId,
         blocked: !state.ready,
@@ -635,7 +637,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
       // Message timestamps are locale-formatted, so they follow the language too.
       const paused = session.error === RUN_CANCELLED;
       const changesIdentity = turnChangesView.update(blocked);
-      const nextTranscriptKey = `${session.sessionId}:${session.messageRevision}:${locale()}:${paused}:${changesIdentity}`;
+      const nextTranscriptKey = `${state.workspace}:${session.sessionId}:${session.messageRevision}:${locale()}:${paused}:${changesIdentity}`;
       const transcriptChanged = nextTranscriptKey !== transcriptKey;
       if (transcriptChanged) {
         transcriptKey = nextTranscriptKey;
@@ -726,23 +728,27 @@ export function connectDesktop(runtime: DesktopRuntime) {
 
     disposers.push(() => sessionPanels.dispose());
 
-    const approvalsView = mountApprovals({
-      invoke,
-      setError: (message) => {
-        localError = message;
-      },
-    });
+    const createApprovals = () =>
+      mountApprovals({
+        invoke,
+        setError: (message) => {
+          localError = message;
+        },
+      });
+    let approvalsView = createApprovals();
 
     disposers.push(() => approvalsView.dispose());
 
-    const questionsView = mountQuestions({
-      markdownActions,
-      invoke,
-      setError: (message) => {
-        localError = message;
-      },
-      requestRender: projectSession,
-    });
+    const createQuestions = () =>
+      mountQuestions({
+        markdownActions,
+        invoke,
+        setError: (message) => {
+          localError = message;
+        },
+        requestRender: projectSession,
+      });
+    let questionsView = createQuestions();
 
     disposers.push(() => questionsView.dispose());
 
@@ -866,6 +872,14 @@ export function connectDesktop(runtime: DesktopRuntime) {
 
     // A clicked system notification names the session it was about; the window is already in front by then.
     disposers.push(
+      window.yuantu.subscribeWorkspaceSession?.(({ workspaceId, sessionId }) => {
+        void window.yuantu.projects({ type: 'select', id: workspaceId }).then(async (reply) => {
+          if (reply.ok && reply.target)
+            await window.yuantu.workspaceInvoke?.(reply.target, { type: 'load', id: sessionId });
+        });
+      }),
+    );
+    disposers.push(
       window.yuantu.subscribeOpenSession?.((sessionId) => {
         if (state?.session.sessionId !== sessionId) void select({ type: 'load', id: sessionId });
       }),
@@ -875,6 +889,22 @@ export function connectDesktop(runtime: DesktopRuntime) {
     disposers.push(
       runtime.onSnapshot((next, changed) => {
         const first = !state;
+        const changedWorkspace =
+          !state || state.workspace !== next.workspace || state.hostPid !== next.hostPid;
+        if (changedWorkspace) {
+          approvalsView.dispose();
+          questionsView.dispose();
+          approvalsView = createApprovals();
+          questionsView = createQuestions();
+        }
+        if (state && state.workspace !== next.workspace) {
+          prompt.value = '';
+          attachmentsView.clear();
+          localError = null;
+          permissionSettings?.refresh();
+          paintedWindow = null;
+          holdReadingPosition = false;
+        }
         const wasRunning = state?.session.running === true;
         state = next;
         modelSettings?.updateSession(next.session.sessionId, next.model, next.modelConnectionId);
@@ -887,7 +917,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
         // recovered silently and kept an error banner from the request that died with the Host.
         if (state.recovery) localError = null;
         // The first state paints at once: there is nothing on screen yet to keep.
-        if (first) {
+        if (first || changedWorkspace) {
           projectSession();
           return;
         }

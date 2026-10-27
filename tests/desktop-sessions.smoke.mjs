@@ -80,6 +80,7 @@ test(
     assert.equal(await project.locator('.project-name').getAttribute('aria-current'), 'true');
     await project.hover();
     await project.locator('.project-actions button').first().click();
+    await page.getByRole('menuitem', { name: '重命名', exact: true }).click();
     await page.locator('.project-rename input').fill('Renamed project');
     await page.locator('.project-rename input').press('Enter');
     await page.waitForFunction(

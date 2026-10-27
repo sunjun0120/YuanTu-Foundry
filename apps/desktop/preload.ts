@@ -1,74 +1,123 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopBridge, DesktopWireReply } from './contract.ts';
-import type { BrowserEvent } from './browser-contract.ts';
-import { SnapshotMirror, type SnapshotPatch } from './snapshot-patch.ts';
+import type { DesktopBridge, DesktopWireReply, CarrierCommand, DesktopReply } from './contract.ts';
+import {
+  WorkspaceMirrors,
+  sameTarget,
+  type WorkspaceEvent,
+  type WorkspaceTarget,
+} from './workspace-routing.ts';
+import type { SnapshotSection } from './snapshot-patch.ts';
 import type { PermissionPresetView } from './permission-presets.ts';
-import type {
-  MessageDelta,
-  StatisticsDelta,
-  SubAgentDelta,
-} from '../../packages/carrier/contract.ts';
+import type { CarrierSnapshot, MessageDelta, SubAgentDelta, StatisticsDelta } from './contract.ts';
 
-/** The snapshot the main process has sent, section by section; see `snapshot-patch.ts`. */
-const mirror = new SnapshotMirror();
+const mirrors = new WorkspaceMirrors();
+const states = new Set<(state: CarrierSnapshot, changed: readonly SnapshotSection[]) => void>();
+const deltas = new Set<(delta: MessageDelta) => void>();
+const subagents = new Set<(delta: SubAgentDelta) => void>();
+const statistics = new Set<(delta: StatisticsDelta) => void>();
+const workspaces = new Set<(event: WorkspaceEvent) => void>();
+const workspaceStates = new Set<(view: WorkspaceTarget & { state: CarrierSnapshot }) => void>();
+const presets = new Set<(view: PermissionPresetView) => void>();
+const presetViews = new Map<string, WorkspaceTarget & { view: PermissionPresetView }>();
+ipcRenderer.on(
+  'yuantu:workspace-presets',
+  (_event, reading: WorkspaceTarget & { view: PermissionPresetView }) => {
+    const held = presetViews.get(reading.workspaceId);
+    if (held && held.hostEpoch > reading.hostEpoch) return;
+    presetViews.set(reading.workspaceId, reading);
+    if (sameTarget(mirrors.target, reading)) for (const listener of presets) listener(reading.view);
+  },
+);
+function receive(event: WorkspaceEvent): void {
+  if (event.type === 'state') {
+    const projected = mirrors.apply(event);
+    if (projected) for (const listener of states) listener(projected.state, projected.changed);
+    const reading = presetViews.get(event.workspaceId);
+    if (event.active && reading && sameTarget(mirrors.target, reading))
+      for (const listener of presets) listener(reading.view);
+  } else if (sameTarget(mirrors.target, event)) {
+    if (event.type === 'delta') for (const listener of deltas) listener(event.delta);
+    if (event.type === 'subagent') for (const listener of subagents) listener(event.delta);
+    if (event.type === 'statistics') for (const listener of statistics) listener(event.delta);
+  }
+  const held = mirrors.get(event);
+  if (held) {
+    for (const listener of workspaces) listener(event);
+    if (event.type === 'state')
+      for (const listener of workspaceStates)
+        listener({ workspaceId: event.workspaceId, hostEpoch: event.hostEpoch, state: held });
+  }
+}
+ipcRenderer.on('yuantu:workspace-event', (_event, event: WorkspaceEvent) => receive(event));
+function subscribe<T>(listeners: Set<T>, listener: T): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+function on<T>(channel: string, listener: (value: T) => void): () => void {
+  const receive = (_event: Electron.IpcRendererEvent, value: T) => listener(value);
+  ipcRenderer.on(channel, receive);
+  return () => ipcRenderer.removeListener(channel, receive);
+}
+async function invoke(
+  target: WorkspaceTarget | null,
+  command: CarrierCommand,
+): Promise<DesktopReply> {
+  const reply = (await ipcRenderer.invoke('yuantu:command', {
+    target,
+    command,
+  })) as DesktopWireReply;
+  if (!reply.ok) return reply;
+  if (!reply.target) return { ok: false, error: 'Workspace reply has no target' };
+  receive({
+    ...reply.target,
+    type: 'state',
+    patch: reply.patch,
+    active: reply.active,
+    selection: reply.selection,
+  });
+  const state = mirrors.get(reply.target);
+  return state ? { ok: true, state } : { ok: false, error: 'Workspace Host has changed' };
+}
+const scoped = (channel: string, command?: unknown) =>
+  ipcRenderer.invoke(channel, { target: mirrors.target, command });
 const bridge: DesktopBridge = {
-  workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
+  workspaceMaintenance: (command) => scoped('yuantu:workspace-maintenance', command),
   browser: (command) => ipcRenderer.invoke('yuantu:browser', command),
-  projects: (command) => ipcRenderer.invoke('yuantu:projects', command),
-  subscribeBrowser(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, event: BrowserEvent) => listener(event);
-    ipcRenderer.on('yuantu:browser-event', receive);
-    return () => ipcRenderer.removeListener('yuantu:browser-event', receive);
+  async projects(command) {
+    const reply = await ipcRenderer.invoke('yuantu:projects', command);
+    if (reply.ok && reply.activation) receive(reply.activation);
+    return reply;
   },
-  archivedSessions: () => ipcRenderer.invoke('yuantu:archived-sessions'),
+  subscribeBrowser: (listener) => on('yuantu:browser-event', listener),
+  archivedSessions: () => scoped('yuantu:archived-sessions'),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
-  files: (command) => ipcRenderer.invoke('yuantu:files', command),
-  openWorkspacePath: (path, action) =>
-    ipcRenderer.invoke('yuantu:open-workspace-path', { path, action }),
-  presets: (command) => ipcRenderer.invoke('yuantu:presets', command),
+  files: (command) => scoped('yuantu:files', command),
+  openWorkspacePath: (path, action) => scoped('yuantu:open-workspace-path', { path, action }),
+  presets: (command) => scoped('yuantu:presets', command),
   subscribePresets(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, view: PermissionPresetView) =>
-      listener(view);
-    ipcRenderer.on('yuantu:presets-view', receive);
-    return () => ipcRenderer.removeListener('yuantu:presets-view', receive);
+    const target = mirrors.target;
+    const view = target ? presetViews.get(target.workspaceId) : undefined;
+    if (view && target && sameTarget(target, view)) listener(view.view);
+    return subscribe(presets, listener);
   },
-  subscribeOpenSession(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
-    ipcRenderer.on('yuantu:open-session', receive);
-    return () => ipcRenderer.removeListener('yuantu:open-session', receive);
-  },
+  subscribeOpenSession: (listener) => on('yuantu:open-session', listener),
+  subscribeWorkspaceSession: (listener) => on('yuantu:open-workspace-session', listener),
   uiSettings: (command) => ipcRenderer.invoke('yuantu:ui-settings', command),
   sandboxSetup: (command) => ipcRenderer.invoke('yuantu:sandbox-setup', command),
   sandboxRecovery: (command) => ipcRenderer.invoke('yuantu:sandbox-recovery', command),
-  settings: (command) => ipcRenderer.invoke('yuantu:settings', command),
-  async invoke(command) {
-    const reply = (await ipcRenderer.invoke('yuantu:command', command)) as DesktopWireReply;
-    if (!reply.ok) return reply;
-    return { ok: true, state: mirror.apply(reply.patch).state };
-  },
-  subscribe(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, patch: SnapshotPatch) => {
-      const { state, changed } = mirror.apply(patch);
-      // A patch every section of which was older than what a reply already delivered changes nothing.
-      if (changed.length) listener(state, changed);
-    };
-    ipcRenderer.on('yuantu:state', receive);
-    return () => ipcRenderer.removeListener('yuantu:state', receive);
-  },
-  subscribeDelta(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, delta: MessageDelta) => listener(delta);
-    ipcRenderer.on('yuantu:delta', receive);
-    return () => ipcRenderer.removeListener('yuantu:delta', receive);
-  },
-  subscribeSubAgentDelta(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, delta: SubAgentDelta) => listener(delta);
-    ipcRenderer.on('yuantu:subagent-delta', receive);
-    return () => ipcRenderer.removeListener('yuantu:subagent-delta', receive);
-  },
-  subscribeStatisticsDelta(listener) {
-    const receive = (_event: Electron.IpcRendererEvent, delta: StatisticsDelta) => listener(delta);
-    ipcRenderer.on('yuantu:statistics-delta', receive);
-    return () => ipcRenderer.removeListener('yuantu:statistics-delta', receive);
+  settings: (command) => scoped('yuantu:settings', command),
+  invoke: (command) => invoke(mirrors.target, command),
+  workspaceInvoke: (target, command) => invoke(target, command),
+  subscribe: (listener) => subscribe(states, listener),
+  subscribeDelta: (listener) => subscribe(deltas, listener),
+  subscribeSubAgentDelta: (listener) => subscribe(subagents, listener),
+  subscribeStatisticsDelta: (listener) => subscribe(statistics, listener),
+  subscribeWorkspaces: (listener) => subscribe(workspaces, listener),
+  subscribeWorkspaceStates(listener) {
+    for (const view of mirrors.snapshots()) listener(view);
+    return subscribe(workspaceStates, listener);
   },
 };
 contextBridge.exposeInMainWorld('yuantu', bridge);

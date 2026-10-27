@@ -57,6 +57,7 @@ export class SessionChoices {
     service(): CarrierService | null;
     window(): BrowserWindow | null;
     sandbox(): SandboxEnvironment;
+    publish?(view: PermissionPresetView): void;
   };
   constructor(deps: SessionChoices['deps']) {
     this.deps = deps;
@@ -204,6 +205,10 @@ export class SessionChoices {
   /** Tell the window which pair its session is in, once it is actually in it. */
   push(): void {
     if (this.uncertain) return;
+    if (this.deps.publish) {
+      this.deps.publish(this.view());
+      return;
+    }
     const window = this.deps.window();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
       window.webContents.send('yuantu:presets-view', this.view());

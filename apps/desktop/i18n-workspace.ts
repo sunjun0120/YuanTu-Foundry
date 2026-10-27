@@ -5,6 +5,10 @@
  */
 /** Sessions, diffs, the welcome screen, workspace files and model settings. */
 export const workspaceMessages: Record<string, [string, string]> = {
+  'projects.pendingTitle': ['待处理请求', 'Pending requests'],
+  'projects.actions': ['工作区操作', 'Workspace actions'],
+  'projects.newSession': ['在 {name} 中新建会话', 'New session in {name}'],
+  'projects.noPending': ['当前没有待处理请求', 'No pending requests'],
   'ui.toolSandboxStateLocked': [
     '无法取得沙箱授权日志锁，命令没有启动。请等待其他 Agent Host 或沙箱维护操作结束后重试；如果仍失败，检查状态目录权限。下面保留了详细错误。',
     'The sandbox grant journal lock could not be acquired, so the command did not start. Wait for other Agent Hosts or sandbox maintenance to finish and retry; if it persists, check the state directory permissions. Details are preserved below.',

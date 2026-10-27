@@ -41,10 +41,10 @@ export function ProductShell(): ReactNode {
               <button id="new-session" className="new-session" disabled={!status.canCreate}>
                 <span aria-hidden="true">＋</span> {t('ui.newSession')}
               </button>
-              <ProjectSidebar canChange={status.canChangeWorkspace} />
-              <div id="session-sidebar-root" className="session-sidebar-root">
-                <ViewSlot name="session-sidebar" />
-              </div>
+              <ProjectSidebar
+                canChange={status.canSelectProject}
+                legacyCanChange={status.canChangeWorkspace}
+              />
               <div className="sidebar-footer">
                 <button
                   id="open-settings"

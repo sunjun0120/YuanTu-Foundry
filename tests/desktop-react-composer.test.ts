@@ -166,6 +166,7 @@ function composerFixture(
     images,
     documents,
     session,
+    state,
     setPrompt: (text: string) => (prompt = text),
     prompt: () => prompt,
     release: () => release,
@@ -179,6 +180,17 @@ test('an ordinary send submits once, clears the composer and is not "sending" af
   assert.deepEqual(fixture.calls, [{ type: 'send', prompt: 'hello', images: [] }]);
   assert.equal(fixture.prompt(), '');
   assert.equal(fixture.controller.isSending(), false);
+});
+
+test('a failed send cannot restore a draft into another workspace with the same session id', async () => {
+  const fixture = composerFixture({ defer: true });
+  fixture.setPrompt('only A');
+  const pending = fixture.controller.submit();
+  fixture.state.workspace = '/b';
+  assert.equal(fixture.controller.isSending(), false);
+  fixture.release()?.(null);
+  await pending;
+  assert.equal(fixture.prompt(), '');
 });
 
 test('a message typed while the run is live is queued as a follow-up', async () => {

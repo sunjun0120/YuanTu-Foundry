@@ -55,6 +55,7 @@ export interface SessionSidebarController {
   readonly store: ReadableStore<SessionSidebarState>;
   /** Feed one carrier snapshot (or the subset the list needs). */
   update(input: {
+    workspaceKey?: string;
     sessions: SessionInfo[];
     currentId: string | null;
     blocked: boolean;
@@ -147,6 +148,8 @@ export function createSessionSidebarController(deps: {
     dialog: null,
   });
   let disposed = false;
+  let workspaceKey = '';
+  const saved = new Map<string, Pick<SessionSidebarState, 'expanded' | 'searchOpen' | 'query'>>();
   const update = (patch: Partial<SessionSidebarState>): void => {
     if (!disposed) store.set({ ...store.getSnapshot(), ...patch });
   };
@@ -161,6 +164,20 @@ export function createSessionSidebarController(deps: {
   return {
     store,
     update(input) {
+      if (input.workspaceKey !== undefined && input.workspaceKey !== workspaceKey) {
+        const previous = store.getSnapshot();
+        saved.set(workspaceKey, {
+          expanded: previous.expanded,
+          searchOpen: previous.searchOpen,
+          query: previous.query,
+        });
+        workspaceKey = input.workspaceKey;
+        update({
+          ...(saved.get(workspaceKey) ?? { expanded: false, searchOpen: false, query: '' }),
+          menuSessionId: null,
+          dialog: null,
+        });
+      }
       const state = store.getSnapshot();
       // A snapshot must not overwrite what the person is typing: sync the query only while the box is closed.
       const query = state.searchOpen ? state.query : (input.sessionQuery ?? '');
@@ -253,7 +270,7 @@ export function createSessionSidebarController(deps: {
       update({ dialog: { ...dialog, saving: true, error: '' } });
       const result = await run(command);
       const latest = store.getSnapshot().dialog;
-      if (!latest) return;
+      if (!latest || latest.targetId !== dialog.targetId || latest.kind !== dialog.kind) return;
       if (result) update({ dialog: null });
       else update({ dialog: { ...latest, saving: false, error: t('session.operationFailed') } });
     },

@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { PRODUCT_SCOPE } from '../packages/protocol/product-scope.ts';
 import { projectRoot } from './process-fixture.ts';
+import * as workspaceRouting from '../apps/desktop/workspace-routing.ts';
 
 test('removed management surfaces stay absent from the preload bridge even with legacy flags enabled', () => {
   const source = readFileSync(path.join(projectRoot, 'apps/desktop/preload.ts'), 'utf8');
@@ -18,6 +19,7 @@ test('removed management surfaces stay absent from the preload bridge even with 
     runInNewContext(compiled, {
       exports: {},
       require: (name: string) => {
+        if (name.endsWith('/workspace-routing.ts')) return workspaceRouting;
         if (name.endsWith('/product-scope.ts'))
           return { PRODUCT_SCOPE: { ...PRODUCT_SCOPE, mcpManagement: enabled, backups: enabled } };
         // The bridge keeps a snapshot mirror; these tests are about which members it exposes, not about the
@@ -38,7 +40,7 @@ test('removed management surfaces stay absent from the preload bridge even with 
               exposed = bridge;
             },
           },
-          ipcRenderer: { invoke: (...args: unknown[]) => calls.push(args) },
+          ipcRenderer: { invoke: (...args: unknown[]) => calls.push(args), on: () => {} },
         };
       },
     });

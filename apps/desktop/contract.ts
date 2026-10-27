@@ -46,7 +46,13 @@ export type DesktopReply =
     };
 /** `DesktopReply` as it crosses IPC: the snapshot travels as a patch the preload merges (`snapshot-patch.ts`). */
 export type DesktopWireReply =
-  | { ok: true; patch: import('./snapshot-patch.ts').SnapshotPatch }
+  | {
+      ok: true;
+      patch: import('./snapshot-patch.ts').SnapshotPatch;
+      target?: import('./workspace-routing.ts').WorkspaceTarget;
+      active?: boolean;
+      selection?: number;
+    }
   | Extract<DesktopReply, { ok: false }>;
 /** The archived sessions of the open project, for their settings page. */
 export type ArchivedSessionsReply =
@@ -60,6 +66,24 @@ export type ArchivedSessionsReply =
 export type WorkspaceFileAction = 'open' | 'reveal';
 export type OpenWorkspacePathReply = { ok: true } | { ok: false; error: string };
 export interface DesktopBridge {
+  /** Explicit target for background approvals and operations retained by menus or dialogs. */
+  workspaceInvoke?(
+    target: import('./workspace-routing.ts').WorkspaceTarget,
+    command: CarrierCommand,
+  ): Promise<DesktopReply>;
+  subscribeWorkspaces?(
+    listener: (event: import('./workspace-routing.ts').WorkspaceEvent) => void,
+  ): () => void;
+  subscribeWorkspaceStates?(
+    listener: (
+      view: import('./workspace-routing.ts').WorkspaceTarget & { state: CarrierSnapshot },
+    ) => void,
+  ): () => void;
+  subscribeWorkspaceSession?(
+    listener: (
+      target: import('./workspace-routing.ts').WorkspaceTarget & { sessionId: string },
+    ) => void,
+  ): () => void;
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
   /** The panel browser's main-process views; the guest itself never crosses this bridge. */
   browser(command: BrowserCommand): Promise<BrowserReply>;

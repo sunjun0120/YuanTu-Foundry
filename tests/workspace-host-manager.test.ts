@@ -92,3 +92,101 @@ test('stopping one entry and stopping all are idempotent', async () => {
   assert.equal(hosts[1]?.stops, 1);
   await assert.rejects(() => manager.ensure('c', '/repo/c'), /disposed/);
 });
+
+test('concurrent starts share one Host and a start completed after quit is stopped', async () => {
+  let release!: () => void;
+  let starts = 0;
+  let stops = 0;
+  const manager = new WorkspaceHostManager(() => ({
+    start: async () => {
+      starts++;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    stop: async () => {
+      stops++;
+    },
+  }));
+  const first = manager.ensure('a', '/a');
+  const second = manager.ensure('a', '/a');
+  assert.equal(starts, 1);
+  await manager.stopAll();
+  release();
+  const replies = await Promise.allSettled([first, second]);
+  assert.ok(replies.every((reply) => reply.status === 'rejected'));
+  assert.equal(manager.get('a'), undefined);
+  assert.ok(stops > 0);
+});
+
+test('idle cleanup retains busy background Hosts and shutdown reports a failed stop', async () => {
+  const now = { value: 0 };
+  const manager = new WorkspaceHostManager(
+    (id) => ({
+      id,
+      busy: id === 'a',
+      start: async () => {},
+      stop: async () => {
+        if (id === 'a') throw new Error('cleanup failed');
+      },
+    }),
+    { now: () => now.value, keepIdle: 0, idleMs: 1, isBusy: (host) => host.busy },
+  );
+  await manager.ensure('a', '/a');
+  await manager.ensure('b', '/b');
+  now.value = 100;
+  assert.deepEqual(await manager.releaseIdle(), []);
+  assert.ok(manager.get('a'));
+  await assert.rejects(() => manager.stopAll(), /cleanup failed/);
+});
+
+test('an idle candidate activated while an earlier stop waits is retained', async () => {
+  let release!: () => void;
+  let began!: () => void;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const stopped: string[] = [];
+  const manager = new WorkspaceHostManager(
+    (id) => ({
+      start: async () => {},
+      stop: async () => {
+        stopped.push(id);
+        if (id === 'a') {
+          began();
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+      },
+    }),
+    { keepIdle: 0, idleMs: 0 },
+  );
+  await manager.ensure('a', '/a');
+  await manager.ensure('b', '/b');
+  await manager.ensure('c', '/c');
+  const cleanup = manager.releaseIdle();
+  await started;
+  manager.activate('b');
+  release();
+  assert.deepEqual(await cleanup, ['a']);
+  assert.equal(manager.activeWorkspaceId, 'b');
+  assert.deepEqual(stopped, ['a']);
+});
+
+test('a starting workspace cannot be removed through the idle stop path', async () => {
+  let release!: () => void;
+  const manager = new WorkspaceHostManager(() => ({
+    start: async () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    stop: async () => {},
+  }));
+  const starting = manager.ensure('a', '/a');
+  assert.equal(manager.isStarting('a'), true);
+  await assert.rejects(() => manager.stop('a'), /starting/);
+  release();
+  await starting;
+  await manager.stopAll();
+});
