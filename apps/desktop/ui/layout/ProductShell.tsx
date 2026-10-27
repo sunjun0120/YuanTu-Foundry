@@ -54,7 +54,7 @@ export function ProductShell(): ReactNode {
                   <span aria-hidden="true">↗</span>
                 </button>
               </div>
-              <div id="session-sidebar-root">
+              <div id="session-sidebar-root" className="session-sidebar-root">
                 <ViewSlot name="session-sidebar" />
               </div>
               <div className="sidebar-footer">
@@ -345,7 +345,12 @@ export function ProductShell(): ReactNode {
                 <div id="goal-root">
                   <ViewSlot name="goal-root" />
                 </div>
-                <div id="deliverables-root">
+                {/*
+                 * Off for now: the session's deliverable list is drawn at the tail of the transcript, where the newest
+                 * turn reads it as that turn's output. The files are still recorded (`deliverable.presented`); the
+                 * panel comes back by dropping this attribute once its placement is settled.
+                 */}
+                <div id="deliverables-root" hidden>
                   <ViewSlot name="deliverables-root" />
                 </div>
                 <div id="approvals" aria-label={t('ui.pendingApprovals')}>

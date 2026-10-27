@@ -56,7 +56,7 @@ export function createDesktopTheme(base: number): MantineThemeOverride {
       lg: `${base + 2}px`,
       xl: `${base + 6}px`,
     },
-    defaultRadius: 'sm',
+    defaultRadius: 'md',
     headings: { fontWeight: '600' },
   };
 }
@@ -82,7 +82,7 @@ export const desktopCssVariablesResolver: CSSVariablesResolver = (theme) => {
     '--mantine-color-default-border': 'var(--line)',
     '--mantine-color-anchor': 'var(--accent)',
     '--mantine-primary-color-filled': 'var(--accent)',
-    '--mantine-primary-color-filled-hover': 'var(--accent)',
+    '--mantine-primary-color-filled-hover': 'var(--accent-hover)',
   };
   return {
     variables: { ...defaults.variables, ...palette },

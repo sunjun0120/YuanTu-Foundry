@@ -37,9 +37,10 @@ export function GeneralSettings({
   useLocale();
   const state = useReadable(controller.store);
   return (
-    <Stack gap="md">
+    <Stack gap={0} className="settings-form-rows settings-card">
       <Select
         id="ui-language"
+        className="settings-row"
         label={t('general.language')}
         description={t('general.languageNote')}
         data={languageData()}
@@ -51,6 +52,7 @@ export function GeneralSettings({
       />
       <Select
         id="ui-appearance"
+        className="settings-row"
         label={t('general.appearance')}
         description={t('general.appearanceNote')}
         data={appearanceData()}
@@ -62,6 +64,7 @@ export function GeneralSettings({
       />
       <Select
         id="ui-font-size"
+        className="settings-row"
         label={t('general.fontSize')}
         description={t('general.fontSizeNote')}
         data={fontSizeData()}
@@ -73,6 +76,7 @@ export function GeneralSettings({
       />
       <Switch
         id="ui-notifications"
+        className="settings-row-switch"
         label={t('general.notifications')}
         description={t('general.notificationsNote')}
         checked={state.draft.notifications}

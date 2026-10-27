@@ -160,7 +160,10 @@ export function SessionSidebar({
             void controller.submitQuery('');
           }}
         >
-          <span className="search-icon" aria-hidden="true" />
+          <svg className="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="7" cy="7" r="4.25"></circle>
+            <path d="m10.2 10.2 3.3 3.3"></path>
+          </svg>
         </button>
         <input
           ref={search}
@@ -193,7 +196,14 @@ export function SessionSidebar({
           disabled={state.blocked}
           onClick={() => closeSearch(true)}
         >
-          ×
+          <svg
+            className="clear-search-icon"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="m4 4 8 8M12 4l-8 8"></path>
+          </svg>
         </button>
       </div>
       <p id="session-search-note" className="session-search-note" hidden>

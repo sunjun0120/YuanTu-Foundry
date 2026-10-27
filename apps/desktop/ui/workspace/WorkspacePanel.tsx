@@ -18,11 +18,16 @@ import { Icon } from './Icon.tsx';
 import { fileName, type WorkspaceController } from './workspace-model.ts';
 
 const STEP = 24;
+/** The reading column never drops below this while there is room for it: the composer's readings stay on one line. */
+const MIN_CHAT_WIDTH = 620;
 
-function widthLimits(): { min: number; max: number } {
-  const available =
-    window.innerWidth <= 1000 ? window.innerWidth - 24 : window.innerWidth - 272 - 320;
-  return { min: Math.min(320, Math.max(0, available)), max: Math.max(0, available) };
+function widthLimits(viewportWidth: number): { min: number; max: number } {
+  // At the window's minimum size the panel has to shrink with it; above that the chat column wins the space it needs.
+  const minChat = Math.max(320, Math.min(MIN_CHAT_WIDTH, viewportWidth - 272 - 280));
+  const available = Math.max(0, viewportWidth - 272 - minChat);
+  // A narrow window leaves less than the normal minimum for the panel; it may still grow from a smaller floor.
+  const minPanel = available < 320 ? Math.min(180, available) : 320;
+  return { min: minPanel, max: available };
 }
 
 export function WorkspacePanel({
@@ -35,6 +40,7 @@ export function WorkspacePanel({
   useLocale();
   const state = useReadable(controller.store);
   const [width, setWidth] = useState(() => Math.min(560, window.innerWidth * 0.42));
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [tooltip, setTooltip] = useState<{ text: string; left: number; top: number } | null>(null);
   const panel = useRef<HTMLElement>(null);
   const previewBody = useRef<HTMLDivElement>(null);
@@ -52,7 +58,14 @@ export function WorkspacePanel({
       controller.setTabScroll(selected, previewBody.current.scrollTop);
   };
 
-  const limits = widthLimits();
+  // The chat column's minimum is a function of the window width, so a resize has to re-run the clamp.
+  useEffect(() => {
+    const onResize = (): void => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const limits = widthLimits(viewportWidth);
   const actualWidth = Math.round(Math.min(limits.max, Math.max(limits.min, width)));
   const fullscreen = state.fullscreen;
   const selected = state.selected;

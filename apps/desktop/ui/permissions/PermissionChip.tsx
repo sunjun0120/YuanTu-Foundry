@@ -42,6 +42,20 @@ function PresetIcon({ reading }: { reading: PermissionReading }): ReactNode {
   );
 }
 
+/** The same check glyph Mantine paints in a dropdown's selected option. */
+function PermissionCheck(): ReactNode {
+  return (
+    <svg className="permission-check-icon" viewBox="0 0 10 7" fill="none" aria-hidden="true">
+      <path
+        d="M4 4.586L1.707 2.293A1 1 0 1 0 .293 3.707l3 3a.997.997 0 0 0 1.414 0l5-5A1 1 0 1 0 8.293.293L4 4.586z"
+        fill="currentColor"
+        fillRule="evenodd"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 export function PermissionChip({
   controller,
   windowsHost,
@@ -150,28 +164,33 @@ export function PermissionChip({
           <p className="permission-heading" role="presentation">
             {t('permission.heading')}
           </p>
-          {permissionIds().map((id: PermissionPresetId) => (
-            <button
-              key={id}
-              type="button"
-              role="menuitemradio"
-              data-preset={id}
-              aria-checked={reading === id}
-              title={permissionBoundary(id, state.view?.sandbox.mode, windowsHost)}
-              disabled={locked}
-              onClick={() => {
-                controller.closeMenu();
-                controller.choose(id);
-              }}
-            >
-              <PresetIcon reading={id} />
-              <span className="permission-copy">
-                <span>{permissionLabel(id)}</span>
-                <small>{permissionSummary(id)}</small>
-              </span>
-              <span className="permission-check">{reading === id ? '✓' : ''}</span>
-            </button>
-          ))}
+          {permissionIds()
+            // Read-only remains a recognized pair for sessions that already chose it, but it is no longer offered.
+            .filter((id) => id !== 'observe')
+            .map((id: PermissionPresetId) => (
+              <button
+                key={id}
+                type="button"
+                role="menuitemradio"
+                data-preset={id}
+                aria-checked={reading === id}
+                title={permissionBoundary(id, state.view?.sandbox.mode, windowsHost)}
+                disabled={locked}
+                onClick={() => {
+                  controller.closeMenu();
+                  controller.choose(id);
+                }}
+              >
+                <PresetIcon reading={id} />
+                <span className="permission-copy">
+                  <span>{permissionLabel(id)}</span>
+                  <small>{permissionSummary(id)}</small>
+                </span>
+                <span className="permission-check" aria-hidden="true">
+                  {reading === id ? <PermissionCheck /> : null}
+                </span>
+              </button>
+            ))}
           <div className="permission-environment" role="presentation">
             <p
               id="permission-custom"

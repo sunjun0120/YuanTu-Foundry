@@ -601,9 +601,9 @@ test(
     let page = await launch();
     assert.equal((await page.locator('#attach-image').innerText()).trim(), '+');
     await page.locator('#permission-trigger').click();
-    // Four presets: the chip writes where a run executes and how
-    // much it may do without asking, as one choice.
-    assert.equal(await page.locator('#permission-menu [role=menuitemradio]').count(), 4);
+    // Three rungs are offered: the chip writes where a run executes and how
+    // much it may do without asking, as one choice. Read-only is a legacy pair, not a rung.
+    assert.equal(await page.locator('#permission-menu [role=menuitemradio]').count(), 3);
     assert.equal(
       await page.locator('#permission-menu [data-preset=auto]').getAttribute('aria-checked'),
       'true',

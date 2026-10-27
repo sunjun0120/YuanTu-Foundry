@@ -77,7 +77,7 @@
 }
 
 .markdown a {
-  color: #296044;
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -86,7 +86,7 @@
   border: 0;
   padding: 0;
   background: none;
-  color: #296044;
+  color: var(--accent);
   cursor: pointer;
   font: inherit;
   text-decoration: underline;
@@ -95,7 +95,7 @@
 
 .markdown .markdown-local-link:hover,
 .markdown .markdown-local-link:focus-visible {
-  color: #163e2a;
+  color: var(--accent-hover);
 }
 
 .markdown :not(pre) > code {
@@ -150,8 +150,8 @@
 .code-header button {
   padding: 4px 8px;
   background: transparent;
-  color: #366048;
-  border: 1px solid #ccd8cc;
+  color: var(--accent);
+  border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 11px;
 }
@@ -446,13 +446,13 @@
   margin: 12px 8px 0;
   padding: 11px 2px;
   background: transparent;
-  border-top: 1px solid #dce3de;
-  color: #5a7263;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
   font-size: 12px;
 }
 
 .settings-entry:hover:enabled {
-  color: #234f35;
+  color: var(--ink);
 }
 
 .settings-protocol {
@@ -527,6 +527,17 @@
   margin: 16px 0 0;
 }
 
+/* The source reading and the test note are one footnote block, not two Stack rows with a gap between them. */
+.settings-model-notes {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-model-notes .settings-source,
+.settings-model-notes .settings-test-note {
+  margin: 0;
+}
+
 .settings-feedback {
   background: #eaf2eb;
   color: #3a7954;
@@ -553,10 +564,6 @@
 }
 
 @media (max-height: 760px) {
-  .settings-form {
-    padding: 18px 26px;
-  }
-
   .settings-protocol {
     margin-bottom: 12px;
     padding: 10px 12px;
@@ -653,13 +660,13 @@ summary:focus-visible {
 }
 
 .new-session {
-  background: #fff;
-  border: 1px solid #d9dfdc;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 7px;
   padding: 11px 12px;
   text-align: left;
   font-weight: 600;
-  color: #2e483b;
+  color: var(--ink);
 }
 
 .new-session span {
@@ -669,7 +676,7 @@ summary:focus-visible {
 }
 
 .new-session:hover:enabled {
-  border-color: #859e8e;
+  border-color: var(--muted);
 }
 
 .section-label {
@@ -740,7 +747,7 @@ summary:focus-visible {
 .text-button {
   padding: 10px 0 0;
   background: transparent;
-  color: #4f7560;
+  color: var(--accent);
   font-size: 11px;
 }
 
@@ -799,19 +806,6 @@ header strong {
   color: #4d5b54;
 }
 
-.model-chip {
-  color: #6c7971;
-  background: #f1f4f1;
-  border: 1px solid #e4e9e3;
-  padding: 5px 9px;
-  border-radius: 5px;
-  font-size: 10px;
-  max-width: 42%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 .conversation {
   flex: 1;
   min-height: 0;
@@ -857,12 +851,12 @@ h1 {
   text-align: left;
   background: transparent;
   padding: 18px 0;
-  border-top: 1px solid #dce4de;
-  color: #43594b;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
 }
 
 .suggestions button:hover {
-  border-color: #719480;
+  border-color: var(--accent);
 }
 
 .suggestions span {
@@ -1024,7 +1018,7 @@ pre {
 }
 
 .primary {
-  background: #315f46;
+  background: var(--accent);
   color: #fff;
   border-radius: 6px;
   padding: 9px 17px;
@@ -1032,15 +1026,19 @@ pre {
 }
 
 .primary:hover:enabled {
-  background: #244b35;
+  background: var(--accent-hover);
 }
 
 .secondary {
-  background: #e9eee9;
-  color: #536456;
+  background: var(--raised);
+  color: var(--ink);
   border-radius: 6px;
   padding: 9px 17px;
   font-size: 12px;
+}
+
+.secondary:hover:enabled {
+  background: var(--hover);
 }
 
 .stop {
@@ -1298,7 +1296,7 @@ select {
   padding: 0;
   border: 1px solid #fff;
   border-radius: 999px;
-  background: #26382d;
+  background: var(--accent);
   color: #fff;
   font-size: 16px;
   line-height: 1;
@@ -1971,7 +1969,7 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
   gap: 10px;
   align-items: center;
   font-size: 14px;
-  color: #3d5f49;
+  color: var(--ink);
 }
 
 .settings-page {
@@ -1982,8 +1980,8 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
 }
 
 .settings-sidebar {
-  background: #f0f2f2;
-  border-right: 1px solid #e0e5e4;
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
   padding: 28px 20px;
 }
 
@@ -1995,7 +1993,7 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
   gap: 10px;
   width: 100%;
   background: transparent;
-  color: #60746a;
+  color: var(--muted);
   padding: 10px 8px;
   font-size: 13px;
   text-align: left;
@@ -2003,8 +2001,8 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
 }
 
 .settings-back:hover {
-  color: #244c35;
-  background: #e5ece6;
+  color: var(--ink);
+  background: var(--raised);
   border-radius: 6px;
 }
 
@@ -2012,7 +2010,7 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
   margin: 38px 12px 24px;
   font-size: 26px;
   font-weight: 600;
-  color: #294637;
+  color: var(--ink);
 }
 
 .settings-sidebar nav button {
@@ -2022,10 +2020,16 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
   width: 100%;
   padding: 14px 16px;
   text-align: left;
-  background: #e0e9e1;
-  color: #335b40;
+  background: transparent;
+  color: var(--muted);
   border-radius: 8px;
   font-weight: 600;
+}
+
+.settings-sidebar nav button[aria-current='page'],
+.settings-sidebar nav button:hover {
+  background: var(--raised);
+  color: var(--ink);
 }
 
 .settings-sidebar nav button > span {
@@ -2194,33 +2198,162 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
 
 .settings-page-header {
   max-width: 780px;
-  margin: 0 auto 30px;
+  margin: 0 0 30px;
 }
 
 .settings-page-header .eyebrow {
   margin: 0 0 12px;
+  color: var(--muted);
 }
 
 .settings-page-header h2 {
   margin: 0;
   font-size: 29px;
   font-weight: 600;
-  color: #294637;
+  color: var(--ink);
 }
 
 .settings-page-header p {
-  color: #7b8880;
+  color: var(--muted);
   font-size: 13px;
   margin: 14px 0 0;
+}
+
+/* The settings column is a bounded, centred reading column, matching the preferences pages elsewhere. */
+.settings-page .settings-content > .mantine-Stack-root,
+.settings-page .settings-form {
+  width: 100%;
+  max-width: 780px;
+  min-width: 500px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+/*
+ * One setting per row: the heading and its explanation stack in the left column, while the control sits on the right,
+ * centred against the pair. The control column is shared so every dropdown and the notification switch line up.
+ */
+.settings-page .settings-content {
+  --settings-control-width: 160px;
+  --settings-row-gap: 20px;
+}
+
+.settings-form-rows {
+  gap: 0;
+}
+
+/* The rows read as one grouped card, like a preferences section, rather than four loose fields. */
+.settings-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sidebar);
+}
+
+.settings-card > * + * {
+  border-top: 1px solid var(--line);
+}
+
+.settings-page .settings-row,
+.settings-page .settings-row-switch {
+  padding: 16px 20px;
+}
+
+.settings-page .settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--settings-control-width);
+  grid-template-rows: auto auto;
+  column-gap: var(--settings-row-gap);
+  row-gap: 4px;
+  align-items: center;
+}
+
+.settings-page .settings-row > .mantine-InputWrapper-label {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.settings-page .settings-row > .mantine-InputWrapper-description {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-page .settings-row > .mantine-Input-wrapper {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 100%;
+  max-width: var(--settings-control-width);
+  margin: 0;
+  align-self: center;
+  justify-self: end;
+}
+
+.settings-page .settings-row .mantine-Select-input {
+  height: 34px;
+  min-height: 34px;
+  font-size: 12px;
+}
+
+.settings-page .settings-row-switch > .mantine-Switch-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--settings-control-width);
+  grid-template-rows: auto auto;
+  column-gap: var(--settings-row-gap);
+  row-gap: 4px;
+  align-items: center;
+  width: 100%;
+}
+
+.settings-page .settings-row-switch .mantine-Switch-labelWrapper {
+  display: contents;
+}
+
+.settings-page .settings-row-switch .mantine-Switch-label {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.settings-page .settings-row-switch .mantine-Switch-description {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-page .settings-row-switch .mantine-Switch-track {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  justify-self: end;
 }
 
 .settings-form {
   max-width: 780px;
   margin: 0 auto;
-  padding: 28px 32px;
-  border: 1px solid #dfe6e0;
-  background: #fff;
-  border-radius: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  border-radius: 0;
 }
 
 .settings-form > .settings-field:first-child {
@@ -2237,18 +2370,94 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
 }
 
 .chat-model label {
-  color: #8c998f;
+  color: var(--muted);
   font-size: 11px;
 }
 
-select.model-chip {
-  padding: 8px 32px 8px 12px;
+/*
+ * Mantine puts the Select's `className` on the field root, not on its input. The composer's model control is the
+ * input alone: the root must stay a transparent layout box, otherwise its background paints a frame around the chip.
+ */
+.chat-page .chat-model .model-picker-frame {
+  flex: 0 0 auto;
+  min-width: 150px;
   max-width: 100%;
-  color: #42634d;
-  cursor: pointer;
-  font: inherit;
+}
+
+.chat-page .chat-model .mantine-Select-root {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  border-radius: 0;
+}
+
+.chat-page .chat-model .mantine-Select-wrapper {
+  width: auto;
+}
+
+.chat-page .chat-model .mantine-Select-input {
+  width: 100%;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 500;
   font-size: 12px;
-  text-overflow: ellipsis;
+}
+
+/* Invisible: it only measures the longest option so the field width stays put when the selection changes. */
+.model-width-probe {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-width-probe > span {
+  display: block;
+}
+
+.chat-page .chat-model .mantine-Select-input:hover:enabled {
+  background: var(--hover);
+}
+
+.chat-page .chat-model .mantine-Select-input:focus {
+  border-color: var(--line);
+}
+
+/* One shared chevron, flipped while its listbox is open. */
+.select-chevron {
+  display: block;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
+}
+
+.mantine-Input-wrapper:has(.mantine-Select-input[aria-expanded='true']) .select-chevron {
+  transform: rotate(180deg);
+}
+
+/*
+ * The model menu may be wider than its compact trigger: the trigger keeps a stable width, while the option labels
+ * stay on one line instead of wrapping the longest model id.
+ */
+[role='listbox'] [role='option'] {
+  white-space: nowrap;
+}
+
+[role='listbox'] {
+  max-width: min(480px, calc(100vw - 24px));
 }
 
 .model-switch-status {
@@ -2258,17 +2467,47 @@ select.model-chip {
   text-align: right;
 }
 
+@media (max-width: 1000px) {
+  /* Below the centred column's comfortable width, drop the card chrome and keep the rows from squeezing. */
+  .settings-page .settings-content {
+    --settings-control-width: 120px;
+    --settings-row-gap: 14px;
+  }
+
+  .settings-page .settings-card {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .settings-page .settings-card > * + * {
+    border-top: 0;
+  }
+
+  .settings-page .settings-row,
+  .settings-page .settings-row-switch {
+    padding: 0;
+  }
+
+  /* Without the card, the rows need their own breathing room back. */
+  .settings-page .settings-form-rows {
+    gap: 18px;
+  }
+}
+
 @media (max-width: 960px) {
   .settings-page {
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
-  .settings-content {
+  /*
+   * The base rule is `.settings-page .settings-content`, so a bare `.settings-content` here loses the custom
+   * properties to it: the narrow column would keep the 160px controls.
+   */
+  .settings-page .settings-content {
     padding: 28px 22px;
-  }
-
-  .settings-form {
-    padding: 22px;
+    --settings-control-width: 120px;
+    --settings-row-gap: 14px;
   }
 
   .chat-model label {
@@ -2461,86 +2700,6 @@ select.model-chip {
   color: #a74536;
 }
 
-.mcp-panel[hidden],
-.mcp-local[hidden],
-.mcp-remote[hidden],
-.mcp-delete-confirm[hidden] {
-  display: none;
-}
-
-.mcp-workspace {
-  font-size: 12px;
-  color: #687263;
-  overflow-wrap: anywhere;
-  margin: 0 0 24px;
-}
-
-.mcp-service-picker {
-  padding: 18px;
-  background: #f0f2ea;
-  border: 1px solid #d9dfd1;
-  border-radius: 10px;
-  margin-bottom: 24px;
-}
-
-.mcp-content label {
-  display: block;
-  font-size: 13px;
-  margin: 16px 0 7px;
-  font-weight: 600;
-}
-
-.mcp-content input:not([type='checkbox']),
-.mcp-content select,
-.mcp-content textarea {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid #cdd4c5;
-  border-radius: 7px;
-  padding: 10px 12px;
-  background: #fffef9;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-}
-
-.mcp-content textarea {
-  resize: vertical;
-  min-height: 74px;
-  line-height: 1.6;
-}
-
-.mcp-content small,
-.mcp-note {
-  font-size: 12px;
-  color: #697262;
-  line-height: 1.7;
-}
-
-.mcp-content .mcp-enabled {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 20px 0 12px;
-}
-
-.mcp-feedback[data-error='true'] {
-  color: #a74536;
-}
-
-.mcp-delete {
-  margin-left: auto;
-  color: #a74536;
-}
-
-.mcp-delete-confirm {
-  padding: 14px;
-  border: 1px solid #e3c9bc;
-  border-radius: 8px;
-  margin-top: 14px;
-  font-size: 13px;
-}
-
 .settings-sidebar nav button:not([aria-current='page']) {
   background: transparent;
   color: #657567;
@@ -2690,43 +2849,21 @@ select.model-chip {
   }
 }
 
+/*
+ * The protocol field is an ordinary model field: heading, explanation, then a full-width dropdown. The old two-column
+ * grid was written for a native `<select>` and squeezed Mantine's root into its 86px label column.
+ */
 .settings-form .settings-protocol {
-  display: grid;
-  grid-template-columns: 86px minmax(0, 1fr);
-  align-items: center;
-  gap: 6px 12px;
-  margin: 18px 0 0;
+  display: block;
+  margin: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
 }
 
-.settings-form .settings-protocol label {
-  align-self: center;
-  margin: 0;
-}
-
-.settings-form .settings-protocol select {
-  width: min(100%, 280px);
-  max-width: none;
-  min-height: 38px;
-  padding: 9px 11px;
-}
-
-.settings-form .settings-protocol small {
-  grid-column: 2;
-  margin: 0;
-}
-
-@media (max-width: 660px) {
-  .settings-form .settings-protocol {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-form .settings-protocol small {
-    grid-column: 1;
-  }
+.settings-form .settings-protocol .mantine-Select-input {
+  width: 100%;
 }
 
 .plan-panel {
@@ -2887,7 +3024,7 @@ select.model-chip {
 
 .deliverables .deliverable-open:hover,
 .deliverables .deliverable-open:focus-visible {
-  color: #244b35;
+  color: var(--accent);
 }
 
 .deliverables .deliverable-actions {
@@ -2909,7 +3046,7 @@ select.model-chip {
 
 .deliverables .deliverable-action:hover,
 .deliverables .deliverable-action:focus-visible {
-  color: #244b35;
+  color: var(--accent);
 }
 
 .deliverables .deliverable-description {
@@ -2925,7 +3062,8 @@ select.model-chip {
   --line: #e2e2e7;
   --ink: #25262b;
   --muted: #777982;
-  --accent: #426bd2;
+  --accent: #4569b8;
+  --accent-hover: #527bd2;
   --goal-active: #8c6b2f;
   --goal-blocked: #9a4b3d;
   --goal-completed: #3f6b3a;
@@ -2942,7 +3080,8 @@ select.model-chip {
   --line: #37373c;
   --ink: #e9e9ee;
   --muted: #9898a2;
-  --accent: #82a5ff;
+  --accent: #4569b8;
+  --accent-hover: #527bd2;
   --goal-active: #d3b070;
   --goal-blocked: #e09888;
   --goal-completed: #8fc488;
@@ -2960,7 +3099,8 @@ select.model-chip {
     --line: #37373c;
     --ink: #e9e9ee;
     --muted: #9898a2;
-    --accent: #82a5ff;
+    --accent: #4569b8;
+    --accent-hover: #527bd2;
     --goal-active: #d3b070;
     --goal-blocked: #e09888;
     --goal-completed: #8fc488;
@@ -2983,6 +3123,23 @@ body {
   background: var(--sidebar);
   border-color: var(--line);
   padding: 8px 10px 0;
+  overflow: hidden;
+}
+
+/*
+ * The sidebar is a column of fixed rows around one scroll region. The session list owns the overflow; the brand,
+ * workspace and settings entry stay put, and the settings entry sits on the bottom edge rather than after the list.
+ */
+.session-sidebar-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.session-sidebar-root .sessions {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .chat-sidebar .brand {
@@ -3038,6 +3195,7 @@ body {
 .chat-sidebar .workspace-box {
   position: relative;
   padding: 0 6px 8px;
+  flex-shrink: 0;
 }
 
 .chat-sidebar .workspace-box .section-label {
@@ -3094,23 +3252,13 @@ body {
 }
 
 .search-icon {
-  width: 13px;
-  height: 13px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  position: relative;
-}
-
-.search-icon::after {
-  content: '';
-  position: absolute;
-  width: 6px;
-  height: 1.5px;
-  right: -5px;
-  bottom: -2px;
-  background: currentColor;
-  transform: rotate(45deg);
-  transform-origin: left center;
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 
 .chat-sidebar .session-search {
@@ -3131,32 +3279,6 @@ body {
 
 .chat-sidebar .sessions {
   padding-bottom: 16px;
-}
-
-.chat-sidebar .sessions::-webkit-scrollbar {
-  width: 6px;
-}
-
-.chat-sidebar .sessions::-webkit-scrollbar-track,
-.chat-sidebar .sessions::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-.chat-sidebar .sessions::-webkit-scrollbar-button {
-  display: none;
-}
-
-.chat-sidebar .sessions::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 3px;
-}
-
-.chat-sidebar .sessions:hover::-webkit-scrollbar-thumb {
-  background: var(--line);
-}
-
-.chat-sidebar .sessions::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
 }
 
 .chat-sidebar .session-row {
@@ -3319,6 +3441,7 @@ body {
 .chat-sidebar .settings-entry:hover,
 .chat-sidebar .settings-entry:focus-visible {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
 }
 
 .chat-sidebar .version {
@@ -3881,7 +4004,7 @@ body {
   border-radius: 8px;
   font-size: 12px;
   background: var(--accent);
-  color: var(--surface);
+  color: #fff;
 }
 
 .chat-page .sandbox-prompt-actions button.secondary {
@@ -4132,7 +4255,7 @@ body {
 
 .chat-page .chat-model {
   margin-left: auto;
-  max-width: min(50%, 270px);
+  max-width: min(55%, 360px);
   gap: 0;
   min-width: 0;
 }
@@ -4151,13 +4274,13 @@ body {
   border-radius: 50%;
   height: 36px;
   min-width: 36px;
-  background: #4569b8;
+  background: var(--accent);
   color: white;
   font-size: 11px;
 }
 
 .chat-page .send:hover:enabled {
-  background: #527bd2;
+  background: var(--accent-hover);
 }
 
 .chat-page .send {
@@ -4405,15 +4528,7 @@ body {
 
 :root[data-theme]
   .settings-page
-  :is(
-    .eyebrow,
-    small,
-    .settings-page-header p,
-    .mcp-workspace,
-    .mcp-note,
-    .settings-source,
-    .settings-test-note
-  ) {
+  :is(.eyebrow, small, .settings-page-header p, .settings-source, .settings-test-note) {
   color: var(--muted);
 }
 
@@ -4453,12 +4568,12 @@ body {
 }
 
 :root[data-theme] .settings-page .primary {
-  background: #4569b8;
+  background: var(--accent);
   color: #fff;
 }
 
 :root[data-theme] .settings-page .primary:hover:enabled {
-  background: #527bd2;
+  background: var(--accent-hover);
 }
 
 :root[data-theme] .settings-page .settings-actions {
@@ -4472,7 +4587,7 @@ body {
 
 :root[data-theme]
   .settings-page
-  :is(.settings-feedback[data-error='true'], .settings-feedback.error, .mcp-delete) {
+  :is(.settings-feedback[data-error='true'], .settings-feedback.error) {
   color: #cb756e;
 }
 
@@ -4578,17 +4693,30 @@ body {
   font-size: 12px;
 }
 
+/*
+ * The two readings share one line whenever the column is wide enough. They wrap as whole pills when it is not — the
+ * minimum window with the workspace panel open leaves 264px, less than the pair needs — rather than run past the
+ * composer and paint over the panel. `white-space` keeps a reading itself unbroken in either case.
+ */
 .chat-page .composer-statistics {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 4px 10px;
+  gap: 4px 12px;
   min-height: 26px;
   margin: 5px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 1000px) {
+  .chat-page .composer-statistics {
+    gap: 4px 8px;
+    font-size: 10px;
+  }
 }
 
 .statistics-item {
@@ -4610,8 +4738,16 @@ body {
   background: transparent;
   color: var(--muted);
   font: inherit;
+  line-height: 1.4;
   cursor: pointer;
   box-shadow: none;
+}
+
+.chat-page .statistics-trigger > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 15px;
 }
 
 .chat-page .statistics-trigger:hover,
@@ -4630,6 +4766,7 @@ body {
 }
 
 .statistics-trigger svg {
+  display: block;
   width: 15px;
   height: 15px;
   fill: none;
@@ -5252,7 +5389,27 @@ textarea {
 }
 
 .permission-check {
-  flex: 0 0 16px;
+  flex: 0 0 0.8em;
+  width: 0.8em;
+  min-width: 0.8em;
+  height: 0.8em;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  color: inherit;
+}
+
+/* `permission-picker svg` sizes the preset glyphs; the check keeps the same footprint Mantine gives an option check. */
+.permission-menu .permission-check svg {
+  flex: 0 0 0.8em;
+  width: 0.8em;
+  height: 0.8em;
+  margin: 0;
+  fill: currentColor;
+  stroke: none;
+  opacity: 1;
 }
 
 .permission-environment {
@@ -5515,7 +5672,6 @@ textarea {
   max-height: 360px;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 6px 10px;
   margin: 4px 0 0 7px;
   border-left: 1px solid var(--line);
@@ -5600,12 +5756,21 @@ textarea {
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
-  font-size: 20px;
   line-height: 1;
   outline: none !important;
+}
+
+.clear-search-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 
 .chat-sidebar .clear-session-search:hover:enabled {
@@ -5660,7 +5825,6 @@ textarea {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
   padding-right: 32px;
 }
 
@@ -5750,7 +5914,7 @@ textarea {
 .workspace-panel .workspace-resize:hover,
 .workspace-panel .workspace-resize:focus-visible,
 .workspace-resizing .workspace-panel .workspace-resize {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
 }
 
 body.workspace-resizing,
@@ -5883,7 +6047,6 @@ body.workspace-resizing * {
   padding: 22px 24px 32px;
   background: var(--surface);
   color: var(--ink);
-  scrollbar-gutter: stable;
 }
 
 .workspace-panel .workspace-preview-text {
@@ -6077,7 +6240,7 @@ body[data-page='settings'] .workspace-panel {
 
 .desktop-shell-navbar {
   height: 100vh;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .desktop-shell-aside {
@@ -6169,4 +6332,56 @@ body[data-workspace-view='fullscreen'] .desktop-shell-aside {
 
 :root .session-menu {
   z-index: 300;
+}
+
+/*
+ * One scrollbar language for the whole window: no rail, no buttons, a rounded thumb inset from the edge. The colour is
+ * derived from the theme's muted ink so every scrolling region — session list, transcript, settings, file tree and
+ * preview — matches. `scrollbar-color`/`scrollbar-width` are the non-WebKit fallback; Chromium uses the pseudo-elements.
+ */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track-piece,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 68%, transparent);
+  background-clip: padding-box;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent) transparent;
+  }
+}
+
+/*
+ * One corner radius for every interactive box. The rule is intentionally last: controls in this window come from
+ * Mantine, retained DOM and native inputs, and they used to drift between 4, 5, 6, 7 and 9px.
+ */
+button,
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+select,
+textarea {
+  border-radius: 8px !important;
 }

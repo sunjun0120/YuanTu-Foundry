@@ -38,13 +38,9 @@ export function permissionSummary(id: PermissionPresetId): string {
 
 /**
  * What the rung's sandbox does and does not stop.
- *
- * The names stay short; "ask for approval" on Windows can mean the account backend or the explicitly chosen weaker
- * restricted-token backend, and a person choosing it should be able to learn which without opening the README.
  */
-export function sandboxNote(mode: SandboxMode | undefined, windowsHost: boolean): string {
+export function sandboxNote(_mode: SandboxMode | undefined, windowsHost: boolean): string {
   if (!windowsHost) return t('permission.sandbox.seatbelt');
-  if (mode === 'windows') return t('permission.sandbox.windows');
   return t('permission.sandbox.account');
 }
 
@@ -72,10 +68,6 @@ export function permissionReading(state: PermissionState): PermissionReading {
   return state.view?.current ?? CUSTOM_PRESET;
 }
 
-export function permissionWeak(state: PermissionState): boolean {
-  return !state.unreadable && state.view?.sandbox.mode === 'windows';
-}
-
 export function permissionLocked(state: PermissionState): boolean {
   return state.pending || !state.ready || state.unreadable;
 }
@@ -83,14 +75,11 @@ export function permissionLocked(state: PermissionState): boolean {
 /** The label inside the chip; an unreadable pair says so instead of falling through to `custom`. */
 export function chipLabel(state: PermissionState): string {
   if (state.unreadable) return t('permission.chip.unknown');
-  if (permissionWeak(state)) return t('permission.chip.weak');
   return permissionLabel(permissionReading(state));
 }
 
 export function chipTitle(state: PermissionState, windowsHost: boolean): string {
   if (state.unreadable) return t('permission.unknownTitle');
-  if (permissionWeak(state))
-    return sandboxNote(state.view?.sandbox.mode, windowsHost) + t('permission.weakHint');
   const reading = permissionReading(state);
   return reading === CUSTOM_PRESET
     ? ''
@@ -103,17 +92,10 @@ export function customReading(state: PermissionState): {
   title: string;
 } {
   const reading = permissionReading(state);
-  const weak = permissionWeak(state);
-  const broken = weak ? (state.view?.sandbox.availability ?? null) : null;
   return {
     hidden: reading !== CUSTOM_PRESET,
-    title: broken ?? '',
-    text: broken
-      ? t('permission.custom.weakBroken') +
-        (broken.length > 160 ? `${broken.slice(0, 160)}…` : broken)
-      : weak
-        ? t('permission.custom.weak')
-        : permissionLabel(CUSTOM_PRESET),
+    title: '',
+    text: permissionLabel(CUSTOM_PRESET),
   };
 }
 
