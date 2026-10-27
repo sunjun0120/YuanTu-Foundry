@@ -818,6 +818,22 @@ summary:focus-visible {
   gap: 6px;
 }
 
+.project-disclosure {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.project-disclosure:hover,
+.project-disclosure:focus-visible {
+  color: var(--ink);
+}
+
 .project-badge {
   flex: 0 0 auto;
   font-size: 10px;

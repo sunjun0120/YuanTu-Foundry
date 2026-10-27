@@ -85,6 +85,26 @@ test(
     await page.waitForFunction(
       () => document.querySelector('.project-name')?.textContent === 'Renamed project',
     );
+    await page
+      .waitForFunction(() => document.querySelectorAll('.project-sessions').length > 0, null, {
+        timeout: 6000,
+      })
+      .catch(() => {});
+    const disclosure = project.locator('.project-disclosure');
+    if ((await project.locator('.project-sessions').count()) > 0) {
+      assert.equal(await disclosure.getAttribute('aria-expanded'), 'true');
+      await disclosure.click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.project-disclosure')?.getAttribute('aria-expanded') === 'false',
+      );
+      assert.equal(await project.locator('.project-sessions').count(), 0);
+      await disclosure.click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.project-disclosure')?.getAttribute('aria-expanded') === 'true',
+      );
+    }
     const row = (id) => page.locator(`[data-session-id="${id}"]`);
     const more = (id) => page.locator(`[data-menu-session-id="${id}"]`);
     const idle = () =>

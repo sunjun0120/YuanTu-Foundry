@@ -77,6 +77,11 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     const invoke = window.yuantu?.invoke;
     if (invoke) await invoke({ type: 'load', id: sessionId });
   };
+  const toggleCollapse = async (id: string, collapsed: boolean): Promise<void> => {
+    const bridge = window.yuantu?.projects;
+    if (!bridge) return;
+    apply(await bridge({ type: 'collapse', id, collapsed }));
+  };
   const remove = async (id: string): Promise<void> => {
     const bridge = window.yuantu?.projects;
     if (!bridge) return;
@@ -122,6 +127,16 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
                 className={`project-row${active ? ' selected' : ''}`}
                 data-project-id={workspace.id}
               >
+                <button
+                  type="button"
+                  className="project-disclosure"
+                  aria-expanded={!workspace.collapsed}
+                  aria-label={workspace.collapsed ? t('projects.expand') : t('projects.collapse')}
+                  title={workspace.collapsed ? t('projects.expand') : t('projects.collapse')}
+                  onClick={() => void toggleCollapse(workspace.id, !workspace.collapsed)}
+                >
+                  {workspace.collapsed ? '▸' : '▾'}
+                </button>
                 <button
                   type="button"
                   className="project-name"
@@ -201,7 +216,7 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
                     </button>
                   </div>
                 ) : null}
-                {status?.sessions.length ? (
+                {!workspace.collapsed && status?.sessions.length ? (
                   <ul className="project-sessions">
                     {status.sessions.slice(0, 5).map((session) => (
                       <li key={session.id}>
