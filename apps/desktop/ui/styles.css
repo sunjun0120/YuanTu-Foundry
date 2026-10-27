@@ -2375,8 +2375,18 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
  */
 .chat-page .chat-model .model-picker-frame {
   flex: 0 0 auto;
-  min-width: 150px;
   max-width: 100%;
+  transition: width 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-page .chat-model .model-picker-frame {
+    transition: none;
+  }
+}
+
+.chat-page .chat-model .model-picker-frame[data-compact='true'] .mantine-Select-input {
+  text-align: right;
 }
 
 .chat-page .chat-model .mantine-Select-root {
@@ -2395,14 +2405,19 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
 
 .chat-page .chat-model .mantine-Select-input {
   width: 100%;
+  padding-left: 8px;
+  padding-right: 28px;
+  overflow: hidden;
   border-color: transparent;
   background: transparent;
   color: var(--ink);
   font-weight: 500;
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Invisible: it only measures the longest option so the field width stays put when the selection changes. */
+/* Invisible: it only measures the selected label; the field width and compact alignment come from that measurement. */
 .model-width-probe {
   position: absolute;
   left: -10000px;
@@ -2412,10 +2427,6 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
   white-space: nowrap;
   font-size: 12px;
   font-weight: 500;
-}
-
-.model-width-probe > span {
-  display: block;
 }
 
 .chat-page .chat-model .mantine-Select-input:hover:enabled {

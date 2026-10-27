@@ -228,6 +228,21 @@ test(
         !document.querySelector('#model').disabled &&
         document.querySelector('#model-switch-status').hidden,
     );
+    const picker = await page.locator('.model-picker-frame').evaluate((frame) => {
+      const input = frame.querySelector('input');
+      return {
+        width: frame.getBoundingClientRect().width,
+        textOverflow: getComputedStyle(input).textOverflow,
+        paddingLeft: getComputedStyle(input).paddingLeft,
+        paddingRight: getComputedStyle(input).paddingRight,
+        title: input.getAttribute('title'),
+      };
+    });
+    assert.ok(picker.width >= 72 && picker.width <= 360, `picker width ${picker.width}`);
+    assert.equal(picker.textOverflow, 'ellipsis');
+    assert.equal(picker.paddingLeft, '8px');
+    assert.equal(picker.paddingRight, '28px');
+    assert.equal(picker.title, 'model-a');
     assert.equal(await page.locator('#prompt').inputValue(), '保留这份草稿');
     assert.equal(
       await page.evaluate(

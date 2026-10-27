@@ -1,17 +1,17 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
 import { Select } from '../primitives.tsx';
 import { pickerOptions } from './model-settings-model.ts';
-import { modelPicker } from './model-picker-state.ts';
+import { modelFieldWidth, modelPicker } from './model-picker-state.ts';
 
 /**
  * The visible control is the only interactive model picker; selecting settings never sends a model command.
  *
- * The field is sized from the *longest option*, not the selected one: a menu whose entries differ in length would
- * otherwise resize the composer row every time the choice changed. The probe is invisible and never participates in
- * layout; it only gives the labels their real rendered width.
+ * The field is sized from the *selected* label: the arrow stays close to the text, while the menu keeps its own
+ * `max-content` width so every model name stays readable. The probe is invisible and never participates in layout;
+ * it only gives the selected label its real rendered width.
  */
 export function ModelPicker(): ReactNode {
   const lang = useLocale();
@@ -26,19 +26,30 @@ export function ModelPicker(): ReactNode {
         disabled: !option.value,
       }))
     : [];
-  const labels = options.length ? options.map((option) => option.label) : [t('settings.noModel')];
-  const labelsKey = labels.join('\n');
+  const selectedValue = state.view?.connectionId || options[0]?.value || null;
+  const selectedLabel =
+    options.find((option) => option.value === selectedValue)?.label ??
+    options[0]?.label ??
+    t('settings.noModel');
   const probe = useRef<HTMLSpanElement>(null);
-  const [fieldWidth, setFieldWidth] = useState(150);
+  const [measured, setMeasured] = useState(0);
+  const [fontTick, setFontTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void document.fonts?.ready.then(() => {
+      if (live) setFontTick((value) => value + 1);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   useLayoutEffect(() => {
     const node = probe.current;
     if (!node) return;
-    let widest = 0;
-    for (const child of node.children)
-      widest = Math.max(widest, child.getBoundingClientRect().width);
-    const next = Math.min(360, Math.max(150, Math.ceil(widest) + 50));
-    setFieldWidth((current) => (current === next ? current : next));
-  }, [labelsKey]);
+    const width = node.getBoundingClientRect().width;
+    setMeasured((current) => (current === width ? current : width));
+  }, [selectedLabel, lang, state.locked, fontTick]);
+  const { width: fieldWidth, compact } = modelFieldWidth(measured);
   const status = state.status;
   const statusText =
     !status || ('key' in status && status.key === 'settings.selectHint')
@@ -49,24 +60,27 @@ export function ModelPicker(): ReactNode {
   return (
     <>
       <span ref={probe} className="model-width-probe" aria-hidden="true">
-        {labels.map((label, index) => (
-          <span key={index}>{label}</span>
-        ))}
+        {selectedLabel}
       </span>
-      <div className="model-picker-frame" style={{ width: fieldWidth }}>
+      <div
+        className="model-picker-frame"
+        data-compact={compact ? 'true' : undefined}
+        style={{ width: fieldWidth }}
+      >
         <Select
           id="model"
           aria-label={t('ui.switchModel')}
           className="model"
-          value={state.view?.connectionId || options[0]?.value || null}
+          value={selectedValue}
           placeholder={t('settings.noModel')}
           disabled={state.locked}
           data={[...options, { value: '__settings__', label: t('settings.modelEntry') }]}
           comboboxProps={{ width: 'max-content', position: 'bottom-end' }}
+          rightSectionWidth={24}
           onChange={(value) => {
             if (value && value !== '__environment__') state.choose(value);
           }}
-          title={state.view?.model || t('settings.addModelConnection')}
+          title={selectedLabel}
         />
       </div>
       <span

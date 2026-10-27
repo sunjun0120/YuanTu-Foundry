@@ -17,7 +17,7 @@ import {
 } from '../apps/desktop/ui/settings/model-settings-model.ts';
 import type { ModelConnectionView, ModelSettingsView } from '../apps/desktop/settings-contract.ts';
 import { connectModelSelection } from '../apps/desktop/ui/settings/model-selection.ts';
-import { modelPicker } from '../apps/desktop/ui/settings/model-picker-state.ts';
+import { modelFieldWidth, modelPicker } from '../apps/desktop/ui/settings/model-picker-state.ts';
 
 function connection(overrides: Partial<ModelConnectionView> = {}): ModelConnectionView {
   return {
@@ -54,6 +54,14 @@ function view(overrides: Partial<ModelSettingsView> = {}): ModelSettingsView {
     ...overrides,
   };
 }
+
+test('the model field floors at 72 and caps at 360, compacting only below the floor', () => {
+  assert.deepEqual(modelFieldWidth(0), { width: 72, compact: false });
+  assert.deepEqual(modelFieldWidth(10), { width: 72, compact: true });
+  assert.deepEqual(modelFieldWidth(32), { width: 72, compact: false });
+  assert.deepEqual(modelFieldWidth(100), { width: 140, compact: false });
+  assert.deepEqual(modelFieldWidth(400), { width: 360, compact: false });
+});
 
 test('the environment reading is labelled per language and only for environment sources', () => {
   assert.equal(
