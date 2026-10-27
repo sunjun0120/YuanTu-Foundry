@@ -51,7 +51,13 @@
 - electron-builder 26.15.3 产出 `dist/release/win-unpacked`（Electron 43.5.0，x64）。
 - `npm run check:windows-package` 通过，校验打包 Node 的 SHA-256 为 `3602f2bb1a10f2cbab4c36886218a33c1ab3db87290e73b033c46c77147d0237`。
 
-未完成：打包后的 `win-unpacked/YuanTu Agent.exe` 在本机启动后立即退出，退出码 `2147483651`（`0x80000003`），无 stderr；带 `--remote-debugging-port` 时 CDP 端口从未打开，Playwright 也无法 attach。包内容校验通过，但打包后的实际窗口/项目切换尚未验证，需在干净的安装环境复核是打包配置还是本机运行环境导致。
+打包后验证通过（CDP，手动运行）：
+
+- 使用仓库内可写的 `user-data-dir` 与 workspace，并清除继承的 `YUANTU_*` 环境变量后，`win-unpacked/YuanTu Agent.exe` 正常启动。
+- 通过 `--remote-debugging-port` 连接后：窗口标题 `YuanTu Agent`，项目列表 1 项，`#workspace` 指向测试 workspace，Host 日志 `host.ready`，`snapshot` 返回 `ok`。
+- 早先的 `0x80000003` 退出是启动环境问题：`user-data-dir` 位于临时目录时 SingletonLock/DevToolsActivePort 报 access denied，且继承了开发期的 `YUANTU_NODE_PATH`；不是包内容损坏。
+
+尚未自动化：该验证目前是手动 CDP 脚本，未纳入 `smoke:desktop`；安装/升级/卸载与 macOS 仍未验证。
 
 ## 5. 定向验证（本轮及此前）
 
@@ -63,7 +69,7 @@
 
 - Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，主进程订阅所有 Host，项目列表显示 `running`/`waiting` 标记、跨项目等待汇总，并列出各工作区最近会话；等待会话、等待项目名或汇总按钮会切到该工作区并加载会话，再由 active Host 的审批面板处理。后台审批的就地处理/队列仍未完成。
 - Phase 7 剩余：系统化键盘/触摸验收；每工作区会话列表、项目级折叠、粗指针悬停操作与键盘 Enter/焦点显示已有覆盖。
-- 打包产物已生成并通过 `check:windows-package`；安装/升级/卸载场景、打包后窗口自动化与 macOS 记录未完成。
+- 打包产物已生成、包内容校验通过，打包后窗口已手动 CDP 验证；安装/升级/卸载场景、打包验证自动化与 macOS 记录未完成。
 
 ## 7. 复现命令
 
