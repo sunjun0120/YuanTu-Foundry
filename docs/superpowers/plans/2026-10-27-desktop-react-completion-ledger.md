@@ -35,6 +35,9 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - Session menus: existing real click regression caught a stacking conflict with fixed AppShell navigation; menu z-index corrected, original rename/delete/draft use case passed. A direct Host-recovery test timed out waiting for durable `run.interrupted`; rerun with the normal harness before classifying it.
 - Final T24a/T25a regression: view registry 2/2; desktop-language 7/7; desktop-layout 4/4; desktop-react 4/4; desktop-sessions 6/6 (including Host recovery), 23/23 total. Separate settings 8 pass / 1 existing MCP skip; locale/plan-card 5/5; motion 5/5.
 - Checkpoint gates: typecheck, lint, layers, cycles, i18n, format, docs, references, isolation all exit 0. Full suite/release acceptance is still pending T26.
+- CSS retirement: six legacy files now contain one retirement comment each (5,983 -> 6 lines); `ui/styles.css` owns component and DOM-island styling through classes, not migrated ids. This relocates needed styles; it is not a claim that total CSS shrank by 5,977 lines. Removed 26 superseded declarations, obsolete select-upgrader rules and a conflicting old dark palette. Existing `!important` count decreased (29 legacy + 4 UI before, 25 UI after).
+- Locale retirement: global DOM walker and native select upgrader removed. Locale subscribers own text/attributes; raw user content is not rewritten. A real Electron test now exercises dynamic React attributes instead of preserving the retired walker's behavior.
+- CSS/DOM-retirement checkpoint: typecheck/lint/layers/cycles/i18n/format/docs/references/isolation all exit 0; final desktop build passes. Style budget 2/2 and full locale/plan-card file 5/5 pass. Layout 4/4, React layer 4/4, language 7/7 and sessions 6/6 passed on the class-based stylesheet; the old-palette regression was fixed and layout rerun green. Product page transitions are the next T24 subtask.
 
 ## Verification
 

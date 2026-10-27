@@ -22,7 +22,7 @@ export function ProductShell(): ReactNode {
         asideVisible={view.workspaceOpen && view.page === 'chat'}
         navbar={
           <>
-            <aside id="chat-sidebar" className="sidebar" hidden={view.page !== 'chat'}>
+            <aside id="chat-sidebar" className="sidebar chat-sidebar" hidden={view.page !== 'chat'}>
               <div className="brand">
                 <div className="brand-logo" role="img" aria-label={t('ui.appName')}>
                   <img className="logo-light" src="./img/logo-light.png" alt="" />
@@ -34,8 +34,8 @@ export function ProductShell(): ReactNode {
               </button>
               <div className="workspace-box">
                 <div className="section-label">{t('ui.workspace')}</div>
-                <div id="workspace" translate="no" />
-                <button id="choose-workspace" className="text-button" disabled>
+                <div id="workspace" className="workspace" translate="no" />
+                <button id="choose-workspace" className="text-button choose-workspace" disabled>
                   {t('ui.changeFolder')}
                   <span aria-hidden="true">↗</span>
                 </button>
@@ -51,7 +51,7 @@ export function ProductShell(): ReactNode {
               </div>
             </aside>
             <aside className="settings-sidebar" hidden={view.page !== 'settings'}>
-              <button id="settings-back" type="button">
+              <button id="settings-back" className="settings-back" type="button">
                 <span aria-hidden="true">←</span>
                 {t('ui.backToChat')}
               </button>
@@ -108,7 +108,10 @@ export function ProductShell(): ReactNode {
                       <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path>
                     </svg>
                   </span>
-                  <span id="workspace-maintenance-label"></span>
+                  <span
+                    id="workspace-maintenance-label"
+                    className="workspace-maintenance-label"
+                  ></span>
                 </button>
               </nav>
             </aside>
@@ -116,10 +119,10 @@ export function ProductShell(): ReactNode {
         }
         main={
           <>
-            <section id="chat-page" hidden={view.page !== 'chat'}>
+            <section id="chat-page" className="chat-page" hidden={view.page !== 'chat'}>
               <header>
                 <div className="chat-heading">
-                  <strong id="chat-title" translate="no" />
+                  <strong id="chat-title" className="chat-title" translate="no" />
                   <span
                     id="chat-breadcrumb-sep"
                     className="chat-breadcrumb-sep"
@@ -137,6 +140,7 @@ export function ProductShell(): ReactNode {
                   <div className="subagent-anchor">
                     <button
                       id="open-subagents"
+                      className="open-subagents"
                       type="button"
                       aria-expanded="false"
                       aria-controls="subagents-popover"
@@ -173,6 +177,7 @@ export function ProductShell(): ReactNode {
                 <div className="workspace-anchor">
                   <button
                     id="open-workspace"
+                    className="open-workspace"
                     type="button"
                     aria-expanded="false"
                     aria-controls="workspace-panel"
@@ -185,14 +190,24 @@ export function ProductShell(): ReactNode {
               </header>
               <div id="error" className="error-banner" role="alert" hidden>
                 <span id="error-text"></span>
-                <button id="error-action" type="button" className="text-button" hidden></button>
-                <span id="error-note" role="status"></span>
+                <button
+                  id="error-action"
+                  type="button"
+                  className="text-button error-action"
+                  hidden
+                ></button>
+                <span id="error-note" className="error-note" role="status"></span>
               </div>
               <div id="notice" className="notice-banner" role="status" hidden></div>
               <div id="configuration" className="configuration" hidden>
                 {t('ui.noModelConfigured')}
               </div>
-              <section id="conversation" aria-label={t('ui.conversation')} tabIndex={0}>
+              <section
+                id="conversation"
+                className="conversation"
+                aria-label={t('ui.conversation')}
+                tabIndex={0}
+              >
                 <div id="welcome" className="welcome">
                   <div className="eyebrow">{t('ui.welcomeEyebrow')}</div>
                   <h1>{t('ui.welcomeStart')}</h1>
@@ -253,7 +268,7 @@ export function ProductShell(): ReactNode {
                 </div>
                 <section
                   id="subagent-transcript"
-                  className="subagent-page"
+                  className="subagent-page subagent-transcript"
                   aria-label={t('subagent.pageLabel')}
                   hidden
                 >
@@ -274,12 +289,13 @@ export function ProductShell(): ReactNode {
                 <div id="approvals" aria-label={t('ui.pendingApprovals')}>
                   <ViewSlot name="approvals" />
                 </div>
-                <div id="questions" aria-label={t('ui.questionLabel')}>
+                <div id="questions" className="questions" aria-label={t('ui.questionLabel')}>
                   <ViewSlot name="questions" />
                 </div>
               </section>
               <button
                 id="jump-to-latest"
+                className="jump-to-latest"
                 type="button"
                 aria-label={t('ui.jumpToLatest')}
                 title={t('ui.jumpToLatest')}
@@ -294,7 +310,7 @@ export function ProductShell(): ReactNode {
                   <span id="run-status" role="status">
                     {t('shell.connecting')}
                   </span>
-                  <span id="session-short"></span>
+                  <span id="session-short" className="session-short"></span>
                 </div>
                 <div id="todos-root">
                   <ViewSlot name="todos-root" />
@@ -302,7 +318,7 @@ export function ProductShell(): ReactNode {
                 <div id="sandbox-prompt-root">
                   <ViewSlot name="sandbox-prompt" />
                 </div>
-                <form id="composer">
+                <form id="composer" className="composer">
                   <div id="attachments-root">
                     <ViewSlot name="attachments" />
                   </div>
@@ -311,6 +327,7 @@ export function ProductShell(): ReactNode {
                   </div>
                   <textarea
                     id="prompt"
+                    className="prompt"
                     aria-label={t('ui.taskDescription')}
                     placeholder={t('ui.promptPlaceholder')}
                     rows={2}
@@ -322,24 +339,29 @@ export function ProductShell(): ReactNode {
                     <button
                       type="button"
                       id="attach-image"
-                      className="secondary"
+                      className="secondary attach-image"
                       aria-label={t('ui.addAttachment')}
                       title={t('ui.addAttachment')}
                     >
                       +
                     </button>
-                    <div id="permission-root">
+                    <div id="permission-root" className="permission-root">
                       <ViewSlot name="permission-chip" />
                     </div>
                     <div className="chat-model">
                       <label htmlFor="model">{t('ui.model')}</label>
                       <ModelPicker />
-                      <span id="model-switch-status" role="status" hidden></span>
+                      <span
+                        id="model-switch-status"
+                        className="model-switch-status"
+                        role="status"
+                        hidden
+                      ></span>
                     </div>
                     <button
                       id="send"
                       type="submit"
-                      className="primary"
+                      className="primary send"
                       aria-label={t('ui.send')}
                       title={t('ui.send')}
                       data-mode="send"
@@ -420,7 +442,7 @@ export function ProductShell(): ReactNode {
           </>
         }
         aside={
-          <div id="workspace-root">
+          <div id="workspace-root" className="workspace-root">
             <ViewSlot name="workspace" />
           </div>
         }
@@ -429,7 +451,7 @@ export function ProductShell(): ReactNode {
       <div id="session-dialog-root">
         <ViewSlot name="session-dialog" />
       </div>
-      <div id="full-access-root">
+      <div id="full-access-root" className="full-access-root">
         <ViewSlot name="permission-dialog" />
       </div>
     </>

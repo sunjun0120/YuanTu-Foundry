@@ -106,6 +106,7 @@ export function PermissionChip({
         <button
           ref={trigger}
           id="permission-trigger"
+          className="permission-trigger"
           type="button"
           aria-label={t('permission.aria')}
           aria-haspopup="menu"
@@ -135,6 +136,7 @@ export function PermissionChip({
         <div
           ref={menu}
           id="permission-menu"
+          className="permission-menu"
           role="menu"
           aria-label={t('permission.aria')}
           hidden={!state.menuOpen}
@@ -171,7 +173,12 @@ export function PermissionChip({
             </button>
           ))}
           <div className="permission-environment" role="presentation">
-            <p id="permission-custom" hidden={custom.hidden} title={custom.title}>
+            <p
+              id="permission-custom"
+              className="permission-custom"
+              hidden={custom.hidden}
+              title={custom.title}
+            >
               {custom.text}
             </p>
           </div>
@@ -187,6 +194,7 @@ export function PermissionChip({
       <select
         ref={select}
         id="permission-mode"
+        className="permission-mode"
         aria-label={t('permission.aria')}
         data-native
         hidden

@@ -29,6 +29,7 @@ export function setupMcpSettings(
   panel.className = 'settings-content mcp-content';
   panel.hidden = true;
   panel.id = 'mcp-panel';
+  panel.classList.add('mcp-panel');
   panel.setAttribute('aria-labelledby', 'mcp-title');
   panel.innerHTML = `<div class="settings-page-header"><div class="eyebrow">偏好设置 / MCP</div><h2 id="mcp-title">MCP 服务</h2><p>连接外部工具，扩展当前工作区的能力。</p></div>
  <div class="mcp-workspace" id="mcp-workspace"></div>

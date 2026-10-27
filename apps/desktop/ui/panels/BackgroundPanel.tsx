@@ -150,6 +150,7 @@ export function BackgroundPanel({
       <button
         ref={button}
         id="open-background"
+        className="open-background"
         type="button"
         aria-expanded={open}
         aria-controls="background-popover"
@@ -159,7 +160,9 @@ export function BackgroundPanel({
         aria-label={current.ariaLabel}
         onClick={() => syncOpen(true)}
       >
-        <span id="background-label">{current.label}</span>
+        <span id="background-label" className="background-label">
+          {current.label}
+        </span>
       </button>
       <section
         ref={popover}

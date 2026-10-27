@@ -29,15 +29,18 @@ import { choiceForPreset } from '../apps/desktop/session-choices.ts';
 
 test('the goal banner and a long question card follow the window theme and height', async () => {
   const surfaces = await readFile(
-    path.join(projectRoot, 'apps', 'desktop', 'layout-surfaces.css'),
+    path.join(projectRoot, 'apps', 'desktop', 'ui', 'styles.css'),
     'utf8',
   );
   assert.match(
     surfaces,
-    /#chat-page \.goal-panel\s*\{[\s\S]*?background: var\(--raised\)/,
+    /\.chat-page \.goal-panel\s*\{[\s\S]*?background: var\(--raised\)/,
     'the goal panel must use the palette the other session panels use',
   );
-  const layout = await readFile(path.join(projectRoot, 'apps', 'desktop', 'layout.css'), 'utf8');
+  const layout = await readFile(
+    path.join(projectRoot, 'apps', 'desktop', 'ui', 'styles.css'),
+    'utf8',
+  );
   assert.match(
     layout,
     /\.question-card\s*\{[\s\S]*?max-height:/,

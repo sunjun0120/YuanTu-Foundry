@@ -57,6 +57,7 @@ export function FullAccessDialog({ controller }: { controller: PermissionControl
     <dialog
       ref={dialog}
       id="full-access-dialog"
+      className="full-access-dialog"
       aria-labelledby="full-access-title"
       onCancel={(event) => {
         event.preventDefault();
@@ -69,6 +70,7 @@ export function FullAccessDialog({ controller }: { controller: PermissionControl
     >
       <form
         id="full-access-form"
+        className="full-access-form"
         onSubmit={(event) => {
           event.preventDefault();
           controller.confirm();
@@ -85,6 +87,7 @@ export function FullAccessDialog({ controller }: { controller: PermissionControl
           <h2 id="full-access-title">{t('permission.dialog.title')}</h2>
           <button
             id="full-access-close"
+            className="full-access-close"
             type="button"
             aria-label={t('permission.dialog.close')}
             onClick={() => controller.cancel()}
@@ -92,7 +95,9 @@ export function FullAccessDialog({ controller }: { controller: PermissionControl
             ✕
           </button>
         </header>
-        <p id="full-access-description">{t('permission.dialog.description')}</p>
+        <p id="full-access-description" className="full-access-description">
+          {t('permission.dialog.description')}
+        </p>
         <ul className="risk-list">
           {RISKS.map((id) => (
             <li key={id} data-risk={id}>
@@ -106,7 +111,9 @@ export function FullAccessDialog({ controller }: { controller: PermissionControl
             </li>
           ))}
         </ul>
-        <p id="full-access-risk">{t('permission.dialog.risk')}</p>
+        <p id="full-access-risk" className="full-access-risk">
+          {t('permission.dialog.risk')}
+        </p>
         <div className="session-dialog-actions">
           <button
             ref={cancel}

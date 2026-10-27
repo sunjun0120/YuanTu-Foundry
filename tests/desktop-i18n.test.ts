@@ -100,9 +100,10 @@ async function desktopPage(t: test.TestContext) {
         "export {mountSubagents} from './apps/desktop/ui/conversation/subagents-mount.tsx';",
         "export {mountQuestions} from './apps/desktop/ui/conversation/questions-mount.tsx';",
         "export {ProductShell} from './apps/desktop/ui/layout/ProductShell.tsx';",
+        "export {useLocale} from './apps/desktop/ui/i18n.ts';",
         "export {MantineProvider} from '@mantine/core';",
         "export {flushSync} from 'react-dom';",
-        "export {createElement} from 'react';",
+        "export {createElement, useState, Fragment} from 'react';",
         "export {createRoot} from 'react-dom/client';",
       ].join('\n'),
       resolveDir: projectRoot,
@@ -347,29 +348,38 @@ for (const surface of ['workspace']) {
 }
 
 test(
-  'locale round trips restore static attributes and preserve real session names and file paths',
+  'locale round trips update React attributes and preserve unrelated user content',
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await desktopPage(t);
     if (!page) return;
     await page.evaluate(`
-    const fixture = document.createElement('input'); fixture.id='locale-attribute';
-    for (const name of ['title','aria-label','placeholder']) fixture.setAttribute(name,'设置');
-    document.body.append(fixture);
-    localeApi.setLocale('en-US');
+    (() => { function AttributeFixture() {
+      localeApi.useLocale();
+      const [key, changeKey] = localeApi.useState('ui.settings');
+      window.changeAttributeKey = changeKey;
+      return localeApi.createElement('input', { id: 'locale-attribute', title: localeApi.t(key), 'aria-label': localeApi.t(key), placeholder: localeApi.t(key) });
+    }
+    localeApi.flushSync(() => localeRoot.render(localeApi.createElement(localeApi.MantineProvider, null,
+      localeApi.createElement(localeApi.Fragment, null, localeApi.createElement(localeApi.ProductShell), localeApi.createElement(AttributeFixture)))));
+    const userContent = document.createElement('p'); userContent.id='locale-user-content';
+    userContent.textContent='设置/新建会话.txt'; document.body.append(userContent);
+    localeApi.flushSync(() => localeApi.setLocale('en-US'));
+    })();
   `);
     assert.equal(await page.locator('#locale-attribute').getAttribute('title'), 'Settings');
-    await page.evaluate(`localeApi.setLocale('zh-CN');`);
+    await page.evaluate(`localeApi.flushSync(() => localeApi.setLocale('zh-CN'));`);
     for (const attribute of ['title', 'aria-label', 'placeholder'])
       assert.equal(await page.locator('#locale-attribute').getAttribute(attribute), '设置');
-    // A freshly assigned attribute must become the new source, even while English is selected.
+    // A React label can change while English is selected; its new key survives the locale round trip.
     await page.evaluate(
-      `localeApi.setLocale('en-US'); document.querySelector('#locale-attribute').setAttribute('title','新建会话');`,
+      `localeApi.flushSync(() => { localeApi.setLocale('en-US'); changeAttributeKey('ui.newSession'); });`,
     );
     await page.waitForFunction(
       `document.querySelector('#locale-attribute').title === 'New session'`,
     );
-    await page.evaluate(`localeApi.setLocale('zh-CN')`);
+    await page.evaluate(`localeApi.flushSync(() => localeApi.setLocale('zh-CN'))`);
     assert.equal(await page.locator('#locale-attribute').getAttribute('title'), '新建会话');
+    assert.equal(await page.locator('#locale-user-content').innerText(), '设置/新建会话.txt');
   },
 );

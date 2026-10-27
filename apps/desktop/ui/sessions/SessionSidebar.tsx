@@ -147,6 +147,7 @@ export function SessionSidebar({
         <button
           ref={openButton}
           id="open-session-search"
+          className="open-session-search"
           aria-expanded={state.searchOpen}
           aria-controls="session-search"
           type="button"
@@ -164,6 +165,7 @@ export function SessionSidebar({
         <input
           ref={search}
           id="session-search"
+          className="session-search"
           type="search"
           maxLength={200}
           placeholder={t('ui.searchSessionsOrMessages')}
@@ -183,6 +185,7 @@ export function SessionSidebar({
         />
         <button
           id="clear-session-search"
+          className="clear-session-search"
           type="button"
           aria-label={t('ui.clearSessionSearch')}
           title={t('ui.clearSessionSearch')}
@@ -196,13 +199,13 @@ export function SessionSidebar({
       <p id="session-search-note" className="session-search-note" hidden>
         {t('ui.searchNameOnly')}
       </p>
-      <p id="session-search-empty" className="session-empty" hidden={!empty}>
+      <p id="session-search-empty" className="session-empty session-search-empty" hidden={!empty}>
         {t('ui.noMatchingSessions')}
       </p>
       <nav
         id="sessions"
         aria-label={t('ui.sessionList')}
-        className={showAll ? 'expanded' : undefined}
+        className={(showAll ? 'expanded' : '') + ' sessions'}
         onScroll={() => controller.closeMenu()}
       >
         {visibleSessions(state).map((item) => (

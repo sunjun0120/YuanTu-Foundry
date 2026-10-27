@@ -25,7 +25,6 @@ const REPO_ALIASES = {
   '@repo/runtime': path.join(uiDir, 'runtime.ts'),
   '@repo/actions': path.join(uiDir, 'actions.ts'),
   '@repo/state': path.join(uiDir, 'ui-state.ts'),
-  '@repo/select-menu': path.join(projectRoot, 'apps/desktop/renderer-select-menu.ts'),
   '@repo/settings': path.join(uiDir, 'settings/GeneralSettings.tsx'),
   '@repo/settings-model': path.join(uiDir, 'settings/settings-model.ts'),
 };
@@ -74,7 +73,6 @@ import { useLocale } from '@repo/ui-i18n';
 import { createDesktopRuntime } from '@repo/runtime';
 import { createDesktopActions } from '@repo/actions';
 import { createPendingOperations } from '@repo/state';
-import { setupSelectMenus } from '@repo/select-menu';
 
 let explode = false;
 const explodeListeners = new Set();
@@ -143,7 +141,6 @@ const actions = createDesktopActions({
   pending: createPendingOperations(),
 });
 mountDesktopApp({ children: <div id="probe-mount" data-react-owned=""><Probe /></div>, runtime, actions });
-setupSelectMenus();
 window.__ui = { setLocale, locale, setExplode };
 `;
 
@@ -311,9 +308,9 @@ async function probePage(t) {
   const html = product
     .replace('<script src="./renderer.js"></script>', '<script src="./fixture.js"></script>')
     .replace(
-      '    <div id="desktop-root"></div>',
+      '    <div id="desktop-root" class="desktop-root"></div>',
       [
-        '    <div id="desktop-root"></div>',
+        '    <div id="desktop-root" class="desktop-root"></div>',
         '    <div id="legacy-copy">新建会话</div>',
         '    <select id="legacy-native-select"><option value="a">A</option></select>',
       ].join('\n'),
@@ -523,15 +520,8 @@ test('the build ships both stylesheets in the documented order', async () => {
   );
   assert.equal(links[0], 'renderer.css');
   assert.equal(links.at(-1), 'ui.css');
-  assert.deepEqual(links.slice(1, -1), [
-    'styles.css',
-    'styles-subagents.css',
-    'styles-panels.css',
-    'layout.css',
-    'layout-surfaces.css',
-    'layout-workspace.css',
-  ]);
-  assert.match(html, /<div id="desktop-root"><\/div>/);
+  assert.deepEqual(links, ['renderer.css', 'ui.css']);
+  assert.match(html, /<div id="desktop-root"[^>]*><\/div>/);
 });
 
 test('the React layer mounts into the product document', { skip: electronSkip }, async (t) => {
@@ -559,7 +549,7 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   assert.notEqual(mounted.bodyVariable, '', 'the provider injects its CSS variables');
   assert.notEqual(mounted.buttonBackground, 'rgba(0, 0, 0, 0)', 'Mantine styles the button');
   assert.equal(mounted.noncedStyles, true, 'every injected stylesheet carries the CSP nonce');
-  assert.equal(mounted.legacyUpgraded, true, 'a legacy select is still upgraded');
+  assert.equal(mounted.legacyUpgraded, false, 'global select mutation has been retired');
   assert.equal(mounted.reactUpgraded, false, 'a select inside a React region is left alone');
   assert.equal(mounted.reactStillSelect, 'SELECT');
 
@@ -634,9 +624,14 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   assert.equal(await page.locator('#legacy-copy').innerText(), '新建会话');
   await page.evaluate(() => window.__ui.setLocale('en-US'));
   await page.waitForFunction(
-    () => document.getElementById('legacy-copy').textContent === 'New session',
+    () => document.getElementById('react-copy').textContent === 'New session',
   );
   assert.equal(await page.locator('#react-copy').innerText(), 'New session');
+  assert.equal(
+    await page.locator('#legacy-copy').innerText(),
+    '新建会话',
+    'locale changes do not rewrite unrelated DOM',
+  );
   assert.equal(await page.locator('#react-raw').innerText(), '新建会话');
   assert.equal(await page.locator('#react-input').getAttribute('placeholder'), 'Search sessions');
   await page.evaluate(() => window.__ui.setLocale('zh-CN'));

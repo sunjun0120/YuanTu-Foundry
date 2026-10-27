@@ -391,7 +391,7 @@ test('background tasks live in a conditional header popover without workspace co
   const [html, renderer, css] = await Promise.all([
     readFile('apps/desktop/ui/layout/ProductShell.tsx', 'utf8'),
     readFile('apps/desktop/ui/panels/BackgroundPanel.tsx', 'utf8'),
-    readFile('apps/desktop/layout-surfaces.css', 'utf8'),
+    readFile('apps/desktop/ui/styles.css', 'utf8'),
   ]);
   const header = html.match(/id="chat-page"[\s\S]*?<header>([\s\S]*?)<\/header>/)?.[1] ?? '';
   // The popover is React now: the header owns a root, and the button/popover ids live in the component.

@@ -24,7 +24,7 @@ export function ModelPicker(): ReactNode {
     <Select
       id="model"
       aria-label={t('ui.switchModel')}
-      className="model-chip"
+      className="model-chip model"
       value={state.view?.connectionId || options[0]?.value || null}
       placeholder={t('settings.noModel')}
       disabled={state.locked}

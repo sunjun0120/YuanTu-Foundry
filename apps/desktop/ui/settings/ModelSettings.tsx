@@ -157,7 +157,7 @@ export function ModelSettings({ controller }: { controller: ModelSettingsControl
   const locked = state.pending || state.busy;
   if (!view || !draft)
     return (
-      <Stack id="settings-form" gap="md">
+      <Stack id="settings-form" className="settings-form" gap="md">
         <Text c="dimmed">{t('ui.loading')}</Text>
       </Stack>
     );
@@ -178,6 +178,7 @@ export function ModelSettings({ controller }: { controller: ModelSettingsControl
   return (
     <form
       id="settings-form"
+      className="settings-form"
       onSubmit={(event) => {
         event.preventDefault();
         void controller.save();

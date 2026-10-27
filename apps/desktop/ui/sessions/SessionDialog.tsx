@@ -36,6 +36,7 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
     <dialog
       ref={dialog}
       id="session-dialog"
+      className="session-dialog"
       aria-labelledby="session-dialog-title"
       onCancel={(event) => {
         event.preventDefault();
@@ -58,6 +59,7 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
         <p id="session-dialog-description">{current ? dialogDescription(current) : ''}</p>
         <label
           id="session-title-label"
+          className="session-title-label"
           htmlFor="session-title-input"
           hidden={current?.kind !== 'rename'}
         >
@@ -66,6 +68,7 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
         <input
           ref={title}
           id="session-title-input"
+          className="session-title-input"
           maxLength={120}
           autoComplete="off"
           hidden={current?.kind !== 'rename'}
@@ -74,7 +77,12 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
           value={current?.value ?? ''}
           onChange={(event) => controller.setDialogValue(event.currentTarget.value)}
         />
-        <p id="session-dialog-error" role="alert" hidden={!current?.error}>
+        <p
+          id="session-dialog-error"
+          className="session-dialog-error"
+          role="alert"
+          hidden={!current?.error}
+        >
           {current?.error ?? ''}
         </p>
         <div className="session-dialog-actions">

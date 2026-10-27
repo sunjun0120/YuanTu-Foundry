@@ -29,16 +29,6 @@ await copyFile('packages/office/automation.ps1', 'dist/desktop/automation.ps1');
 await mkdir('dist/packages/office', { recursive: true });
 await copyFile('packages/office/automation.ps1', 'dist/packages/office/automation.ps1');
 await copyFile('apps/desktop/index.html', 'dist/desktop/index.html');
-// The stylesheets `index.html` links, in its order.
-for (const sheet of [
-  'styles.css',
-  'styles-subagents.css',
-  'styles-panels.css',
-  'layout.css',
-  'layout-surfaces.css',
-  'layout-workspace.css',
-])
-  await copyFile(`apps/desktop/${sheet}`, `dist/desktop/${sheet}`);
 // The React layer's own stylesheet: the project palette and the rules for the DOM islands React only wraps.
 await copyFile('apps/desktop/ui/styles.css', 'dist/desktop/ui.css');
 // Runs under ordinary bundled Node, including from a copied maintenance directory.

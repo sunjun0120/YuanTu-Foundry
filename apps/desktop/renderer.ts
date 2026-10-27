@@ -43,7 +43,6 @@ import {
 import { mountSandboxSetup } from './ui/sandbox/mount.tsx';
 import { mountWorkspaceSettings } from './ui/settings/workspace-mount.tsx';
 import { mountPermissions } from './ui/permissions/mount.tsx';
-import { setupSelectMenus } from './renderer-select-menu.ts';
 import { locale, t, format, onLocaleChange } from './i18n.ts';
 import { environmentBlockedCode } from '../../packages/tools/environment-blocked.ts';
 import { localizedRunError, runErrorWantsModelSettings } from './renderer-error-text.ts';
@@ -98,7 +97,6 @@ const actions = createDesktopActions({
   pending: pendingOperations,
 });
 const disposeDesktopUi = mountDesktopApp({ runtime, actions });
-setupSelectMenus();
 const statisticsView = mountStatistics();
 const workspaceView = mountWorkspace({ files: (command) => window.yuantu.files(command) });
 const workspaceSettings = mountWorkspaceSettings(window.yuantu, { select });
