@@ -40,19 +40,30 @@
 - 总 wall time 约 312 秒。
 - 覆盖 `desktop.smoke`、`desktop-i18n`、`desktop-sessions`、`settings`、`workspace-ui`、`desktop-browser` 等；项目列表/`#choose-workspace`/`#workspace` 兼容钩子均由这些套件实际执行。
 
-## 4. 定向验证（本轮及此前）
+## 4. Windows 打包
+
+`npm run package:windows:dir` 成功：
+
+- 构建 sandbox account executor（exec/broker/runner 与 account maintenance）。
+- 完成 Host bundle、desktop build、bundled Node 24.19.0（libuv 1.52.1）与 win32-x64 search asset。
+- electron-builder 26.15.3 产出 `dist/release/win-unpacked`（Electron 43.5.0，x64）。
+- `npm run check:windows-package` 通过，校验打包 Node 的 SHA-256 为 `3602f2bb1a10f2cbab4c36886218a33c1ab3db87290e73b033c46c77147d0237`。
+
+未完成：用 Playwright 直接启动 `win-unpacked/YuanTu Agent.exe` 失败（打包后的 Electron 不暴露 Playwright 所需的 Node inspector），因此打包后的实际窗口/项目切换路径尚未自动化验证；需要在安装包场景中手工或换用 CDP 方式补验。
+
+## 5. 定向验证（本轮及此前）
 
 - `desktop-sessions.smoke.mjs` 6、`desktop-layout.smoke.mjs` 4、`desktop-browser.smoke.mjs` 1 通过。
 - `project-workspaces-store` 6、`project-workspaces-path` 5、`workspace-host-manager` 5、`browser-url` 2、`workspace-panel-loading` 14 通过。
 - 项目列表重命名、注册表启动写入、浏览器 guest 隔离与关闭销毁均有 smoke 断言。
 
-## 5. 未完成
+## 6. 未完成
 
 - Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，主进程订阅所有 Host，项目列表显示 `running`/`waiting` 标记并列出各工作区最近会话；等待会话的 `!` 标记或等待项目名会切到该工作区并加载会话，再由 active Host 的审批面板处理。后台审批的就地处理/队列仍未完成。
 - Phase 7 剩余：系统化键盘/触摸验收；每工作区会话列表、项目级折叠、粗指针悬停操作与键盘 Enter/焦点显示已有覆盖。
-- 打包/安装场景与跨平台手工记录。
+- 打包产物已生成并通过 `check:windows-package`；安装/升级/卸载场景、打包后窗口自动化与 macOS 记录未完成。
 
-## 6. 复现命令
+## 7. 复现命令
 
 ```powershell
 npm run check
