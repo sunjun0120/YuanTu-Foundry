@@ -107,6 +107,7 @@ export async function startRun(
       ? ctx.store.executablePlan(sessionId, params.planId)
       : undefined;
   const controller = new AbortController();
+  const model = ctx.models.capture(sessionId, true);
   const entry: ActiveRun = { controller, root: executionRoot(ctx, sessionId) };
   // Reserve the slot before the first await. The reconciliation below does real filesystem
   // I/O, so a check-then-set across it let a concurrent run.start (a duplicate dispatch, or
@@ -148,6 +149,7 @@ export async function startRun(
           ? (firstQuestion.displayContent ?? firstQuestion.content)
           : prompt,
         controller.signal,
+        model.env,
       );
     }
     // The previous run journalled its writes against the directory it executed in; a bound session works in its
@@ -264,7 +266,7 @@ export async function startRun(
     const agent = await createAgent(
       ctx.store,
       ctx.workspace,
-      ctx.options,
+      model.options,
       approve,
       // Live policy changes affect pending approvals and the next round's tool schema.
       () => (wake ? wakePolicy : sessionPermissionPolicy(ctx, sessionId)),
@@ -272,7 +274,7 @@ export async function startRun(
       ctx.background,
       sessionId,
       ctx.hooks,
-      ctx.residency,
+      await ctx.models.residency(model, sessionId, ctx.residency),
       ask,
       ctx.invariants,
       ctx.terminals,
@@ -292,6 +294,7 @@ export async function startRun(
           },
         ),
       controller.signal,
+      model.env,
     );
     entry.agent = agent;
     // Created after the busy-guard above but before the run, so the row and the run that fills

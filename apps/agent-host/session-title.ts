@@ -11,6 +11,7 @@ export function startSessionTitle(
   sessionId: string,
   prompt: string,
   runSignal: AbortSignal,
+  modelEnvironment: NodeJS.ProcessEnv = ctx.models.capture(sessionId).env,
 ): void {
   if (ctx.closing) return;
   let titles = pending.get(ctx);
@@ -22,7 +23,11 @@ export function startSessionTitle(
   const task = Promise.resolve()
     .then(async () => {
       signal.throwIfAborted();
-      const generated = await generateSessionTitle(createProvider(readConfig()), prompt, signal);
+      const generated = await generateSessionTitle(
+        createProvider(readConfig(modelEnvironment)),
+        prompt,
+        signal,
+      );
       if (signal.aborted || ctx.closing) return;
       if (!generated) {
         process.stderr.write(

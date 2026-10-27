@@ -204,6 +204,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
   'task.propose': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
+    const model = ctx.models.capture(sessionId, true);
     // Planning rewrites this task's own definition from one model request: only this session has to be idle.
     const planning = [hostClaim('shared'), sessionClaim(sessionId)];
     assertUnlocked(ctx, planning, 'Host is busy; wait before planning');
@@ -229,7 +230,7 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
     try {
       runId = ctx.store.beginRun(sessionId);
       const proposal = await proposeTask(
-        createProvider(readConfig()),
+        createProvider(readConfig(model.env)),
         task,
         AbortSignal.any([
           operation.controller.signal,

@@ -1,4 +1,5 @@
 import type { Agent } from '../../packages/core/agent.ts';
+import { HostModelRuntime } from './model-runtime.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import type { BackgroundAuthority } from '../../packages/core/background-deliveries.ts';
@@ -101,6 +102,7 @@ export type Dispatcher = (
  * starts; nothing can observe them unset, because nothing can send a request before then.
  */
 export interface HostContext {
+  models: HostModelRuntime;
   /** The parsed command line, including the `--listen` address when the carrier is a socket. */
   options: HostLaunch['options'];
   /** The one workspace this Host serves; every session it accepts has to resolve to it. */
@@ -248,6 +250,7 @@ export function createHostState(launch: HostLaunch, services: HostServices): Hos
   const { store, hooks } = services;
   const announced = new Set<string>();
   const state: HostContext = {
+    models: new HostModelRuntime(store, options),
     options,
     workspace,
     launchSandbox,

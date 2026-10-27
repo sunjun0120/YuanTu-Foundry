@@ -185,6 +185,8 @@ export interface CarrierSnapshot {
   resources: HostMethods['resources.list']['result'];
   workspace: string;
   model: string;
+  /** The selected saved connection; distinct endpoints may expose the same model id. */
+  modelConnectionId?: string;
   configured: boolean;
   supportsVision: boolean;
   ready: boolean;
@@ -414,7 +416,10 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     if (typeof value.id !== 'string' || !value.id.trim() || value.id.length > 256) return invalid();
   }
   if (value.type === 'archiveSession' && typeof value.archived !== 'boolean') return invalid();
-  if (value.type === 'sandbox' && (value.mode === 'docker' || value.mode === 'sbx'))
+  if (
+    value.type === 'sandbox' &&
+    (value.mode === 'docker' || value.mode === 'sbx' || value.mode === 'windows')
+  )
     parseSandboxMode(value.mode);
   // The vocabulary is the sandbox seam's, so an unknown backend is refused here rather than at the far end of
   // the wire — where the answer would be a Host that kept enforcing the old mode while the caller believed
@@ -424,7 +429,7 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     value.mode !== 'host' &&
     value.mode !== 'native' &&
     value.mode !== 'seatbelt' &&
-    value.mode !== 'windows'
+    value.mode !== 'windows-account'
   )
     return invalid();
   if (

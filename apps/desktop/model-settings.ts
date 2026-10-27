@@ -11,6 +11,7 @@ import {
   type ModelLimitField,
 } from '../../packages/protocol/settings.ts';
 import { startupEnvironmentProblems } from './startup-environment.ts';
+import type { ModelCatalogConfiguration } from '../../packages/protocol/model-configuration.ts';
 import {
   parseSettingsCommand,
   type ModelSettingsInput,
@@ -245,6 +246,64 @@ export class ModelSettingsStore {
     const connection = this.connections.get(connectionId);
     if (!connection) throw new Error(mainText('settings.connectionMissing'));
     return { ...connection };
+  }
+  /** The trusted Host catalog is never used as a renderer settings view. */
+  get runtimeCatalog(): ModelCatalogConfiguration {
+    return {
+      defaultConnectionId: this.activeConnectionId,
+      connections: [...this.connections.values()].map((connection) => ({
+        connectionId: connection.connectionId,
+        protocol: builtinProtocol(connection.protocol),
+        model: connection.model,
+        baseUrl: connection.baseUrl || '',
+        apiKey: connection.apiKey,
+        supportsVision: connection.supportsVision,
+        maxContextTokens: connection.maxContextTokens,
+        autoCompactTokens: connection.autoCompactTokens,
+        maxOutputTokens: connection.maxOutputTokens,
+        streamIdleTimeoutMs: connection.streamIdleTimeoutMs,
+        modelCapacities: this.routeCapacities(connection),
+      })),
+    };
+  }
+  /** Commit encrypted settings and the live catalog together; a failed apply restores both owners. */
+  async withRuntime(
+    change: () => Promise<void>,
+    apply: (catalog: ModelCatalogConfiguration) => Promise<void>,
+  ): Promise<void> {
+    const connections = this.connections;
+    const active = this.activeConnectionId;
+    const error = this.error;
+    const original = await readFile(this.file).catch((failure: NodeJS.ErrnoException) => {
+      if (failure.code === 'ENOENT') return null;
+      throw failure;
+    });
+    await change();
+    try {
+      await apply(this.runtimeCatalog);
+    } catch (failure) {
+      this.connections = connections;
+      this.activeConnectionId = active;
+      this.error = error;
+      const rollback = await Promise.allSettled([
+        (async () => {
+          if (original === null) await rm(this.file, { force: true });
+          else {
+            const temporary = `${this.file}.${randomUUID()}.tmp`;
+            try {
+              await writeFile(temporary, original, { mode: 0o600, flag: 'wx' });
+              await rename(temporary, this.file);
+            } finally {
+              await rm(temporary, { force: true }).catch(() => {});
+            }
+          }
+        })(),
+        apply(this.runtimeCatalog),
+      ]);
+      if (rollback.some((result) => result.status === 'rejected'))
+        throw new Error('Could not restore model settings after a failed update');
+      throw failure;
+    }
   }
   private publicConnection(current: PreparedModelSettings): ModelConnectionView {
     let publicUrl = '';

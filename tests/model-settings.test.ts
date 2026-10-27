@@ -16,6 +16,8 @@ import {
   type ModelDraft,
 } from '../apps/desktop/ui/settings/model-settings-model.ts';
 import type { ModelConnectionView, ModelSettingsView } from '../apps/desktop/settings-contract.ts';
+import { connectModelSelection } from '../apps/desktop/ui/settings/model-selection.ts';
+import { modelPicker } from '../apps/desktop/ui/settings/model-picker-state.ts';
 
 function connection(overrides: Partial<ModelConnectionView> = {}): ModelConnectionView {
   return {
@@ -340,6 +342,57 @@ test('a refused switch reports why and leaves the view alone', async () => {
   await controller.selectConnection('b-1');
   assert.equal(controller.store.getSnapshot().switchStatus, 'busy');
   assert.equal(controller.store.getSnapshot().view?.connectionId, 'a-1');
+});
+
+test('a pending model selection has no switching copy and still reports failures', async () => {
+  let settle!: (reply: SettingsReply) => void;
+  const { controller } = scripted((command) =>
+    command.type === 'select'
+      ? new Promise((resolve) => {
+          settle = resolve;
+        })
+      : Promise.resolve({ ok: true, settings: savedView() }),
+  );
+  await controller.refresh();
+  const choosing = controller.selectConnection('b-1');
+  assert.equal(controller.store.getSnapshot().pending, true);
+  assert.equal(controller.store.getSnapshot().switchStatus, null);
+  settle({ ok: false, error: 'connection removed' });
+  await choosing;
+  assert.equal(controller.store.getSnapshot().switchStatus, 'connection removed');
+});
+
+test('the picker refreshes when the connection changes while the chat and model label stay the same', async (t) => {
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const element = new EventTarget();
+  let view = savedView({ model: 'same-model', connectionId: 'a-1' });
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { getElementById: () => element },
+  });
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { yuantu: { settings: async () => ({ ok: true, settings: view }) } },
+  });
+  const controller = connectModelSelection(
+    () => false,
+    () => {},
+  );
+  t.after(() => {
+    controller.dispose();
+    if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor);
+    else Reflect.deleteProperty(globalThis, 'window');
+  });
+  Reflect.apply(controller.updateSession, controller, ['chat', 'same-model', 'a-1']);
+  await Promise.resolve();
+  assert.equal(modelPicker.getSnapshot().view?.connectionId, 'a-1');
+  view = savedView({ model: 'same-model', connectionId: 'b-1' });
+  Reflect.apply(controller.updateSession, controller, ['chat', 'same-model', 'b-1']);
+  await Promise.resolve();
+  assert.equal(modelPicker.getSnapshot().view?.connectionId, 'b-1');
 });
 
 test('discovery fills only the limits the catalogue answered and names the rest', async () => {

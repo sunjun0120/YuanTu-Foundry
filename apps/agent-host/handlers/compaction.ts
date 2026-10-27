@@ -31,6 +31,7 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
   'context.compact': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
+    const model = ctx.models.capture(sessionId, true);
     // A summary rewrites only this session's own context, so only this session has to be idle.
     const claims = [hostClaim('shared'), sessionClaim(sessionId)];
     const busy = 'Host is busy; wait before compacting';
@@ -71,8 +72,8 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
     try {
       return await withLocks(ctx, { claims, busy, operation: { sessionId } }, async (signal) => {
         // The same defaults the kernel uses, from the same owner (see `packages/protocol/settings.ts`).
-        const limits = resolveRunLimits(ctx.options);
-        const config = readConfig();
+        const limits = resolveRunLimits(model.options);
+        const config = readConfig(model.env);
         /**
          * The session's own correction, and the shortening the run would have applied.
          *
@@ -82,14 +83,19 @@ export const compactionHandlers: Readonly<Record<string, Handler>> = {
          * a batch too large to summarise). Both are the run's own seams, built from the same values and the same
          * store, so the compaction a person asks for is priced like the rounds around it.
          */
-        const route = calibrationRoute(modelInfoFor(config));
-        const routeInfo = modelInfoFor(config);
+        const route = calibrationRoute(modelInfoFor(config, model.env));
+        const routeInfo = modelInfoFor(config, model.env);
         const calibration = TokenCalibration.from(
           ctx.store.newestPayload(sessionId, 'context.calibration'),
           route,
         );
         const provider = createProvider(config);
-        const capacityFor = await resolveConnectionCapacities(ctx.options, config, signal);
+        const capacityFor = await resolveConnectionCapacities(
+          model.options,
+          config,
+          signal,
+          model.env,
+        );
         const capacity = capacityFor(config.model);
         await prepareContext({
           store: ctx.store,

@@ -9,6 +9,7 @@ import {
 } from '../client/session-controller.ts';
 import { redactSecrets } from '../platform/redact.ts';
 import { readConfig } from '../providers/config.ts';
+import type { ModelCatalogConfiguration, ModelSelection } from '../protocol/model-configuration.ts';
 import { credentialsPath } from '../providers/credentials.ts';
 import { statSync } from 'node:fs';
 import type { SessionInfo } from '../protocol/index.ts';
@@ -71,6 +72,8 @@ const AUDIT_PAGE = 500;
  *   reconnecting is the carrier's own business.
  */
 export interface CarrierOptions {
+  /** Trusted connection catalog, restored before automatic work is enabled after startup or recovery. */
+  modelCatalog?: ModelCatalogConfiguration;
   /**
    * Whether the snapshot carries the session's process record (`audit`); defaults to `true`.
    *
@@ -120,6 +123,9 @@ export class CarrierService {
   private readonly startupCheck: (() => void) | undefined;
   /** The environment this carrier runs under, used for configuration reads and error redaction. */
   private readonly env: NodeJS.ProcessEnv;
+  private modelCatalog: ModelCatalogConfiguration | undefined;
+  private modelSelection: { sessionId: string; value: ModelSelection } | undefined;
+  private readonly modelSecrets = new Set<string>();
   /**
    * The workspace the Host serves.
    *
@@ -192,7 +198,10 @@ export class CarrierService {
   private statisticsDeltaListeners = new Set<(delta: StatisticsDelta) => void>();
   private unsubscribers: (() => void)[];
   constructor(options: HostClientOptions & CarrierOptions) {
-    const { audit, startupCheck, ...clientOptions } = options;
+    const { audit, startupCheck, modelCatalog, ...clientOptions } = options;
+    this.modelCatalog = modelCatalog ? structuredClone(modelCatalog) : undefined;
+    for (const connection of modelCatalog?.connections ?? [])
+      this.modelSecrets.add(connection.apiKey);
     this.readsAudit = audit !== false;
     this.startupCheck = startupCheck;
     // `workspace` is the spawning shape's own key; the connected shape learns it from `host.info`.
@@ -452,8 +461,19 @@ export class CarrierService {
     // The settings page shows a list, not a history: bound what one request may return. The UI says "newest 500".
     return this.client.request('session.list', { archived: true, limit: 500 });
   }
+  /**
+   * Whether a command that changes what a session holds — delete, archive, undo, a task command — is running.
+   *
+   * `dispatch` refuses every other command while it is (`sessionOperationBusy`). A shell that only mirrors
+   * state reads this to hold a passive follow — the preset tracking the visible session — for the command's
+   * last publish instead of dispatching into that refusal: a publish made mid-command is a progress report,
+   * not a settled session.
+   */
+  get sessionOperation(): boolean {
+    return this.restoring || this.managing;
+  }
   get busy(): boolean {
-    return this.restoring || this.managing || this.controller.running || this.controller.loading;
+    return this.sessionOperation || this.controller.running || this.controller.loading;
   }
   /** The last `configured` answer and what it was computed from; see `isConfigured`. */
   private configuredMemo: { key: string; value: boolean } | null = null;
@@ -498,7 +518,11 @@ export class CarrierService {
    */
   get snapshot(): CarrierSnapshot {
     const env = { ...process.env, ...this.env };
-    const configured = this.isConfigured(env);
+    const selected =
+      this.modelSelection?.sessionId === this.controller.sessionId
+        ? this.modelSelection.value
+        : undefined;
+    const configured = selected?.configured ?? this.isConfigured(env);
     return {
       sessionQuery: this.sessionQuery,
       currentSession: this.currentSession,
@@ -509,9 +533,10 @@ export class CarrierService {
       recovery: this.recovery ? { ...this.recovery } : null,
       resources: this.resources,
       workspace: this.workspace,
-      model: redactSecrets(env.YUANTU_MODEL || '', env),
+      model: selected?.model ?? redactSecrets(env.YUANTU_MODEL || '', env),
+      modelConnectionId: selected?.connectionId,
       configured,
-      supportsVision: env.YUANTU_SUPPORTS_VISION !== 'false',
+      supportsVision: selected?.supportsVision ?? env.YUANTU_SUPPORTS_VISION !== 'false',
       ready: this.ready && this.client.status === 'ready',
       host: this.client.status,
       // Only a carrier that started the Host may name its process: for a connected carrier the pid belongs to
@@ -786,6 +811,7 @@ export class CarrierService {
         this.publish();
         try {
           await this.client.start();
+          await this.restoreModels();
         } catch (error) {
           this.error = this.captureError(error);
           if (attempt < HOST_RECOVERY_ATTEMPTS) await this.recoveryDelay(attempt);
@@ -837,6 +863,7 @@ export class CarrierService {
           else if (this.sessions[0]) await this.controller.load(this.sessions[0].id);
           else await this.controller.create();
           await this.refresh();
+          await this.refreshModelSelection();
           if (this.client.supports('runtime.ready')) await this.client.request('runtime.ready', {});
           this.ready = true;
           this.startupStage = 'ready';
@@ -860,6 +887,42 @@ export class CarrierService {
   private recoveryDelay(attempt: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, HOST_RECOVERY_DELAY_MS * attempt));
   }
+  private async restoreModels(): Promise<void> {
+    if (!this.modelCatalog) return;
+    if (!this.client.supports('model-configuration-v1'))
+      throw new Error('Host does not support live model configuration');
+    await this.client.request('model.configure', this.modelCatalog);
+  }
+  private async refreshModelSelection(): Promise<void> {
+    const sessionId = this.controller.sessionId;
+    if (!sessionId || !this.client.supports('model-configuration-v1')) return;
+    const value = await this.client.request('model.get', { sessionId });
+    if (sessionId === this.controller.sessionId) this.modelSelection = { sessionId, value };
+  }
+  async configureModels(catalog: ModelCatalogConfiguration): Promise<void> {
+    for (const connection of catalog.connections) this.modelSecrets.add(connection.apiKey);
+    if (!this.client.supports('model-configuration-v1'))
+      throw new Error('Host does not support live model configuration');
+    await this.client.request('model.configure', catalog);
+    this.modelCatalog = structuredClone(catalog);
+    await this.refreshModelSelection();
+    this.publish();
+  }
+  async selectModel(connectionId: string): Promise<ModelSelection> {
+    if (this.busy || this.restoring || this.managing) throw new CarrierError('operationBusy');
+    const sessionId = this.controller.sessionId;
+    if (!sessionId) throw new Error('No session selected');
+    const value = await this.client.request('model.select', { sessionId, connectionId });
+    if (sessionId === this.controller.sessionId) this.modelSelection = { sessionId, value };
+    this.publish();
+    return value;
+  }
+  /** The connection choice is public metadata; reading it never reloads the transcript. */
+  get selectedModel(): ModelSelection | undefined {
+    return this.modelSelection?.sessionId === this.controller.sessionId
+      ? this.modelSelection.value
+      : undefined;
+  }
   async start(sessionId?: string): Promise<void> {
     try {
       this.startupStage = 'starting';
@@ -869,6 +932,7 @@ export class CarrierService {
       const info = await this.client.start();
       // The Host realpaths the workspace; its answer is the authority, not the path the carrier passed in.
       this.workspace = info.workspace;
+      await this.restoreModels();
       await this.refresh();
       this.startupStage = 'resources';
       this.publish();
@@ -882,6 +946,7 @@ export class CarrierService {
         await this.refresh();
       }
       await this.refresh();
+      await this.refreshModelSelection();
       if (this.client.supports('runtime.ready')) await this.client.request('runtime.ready', {});
       this.ready = true;
       this.startupStage = 'ready';
@@ -895,9 +960,13 @@ export class CarrierService {
     }
   }
   safeError(error: unknown): string {
+    const secrets = Object.fromEntries(
+      [...this.modelSecrets].map((value, index) => [`MODEL_${index}_API_KEY`, value]),
+    );
     return redactSecrets(error instanceof Error ? error.message : 'Carrier operation failed', {
       ...process.env,
       ...this.env,
+      ...secrets,
     });
   }
   private captureError(error: unknown): string | CarrierError {
@@ -1202,6 +1271,8 @@ export class CarrierService {
           throw new CarrierError('shellCommand');
       }
       await this.refresh(refreshScopeFor(command.type));
+      if (this.modelSelection?.sessionId !== this.controller.sessionId)
+        await this.refreshModelSelection();
       return this.snapshot;
     } catch (error) {
       this.error = this.captureError(error);

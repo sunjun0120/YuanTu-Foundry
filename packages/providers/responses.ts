@@ -112,6 +112,7 @@ export class ResponsesProvider implements Provider {
         const state = message.providerState;
         if (
           state?.protocol === 'openai-responses' &&
+          state.connectionId === this.config.connectionId &&
           state.model === effectiveModel &&
           state.endpoint === this.endpoint
         ) {
@@ -332,6 +333,7 @@ export class ResponsesProvider implements Provider {
       finishReason: toolCalls.length ? 'tool_calls' : 'stop',
       usage,
       providerState: {
+        ...(this.config.connectionId ? { connectionId: this.config.connectionId } : {}),
         protocol: 'openai-responses',
         model: effectiveModel,
         endpoint: this.endpoint,

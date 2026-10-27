@@ -18,6 +18,17 @@ import type { Handler } from '../dispatch.ts';
  * session inherits, and the policy every tool call is judged by.
  */
 export const systemHandlers: Readonly<Record<string, Handler>> = {
+  'model.configure': async (ctx, params) => ctx.models.configure(params),
+  'model.get': async (ctx, params) => {
+    const sessionId = required(params, 'sessionId');
+    ownedSession(ctx.store, ctx.workspace, sessionId);
+    return ctx.models.selection(sessionId);
+  },
+  'model.select': async (ctx, params) => {
+    const sessionId = required(params, 'sessionId');
+    ownedSession(ctx.store, ctx.workspace, sessionId);
+    return ctx.models.select(sessionId, required(params, 'connectionId'));
+  },
   'sandbox.refresh': async (ctx, params) => {
     if (Object.keys(params).length) throw new Error('Invalid sandbox refresh parameters');
     if (ctx.active.size) throw new Error('Wait for active runs before refreshing sandbox accounts');
@@ -30,6 +41,7 @@ export const systemHandlers: Readonly<Record<string, Handler>> = {
     workspace: ctx.workspace,
     capabilities: [
       'runtime.ready',
+      'model-configuration-v1',
       'sessions',
       'session-management',
       'session-recover-v1',

@@ -46,15 +46,18 @@ import { parseSetting } from '../../packages/protocol/settings.ts';
  * one recorded under a second name for the same endpoint is a correction that never accumulates. The Host's manual
  * compaction is the other caller — it prices a summary request for the same route the rounds around it use.
  */
-export function modelInfoFor(config: ProviderConfig): {
+export function modelInfoFor(
+  config: ProviderConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): {
   model: string;
   protocol: string;
   connectionId?: string;
 } {
   return {
-    model: redactSecrets(config.model),
+    model: redactSecrets(config.model, env),
     protocol: config.protocol ?? 'anthropic',
-    connectionId: parseSetting(process.env, 'YUANTU_CONNECTION_ID') as string | undefined,
+    connectionId: parseSetting(env, 'YUANTU_CONNECTION_ID') as string | undefined,
   };
 }
 
@@ -152,13 +155,12 @@ export function capacityResolver(
   options: Options,
   config: ProviderConfig,
   automatic: ReadonlyMap<string, RouteCapacity> = new Map(),
+  env: NodeJS.ProcessEnv = process.env,
 ): (model: string) => RouteCapacity {
   const base = config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl };
   const declared = declaredRoute(options, config);
-  const routes = declaredRoutes(
-    parseSetting(process.env, 'YUANTU_MODEL_CAPACITIES') as string | undefined,
-  );
-  const configuredLabel = modelInfoFor(config).model;
+  const routes = declaredRoutes(parseSetting(env, 'YUANTU_MODEL_CAPACITIES') as string | undefined);
+  const configuredLabel = modelInfoFor(config, env).model;
   return (model) => {
     // The kernel holds a redacted display label; capacity lookup needs the configured route ID.
     if (model === configuredLabel) model = config.model;
@@ -189,21 +191,20 @@ export async function resolveConnectionCapacities(
   options: Options,
   config: ProviderConfig,
   signal?: AbortSignal,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<(model: string) => RouteCapacity> {
   signal?.throwIfAborted();
   const known = resolveRouteCapacity({
     model: config.model,
     baseUrl: config.baseUrl,
     declared: declaredRoute(options, config),
-    routes: declaredRoutes(
-      parseSetting(process.env, 'YUANTU_MODEL_CAPACITIES') as string | undefined,
-    ),
+    routes: declaredRoutes(parseSetting(env, 'YUANTU_MODEL_CAPACITIES') as string | undefined),
   });
   const automatic = known
     ? new Map<string, RouteCapacity>()
     : await discoverAutomaticCapacities(config, { signal });
   signal?.throwIfAborted();
-  return capacityResolver(options, config, automatic);
+  return capacityResolver(options, config, automatic, env);
 }
 /**
  * The models a sub-agent may be asked to run on, as this process can honestly promise them.
@@ -213,8 +214,11 @@ export async function resolveConnectionCapacities(
  * the configured model again does not read as two choices, and the whole list is bounded because it is
  * rendered into a tool result the model reads.
  */
-export function subagentModels(active: string): { model: string; note?: string }[] {
-  const declared = String(parseSetting(process.env, 'YUANTU_SUBAGENT_MODELS') ?? '')
+export function subagentModels(
+  active: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { model: string; note?: string }[] {
+  const declared = String(parseSetting(env, 'YUANTU_SUBAGENT_MODELS') ?? '')
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -311,8 +315,9 @@ export async function createAgent(
   terminals?: TerminalSessions,
   executionPolicy?: () => ExecutionPolicy,
   signal?: AbortSignal,
+  modelEnvironment: NodeJS.ProcessEnv = process.env,
 ): Promise<Agent> {
-  const config = readConfig();
+  const config = readConfig(modelEnvironment);
   /**
    * The process's rate gate for this endpoint, shared by this run, every child it delegates to and every other
    * session's run against the same endpoint and key, so a 429 slows the whole burst down rather than each run
@@ -320,7 +325,7 @@ export async function createAgent(
    */
   const gate = endpointGate(config);
   const provider = gatedProvider(createProvider(config), gate);
-  const capacityFor = await resolveConnectionCapacities(options, config, signal);
+  const capacityFor = await resolveConnectionCapacities(options, config, signal, modelEnvironment);
   const capacity = capacityFor(config.model);
   const policyForCall =
     executionPolicy ??
@@ -343,11 +348,11 @@ export async function createAgent(
     store,
     executionEnvironment: () => withExecutionPolicy(policyForCall(), () => executionEnvironment()),
     executionPolicy: policyForCall,
-    modelInfo: modelInfoFor(config),
+    modelInfo: modelInfoFor(config, modelEnvironment),
     supportsVision: config.supportsVision ?? true,
     tools: createTools(workspace, background, scope, hooks, undefined, terminals),
     provider,
-    ...summaryProviderFor(config),
+    ...summaryProviderFor(config, modelEnvironment),
     /**
      * Per-child model selection, wired to the same configuration the run itself uses.
      *
@@ -368,7 +373,7 @@ export async function createAgent(
      * set an operator has declared — the configured model plus `YUANTU_SUBAGENT_MODELS`. Listing anything
      * else would promise that the endpoint serves it, which is exactly what this runtime cannot know.
      */
-    subagentModels: () => subagentModels(config.model),
+    subagentModels: () => subagentModels(config.model, modelEnvironment),
     approve,
     // Absent for an embedder that cannot reach a human: the tool then reports the missing answer rather than
     // failing the call, which is why a run without a questioner still starts.

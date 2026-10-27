@@ -15,7 +15,11 @@ import { navigation, showPage } from '../navigation.ts';
 export function connectModelSelection(
   isBusy: () => boolean,
   onBusy: (busy: boolean) => void,
-): { updateBusy(): void; dispose(): void } {
+): {
+  updateBusy(): void;
+  updateSession(sessionId: string | null, model: string, connectionId?: string): void;
+  dispose(): void;
+} {
   const lifecycle = new AbortController();
   let disposed = false;
   let requestEpoch = 0;
@@ -24,6 +28,8 @@ export function connectModelSelection(
   let view: ModelSettingsView | null = null;
   let pending = false;
   let conversationScroll = 0;
+  let sessionKey = '';
+  let refreshAfterSelection = false;
 
   function updateBusy(): void {
     if (disposed) return;
@@ -94,7 +100,7 @@ export function connectModelSelection(
     if (pending || isBusy() || !id || id === view?.connectionId) {
       return;
     }
-    modelPicker.set({ ...modelPicker.getSnapshot(), status: { key: 'settings.selectHint' } });
+    modelPicker.set({ ...modelPicker.getSnapshot(), status: null });
     busy(true);
     const epoch = ++requestEpoch;
     void window.yuantu
@@ -116,13 +122,26 @@ export function connectModelSelection(
           status: { key: 'settings.connectionError' },
         });
       })
-      .finally(() => busy(false));
+      .finally(() => {
+        busy(false);
+        if (refreshAfterSelection) {
+          refreshAfterSelection = false;
+          void refreshPicker();
+        }
+      });
   };
   modelPicker.set({ ...modelPicker.getSnapshot(), choose });
 
   void refreshPicker();
   return {
     updateBusy,
+    updateSession(sessionId, model, connectionId) {
+      const key = JSON.stringify([sessionId, model, connectionId]);
+      if (key === sessionKey) return;
+      sessionKey = key;
+      if (pending) refreshAfterSelection = true;
+      else void refreshPicker();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

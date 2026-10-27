@@ -2,6 +2,8 @@ import { parseSetting, promptCacheMode } from '../protocol/settings.ts';
 import type { PromptCacheMode } from '../protocol/cache-modes.ts';
 import { credentialsPath, readCredentials } from './credentials.ts';
 export interface ProviderConfig {
+  /** Public route identity, independent of the secret credential. */
+  connectionId?: string;
   /** Auto detects known DeepSeek models on the official endpoint; gateways require explicit opt-in. */
   deepseekCompatibility?: 'auto' | 'on' | 'off';
   /** Operator-declared image input support; absence preserves the legacy default. */
@@ -118,6 +120,9 @@ export function readConfig(
     'YUANTU_DEEPSEEK_COMPAT',
   ) as ProviderConfig['deepseekCompatibility'];
   return {
+    ...(env.YUANTU_CONNECTION_ID
+      ? { connectionId: parseSetting(env, 'YUANTU_CONNECTION_ID') as string }
+      : {}),
     ...(deepseekCompatibility === undefined ? {} : { deepseekCompatibility }),
     ...(supportsVision === undefined ? {} : { supportsVision }),
     ...(streamIdleTimeoutMs === undefined ? {} : { streamIdleTimeoutMs }),

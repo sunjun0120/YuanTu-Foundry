@@ -41,6 +41,43 @@ const cipher = {
     return Buffer.concat([c.update(bytes.subarray(28)), c.final()]).toString('utf8');
   },
 };
+
+test('a refused live catalog update restores encrypted settings and the previous default', async (t) => {
+  const root = await tempRoot(t, 'yuantu-model-rollback-');
+  const file = path.join(root, 'settings.json');
+  const settings = new ModelSettingsStore(file, cipher, {});
+  await settings.save({
+    model: 'original',
+    protocol: 'anthropic',
+    baseUrl: 'https://example.test',
+    apiKey: 'original-secret',
+  });
+  const original = await readFile(file, 'utf8');
+  const applied: string[] = [];
+  await assert.rejects(
+    settings.withRuntime(
+      () =>
+        settings.save({
+          model: 'replacement',
+          protocol: 'anthropic',
+          baseUrl: 'https://example.test',
+          apiKey: 'replacement-secret',
+        }),
+      async (catalog) => {
+        const model = catalog.connections[0]!.model;
+        applied.push(model);
+        if (model === 'replacement') throw new Error('Host rejected the update');
+      },
+    ),
+    /Host rejected/,
+  );
+  assert.deepEqual(applied, ['replacement', 'original']);
+  assert.equal(settings.view.model, 'original');
+  assert.equal(await readFile(file, 'utf8'), original);
+  const restored = new ModelSettingsStore(file, cipher, {});
+  await restored.load();
+  assert.equal(restored.environment().YUANTU_API_KEY, 'original-secret');
+});
 test('legacy settings migrate to a named vision-capable catalog while preserving encrypted credentials', async (t) => {
   const root = await tempRoot(t, 'yuantu-catalog-');
   const file = path.join(root, 'settings.json');

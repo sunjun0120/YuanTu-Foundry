@@ -26,6 +26,7 @@ import type { InputMode } from '../protocol/inputs.ts';
  *    model-visible one never can.
  */
 export const SESSION_EVENT_TYPES = [
+  'model.selected',
   'message.user',
   'message.assistant',
   'message.tool',

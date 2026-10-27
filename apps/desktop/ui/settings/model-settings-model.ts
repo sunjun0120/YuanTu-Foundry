@@ -509,7 +509,7 @@ export function createModelSettingsController(deps: {
       )
         return;
       setPending(true);
-      update({ switchStatus: t('settings.selectHint'), error: null });
+      update({ switchStatus: null, error: null });
       try {
         const reply = await deps.bridge.settings({ type: 'select', connectionId });
         if (disposed) return;

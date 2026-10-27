@@ -56,6 +56,8 @@ export interface UserInput {
   images?: ImageAttachment[];
 }
 export interface ProviderState {
+  /** Saved connections with different credentials must not share native continuation state. */
+  connectionId?: string;
   protocol: 'openai-responses' | 'openai' | 'anthropic';
   model: string;
   endpoint: string;

@@ -186,11 +186,7 @@ export function ModelSettings({ controller }: { controller: ModelSettingsControl
     >
       <Stack gap="md">
         <div className="settings-page-header">
-          <div className="eyebrow">
-            {t('ui.settingsPage')} / {t('ui.models')}
-          </div>
           <h2 id="settings-title">{t('ui.models')}</h2>
-          <p>{t('settings.description')}</p>
         </div>
 
         <div className="model-group-bar">
@@ -297,12 +293,14 @@ export function ModelSettings({ controller }: { controller: ModelSettingsControl
           {t('settings.addModel')}
         </Button>
 
-        <div id="settings-source" className="settings-source">
-          {sourceLabel}
+        <div className="settings-model-notes">
+          <div id="settings-source" className="settings-source">
+            {sourceLabel}
+          </div>
+          <p id="settings-test-note" className="settings-test-note">
+            {t('settings.testNote')}
+          </p>
         </div>
-        <p id="settings-test-note" className="settings-test-note">
-          {t('settings.testNote')}
-        </p>
         <p
           id="settings-feedback"
           className="settings-feedback"

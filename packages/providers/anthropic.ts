@@ -123,7 +123,12 @@ export class AnthropicProvider implements Provider {
     const cache = cacheFields(this.config, request.cacheKey, 'anthropic');
     const model = request.model ?? this.config.model;
     const capabilities = deepseekCapabilities(this.config, this.endpoint, model);
-    const route = { protocol: 'anthropic' as const, model, endpoint: this.endpoint };
+    const route = {
+      protocol: 'anthropic' as const,
+      model,
+      endpoint: this.endpoint,
+      ...(this.config.connectionId ? { connectionId: this.config.connectionId } : {}),
+    };
     const prompt = projectNativeSystem(request, route, capabilities.systemUpdates);
     /**
      * Anthropic's extended thinking, sized by our own documented rule (see `effort.ts`).

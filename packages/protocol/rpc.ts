@@ -7,6 +7,7 @@ import type {
   UserInput,
 } from './index.ts';
 import type { PermissionPolicySource } from './permissions.ts';
+import type { ModelCatalogConfiguration, ModelSelection } from './model-configuration.ts';
 import type { InputMode, QueuedInput } from './inputs.ts';
 import type { SkillInfo } from './skills.ts';
 import type { ExecutionMode as SandboxMode, FileEffect, NetworkEffect } from './execution.ts';
@@ -345,6 +346,9 @@ export interface HostMethods {
   'run.queue.clear': { params: { sessionId: string }; result: { cleared: true } };
   'host.info': { params: { protocolVersions?: number[]; authToken?: string }; result: HostInfo };
   'runtime.ready': { params: Record<string, never>; result: { ready: true } };
+  'model.configure': { params: ModelCatalogConfiguration; result: { revision: number } };
+  'model.select': { params: { sessionId: string; connectionId: string }; result: ModelSelection };
+  'model.get': { params: { sessionId: string }; result: ModelSelection };
   'permission.update': {
     params: { policy: PermissionPolicySource; sessionId?: string };
     result: { applied: true; resolvedApprovals: number };

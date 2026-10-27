@@ -3,6 +3,7 @@ import type { Message, ModelRequest, ProviderState, ToolCall } from '../protocol
 import type { ProviderConfig } from './config.ts';
 
 export interface NativeRoute {
+  connectionId?: string;
   protocol: 'openai' | 'anthropic';
   model: string;
   endpoint: string;
@@ -40,6 +41,7 @@ export function nativeState(message: Message, route: NativeRoute): ProviderState
   const state = message.providerState;
   if (
     state?.protocol === route.protocol &&
+    state.connectionId === route.connectionId &&
     state.model === route.model &&
     state.endpoint === route.endpoint &&
     state.messageHash === assistantHash(message)

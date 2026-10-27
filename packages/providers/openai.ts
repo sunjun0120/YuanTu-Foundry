@@ -86,7 +86,12 @@ export class OpenAIProvider implements Provider {
       this.config.deepseekCompatibility !== 'off' &&
       (this.config.deepseekCompatibility === 'on' || /^deepseek(?:[-_]|$)/i.test(model));
     const contentBuffer = dsmlEnabled ? new DsmlContentBuffer() : undefined;
-    const route = { protocol: 'openai' as const, model, endpoint: this.endpoint };
+    const route = {
+      protocol: 'openai' as const,
+      model,
+      endpoint: this.endpoint,
+      ...(this.config.connectionId ? { connectionId: this.config.connectionId } : {}),
+    };
     const prompt = projectNativeSystem(request, route, capabilities.systemUpdates);
     const toolImages: Record<string, unknown>[] = [];
     const messages: Record<string, unknown>[] = [
