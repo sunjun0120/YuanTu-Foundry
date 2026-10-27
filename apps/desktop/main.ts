@@ -48,6 +48,7 @@ import { parseBrowserCommand, type BrowserReply } from './browser-contract.ts';
 import { ProjectWorkspacesStore } from './project-workspaces-store.ts';
 import {
   parseProjectWorkspaceCommand,
+  type ProjectRuntimeView,
   type ProjectWorkspaceReply,
 } from './project-workspaces-contract.ts';
 import { ProjectWorkspaces, resolveStartupWorkspace, samePath } from './main-project-workspaces.ts';
@@ -97,6 +98,27 @@ let window: BrowserWindow | null = null;
 let browserViews: BrowserViews | null = null;
 let projectWorkspaces: ProjectWorkspaces | null = null;
 let workspaceHosts: WorkspaceHostManager<CarrierService> | null = null;
+/** Background workspace state for the left sidebar: running and waiting counts, not a second renderer snapshot. */
+const workspaceRuntime = new Map<string, ProjectRuntimeView>();
+const workspaceWatchers = new Map<string, () => void>();
+function watchHost(workspaceId: string, host: CarrierService): void {
+  workspaceWatchers.get(workspaceId)?.();
+  workspaceWatchers.set(
+    workspaceId,
+    host.subscribe((state) => {
+      const other = state.session.otherRuns ?? [];
+      workspaceRuntime.set(workspaceId, {
+        ready: state.ready,
+        running: state.session.running || other.length > 0,
+        waiting:
+          state.session.approvals.length +
+          state.session.questions.length +
+          other.reduce((count, run) => count + run.approvals.length + run.questions.length, 0),
+      });
+      runNotifier.update(state);
+    }),
+  );
+}
 /** The last workspace/session pair written to the registry; a snapshot burst must not rewrite the file. */
 let recordedLastSession = '';
 async function noteLastSession(state: CarrierSnapshot): Promise<void> {
@@ -592,9 +614,14 @@ void app
       browserViews?.destroyAll();
       browserViews = null;
     });
-    workspaceHosts = new WorkspaceHostManager((_id, hostPath) => createService(hostPath));
+    workspaceHosts = new WorkspaceHostManager((id, hostPath) => {
+      const host = createService(hostPath);
+      watchHost(id, host);
+      return host;
+    });
     const initial = attach(createService(workspace));
     workspaceHosts.adopt(started.registry.activeWorkspaceId ?? 'default', workspace, initial);
+    watchHost(started.registry.activeWorkspaceId ?? 'default', initial);
     /**
      * Switch the visible Host to another workspace's.
      *
@@ -643,7 +670,11 @@ void app
           }
           switch (command.type) {
             case 'list':
-              return { ok: true, registry: await projectWorkspaces.list() };
+              return {
+                ok: true,
+                registry: await projectWorkspaces.list(),
+                runtime: Object.fromEntries(workspaceRuntime),
+              };
             case 'select': {
               const registry = await projectWorkspaces.list();
               const entry = registry.workspaces.find(

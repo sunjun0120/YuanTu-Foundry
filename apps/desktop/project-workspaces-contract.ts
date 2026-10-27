@@ -43,8 +43,20 @@ export type ProjectWorkspaceCommand =
   | { type: 'collapse'; id: string; collapsed: boolean }
   | { type: 'lastSession'; id: string; sessionId: string | null };
 
+export interface ProjectRuntimeView {
+  ready: boolean;
+  running: boolean;
+  waiting: number;
+}
+
 export type ProjectWorkspaceReply =
-  { ok: true; registry: ProjectWorkspacesFile; cancelled?: boolean } | { ok: false; error: string };
+  | {
+      ok: true;
+      registry: ProjectWorkspacesFile;
+      runtime?: Record<string, ProjectRuntimeView>;
+      cancelled?: boolean;
+    }
+  | { ok: false; error: string };
 
 export function parseProjectWorkspaceCommand(input: unknown): ProjectWorkspaceCommand {
   if (!record(input) || typeof input.type !== 'string') throw new Error('Invalid project command');

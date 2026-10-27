@@ -346,6 +346,8 @@ export const workspaceMessages: Record<string, [string, string]> = {
     'Remove from the list? Files on disk stay.',
   ],
   'projects.unavailable': ['不可用', 'Unavailable'],
+  'projects.running': ['运行中', 'Running'],
+  'projects.waiting': ['等待处理 {count} 项', 'Waiting on {count}'],
   'workspace.treeLabel': ['工作区文件树', 'Workspace file tree'],
   'workspace.open': ['文件', 'Files'],
   'workspace.openTitle': ['显示工作区文件', 'Show workspace files'],

@@ -812,6 +812,25 @@ summary:focus-visible {
   font-weight: 600;
 }
 
+.project-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+}
+
+.project-badge.running {
+  color: var(--accent);
+}
+
+.project-badge.waiting {
+  color: var(--goal-active);
+}
+
 .project-actions {
   display: flex;
   gap: 1px;

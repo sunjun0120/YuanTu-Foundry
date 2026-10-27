@@ -4,6 +4,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import type {
+  ProjectRuntimeView,
   ProjectWorkspacesFile,
   ProjectWorkspaceReply,
 } from '../../project-workspaces-contract.ts';
@@ -11,6 +12,7 @@ import { t } from '../../i18n.ts';
 
 export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode {
   const [registry, setRegistry] = useState<ProjectWorkspacesFile | null>(null);
+  const [runtime, setRuntime] = useState<Record<string, ProjectRuntimeView>>({});
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -23,8 +25,10 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     void bridge({ type: 'list' })
       .then((reply) => {
         if (!live) return;
-        if (reply.ok) setRegistry(reply.registry);
-        else setError(reply.error);
+        if (reply.ok) {
+          setRegistry(reply.registry);
+          if (reply.runtime) setRuntime(reply.runtime);
+        } else setError(reply.error);
       })
       .catch((failure: unknown) => {
         if (live) setError(failure instanceof Error ? failure.message : String(failure));
@@ -38,8 +42,16 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     const bridge = window.yuantu?.projects;
     if (!bridge) return;
     const reply = await bridge({ type: 'list' });
-    if (reply.ok) setRegistry(reply.registry);
+    if (reply.ok) {
+      setRegistry(reply.registry);
+      if (reply.runtime) setRuntime(reply.runtime);
+    }
   };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void reload(), 4000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const apply = (reply: ProjectWorkspaceReply): boolean => {
     if (!reply.ok) {
@@ -48,6 +60,7 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     }
     setError('');
     setRegistry(reply.registry);
+    if (reply.runtime) setRuntime(reply.runtime);
     return true;
   };
 
@@ -94,6 +107,7 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
         <ul className="project-list">
           {visible.map((workspace) => {
             const active = registry?.activeWorkspaceId === workspace.id;
+            const status = runtime[workspace.id];
             return (
               <li
                 key={workspace.id}
@@ -109,6 +123,23 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
                   onClick={() => void select(workspace.id)}
                 >
                   <span>{workspace.displayName}</span>
+                  {status?.waiting ? (
+                    <span
+                      className="project-badge waiting"
+                      title={t('projects.waiting', { count: status.waiting })}
+                      aria-label={t('projects.waiting', { count: status.waiting })}
+                    >
+                      !
+                    </span>
+                  ) : status?.running ? (
+                    <span
+                      className="project-badge running"
+                      title={t('projects.running')}
+                      aria-label={t('projects.running')}
+                    >
+                      ●
+                    </span>
+                  ) : null}
                 </button>
                 {editing === workspace.id ? (
                   <form
