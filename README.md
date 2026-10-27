@@ -360,13 +360,13 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 桌面运行中也可以切换权限预设，新的选择立即作用于尚未执行的工具。等待授权的调用按新权限允许或拒绝，开始执行前再次核对执行环境；下一轮模型请求同步更新工具列表与环境说明。已经启动的命令、后台进程、终端和语言服务器保留创建时的执行环境。
 
-`YUANTU_SANDBOX` 接受 `native`、`windows-account`、`seatbelt`、`host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。应用命令及 hook 启动配置中的旧 `windows` 会迁到 `native`，隔离预设不再保留旧后端；底层受限令牌 provider 仅用于显式兼容性检查。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
+`YUANTU_SANDBOX` 接受 `native`、`windows-account`、`seatbelt`、`host`；旧 `windows` 只作为迁移来源识别，执行时提示改用 `native` 或显式 `host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。应用命令及 hook 启动配置中的旧 `windows` 会迁到 `native`，隔离预设不再保留旧后端。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
-文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 基础后端（`windows`）使用 Low 完整性受限令牌和临时工作区授权，仍是**部分写入限制**：读取与网络不受限，也存在宿主预先授权给 Low/Everyone 的路径，因此拒绝严格进程只读及断网请求。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，WFP 断网，子进程可正常 fork）；`native` 在 Windows 上始终选择它，未初始化或标记版本不对时拒绝执行并提示去设置页初始化/修复，**不会自动回退**到 `windows`。基础验收入口为 `npm.cmd run check:windows-sandbox`，两个后端的边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
+文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 的旧受限令牌后端（`windows`）与弱沙箱入口已移除：它只提供部分写入边界，读取与网络不受限，因此不再作为可选执行后端；历史 ACL 日志仍可用 `sandbox-recover` 恢复。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，WFP 断网，子进程可正常 fork）；`native` 在 Windows 上始终选择它，未初始化或标记版本不对时拒绝执行并提示去设置页初始化/修复，**不会自动回退**到已移除的旧后端。基础验收入口为 `npm.cmd run check:windows-sandbox`，隔离边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
-Windows 上模型写的命令文本统一由 PowerShell 执行（host、`windows-account` 与旧基础沙箱一致，`terminal_open` 的默认 shell 相同），选择顺序参照 Codex：PATH 中的 `pwsh`、`C:\Program Files\PowerShell\7\pwsh.exe`、PATH 中的 `powershell`、System32 下的 Windows PowerShell 5.1，都不存在时才回退 `cmd.exe`；商店版（`WindowsApps`）PowerShell 被跳过，因为沙箱账户无法打开它。调用形式为 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`（执行策略只作用于该进程，否则 `npm` 会解析到被默认策略拒绝的 `npm.ps1`），脚本前置 UTF-8 输出与关闭进度条，脚本末尾保留最后一条原生命令的退出码；以引号开头的命令自动加调用运算符 `&`。终止 PowerShell 时，若它正好在启动子程序，`taskkill /T` 可能漏掉这个子程序（负载下约一半），因此在 shell 退出后再按父进程号补扫一次（`killOrphans`）。需要 PATHEXT 解析的「程序 + 参数」请求（`.cmd` 垫片，如 `npm`）与 `run_validation` 仍经 `cmd.exe /d /s /c`。PowerShell 每次启动比 cmd 多约 0.4 秒（8 路并发时约 0.7 秒），因此测试隔离环境（`scripts/test-isolation/environment.mjs`）默认设 `YUANTU_TEST_WINDOWS_SHELL=cmd`，PowerShell 路径由 `tests/windows-shell.test.ts` 专门覆盖。Windows PowerShell 5.1 会吞掉传给原生程序的参数里内嵌的双引号（7.3+ 由前缀里的 `$PSNativeCommandArgumentPassing` 修正），执行环境说明会提示模型改写为 `\"`。实现见 `packages/tools/windows-shell.ts`。
+Windows 上模型写的命令文本统一由 PowerShell 执行（host 与 `windows-account` 一致，`terminal_open` 的默认 shell 相同），选择顺序参照 Codex：PATH 中的 `pwsh`、`C:\Program Files\PowerShell\7\pwsh.exe`、PATH 中的 `powershell`、System32 下的 Windows PowerShell 5.1，都不存在时才回退 `cmd.exe`；商店版（`WindowsApps`）PowerShell 被跳过，因为沙箱账户无法打开它。调用形式为 `-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`（执行策略只作用于该进程，否则 `npm` 会解析到被默认策略拒绝的 `npm.ps1`），脚本前置 UTF-8 输出与关闭进度条，脚本末尾保留最后一条原生命令的退出码；以引号开头的命令自动加调用运算符 `&`。终止 PowerShell 时，若它正好在启动子程序，`taskkill /T` 可能漏掉这个子程序（负载下约一半），因此在 shell 退出后再按父进程号补扫一次（`killOrphans`）。需要 PATHEXT 解析的「程序 + 参数」请求（`.cmd` 垫片，如 `npm`）与 `run_validation` 仍经 `cmd.exe /d /s /c`。PowerShell 每次启动比 cmd 多约 0.4 秒（8 路并发时约 0.7 秒），因此测试隔离环境（`scripts/test-isolation/environment.mjs`）默认设 `YUANTU_TEST_WINDOWS_SHELL=cmd`，PowerShell 路径由 `tests/windows-shell.test.ts` 专门覆盖。Windows PowerShell 5.1 会吞掉传给原生程序的参数里内嵌的双引号（7.3+ 由前缀里的 `$PSNativeCommandArgumentPassing` 修正），执行环境说明会提示模型改写为 `\"`。实现见 `packages/tools/windows-shell.ts`。
 
 Windows 账户主流程通过 `npm.cmd run check:windows-sandbox`、桌面闭环通过 `npm.cmd run check:windows-desktop-sandbox` 验证。两者只在已初始化账户的 GitHub 托管 Windows runner 上运行，要求 `FOUNDRY_TEST_WINDOWS_ACCOUNT_JOURNEYS=1`，由 workflow 负责初始化及始终清理；本机不执行账户维护。旧后端专属验收通过 `npm.cmd run check:windows-legacy-sandbox` 单独运行，不属于默认主流程。
 
@@ -392,7 +392,7 @@ Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩�
 
 ## 会话、事件与投影
 
-默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL、`synchronous=NORMAL`（断电最多丢失最后几次提交，不会损坏文件）与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置与模型设置（MCP 服务管理随范围开关暂停，页面与 IPC 一并关闭），不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复、中断恢复与就地压缩通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover`、`db-compact` 维护命令提供，备份最多保留 5 份、合计 512 MiB。删除记录不会让 SQLite 文件变小——空闲页留在文件里等待复用，文件保持历史峰值——`db-compact` 用一次 `VACUUM` 把这些页还给文件系统，并报告压缩前后的字节数；它同样要求先关闭使用该库的桌面、Host 与 CLI，数据库路径与身份不变。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
+默认会话数据库是 `<workspace>/.yuantu/sessions.sqlite`，桌面、CLI 与 Host 共用。SQLite 打开时设置 `busy_timeout`、WAL、`synchronous=NORMAL`（断电最多丢失最后几次提交，不会损坏文件）与 `foreign_keys=ON`；**比当前代码更新的库会被拒绝打开**并给出明确错误，不自动降级。旧库迁移前自动创建包含已提交 WAL 的一致性备份，备份失败则拒绝迁移；新空库和当前 schema 的正常打开不备份。桌面设置只提供通用设置与模型设置（MCP 自定义配置页面及管理 IPC 已移除；MCP 运行时与凭据存储保留，待后端提供连接信息后接入内置远程服务），不提供备份页面或每日备份调度；旧的每日备份配置不再生效。手动备份、校验、恢复、中断恢复与就地压缩通过 CLI 的 `db-backup`、`db-verify`、`db-restore`、`db-recover`、`db-compact` 维护命令提供，备份最多保留 5 份、合计 512 MiB。删除记录不会让 SQLite 文件变小——空闲页留在文件里等待复用，文件保持历史峰值——`db-compact` 用一次 `VACUUM` 把这些页还给文件系统，并报告压缩前后的字节数；它同样要求先关闭使用该库的桌面、Host 与 CLI，数据库路径与身份不变。包含数据库内的记录和图片，工作区文件、外部附件及应用设置需另行备份。恢复前保留当前数据库副本，并须先关闭使用同一数据库的桌面、Host 与 CLI。维护命令可通过 CLI 帮助查看；恢复后应检查会话与任务状态。
 
 桌面会话默认加载最近 100 条展示消息，可按“加载更早记录”每次向前加载 100 条；重用未变化的消息节点，保留阅读位置和操作组展开状态。此分页仅限制展示传输与渲染，模型仍读取完整会话记录。模型设置中的容量、自动压缩阈值和流空闲超时支持编辑；部分保存省略字段时保留旧值，显式清空恢复默认行为。
 
@@ -552,6 +552,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 域         | 方法                                                                                                                                                                                                       |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 控制面     | `host.info`、`runtime.ready`、`sandbox.set`、`sandbox.refresh`、`permission.update`、`invariants.list`、`host.health`                                                                                      |
+| 模型       | `model.configure`、`model.select`、`model.get`                                                                                                                                                             |
 | 会话       | `session.create`、`session.list`、`session.rename`、`session.archive`、`session.delete`、`session.recover`、`session.get`、`session.audit`、`session.events`                                               |
 | 运行       | `run.start`、`run.cancel`、`run.enqueue`、`run.queue.get`、`run.queue.clear`、`context.compact`                                                                                                            |
 | 审批与提问 | `approval.respond`、`question.respond`                                                                                                                                                                     |
@@ -644,8 +645,8 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | `YUANTU_MAX_RUN_TOKENS` | `0–1000000000` | 单次运行累计消耗的模型 token 上限（输入 + 输出，0 = 不限；默认 2000 万） |
 | `YUANTU_TOOL_TIMEOUT_MS` | `0–3600000` | 单次工具调用的墙钟上限（毫秒，0 = 不设上限） |
 | `YUANTU_WORKSPACE` | `string` | 工作区目录 |
-| `YUANTU_SANDBOX` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值） |
-| `YUANTU_SANDBOX_HOOK` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 钩子用的沙箱后端（默认继承当前调用的执行策略） |
+| `YUANTU_SANDBOX` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值；`windows` 为已移除的旧值，仅用于迁移识别） |
+| `YUANTU_SANDBOX_HOOK` | `host` / `native` / `windows` / `windows-account` / `seatbelt` | 钩子用的沙箱后端（默认继承当前调用的执行策略；`windows` 为已移除的旧值，仅用于迁移识别） |
 | `YUANTU_SANDBOX_FILES` | `read-only` / `workspace-write` | 工作区文件权限 |
 | `YUANTU_SANDBOX_NETWORK` | `denied` / `unrestricted` | 命令网络权限；不支持所需隔离时拒绝执行 |
 | `YUANTU_SANDBOX_SPEC` | `string` | （内部）沙箱启动器的单次命令载荷 |
@@ -697,6 +698,8 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 ### 模型设置页
 
+聊天输入区的模型选择只修改当前会话，不修改新会话的全局默认。桌面通过 `model.configure` 更新常驻 Host 的连接目录，通过 `model.select` 保存会话选择，`model.get` 返回不含密钥的当前选择；切换不重启 Host，也不重载聊天历史。任务在开始时固定连接与容量配置，执行期间的重试、续轮和子代理继续使用该快照。会话日志只保存连接 ID，密钥仍由桌面加密保存；Host 崩溃恢复时先重建目录，再允许自动任务运行。切换过程不显示“正在切换”文案。
+
 桌面可直接配置多组连接（名称、协议、地址、模型、密钥、是否支持图片）。编辑已有连接时密钥框留空表示保留原密钥；更换地址或协议需要重新输入。「测试连接」发送一条无工具的简短请求确认可达，不保存配置。每个用户轮次记录实际使用的模型、协议与连接 ID，切换模型后历史标识不会被覆盖。窗口与输出上限的取值范围只有 `ENVIRONMENT` 一处声明：表单的 `min`/`max`、保存时的校验、以及启动环境的读取都从它取，因此桌面与 CLI 对同一个值给同一个答案；启动环境里取值不合法或名字拼错的设置会在设置页明说，而不是被无声忽略。
 
 ---
@@ -717,13 +720,13 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 工具（默认按需加载，首个请求） | 24 个 / 14.3 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 55 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
-| 桌面冒烟套件 | 18 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 330 个 | `tests/*.test.ts` |
+| 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 桌面冒烟套件 | 17 | `smoke:desktop` 的清单 |
+| 行为测试文件 | 329 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
-| Host JSON-RPC 方法 | 63 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
+| Host JSON-RPC 方法 | 66 个 | `HostMethods`（`packages/protocol/rpc.ts`） |
 | `collect_subagents` 的等待上限 | 120000 ms | `SUBAGENT_CEILINGS.collectWaitMs`（上限；默认值见 `SUBAGENT_DEFAULTS.collectWaitMs`，描述文本与 schema 必须一致） |
 
 <!-- facts:end -->
@@ -749,7 +752,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **符号索引是独立数据库**：位于内部 `.yuantu/search/`，与会话数据库分开，文件工具不读写它。查询会核对源文件清单、大小与 mtime，发现外部新增、删除、重命名或改写后刷新索引；可选完整哈希核对用于大小与 mtime 均未变化的改写。调用方可取消刷新等待，共享构建继续供后续查询使用。单文件超过 8 MiB、读取失败或清单扫描截断时，覆盖状态明确标为不完整；读取失败的文件会在后续查询重试。凭据与依赖目录同样不进入索引。
 - **符号分页绑定查询与来源版本**：将 `repo_map` 返回的 `nextCursor` 作为 `cursor`，保留同一 `query` 即可续页；索引与已启动语言服务器均支持分页。查询、来源版本变化或游标失效后会拒绝续页，应从第一页重新检索。
 - **快速搜索后端需要固定资产**：`literal` + 区分大小写可走固定版本的 ripgrep，仅使用 `build/search-assets.lock.json` 中已记录 SHA-256 且校验通过的二进制；打包时由 `scripts/copy-search-assets.mjs` 核验后放入应用资源。没有可用资产、或执行环境无法安全启动进程时，一律回退内置流式扫描，不回退 host 进程。
-- **旧 Windows 基础沙箱仅保留兼容性检查**：它是部分写入边界，读取与网络不受限，也有子进程 `spawn EPERM` 限制。应用及主流程 CI 使用 `native` 对应的账户后端，支持正常 fork、严格只读及按账户断网；初始化无法完成时拒绝执行并提示修复。
+- **旧 Windows 基础沙箱已移除**：弱沙箱只是部分写入边界，读取与网络不受限，子进程还会遇到 `spawn EPERM`；旧的 `windows` 设置迁移到 `native`，历史 ACL 日志仍可用 `yuantu-agent sandbox-recover` 恢复。应用及主流程 CI 使用 `native` 对应的账户后端，支持正常 fork、严格只读及按账户断网；初始化无法完成时拒绝执行并提示修复。
 - **模型设置页支持模型 ID、容量、自动压缩阈值、流空闲超时和视觉能力**：更新时未提供的高级参数保留原值；清空数值字段显式恢复自动/default 行为，合并后的压缩阈值与上下文关系仍需通过校验。
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
