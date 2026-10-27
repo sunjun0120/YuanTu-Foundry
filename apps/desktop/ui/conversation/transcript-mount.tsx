@@ -115,7 +115,10 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
   let previousGroups: ReadonlyMap<string, string> = new Map();
   /** Where each fold was scrolled to, keyed by the group key that survives rebuilds. */
   const processScroll = new Map<string, number>();
-  /** Whether each fold was open, keyed the same way. React leaves `open` to the browser, so a remounted fold needs it. */
+  /**
+   * Whether the reader left each fold open. React owns the fold's state (`Fold`), so this is not a second copy: it is
+   * the value a fold React had to recreate starts from, written when the reader toggles and cleared with the session.
+   */
   const processOpen = new Map<string, boolean>();
   /** Tool calls whose summary line was already moved to the head of their group. */
   let runningProcessCalls = new Set<string>();
@@ -145,22 +148,21 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       if (steps && thought.parentElement !== steps) steps.append(thought);
       updateProcessSummary(group);
     },
+    wasOpen: (key) => processOpen.get(key),
+    rememberOpen(key, open) {
+      processOpen.set(key, open);
+    },
   };
 
   /** One message's built view, with the foldable pieces lifted out of it (legacy did this once per rebuild too). */
   function buildFragments(model: TranscriptModel, identity: string): Map<number, MessageFragment> {
     const views = cache.views(identity, model.rows, (message) => {
       const view = messageView(message);
-      const summary = view.querySelector<HTMLElement>(':scope > summary');
       const thought = view.querySelector<HTMLElement>(':scope > .message-reasoning');
-      const thoughtSummary = thought?.querySelector<HTMLElement>(':scope > summary') ?? null;
       const calls = Array.from(view.querySelectorAll<HTMLElement>(':scope > .tool-call'));
-      const callSummaries = calls.map((call) =>
-        call.querySelector<HTMLElement>(':scope > summary'),
-      );
       thought?.remove();
       for (const call of calls) call.remove();
-      return { message, view, summary, thought, thoughtSummary, calls, callSummaries };
+      return { message, view, thought, calls };
     });
     return new Map(model.rows.map((row, index) => [row.index, views[index]!]));
   }
@@ -168,6 +170,9 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
   /**
    * Remember every fold's scroll position and the first visible step inside each open one, before React replaces the
    * steps above it. The scroll positions are the fallback for a fold whose visible step did not survive.
+   *
+   * The open state is not read from the DOM here: `Fold` records the reader's decision in `processOpen` when it
+   * happens, which is both earlier than this pass and stable while a close animation still has `open` set.
    */
   function captureProcessState(): {
     scrolls: Map<string, number>;
@@ -180,7 +185,6 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       const key = group.dataset.processKey;
       const steps = group.querySelector<HTMLElement>(':scope > .process-steps');
       if (!key || !steps) continue;
-      processOpen.set(key, group.open);
       scrolls.set(key, visible ? steps.scrollTop : (processScroll.get(key) ?? 0));
       if (visible && group.open) anchors.set(key, captureAnchor(steps));
     }
@@ -198,8 +202,8 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       const steps = group.querySelector<HTMLElement>(':scope > .process-steps');
       if (!key || !steps) continue;
       current.add(key);
-      const open = processOpen.get(key);
-      if (open !== undefined) group.open = open;
+      // `open` belongs to `Fold` and is applied by the same render that created the node; writing it here would
+      // fight a close animation the reader just started.
       const stored = saved.scrolls.get(key) ?? processScroll.get(key) ?? 0;
       steps.scrollTop = stored;
       const anchor = saved.anchors.get(key);

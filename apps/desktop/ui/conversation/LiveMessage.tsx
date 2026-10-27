@@ -13,34 +13,43 @@ import type { ReactNode } from 'react';
 import { t } from '../../i18n.ts';
 import type { MarkdownActions } from '../../markdown.ts';
 import { useLocale } from '../i18n.ts';
+import { Fold } from './Fold.tsx';
 import { MarkdownView } from './MarkdownView.tsx';
 import { liveBodyText, liveReasoningPreview, type LiveMessageView } from './live-model.ts';
 
 /**
  * The fold. React owns it, so the transcript can move the same node into the last process group while the run is
- * live; a rebuilt node would lose the reader's open state with it.
+ * live; a rebuilt node would lose the reader's open state with it. `Fold` animates the height without taking the
+ * native `<details>` semantics away.
  */
 function ReasoningFold({ reasoning }: { reasoning: string }): ReactNode {
   return (
-    <details id="live-reasoning" className="message-reasoning" hidden={reasoning === ''}>
-      <summary className="process-summary process-reasoning">
-        <span className="process-icon" data-kind="reasoning" aria-hidden="true">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z" />
-          </svg>
-        </span>
-        <span className="process-label">{t('ui.reasoning')}</span>
-        <span className="process-preview">{liveReasoningPreview(reasoning)}</span>
-      </summary>
+    <Fold
+      id="live-reasoning"
+      className="message-reasoning"
+      summaryClassName="process-summary process-reasoning"
+      hidden={reasoning === ''}
+      summary={
+        <>
+          <span className="process-icon" data-kind="reasoning" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z" />
+            </svg>
+          </span>
+          <span className="process-label">{t('ui.reasoning')}</span>
+          <span className="process-preview">{liveReasoningPreview(reasoning)}</span>
+        </>
+      }
+    >
       <pre className="reasoning-content">{reasoning}</pre>
-    </details>
+    </Fold>
   );
 }
 

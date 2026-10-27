@@ -1088,6 +1088,8 @@ test(
     assert.equal(await group.locator('.tool-result').count(), 2);
     await group.locator(':scope > summary').click();
     assert.match(await group.locator(':scope > summary').innerText(), /SECOND_THOUGHT/);
+    // The fold now closes with the panel animation, so the hidden state is the end of it rather than the same tick.
+    await group.locator('.process-steps').waitFor({ state: 'hidden' });
     assert.equal(await group.locator('.process-steps').isVisible(), false);
     releases[1]();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);

@@ -24,18 +24,15 @@ import { runEndingText } from '../../renderer-messages.ts';
 import { useLocale } from '../i18n.ts';
 import type { Message } from '../../../../packages/protocol/index.ts';
 import { BuiltArticle, BuiltDetails } from './BuiltMessage.tsx';
+import { Fold } from './Fold.tsx';
 import type { TranscriptModel, TranscriptSegment, TranscriptStep } from './transcript-model.ts';
 
 /** One message's built view, with the pieces the transcript lifts out into process groups. */
 export interface MessageFragment {
   message: Message;
   view: HTMLElement;
-  /** The row's own `:scope > summary`, for a tool result. */
-  summary: HTMLElement | null;
   thought: HTMLElement | null;
-  thoughtSummary: HTMLElement | null;
   calls: HTMLElement[];
-  callSummaries: (HTMLElement | null)[];
 }
 
 type CardSegment = Extract<TranscriptSegment, { kind: 'card' }>;
@@ -63,6 +60,10 @@ export interface TranscriptState {
 /** The one mutable seam between the adapter's imperative helpers and the folds React owns. */
 export interface GroupRegistry {
   register(key: string, group: HTMLDetailsElement | null): void;
+  /** Whether the reader left this fold open: the value a fold React had to recreate starts from. */
+  wasOpen(key: string): boolean | undefined;
+  /** Record a decision the reader just made, so a repaint cannot lose it. */
+  rememberOpen(key: string, open: boolean): void;
 }
 
 function node<K extends keyof HTMLElementTagNameMap>(
@@ -149,14 +150,13 @@ function TranscriptStepRow({
 
 /**
  * One fold. Steps are React children (so their identity survives a repaint); the summary is imperatively painted
- * from the last step, and the fold's `open` is left to the browser, which is what keeps it open when its steps
- * change. The adapter re-applies it from its per-key map only when React had to create a fresh node.
+ * from the last step, and the fold's open state is React's, keyed by the group key. `Fold` animates the height and
+ * asks the adapter's registry for the reader's last decision, so a recreated fold opens where the reader left it.
  */
 function ProcessGroup({
   groupKey,
   steps,
   fragments,
-  summarySource,
   revision,
   registry,
   live = false,
@@ -164,7 +164,6 @@ function ProcessGroup({
   groupKey: string;
   steps: readonly TranscriptStep[];
   fragments: ReadonlyMap<number, MessageFragment>;
-  summarySource: HTMLElement | null;
   revision: number;
   registry: GroupRegistry;
   live?: boolean;
@@ -175,12 +174,25 @@ function ProcessGroup({
     return () => registry.register(groupKey, null);
   }, [groupKey, registry]);
   useLayoutEffect(() => {
-    if (live || !summarySource || !host.current) return;
-    updateProcessSummary(host.current, summarySource);
-  }, [live, summarySource, revision]);
+    if (live || !host.current) return;
+    // The built source summary has already handed its children to the React step row by the time this runs (child
+    // layout effects commit first), so the summary is read back from the row the fold actually renders.
+    updateProcessSummary(host.current);
+  }, [live, revision]);
+  // The live group's summary comes from the borrowed thought the adapter appends imperatively. Re-offering it on every
+  // render heals the one ordering the adapter cannot cover: a group that committed before its thought was ready.
+  useLayoutEffect(() => {
+    if (live && host.current) updateProcessSummary(host.current);
+  });
   return (
-    <details ref={host} className="process-group" data-process-key={groupKey}>
-      <summary />
+    <Fold
+      detailsRef={host}
+      className="process-group"
+      processKey={groupKey}
+      initiallyOpen={registry.wasOpen(groupKey) ?? false}
+      onOpenChange={(open) => registry.rememberOpen(groupKey, open)}
+      summary={null}
+    >
       <div className="process-steps">
         {live
           ? null
@@ -191,21 +203,8 @@ function ProcessGroup({
               ) : null;
             })}
       </div>
-    </details>
+    </Fold>
   );
-}
-
-function summarySourceFor(
-  steps: readonly TranscriptStep[],
-  fragments: ReadonlyMap<number, MessageFragment>,
-): HTMLElement | null {
-  const last = steps.at(-1);
-  if (!last) return null;
-  const fragment = fragments.get(last.index);
-  if (!fragment) return null;
-  if (last.kind === 'result') return fragment.summary;
-  if (last.kind === 'reasoning') return fragment.thoughtSummary;
-  return fragment.callSummaries[last.callIndex] ?? null;
 }
 
 /**
@@ -310,7 +309,6 @@ export function Conversation({
               groupKey={segment.key}
               steps={segment.steps}
               fragments={fragments}
-              summarySource={summarySourceFor(segment.steps, fragments)}
               revision={state.revision}
               registry={registry}
             />
@@ -336,7 +334,6 @@ export function Conversation({
           groupKey={state.liveGroupKey}
           steps={[]}
           fragments={fragments}
-          summarySource={null}
           revision={state.revision}
           registry={registry}
           live

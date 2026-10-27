@@ -139,16 +139,31 @@ function TransientPage({ viewKey, kind, children }: PageTransitionProps): ReactN
 export interface PanelTransitionProps {
   opened: boolean;
   children: ReactNode;
+  /** Runs when the height transition finishes, whatever its direction. */
+  onTransitionEnd?(): void;
 }
 
-/** Height animation for thinking blocks, tool details and verification evidence. */
-export function PanelTransition({ opened, children }: PanelTransitionProps): ReactNode {
+/**
+ * Height animation for thinking blocks, tool details and verification evidence.
+ *
+ * `keepMountedMode` is `display-none`, not Mantine's default `activity`: the transcript adapter moves the live thought
+ * into a collapsed fold's `.process-steps` synchronously inside the commit, and React 19 `Activity` does not render
+ * hidden children during that commit — the thought would be dropped and the fold's summary left blank.
+ */
+export function PanelTransition({
+  opened,
+  children,
+  onTransitionEnd,
+}: PanelTransitionProps): ReactNode {
   const reduced = usePrefersReducedMotion();
   return (
     <Collapse
       expanded={opened}
       transitionDuration={reduced ? 0 : MOTION.panel}
       transitionTimingFunction={EASING_CSS}
+      keepMounted
+      keepMountedMode="display-none"
+      onTransitionEnd={onTransitionEnd}
     >
       {children}
     </Collapse>

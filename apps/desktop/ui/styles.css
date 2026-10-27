@@ -6110,6 +6110,15 @@ body[data-page='settings'] .workspace-panel {
   display: contents;
 }
 
+/*
+ * A slot contribution takes the place its host reserved, exactly as the region adapters used to. The wrapper is not
+ * a box: with one, the workspace panel became a block item that grew to its content height, so its preview lost the
+ * viewport height it needs to scroll, and the composer contributions stopped being flex children of the composer.
+ */
+.slot {
+  display: contents;
+}
+
 body {
   display: block;
 }

@@ -662,6 +662,8 @@ test(
     assert.ok(actions.y >= bubble.y + bubble.height);
     await user.locator('.copy-user-message').click();
     assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), question);
+    // The acknowledgement is React state set after the clipboard write settles; wait for it rather than racing it.
+    await user.locator('[role=status]').filter({ hasText: '已复制' }).waitFor({ timeout: 5000 });
     assert.equal(await user.locator('[role=status]').innerText(), '已复制');
     await page.evaluate(() => {
       document.documentElement.dataset.theme = 'dark';
