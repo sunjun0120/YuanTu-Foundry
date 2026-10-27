@@ -34,6 +34,43 @@ export class ProjectWorkspacesError extends Error {
   }
 }
 
+export type ProjectWorkspaceCommand =
+  | { type: 'list' }
+  | { type: 'add' }
+  | { type: 'select'; id: string }
+  | { type: 'rename'; id: string; displayName: string }
+  | { type: 'remove'; id: string }
+  | { type: 'collapse'; id: string; collapsed: boolean }
+  | { type: 'lastSession'; id: string; sessionId: string | null };
+
+export type ProjectWorkspaceReply =
+  { ok: true; registry: ProjectWorkspacesFile; cancelled?: boolean } | { ok: false; error: string };
+
+export function parseProjectWorkspaceCommand(input: unknown): ProjectWorkspaceCommand {
+  if (!record(input) || typeof input.type !== 'string') throw new Error('Invalid project command');
+  const type = input.type;
+  if (type === 'list' || type === 'add') return { type };
+  if (typeof input.id !== 'string' || !/^[\w-]{1,128}$/u.test(input.id))
+    throw new Error('Invalid workspace id');
+  switch (type) {
+    case 'select':
+    case 'remove':
+      return { type, id: input.id };
+    case 'rename':
+      if (typeof input.displayName !== 'string') throw new Error('Invalid workspace name');
+      return { type, id: input.id, displayName: input.displayName };
+    case 'collapse':
+      if (typeof input.collapsed !== 'boolean') throw new Error('Invalid collapse state');
+      return { type, id: input.id, collapsed: input.collapsed };
+    case 'lastSession':
+      if (input.sessionId !== null && typeof input.sessionId !== 'string')
+        throw new Error('Invalid session id');
+      return { type, id: input.id, sessionId: input.sessionId };
+    default:
+      throw new Error('Unknown project command');
+  }
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

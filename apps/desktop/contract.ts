@@ -9,6 +9,10 @@
  */
 import type { AttachmentReply } from './attachment-contract.ts';
 import type { BrowserCommand, BrowserEvent, BrowserReply } from './browser-contract.ts';
+import type {
+  ProjectWorkspaceCommand,
+  ProjectWorkspaceReply,
+} from './project-workspaces-contract.ts';
 import type { FilesCommand, FilesReply } from './files-contract.ts';
 import type {
   WorkspaceMaintenanceCommand,
@@ -60,6 +64,8 @@ export interface DesktopBridge {
   /** The panel browser's main-process views; the guest itself never crosses this bridge. */
   browser(command: BrowserCommand): Promise<BrowserReply>;
   subscribeBrowser(listener: (event: BrowserEvent) => void): () => void;
+  /** The project-workspace registry; adding opens the native folder picker in the main process. */
+  projects(command: ProjectWorkspaceCommand): Promise<ProjectWorkspaceReply>;
   /** Read on demand by the settings page; unarchiving and deleting go through `invoke`. */
   archivedSessions?(): Promise<ArchivedSessionsReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;

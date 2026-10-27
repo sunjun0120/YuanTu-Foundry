@@ -14,6 +14,7 @@ const mirror = new SnapshotMirror();
 const bridge: DesktopBridge = {
   workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
   browser: (command) => ipcRenderer.invoke('yuantu:browser', command),
+  projects: (command) => ipcRenderer.invoke('yuantu:projects', command),
   subscribeBrowser(listener) {
     const receive = (_event: Electron.IpcRendererEvent, event: BrowserEvent) => listener(event);
     ipcRenderer.on('yuantu:browser-event', receive);

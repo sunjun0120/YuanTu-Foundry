@@ -34,7 +34,7 @@ import {
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
 import type {
@@ -45,6 +45,12 @@ import type {
 import { workspaceFilePath } from './workspace-file-path.ts';
 import { BrowserViews } from './browser-views.ts';
 import { parseBrowserCommand, type BrowserReply } from './browser-contract.ts';
+import { ProjectWorkspacesStore } from './project-workspaces-store.ts';
+import {
+  parseProjectWorkspaceCommand,
+  type ProjectWorkspaceReply,
+} from './project-workspaces-contract.ts';
+import { ProjectWorkspaces, resolveStartupWorkspace } from './main-project-workspaces.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -88,6 +94,7 @@ import {
  */
 let window: BrowserWindow | null = null;
 let browserViews: BrowserViews | null = null;
+let projectWorkspaces: ProjectWorkspaces | null = null;
 let service: CarrierService | null = null;
 let openingService: CarrierService | null = null;
 let unsubscribe: (() => void) | undefined;
@@ -486,10 +493,20 @@ void app
     });
     // Probe with standalone Node, not Electron's executable; remember each mode's answer.
     void sandboxEnvironment.probe(sandboxEnvironment.defaultMode);
-    if (app.isPackaged && runtime.workspace === path.join(app.getPath('userData'), 'workspace'))
-      mkdirSync(runtime.workspace, { recursive: true });
-    const workspace = realpathSync(runtime.workspace);
-    if (!statSync(workspace).isDirectory()) throw new Error('Workspace must be a directory');
+    const projectStore = new ProjectWorkspacesStore(
+      path.join(app.getPath('userData'), 'project-workspaces.json'),
+    );
+    const explicitWorkspace =
+      process.argv.find((arg) => arg.startsWith('--workspace='))?.slice('--workspace='.length) ||
+      process.env.YUANTU_WORKSPACE;
+    const installDirectory = app.isPackaged ? path.dirname(app.getPath('exe')) : undefined;
+    const started = await resolveStartupWorkspace(projectStore, {
+      explicitPath: explicitWorkspace,
+      fallbackPath: path.join(app.getPath('userData'), 'workspace'),
+      installDirectory,
+    });
+    projectWorkspaces = new ProjectWorkspaces(projectStore, installDirectory);
+    const workspace = started.workspace;
     windowStateStore = new WindowStateStore(
       path.join(app.getPath('userData'), 'window-state.json'),
     );
@@ -561,6 +578,48 @@ void app
         return { ok: false, error: safeError(error) };
       }
     });
+    ipcMain.handle(
+      'yuantu:projects',
+      async (event, input: unknown): Promise<ProjectWorkspaceReply> => {
+        try {
+          assertSender(event);
+          if (!projectWorkspaces || quitting) throw new Error(mainText('desktop.quitting'));
+          const command = parseProjectWorkspaceCommand(input);
+          if (command.type === 'add') {
+            if (!window) throw new Error(mainText('desktop.quitting'));
+            const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
+            if (picked.canceled || !picked.filePaths[0])
+              return { ok: true, registry: await projectWorkspaces.list(), cancelled: true };
+            return { ok: true, registry: await projectWorkspaces.add(picked.filePaths[0]) };
+          }
+          switch (command.type) {
+            case 'list':
+              return { ok: true, registry: await projectWorkspaces.list() };
+            case 'select':
+              return { ok: true, registry: await projectWorkspaces.select(command.id) };
+            case 'rename':
+              return {
+                ok: true,
+                registry: await projectWorkspaces.rename(command.id, command.displayName),
+              };
+            case 'remove':
+              return { ok: true, registry: await projectWorkspaces.remove(command.id) };
+            case 'collapse':
+              return {
+                ok: true,
+                registry: await projectWorkspaces.setCollapsed(command.id, command.collapsed),
+              };
+            case 'lastSession':
+              return {
+                ok: true,
+                registry: await projectWorkspaces.setLastSession(command.id, command.sessionId),
+              };
+          }
+        } catch (error) {
+          return { ok: false, error: safeError(error) };
+        }
+      },
+    );
     ipcMain.handle(
       'yuantu:workspace-maintenance',
       async (event, input: unknown): Promise<WorkspaceMaintenanceReply> => {
@@ -959,6 +1018,8 @@ void app
             });
             if (!result.canceled && result.filePaths[0] && !quitting) {
               const selected = realpathSync(result.filePaths[0]);
+              // The picker is also the "add workspace" flow: register it before starting the Host.
+              await projectWorkspaces?.add(selected);
               if (selected !== state.workspace) {
                 // Before the Host exists: its first run is when an untrusted hook would otherwise execute.
                 await reviewWorkspaceHooks(selected);

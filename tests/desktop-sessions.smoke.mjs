@@ -62,6 +62,14 @@ test(
       return page;
     };
     let page = await launch();
+    const projects = await page.evaluate(() => window.yuantu.projects({ type: 'list' }));
+    assert.equal(projects.ok, true);
+    assert.ok(
+      projects.registry.workspaces.some(
+        (entry) => entry.canonicalPath.toLowerCase() === root.toLowerCase(),
+      ),
+      'the explicit workspace is registered on startup',
+    );
     assert.equal(await page.locator('#session-short').count(), 0);
     assert.doesNotMatch(
       await page.locator('.composer-area').innerText(),
