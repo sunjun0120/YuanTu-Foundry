@@ -224,6 +224,17 @@ test('preparation refuses active databases and application/profile overlap; reco
   );
 });
 
+test('preparation refuses a workspace that is the application directory', (t) => {
+  const f = fixture(t);
+  // The database inside the install directory is what a workspace registered there would look like.
+  const database = path.join(f.installDirectory, '.yuantu', 'sessions.sqlite');
+  mkdirSync(path.dirname(database), { recursive: true });
+  const store = new SessionStore(database);
+  store.close();
+  const staged = stageUpgrade(f.file, f.profile, f.current);
+  assert.throws(() => prepareUpgrade(staged, f.installDirectory, database, f.current), /overlap/);
+});
+
 test('rollback judges the launched desktop by pid and start time, so a reused pid does not block it', (t) => {
   const f = fixture(t);
   const staged = stageUpgrade(f.file, f.profile, f.current);

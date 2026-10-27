@@ -422,7 +422,7 @@ WebContentsView 技术验证失败时先定位并修复；不要未经证据就�
 
 ### 9.2 Electron smoke
 
-新增或合并 desktop-browser、desktop-projects、workspace-preview 的本地 fixture；将新 smoke 纳入 package.json 的 smoke:desktop，不能只生成文件而从不运行。浏览器 guest 用例通过仅测试环境启用的主进程钩子（executeJavaScript、URL/title/视图计数、导航/弹窗探针）驱动；不要求 Playwright 直接拿到 WebContentsView 的 Page。
+新增或合并 desktop-browser、desktop-projects、workspace-preview 的本地 fixture；将新 smoke 纳入 package.json 的 smoke:desktop，不能只生成文件而从不运行。Phase 0 已验证 Playwright 1.63 的 `app.windows()`/`context().pages()` 会暴露 WebContentsView guest 页面，可直接用 locator/title/click 驱动；视图计数、bounds、可见性与 sandbox 标志通过主进程 `app.evaluate` 读取。保留仅测试环境启用的主进程探针作为兜底，不把 Playwright 的内部行为当作唯一契约。
 
 1. 在独立临时 workspace/userData 启动，用本地 HTTP fixture 测试标题、链接、POST 弹窗、iframe、SPA、慢页面和错误页面；不依赖公网/真实账号。
 2. 顶部打开面板默认新建页，只有两个入口，没有提前创建 guest；+ 返回同一选择页，文件入口不复制文件树。
