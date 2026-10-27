@@ -18,14 +18,18 @@
 - `lint`
 - `test:isolation:check`（0 violations）
 
-## 2. `npm test` 结果
+## 2. `npm run check` 结果
 
-- 执行 334 个测试文件；并行阶段报告 1360 个测试。
-- 1354 通过，5 跳过，1 失败。
-- 失败：`tests/windows-shell.test.ts:156 cancelling a command while PowerShell is still starting it leaves no program behind`，断言 `late-2.txt`、`late-3.txt`、`late-5.txt` 未出现，实际出现。该用例与桌面端 UI、注册表或浏览器改动无交集。
-- 单独重跑该文件：7/7 通过（11.0s），判定为并行负载下的时序抖动；尚未修改测试。
+第二次完整执行通过（`exit code 0`）：
 
-因 `npm test` 失败，后续 `npm run build` 与 `npm run smoke:client` 未在本轮 `check` 中执行；它们在之前的定向构建/冒烟中已分别通过。
+- 前置门禁：`format`、`docs`、`references`、`cycles`、`layers`、`i18n`、`typecheck`、`lint`、`test:isolation` 全部通过。
+- 并行测试：3347 个，3329 通过，18 跳过，0 失败。
+- 串行测试：32 个，19 通过，13 跳过，0 失败。
+- `npm run build` 通过（Host bundle 6.05 MB）。
+- `npm run smoke:client`：3/3 通过。
+- 跳过项均为平台/外部依赖条件（真实 Windows 账号、Chromium、macOS 等），不是通过的替代。
+
+第一次尝试曾在 `tests/windows-shell.test.ts` 的 PowerShell 取消时序用例上失败；该文件单独重跑 7/7 通过。第二次完整运行未复现，记录为并行负载下的时序抖动，尚未修改该用例。
 
 ## 3. 完整桌面冒烟
 
@@ -44,14 +48,14 @@
 
 ## 5. 未完成
 
-- 完整 `npm run check` 的绿跑（需在低负载下重跑，或先稳定 `windows-shell` 取消用例）；完整 `smoke:desktop` 已通过。
-- Phase 6 的 Host 路由集成：`WorkspaceHostManager` 已有单测，但 `main.ts` 仍是单 `service` 全局。
-- Phase 7 剩余：每工作区独立会话列表、两级折叠、触摸/键盘完整行为、运行中移除保护。
+- Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，但快照/审批/通知仍只路由给 active Host；后台工作区审批和运行标记未完成。
+- Phase 7 剩余：每工作区独立会话列表、两级折叠、触摸/键盘完整行为。
 - 打包/安装场景与跨平台手工记录。
 
-## 5. 复现命令
+## 6. 复现命令
 
 ```powershell
 npm run check
+npm run smoke:desktop
 node scripts/run-tests.mjs tests/windows-shell.test.ts
 ```
