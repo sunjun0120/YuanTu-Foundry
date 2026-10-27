@@ -9,7 +9,10 @@ test('the boundary sentence says what each backend declares, and no more', () =>
   assert.match(describeExecutionBoundary(executionPolicy('host')), /can reach the network/);
   // The Windows token backend is a partial write boundary: the person approving must hear that reads and the
   // network stay open, because that is the part a "sandboxed" label would hide.
-  const windows = describeExecutionBoundary(executionPolicy('windows'));
+  const windows = describeExecutionBoundary({
+    ...executionPolicy('host'),
+    processFiles: 'workspace-write-partial',
+  });
   assert.match(windows, /only partly confined/);
   assert.match(windows, /read files anywhere/);
   assert.match(windows, /can reach the network/);

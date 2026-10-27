@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWriteFile } from '../packages/platform/write-all.ts';
-import { workspaceSandboxSid } from '../packages/tools/sandbox-windows.ts';
+import { workspaceSandboxSid } from '../packages/tools/windows-sandbox-recovery.ts';
 import { toolEnvironment } from '../packages/tools/environment.ts';
 
 const helper = fileURLToPath(new URL('../packages/tools/windows-sandbox/acl.ps1', import.meta.url));
@@ -108,12 +108,24 @@ async function withYuantuAcl(script: string) {
     source.indexOf('$ErrorActionPreference'),
     source.indexOf('function Safe-Tree'),
   );
-  return run(powershell, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-EncodedCommand',
-    Buffer.from(`${declarations}\n${script}`, 'utf16le').toString('base64'),
-  ]);
+  // `-EncodedCommand` doubles the source into UTF-16 base64 and overruns the Windows command-line limit, so the
+  // probe goes to a script file and runs through `-File`.
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acl-probe-'));
+  const file = path.join(directory, 'probe.ps1');
+  // PowerShell 5 reads a BOM-less script as ANSI; the helper's own text has to survive verbatim.
+  await writeFile(file, `\uFEFF${declarations}\n${script}`, 'utf8');
+  try {
+    return await run(powershell, [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      file,
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
@@ -181,7 +193,10 @@ test('recovery writes a legacy DACL back exactly as recorded', windows, async (t
   entry.before = entry.before.replace(/^D:AI/, 'D:').replaceAll(';ID;', ';;');
   await writeFile(journal, JSON.stringify(record));
   await operation('restore');
-  const restored = (await withYuantuAcl(`[YuantuAcl]::Capture(${literal(file)})`)).stdout.trim();
+  // A read-only capture: the write pin grants the owner WRITE_OWNER first on volumes outside its profile.
+  const restored = (
+    await withYuantuAcl(`[YuantuAcl]::CaptureRead(${literal(file)})`)
+  ).stdout.trim();
   // SetSecurityInfo would return these entries as explicit ACEs plus inherited duplicates, or mark them protected.
   assert.equal(restored.split('S:')[0], entry.before);
   assert.doesNotMatch(restored, /\(ML;/, 'no integrity label is left behind');

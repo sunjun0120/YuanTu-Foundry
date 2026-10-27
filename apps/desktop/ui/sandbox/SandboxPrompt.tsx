@@ -45,16 +45,6 @@ export function SandboxPrompt({ controller }: { controller: SandboxSetupControll
       </div>
       <div className="sandbox-prompt-actions">
         <button
-          id="sandbox-prompt-weak"
-          type="button"
-          className="link"
-          disabled={state.pending}
-          title={t('sandboxSetup.prompt.weakNote')}
-          onClick={() => void controller.chooseWeak()}
-        >
-          {t('sandboxSetup.prompt.weak')}
-        </button>
-        <button
           id="sandbox-prompt-dismiss"
           type="button"
           className="secondary"

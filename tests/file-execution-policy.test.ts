@@ -34,7 +34,7 @@ async function fixture(t: test.TestContext) {
 test('explicit read-only file policy prevents a real file write before approval in every backend', async (t) => {
   const { root, tools } = await fixture(t);
   let approvals = 0;
-  for (const mode of ['host', 'windows', 'seatbelt', ...nativeModes] as const) {
+  for (const mode of ['host', 'seatbelt', ...nativeModes] as const) {
     const file = `${mode}.txt`;
     const result = await tools.execute(
       { id: mode, name: 'write_file', arguments: { path: file, content: 'fixture' } },
@@ -82,10 +82,10 @@ test('container command restrictions leave approved workspace file edits availab
 });
 
 test('the policy factory refuses values a backend would otherwise reinterpret', () => {
-  // `host` and `windows` declare fixed capabilities and never read `files`, so without this check an unknown
+  // `host` declare fixed capabilities and never read `files`, so without this check an unknown
   // value would travel into the policy the tools then run under. For the backends that do read it the
   // declaration check would reject it, but with a different message — the refusal has to be this one.
-  for (const mode of ['host', 'windows', 'windows-account', 'seatbelt', 'native'] as const)
+  for (const mode of ['host', 'windows-account', 'seatbelt', 'native'] as const)
     for (const files of ['bogus', 'read-write'] as unknown as FileEffect[])
       assert.throws(() => executionPolicy(mode, { files }), /invalid file policy/i);
   // The image arrives from configuration and is interpolated into what the sandbox runtime is asked to run,
@@ -95,10 +95,10 @@ test('the policy factory refuses values a backend would otherwise reinterpret', 
 });
 
 test('a backend that cannot enforce the requested network policy refuses rather than widening it', () => {
-  // `host` and `windows` report `unrestricted`, so a caller asking them for a denied network must be refused.
+  // `host` report `unrestricted`, so a caller asking them for a denied network must be refused.
   // Returning a policy instead would hand back a weaker confinement than the one that was asked for, and the
   // caller would have no way to tell: the policy object itself would claim the network is open.
-  for (const mode of ['host', 'windows'] as const)
+  for (const mode of ['host'] as const)
     assert.throws(
       () => executionPolicy(mode, { network: 'denied' }),
       /network capability does not satisfy/i,

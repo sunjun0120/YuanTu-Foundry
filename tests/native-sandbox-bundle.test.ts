@@ -51,13 +51,7 @@ test('CommonJS desktop bundle loads native providers and their packaged helper',
   const { stdout } = await promisify(execFile)(process.execPath, [entry]);
   const firstLine = stdout.split('\n')[0];
   assert.ok(firstLine);
-  assert.deepEqual(JSON.parse(firstLine), [
-    'host',
-    'windows',
-    'windows-account',
-    'seatbelt',
-    'native',
-  ]);
+  assert.deepEqual(JSON.parse(firstLine), ['host', 'windows-account', 'seatbelt', 'native']);
   assert.match(stdout, /null/);
   assert.deepEqual(
     result.warnings,

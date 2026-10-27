@@ -33,7 +33,7 @@ import {
   type SandboxProvider,
   type SandboxRequest,
 } from './sandbox-provider.ts';
-import { quoteWindowsArgument, windowsProgramNeedsShell } from './sandbox-windows.ts';
+import { quoteWindowsArgument, windowsProgramNeedsShell } from './windows-command.ts';
 
 const assetRoot =
   typeof __dirname === 'string'

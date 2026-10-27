@@ -382,7 +382,7 @@ test(
 
 test('mutating the caller policy while approval waits cannot change the dispatched policy', async () => {
   const registry = new ToolRegistry();
-  const selected = { ...executionPolicy('windows') };
+  const selected = { ...executionPolicy('windows-account') };
   registry.register({
     name: 'policy',
     description: 'inspect policy after approval',
@@ -407,7 +407,7 @@ test('mutating the caller policy while approval waits cannot change the dispatch
       },
     },
   );
-  assert.equal(result.content, 'windows/windows');
+  assert.equal(result.content, 'windows-account/windows-account');
   await registry.close();
 });
 
@@ -430,12 +430,12 @@ test('concurrent tool calls pin separate backend policies across awaits and glob
     );
     const windows = registry.execute(
       { id: 'b', name: 'mode', arguments: {} },
-      { ...context(), executionPolicy: executionPolicy('windows') },
+      { ...context(), executionPolicy: executionPolicy('windows-account') },
     );
     setSandboxMode('seatbelt');
     assert.deepEqual(
       (await Promise.all([host, windows])).map((r) => r.content),
-      ['host/host', 'windows/windows'],
+      ['host/host', 'windows-account/windows-account'],
     );
   } finally {
     setSandboxMode(undefined);
@@ -489,13 +489,8 @@ test('capability checks separate process filesystem confinement from network and
     /filesystem/,
   );
   assert.throws(
-    () => requireExecutionCapabilities(executionPolicy('windows'), { network: 'denied' }),
+    () => requireExecutionCapabilities(executionPolicy('windows-account'), { network: 'denied' }),
     /network/,
-  );
-  assert.throws(
-    () =>
-      requireExecutionCapabilities(executionPolicy('windows'), { processFiles: 'workspace-write' }),
-    /filesystem/,
   );
   assert.throws(
     () =>
@@ -508,7 +503,7 @@ test('capability checks separate process filesystem confinement from network and
     processFiles: 'read-only',
     network: 'denied',
   });
-  assert.ok(Object.isFrozen(executionPolicy('windows')));
+  assert.ok(Object.isFrozen(executionPolicy('windows-account')));
 });
 
 test('local file and process contracts resolve one workspace identity and reject foreign paths and links', async (t) => {

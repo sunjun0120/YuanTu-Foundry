@@ -33,7 +33,10 @@ export function backgroundAuthority(
     ?.data.authority;
   if (!source || typeof source !== 'object') return;
   const a = source as BackgroundAuthority;
-  if (!['host', 'windows', 'native', 'seatbelt'].includes(a.sandboxMode)) return;
+  // A session that opted into the retired token backend keeps its durable authority; the value it chose is the
+  // native backend's predecessor, so it migrates by the same rule as the app settings rather than failing the wake.
+  const mode = (a.sandboxMode as string) === 'windows' ? 'native' : a.sandboxMode;
+  if (!['host', 'native', 'windows-account', 'seatbelt'].includes(mode)) return;
   if (
     a.sandboxFiles !== undefined &&
     a.sandboxFiles !== 'read-only' &&
@@ -48,7 +51,7 @@ export function backgroundAuthority(
     return;
   try {
     return {
-      sandboxMode: a.sandboxMode,
+      sandboxMode: mode,
       ...(a.sandboxNetwork ? { sandboxNetwork: a.sandboxNetwork } : {}),
       ...(a.sandboxFiles !== undefined ? { sandboxFiles: a.sandboxFiles } : {}),
       permissionPolicy:

@@ -25,16 +25,3 @@ test('Windows and relative paths normalize consistently', () => {
   assert.equal(normalizeRepoPath('.\\tests\\a.test.ts'), 'tests/a.test.ts');
   assert.equal(normalizeRepoPath('./tests/a.test.ts'), 'tests/a.test.ts');
 });
-
-test('default discovery excludes legacy Windows compatibility acceptance', async (t) => {
-  const root = await tempRoot(t, 'yuantu-legacy-discovery-');
-  await mkdir(path.join(root, 'tests'));
-  for (const file of [
-    'sandbox-windows.test.ts',
-    'sandbox-windows-assets.test.ts',
-    'sandbox-windows-recovery.test.ts',
-    'windows-sandbox-host.test.ts',
-  ])
-    await writeFile(path.join(root, 'tests', file), 'export {};');
-  assert.deepEqual(await discoverTests(root), ['tests/windows-sandbox-host.test.ts']);
-});

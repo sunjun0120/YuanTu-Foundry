@@ -83,7 +83,7 @@ test(
         await manager.close();
       });
       assert.equal(clients[0] === clients[1], true, 'concurrent callers must share one client');
-      await withExecutionPolicy(executionPolicy('windows'), async () => {
+      await withExecutionPolicy(executionPolicy('windows-account'), async () => {
         assert.throws(
           () => clients[0]!.send('workspace/symbol', { query: 'x' }, new AbortController().signal),
           /creation policy/,

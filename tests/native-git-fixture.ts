@@ -38,7 +38,7 @@ export async function fixture(t: test.TestContext) {
     'fixture',
   ]);
   await writeFile(path.join(root, 'tracked.txt'), 'after\n');
-  const original = sandboxProvider('windows');
+  const original = sandboxProvider('windows-account');
   const host = sandboxProvider('host');
   const plans = new Set<SandboxPlan>();
   let prepared = 0,
@@ -47,10 +47,10 @@ export async function fixture(t: test.TestContext) {
   let failCleanupAt = 0;
   registerSandboxProvider({
     ...host,
-    mode: 'windows',
+    mode: 'windows-account',
     async prepare(request) {
       prepared++;
-      const plan = { ...(await host.prepare(request)), backend: 'windows' as const };
+      const plan = { ...(await host.prepare(request)), backend: 'windows-account' as const };
       plans.add(plan);
       return plan;
     },
@@ -74,7 +74,7 @@ export async function fixture(t: test.TestContext) {
   return {
     root,
     tools,
-    policy: executionPolicy('windows'),
+    policy: executionPolicy('windows-account'),
     counts: () => ({ prepared, started, cleaned }),
     failCleanup(at: number) {
       failCleanupAt = at;

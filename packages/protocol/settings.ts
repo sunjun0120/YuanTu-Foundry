@@ -427,12 +427,13 @@ export const ENVIRONMENT = {
     kind: 'enum',
     values: ['host', 'native', 'windows', 'windows-account', 'seatbelt'],
     description:
-      '命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值）',
+      '命令沙箱模式（桌面：新会话从哪个模式开始——档位按会话选择，改动即时生效，不改写这个值；`windows` 为已移除的旧值，仅用于迁移识别）',
   },
   YUANTU_SANDBOX_HOOK: {
     kind: 'enum',
     values: ['host', 'native', 'windows', 'windows-account', 'seatbelt'],
-    description: '钩子用的沙箱后端（默认继承当前调用的执行策略）',
+    description:
+      '钩子用的沙箱后端（默认继承当前调用的执行策略；`windows` 为已移除的旧值，仅用于迁移识别）',
   },
   YUANTU_SANDBOX_FILES: {
     kind: 'enum',

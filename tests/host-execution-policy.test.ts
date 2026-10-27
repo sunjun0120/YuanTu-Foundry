@@ -26,7 +26,7 @@ test('the Host advertises and echoes the file and network policy it was given', 
   assert.deepEqual(selection, { mode: 'seatbelt', files: 'read-only', network: 'denied' });
 });
 
-test('unsupported process file policies are rejected before changing the Host selection', async (t) => {
+test('unsupported and retired selections are rejected before changing the Host selection', async (t) => {
   const host = await listeningHost(t, { YUANTU_SANDBOX: 'host' });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
@@ -36,9 +36,10 @@ test('unsupported process file policies are rejected before changing the Host se
     client.request('sandbox.set', { sessionId: session.id, mode: 'host', files: 'read-only' }),
     /filesystem capability/,
   );
+  // The retired token backend fails closed through the same wire command, naming the replacement.
   await assert.rejects(
     client.request('sandbox.set', { sessionId: session.id, mode: 'windows', files: 'read-only' }),
-    /filesystem capability/,
+    /windows sandbox was removed; select native/,
   );
 });
 

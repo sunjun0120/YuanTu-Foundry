@@ -14,7 +14,7 @@ import {
   inspectWindowsSandboxLeases,
   leaseBlockedError,
   recoverWindowsSandboxLeases,
-} from '../packages/tools/sandbox-windows.ts';
+} from '../packages/tools/windows-sandbox-recovery.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 

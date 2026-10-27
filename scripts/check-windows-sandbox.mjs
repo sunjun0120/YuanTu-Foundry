@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { manageWindowsAccounts } from './windows-account-ci.mjs';
-import { assertAcceptanceOutput } from './check-windows-legacy-sandbox.mjs';
+import { assertAcceptanceOutput } from './windows-acceptance-output.mjs';
 import { WINDOWS_ACCOUNT_JOURNEY_FILES } from './windows-sandbox-suites.mjs';
 
 export { assertAcceptanceOutput };

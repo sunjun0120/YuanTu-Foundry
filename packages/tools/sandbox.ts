@@ -14,7 +14,6 @@ import {
   type SandboxRequest,
   type TerminalSize,
 } from './sandbox-provider.ts';
-import { windowsSandboxProvider } from './sandbox-windows.ts';
 import { windowsAccountSandboxProvider } from './sandbox-account.ts';
 import { seatbeltSandboxProvider } from './sandbox-seatbelt.ts';
 import { nativeSandboxBackend } from './sandbox-mode.ts';
@@ -192,7 +191,6 @@ registerSandboxProvider({
   prepare: hostPrepare,
   cleanup: async () => {},
 });
-registerSandboxProvider(windowsSandboxProvider);
 registerSandboxProvider(windowsAccountSandboxProvider);
 registerSandboxProvider(seatbeltSandboxProvider);
 registerSandboxProvider({

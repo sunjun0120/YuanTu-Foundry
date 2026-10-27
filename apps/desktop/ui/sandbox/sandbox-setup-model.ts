@@ -8,13 +8,12 @@
  *
  * Two rules survive verbatim:
  *
- * - `undefined` mode counts as needing accounts (that is the native default), while `windows` and `host` do not;
+ * - `undefined` mode counts as needing accounts (that is the native default), while `host` does not;
  * - a damaged backend is diagnosed once with a live `verify`, because the status call only names the problem ids.
  */
 import { t } from '../../i18n.ts';
 import type { SandboxSetupCommand, SandboxSetupView } from '../../sandbox-setup.ts';
 import type { SandboxMode } from '../../sandbox-settings.ts';
-import type { PermissionPresetCommand } from '../../permission-presets.ts';
 import { createStore, type ReadableStore } from '../stores.ts';
 
 /** Whether this session's commands need the account backend before they can run at all. */
@@ -48,7 +47,6 @@ export interface SandboxSetupController {
   start(): Promise<void>;
   request(command: SandboxSetupCommand): Promise<void>;
   dismiss(): void;
-  chooseWeak(): Promise<void>;
   setMode(mode: SandboxMode | undefined): void;
   dispose(): void;
 }
@@ -95,8 +93,6 @@ export function createSandboxSetupController(deps: {
   api?: (
     command: SandboxSetupCommand,
   ) => Promise<import('../../sandbox-setup.ts').SandboxSetupReply>;
-  presets?: (command: PermissionPresetCommand) => Promise<unknown>;
-  confirm?(message: string): boolean;
 }): SandboxSetupController {
   const store = createStore<SandboxSetupState>({
     view: null,
@@ -145,24 +141,6 @@ export function createSandboxSetupController(deps: {
     },
     dismiss() {
       update({ dismissed: true, error: '' });
-    },
-    async chooseWeak() {
-      const state = store.getSnapshot();
-      if (disposed || state.pending || !deps.presets) return;
-      const confirm = deps.confirm ?? ((message: string) => window.confirm(message));
-      if (!confirm(t('sandboxSetup.prompt.weakConfirm'))) return;
-      update({ pending: true, error: '', operation: 'status' });
-      try {
-        const reply = (await deps.presets({
-          type: 'weak-sandbox',
-          acknowledgeWeak: true,
-        })) as { ok: boolean; error?: string };
-        if (!reply.ok) throw new Error(reply.error ?? t('sandboxSetup.failed'));
-      } catch (error) {
-        update({ error: messageOf(error) });
-      } finally {
-        update({ pending: false });
-      }
     },
     setMode(mode) {
       const needed = mode === undefined || mode === 'native' || mode === 'windows-account';

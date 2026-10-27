@@ -1,6 +1,6 @@
 # Historical Windows broker design
 
-This is the earlier SYSTEM broker design, retained as historical reference. The implemented account backend instead uses a desktop-user broker, dedicated offline/online accounts and CurrentUser DPAPI, with no SYSTEM service; see [current implementation and acceptance boundaries](README.md) and [the account design](../../../docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md). `windows-account` is registered; `native` always selects it on Windows and fails closed until initialized, while `windows` remains an explicit weaker choice. The old name `windows-elevated` remains unsupported. The SYSTEM-service requirements and blockers below do not describe this implementation.
+This is the earlier SYSTEM broker design, retained as historical reference. The implemented account backend instead uses a desktop-user broker, dedicated offline/online accounts and CurrentUser DPAPI, with no SYSTEM service; see [current implementation and acceptance boundaries](README.md) and [the account design](../../../docs/superpowers/specs/2026-10-21-windows-account-sandbox-design.md). `windows-account` is registered; `native` always selects it on Windows and fails closed until initialized. The retired `windows` token backend no longer exists: old settings migrate to `native` and historical ACL journals recover with `sandbox-recover`. The old name `windows-elevated` remains unsupported. The SYSTEM-service requirements and blockers below do not describe this implementation.
 
 ## First administrator initialization
 

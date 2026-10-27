@@ -20,15 +20,15 @@ import { BackgroundCommands } from '../packages/tools/background.ts';
 
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-started-'));
-  const original = sandboxProvider('windows');
+  const original = sandboxProvider('windows-account');
   const host = sandboxProvider('host');
   const started = new Set<SandboxPlan>();
   const cleaned = new Set<SandboxPlan>();
   const provider = {
     ...host,
-    mode: 'windows' as const,
+    mode: 'windows-account' as const,
     async prepare(request: Parameters<typeof host.prepare>[0]) {
-      return { ...(await host.prepare(request)), backend: 'windows' as const };
+      return { ...(await host.prepare(request)), backend: 'windows-account' as const };
     },
     started(plan: SandboxPlan) {
       started.add(plan);
@@ -42,7 +42,7 @@ async function fixture(t: test.TestContext) {
     registerSandboxProvider(original);
     await rm(root, { recursive: true, force: true });
   });
-  return { root, started, cleaned, policy: executionPolicy('windows') };
+  return { root, started, cleaned, policy: executionPolicy('windows-account') };
 }
 
 test('foreground commands register their original plan before owner cleanup', async (t) => {
@@ -97,14 +97,14 @@ test('background launch registers the owner plan before serializing it to a work
 test('original owner receives lifecycle calls after backend mutation and provider replacement', async (t) => {
   const { root, started, cleaned } = await fixture(t);
   const plan = await prepareSandbox(root, root, process.execPath, ['-e', ''], {
-    mode: 'windows',
+    mode: 'windows-account',
     image: 'native',
   });
   let replacementCalls = 0;
   const host = sandboxProvider('host');
   registerSandboxProvider({
     ...host,
-    mode: 'windows',
+    mode: 'windows-account',
     started() {
       replacementCalls++;
     },

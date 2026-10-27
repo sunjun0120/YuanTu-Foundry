@@ -45,6 +45,23 @@ test('background authority retains its file policy across reopen and rejects cor
   }
 });
 
+test('a legacy windows authority migrates to native, and retired modes stay absent', () => {
+  const store = new SessionStore(':memory:');
+  try {
+    const id = store.create(process.cwd()).id;
+    store.recordEvent(id, 'background.policy', {
+      authority: { sandboxMode: 'windows', permissionPolicy: null },
+    });
+    assert.equal(backgroundAuthority(store, id)?.sandboxMode, 'native');
+    store.recordEvent(id, 'background.policy', {
+      authority: { sandboxMode: 'docker', permissionPolicy: null },
+    });
+    assert.equal(backgroundAuthority(store, id), undefined);
+  } finally {
+    store.close();
+  }
+});
+
 test('durable completion identities, collection, admission and budget survive projection rebuilds', () => {
   const store = new SessionStore(':memory:');
   try {

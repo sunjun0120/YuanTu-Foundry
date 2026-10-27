@@ -12,12 +12,6 @@ export const HOST_CAPABILITIES: ExecutionCapabilities = Object.freeze({
   pathKind: 'local',
   links: 'refused',
 });
-export const WINDOWS_CAPABILITIES: ExecutionCapabilities = Object.freeze({
-  processFiles: 'workspace-write-partial',
-  network: 'unrestricted',
-  pathKind: 'local',
-  links: 'refused',
-});
 
 type Configuration = {
   mode: ExecutionMode;
@@ -52,7 +46,6 @@ type Declaration = (config: Configuration) => ExecutionCapabilities;
 const declarations = new Map<ExecutionMode, Declaration>([
   ['host', () => HOST_CAPABILITIES],
   ['seatbelt', seatbeltCapabilities],
-  ['windows', () => WINDOWS_CAPABILITIES],
   ['windows-account', windowsAccountCapabilities],
   [
     'native',

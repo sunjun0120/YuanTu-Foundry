@@ -22,7 +22,7 @@ import {
 } from '../packages/tools/sandbox.ts';
 
 test('local sandbox scratch is cleaned only after its process has stopped', async (t) => {
-  const original = sandboxProvider('windows');
+  const original = sandboxProvider('windows-account');
   const child = spawn(process.execPath, ['-e', 'console.log("ready");setInterval(()=>{},1000)'], {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -53,7 +53,7 @@ test('local sandbox scratch is cleaned only after its process has stopped', asyn
     cwd: process.cwd(),
     env: {},
     windowsVerbatimArguments: false,
-    backend: 'windows',
+    backend: 'windows-account',
   });
   assert.equal(cleanups, 1);
 });
@@ -118,10 +118,10 @@ async function withProvider(
   }
 }
 
-test('the five backends ship registered, each with something to say about itself', () => {
+test('the four backends ship registered, each with something to say about itself', () => {
   assert.deepEqual(
     sandboxProviders().map((provider) => provider.mode),
-    ['host', 'windows', 'windows-account', 'seatbelt', 'native'],
+    ['host', 'windows-account', 'seatbelt', 'native'],
   );
   for (const provider of sandboxProviders()) {
     assert.ok(provider.description.length > 20, `${provider.mode} needs a description`);

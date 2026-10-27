@@ -7,7 +7,6 @@ import type {
   SandboxSetupReply,
   SandboxSetupView,
 } from '../apps/desktop/sandbox-setup.ts';
-import type { PermissionPresetCommand } from '../apps/desktop/permission-presets.ts';
 import {
   commandsNeedSandboxAccounts,
   createSandboxSetupController,
@@ -54,12 +53,9 @@ const damaged: SandboxSetupView = {
 
 function fixture(options: {
   reply?: (command: SandboxSetupCommand) => Promise<SandboxSetupReply>;
-  presets?: (command: PermissionPresetCommand) => Promise<unknown>;
-  confirm?: () => boolean;
   api?: boolean;
 }) {
   const commands: SandboxSetupCommand[] = [];
-  const presets: PermissionPresetCommand[] = [];
   const controller: SandboxSetupController = createSandboxSetupController({
     api:
       options.api === false
@@ -68,13 +64,8 @@ function fixture(options: {
             commands.push(command);
             return options.reply ? options.reply(command) : { ok: true, view: ready };
           },
-    presets: async (command) => {
-      presets.push(command);
-      return options.presets ? options.presets(command) : { ok: true };
-    },
-    confirm: options.confirm ?? (() => true),
   });
-  return { controller, commands, presets };
+  return { controller, commands };
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -82,7 +73,6 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 test('only a native preset with uninitialized accounts needs the setup', () => {
   assert.equal(commandsNeedSandboxAccounts({ mode: 'native', state: 'uninitialized' }), true);
   assert.equal(commandsNeedSandboxAccounts({ mode: 'native', state: 'ready' }), false);
-  assert.equal(commandsNeedSandboxAccounts({ mode: 'windows', state: 'uninitialized' }), false);
   assert.equal(commandsNeedSandboxAccounts({ mode: 'host', state: 'uninitialized' }), false);
   assert.equal(commandsNeedSandboxAccounts({ mode: 'windows-account', state: 'damaged' }), true);
   assert.equal(commandsNeedSandboxAccounts({ mode: undefined, state: 'uninitialized' }), true);
@@ -186,32 +176,6 @@ test('a browser bridge without the helper shows nothing', async () => {
   await controller.start();
   assert.deepEqual(commands, []);
   assert.equal(sandboxPromptVisible(controller.store.getSnapshot()), false);
-});
-
-test('the weaker sandbox switches only after the person confirms', async () => {
-  const { controller, presets } = fixture({
-    reply: async () => ({ ok: true, view: uninitialized }),
-    confirm: () => false,
-  });
-  await controller.start();
-  await controller.chooseWeak();
-  assert.deepEqual(presets, []);
-  const confirmed = fixture({ reply: async () => ({ ok: true, view: uninitialized }) });
-  await confirmed.controller.start();
-  await confirmed.controller.chooseWeak();
-  assert.deepEqual(confirmed.presets, [{ type: 'weak-sandbox', acknowledgeWeak: true }]);
-});
-
-test('a weaker-sandbox failure is reported and releases the prompt', async () => {
-  const { controller } = fixture({
-    reply: async () => ({ ok: true, view: uninitialized }),
-    presets: async () => ({ ok: false, error: 'no administrator' }),
-  });
-  await controller.start();
-  await controller.chooseWeak();
-  const state = controller.store.getSnapshot();
-  assert.equal(state.pending, false);
-  assert.equal(sandboxPromptFeedback(state), 'no administrator');
 });
 
 test('disposing stops a late answer from changing the state', async () => {

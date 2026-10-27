@@ -13,7 +13,7 @@ import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
 import { verificationNudge } from './desktop-smoke-support.mjs';
-import { quoteWindowsArgument } from '../packages/tools/sandbox-windows.ts';
+import { quoteWindowsArgument } from '../packages/tools/windows-command.ts';
 import { windowsAccountTests, useAccountTests } from './windows-account-fixture.ts';
 import { accountHelper } from '../scripts/windows-account-ci.mjs';
 
@@ -255,7 +255,7 @@ fs.writeFileSync('desktop-proof.json',JSON.stringify(result));console.log('DESKT
       );
     };
     let page = await launch();
-    for (const preset of ['observe', 'guarded']) await choosePreset(page, preset);
+    for (const preset of ['auto', 'guarded']) await choosePreset(page, preset);
     const choice = await page.evaluate(() => window.yuantu.presets({ type: 'get' }));
     assert.equal(choice.ok, true);
     assert.equal(choice.view.current, 'guarded');

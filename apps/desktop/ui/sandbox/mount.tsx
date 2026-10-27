@@ -19,8 +19,6 @@ export function mountSandboxSetup(bridge: DesktopBridge): {
   if (!host) return { setMode() {}, dispose() {} };
   const controller = createSandboxSetupController({
     api: bridge.sandboxSetup,
-    presets: bridge.presets,
-    confirm: (message) => window.confirm(message),
   });
   const disposeRegion = registerView('sandbox-prompt', <SandboxPrompt controller={controller} />);
   void controller.start();

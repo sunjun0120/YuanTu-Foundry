@@ -113,6 +113,8 @@ public static class YuantuAcl {
     }
   }
   public static string Capture(string path) { return Describe(Handle(path)); }
+  /** Reads a descriptor without the write pin: `Capture` may grant the owner WRITE_OWNER first on volumes outside its profile. */
+  public static string CaptureRead(string path) { PinRead(path); return Describe(pinned[path]); }
   static string Describe(SafeFileHandle handle) {
     IntPtr owner, group, dacl, sacl, sd, text = IntPtr.Zero; uint length;
     uint code = GetSecurityInfo(handle, 1, 0x14, out owner, out group, out dacl, out sacl, out sd);
@@ -140,6 +142,14 @@ public static class YuantuAcl {
     // binary descriptor so integrity SID/policy changes can never disappear from this check.
     var bytes = new byte[descriptor.BinaryLength];
     descriptor.GetBinaryForm(bytes, 0);
+    // An atomic replacement can re-create the object with the same inherited entries but without the DACL's
+    // auto-inherited provenance bit. Provenance is not access: the entries above still have to match exactly,
+    // so clear SE_DACL_AUTO_INHERITED (0x0400) in the self-relative header before comparing.
+    const int SE_DACL_AUTO_INHERITED = 0x0400;
+    int control = bytes[2] | (bytes[3] << 8);
+    control &= ~SE_DACL_AUTO_INHERITED;
+    bytes[2] = (byte)(control & 0xFF);
+    bytes[3] = (byte)((control >> 8) & 0xFF);
     return Convert.ToBase64String(bytes);
   }
   static string AceKey(GenericAce ace) {

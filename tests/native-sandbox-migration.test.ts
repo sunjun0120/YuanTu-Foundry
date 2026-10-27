@@ -8,6 +8,13 @@ import {
 import { permissionPreset } from '../apps/desktop/permission-presets.ts';
 import { parseCarrierCommand } from '../packages/carrier/contract.ts';
 import { applySandboxDefaults, executionEnvironment } from '../apps/shared/runtime.ts';
+import { sandboxProvider } from '../packages/tools/sandbox.ts';
+
+test('the retired Windows token backend cannot be selected for execution', () => {
+  assert.throws(() => resolveSandboxConfig({ YUANTU_SANDBOX: 'windows' }), /removed.*native/i);
+  assert.throws(() => setSandboxMode('windows'), /removed.*native/i);
+  assert.throws(() => sandboxProvider('windows'), /No sandbox provider/);
+});
 
 test('desktop and guarded presets use native isolation without a container runtime', () => {
   assert.equal(defaultSandboxMode({}), 'native');
