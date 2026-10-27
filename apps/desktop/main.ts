@@ -51,6 +51,7 @@ import {
   type ProjectWorkspaceReply,
 } from './project-workspaces-contract.ts';
 import { ProjectWorkspaces, resolveStartupWorkspace, samePath } from './main-project-workspaces.ts';
+import { WorkspaceHostManager } from './workspace-host-manager.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -95,6 +96,7 @@ import {
 let window: BrowserWindow | null = null;
 let browserViews: BrowserViews | null = null;
 let projectWorkspaces: ProjectWorkspaces | null = null;
+let workspaceHosts: WorkspaceHostManager<CarrierService> | null = null;
 /** The last workspace/session pair written to the registry; a snapshot burst must not rewrite the file. */
 let recordedLastSession = '';
 async function noteLastSession(state: CarrierSnapshot): Promise<void> {
@@ -382,10 +384,12 @@ app.on('before-quit', (event) => {
         waitForSandboxInitialization(sandboxInitializing),
         'sandbox setup confirmation',
       );
-      const results = await Promise.allSettled([
-        withinQuitDeadline(service?.stop(), 'Host shutdown'),
-        withinQuitDeadline(openingService?.stop(), 'Host shutdown'),
-      ]);
+      const results = workspaceHosts
+        ? await Promise.allSettled([withinQuitDeadline(workspaceHosts.stopAll(), 'Host shutdown')])
+        : await Promise.allSettled([
+            withinQuitDeadline(service?.stop(), 'Host shutdown'),
+            withinQuitDeadline(openingService?.stop(), 'Host shutdown'),
+          ]);
       const failure = results.find((result) => result.status === 'rejected');
       if (!setupSettled) throw new Error(mainText('sandboxSetup.exitUnconfirmed'));
       if (failure?.status === 'rejected') throw failure.reason;
@@ -588,30 +592,28 @@ void app
       browserViews?.destroyAll();
       browserViews = null;
     });
+    workspaceHosts = new WorkspaceHostManager((_id, hostPath) => createService(hostPath));
     const initial = attach(createService(workspace));
+    workspaceHosts.adopt(started.registry.activeWorkspaceId ?? 'default', workspace, initial);
     /**
-     * Replace the Host with one for `selected`.
+     * Switch the visible Host to another workspace's.
      *
-     * The caller owns `switching` and has checked that no run, queue or approval still depends on the old Host. The
-     * new Host is started before the old one stops, so a failed start leaves the window on the old workspace.
+     * The new Host starts before it becomes visible; the previous Host is kept in the manager so its run can finish
+     * in the background. The caller owns `switching` and has checked that no approval still waits on the old view.
      */
     const replaceHost = async (selected: string): Promise<void> => {
-      const current = service;
-      if (!current) throw new Error(mainText('desktop.quitting'));
+      const registry = projectWorkspaces ? await projectWorkspaces.list() : null;
+      const entry = registry?.workspaces.find(
+        (workspaceEntry) =>
+          !workspaceEntry.removed && samePath(workspaceEntry.canonicalPath, selected),
+      );
       // Before the Host exists: its first run is when an untrusted hook would otherwise execute.
       await reviewWorkspaceHooks(selected);
-      const next = createService(selected);
-      openingService = next;
-      try {
-        await next.start();
-        if (!quitting) {
-          await current.stop();
-          if (!quitting) attach(next);
-        }
-      } finally {
-        if (service !== next) await next.stop();
-        openingService = null;
-      }
+      const runtime = await workspaceHosts!.ensure(
+        entry?.id ?? `unregistered:${selected}`,
+        selected,
+      );
+      if (!quitting) attach(runtime.host);
     };
     registerAttachmentIpc(ctx, () => uiSettingsStore.view.language);
     ipcMain.handle('yuantu:browser', async (event, input: unknown): Promise<BrowserReply> => {
@@ -631,6 +633,8 @@ void app
           if (!projectWorkspaces || quitting) throw new Error(mainText('desktop.quitting'));
           const command = parseProjectWorkspaceCommand(input);
           if (command.type === 'add') {
+            if (command.path)
+              return { ok: true, registry: await projectWorkspaces.add(command.path) };
             if (!window) throw new Error(mainText('desktop.quitting'));
             const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
             if (picked.canceled || !picked.filePaths[0])

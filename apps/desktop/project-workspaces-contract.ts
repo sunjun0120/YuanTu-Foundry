@@ -36,7 +36,7 @@ export class ProjectWorkspacesError extends Error {
 
 export type ProjectWorkspaceCommand =
   | { type: 'list' }
-  | { type: 'add' }
+  | { type: 'add'; path?: string }
   | { type: 'select'; id: string }
   | { type: 'rename'; id: string; displayName: string }
   | { type: 'remove'; id: string }
@@ -49,7 +49,12 @@ export type ProjectWorkspaceReply =
 export function parseProjectWorkspaceCommand(input: unknown): ProjectWorkspaceCommand {
   if (!record(input) || typeof input.type !== 'string') throw new Error('Invalid project command');
   const type = input.type;
-  if (type === 'list' || type === 'add') return { type };
+  if (type === 'list') return { type };
+  if (type === 'add') {
+    if (input.path !== undefined && typeof input.path !== 'string')
+      throw new Error('Invalid workspace path');
+    return { type, ...(input.path ? { path: input.path } : {}) };
+  }
   if (typeof input.id !== 'string' || !/^[\w-]{1,128}$/u.test(input.id))
     throw new Error('Invalid workspace id');
   switch (type) {

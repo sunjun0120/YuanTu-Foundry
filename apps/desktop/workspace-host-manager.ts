@@ -84,6 +84,23 @@ export class WorkspaceHostManager<H extends ManagedHost> {
     return this.entries.get(workspaceId);
   }
 
+  /** Take ownership of a Host the caller already started (the startup Host, before the window was ready). */
+  adopt(workspaceId: string, workspacePath: string, host: H): HostEntry<H> {
+    this.assertLive();
+    const existing = this.entries.get(workspaceId);
+    if (existing) return existing;
+    const entry: HostEntry<H> = {
+      workspaceId,
+      workspacePath,
+      host,
+      epoch: ++this.epoch,
+      lastUsed: this.now(),
+    };
+    this.entries.set(workspaceId, entry);
+    this.activeId = workspaceId;
+    return entry;
+  }
+
   get activeWorkspaceId(): string | null {
     return this.activeId;
   }
