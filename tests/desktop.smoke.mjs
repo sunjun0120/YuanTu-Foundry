@@ -32,7 +32,7 @@ async function waitForNoCompletionUi(page) {
 }
 
 test(
-  'desktop automatic verification folds reasons and evidence into a plain status line',
+  'desktop keeps automatic verification off the transcript until its presentation returns',
   { timeout: 60000 },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-verification-fold-'));
