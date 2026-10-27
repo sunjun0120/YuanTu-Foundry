@@ -10,6 +10,7 @@ import { PanelSlot } from '../slots.tsx';
 import { DesktopShell } from './DesktopShell.tsx';
 import { ModelPicker } from '../settings/ModelPicker.tsx';
 import { modelPicker } from '../settings/model-picker-state.ts';
+import { ProjectSidebar } from '../projects/ProjectSidebar.tsx';
 
 /** Product chrome is owned by React. Child panel containers remain stable across navigation. */
 export function ProductShell(): ReactNode {
@@ -40,20 +41,7 @@ export function ProductShell(): ReactNode {
               <button id="new-session" className="new-session" disabled={!status.canCreate}>
                 <span aria-hidden="true">＋</span> {t('ui.newSession')}
               </button>
-              <div className="workspace-box">
-                <div className="section-label">{t('ui.workspace')}</div>
-                <div id="workspace" title={status.workspace} className="workspace" translate="no">
-                  {status.workspace}
-                </div>
-                <button
-                  id="choose-workspace"
-                  className="text-button choose-workspace"
-                  disabled={!status.canChangeWorkspace}
-                >
-                  {t('ui.changeFolder')}
-                  <span aria-hidden="true">↗</span>
-                </button>
-              </div>
+              <ProjectSidebar canChange={status.canChangeWorkspace} />
               <div id="session-sidebar-root" className="session-sidebar-root">
                 <ViewSlot name="session-sidebar" />
               </div>

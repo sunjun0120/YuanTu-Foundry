@@ -75,6 +75,16 @@ test(
       await page.locator('.composer-area').innerText(),
       /(?:Session|会话) [0-9a-f]{8}/,
     );
+    const project = page.locator('.project-row').first();
+    await project.waitFor();
+    assert.equal(await project.locator('.project-name').getAttribute('aria-current'), 'true');
+    await project.hover();
+    await project.locator('.project-actions button').first().click();
+    await page.locator('.project-rename input').fill('Renamed project');
+    await page.locator('.project-rename input').press('Enter');
+    await page.waitForFunction(
+      () => document.querySelector('.project-name')?.textContent === 'Renamed project',
+    );
     const row = (id) => page.locator(`[data-session-id="${id}"]`);
     const more = (id) => page.locator(`[data-menu-session-id="${id}"]`);
     const idle = () =>

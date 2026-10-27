@@ -336,6 +336,16 @@ export const workspaceMessages: Record<string, [string, string]> = {
   // built at runtime: a Chinese string written into index.html and never translated is exactly the leak the
   // language sweep exists to catch, and it would only be caught on the surfaces the sweep opens.
   'workspace.title': ['工作区文件', 'Workspace files'],
+  'projects.title': ['项目', 'Projects'],
+  'projects.add': ['添加工作区', 'Add workspace'],
+  'projects.empty': ['还没有工作区', 'No workspaces yet'],
+  'projects.rename': ['重命名', 'Rename'],
+  'projects.remove': ['移除', 'Remove'],
+  'projects.removeConfirm': [
+    '确认从列表移除，磁盘文件保留？',
+    'Remove from the list? Files on disk stay.',
+  ],
+  'projects.unavailable': ['不可用', 'Unavailable'],
   'workspace.treeLabel': ['工作区文件树', 'Workspace file tree'],
   'workspace.open': ['文件', 'Files'],
   'workspace.openTitle': ['显示工作区文件', 'Show workspace files'],

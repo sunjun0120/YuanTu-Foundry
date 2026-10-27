@@ -50,7 +50,7 @@ import {
   parseProjectWorkspaceCommand,
   type ProjectWorkspaceReply,
 } from './project-workspaces-contract.ts';
-import { ProjectWorkspaces, resolveStartupWorkspace } from './main-project-workspaces.ts';
+import { ProjectWorkspaces, resolveStartupWorkspace, samePath } from './main-project-workspaces.ts';
 import { SnapshotSender } from './snapshot-patch.ts';
 import { createRunNotifier } from './main-notifications.ts';
 import { withinQuitDeadline } from './quit-deadline.ts';
@@ -568,6 +568,30 @@ void app
       browserViews = null;
     });
     const initial = attach(createService(workspace));
+    /**
+     * Replace the Host with one for `selected`.
+     *
+     * The caller owns `switching` and has checked that no run, queue or approval still depends on the old Host. The
+     * new Host is started before the old one stops, so a failed start leaves the window on the old workspace.
+     */
+    const replaceHost = async (selected: string): Promise<void> => {
+      const current = service;
+      if (!current) throw new Error(mainText('desktop.quitting'));
+      // Before the Host exists: its first run is when an untrusted hook would otherwise execute.
+      await reviewWorkspaceHooks(selected);
+      const next = createService(selected);
+      openingService = next;
+      try {
+        await next.start();
+        if (!quitting) {
+          await current.stop();
+          if (!quitting) attach(next);
+        }
+      } finally {
+        if (service !== next) await next.stop();
+        openingService = null;
+      }
+    };
     registerAttachmentIpc(ctx, () => uiSettingsStore.view.language);
     ipcMain.handle('yuantu:browser', async (event, input: unknown): Promise<BrowserReply> => {
       try {
@@ -595,8 +619,31 @@ void app
           switch (command.type) {
             case 'list':
               return { ok: true, registry: await projectWorkspaces.list() };
-            case 'select':
+            case 'select': {
+              const registry = await projectWorkspaces.list();
+              const entry = registry.workspaces.find(
+                (workspace) => workspace.id === command.id && !workspace.removed,
+              );
+              if (!entry) throw new Error('Workspace is not in the list');
+              if (service && !samePath(service.snapshot.workspace, entry.canonicalPath)) {
+                const state = service.snapshot;
+                if (
+                  !state.ready ||
+                  state.session.running ||
+                  state.session.loading ||
+                  (state.session.otherRuns?.length ?? 0) > 0 ||
+                  state.sessions.some((item) => item.activeRun)
+                )
+                  throw new Error('Wait for the current operation to finish');
+                switching = true;
+                try {
+                  await replaceHost(entry.canonicalPath);
+                } finally {
+                  switching = false;
+                }
+              }
               return { ok: true, registry: await projectWorkspaces.select(command.id) };
+            }
             case 'rename':
               return {
                 ok: true,
@@ -1020,22 +1067,7 @@ void app
               const selected = realpathSync(result.filePaths[0]);
               // The picker is also the "add workspace" flow: register it before starting the Host.
               await projectWorkspaces?.add(selected);
-              if (selected !== state.workspace) {
-                // Before the Host exists: its first run is when an untrusted hook would otherwise execute.
-                await reviewWorkspaceHooks(selected);
-                const next = createService(selected);
-                openingService = next;
-                try {
-                  await next.start();
-                  if (!quitting) {
-                    await service.stop();
-                    if (!quitting) attach(next);
-                  }
-                } finally {
-                  if (service !== next) await next.stop();
-                  openingService = null;
-                }
-              }
+              if (selected !== state.workspace) await replaceHost(selected);
             }
             return { ok: true, patch: replyPatch(service.snapshot) };
           } finally {

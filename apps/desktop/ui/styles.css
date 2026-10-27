@@ -761,6 +761,146 @@ summary:focus-visible {
   margin: 18px 0 9px;
 }
 
+.project-sidebar {
+  padding: 0 10px 14px;
+}
+
+.project-sidebar > .section-label {
+  margin: 18px 0 9px;
+}
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border-radius: 7px;
+}
+
+.project-row:hover,
+.project-row:focus-within,
+.project-row.selected {
+  background: var(--hover);
+}
+
+.project-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row.selected .project-name,
+.project-name[aria-current='true'] {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.project-actions {
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+}
+
+.project-row:hover .project-actions,
+.project-row:focus-within .project-actions {
+  opacity: 1;
+}
+
+.project-actions button {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-actions button:hover,
+.project-actions button:focus-visible {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.project-rename {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+
+.project-rename input {
+  min-width: 0;
+  flex: 1;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.project-rename button {
+  border: 0;
+  border-radius: 5px;
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.project-remove {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.project-remove button {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.project-empty,
+.project-error {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.project-error {
+  color: var(--goal-blocked);
+}
+
+.project-add {
+  margin-top: 10px;
+}
+
 .workspace {
   font-size: 11px;
   color: #596660;
