@@ -104,6 +104,24 @@ test(
         () =>
           document.querySelector('.project-disclosure')?.getAttribute('aria-expanded') === 'true',
       );
+      await disclosure.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.project-disclosure')?.getAttribute('aria-expanded') === 'false',
+      );
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () =>
+          document.querySelector('.project-disclosure')?.getAttribute('aria-expanded') === 'true',
+      );
+      await project.locator('.project-actions button').first().focus();
+      assert.equal(
+        await project
+          .locator('.project-actions')
+          .evaluate((element) => getComputedStyle(element).opacity),
+        '1',
+      );
     }
     const row = (id) => page.locator(`[data-session-id="${id}"]`);
     const more = (id) => page.locator(`[data-menu-session-id="${id}"]`);
