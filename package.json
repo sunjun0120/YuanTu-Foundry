@@ -67,7 +67,8 @@
     "check:release": "npm run check && npm run audit:check && npm run smoke:desktop",
     "search-assets:prepare": "node scripts/prepare-search-assets.mjs",
     "search-assets:verify": "node scripts/prepare-search-assets.mjs --verify-only",
-    "test:isolation:check": "node scripts/check-test-isolation.mjs"
+    "test:isolation:check": "node scripts/check-test-isolation.mjs",
+    "acceptance:desktop": "node scripts/desktop-acceptance.mjs"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.15",

@@ -136,12 +136,13 @@ test('a non-ASCII file name is shown as the name, not as octal escapes', async (
 });
 
 test('the approval card draws through the same view', async () => {
-  // The approval card moved to React (`Approvals.tsx`); the tool result's own change stayed in the renderer. Both
-  // must keep drawing through `diffView`, or the two accounts of one patch drift apart.
+  // The approval card moved to React (`Approvals.tsx`); the tool result's own change is rendered onto the transcript
+  // from `ui/application.tsx`. Both must keep drawing through `diffView`, or the two accounts of one patch drift
+  // apart. The renderer bootstrap no longer builds content at all, so it is not the place to assert this.
   const approvals = await readFile('apps/desktop/ui/conversation/Approvals.tsx', 'utf8');
   assert.match(approvals, /import \{ diffView \} from '\.\.\/\.\.\/diff-view\.ts';/);
   assert.match(approvals, /diffView\(approval\.change, true\)/);
-  const renderer = await readFile('apps/desktop/renderer.ts', 'utf8');
-  assert.match(renderer, /import \{ diffView \} from '\.\/diff-view\.ts';/);
-  assert.match(renderer, /diffView\(message\.change\)/);
+  const application = await readFile('apps/desktop/ui/application.tsx', 'utf8');
+  assert.match(application, /import \{ diffView \} from '\.\.\/diff-view\.ts';/);
+  assert.match(application, /diffView\(message\.change\)/);
 });

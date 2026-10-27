@@ -10,8 +10,8 @@ Reproduce the inventory with:
 rg -c "document\.getElementById|document\.createElement|replaceChildren|new MutationObserver|document\.querySelector|addEventListener" apps/desktop
 ```
 
-At the T25b checkpoint the renderer holds 55 `document.getElementById`, 22 `document.createElement`, 27
-`replaceChildren`, 4 `document.querySelector`, 77 `addEventListener` and 1 `new MutationObserver` (57 of the listeners
+At the final checkpoint the renderer holds 56 `document.getElementById`, 22 `document.createElement`, 27
+`replaceChildren`, 4 `document.querySelector`, 78 `addEventListener` and 1 `new MutationObserver` (58 of the listeners
 live under `apps/desktop/ui`).
 
 ## 1. The one React root and the product skeleton
@@ -85,7 +85,7 @@ All 57 `addEventListener` calls under `ui/` are owned by one of:
   `SessionSidebar.tsx` outside-click; `Statistics.tsx` and `BackgroundPanel.tsx` hover/outside-click; `PermissionChip.tsx`,
   `Subagents.tsx`, `WorkspacePanel.tsx`, `model-selection.ts`, `session-mount.tsx`, `mount.tsx`, `model-mount.tsx`,
   `attachment-mount.tsx`, `command-mount.tsx`, `bindings.ts`);
-- a media-query subscription (`reduced-motion.ts`);
+- a media-query subscription (`reduced-motion.ts`), plus one native `toggle` listener in `ui/conversation/Fold.tsx` that adopts an external `.open` write;
 - the bootstrap's `pagehide` disposer (`renderer.ts`).
 
 The single `MutationObserver` is `ui/providers.tsx`: it watches the `data-theme` / `data-font-size` attributes the

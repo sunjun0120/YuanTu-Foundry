@@ -1,99 +1,127 @@
-# 桌面 React 迁移验证记录（2026-10-27）
+# 桌面 React 迁移最终验收（2026-10-27）
 
-**结论：迁移未完成，本记录不是完成验收。** M2–M6 的迁移任务已落地，M7（外壳接管、CSS 退役、Slot/遗留清理、完整验收）尚未完成；计划中的完整验收标准（六份旧 CSS ≤1,200 行、单一 React 根、`renderer.ts` 仅创建 runtime/root、兼容 id 清零）未达到。下文分别列出已验证事实与未达标项。
+**结论：迁移完成，本记录是可复核的交付证据。** 计划 `docs/superpowers/plans/2026-10-26-desktop-react-typescript-migration.md`
+的 M1–M7 任务全部落地；产品由单一 React 根渲染，六份旧 CSS 退休，兼容 id 表清零，翻译 walker 与 select upgrader
+删除。保留的过渡形态（内容 DOM 岛、休眠 MCP 面板）在下方明确列出，不是遗漏。完成状态摘要见
+`docs/desktop-react-migration-status-2026-10-27.md`，逐任务流水见
+`docs/superpowers/plans/2026-10-27-desktop-react-completion-ledger.md`。
 
-## 1. 已完成并有证据的部分
+## 1. 环境与基线
 
-| 任务                       | 实现                                                                                                           | 被替换/保留                                                           | 证据                                                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| T1–T4 工具链               | tsconfig、eslint、layers/cycles/i18n gate、compat-id 登记、`renderer-globals.d.ts`、`ui/nonce.ts`              | —                                                                     | 全仓库 gate                                                                          |
-| T5–T9 运行时/壳/基础组件   | `ui/stores`、`runtime`、`actions`、`context`、`primitives`、`providers`、`i18n`、`App`、`DesktopShell`、motion | —                                                                     | React 冒烟、motion 冒烟                                                              |
-| T10 通用设置               | `ui/settings/GeneralSettings`                                                                                  | `renderer-general-settings.ts`                                        | controller 测试 8 条；settings 冒烟                                                  |
-| T11 模型设置               | `ui/settings/ModelSettings` + model                                                                            | `renderer-settings.ts` 缩减为 picker 入口                             | settings 8 通过 + 1 跳过（MCP）                                                      |
-| T12 沙箱/权限              | `ui/sandbox`、`ui/permissions`                                                                                 | `renderer-sandbox-setup.ts`、`renderer-permissions.ts`                | capabilities、language                                                               |
-| T13 工作区维护/归档        | `ui/settings/WorkspaceMaintenance`、`ui/sessions/ArchivedSessions`                                             | `renderer-workspace-maintenance.ts`、`renderer-archived-sessions.ts`  | workspace-settings 10 条                                                             |
-| T14 会话列表               | `ui/sessions/*`                                                                                                | `renderer-session-list.ts`、`session-management.ts`                   | desktop-react-sessions 10/10                                                         |
-| T15 命令菜单/composer 状态 | `ui/composer/command-*`、`composer-model`                                                                      | `renderer-commands.ts`；`renderer-composer.ts` 为 DOM adapter         | desktop-react-composer 18/18；language/workflows/agent                               |
-| T16 附件                   | `ui/composer/Attachments` + model/mount                                                                        | `renderer-attachments.ts`、`renderer-attachment-copy.ts`              | desktop-react-attachments 10/10；agent 7/7                                           |
-| T17 工作区面板             | `ui/workspace/*`                                                                                               | `renderer-workspace.ts`                                               | workspace-panel-loading 12/12；desktop-sessions 6/6                                  |
-| T18 后台/统计              | `BackgroundPanel`、`Statistics` + models                                                                       | `renderer-background.ts`、`renderer-statistics.ts`                    | statistics-model 9/9、background-model 7/7；agent/layout                             |
-| T19 任务/计划/会话辅助     | `TasksPanel`、`PlanPanel`、`SessionPanels` + models                                                            | `renderer-tasks.ts`、`renderer-plan.ts`、`renderer-session-panels.ts` | task-view 11/11、plan-contract 10/10、session-panels 4/4；workflows 4/4              |
-| T20 流式/live              | `stream-store`、`MarkdownView`、`LiveMessage` + mount                                                          | `renderer-live.ts` 仅调度；`live-content.tsx`                         | desktop-react-stream 10/10；agent 7/7                                                |
-| T21 Transcript             | `Conversation`、`transcript-mount`、`completion-view`、`transcript-model`、`scroll-anchor`                     | `renderer-transcript.ts`；`renderer-messages.ts` 仅 DOM 岛            | desktop-react-transcript 7/7、scroll-anchor 5/5；desktop 9/9、history 2/2、agent 7/7 |
-| T22 问题/审批/计划批准卡   | `question-model`、`Questions`、`approval-model`、`Approvals`                                                   | `renderer-questions.ts`；审批内联块移出 renderer                      | question-model 9/9、approval-model 2/2；agent/desktop/sessions                       |
-| T23 子 agent/本轮改动      | `Subagents`、`TurnChanges` + mounts/models                                                                     | `renderer-subagents.ts`、`renderer-changes.ts`                        | subagent-model 5/5、turn-changes-model 6/6；agent/sessions/desktop                   |
+| 项       | 值                                                                                                                                                                                                           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 基线提交 | `34a8ace`（M7 开始前，clean worktree）                                                                                                                                                                       |
+| 交付分支 | `feat/desktop-react-completion`                                                                                                                                                                              |
+| 迁移提交 | `033327b` 外壳、`2f5ef5d` CSS/全局改写退役、`cd74b1b` 页面过渡、`41eb844` 生命周期、`a718424` slots、`0756a12` 任务定义编辑器、`853a4d4` 触发编辑器、`7ecf759` 兼容表/DOM 审计、`c2c7a36` 折叠动画与身份证据 |
+| 平台     | Windows（本机），Node 24.19、Electron 43、Chromium 由 Electron 内置                                                                                                                                          |
+| 构建     | `npm run build`（tsc + esbuild；无 Vite/PostCSS 开发服务器，无外部字体/CDN）                                                                                                                                 |
 
-## 2. 未完成项（明确不达标）
+## 2. 命令与结果
 
-1. **T21 动画项**：思考/工具组/验证证据尚未统一使用 `PanelTransition`，没有专门的 transcript 动画冒烟；流式行为由现有 Electron 冒烟覆盖。
-2. **T20 React 冒烟证据**：未记录 MutationObserver/DOM 身份证据；现有 agent/desktop 断言覆盖流式正文与折叠状态。
-3. **DOM 岛（按任务范围保留）**：消息/工具卡/markdown 内容仍由 `renderer-messages.ts` 构建；diff 正文仍由 `diff-view.diffBody` 构建；任务编辑/触发设置表单仍是 `renderer-tasks-editors.ts`；`turn-changes` 卡片内容通过 portal 承载。
-4. **T24 应用外壳接管与旧 CSS 退役：仅起步**。六份旧 CSS 仍为 6,023 行 / 29 个 `!important`（T24 起步只删了已移除的 `#project-name`/`.header-context` 规则；目标 ≤1,200 远未达到）；`body` 仍是旧的页面 grid；`index.html` 仍保留整页静态结构；`renderer.ts` 仍创建多个 region 挂载点。
-5. **T25 Slot/遗留清理：未开始**。`RegionHost`/portal 适配仍在；旧整页 render 仍在；兼容 id 登记表未清零；i18n walker 与原生 select upgrader 仍为 legacy 区域服务。
-6. **T26 完整验收：未完成**。本记录只覆盖可自动化的检查，未做浅/深/系统主题、中英文、字号与窗口尺寸的截图对照，也没有动效的开始/中间/结束帧证据或打包资源校验。
+| 命令                                            | 退出码             | 结果                                                                                                                    |
+| ----------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `npm run format:check`                          | 0                  | 全仓库格式                                                                                                              |
+| `npm run docs:check`                            | 0                  | 先运行 `npm run docs:generate` 刷新 README 事实块                                                                       |
+| `npm run references:check`                      | 0                  |                                                                                                                         |
+| `npm run cycles:check`                          | 0                  |                                                                                                                         |
+| `npm run layers:check`                          | 0                  | 含 `.tsx` 边界规则                                                                                                      |
+| `npm run i18n:check`                            | 0                  |                                                                                                                         |
+| `npm run typecheck`（`tsc --noEmit`）           | 0                  | 覆盖 `apps/**/*.tsx`                                                                                                    |
+| `npm run lint`                                  | 0                  |                                                                                                                         |
+| `npm run test:isolation:check`                  | 0                  |                                                                                                                         |
+| `npm test`                                      | 未整体通过（见下） | 默认并行两次分别命中既有负载敏感用例；`--concurrency=4` 复跑在 44/327 文件后被运行器进程清理中止（该批 561 条全部通过） |
+| `npm run build`                                 | 0                  | tsconfig.build + esbuild；renderer.js / renderer.css / ui.css / index.html                                              |
+| `npm run smoke:client`（`compiled-client` 3/3） | 0                  | 编译后的客户端夹具                                                                                                      |
+| `npm run smoke:desktop`                         | 0                  | **18 套件 76 通过 / 0 失败 / 3 跳过**（Chromium 未安装、MCP 超出当前产品范围、backups 范围外）                          |
+| `npm run acceptance:desktop`                    | 0                  | 9 张截图 + `summary.json`（指标/动效/文档事实）                                                                         |
 
-## 3. 自动化验证
+**关于全量 `npm test`**：两次默认并行运行分别失败在
+`tests/windows-shell.test.ts`（“取消仍在启动的 PowerShell 不留下进程”，实际写出 late-2/6.txt）与
+`tests/swe-bench.test.ts`（真实 Host 的 `run.interrupted` 时序，`undefined !== true`）；两个文件单独运行均通过
+（7/7、19/19），失败只出现在高并发负载下，属既有 flake，与本轮改动无关（迁移前记录
+`docs/validation-…` 也记录过同类 swe-bench 时序 flake）。`--concurrency=4` 的复跑没有断言失败：44 个文件、
+561 条测试全部通过后，运行器在清理 `host-carrier-auth` 的进程树时报
+`Process cleanup failed`，因此没有完整的 327 文件汇总。按计划“记录退出码与测试数、不如实写成通过”的要求，
+这里不把全量套件记为通过；逐区域证据见下。
 
-- 全量 `npm test`：一次完整运行在 45/324 个文件、631 条测试后遇到 `tests/swe-bench.test.ts` 的真实 Host 时序失败（`undefined !== true`）；该文件单独运行 19/19 通过，属于全量并行负载下的既有 flake，与本次迁移改动无关。调度器因失败未跑完剩余文件，因此不把全量套件记为通过。
+### 定向批次（本轮运行的桌面与模型测试）
 
-- 门禁：`npx tsc --noEmit`、`npm run lint`、`npm run i18n:check`、`npm run layers:check`、`npm run cycles:check`、`npm run format:check`、`npm run docs:check`、`npm run references:check`、`npm run test:isolation:check`、`npm run build` 全绿。
-- 最终定向批次（2026-10-27，24 个文件）：**190 通过 / 0 失败**（parallel 185 + serial 5，含 desktop-i18n）。覆盖：stream 10、transcript 7、scroll-anchor 5、turn-changes 6、subagent 5、question 9、approval 2、task-view 11、plan-contract 10、session-panels 4、background 7、statistics 9、workspace-loading 12、attachments 10、sessions 10、composer 18、copy 14、i18n 5、ui-i18n-coverage 2、compat-ids 5、render-caches 2、diff-view 6、i18n-gate 14、ui-copy-migration 7。
-- 最终完整桌面冒烟（2026-10-27，CSS/拖拽/会话菜单修复后重跑）：**72 通过 / 0 失败 / 3 跳过**（`desktop-sessions` 连续 3 次 6/6，确认 `openMenu` 的 `cancelClose()` 恢复执行后不再间歇超时）。
-- 安全/工具链：`desktop-react-csp` 2/2、`desktop-react-toolchain` 6/6、`compat-ids` 5/5、`render-caches` 2/2。
-- 受限环境：本机未安装 Chromium，`desktop-round3` 的 Chromium 截图用例跳过；无法完成 T26 要求的真实 Electron 截图/录屏对照。
+| 套件               | 结果                                                                                                                                                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 桌面 Electron 冒烟 | agent 7/7、desktop 9/9、sessions 6/6、history 2/2、language 7/7、layout 4/4、settings 8 通过 + 1 个既有 MCP 跳过、capabilities 3/3、workflows 4/4、launcher 1/1、motion 5/5、navigation 2/2、React 6/6、identity 1/1、round3 1 通过 + 1 个 Chromium 跳过                          |
+| 模型/视图单测      | stream 10/10、transcript 7/7、scroll-anchor 5/5、turn-changes 6/6、subagent 5/5、question 9/9、approval 2/2、task-view 11/11、plan-contract 10/10、session-panels 4/4、statistics 9/9、background 7/7、workspace-loading 12/12、attachments 10/10、sessions 10/10、composer 18/18 |
+| 契约/门禁单测      | slots 6/6、compat-ids 2/2、ui-i18n-coverage 2/2、i18n-gate 14/14、runtime 13/13、theme 4/4、desktop-copy 14/14、schedule-draft 6/6、diff-view 6/6、render-caches 2/2、windows-shell 7/7、swe-bench 19/19                                                                          |
 
-## 4. 与迁移前行为的已知差异
+## 3. 视觉证据
 
-- Mantine 统一控件带来的外观差异（按钮/输入/弹层）属于计划预期变化；行为断言均以原契约为准。
-- 任务编辑器表单、消息内容、diff 正文仍是 legacy DOM 岛；这是计划中允许的过渡形态，但不是 T24/T25 完成后的终态。
-- `#live` 仍是静态宿主：其 `hidden` 属性由 React 适配器写入，内部节点全部 React；把宿主本身移入 React 树需要 T24 的外壳改造。
+`artifacts/desktop-react-acceptance-2026-10-27/`（由 `npm run acceptance:desktop` 生成，见 `scripts/desktop-acceptance.mjs`）
+包含 9 张真实 Electron 截图与 `summary.json`：
 
-## 5. M7 剩余工作拆解（供后续继续）
+| 截图                                                      | 覆盖                                    |
+| --------------------------------------------------------- | --------------------------------------- |
+| `screens/chat-light-zh.png`                               | 浅色 + 中文 + 1280×800 默认             |
+| `screens/chat-dark-zh.png`                                | 深色 + 中文                             |
+| `screens/chat-system-dark-zh.png`                         | 跟随系统（系统深色）                    |
+| `screens/chat-light-en.png`                               | 英文界面（内容仍是用户原文）            |
+| `screens/settings-small-zh.png` / `settings-small-en.png` | 设置页 + 小字号，中/英两套文案          |
+| `screens/chat-large-zh.png`                               | 大字号                                  |
+| `screens/chat-min-window-zh.png`                          | 最小窗口 820×560，单列、无横向溢出      |
+| `screens/workspace-open-zh.png`                           | 工作区面板打开（树/预览区域，滚动可用） |
 
-### T24 外壳接管与 CSS 退役
+与迁移前对比：仓库没有保留迁移前的像素基线截图，因此不声称逐像素一致。已核对的预期变化是 Mantine 统一控件带来的
+按钮/输入/弹层外观；信息结构（导航、会话列表、标题、状态、输入区、工作区）与品牌保持一致。截图同时人工核对了浅/深/
+系统三套配色、中英两套文案、字号与最小窗口下无遮挡/溢出。
 
-1. **页面结构**：把 `index.html` 的 `body` 网格、`#chat-sidebar`/`#chat-page`/`#workspace-root` 静态骨架迁入 `ui/layout/DesktopShell`；保留现有 region 容器（可先作为 `DesktopShell` 的 children）以缩小一次性改动。
-2. **唯一根**：`renderer.ts` 只创建 runtime/actions 与一个 `createRoot`；删除 `RegionHost` 之外的多个 `mountRegion` 入口（区域组件改为同根子树）。
-3. **过渡**：接通 `PageTransition` 到聊天/设置/设置分类/侧栏显隐；验证返回聊天恢复锚点、草稿与附件，快速反向切换不留下过期回调。
-4. **CSS**：按迁移区域逐块删除 `#id` 规则；每删一块先跑 `desktop`/`desktop-sessions`/`settings` 冒烟，维护 §10 的六文件行数与 `!important` 预算（当前 5,983 / 29，目标 ≤1,200）。
-5. **验收命令**：`node scripts/run-tests.mjs tests/desktop-layout.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-launcher.smoke.mjs`，并检查 React warning / 未处理 Promise / CSP violation。
+## 4. 动效证据
 
-### T25 Slot 与遗留清理
+- **折叠动画**（`tests/desktop-react-identity.smoke.mjs`，1/1 通过，真实 Electron）：逐帧采样折叠容器高度，打开是
+  ≥3 个中间帧、总爬升落在 60–420ms 区间（`MOTION.panel` = 180ms）；关闭到 0 后才移除 `open`；`prefers-reduced-motion`
+  下中间帧 ≤1。
+- **页面过渡**：`desktop-react-motion` 5/5（帧采样，含 reduce 与运行中切换 reduce）、`desktop-react-navigation`
+  （正常/减弱动效下的页面切换、快速反向、草稿/锚点/附件保留）。验收脚本另外记录了打开设置的 `PageTransition`
+  逐帧 opacity 曲线（`summary.json` → `metrics.motion.settingsEnter`，0 → 1 约 11 帧）。
+- **流式身份**：同一 smoke 比较若干 delta 前后 `#live` 宿主、`#live-reasoning` 折叠与答案 `.message-content` 的对象
+  身份不变，并用 MutationObserver 断言内容元素从未被移除重建。
 
-1. 删除 `RegionHost`/portal 适配与旧整页 render；把 slot 语义迁入 `ui/slots.tsx`（五种 context、排序稳定、注销幂等、卸载无残留）。
-2. 移除全局 select upgrader 与翻译 walker 的 legacy 依赖；旧 i18n 豁免若无匹配项一并删除。
-3. 兼容 id 登记表清零（§11），`tests/compat-ids.test.ts` 只保留“表为空”断言。
-4. 用 `rg` 清点剩余 `setup*`、`document.getElementById`、`replaceChildren`、`MutationObserver`、`addEventListener` 引用，逐项说明归属。
+## 5. 资源、CSP 与打包
 
-### T26 完整验收
+- **未打包资源**（`dist/desktop`）：`index.html`（1,001 B）只引用 `./renderer.css`（Mantine，280,201 B）与
+  `./ui.css`（应用样式，104,707 B），顺序为先 Mantine 后应用；两个文件均存在。`document.externalRequests = false`，
+  没有 http(s) 资源引用。
+- **CSP**：`default-src 'self'; script-src 'self'; style-src 'self' data: 'nonce-b7Qm2xL9pR4sT1vW'; …`，
+  无 `unsafe-inline`/`unsafe-eval`，静态 nonce 恰 1 个，与 `ui/nonce.ts`、meta 三方一致（`desktop-react-csp` 2/2）。
+- **离线**：验收脚本与全部桌面冒烟都以本地 `dist/desktop/index.html` 启动，`connect-src 'none'`，无外部请求。
+- **打包产物**：`electron-builder.config.cjs` 的 `files` 含 `dist/desktop/**/*` 且 `asar: false`，上述两个样式表会
+  进入安装包；但 `dist/release/win-unpacked` 现有产物是 2026-10-26 的迁移前包（含六份旧 CSS、无 `ui.css`），
+  不能用于本轮验收。**本轮未重新打包**：`npm run package:windows:dir` 需要 `.scratch/packaging/runtime` 的已准备
+  Windows 运行时（本机当前缺失）。因此打包资源记为“未验证”，复核命令为
+  `npm run package:windows:dir` 后检查 `resources/app/dist/desktop/ui.css` 与 `renderer.css`，而不是沿用旧包结论。
 
-1. 真实 Electron：浅/深/系统主题、中英文、字号、窗口尺寸截图对照；记录 Mantine 控件带来的预期差异。
-2. 动效：正常与 reduced-motion 两套，覆盖页面切换、设置分类、侧栏、菜单/弹窗、折叠、新消息首次出现；记录开始/中间/结束帧与最终焦点/草稿/锚点断言。
-3. 打包：确认 `renderer.css/ui.css` 存在、离线无外部请求、真实 CSP 下无样式拒绝或脚本放行变化。
+## 6. 四项可复核指标
 
-## 6. 复现验证\n\n最终门禁复核：HEAD 69a75e1，工作区干净； ypecheck/lint/i18n/layers/cycles/ormat/docs/
+| 指标                        | 迁移前                                                                    | 迁移后                                                                                        | 说明                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| i18n 覆盖率                 | —                                                                         | `scanI18n` 0 问题；`ui/**` 中文字面量 0；未知 `t()` key 0                                     | `npm run i18n:check`、`tests/ui-i18n-coverage.test.ts`、验收脚本 `metrics.i18n`                                                  |
+| 旧 CSS 行数                 | 6 份合计 5,983 行、29 个 `!important`                                     | 6 份合计 6 行（各 1 行说明）、0 个 `!important`                                               | 目标 ≤1,200 行；`tests/desktop-style-budget.test.ts`；应用样式表 `ui/styles.css` 6,172 行、25 个 `!important`                    |
+| renderer bundle             | `renderer.js` 777,485 B；`index.html` 30,170 B；六份旧 CSS 合计 128,540 B | `renderer.js` 2,545,572 B；`renderer.css` 280,201 B；`ui.css` 104,707 B；`index.html` 1,001 B | 迁移前取自 `dist/release/win-unpacked`（2026-10-26 14:55 打包产物，M7 之前）；增长来自 React 19 + Mantine + motion 进入 renderer |
+| 冷启动到可输入 / 长历史首屏 | 未记录                                                                    | 中位 1,358ms / 95ms（3 次）                                                                   | 同一夹具、同一机器；长历史为 150 条消息的会话，从点击会话到首条消息出现                                                          |
 
-eferences/ est:isolation/uild 全部通过。以下命令按顺序可复现本记录。
+## 7. 已知差异与未验证项
+
+1. **内容 DOM 岛**：消息正文、工具卡、Markdown、diff 正文与完成块仍是 DOM 岛（计划允许）；归属见
+   `docs/desktop-react-dom-audit-2026-10-27.md`。
+2. **休眠 MCP 面板**：`renderer-mcp.ts` 仍为 legacy，但 `PRODUCT_SCOPE.mcpManagement = false`，入口不渲染、
+   `settings.smoke` 跳过该用例。重新启用前需迁移为 React（计划 T13 记录的偏差）。
+3. **CI 平台矩阵**：本轮只在本机 Windows 上执行；其他平台与 CI 矩阵未验证，不声称全平台通过。
+4. **打包产物**：见第 5 节的打包说明；未重新打包时明确标注为未验证，而不是沿用旧包结论。
+5. **像素基线**：没有迁移前截图可直接对比；只对比结构、主题、语言与尺寸可用性，并记录 Mantine 控件带来的预期差异。
+
+## 8. 复核命令
 
 ```powershell
-npm run typecheck
-npm run lint
-npm run i18n:check
-npm run layers:check
-npm run cycles:check
-npm run format:check
-npm run docs:check
-npm run references:check
-npm run test:isolation:check
 npm run build
-node scripts/run-tests.mjs tests/desktop-react-stream.test.ts tests/desktop-react-transcript.test.ts tests/scroll-anchor.test.ts tests/turn-changes-model.test.ts tests/subagent-model.test.ts tests/question-model.test.ts tests/approval-model.test.ts tests/task-view.test.ts tests/plan-contract.test.ts tests/session-panels-model.test.ts tests/background-model.test.ts tests/statistics-model.test.ts tests/workspace-panel-loading.test.ts tests/desktop-react-attachments.test.ts tests/desktop-react-sessions.test.ts tests/desktop-react-composer.test.ts tests/desktop-copy.test.ts tests/desktop-i18n.test.ts tests/ui-i18n-coverage.test.ts tests/compat-ids.test.ts tests/render-caches.test.ts tests/diff-view.test.ts tests/i18n-gate.test.ts tests/ui-copy-migration.test.ts
+node scripts/run-tests.mjs tests/desktop-react-identity.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react-navigation.smoke.mjs
+npm run acceptance:desktop
 npm run smoke:desktop
+npm run check
 ```
-
-## 7. 迁移期发现并修复的缺陷
-
-- `SessionSidebar.openMenu` 的 `cancelClose()` 曾被写在注释行内（注释末尾带字面 `\n`），导致上一行的关闭定时器会关掉刚打开的菜单；修复后 `desktop-sessions` 连续 3 次 6/6。
-- `desktop-layout` 的权限模式 `change` 事件同样被注释吞掉，测试实际未切到 observe；恢复 `dispatchEvent` 后 4/4 通过，冒烟强度恢复。
-- `WorkspacePanel` 拖拽漏掉 `body.workspace-resizing`、pointer capture 与焦点；修复并补了按下/松开类名断言。
-- `task.event.sessionCreated` 与 `ui.newSession` 字典值重复导致 `ui-copy-migration` 拒绝迁移；任务事件改为“有会话创建”。
-- 两条历史文档指向已删除模块的路径已修正，`references:check` 恢复通过。

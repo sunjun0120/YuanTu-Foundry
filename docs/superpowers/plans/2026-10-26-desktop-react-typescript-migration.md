@@ -790,12 +790,12 @@ interface PanelTransitionProps {
 - [x] 可控时钟测试：100 delta 只发布一次且文本完整、text/reasoning 分离、reset、delta 先于 snapshot、终止/新 messageId、dispose 后不再发布。
 - [x] store 严格复刻既有 ID/reset/结束规则；不扩展 IPC、不虚构 delta 的 sessionId。
 - [x] `MarkdownView` 保留 `markdownBlocks`/复制/链接动作，只更新末尾变化块，不把模型 HTML 交给 `dangerouslySetInnerHTML`。
-- [~] 专门的 React smoke 未记录 MutationObserver/DOM 身份证据；`agent`/`desktop` 现有断言覆盖流式正文、历史节点与展开折叠，agent 新增“重绘后折叠仍展开”断言。
+- [x] 专门的 React smoke 记录 MutationObserver/DOM 身份证据（`tests/desktop-react-identity.smoke.mjs`）：流式若干 delta 后比较 `#live` 宿主、`#live-reasoning` 折叠与答案 `.message-content` 的对象身份不变，MutationObserver 断言内容元素从未被移除重建；`agent`/`desktop` 现有断言继续覆盖流式正文、历史节点与展开折叠。
 - [x] 验证：`desktop-react-stream` 10/10、`markdown-links` 5/5、`agent` 7/7、`language` 7/7、`desktop-react` 4/4、`desktop` 9/9、`sessions` 6/6、`desktop-react-transcript` 7/7；lint/i18n/layers/cycles/format/typecheck/build 全绿。
 
 #### T21: 历史消息、Transcript 与滚动锚点
 
-**进度:** 已完成主体。`transcript-model`（7 条纯测试：runtime context、provisional、操作折叠/断组、ending/card、绝对 key、prepend 继承 group key、重复 key 守卫）+ `scroll-anchor`（5 条：capture/restore、节点消失回退、`captureHistoryAnchor` 对展开工具组内部步骤）+ `Conversation.tsx`/`transcript-mount.tsx`/`completion-view.ts`；React 接管 `#messages` 行、process-group、run-paused、turn-card 位置、完成块、DOM 身份与 per-key 展开/滚动；`renderer-transcript.ts`（560 行）删除，`renderer-messages.ts` 保留为 DOM 岛构建器。`renderer.ts` 的 load-older 改用 capture/restoreAnchor。**未做：** 统一 `PanelTransition` 的折叠动画与专用 `desktop-react-transcript.smoke.mjs`（现有 Electron 冒烟覆盖行为）；`turn-changes` 卡片仍由 `renderer-changes.ts` 构建。
+**进度:** 已完成。`transcript-model`（7 条纯测试）+ `scroll-anchor`（5 条）+ `Conversation.tsx`/`transcript-mount.tsx`/`completion-view.ts`；React 接管 `#messages` 行、process-group、run-paused、turn-card 位置、完成块、DOM 身份与 per-key 展开/滚动；`renderer-transcript.ts`（560 行）删除，`renderer-messages.ts` 保留为 DOM 岛构建器。`renderer.ts` 的 load-older 改用 capture/restoreAnchor。折叠动画已统一到 `ui/conversation/Fold.tsx`（原语 `<details>`+`PanelTransition`，React 持有 open、原生 `toggle` 被采纳），并新增 `tests/desktop-react-identity.smoke.mjs` 逐帧记录高度曲线；`turn-changes` 卡片由 `TurnChanges.tsx` 渲染（portal 到稳定 holder）。
 
 **Files:** 新增 `ui/conversation/Conversation.tsx`、`transcript-mount.tsx`、`completion-view.ts`、`transcript-model.ts`、`scroll-anchor.ts`；修改 `renderer-messages.ts`、`renderer.ts`；删除 `renderer-transcript.ts`；扩展 `tests/desktop-react-transcript.test.ts`、`tests/scroll-anchor.test.ts`、`tests/desktop.smoke.mjs`、`tests/history.smoke.mjs`。
 
@@ -807,7 +807,7 @@ interface PanelTransitionProps {
 - [x] 真实页面验证 prepend 旧消息保持可见锚点（消息与展开工具组内部；history.smoke 通过）；用户滚离尾部不抢滚动、子 agent 页打开时父流不抢滚动（agent/desktop 冒烟）。
 - [x] 保持思考、工具组与验证证据的展开状态；per-key open/scroll 映射跨重建保留；key 不含 locale/messageRevision/流式文本，语言变化经 props 更新。
 - [x] 保留自动验证 presentation：`verified` 不出现提示；环境限制、未验证、受限等展示和证据可展开；原始命令、退出码或输出不丢，完成判定未改（`completion-view.ts`）。
-- [~] 思考/工具组/验证证据的统一 PanelTransition 与专门动画补测未做；当前沿用既有原生 details 行为，流式冒烟已覆盖不抢滚动与展开状态。
+- [x] 思考/工具组/验证证据统一走 `PanelTransition`（`Fold`）；专用动画补测由 `desktop-react-identity` 覆盖：打开是 180ms 高度爬升（≥3 个中间帧），关闭结束时才移除 `open`，reduced-motion 单帧完成；同时保留原生 details 语义与 `history.smoke` 的直接 `.open` 写入。
 - [x] 文案键化；`renderer-transcript.ts` 删除；兼容 id/class 保留（`#messages > .message`、`.process-group`、`.run-paused`）。
 - [x] 验证：`desktop-react-transcript` 7/7、`scroll-anchor` 5/5、`render-caches` 2/2、`desktop` 9/9、`history` 2/2、`agent` 7/7、`sessions` 6/6、`desktop-i18n` 5/5、`desktop-react` 4/4；另 `language` 7/7、`layout` 4/4、`round3` 1 通过+1 Chromium 跳过、`copy` 14/14。
 
@@ -845,13 +845,13 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 **Files:** 完成 `ui/App.tsx`、`ui/layout/DesktopShell.tsx`；精简 `renderer.ts`、`index.html`；按 §10 调整六份旧 CSS 与 `ui/styles.css`；扩展 `tests/desktop-layout.smoke.mjs`、`tests/desktop-react-motion.smoke.mjs`。
 
-**规模:** 约 800–1,200 行（其中 CSS 删除远大于新增）。\n\n**进度:** 仅起步。删除已移除的 #project-name、.header-context、.message-label、.message-model、.background-meta、.background-log 规则后旧 CSS 为 5,983 行（layout.css 1,371、styles.css 1,403、styles-subagents.css 1,005）；外壳接管、body grid 替换、PageTransition 与 ≤1,200 行预算均未完成。
+**规模:** 约 800–1,200 行（其中 CSS 删除远大于新增）。\n\n**进度:** 已完成（拆为 T24a 外壳/T24b 过渡与 CSS 退役）。`index.html` 只剩 `#desktop-root`（21 行、0 中文），`renderer.ts` 36 行只做 runtime/root 引导；产品树由 `ui/layout/ProductShell.tsx` 的单一 AppShell 渲染，`PageTransition` 接通聊天/设置/设置分类，`desktop-react-navigation` 以帧记录过渡与草稿/锚点保留。六份旧 CSS 均已退役为 1 行说明（合计 6 行、0 个 `!important`），需要的规则迁入 `ui/styles.css`（6,172 行、25 个 `!important`），已无已迁移区域的 `#id` 选择器；`desktop-style-budget` 守卫预算。
 
-- [ ] 移除 RegionHost/portal 区域适配，由同一根内的 App/DesktopShell 接管 `index.html` 的整页结构；保留单 provider 和所有业务状态。移除旧 body grid 的干扰，修复 AppShell 偏移、高度、overflow 及 portal 样式，核对 HTML 只有一个 `main` landmark。
-- [ ] 接通产品中的 PageTransition 与各面板过渡，覆盖聊天/设置/设置分类/已有侧栏显隐和消息容器首次出现。验证返回聊天恢复锚点、草稿和附件，动画中快速切换或关闭窗口不遗留过期回调。
-- [ ] 按 §10 完成 CSS 清单、删除与预算：完成时六份旧 CSS 合计 ≤ 1,200 行，不含已迁移区域 `#id` 规则；记录每份删减行数与 `!important` 计数变化。
-- [ ] 确认 `index.html` 的静态文案已键化（T2 脚本 + 人工复核），`index.html` 与 `ui/` 无产品中文字面量。
-- [ ] 构建后运行 `node scripts/run-tests.mjs tests/desktop-layout.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-launcher.smoke.mjs`；验证桌面启动、缩放窗口、面板切换无 React warning/未处理 Promise/意外 CSP violation。
+- [x] 移除 RegionHost/portal 区域适配，由同一根内的 App/DesktopShell 接管 `index.html` 的整页结构；保留单 provider 和所有业务状态。移除旧 body grid 的干扰，修复 AppShell 偏移、高度、overflow 及 portal 样式，核对 HTML 只有一个 `main` landmark。
+- [x] 接通产品中的 PageTransition 与各面板过渡，覆盖聊天/设置/设置分类/已有侧栏显隐和消息容器首次出现。验证返回聊天恢复锚点、草稿和附件，动画中快速切换或关闭窗口不遗留过期回调。
+- [x] 按 §10 完成 CSS 清单、删除与预算：完成时六份旧 CSS 合计 ≤ 1,200 行，不含已迁移区域 `#id` 规则；记录每份删减行数与 `!important` 计数变化（1,403→1、1,005→1、452→1、1,371→1、1,339→1、413→1；`!important` 29→0）。
+- [x] 确认 `index.html` 的静态文案已键化（T2 脚本 + 人工复核），`index.html` 与 `ui/` 无产品中文字面量（`ui-i18n-coverage` 2/2、`docs/desktop-react-dom-audit-2026-10-27.md` 记录 scanI18n 0 问题、`ui/**` 0 个中文字面量）。
+- [x] 构建后运行 `node scripts/run-tests.mjs tests/desktop-layout.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-react.smoke.mjs tests/desktop-launcher.smoke.mjs`；验证桌面启动、缩放窗口、面板切换无 React warning/未处理 Promise/意外 CSP violation。已完成：4/4、5/5、6/6、1/1；全量 `smoke:desktop` 见最终验收记录。
 
 #### T25: Slot、遗留清理与旧测试迁移
 
@@ -859,16 +859,16 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 **规模:** 约 600–900 行（含测试迁移）。
 
-**进度:** 未开始。`renderer.ts` 仍创建多个 region 挂载点、旧整页 render 仍在、`RegionHost`/portal 适配仍在、兼容 id 登记表未清零、select upgrader 与翻译 walker 仍为 legacy 区域服务。本任务依赖 T24 的外壳接管，不能在剩余轮次内安全完成。
+**进度:** 已完成（拆为 T25 chrome/T25a 区域 children/T25 slots/T25b 遗留清理）。`renderer.ts` 只创建 runtime/actions 与唯一 `createRoot`，退出时 unmount+dispose；区域不再经 portal，`ui/views.tsx` 的 `ViewSlot` 渲染普通 children；五种 slot 由 `ui/slots.tsx` 渲染、`ui/slot-registry.ts` 发布修订，注销幂等、替换后旧 disposer 无效；翻译 walker 与原生 select upgrader 已删除；兼容 id 表为空且 `MIGRATION_COMPLETE = true`（`tests/compat-ids.test.ts` 只保留完成态断言）；`docs/desktop-react-dom-audit-2026-10-27.md` 逐项登记剩余 DOM 调用的归属（1 个 root、无 RegionHost、无第二套页面，休眠 MCP 面板记录在案）。同一轮修复了 slot 包装元素缺少规则导致的工作区预览无法滚动回归（`.slot { display: contents }`）。
+
+- [x] 先用测试锁定 Slot 排序、同序稳定、动态注册、注销幂等、不重复挂载，以及 message/panel 的类型不能混用；React root 卸载后无订阅和定时器残留。
+- [x] 移除旧整页 render、全局 select upgrader 和 React 区域的翻译 walker 依赖；i18n 中面向 main process 的 `mainText/setMainLocale` 继续可用。若旧渲染豁免已无匹配项，连同理由更新 i18n gate，不保留失效豁免。
+- [x] 原测试若直接 import 已退役的 `setup*` 或读取旧源码字符串（`plan-contract`、`sandbox-setup-renderer` 等未在前序任务点名的测试），迁移到纯模型/真实 React 页面断言；保留同等行为覆盖，不靠重导出旧 UI、删断言或 skip 来过门禁（本轮把 `diff-view.test.ts` 对旧 renderer 源码的断言迁到 `ui/application.tsx` 与 `Approvals.tsx`）。
+- [x] 用 `rg` 搜索旧 setup、`document.getElementById`、`replaceChildren`、`new MutationObserver`、`addEventListener` 的剩余引用，逐项说明归属；允许 DOM 岛和基础工具，不允许隐藏的第二套页面实现。
+- [x] 兼容 id 登记表清零（§11），并删除 `tests/compat-ids.test.ts` 中的过程中断言，保留“表为空”断言。
+- [x] 构建后运行 `node scripts/run-tests.mjs tests/slots.test.ts tests/compat-ids.test.ts tests/desktop-react.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-launcher.smoke.mjs tests/desktop-capabilities.smoke.mjs`。已完成：6/6、2/2、6/6、5/5、4/4、1/1、3/3。
 
 **Interfaces:** `renderer.ts` 只创建 runtime/actions、启动唯一 `createRoot`、在 DesktopProviders 内挂载 App、退出时 `root.unmount/runtime.dispose`。Slot 保持架构约定的五种 context 和注册/注销语义。
-
-- [ ] 先用测试锁定 Slot 排序、同序稳定、动态注册、注销幂等、不重复挂载，以及 message/panel 的类型不能混用；React root 卸载后无订阅和定时器残留。
-- [ ] 移除旧整页 render、全局 select upgrader 和 React 区域的翻译 walker 依赖；i18n 中面向 main process 的 `mainText/setMainLocale` 继续可用。若旧渲染豁免已无匹配项，连同理由更新 i18n gate，不保留失效豁免。
-- [ ] 原测试若直接 import 已退役的 `setup*` 或读取旧源码字符串（`plan-contract`、`sandbox-setup-renderer` 等未在前序任务点名的测试），迁移到纯模型/真实 React 页面断言；保留同等行为覆盖，不靠重导出旧 UI、删断言或 skip 来过门禁。
-- [ ] 用 `rg` 搜索旧 setup、`document.getElementById`、`replaceChildren`、`new MutationObserver`、`addEventListener` 的剩余引用，逐项说明归属；允许 DOM 岛和基础工具，不允许隐藏的第二套页面实现。
-- [ ] 兼容 id 登记表清零（§11），并删除 `tests/compat-ids.test.ts` 中的过程中断言，保留“表为空”断言。
-- [ ] 构建后运行 `node scripts/run-tests.mjs tests/slots.test.ts tests/compat-ids.test.ts tests/desktop-react.smoke.mjs tests/desktop-react-motion.smoke.mjs tests/desktop-layout.smoke.mjs tests/desktop-launcher.smoke.mjs tests/desktop-capabilities.smoke.mjs`。
 
 #### T26: 完整验收与交付记录
 
@@ -876,14 +876,14 @@ enderer-live.ts 直接 import .tsx（layers 门禁）与 ui-i18n-coverage 扫描
 
 **规模:** 文档与证据为主，约 1–2 天。
 
-**进度:** 部分完成。`docs/validation-desktop-react-migration-2026-10-27.md` 已逐模块记录实现/证据/未达标项；完整桌面冒烟 72 通过 / 0 失败 / 3 跳过、最终定向批次 190 通过。**未完成**：真实 Electron 的主题/中英文/字号/窗口尺寸截图对照、动效帧证据、打包资源与 CSP 的最终核验；因此本任务不能标记完成。
+**进度:** 已完成本地验收。`docs/validation-desktop-react-migration-2026-10-27.md` 记录命令退出码、测试通过/失败/跳过数、9 张真实 Electron 截图、逐帧动效与身份证据、资源/CSP 核对、四项指标与未验证项；`npm run acceptance:desktop` 可重现证据。默认并行 `npm run check` 在本机两次分别命中既有负载敏感用例（`windows-shell` 进程取消、`swe-bench` 真实 Host 时序，均单独通过），全量行为测试在 `--concurrency=4` 下复跑；CI 平台矩阵未验证。
 
-- [ ] 对照完整模块表逐行填写实际目标文件与结果，确认隐藏功能的处理。检查 Electron/main/preload、协议、数据文件和模型/沙箱行为没有随迁移漂移。
-- [ ] 使用真实 Electron 检查浅/深/系统主题、中英文、各字号和当前测试覆盖的窗口尺寸；与迁移前截图比较，记录 Mantine 统一控件引起的预期变化，以及实际修复的布局偏移。保留原有信息结构、品牌和可用空间，不以像素不同直接判失败或忽略真实遮挡。
-- [ ] 正常动效与 reduced-motion 两套模式都验收页面切换、设置分类、已有侧栏、菜单/弹窗、折叠和新消息首次出现；覆盖快速反向切换和窗口关闭。记录短录屏或开始/中间/结束帧证据，另以真实断言确认最终焦点、草稿和锚点；单张最终截图不能证明动画通过。
-- [ ] 核验未打包与打包资源中的 `renderer.css/ui.css` 均存在，离线启动无外部资源请求；真实 CSP 下没有意外样式拒绝、内联脚本放行或升级后的安全设置变化。
-- [ ] 记录四项可复核指标：i18n 覆盖率（`ui/**` 中文字面量 = 0，`t()` key 缺失 = 0）、旧 CSS 行数（≤ 1,200）与 `!important` 计数变化、renderer bundle 大小（迁移前/后，同构建参数）、冷启动到可输入与长历史初次显示时间（同夹具、同机器，各测 3 次取中位数）。发现回退须定位处理并重跑相关项。
-- [ ] 先运行必要的定向测试，再依次执行下列最终命令；全部通过后不无故重复全量测试。
+- [x] 对照完整模块表逐行填写实际目标文件与结果，确认隐藏功能的处理。检查 Electron/main/preload、协议、数据文件和模型/沙箱行为没有随迁移漂移（验收记录第 2、7 节；休眠 MCP 与 DOM 岛明确列账）。
+- [x] 使用真实 Electron 检查浅/深/系统主题、中英文、各字号和当前测试覆盖的窗口尺寸；与迁移前截图比较，记录 Mantine 统一控件引起的预期变化，以及实际修复的布局偏移。保留原有信息结构、品牌和可用空间，不以像素不同直接判失败或忽略真实遮挡（9 张截图在 `artifacts/desktop-react-acceptance-2026-10-27/screens/`；仓库无迁移前像素基线，已如实记录）。
+- [x] 正常动效与 reduced-motion 两套模式都验收页面切换、设置分类、已有侧栏、菜单/弹窗、折叠和新消息首次出现；覆盖快速反向切换和窗口关闭。记录短录屏或开始/中间/结束帧证据，另以真实断言确认最终焦点、草稿和锚点；单张最终截图不能证明动画通过（`desktop-react-motion` 5/5、`desktop-react-navigation`、`desktop-react-identity` 逐帧采样；`summary.json` 记录设置页 opacity 曲线）。
+- [x] 核验未打包与打包资源中的 `renderer.css/ui.css` 均存在，离线启动无外部资源请求；真实 CSP 下没有意外样式拒绝、内联脚本放行或升级后的安全设置变化（`summary.json` 的 `document` 与 `packaged` 段；打包脚本 `npm run package:windows:dir`，未重新打包时明确标注）。
+- [x] 记录四项可复核指标：i18n 覆盖率（0 问题、`ui/**` 中文字面量 0、未知 key 0）、旧 CSS 行数（6 行 ≤ 1,200，`!important` 29→0）、renderer bundle 大小（777,485 B → 2,545,572 B，另 renderer.css 280,201 B、ui.css 104,707 B）、冷启动中位 1,358ms 与长历史首屏 95ms（3 次）。发现回退须定位处理并重跑相关项。
+- [x] 先运行必要的定向测试，再依次执行下列最终命令；全部通过后不无故重复全量测试（见验收记录第 2 节）。
 
 ```powershell
 npm run docs:generate
@@ -891,9 +891,9 @@ npm run check
 npm run smoke:desktop
 ```
 
-- [ ] `npm run check` 已包含格式、文档、引用、循环、分层、i18n、类型、lint、隔离、全量行为测试、构建和 compiled-client smoke。记录每条命令退出码、测试通过/失败/跳过数、源码 commit/diff 标识和环境。
-- [ ] 在现有 CI 平台矩阵上验证桌面 smoke；真实 Windows 沙箱账号项仅在其既有 CI 条件下运行。Electron 不可启动、平台不支持或账号用例跳过时，明确写“未验证”与原因，不能写全平台验收通过。
-- [ ] 保留 `artifacts/` 或现有测试产物中的截图/报告路径；交付剩余限制、未实施的隐藏功能和必要后续项，不删除其他任务的修改或冻结 benchmark 证据。
+- [x] `npm run check` 已包含格式、文档、引用、循环、分层、i18n、类型、lint、隔离、全量行为测试、构建和 compiled-client smoke。记录每条命令退出码、测试通过/失败/跳过数、源码 commit/diff 标识和环境（逐条退出码与测试数在验收记录第 2 节；默认并行 flake 与 `--concurrency=4` 复跑结果一并记录）。
+- [~] 在现有 CI 平台矩阵上验证桌面 smoke；真实 Windows 沙箱账号项仅在其既有 CI 条件下运行。Electron 不可启动、平台不支持或账号用例跳过时，明确写“未验证”与原因，不能写全平台验收通过。**本轮只在本机 Windows 执行，CI 矩阵未验证**。
+- [x] 保留 `artifacts/desktop-react-acceptance-2026-10-27/` 截图与 `summary.json`；交付剩余限制、未实施的隐藏功能和必要后续项，不删除其他任务的修改或冻结 benchmark 证据。
 
 ## 验收矩阵
 

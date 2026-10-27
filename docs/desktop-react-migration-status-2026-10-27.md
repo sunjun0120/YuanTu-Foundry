@@ -1,59 +1,42 @@
-# 桌面 React 迁移实施状态（2026-10-27）
+# 桌面 React 迁移最终状态（2026-10-27）
 
-本文件记录 `docs/superpowers/plans/2026-10-26-desktop-react-typescript-migration.md` 的实际进度，供 T26 完整验收时继续填写。它**不是**完成验收记录：迁移尚未全部结束，未完成项在下方明确列出。
+本文件是迁移完成后的状态说明，取代同名文件早期的“实施中”版本。过程记录与逐任务证据在
+`docs/superpowers/plans/2026-10-27-desktop-react-completion-ledger.md`，验收结果与截图/指标在
+`docs/validation-desktop-react-migration-2026-10-27.md`。
 
-## 已完成（有测试与冒烟证据）
+## 结论
 
-| 区域                         | 实现                                                                                       | 旧模块                                                                                                         | 定向验证                                                                                           |
-| ---------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 工具链/门禁                  | tsconfig、eslint、layers/cycles/i18n gate、compat-id 登记                                  | —                                                                                                              | 全仓库 gate                                                                                        |
-| 设置（通用/模型/工作区维护） | `ui/settings/*`                                                                            | `renderer-general-settings.ts`、`renderer-settings.ts`（picker 入口保留）、`renderer-workspace-maintenance.ts` | settings 8 通过 + 1 跳过（MCP）；general-settings 8 条 controller 测试                             |
-| 沙箱权限                     | `ui/sandbox/*`、`ui/permissions/*`                                                         | `renderer-sandbox-setup.ts`、`renderer-permissions.ts`                                                         | desktop-capabilities、desktop-language                                                             |
-| 会话列表/对话框/归档         | `ui/sessions/*`（session-model、SessionSidebar/Row/Dialog、ArchivedSessions）              | `renderer-session-list.ts`、`session-management.ts`、`renderer-archived-sessions.ts`                           | desktop-react-sessions 10/10；desktop-sessions                                                     |
-| 命令菜单                     | `ui/composer/command-*`                                                                    | `renderer-commands.ts`                                                                                         | desktop-react-composer 9/9（palette）                                                              |
-| 附件                         | `ui/composer/attachment-*`、`Attachments`                                                  | `renderer-attachments.ts`、`renderer-attachment-copy.ts`                                                       | desktop-react-attachments 10/10；agent 7/7（附件全流程）                                           |
-| 工作区面板                   | `ui/workspace/*`（model、WorkspacePanel、FileTree/FilePreview、mount）                     | `renderer-workspace.ts`                                                                                        | workspace-panel-loading 12/12；desktop-sessions 6/6（拖拽/全屏/预览/tab/滚动）                     |
-| 统计/后台                    | `ui/panels/Statistics`、`BackgroundPanel`、两个 model                                      | `renderer-statistics.ts`、`renderer-background.ts`                                                             | statistics-model 9/9、background-model 7/7；agent 7/7、layout 4/4                                  |
-| 任务/计划/会话辅助           | `ui/panels/task-view`、`TasksPanel`、`PlanPanel`、`SessionPanels`、`task-confirm-drafts`   | `renderer-tasks.ts`、`renderer-plan.ts`、`renderer-session-panels.ts`                                          | task-view 11/11、plan-contract 10/10、session-panels-model 4/4；workflows 4/4                      |
-| 问题/审批/计划批准卡         | `ui/conversation/question-model`、`Questions`、`approval-model`、`Approvals`、mounts       | `renderer-questions.ts`（审批内联块从 renderer.ts 移出）                                                       | question-model 9/9、approval-model 2/2；agent 7/7、desktop 9/9、sessions 6/6                       |
-| 流式答案与思考               | `stream-store`、`MarkdownView`、`LiveMessage`、`live-message-mount`、`live-model`          | `renderer-live.ts` 只剩调度（`#live` 为稳定宿主）                                                              | desktop-react-stream 10/10；agent 7/7、language 7/7、desktop 9/9                                   |
-| Transcript/历史消息          | `Conversation`、`transcript-mount`、`transcript-model`、`scroll-anchor`、`completion-view` | `renderer-transcript.ts`（`renderer-messages.ts` 仅作 DOM 岛）                                                 | desktop-react-transcript 7/7、scroll-anchor 5/5；desktop 9/9、history 2/2、agent 7/7、sessions 6/6 |
-| 子 agent                     | `Subagents`、`subagents-mount`、`subagent-model`                                           | `renderer-subagents.ts`                                                                                        | subagent-model 5/5；agent 7/7、workspace-ui 5/5、language 7/7                                      |
-| 本轮改动                     | `TurnChanges`、`turn-changes-mount`、`turn-changes-model`                                  | `renderer-changes.ts`                                                                                          | turn-changes-model 6/6；desktop 9/9、sessions 6/6、agent 7/7                                       |
+计划 `docs/superpowers/plans/2026-10-26-desktop-react-typescript-migration.md` 的 M1–M7 任务全部完成，桌面产品由单一
+React 根渲染：`renderer.ts`（36 行）只创建 runtime/actions 和一个 root，`index.html`（21 行、无静态产品结构、无中文）
+只保留 `#desktop-root` 与两个本地样式表。六份旧 CSS 退休为 1 行说明；兼容 id 表为空且 `MIGRATION_COMPLETE = true`；
+i18n 翻译 walker 与原生 select upgrader 已删除。
 
-## 未完成 / 明确保留的 legacy
+## 完成情况
 
-1. **T21 剩余**：统一 PanelTransition 与专门的 transcript 动画冒烟未做；消息/工具卡/markdown 内容仍由 `renderer-messages.ts` 构建（DOM 岛）。
-2. **T20 剩余**：`#live` 仍是静态宿主（内部全部 React，`hidden` 由 mount 写）；专门的 React DOM 身份/MutationObserver 冒烟未记录。
-3. **T23 已完成**：子 agent 与本轮改动两组面板都由 React 接管；diff 正文与消息内容仍是 DOM 岛。
-4. **任务编辑/触发设置表单**：`renderer-tasks-editors.ts` 仍是 legacy DOM，作为宿主节点嵌在 React 卡片中；字段、校验与保存协议原样。
-5. **M7 T24 外壳接管/CSS 退役**：尚未开始。`#`/class 兼容 id 仍按计划保留，旧 CSS 仍为 6,033 行。
-6. **M7 T25 Slot/遗留清理**：未开始；`renderer.ts` 仍创建多个 React 区域挂载点，旧整页渲染仍在。
-7. **M7 T26 完整验收**：尚未完成；已写 `docs/validation-desktop-react-migration-2026-10-27.md`，其中明确列出未达标项与自动化证据。
+| 里程碑                         | 结果 | 主要证据                                                                                                                                              |
+| ------------------------------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1 工具链/CSP/i18n/smoke 基建  | 完成 | 全仓库 gate；`desktop-react-csp` 2/2；`desktop-react-toolchain` 6/6；`ui-i18n-coverage` 2/2                                                           |
+| M2 runtime/provider/主题/外壳  | 完成 | 单一 root/provider/theme；`desktop-react` 6/6；`desktop-react-runtime` 13/13                                                                          |
+| M3 动效                        | 完成 | `desktop-react-motion` 5/5（帧采样）；`desktop-react-navigation`（页面过渡/快速反向）                                                                 |
+| M4 设置页                      | 完成 | controller 测试；`settings` 8 通过 + 1 个既有 MCP 跳过；`desktop-language` 7/7                                                                        |
+| M5 会话/输入/附件/工作区/面板  | 完成 | `desktop-react-sessions` 10/10、`desktop-react-composer` 18/18、`desktop-react-attachments` 10/10、`workspace-panel-loading` 12/12、`task-view` 11/11 |
+| M6 对话流                      | 完成 | `desktop-react-stream` 10/10、`desktop-react-transcript` 7/7、`scroll-anchor` 5/5、`question-model` 9/9、`approval-model` 2/2、`subagent-model` 5/5   |
+| M7 外壳接管/CSS 退役/清理/验收 | 完成 | `desktop-react-dom-audit-2026-10-27.md`；`desktop-react-identity` 1/1；CSS 预算 6 行；最终验收记录                                                    |
 
-## 当前门禁与测试证据（最近一次）
+## 明确保留的过渡形态（不是遗漏）
 
-- `npx tsc --noEmit`、`npm run lint`、`npm run i18n:check`、`npm run layers:check`、`npm run cycles:check`、`npm run format:check`、`npm run docs:check`、`npm run build` 全绿。
-- 单元/模型测试：desktop-react-stream 10、desktop-react-transcript 7、scroll-anchor 5、turn-changes-model 6、subagent-model 5、question-model 9、approval-model 2、task-view 11、plan-contract 10、session-panels-model 4、background-model 7、statistics-model 9、workspace-panel-loading 12、desktop-react-attachments 10、desktop-react-sessions 10、desktop-react-composer 18、desktop-copy 14、desktop-i18n 5。
-- Electron 冒烟：agent 7、desktop 9、workflows 4、desktop-language 7、desktop-layout 4、desktop-capabilities 3、desktop-sessions 6、settings 8（+1 跳过 MCP）、round3 1（+1 跳过 Chromium）、backups 跳过（范围外）。
+1. **内容 DOM 岛**：消息正文、工具卡、Markdown、diff 正文、完成块仍由 `renderer-messages.ts` / `markdown.ts` /
+   `tool-cards.ts` / `diff-view.ts` / `completion-view.ts` 构建，由 React 行通过 ref 承载。React 拥有位置、key、
+   展开状态与元数据；计划允许这些安全敏感内容保持岛状并已逐项登记在 DOM 审计中。
+2. **休眠 MCP 设置面板**：`renderer-mcp.ts` 由 `PRODUCT_SCOPE.mcpManagement`（当前 `false`）关闭，入口不渲染、冒烟跳过。
+   这是计划 T13 记录的偏差；重新启用该功能前需迁移为 `ui/settings/McpSettings.tsx`。
+3. **纯文本 helper**：`renderer-status.ts`、`renderer-messages.ts` 的文案函数、`renderer-error-text.ts`、
+   `renderer-question-copy.ts`、`renderer-export.ts` 不含页面构建，保留供模型与测试共享。
 
-## CSS 基线（T24 尚未开始）
+## 文档关系
 
-| 文件                 | 行数 | !important |
-| -------------------- | ---- | ---------- |
-| styles.css           | 1403 | 12         |
-| styles-panels.css    | 452  | 0          |
-| styles-subagents.css | 1005 | 0          |
-| layout.css           | 1371 | 0          |
-| layout-surfaces.css  | 1339 | 14         |
-| layout-workspace.css | 413  | 3          |
-| 合计                 | 5983 | 29         |
-
-计划 T24 要求完成时旧 CSS 合计 ≤ 1,200 行；当前 5,983 行（T24 起步删除已移除的 #project-name/.header-context/.message-label/.message-model/.background-meta/.background-log 规则），外壳接管与其余删除尚未开始。
-
-## 推进顺序（剩余）
-
-1. 完成 T23 子 agent 面板迁移；把 `renderer-changes.ts` 与 transcript 一起处理。
-2. T21 React 消息列表与滚动锚点（依赖 `transcript-model`）。
-3. 接入 `stream-store` 与 LiveMessage/reasoning。
-4. T24 外壳接管 + CSS 退役；T25 Slot/遗留清理；T26 完整验收记录替换本文件。
+- 本文件：完成状态摘要。
+- `docs/validation-desktop-react-migration-2026-10-27.md`：最终验收（命令、截图、指标、限制）。
+- `docs/desktop-react-css-retirement-2026-10-27.md`：CSS 归属迁移与最终行数。
+- `docs/desktop-react-dom-audit-2026-10-27.md`：剩余 DOM 调用的逐项归属。
+- `docs/superpowers/plans/2026-10-27-desktop-react-completion-ledger.md`：M7 拆解、缺陷与证据流水。
