@@ -153,7 +153,7 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
         </p>
       ) : null}
       <button
-        id="choose-workspace"
+        id="project-add"
         type="button"
         className="text-button project-add"
         disabled={!canChange}
@@ -161,6 +161,13 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
       >
         {t('projects.add')}
         <span aria-hidden="true">↗</span>
+      </button>
+      {/*
+       * The legacy session mount still waits on this id to know when the Host finished a workspace switch. It is
+       * hidden because the project list owns the visible add flow; keeping the element avoids a second picker.
+       */}
+      <button id="choose-workspace" type="button" hidden disabled={!canChange}>
+        {t('ui.changeFolder')}
       </button>
     </section>
   );
