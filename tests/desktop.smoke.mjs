@@ -645,7 +645,10 @@ for (const transition of ['Host recovery', 'model replacement']) {
       const after = await page.evaluate(
         async () => (await window.yuantu.invoke({ type: 'snapshot' })).state,
       );
-      assert.notEqual(after.hostPid, before.hostPid);
+      if (transition === 'Host recovery') assert.notEqual(after.hostPid, before.hostPid);
+      else
+        // Saving a model connection reconfigures the live Host; only the Host-recovery transition replaces it.
+        assert.equal(after.hostPid, before.hostPid);
       assert.equal(after.session.sessionId, before.session.sessionId);
       await checkReadOnly();
     },
