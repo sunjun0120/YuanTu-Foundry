@@ -121,6 +121,7 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
           {visible.map((workspace) => {
             const active = registry?.activeWorkspaceId === workspace.id;
             const status = runtime[workspace.id];
+            const waitingSession = status?.sessions.find((session) => session.waiting > 0);
             return (
               <li
                 key={workspace.id}
@@ -143,7 +144,11 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
                   title={workspace.canonicalPath}
                   aria-current={active ? 'true' : undefined}
                   disabled={!canChange}
-                  onClick={() => void select(workspace.id)}
+                  onClick={() =>
+                    waitingSession
+                      ? void openSession(workspace.id, waitingSession.id)
+                      : void select(workspace.id)
+                  }
                 >
                   <span>{workspace.displayName}</span>
                   {status?.waiting ? (
