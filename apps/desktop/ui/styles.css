@@ -4784,6 +4784,10 @@ body {
   border: 0;
 }
 
+.task-editor .mantine-InputWrapper-root {
+  margin-bottom: 14px;
+}
+
 .task-field {
   display: flex;
   flex-direction: column;

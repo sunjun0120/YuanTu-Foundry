@@ -10,7 +10,7 @@ import { TaskConfirmDrafts } from '../../task-confirm-drafts.ts';
 import { useReadable } from '../context.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import { registerView } from '../views.tsx';
-import { scheduleEditor, taskEditor, type EditorHost } from '../../renderer-tasks-editors.ts';
+import { scheduleEditor, type EditorHost } from '../../renderer-tasks-editors.ts';
 import { TaskCards, type TaskCardActions, type TaskEditing } from './TasksPanel.tsx';
 
 export interface TasksState {
@@ -50,6 +50,8 @@ export function mountTasks(
   const drafts = new TaskConfirmDrafts();
   let sessionKey = '';
   let editing: TaskEditing | null = null;
+  let editorToken = 0;
+  let latest: CarrierSnapshot | null = null;
 
   const host = (
     current: () => { revision: string } | undefined,
@@ -66,7 +68,7 @@ export function mountTasks(
       parent.append(button);
       return button;
     },
-    snapshot: () => store.getSnapshot().snapshot,
+    snapshot: () => latest,
     busy: () => store.getSnapshot().busy,
     current,
     close(next, locked) {
@@ -79,16 +81,10 @@ export function mountTasks(
   const actions: TaskCardActions = {
     send: (command) => void send(command),
     edit(task) {
-      const built = taskEditor(
-        task,
-        host(
-          () => editing ?? undefined,
-          () => (editing = null),
-        ),
-      );
       editing = {
         taskId: task.id,
-        form: built.form,
+        task,
+        token: ++editorToken,
         revision: task.updatedAt,
         stale: false,
       };
@@ -102,7 +98,14 @@ export function mountTasks(
           () => (editing = null),
         ),
       );
-      editing = { taskId: task.id, form, revision: task.updatedAt, stale: false };
+      editing = {
+        taskId: task.id,
+        task,
+        token: ++editorToken,
+        form,
+        revision: task.updatedAt,
+        stale: false,
+      };
       store.set({ ...store.getSnapshot(), editing, tick: store.getSnapshot().tick + 1 });
     },
     confirm(task, indices) {
@@ -120,9 +123,27 @@ export function mountTasks(
     selectionChanged() {
       store.set({ ...store.getSnapshot(), tick: store.getSnapshot().tick + 1 });
     },
+    async save(command, open) {
+      if (
+        editing?.token !== open.token ||
+        editing.stale ||
+        store.getSnapshot().busy ||
+        latest?.tasks.find((task) => task.id === open.taskId)?.updatedAt !== open.revision
+      )
+        return;
+      const result = await send(command);
+      if (!result || editing?.token !== open.token) return;
+      editing = null;
+      render(result, false);
+    },
+    cancel() {
+      editing = null;
+      render(latest, store.getSnapshot().busy);
+    },
   };
 
   function render(next: CarrierSnapshot | null, locked: boolean): void {
+    latest = next;
     const busy = locked || !!next?.session.running || !!next?.session.loading;
     const nextSession = `${next?.workspace}:${next?.session.sessionId}`;
     if (sessionKey !== nextSession) {

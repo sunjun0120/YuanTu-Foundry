@@ -4,6 +4,7 @@ import { conversationMessages } from './i18n-conversation.ts';
 import { workspaceMessages } from './i18n-workspace.ts';
 import { mainProcessMessages } from './i18n-main-process.ts';
 import { shellMessages } from './i18n-shell.ts';
+import { taskEditorMessages } from './i18n-task-editors.ts';
 
 type Listener = () => void;
 export type TranslationValues = Record<string, string | number>;
@@ -18,6 +19,7 @@ const messages: Record<string, Pair> = {
   ...workspaceMessages,
   ...mainProcessMessages,
   ...shellMessages,
+  ...taskEditorMessages,
 };
 const listeners = new Set<Listener>();
 let language: UiLanguage = 'zh-CN';

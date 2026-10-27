@@ -11,6 +11,7 @@ import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carri
 import type { Task } from '../../../../packages/protocol/index.ts';
 import { t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
+import { TaskEditor } from './TaskEditor.tsx';
 import {
   acceptanceRows,
   evidenceReading,
@@ -24,7 +25,9 @@ import {
 
 export interface TaskEditing {
   taskId: string;
-  form: HTMLFormElement;
+  form?: HTMLFormElement;
+  task: Task;
+  token: number;
   revision: string;
   stale: boolean;
 }
@@ -36,23 +39,26 @@ export interface TaskCardActions {
   confirm(task: Task, indices: number[]): void;
   selection(task: Task): Set<number>;
   selectionChanged(): void;
+  save(command: CarrierCommand, editing: TaskEditing): Promise<void>;
+  cancel(): void;
 }
 
 function FormHost({ editing, busy }: { editing: TaskEditing; busy: boolean }): ReactNode {
+  const form = editing.form!;
   const host = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const container = host.current;
     if (!container) return;
-    if (editing.form.parentElement !== container) container.replaceChildren(editing.form);
-  }, [editing.form]);
+    if (form.parentElement !== container) container.replaceChildren(form);
+  }, [form]);
   useEffect(() => {
-    const fieldset = editing.form.querySelector('fieldset');
+    const fieldset = form.querySelector('fieldset');
     if (fieldset) fieldset.disabled = busy;
-    const save = editing.form.querySelector<HTMLButtonElement>('button[type=submit]');
+    const save = form.querySelector<HTMLButtonElement>('button[type=submit]');
     if (save) save.disabled = busy || editing.stale;
-    const warning = editing.form.querySelector<HTMLElement>('.task-edit-warning');
+    const warning = form.querySelector<HTMLElement>('.task-edit-warning');
     if (warning) warning.textContent = editing.stale ? t('task.staleWarning') : '';
-  }, [editing, busy]);
+  }, [editing, busy, form]);
   return <div ref={host} />;
 }
 
@@ -101,7 +107,19 @@ function TaskCard({
             {taskStatusReading(task.status, lang)}
           </span>
         </div>
-        <FormHost editing={editing} busy={busy} />
+        {editing.form ? (
+          <FormHost editing={editing} busy={busy} />
+        ) : (
+          <TaskEditor
+            key={editing.token}
+            task={editing.task}
+            revision={editing.revision}
+            busy={busy}
+            stale={editing.stale}
+            onSave={(command) => actions.save(command, editing)}
+            onCancel={actions.cancel}
+          />
+        )}
       </article>
     );
   const selection = actions.selection(task);

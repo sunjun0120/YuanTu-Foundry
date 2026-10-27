@@ -12,6 +12,8 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - [x] T25 chrome: React owns dynamic window chrome; remove the old page renderer and finish bootstrap/lifetime cleanup.
 - [x] T25a: Replace region portals with ordinary React children; independent view lifecycle.
 - [x] T25 slots: React slot ordering, dynamic registration, unload and type contracts.
+- [x] T19 follow-up A: React task-definition editor, keyed criteria, draft and conflict protection.
+- [ ] T19 follow-up B: React trigger editor; retire remaining task-editor DOM builder.
 - [ ] T25b: Remove legacy page rendering, select/walker dependencies and compatibility-only selectors; audit retained DOM islands.
 - [ ] T20/T21 follow-up: Live DOM identity and transcript animation evidence.
 - [ ] T26: Full checks, Electron behavior/visual/motion/resource/performance evidence and accurate delivery record.
@@ -44,6 +46,8 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - Ruling: Opening settings refreshes the model reading without locking navigation; save/model-switch locks remain. A read-only refresh must not prevent the rapid navigation reversals required by the specification. Request ordering/lifetime cleanup is part of T25.
 
 ## Verification
+
+- Task-definition editor checkpoint: replaced the DOM form with controlled Mantine fields and keyed acceptance rows; invalid command-argument JSON stays visible and cannot be submitted. Background task refresh preserves the draft; stale revision and late save replies are checked against the current editor/session, not the frozen list snapshot. The real workflow's old native-select assertion failed first, then full workflows 4/4, confirmation drafts 5/5 and UI i18n coverage 2/2 passed. The schedule editor is still pending the next checkpoint.
 
 - React Slot checkpoint: `ui/slots.tsx` renders typed, keyed React contributions in all five positions; `ui/slot-registry.ts` publishes per-slot revisions. Duplicate contribution ids are rejected, frozen snapshots retain identities, and old disposers cannot remove replacements. Retired the DOM slot mount. Message metadata is React; security-sensitive message bodies remain explicit ref islands, with React-owned extension positions beside them. Registry/type contracts 6/6; React layer including dynamic order/draft/focus/unmount 6/6. Latest product build: language/subagent/copy 7/7 and paged-history 2/2.
 

@@ -98,6 +98,11 @@ test(
     assert.equal(state.session.messages.filter((m) => m.role === 'tool').length, 0);
     const proposalRequests = requests;
     await card.getByRole('button', { name: '编辑', exact: true }).click();
+    assert.equal(
+      await card.locator('select').count(),
+      0,
+      'the React task editor uses visible Mantine controls',
+    );
     await card.getByLabel('标题', { exact: true }).fill('Edited output review');
     // Snapshot refresh must preserve the active editor and its draft input.
     await page.locator('#refresh-tasks').click();
@@ -109,7 +114,15 @@ test(
     await card.getByRole('button', { name: '添加验收标准', exact: true }).click();
     const criterion = card.locator('.task-criterion').last();
     await criterion.getByLabel('标准描述', { exact: true }).fill('File content matches');
-    await criterion.getByLabel('检查方式', { exact: true }).selectOption('file-exact');
+    await criterion.getByLabel('检查方式', { exact: true }).click();
+    await page.getByRole('option', { name: '执行验收命令', exact: true }).click();
+    await criterion.getByLabel('命令 / 可执行文件', { exact: true }).fill('node');
+    await criterion.getByLabel('参数（可选，JSON 字符串数组）', { exact: true }).fill('[1]');
+    await card.getByRole('button', { name: '保存草稿', exact: true }).click();
+    assert.equal(await card.locator('.task-editor').isVisible(), true);
+    await criterion.getByText('请输入字符串数组，例如 ["--check"]', { exact: true }).waitFor();
+    await criterion.getByLabel('检查方式', { exact: true }).click();
+    await page.getByRole('option', { name: '文件内容完全匹配', exact: true }).click();
     await criterion.getByLabel('相对工作区路径', { exact: true }).fill('result.txt');
     await criterion.getByLabel('期望文本', { exact: true }).fill('expected output');
     await card.getByRole('button', { name: '保存草稿', exact: true }).click();
