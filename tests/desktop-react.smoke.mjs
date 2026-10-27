@@ -27,6 +27,7 @@ const REPO_ALIASES = {
   '@repo/state': path.join(uiDir, 'ui-state.ts'),
   '@repo/settings': path.join(uiDir, 'settings/GeneralSettings.tsx'),
   '@repo/settings-model': path.join(uiDir, 'settings/settings-model.ts'),
+  '@repo/slots': path.join(uiDir, 'slots.tsx'),
 };
 
 function installedElectron() {
@@ -65,7 +66,7 @@ const electronSkip = electronPath
  */
 const ENTRY = `
 import { createRoot } from 'react-dom/client';
-import { useSyncExternalStore, useState } from 'react';
+import { useSyncExternalStore, useState, useEffect } from 'react';
 import { Button, Dialog, Select, Stack, Text, TextInput } from '@repo/primitives';
 import { mountDesktopApp } from '@repo/app';
 import { locale, setLocale, t } from '@repo/i18n';
@@ -73,6 +74,23 @@ import { useLocale } from '@repo/ui-i18n';
 import { createDesktopRuntime } from '@repo/runtime';
 import { createDesktopActions } from '@repo/actions';
 import { createPendingOperations } from '@repo/state';
+import { SlotRegistry, SlotOutlet } from '@repo/slots';
+
+const slots = new SlotRegistry();
+function SlotInput() {
+  const [value, setValue] = useState('');
+  useEffect(() => {
+    window.__slotStarts = (window.__slotStarts || 0) + 1;
+    return () => { window.__slotStops = (window.__slotStops || 0) + 1; };
+  }, []);
+  return <input aria-label="Contribution draft" value={value} onChange={(event) => setValue(event.currentTarget.value)} />;
+}
+slots.register('composer.above', { id: 'input', order: 10, render: () => <SlotInput /> });
+const dynamicSlots = () => {
+  const early = slots.register('composer.above', { id: 'early', order: 0, render: () => <span>Earlier contribution</span> });
+  const late = slots.register('composer.above', { id: 'late', order: 10, render: () => <span>Later contribution</span> });
+  return () => { early(); late(); };
+};
 
 let explode = false;
 const explodeListeners = new Set();
@@ -100,6 +118,7 @@ function Probe() {
     <Stack gap="sm" p="md">
       <Text id="react-copy">{t('ui.newSession')}</Text>
       <Text id="react-raw">新建会话</Text>
+      <section aria-label="Extension contributions"><SlotOutlet registry={slots} name="composer.above" context={{ workspace: 'fixture' }} /></section>
       <div id="surface-probe" style={{ background: 'var(--surface)', width: 16, height: 16 }} />
       <TextInput id="react-input" label={t('ui.settings')} placeholder={t('ui.searchSessions')} />
       <Select
@@ -148,7 +167,7 @@ const disposeApp = mountDesktopApp({ children: <div id="probe-mount" data-react-
     return () => { clearInterval(ticker); window.__stops = (window.__stops || 0) + 1; };
   },
 });
-window.__ui = { setLocale, locale, setExplode, disposeApp };
+window.__ui = { setLocale, locale, setExplode, disposeApp, dynamicSlots };
 `;
 
 /**
@@ -679,6 +698,49 @@ test(
     await page.waitForTimeout(60);
     assert.equal(await page.evaluate(() => window.__ticks), stopped.ticks);
     await page.evaluate(() => window.__ui.setLocale('en-US'));
+  },
+);
+
+test(
+  'React slots reconcile dynamic order without remounting or losing draft and focus',
+  { skip: electronSkip },
+  async (t) => {
+    const page = await probePage(t);
+    if (!page) return;
+    const draft = page.getByRole('textbox', { name: 'Contribution draft' });
+    await draft.fill('unfinished contribution');
+    await draft.focus();
+    await page.evaluate(() => {
+      window.__slotInput = document.activeElement;
+      window.__removeSlots = window.__ui.dynamicSlots();
+    });
+    const outlet = page.getByRole('region', { name: 'Extension contributions' });
+    await outlet.getByText('Later contribution', { exact: true }).waitFor();
+    assert.deepEqual(
+      await outlet
+        .locator(':scope > .slot')
+        .evaluateAll((nodes) =>
+          nodes.map((node) => node.textContent || node.querySelector('input')?.value),
+        ),
+      ['Earlier contribution', 'unfinished contribution', 'Later contribution'],
+    );
+    assert.equal(await draft.inputValue(), 'unfinished contribution');
+    assert.equal(await page.evaluate(() => window.__slotInput === document.activeElement), true);
+    assert.equal(await page.evaluate(() => window.__slotStarts), 1);
+    await page.evaluate(() => {
+      window.__removeSlots();
+      window.__removeSlots();
+    });
+    await outlet.getByText('Earlier contribution', { exact: true }).waitFor({ state: 'detached' });
+    assert.equal(await outlet.locator('.slot').count(), 1);
+    assert.equal(await page.evaluate(() => window.__slotInput === document.activeElement), true);
+    await page.evaluate(() => window.__ui.disposeApp());
+    assert.equal(await page.evaluate(() => window.__slotStops), 1);
+    await page.evaluate(() => {
+      window.__removeSlots = window.__ui.dynamicSlots();
+      window.__removeSlots();
+    });
+    assert.equal(await page.evaluate(() => window.__slotStarts), 1);
   },
 );
 

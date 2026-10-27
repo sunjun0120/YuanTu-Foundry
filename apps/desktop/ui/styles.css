@@ -890,6 +890,11 @@ h1 {
   font-size: 13px;
 }
 
+/* The adapter owns only its empty ref host; React owns its surrounding row and extension positions. */
+.message-built-body {
+  display: contents;
+}
+
 .user {
   margin-left: 42px;
   background: #eef2ef;

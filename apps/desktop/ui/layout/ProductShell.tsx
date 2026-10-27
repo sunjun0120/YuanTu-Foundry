@@ -6,6 +6,7 @@ import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
 import { navigation } from '../navigation.ts';
 import { ViewSlot } from '../views.tsx';
+import { PanelSlot } from '../slots.tsx';
 import { DesktopShell } from './DesktopShell.tsx';
 import { ModelPicker } from '../settings/ModelPicker.tsx';
 import { modelPicker } from '../settings/model-picker-state.ts';
@@ -381,6 +382,7 @@ export function ProductShell(): ReactNode {
                 <div id="sandbox-prompt-root">
                   <ViewSlot name="sandbox-prompt" />
                 </div>
+                <PanelSlot name="composer.above" />
                 <form id="composer" className="composer">
                   <div id="attachments-root">
                     <ViewSlot name="attachments" />
@@ -518,7 +520,7 @@ export function ProductShell(): ReactNode {
         }
         aside={
           <div id="workspace-root" className="workspace-root">
-            <ViewSlot name="workspace" />
+            <PanelSlot name="sidebar.right" />
           </div>
         }
       />

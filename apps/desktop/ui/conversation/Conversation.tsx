@@ -22,10 +22,13 @@ import type { RunEnding } from '../../../../packages/protocol/run-cancellation.t
 import { t } from '../../i18n.ts';
 import { runEndingText } from '../../renderer-messages.ts';
 import { useLocale } from '../i18n.ts';
+import type { Message } from '../../../../packages/protocol/index.ts';
+import { BuiltArticle, BuiltDetails } from './BuiltMessage.tsx';
 import type { TranscriptModel, TranscriptSegment, TranscriptStep } from './transcript-model.ts';
 
 /** One message's built view, with the pieces the transcript lifts out into process groups. */
 export interface MessageFragment {
+  message: Message;
   view: HTMLElement;
   /** The row's own `:scope > summary`, for a tool result. */
   summary: HTMLElement | null;
@@ -114,9 +117,8 @@ function useLegacyChildren<T extends HTMLElement = HTMLElement>(
 }
 
 /** One message row: the element React owns is the row the rest of the window styles and measures. */
-function MessageRow({ view }: { view: HTMLElement }): ReactNode {
-  const host = useLegacyChildren(view);
-  return <article ref={host} className={view.className} />;
+function MessageRow({ fragment }: { fragment: MessageFragment }): ReactNode {
+  return <BuiltArticle view={fragment.view} message={fragment.message} />;
 }
 
 function stepView(step: TranscriptStep, fragment: MessageFragment): HTMLElement | null {
@@ -134,14 +136,13 @@ function TranscriptStepRow({
   fragment: MessageFragment;
 }): ReactNode {
   const view = stepView(step, fragment);
-  const host = useLegacyChildren<HTMLDetailsElement>(view);
   if (!view) return null;
   return (
-    <details
-      ref={host}
-      className={view.className}
-      data-process-key={step.key}
-      data-call-id={step.kind === 'call' ? view.dataset.callId : undefined}
+    <BuiltDetails
+      view={view}
+      message={step.kind === 'result' ? fragment.message : undefined}
+      processKey={step.key}
+      callId={step.kind === 'call' ? view.dataset.callId : undefined}
     />
   );
 }
@@ -233,14 +234,7 @@ function TurnChangeRow({ view }: { view: HTMLElement }): ReactNode {
 
 /** The completion block: a fold for the automatic verdict, a plain notice otherwise. */
 function CompletionDetails({ view }: { view: HTMLElement }): ReactNode {
-  const host = useLegacyChildren<HTMLDetailsElement>(view);
-  return (
-    <details
-      ref={host}
-      className={view.className}
-      data-completion-key={view.dataset.completionKey}
-    />
-  );
+  return <BuiltDetails view={view} completionKey={view.dataset.completionKey} />;
 }
 
 function CompletionNotice({ view }: { view: HTMLElement }): ReactNode {
@@ -307,7 +301,7 @@ export function Conversation({
       {model.segments.map((segment) => {
         if (segment.kind === 'message') {
           const fragment = fragments.get(segment.index);
-          return fragment ? <MessageRow key={segment.key} view={fragment.view} /> : null;
+          return fragment ? <MessageRow key={segment.key} fragment={fragment} /> : null;
         }
         if (segment.kind === 'group')
           return (

@@ -11,7 +11,7 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - [x] T24b: Product page/settings-category transitions and legacy CSS retirement by selector ownership.
 - [x] T25 chrome: React owns dynamic window chrome; remove the old page renderer and finish bootstrap/lifetime cleanup.
 - [x] T25a: Replace region portals with ordinary React children; independent view lifecycle.
-- [ ] T25 slots: React slot ordering, dynamic registration, unload and type contracts.
+- [x] T25 slots: React slot ordering, dynamic registration, unload and type contracts.
 - [ ] T25b: Remove legacy page rendering, select/walker dependencies and compatibility-only selectors; audit retained DOM islands.
 - [ ] T20/T21 follow-up: Live DOM identity and transcript animation evidence.
 - [ ] T26: Full checks, Electron behavior/visual/motion/resource/performance evidence and accurate delivery record.
@@ -44,6 +44,8 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - Ruling: Opening settings refreshes the model reading without locking navigation; save/model-switch locks remain. A read-only refresh must not prevent the rapid navigation reversals required by the specification. Request ordering/lifetime cleanup is part of T25.
 
 ## Verification
+
+- React Slot checkpoint: `ui/slots.tsx` renders typed, keyed React contributions in all five positions; `ui/slot-registry.ts` publishes per-slot revisions. Duplicate contribution ids are rejected, frozen snapshots retain identities, and old disposers cannot remove replacements. Retired the DOM slot mount. Message metadata is React; security-sensitive message bodies remain explicit ref islands, with React-owned extension positions beside them. Registry/type contracts 6/6; React layer including dynamic order/draft/focus/unmount 6/6. Latest product build: language/subagent/copy 7/7 and paged-history 2/2.
 
 - Bootstrap/chrome checkpoint: `renderer.ts` is a ~40-line runtime/root bootstrap. Application composition runs after committed hosts, cleans controllers, IPC/locale subscriptions, listeners, timers and observers on unmount/retry, and ignores late model-selection replies. Composer/live/model bindings now live under `ui/`. Chrome/model status/locks are React projections. All nine static gates pass. Real Electron language 7/7, React 5/5, settings 8 pass/1 existing MCP skip; the lifecycle test verifies initialization ordering, idempotent cleanup and ticker cancellation. Language navigation now waits for the outgoing page to hide instead of trying to click a hidden back button during its exit animation.
 

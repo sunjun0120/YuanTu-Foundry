@@ -33,6 +33,7 @@ import {
   subagentTokenText,
   subagentWorkDuration,
 } from './subagent-model.ts';
+import { BuiltMessage } from './BuiltMessage.tsx';
 
 export interface SubagentPageState {
   id: string;
@@ -334,56 +335,28 @@ function ProcessBody({
   lang: UiLanguage;
   renderMessage(message: Message): HTMLElement;
 }): ReactNode {
-  const host = useRef<HTMLDivElement>(null);
-  const toolNode = useRef<HTMLDetailsElement | null>(null);
   const toolLabel = translate('ui.toolCall', lang);
-  useLayoutEffect(() => {
-    const container = host.current;
-    if (!container) return;
-    const nodes = open && loaded ? processMessages.map(renderMessage) : [];
-    if (toolNode.current) nodes.push(toolNode.current);
-    if (open && loaded && processMessages.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'subagent-transcript-empty';
-      empty.textContent = emptyText;
-      nodes.push(empty);
-    }
-    container.replaceChildren(...nodes);
-    return () => container.replaceChildren();
-  }, [loaded, open, processMessages, emptyText, renderMessage]);
-  useLayoutEffect(() => {
-    const container = host.current;
-    if (!container) return;
-    if (!tool) {
-      toolNode.current?.remove();
-      toolNode.current = null;
-      return;
-    }
-    let node = toolNode.current;
-    if (!node) {
-      node = document.createElement('details');
-      node.className = 'tool-call subagent-live-tool';
-      toolNode.current = node;
-    }
-    const summary = document.createElement('summary');
-    summary.className = 'process-summary process-tool';
-    const icon = document.createElement('span');
-    icon.className = 'process-icon';
-    icon.textContent = '✧';
-    const label = document.createElement('span');
-    label.className = 'process-label';
-    label.textContent = toolLabel;
-    const preview = document.createElement('span');
-    preview.className = 'process-preview';
-    preview.textContent = `· ${tool}`;
-    summary.replaceChildren(icon, label, preview);
-    const args = document.createElement('pre');
-    args.textContent = toolArgs ?? tool;
-    node.replaceChildren(summary, args);
-    if (node.parentElement !== container) container.append(node);
-  }, [tool, toolArgs, toolLabel]);
   return (
-    <div ref={host} id="subagent-transcript-messages" className="subagent-transcript-messages" />
+    <div id="subagent-transcript-messages" className="subagent-transcript-messages">
+      {open && loaded
+        ? processMessages.map((message, index) => (
+            <BuiltMessage key={index} message={message} renderMessage={renderMessage} />
+          ))
+        : null}
+      {open && loaded && processMessages.length === 0 ? (
+        <p className="subagent-transcript-empty">{emptyText}</p>
+      ) : null}
+      {tool ? (
+        <details className="tool-call subagent-live-tool">
+          <summary className="process-summary process-tool">
+            <span className="process-icon">✧</span>
+            <span className="process-label">{toolLabel}</span>
+            <span className="process-preview">{`· ${tool}`}</span>
+          </summary>
+          <pre>{toolArgs ?? tool}</pre>
+        </details>
+      ) : null}
+    </div>
   );
 }
 

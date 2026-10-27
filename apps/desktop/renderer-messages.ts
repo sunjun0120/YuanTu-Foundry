@@ -1,17 +1,4 @@
-/**
- * What one message looks like: the transcript's leaf view, and the small pieces the message-level slots hang
- * off it.
- *
- * Everything here is a pure function of the message it is given and is called once per message per transcript
- * rebuild, so a view is never patched — a changed revision or a changed language replaces the whole list. The
- * two satellites (`messageTimeView`, `messageCopyView`) are contributions to `message.footer` and
- * `message.actions` rather than lines inside the bubble: the slot owns *where* they appear and in what order,
- * and these own what they say.
- *
- * The transcript's React rows (`ui/conversation/Conversation.tsx`) own each row's outer element and move this
- * builder's children underneath it. A tool card, Markdown and a diff preview are therefore still built here; only
- * the row identity, ordering and folds moved to React.
- */
+/** Security-sensitive message body builders. React owns rows, folds and slot contributions. */
 import type { ImageAttachment, Message } from '../../packages/protocol/index.ts';
 import { splitAttachmentPrompt } from './attachment-contract.ts';
 import { locale, t } from './i18n.ts';
@@ -92,24 +79,25 @@ export function toolFailureNote(message: {
   return null;
 }
 
+const COMPLETION_REPAIR_PREFIX = 'Automated acceptance checks did not pass';
+export function userMessageText(message: Message): string {
+  if (message.role !== 'user') return message.content;
+  const shown = message.displayContent ?? message.content;
+  return !message.displayContent && shown.startsWith(COMPLETION_REPAIR_PREFIX)
+    ? t('ui.completionRepairSummary')
+    : shown;
+}
+
 export function setupMessages(options: {
   /** The hub's bridge-backed actions: markdown may only reach the outside world through these. */
   markdownActions: MarkdownActions;
-  /** The hub's slot mounter, so a view inside a message gets its frames from the one registry. */
-  mountMessageSlot(
-    container: HTMLElement,
-    slot: 'message.actions' | 'message.footer' | 'tool.result.extra',
-    message: Message,
-  ): void;
 }): {
   imageGallery(images: readonly ImageAttachment[]): HTMLElement;
-  messageTimeView(message: Message): HTMLElement;
-  messageCopyView(message: Message): HTMLElement;
   processIcon(kind: string): HTMLElement;
   messageView(message: Message): HTMLElement;
   reasoningView(text: string): HTMLElement;
 } {
-  const { markdownActions, mountMessageSlot } = options;
+  const { markdownActions } = options;
   /**
    * The pictures a message carries, whichever role carries them.
    *
@@ -126,78 +114,6 @@ export function setupMessages(options: {
       gallery.append(preview);
     }
     return gallery;
-  }
-  /**
-   * When a user message was sent, as the `message.footer` slot draws it.
-   *
-   * Its own function because it is now a contribution rather than a line inside `messageView`: the slot owns
-   * *where* it appears and in what order, and this owns what it says.
-   */
-  function messageTimeView(message: Message): HTMLElement {
-    const time = node('time', '—');
-    // Only a user message carries a send time; another role in this slot says so rather than showing a fake one.
-    const createdAt = 'createdAt' in message ? message.createdAt : undefined;
-    const date = createdAt ? new Date(createdAt) : null;
-    if (date && Number.isFinite(date.getTime())) {
-      time.dateTime = date.toISOString();
-      time.textContent = date.toLocaleTimeString(locale(), {
-        hour: '2-digit',
-        minute: '2-digit',
-        hourCycle: 'h23',
-      });
-      time.title = date.toLocaleString(locale());
-    } else {
-      time.title = t('ui.sendTimeUnavailable');
-    }
-    return time;
-  }
-  /**
-   * What a user-role message says to this reader.
-   *
-   * The completion repair prompt is written for the model, in English, and is stored as a user message so the
-   * next request carries it. The transcript shows a one-line Chinese summary in its place; the completion panel
-   * below carries the failed checks and their output.
-   */
-  const COMPLETION_REPAIR_PREFIX = 'Automated acceptance checks did not pass';
-  function userText(message: Message): string {
-    if (message.role !== 'user') return message.content;
-    const shown = message.displayContent ?? message.content;
-    return !message.displayContent && shown.startsWith(COMPLETION_REPAIR_PREFIX)
-      ? t('ui.completionRepairSummary')
-      : shown;
-  }
-  /** The copy button and its feedback, as the `message.actions` slot draws them. */
-  function messageCopyView(message: Message): HTMLElement {
-    const content = message.role === 'user' ? userText(message) : message.content;
-    const copy = node('button', '', 'copy-user-message');
-    copy.type = 'button';
-    const label = () => t('ui.copyMessage');
-    copy.title = label();
-    copy.setAttribute('aria-label', label());
-    copy.innerHTML =
-      '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="6" width="10" height="11" rx="2"/><path d="M7 6V5a2 2 0 0 1 2-2h5a3 3 0 0 1 3 3v6a2 2 0 0 1-2 2h-1"/></svg>';
-    const feedback = node('span', '', 'user-copy-feedback');
-    feedback.setAttribute('role', 'status');
-    let reset: ReturnType<typeof setTimeout> | undefined;
-    const copyContent = async (): Promise<void> => {
-      copy.disabled = true;
-      clearTimeout(reset);
-      try {
-        await markdownActions.copy(content);
-        feedback.textContent = t('ui.copied');
-      } catch {
-        feedback.textContent = t('ui.copyFailed');
-      } finally {
-        copy.disabled = false;
-        reset = setTimeout(() => {
-          feedback.textContent = '';
-        }, 1600);
-      }
-    };
-    copy.addEventListener('click', () => void copyContent());
-    const actions = node('span', '', 'user-message-actions');
-    actions.append(feedback, copy);
-    return actions;
   }
   function processIcon(kind: string): HTMLElement {
     const paths: Record<string, string> = {
@@ -271,8 +187,6 @@ export function setupMessages(options: {
         if (note) details.append(node('p', note, 'tool-error-note'));
         details.append(node('pre', message.content));
       }
-      if (message.images?.length || (message.change && !message.isError))
-        mountMessageSlot(details, 'tool.result.extra', message);
       return details;
     }
     const article = node(
@@ -286,7 +200,7 @@ export function setupMessages(options: {
     // closed is also what keeps a reopened session's reasoning out of the way until it is asked for.
     if (message.role === 'assistant' && message.reasoning)
       body.append(reasoningView(message.reasoning));
-    const content = message.role === 'user' ? userText(message) : message.content;
+    const content = message.role === 'user' ? userMessageText(message) : message.content;
     const display =
       message.role === 'user' ? splitAttachmentPrompt(content) : { prompt: content, files: [] };
     if (display.prompt)
@@ -302,13 +216,6 @@ export function setupMessages(options: {
     }
     if (message.role === 'user' && message.images?.length)
       body.append(imageGallery(message.images));
-    if (message.role === 'user') {
-      const meta = node('div', '', 'user-message-meta');
-      article.append(meta);
-      // Both halves of the row are slots: the order between them is the slots' decision now, not this line's.
-      mountMessageSlot(meta, 'message.footer', message);
-      mountMessageSlot(meta, 'message.actions', message);
-    }
     if (message.role === 'assistant' && message.interrupted)
       article.append(node('p', t('ui.interruptedReply'), 'interrupted-reply'));
     if (message.role === 'assistant')
@@ -366,8 +273,6 @@ export function setupMessages(options: {
   }
   return {
     imageGallery,
-    messageTimeView,
-    messageCopyView,
     processIcon,
     messageView,
     reasoningView,

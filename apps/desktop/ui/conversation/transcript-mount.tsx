@@ -160,7 +160,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       );
       thought?.remove();
       for (const call of calls) call.remove();
-      return { view, summary, thought, thoughtSummary, calls, callSummaries };
+      return { message, view, summary, thought, thoughtSummary, calls, callSummaries };
     });
     return new Map(model.rows.map((row, index) => [row.index, views[index]!]));
   }

@@ -44,7 +44,15 @@ import { mountPermissions } from './permissions/mount.tsx';
 import { locale, t, format, onLocaleChange } from '../i18n.ts';
 import { environmentBlockedCode } from '../../../packages/tools/environment-blocked.ts';
 import { localizedRunError, runErrorWantsModelSettings } from '../renderer-error-text.ts';
-import { SlotRegistry, mountSlot, type SlotMount } from '../slots.ts';
+import type { ReactNode } from 'react';
+import {
+  SlotRegistry,
+  desktopSlots,
+  type DesktopSlotContexts,
+  type PanelSlotContext,
+} from './slots.tsx';
+import { ViewSlot } from './views.tsx';
+import { MessageTime, MessageCopy, MessageExtras } from './conversation/MessageContributions.tsx';
 import { modelLock } from './settings/model-lock.ts';
 
 /** Window controllers project independent stores; React owns all page and chrome rendering. */
@@ -124,32 +132,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
 
     disposers.push(() => workspaceSettings.dispose());
 
-    /** What a panel-level slot is given: the carrier snapshot a panel draws from, and nothing else. */
-    interface PanelSlotContext {
-      readonly session: CarrierSnapshot['session'];
-      readonly workspace: string;
-    }
-
-    /** What a slot inside one message is given: the message it sits on. */
-    interface MessageSlotContext {
-      readonly message: Message;
-    }
-
-    /**
-     * Every slot this window renders, and what each hands a contribution.
-     *
-     * Declared as one map so the registry can check a registration against the slot it names: a contribution to
-     * `sidebar.right` that expects a message is a type error here rather than a panel that receives something it
-     * cannot read. A slot missing from this map is a type error too.
-     */
-    interface DesktopSlotContexts {
-      'composer.above': PanelSlotContext;
-      'message.actions': MessageSlotContext;
-      'message.footer': MessageSlotContext;
-      'sidebar.right': PanelSlotContext;
-      'tool.result.extra': MessageSlotContext;
-    }
-
     /**
      * What markdown is allowed to ask the window to do: copy text, or open a link.
      *
@@ -169,54 +151,39 @@ export function connectDesktop(runtime: DesktopRuntime) {
       },
     };
 
-    const messagesView = setupMessages({ markdownActions, mountMessageSlot });
+    const messagesView = setupMessages({ markdownActions });
 
-    /**
-     * The window's combination point.
-     *
-     * The panels used to be called by name from `projectSession()`, in the order the calls happened to be written, which
-     * left exactly one way to add a view: edit this file. They now register into a named slot, through the same call
-     * a contributed view would use — a built-in that bypassed its own slot would be a second path that drifts from
-     * the first. Which slot exists, what order it renders in and how a contribution leaves are pinned by
-     * `tests/slots.test.ts`; the composition itself is exercised by the desktop smoke.
-     *
-     * The frames the mount creates are nesting, not ownership: each panel still builds its own subtree by id, so
-     * moving one into the slot changed where it sits and who decides the order, not what it renders.
-     */
-    const slots = new SlotRegistry<DesktopSlotContexts>();
-
+    const slots = new SlotRegistry<DesktopSlotContexts, ReactNode>();
+    desktopSlots.set({ registry: slots, context: null });
+    disposers.push(() => {
+      if (desktopSlots.getSnapshot()?.registry === slots) desktopSlots.set(null);
+    });
     slots.register('sidebar.right', {
+      id: 'workspace',
       order: 10,
-      render: (_frame, context) => workspaceView.update(context.workspace),
+      render: () => <ViewSlot name="workspace" />,
     });
-
-    // Extra material beside a tool result: the pictures it produced and the change it made to a file. A contributed
-    // view can add more here — a chart, a rendered document — without this file learning about it.
+    const renderExtras = (message: Message): HTMLElement[] =>
+      message.role !== 'tool'
+        ? []
+        : [
+            ...(message.images?.length ? [messagesView.imageGallery(message.images)] : []),
+            ...(message.change && !message.isError ? [diffView(message.change)] : []),
+          ];
     slots.register('tool.result.extra', {
+      id: 'tool-extras',
       order: 10,
-      render: (frame, context) => {
-        const message = context.message;
-        if (message.role !== 'tool') return;
-        frame.replaceChildren(
-          ...(message.images?.length ? [messagesView.imageGallery(message.images)] : []),
-          ...(message.change && !message.isError ? [diffView(message.change)] : []),
-        );
-      },
+      render: ({ message }) => <MessageExtras message={message} render={renderExtras} />,
     });
-
-    // The two halves of a user message's meta row: when it was sent, and what can be done with it. They are two
-    // slots because they are two questions — a contributed view that wants to act on a message registers next to the
-    // copy button, and one that wants to annotate it registers beside the timestamp.
     slots.register('message.footer', {
+      id: 'sent-time',
       order: 10,
-      render: (frame, context) =>
-        frame.replaceChildren(messagesView.messageTimeView(context.message)),
+      render: ({ message }) => <MessageTime message={message} />,
     });
-
     slots.register('message.actions', {
+      id: 'copy-message',
       order: 20,
-      render: (frame, context) =>
-        frame.replaceChildren(messagesView.messageCopyView(context.message)),
+      render: ({ message }) => <MessageCopy message={message} copy={markdownActions.copy} />,
     });
 
     const subagentView = mountSubagents({
@@ -230,30 +197,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
     const prompt = element<HTMLTextAreaElement>('prompt');
 
     const conversation = element('conversation');
-
-    /** Mounted once: a slot's frames are stable across renders, so re-rendering cannot stack a panel twice. */
-    const slotMounts: SlotMount<PanelSlotContext>[] = [
-      mountSlot(document, element('workspace-root'), slots, 'sidebar.right'),
-    ];
-
-    disposers.push(() => {
-      for (const slot of slotMounts) slot.dispose();
-    });
-
-    /**
-     * Mount a message-level slot into a container this view just built.
-     *
-     * Called from `messageView`, which runs once per message per transcript rebuild (`projectSession()` replaces the whole
-     * list when the revision or the language changes), so each message element gets its own frames and nothing has
-     * to be disposed: they are removed with the element they live in.
-     */
-    function mountMessageSlot(
-      container: HTMLElement,
-      slot: 'message.actions' | 'message.footer' | 'tool.result.extra',
-      message: Message,
-    ): void {
-      mountSlot(document, container, slots, slot).render({ message });
-    }
 
     let state: CarrierSnapshot | null = runtime.getSnapshot();
 
@@ -591,7 +534,8 @@ export function connectDesktop(runtime: DesktopRuntime) {
       // Every panel in a slot renders here, in the order the slot decides — the built-ins included. Nothing below
       // this line calls a panel directly; adding one is a `register`, not an edit to this function.
       const slotContext: PanelSlotContext = { session, workspace: state.workspace };
-      for (const mount of slotMounts) mount.render(slotContext);
+      workspaceView.update(state.workspace);
+      desktopSlots.set({ registry: slots, context: slotContext });
       statisticsView.update(state.session);
       const blocked =
         !state.ready ||
@@ -1082,7 +1026,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
 
     disposers.push(() => permissionSettings?.dispose());
 
-    // The React root is created once, after the legacy DOM exists, and owns only the containers regions hand it.
+    // Controllers publish ordinary children under the already committed application hosts.
     const disposeGeneralSettings = mountGeneralSettings(window.yuantu);
 
     disposers.push(disposeGeneralSettings);
