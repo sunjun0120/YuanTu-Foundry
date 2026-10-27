@@ -28,6 +28,9 @@
  * - paths outside the directories this repository owns (`.yuantu/…`, `.claude/…`, `~/.yuantu/…`): those are the
  *   user's files, and their absence from a clone is not a defect.
  * - URLs, site-absolute paths, and `path:line` suffixes.
+ * - a forward-looking plan marked `<!-- references:planned -->`: its backticked paths name files the plan intends
+ *   to create, so they are not dangling references yet. The marker is explicit so an ordinary description cannot
+ *   opt out by accident; the plan's markdown links are still checked.
  *
  * `README.md` additionally may not point into `docs/` at all, whether the target exists or not: the README has to
  * stand on its own, and the documents under `docs/` are free to be deleted without a README edit to go with them.
@@ -54,6 +57,8 @@ const OWNED_DIRECTORIES = [
 ];
 /** Records, not descriptions: excluded from the backticked-path scan (see the header). */
 const HISTORICAL = [/^docs[\\/](?:capability-comparison|validation)-/];
+/** A plan opts out of the backticked-path scan explicitly; its links are still checked. */
+const PLANNED = /<!--\s*references:planned\s*-->/;
 const ALLOWED_MISSING = new Set([]);
 /** The README stands on its own: nothing in it may point into `docs/` (see the header). */
 const intoDocs = (file) => /^docs(?:\/|$)/.test(path.posix.normalize(file));
@@ -186,8 +191,11 @@ async function check() {
           await checkPath(word, `package.json scripts.${name}`);
       continue;
     }
-    const lines = (await textOf(source.file)).split('\n');
-    const living = !HISTORICAL.some((pattern) => pattern.test(source.file));
+    const text = await textOf(source.file);
+    const lines = text.split('\n');
+    const living =
+      !HISTORICAL.some((pattern) => pattern.test(source.file)) &&
+      !(source.kind === 'markdown' && PLANNED.test(text));
     for (let index = 0; index < lines.length; index++) {
       const at = `${source.file}:${index + 1}`;
       if (source.kind === 'markdown') {
