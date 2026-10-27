@@ -44,6 +44,38 @@ test('development launch preserves explicit Node and workspace; packaged launch 
   assert.throws(() => desktopPaths({ ...options, packaged: false, env: {} }), /Node/i);
 });
 
+test('a development launch that skipped the launcher resolves the Host Node from npm or PATH, and refuses when neither exists', async (t) => {
+  const root = await tempRoot(t, 'yuantu-development-node-');
+  const options = {
+    packaged: false,
+    resourcesPath: path.join(root, 'resources'),
+    mainDirectory: path.join(root, 'app/dist/desktop'),
+    userData: path.join(root, 'profile'),
+    cwd: root,
+    args: [],
+  };
+  // `npm run` exports the Node it is running under, so any npm script reaches the Host without the launcher.
+  const npmNode = path.join(root, 'npm-node');
+  await writeFile(npmNode, '');
+  assert.equal(desktopPaths({ ...options, env: { npm_node_execpath: npmNode } }).nodePath, npmNode);
+  // An IDE run or a bare `electron dist/desktop/main.cjs` inherits PATH instead; the entry may end in a separator.
+  const bin = path.join(root, 'bin');
+  await mkdir(bin, { recursive: true });
+  const onPath = path.join(bin, process.platform === 'win32' ? 'node.exe' : 'node');
+  await writeFile(onPath, '');
+  assert.equal(
+    desktopPaths({ ...options, env: { PATH: `${bin}${path.delimiter}` } }).nodePath,
+    onPath,
+  );
+  // Nothing to run the Host with: the failure names the Node requirement rather than spawning a missing binary.
+  assert.throws(() => desktopPaths({ ...options, env: { PATH: root } }), /Node/);
+  // A relative YUANTU_NODE_PATH is refused rather than silently replaced by the Node on PATH.
+  assert.throws(
+    () => desktopPaths({ ...options, env: { YUANTU_NODE_PATH: 'node', PATH: bin } }),
+    /Node/,
+  );
+});
+
 test('the single-file Host bundle is preferred when built, and the compiled entry is the fallback', async (t) => {
   const root = await tempRoot(t, 'yuantu-install-paths-');
   const options = {

@@ -74,6 +74,7 @@ import {
   type PermissionPresetReply,
 } from './permission-presets.ts';
 import { runtimePaths, safeError, type MainContext } from './main-context.ts';
+import { MissingDevelopmentNode } from './install-paths.ts';
 import { SessionChoices, choiceForPreset, type SessionChoice } from './session-choices.ts';
 import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
 import { workspaceHookReviewer } from './main-hook-trust.ts';
@@ -1192,6 +1193,13 @@ void app
         });
   })
   .catch((error) => {
-    dialog.showErrorBox(mainText('desktop.startFailureTitle'), safeError(error));
+    dialog.showErrorBox(
+      mainText('desktop.startFailureTitle'),
+      // A launch that skipped the script has one recovery, and the dictionary already owns its sentence; the
+      // English detail behind it would name a variable the person who double-clicked never set.
+      error instanceof MissingDevelopmentNode
+        ? mainText('desktop.startWithNode')
+        : safeError(error),
+    );
     app.quit();
   });
