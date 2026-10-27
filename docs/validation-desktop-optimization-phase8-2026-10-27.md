@@ -57,7 +57,7 @@
 - 通过 `--remote-debugging-port` 连接后：窗口标题 `YuanTu Agent`，项目列表 1 项，`#workspace` 指向测试 workspace，Host 日志 `host.ready`，`snapshot` 返回 `ok`。
 - 早先的 `0x80000003` 退出是启动环境问题：`user-data-dir` 位于临时目录时 SingletonLock/DevToolsActivePort 报 access denied，且继承了开发期的 `YUANTU_NODE_PATH`；不是包内容损坏。
 
-尚未自动化：该验证目前是手动 CDP 脚本，未纳入 `smoke:desktop`；安装/升级/卸载与 macOS 仍未验证。
+尚未自动化：该验证目前是手动 CDP 脚本，未纳入 `smoke:desktop`；安装/升级/卸载与 macOS 仍未验证。尝试把这套 CDP 流程写成 `desktop-packaged.smoke.mjs` 时，test-isolation 的写入所有权与 Windows 打包进程无法在测试临时 profile/workspace 上创建锁文件（或 Host 报 EACCES）冲突，未能稳定，已移除该尝试，未把不稳定测试留在仓库。
 
 ## 5. 定向验证（本轮及此前）
 
