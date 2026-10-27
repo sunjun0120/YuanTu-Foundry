@@ -212,7 +212,15 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
                           onClick={() => void openSession(workspace.id, session.id)}
                         >
                           <span>{session.title || t('ui.untitledSession')}</span>
-                          {session.running ? (
+                          {session.waiting ? (
+                            <span
+                              className="project-badge waiting"
+                              title={t('projects.waiting', { count: session.waiting })}
+                              aria-label={t('projects.waiting', { count: session.waiting })}
+                            >
+                              !
+                            </span>
+                          ) : session.running ? (
                             <span className="project-badge running" aria-hidden="true">
                               ●
                             </span>

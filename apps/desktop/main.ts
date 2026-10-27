@@ -117,11 +117,19 @@ function watchHost(workspaceId: string, host: CarrierService): void {
         sessions: state.sessions
           .filter((session) => !session.parentSessionId)
           .slice(0, 20)
-          .map((session) => ({
-            id: session.id,
-            title: session.title ?? '',
-            running: Boolean(session.activeRun),
-          })),
+          .map((session) => {
+            const otherRun = other.find((run) => run.sessionId === session.id);
+            const waiting =
+              (session.id === state.session.sessionId
+                ? state.session.approvals.length + state.session.questions.length
+                : 0) + (otherRun ? otherRun.approvals.length + otherRun.questions.length : 0);
+            return {
+              id: session.id,
+              title: session.title ?? '',
+              running: Boolean(session.activeRun),
+              waiting,
+            };
+          }),
       });
       runNotifier.update(state);
     }),
