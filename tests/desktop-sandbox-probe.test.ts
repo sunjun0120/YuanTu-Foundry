@@ -33,6 +33,8 @@ test('desktop quit bounds sandbox initialization and still closes both carriers'
     },
     quitting: false,
     quitAllowed: false,
+    browserViews: null,
+    workspaceHosts: null,
     settingsAbort: new AbortController(),
     sandboxInitializing: pending,
     waitForSandboxInitialization: (setup: Promise<unknown>) =>
