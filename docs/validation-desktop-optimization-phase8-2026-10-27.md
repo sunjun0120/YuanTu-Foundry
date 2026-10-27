@@ -20,18 +20,16 @@
 
 ## 2. `npm run check` 结果
 
-第二次完整执行通过（`exit code 0`）：
+最新完整执行（`65d3602` 之后）通过（`exit code 0`）：
 
 - 前置门禁：`format`、`docs`、`references`、`cycles`、`layers`、`i18n`、`typecheck`、`lint`、`test:isolation` 全部通过。
-- 并行测试：3347 个，3329 通过，18 跳过，0 失败。
-- 串行测试：32 个，19 通过，13 跳过，0 失败。
+- 并行测试：3340 个，3322 通过，18 跳过，0 失败。
+- 串行测试：39 个，26 通过，13 跳过，0 失败。
 - `npm run build` 通过（Host bundle 6.05 MB）。
 - `npm run smoke:client`：3/3 通过。
 - 跳过项均为平台/外部依赖条件（真实 Windows 账号、Chromium、macOS 等），不是通过的替代。
 
-第一次尝试曾在 `tests/windows-shell.test.ts` 的 PowerShell 取消时序用例上失败；该文件单独重跑 7/7 通过。第二次完整运行未复现，记录为并行负载下的时序抖动，尚未修改该用例。
-
-在每工作区会话列表提交 `d099209` 之后又执行了一次完整 `check`，结果相同：并行 3329 通过 / 18 跳过 / 0 失败，串行 19 通过 / 13 跳过 / 0 失败，build 与 `smoke:client` 通过。
+`tests/windows-shell.test.ts` 的取消时序用例曾在并行阶段两次失败、单独运行通过；现以 `@test-serial windows-sandbox` 移入串行阶段，仍执行同一取消竞态，7/7 通过。此前 `d099209` 基线的完整绿跑为并行 3329 通过 / 18 跳过、串行 19 通过 / 13 跳过。
 
 ## 3. 完整桌面冒烟
 
