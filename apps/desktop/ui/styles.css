@@ -892,6 +892,13 @@ summary:focus-visible {
   opacity: 1;
 }
 
+/* Touch screens have no hover: keep rename/remove reachable without a first tap opening nothing. */
+@media (hover: none) {
+  .project-actions {
+    opacity: 1;
+  }
+}
+
 .project-actions button {
   display: flex;
   width: 20px;
