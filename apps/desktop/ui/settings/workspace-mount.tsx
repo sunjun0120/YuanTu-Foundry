@@ -7,8 +7,7 @@
  */
 import type { DesktopBridge } from '../../contract.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
-import { onLocaleChange, t } from '../../i18n.ts';
-import { showSettingsPanel } from '../../renderer-panels.ts';
+import { showSettingsPanel } from './navigation.ts';
 import { registerView } from '../views.tsx';
 import { WorkspaceMaintenance } from './WorkspaceMaintenance.tsx';
 import { createWorkspaceSettingsController } from './workspace-settings-model.ts';
@@ -32,12 +31,6 @@ export function mountWorkspaceSettings(
     'workspace-settings',
     <WorkspaceMaintenance controller={controller} />,
   );
-  const label = document.getElementById('workspace-maintenance-label');
-  const translate = (): void => {
-    if (label) label.textContent = t('archived.title');
-  };
-  onLocaleChange(translate);
-  translate();
   const entry = document.getElementById('workspace-maintenance-settings');
   const open = (): void => {
     showSettingsPanel('workspace-maintenance-content');

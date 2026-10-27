@@ -5,11 +5,11 @@
  * legacy window's — where the buttons are and what a submit means. When the composer region itself moves to React,
  * this adapter becomes props on the form.
  */
-import type { CarrierCommand, CarrierSnapshot } from '../../packages/carrier/contract.ts';
-import type { DocumentAttachment } from './attachment-contract.ts';
-import type { ImageAttachment } from '../../packages/protocol/index.ts';
-import { type SlashOutcome } from './ui/composer/command-model.ts';
-import { createComposerController } from './ui/composer/composer-model.ts';
+import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
+import type { DocumentAttachment } from '../../attachment-contract.ts';
+import type { ImageAttachment } from '../../../../packages/protocol/index.ts';
+import { type SlashOutcome } from './command-model.ts';
+import { createComposerController } from './composer-model.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -17,7 +17,7 @@ function required<T extends HTMLElement = HTMLElement>(id: string): T {
   return value as T;
 }
 
-export function setupComposer(actions: {
+export function connectComposer(actions: {
   getState(): CarrierSnapshot | null;
   invoke(command: CarrierCommand): Promise<CarrierSnapshot | null>;
   requestRender(): void;
@@ -34,7 +34,9 @@ export function setupComposer(actions: {
   isSending(): boolean;
   isStopping(): boolean;
   isQueueBusy(): boolean;
+  dispose(): void;
 } {
+  const lifecycle = new AbortController();
   const prompt = required<HTMLTextAreaElement>('prompt');
   const sendButton = required<HTMLButtonElement>('send');
   const composer = required<HTMLFormElement>('composer');
@@ -59,23 +61,38 @@ export function setupComposer(actions: {
     focusPrompt: () => prompt.focus(),
   });
 
-  composer.addEventListener('submit', (event) => {
-    event.preventDefault();
-    void controller.submit();
+  composer.addEventListener(
+    'submit',
+    (event) => {
+      event.preventDefault();
+      void controller.submit();
+    },
+    { signal: lifecycle.signal },
+  );
+  sendButton.addEventListener(
+    'click',
+    (event) => {
+      if (!actions.getState()?.session.running) return;
+      event.preventDefault();
+      void controller.stop();
+    },
+    { signal: lifecycle.signal },
+  );
+  required('refresh-tasks').addEventListener('click', () => void controller.refreshTasks(), {
+    signal: lifecycle.signal,
   });
-  sendButton.addEventListener('click', (event) => {
-    if (!actions.getState()?.session.running) return;
-    event.preventDefault();
-    void controller.stop();
+  required('clear-queue').addEventListener('click', () => void controller.clearQueue(), {
+    signal: lifecycle.signal,
   });
-  required('refresh-tasks').addEventListener('click', () => void controller.refreshTasks());
-  required('clear-queue').addEventListener('click', () => void controller.clearQueue());
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-prompt]')) {
-    button.addEventListener('click', () => controller.applyPrompt(button.dataset.prompt!));
+    button.addEventListener('click', () => controller.applyPrompt(button.dataset.prompt!), {
+      signal: lifecycle.signal,
+    });
   }
   return {
     isSending: () => controller.isSending(),
     isStopping: () => controller.isStopping(),
     isQueueBusy: () => controller.isQueueBusy(),
+    dispose: () => lifecycle.abort(),
   };
 }

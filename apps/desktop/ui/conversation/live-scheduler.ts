@@ -13,9 +13,9 @@
  * session reload, for instance), the snapshot's own copy is what the bubble shows. The store drops that buffer the
  * moment the run stops or a reload replaces the message, so stale text can never reappear under a new message id.
  */
-import type { CarrierSnapshot, MessageDelta } from '../../packages/carrier/contract.ts';
-import type { LiveMessageSurface, LiveMessageView } from './ui/conversation/live-model.ts';
-import { createStreamStore } from './ui/conversation/stream-store.ts';
+import type { CarrierSnapshot, MessageDelta } from '../../../../packages/carrier/contract.ts';
+import type { LiveMessageSurface, LiveMessageView } from './live-model.ts';
+import { createStreamStore } from './stream-store.ts';
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -26,7 +26,7 @@ function required<T extends HTMLElement = HTMLElement>(id: string): T {
 /** What the projection shows when there is no running message. */
 const NO_LIVE: LiveMessageView = { present: false, text: '', reasoning: '', phase: undefined };
 
-export function setupLiveMessage(options: {
+export function createLiveScheduler(options: {
   getState(): CarrierSnapshot | null;
   /** The React-owned bubble: the folded thought and the answer body. */
   live: LiveMessageSurface;
@@ -39,14 +39,16 @@ export function setupLiveMessage(options: {
   sync(): void;
   delta(delta: MessageDelta): void;
   schedule(): void;
+  dispose(): void;
 } {
   const { live, updateJumpButton, isChildPageOpen, isLoadingOlder } = options;
   const conversation = required('conversation');
   let liveKey = '';
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
   // Delta merging and its 100ms publish budget live in the stream store; this file only paints.
   const stream = createStreamStore();
-  stream.view.subscribe(() => schedule());
+  const unsubscribe = stream.view.subscribe(() => schedule());
   /** The answer text the live bubble should show: the streamed view when it matches, else the snapshot. */
   function liveText(): string {
     const live = options.getState()?.session.liveMessage;
@@ -74,7 +76,7 @@ export function setupLiveMessage(options: {
   }
   /** Markdown rendering is far too expensive to run per token, so paints stay coalesced at 100ms. */
   function schedule(): void {
-    if (liveTimer) return;
+    if (disposed || liveTimer) return;
     liveTimer = setTimeout(() => {
       liveTimer = undefined;
       const nearBottom =
@@ -96,6 +98,7 @@ export function setupLiveMessage(options: {
   }
   /** Keep the visible bubble in step with the snapshot. */
   function sync(): void {
+    if (disposed) return;
     const message = options.getState()?.session.liveMessage;
     live.setVisible(Boolean(message) && liveText() !== '');
     // The store clears its own buffer once the run stops (or a reload replaced the message), so stale text can
@@ -115,7 +118,19 @@ export function setupLiveMessage(options: {
   // closes. The channel says which of a message's two streams a slice belongs to, and a slice must never be added to
   // the wrong one.
   function delta(delta: MessageDelta): void {
+    if (disposed) return;
     stream.acceptDelta(delta);
   }
-  return { sync, delta, schedule };
+  return {
+    sync,
+    delta,
+    schedule,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      if (liveTimer) clearTimeout(liveTimer);
+      unsubscribe();
+      stream.dispose();
+    },
+  };
 }

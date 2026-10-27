@@ -20,7 +20,7 @@
  * `YUANTU_*` variables it reads — see §7-8 of the ledger). A switcher owned by whichever panel happened to be
  * added last is a switcher the next removal has to go looking for.
  */
-import { showPanel } from './ui/navigation.ts';
+import { showPanel } from '../navigation.ts';
 
 const PANELS = {
   'workspace-maintenance-content': 'workspace-maintenance-settings',
@@ -32,12 +32,10 @@ export type SettingsPanelId = keyof typeof PANELS;
 
 export function showSettingsPanel(panelId: SettingsPanelId): void {
   showPanel(panelId);
-  for (const [id, buttonId] of Object.entries(PANELS)) {
-    const panel = document.getElementById(id);
-    if (panel && id === 'mcp-panel') panel.hidden = id !== panelId;
-    const button = document.getElementById(buttonId);
-    if (!button) continue;
-    if (id === panelId) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  }
+  // MCP management is feature-gated and still owns its isolated legacy panel; ordinary settings are React-owned.
+  const panel = document.getElementById('mcp-panel');
+  if (panel) panel.hidden = panelId !== 'mcp-panel';
+  const button = document.getElementById('mcp-settings');
+  if (panelId === 'mcp-panel') button?.setAttribute('aria-current', 'page');
+  else button?.removeAttribute('aria-current');
 }

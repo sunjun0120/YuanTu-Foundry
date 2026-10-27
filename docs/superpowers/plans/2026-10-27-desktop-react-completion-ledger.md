@@ -9,7 +9,7 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 
 - [x] T24a: React owns the product skeleton and one AppShell; preserve drafts, scroll and region state.
 - [x] T24b: Product page/settings-category transitions and legacy CSS retirement by selector ownership.
-- [ ] T25 chrome: React owns dynamic window chrome; remove the old page renderer and finish bootstrap/lifetime cleanup.
+- [x] T25 chrome: React owns dynamic window chrome; remove the old page renderer and finish bootstrap/lifetime cleanup.
 - [x] T25a: Replace region portals with ordinary React children; independent view lifecycle.
 - [ ] T25 slots: React slot ordering, dynamic registration, unload and type contracts.
 - [ ] T25b: Remove legacy page rendering, select/walker dependencies and compatibility-only selectors; audit retained DOM islands.
@@ -44,5 +44,7 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - Ruling: Opening settings refreshes the model reading without locking navigation; save/model-switch locks remain. A read-only refresh must not prevent the rapid navigation reversals required by the specification. Request ordering/lifetime cleanup is part of T25.
 
 ## Verification
+
+- Bootstrap/chrome checkpoint: `renderer.ts` is a ~40-line runtime/root bootstrap. Application composition runs after committed hosts, cleans controllers, IPC/locale subscriptions, listeners, timers and observers on unmount/retry, and ignores late model-selection replies. Composer/live/model bindings now live under `ui/`. Chrome/model status/locks are React projections. All nine static gates pass. Real Electron language 7/7, React 5/5, settings 8 pass/1 existing MCP skip; the lifecycle test verifies initialization ordering, idempotent cleanup and ticker cancellation. Language navigation now waits for the outgoing page to hide instead of trying to click a hidden back button during its exit animation.
 
 Test and screenshot scratch: `.scratch/react-completion/`. This ledger records results as work proceeds; unchecked tasks remain unfinished.

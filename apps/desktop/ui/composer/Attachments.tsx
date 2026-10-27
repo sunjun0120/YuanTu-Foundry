@@ -50,6 +50,7 @@ export function Attachments({ controller }: { controller: AttachmentsController 
             <button
               type="button"
               className="attachment-remove"
+              disabled={state.busy}
               aria-label={t('ui.removeAttachment', { name: document.name })}
               title={t('ui.removeAttachment', { name: document.name })}
               onClick={() => controller.removeDocument(index)}
@@ -71,6 +72,7 @@ export function Attachments({ controller }: { controller: AttachmentsController 
               <button
                 type="button"
                 className="attachment-remove"
+                disabled={state.busy}
                 aria-label={t('ui.removeImage', { name })}
                 title={t('ui.removeImage', { name })}
                 onClick={(event) => {

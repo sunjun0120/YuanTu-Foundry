@@ -140,8 +140,15 @@ const actions = createDesktopActions({
   focusPrompt: () => {},
   pending: createPendingOperations(),
 });
-mountDesktopApp({ children: <div id="probe-mount" data-react-owned=""><Probe /></div>, runtime, actions });
-window.__ui = { setLocale, locale, setExplode };
+const disposeApp = mountDesktopApp({ children: <div id="probe-mount" data-react-owned=""><Probe /></div>, runtime, actions,
+  initialize: () => {
+    if (!document.getElementById('probe-mount')) throw new Error('application initialized before its hosts');
+    window.__starts = (window.__starts || 0) + 1;
+    const ticker = setInterval(() => { window.__ticks = (window.__ticks || 0) + 1; }, 10);
+    return () => { clearInterval(ticker); window.__stops = (window.__stops || 0) + 1; };
+  },
+});
+window.__ui = { setLocale, locale, setExplode, disposeApp };
 `;
 
 /**
@@ -649,6 +656,31 @@ test('the React layer mounts into the product document', { skip: electronSkip },
   await page.waitForSelector('#react-copy');
   assert.equal(await page.locator('#react-copy').innerText(), 'New session');
 });
+
+test(
+  'application lifetime starts after its hosts and stops its ticker exactly once',
+  { skip: electronSkip },
+  async (t) => {
+    const page = await probePage(t);
+    if (!page) return;
+    await page.waitForSelector('#react-copy');
+    assert.equal(await page.evaluate(() => window.__starts), 1);
+    await page.evaluate(() => {
+      window.__ui.disposeApp();
+      window.__ui.disposeApp();
+    });
+    const stopped = await page.evaluate(() => ({
+      stops: window.__stops,
+      ticks: window.__ticks,
+      nodes: document.getElementById('desktop-root').childElementCount,
+    }));
+    assert.equal(stopped.stops, 1);
+    assert.equal(stopped.nodes, 0);
+    await page.waitForTimeout(60);
+    assert.equal(await page.evaluate(() => window.__ticks), stopped.ticks);
+    await page.evaluate(() => window.__ui.setLocale('en-US'));
+  },
+);
 
 test(
   'the shell is one AppShell with one main and one scroll container',

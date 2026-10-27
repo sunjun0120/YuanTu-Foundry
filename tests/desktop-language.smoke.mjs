@@ -170,8 +170,9 @@ test(
       }
     };
     const toChat = async () => {
-      if (await page.locator('#settings-page').isVisible())
+      if ((await page.locator('#settings-page').getAttribute('data-page-active')) === 'true')
         await page.locator('#settings-back').click();
+      await page.locator('#settings-page').waitFor({ state: 'hidden' });
     };
 
     /** Walk every reachable surface, scanning as it goes. */

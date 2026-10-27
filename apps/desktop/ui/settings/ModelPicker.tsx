@@ -21,18 +21,28 @@ export function ModelPicker(): ReactNode {
       }))
     : [];
   return (
-    <Select
-      id="model"
-      aria-label={t('ui.switchModel')}
-      className="model-chip model"
-      value={state.view?.connectionId || options[0]?.value || null}
-      placeholder={t('settings.noModel')}
-      disabled={state.locked}
-      data={[...options, { value: '__settings__', label: t('settings.modelEntry') }]}
-      onChange={(value) => {
-        if (value && value !== '__environment__') state.choose(value);
-      }}
-      title={state.view?.model || t('settings.addModelConnection')}
-    />
+    <>
+      <Select
+        id="model"
+        aria-label={t('ui.switchModel')}
+        className="model-chip model"
+        value={state.view?.connectionId || options[0]?.value || null}
+        placeholder={t('settings.noModel')}
+        disabled={state.locked}
+        data={[...options, { value: '__settings__', label: t('settings.modelEntry') }]}
+        onChange={(value) => {
+          if (value && value !== '__environment__') state.choose(value);
+        }}
+        title={state.view?.model || t('settings.addModelConnection')}
+      />
+      <span
+        id="model-switch-status"
+        className="model-switch-status"
+        role="status"
+        hidden={!state.status}
+      >
+        {state.status ? ('key' in state.status ? t(state.status.key) : state.status.text) : ''}
+      </span>
+    </>
   );
 }

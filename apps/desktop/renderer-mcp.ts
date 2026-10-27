@@ -1,5 +1,5 @@
 import type { McpServer, McpServerView, McpView, McpReply } from './mcp-contract.ts';
-import { showSettingsPanel } from './renderer-panels.ts';
+import { showSettingsPanel } from './ui/settings/navigation.ts';
 import { onLocaleChange, t } from './i18n.ts';
 export function setupMcpSettings(
   isBusy: () => boolean,

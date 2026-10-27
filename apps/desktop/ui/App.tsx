@@ -1,14 +1,10 @@
 /**
- * The React entry the legacy renderer calls once: create the root, wrap it in the single provider tree, draw the
- * regions that have been handed over.
- *
- * `App` stays this small on purpose. The migration's whole shape is "legacy DOM with React regions until nothing
- * legacy is left", so the app is the region host plus the error boundary that catches a region's failure without
- * unmounting the rest of the window. The shell (`DesktopShell`/`AppShell`) replaces this at T24.
+ * The window's one React root and provider tree. Controller initialization runs after the product hosts commit;
+ * its cleanup runs on unmount and on error-boundary retry, so a retry cannot retain the previous window bindings.
  */
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, type ReactNode } from 'react';
 import type { DesktopActions } from './actions.ts';
 import { ErrorBoundary } from './ErrorBoundary.tsx';
 import { desktopViews } from './views.tsx';
@@ -16,8 +12,26 @@ import { DesktopProviders } from './providers.tsx';
 import type { DesktopRuntime } from './runtime.ts';
 import { ProductShell } from './layout/ProductShell.tsx';
 
-export function App({ children }: { children?: ReactNode }): ReactNode {
-  return <ErrorBoundary>{children ?? <ProductShell />}</ErrorBoundary>;
+type Initialize = () => void | (() => void);
+
+function ApplicationLifetime({ initialize }: { initialize?: Initialize }): ReactNode {
+  useLayoutEffect(() => initialize?.(), [initialize]);
+  return null;
+}
+
+export function App({
+  children,
+  initialize,
+}: {
+  children?: ReactNode;
+  initialize?: Initialize;
+}): ReactNode {
+  return (
+    <ErrorBoundary>
+      {children ?? <ProductShell />}
+      <ApplicationLifetime initialize={initialize} />
+    </ErrorBoundary>
+  );
 }
 
 /**
@@ -30,6 +44,7 @@ export function mountDesktopApp(options: {
   runtime: DesktopRuntime;
   actions: DesktopActions;
   children?: ReactNode;
+  initialize?: Initialize;
 }): () => void {
   const container = document.getElementById('desktop-root');
   if (!container) throw new Error('the desktop document has no #desktop-root');
@@ -38,13 +53,19 @@ export function mountDesktopApp(options: {
   flushSync(() =>
     root.render(
       <DesktopProviders runtime={options.runtime} actions={options.actions}>
-        <App>{options.children}</App>
+        <App initialize={options.initialize}>{options.children}</App>
       </DesktopProviders>,
     ),
   );
+  let disposed = false;
   return () => {
-    root.unmount();
-    desktopViews.clear();
-    delete container.dataset.reactOwned;
+    if (disposed) return;
+    disposed = true;
+    try {
+      root.unmount();
+    } finally {
+      desktopViews.clear();
+      delete container.dataset.reactOwned;
+    }
   };
 }

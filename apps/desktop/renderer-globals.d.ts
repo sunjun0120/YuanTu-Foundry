@@ -7,8 +7,7 @@
  * `.d.ts` the build keeps — excluding this file would break every `setup*` module with `Property 'yuantu' does not
  * exist on type 'Window'`.
  *
- * `renderer.ts` still declares the same property today; TypeScript merges the two while the entry is rewritten
- * (T6/T24), and the duplicate there goes away with the rest of its DOM orchestration.
+ * The entry now creates only the runtime and React root; the shared declaration stays here for DOM-island helpers.
  */
 import type { DesktopBridge } from './contract.ts';
 

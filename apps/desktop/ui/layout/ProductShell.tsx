@@ -1,3 +1,4 @@
+import { chrome } from '../chrome.ts';
 import { PageTransition } from '../transitions.tsx';
 import { useLayoutEffect, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
@@ -7,11 +8,14 @@ import { navigation } from '../navigation.ts';
 import { ViewSlot } from '../views.tsx';
 import { DesktopShell } from './DesktopShell.tsx';
 import { ModelPicker } from '../settings/ModelPicker.tsx';
+import { modelPicker } from '../settings/model-picker-state.ts';
 
 /** Product chrome is owned by React. Child panel containers remain stable across navigation. */
 export function ProductShell(): ReactNode {
   useLocale();
   const view = useReadable(navigation);
+  const status = useReadable(chrome);
+  const picker = useReadable(modelPicker);
   useLayoutEffect(() => {
     document.body.dataset.page = view.page;
     if (view.page === 'chat')
@@ -32,13 +36,19 @@ export function ProductShell(): ReactNode {
                   <img className="logo-dark" src="./img/logo-dark.png" alt="" />
                 </div>
               </div>
-              <button id="new-session" className="new-session" disabled>
+              <button id="new-session" className="new-session" disabled={!status.canCreate}>
                 <span aria-hidden="true">＋</span> {t('ui.newSession')}
               </button>
               <div className="workspace-box">
                 <div className="section-label">{t('ui.workspace')}</div>
-                <div id="workspace" className="workspace" translate="no" />
-                <button id="choose-workspace" className="text-button choose-workspace" disabled>
+                <div id="workspace" title={status.workspace} className="workspace" translate="no">
+                  {status.workspace}
+                </div>
+                <button
+                  id="choose-workspace"
+                  className="text-button choose-workspace"
+                  disabled={!status.canChangeWorkspace}
+                >
                   {t('ui.changeFolder')}
                   <span aria-hidden="true">↗</span>
                 </button>
@@ -47,20 +57,34 @@ export function ProductShell(): ReactNode {
                 <ViewSlot name="session-sidebar" />
               </div>
               <div className="sidebar-footer">
-                <button id="open-settings" className="settings-entry" type="button">
+                <button
+                  id="open-settings"
+                  className="settings-entry"
+                  type="button"
+                  disabled={picker.locked}
+                >
                   <span aria-hidden="true">⚙</span>
                   <span id="settings-label">{t('ui.settings')}</span>
                 </button>
               </div>
             </aside>
             <aside className="settings-sidebar" hidden={view.page !== 'settings'}>
-              <button id="settings-back" className="settings-back" type="button">
+              <button
+                id="settings-back"
+                className="settings-back"
+                type="button"
+                disabled={picker.locked}
+              >
                 <span aria-hidden="true">←</span>
                 {t('ui.backToChat')}
               </button>
               <h1>{t('ui.settings')}</h1>
               <nav aria-label={t('shell.settingsMenu')}>
-                <button id="general-settings" type="button">
+                <button
+                  id="general-settings"
+                  type="button"
+                  aria-current={view.panel === 'general-settings-content' ? 'page' : undefined}
+                >
                   <span aria-hidden="true">
                     <svg
                       className="settings-nav-icon"
@@ -79,7 +103,11 @@ export function ProductShell(): ReactNode {
                   </span>
                   {t('ui.general')}
                 </button>
-                <button id="model-settings" type="button" aria-current="page">
+                <button
+                  id="model-settings"
+                  type="button"
+                  aria-current={view.panel === 'model-settings-content' ? 'page' : undefined}
+                >
                   <span aria-hidden="true">
                     <svg
                       className="settings-nav-icon"
@@ -111,10 +139,9 @@ export function ProductShell(): ReactNode {
                       <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path>
                     </svg>
                   </span>
-                  <span
-                    id="workspace-maintenance-label"
-                    className="workspace-maintenance-label"
-                  ></span>
+                  <span id="workspace-maintenance-label" className="workspace-maintenance-label">
+                    {t('archived.title')}
+                  </span>
                 </button>
               </nav>
             </aside>
@@ -132,7 +159,14 @@ export function ProductShell(): ReactNode {
             >
               <header>
                 <div className="chat-heading">
-                  <strong id="chat-title" className="chat-title" translate="no" />
+                  <strong
+                    id="chat-title"
+                    title={status.title}
+                    className="chat-title"
+                    translate="no"
+                  >
+                    {status.title}
+                  </strong>
                   <span
                     id="chat-breadcrumb-sep"
                     className="chat-breadcrumb-sep"
@@ -198,18 +232,32 @@ export function ProductShell(): ReactNode {
                   </button>
                 </div>
               </header>
-              <div id="error" className="error-banner" role="alert" hidden>
-                <span id="error-text"></span>
+              <div
+                id="error"
+                title={status.errorTitle}
+                className="error-banner"
+                role="alert"
+                hidden={!status.errorVisible}
+              >
+                <span id="error-text">{status.errorText}</span>
                 <button
                   id="error-action"
+                  data-action={status.errorAction ?? undefined}
+                  disabled={status.errorActionDisabled}
                   type="button"
                   className="text-button error-action"
-                  hidden
-                ></button>
-                <span id="error-note" className="error-note" role="status"></span>
+                  hidden={!status.errorAction}
+                >
+                  {status.errorActionText}
+                </button>
+                <span id="error-note" className="error-note" role="status">
+                  {status.errorNote}
+                </span>
               </div>
-              <div id="notice" className="notice-banner" role="status" hidden></div>
-              <div id="configuration" className="configuration" hidden>
+              <div id="notice" className="notice-banner" role="status" hidden={!status.notice}>
+                {status.notice}
+              </div>
+              <div id="configuration" className="configuration" hidden={!status.configVisible}>
                 {t('ui.noModelConfigured')}
               </div>
               <section
@@ -218,7 +266,7 @@ export function ProductShell(): ReactNode {
                 aria-label={t('ui.conversation')}
                 tabIndex={0}
               >
-                <div id="welcome" className="welcome">
+                <div id="welcome" hidden={!status.welcomeVisible} className="welcome">
                   <div className="eyebrow">{t('ui.welcomeEyebrow')}</div>
                   <h1>{t('ui.welcomeStart')}</h1>
                   <p>{t('ui.welcomeSubtitle')}</p>
@@ -269,10 +317,13 @@ export function ProductShell(): ReactNode {
                 </section>
                 <button
                   id="load-older-history"
+                  disabled={status.olderDisabled}
                   type="button"
                   className="text-button"
-                  hidden
-                ></button>
+                  hidden={!status.olderVisible}
+                >
+                  {status.olderText}
+                </button>
                 <div id="messages">
                   <ViewSlot name="transcript" />
                 </div>
@@ -309,7 +360,7 @@ export function ProductShell(): ReactNode {
                 type="button"
                 aria-label={t('ui.jumpToLatest')}
                 title={t('ui.jumpToLatest')}
-                hidden
+                hidden={!status.jumpVisible}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="m5 9 7 7 7-7"></path>
@@ -318,9 +369,11 @@ export function ProductShell(): ReactNode {
               <footer className="composer-area">
                 <div className="run-status">
                   <span id="run-status" role="status">
-                    {t('shell.connecting')}
+                    {status.runStatus || t('shell.connecting')}
                   </span>
-                  <span id="session-short" className="session-short"></span>
+                  <span id="session-short" className="session-short">
+                    {status.sessionShort}
+                  </span>
                 </div>
                 <div id="todos-root">
                   <ViewSlot name="todos-root" />
@@ -342,13 +395,14 @@ export function ProductShell(): ReactNode {
                     placeholder={t('ui.promptPlaceholder')}
                     rows={2}
                     maxLength={100000}
-                    disabled
+                    disabled={status.promptDisabled}
                   ></textarea>
                   <div className="composer-bottom">
                     <input id="image-input" type="file" multiple hidden />
                     <button
                       type="button"
                       id="attach-image"
+                      disabled={status.attachDisabled}
                       className="secondary attach-image"
                       aria-label={t('ui.addAttachment')}
                       title={t('ui.addAttachment')}
@@ -361,21 +415,15 @@ export function ProductShell(): ReactNode {
                     <div className="chat-model">
                       <label htmlFor="model">{t('ui.model')}</label>
                       <ModelPicker />
-                      <span
-                        id="model-switch-status"
-                        className="model-switch-status"
-                        role="status"
-                        hidden
-                      ></span>
                     </div>
                     <button
                       id="send"
                       type="submit"
                       className="primary send"
-                      aria-label={t('ui.send')}
-                      title={t('ui.send')}
-                      data-mode="send"
-                      disabled
+                      aria-label={status.sendLabel || t('ui.send')}
+                      title={status.sendLabel || t('ui.send')}
+                      data-mode={status.sendMode}
+                      disabled={status.sendDisabled}
                     >
                       <svg
                         className="send-arrow"
@@ -412,8 +460,16 @@ export function ProductShell(): ReactNode {
                 >
                   <ViewSlot name="statistics" />
                 </div>
-                <div id="queue" className="queue-status" aria-live="polite"></div>
-                <button type="button" id="clear-queue" className="text-button" hidden>
+                <div id="queue" className="queue-status" aria-live="polite">
+                  {status.queueText}
+                </div>
+                <button
+                  type="button"
+                  id="clear-queue"
+                  disabled={status.queueDisabled}
+                  className="text-button"
+                  hidden={!status.queueVisible}
+                >
                   {t('ui.clearQueue')}
                 </button>
               </footer>

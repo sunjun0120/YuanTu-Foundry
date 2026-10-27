@@ -6,45 +6,48 @@
  * racing each other (`modelLock`). The picker's `__settings__` entry stays an **action**: it opens the settings page
  * and is restored before any command could carry it as a connection id.
  */
-import { onLocaleChange, t } from './i18n.ts';
-import { showSettingsPanel } from './renderer-panels.ts';
-import type { ModelSettingsView } from './settings-contract.ts';
-import { modelLock } from './ui/settings/model-lock.ts';
-import { modelPicker } from './ui/settings/model-picker-state.ts';
-import { navigation, showPage } from './ui/navigation.ts';
+import { showSettingsPanel } from './navigation.ts';
+import type { ModelSettingsView } from '../../settings-contract.ts';
+import { modelLock } from './model-lock.ts';
+import { modelPicker } from './model-picker-state.ts';
+import { navigation, showPage } from '../navigation.ts';
 
-export function setupModelSettingsEntry(
+export function connectModelSelection(
   isBusy: () => boolean,
   onBusy: (busy: boolean) => void,
-): { updateBusy(): void } {
+): { updateBusy(): void; dispose(): void } {
+  const lifecycle = new AbortController();
+  let disposed = false;
+  let requestEpoch = 0;
   const byId = <T extends HTMLElement = HTMLElement>(id: string): T =>
     document.getElementById(id) as T;
-  const switchStatus = byId<HTMLElement>('model-switch-status');
   let view: ModelSettingsView | null = null;
   let pending = false;
   let conversationScroll = 0;
 
   function updateBusy(): void {
+    if (disposed) return;
     const locked = pending || isBusy() || modelLock.getSnapshot().form;
-    modelPicker.set({ ...modelPicker.getSnapshot(), locked });
-    byId<HTMLButtonElement>('settings-back').disabled = locked;
-    byId<HTMLButtonElement>('open-settings').disabled = locked;
+    if (modelPicker.getSnapshot().locked !== locked)
+      modelPicker.set({ ...modelPicker.getSnapshot(), locked });
   }
   function busy(value: boolean): void {
+    if (disposed) return;
     pending = value;
     onBusy(value);
     modelLock.set({ ...modelLock.getSnapshot(), entry: value, busy: isBusy() });
     updateBusy();
   }
-  modelLock.subscribe(updateBusy);
+  const stopLock = modelLock.subscribe(updateBusy);
 
   function updatePicker(next: ModelSettingsView): void {
     modelPicker.set({ ...modelPicker.getSnapshot(), view: next });
   }
   async function refreshPicker(): Promise<void> {
+    const epoch = ++requestEpoch;
     try {
       const reply = await window.yuantu.settings({ type: 'get' });
-      if (reply.ok) {
+      if (!disposed && epoch === requestEpoch && reply.ok) {
         view = reply.settings;
         updatePicker(reply.settings);
       }
@@ -52,14 +55,9 @@ export function setupModelSettingsEntry(
       // The picker keeps whatever it showed; the form reports a real read failure itself.
     }
   }
-  const translate = (): void => {
-    switchStatus.textContent = switchStatus.hidden ? '' : t('settings.selectHint');
-    if (view) updatePicker(view);
-  };
-  onLocaleChange(translate);
 
   function openSettings(target: 'general' | 'model' = 'general'): void {
-    if (pending) return;
+    if (disposed || pending) return;
     if (navigation.getSnapshot().page === 'chat')
       conversationScroll = byId('conversation').scrollTop;
     window.dispatchEvent(new CustomEvent('yuantu-settings-open'));
@@ -70,22 +68,25 @@ export function setupModelSettingsEntry(
     void refreshPicker();
   }
   function backToChat(): void {
-    if (pending) return;
-    switchStatus.hidden = true;
+    if (disposed || pending) return;
+    modelPicker.set({ ...modelPicker.getSnapshot(), status: null });
     showPage('chat', conversationScroll);
     window.dispatchEvent(new CustomEvent('yuantu-settings-close'));
     void refreshPicker();
   }
   function showModelPanel(): void {
-    if (pending) return;
+    if (disposed || pending) return;
     showSettingsPanel('model-settings-content');
     document.getElementById('settings-url')?.focus();
   }
-  byId('open-settings').addEventListener('click', () => openSettings('general'));
-  byId('settings-back').addEventListener('click', backToChat);
-  byId('model-settings').addEventListener('click', showModelPanel);
+  byId('open-settings').addEventListener('click', () => openSettings('general'), {
+    signal: lifecycle.signal,
+  });
+  byId('settings-back').addEventListener('click', backToChat, { signal: lifecycle.signal });
+  byId('model-settings').addEventListener('click', showModelPanel, { signal: lifecycle.signal });
 
   const choose = (id: string): void => {
+    if (disposed) return;
     if (id === '__settings__') {
       openSettings('model');
       return;
@@ -93,27 +94,41 @@ export function setupModelSettingsEntry(
     if (pending || isBusy() || !id || id === view?.connectionId) {
       return;
     }
-    switchStatus.hidden = false;
-    switchStatus.textContent = t('settings.selectHint');
+    modelPicker.set({ ...modelPicker.getSnapshot(), status: { key: 'settings.selectHint' } });
     busy(true);
+    const epoch = ++requestEpoch;
     void window.yuantu
       .settings({ type: 'select', connectionId: id })
       .then((reply) => {
+        if (disposed || epoch !== requestEpoch) return;
         if (reply.ok) {
           view = reply.settings;
           updatePicker(reply.settings);
-          switchStatus.hidden = true;
+          modelPicker.set({ ...modelPicker.getSnapshot(), status: null });
         } else {
-          switchStatus.textContent = reply.error;
+          modelPicker.set({ ...modelPicker.getSnapshot(), status: { text: reply.error } });
         }
       })
       .catch(() => {
-        switchStatus.textContent = t('settings.connectionError');
+        if (disposed || epoch !== requestEpoch) return;
+        modelPicker.set({
+          ...modelPicker.getSnapshot(),
+          status: { key: 'settings.connectionError' },
+        });
       })
       .finally(() => busy(false));
   };
   modelPicker.set({ ...modelPicker.getSnapshot(), choose });
 
   void refreshPicker();
-  return { updateBusy };
+  return {
+    updateBusy,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      requestEpoch++;
+      lifecycle.abort();
+      stopLock();
+    },
+  };
 }

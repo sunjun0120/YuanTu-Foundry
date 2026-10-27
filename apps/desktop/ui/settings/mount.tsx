@@ -12,8 +12,8 @@
  *    controller performed — the provider already follows those attributes.
  */
 import type { DesktopBridge } from '../../contract.ts';
-import { onLocaleChange, setLocale, t } from '../../i18n.ts';
-import { showSettingsPanel } from '../../renderer-panels.ts';
+import { setLocale } from '../../i18n.ts';
+import { showSettingsPanel } from './navigation.ts';
 import { registerView } from '../views.tsx';
 import { createStore } from '../stores.ts';
 import type { UiSettings } from '../../ui-settings.ts';
@@ -32,8 +32,6 @@ export function mountGeneralSettings(bridge: DesktopBridge): () => void {
   const content = document.getElementById('general-settings-content');
   if (!content) return () => {};
   const page = document.getElementById('settings-page');
-  const sidebar = page?.querySelector<HTMLElement>('.settings-sidebar h1');
-  const navigation = page?.querySelector<HTMLElement>('.settings-sidebar nav');
   // The legacy page tracked the input modality so focus rings only appear for keyboard use; CSS still reads it.
   const pointer = () => {
     if (page) page.dataset.input = 'pointer';
@@ -56,13 +54,6 @@ export function mountGeneralSettings(bridge: DesktopBridge): () => void {
       environment.set(null);
     }
   };
-  const translateChrome = (): void => {
-    page?.setAttribute('aria-label', t('ui.settingsPage'));
-    if (sidebar) sidebar.textContent = t('ui.settings');
-    navigation?.setAttribute('aria-label', t('ui.settingsMenu'));
-  };
-  onLocaleChange(translateChrome);
-  translateChrome();
 
   const disposeRegion = registerView(
     'general-settings',
