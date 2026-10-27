@@ -59,7 +59,7 @@
 
 ## 6. 未完成
 
-- Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，主进程订阅所有 Host，项目列表显示 `running`/`waiting` 标记并列出各工作区最近会话；等待会话的 `!` 标记或等待项目名会切到该工作区并加载会话，再由 active Host 的审批面板处理。后台审批的就地处理/队列仍未完成。
+- Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，主进程订阅所有 Host，项目列表显示 `running`/`waiting` 标记、跨项目等待汇总，并列出各工作区最近会话；等待会话、等待项目名或汇总按钮会切到该工作区并加载会话，再由 active Host 的审批面板处理。后台审批的就地处理/队列仍未完成。
 - Phase 7 剩余：系统化键盘/触摸验收；每工作区会话列表、项目级折叠、粗指针悬停操作与键盘 Enter/焦点显示已有覆盖。
 - 打包产物已生成并通过 `check:windows-package`；安装/升级/卸载场景、打包后窗口自动化与 macOS 记录未完成。
 
