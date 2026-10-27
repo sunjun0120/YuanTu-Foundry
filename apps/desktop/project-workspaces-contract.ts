@@ -47,6 +47,7 @@ export interface ProjectRuntimeView {
   ready: boolean;
   running: boolean;
   waiting: number;
+  sessions: { id: string; title: string; running: boolean }[];
 }
 
 export type ProjectWorkspaceReply =

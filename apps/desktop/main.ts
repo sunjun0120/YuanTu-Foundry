@@ -114,6 +114,14 @@ function watchHost(workspaceId: string, host: CarrierService): void {
           state.session.approvals.length +
           state.session.questions.length +
           other.reduce((count, run) => count + run.approvals.length + run.questions.length, 0),
+        sessions: state.sessions
+          .filter((session) => !session.parentSessionId)
+          .slice(0, 20)
+          .map((session) => ({
+            id: session.id,
+            title: session.title ?? '',
+            running: Boolean(session.activeRun),
+          })),
       });
       runNotifier.update(state);
     }),

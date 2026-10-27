@@ -831,6 +831,40 @@ summary:focus-visible {
   color: var(--goal-active);
 }
 
+.project-sessions {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 1px;
+  margin: 1px 0 3px 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.project-sessions button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.project-sessions button span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-sessions button:hover,
+.project-sessions button:focus-visible {
+  color: var(--ink);
+}
+
 .project-actions {
   display: flex;
   gap: 1px;

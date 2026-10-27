@@ -69,6 +69,14 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     if (!bridge) return;
     apply(await bridge({ type: 'select', id }));
   };
+  const openSession = async (workspaceId: string, sessionId: string): Promise<void> => {
+    const bridge = window.yuantu?.projects;
+    if (!bridge || !canChange) return;
+    const reply = await bridge({ type: 'select', id: workspaceId });
+    if (!apply(reply)) return;
+    const invoke = window.yuantu?.invoke;
+    if (invoke) await invoke({ type: 'load', id: sessionId });
+  };
   const remove = async (id: string): Promise<void> => {
     const bridge = window.yuantu?.projects;
     if (!bridge) return;
@@ -192,6 +200,27 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
                       {t('projects.remove')}
                     </button>
                   </div>
+                ) : null}
+                {status?.sessions.length ? (
+                  <ul className="project-sessions">
+                    {status.sessions.slice(0, 5).map((session) => (
+                      <li key={session.id}>
+                        <button
+                          type="button"
+                          disabled={!canChange}
+                          title={session.title || t('ui.untitledSession')}
+                          onClick={() => void openSession(workspace.id, session.id)}
+                        >
+                          <span>{session.title || t('ui.untitledSession')}</span>
+                          {session.running ? (
+                            <span className="project-badge running" aria-hidden="true">
+                              ●
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 ) : null}
               </li>
             );
