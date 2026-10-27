@@ -18,8 +18,9 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
 
   useEffect(() => {
     let live = true;
-    void window.yuantu
-      .projects?.({ type: 'list' })
+    const bridge = window.yuantu?.projects;
+    if (!bridge) return;
+    void bridge({ type: 'list' })
       .then((reply) => {
         if (!live) return;
         if (reply.ok) setRegistry(reply.registry);
@@ -33,6 +34,13 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     };
   }, []);
 
+  const reload = async (): Promise<void> => {
+    const bridge = window.yuantu?.projects;
+    if (!bridge) return;
+    const reply = await bridge({ type: 'list' });
+    if (reply.ok) setRegistry(reply.registry);
+  };
+
   const apply = (reply: ProjectWorkspaceReply): boolean => {
     if (!reply.ok) {
       setError(reply.error);
@@ -43,30 +51,44 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
     return true;
   };
 
-  const add = async (): Promise<void> => {
-    const reply = await window.yuantu.projects({ type: 'add' });
-    apply(reply);
-  };
   const select = async (id: string): Promise<void> => {
-    const reply = await window.yuantu.projects({ type: 'select', id });
-    apply(reply);
+    const bridge = window.yuantu?.projects;
+    if (!bridge) return;
+    apply(await bridge({ type: 'select', id }));
   };
   const remove = async (id: string): Promise<void> => {
+    const bridge = window.yuantu?.projects;
+    if (!bridge) return;
     const wasActive = registry?.activeWorkspaceId === id;
-    const reply = await window.yuantu.projects({ type: 'remove', id });
+    const reply = await bridge({ type: 'remove', id });
     if (!apply(reply) || !reply.ok) return;
     setRemoving(null);
     const next = reply.registry.activeWorkspaceId;
     if (wasActive && next) await select(next);
   };
   const saveName = async (id: string): Promise<void> => {
-    const reply = await window.yuantu.projects({ type: 'rename', id, displayName: name });
+    const bridge = window.yuantu?.projects;
+    if (!bridge) return;
+    const reply = await bridge({ type: 'rename', id, displayName: name });
     if (apply(reply)) setEditing(null);
   };
 
+  const choose = (): void => {
+    // The legacy session controller owns the error banner and the Host switch; this visible control forwards to it.
+    document.getElementById('choose-workspace')?.click();
+    // The picker and the Host switch are asynchronous; reading the registry again after them keeps the list current.
+    window.setTimeout(() => void reload(), 400);
+    window.setTimeout(() => void reload(), 1500);
+  };
+
   const visible = registry?.workspaces.filter((workspace) => !workspace.removed) ?? [];
+  const activePath =
+    visible.find((workspace) => workspace.id === registry?.activeWorkspaceId)?.canonicalPath ?? '';
   return (
     <section className="project-sidebar" aria-label={t('projects.title')}>
+      <div id="workspace" hidden translate="no">
+        {activePath}
+      </div>
       <div className="section-label">{t('projects.title')}</div>
       {visible.length ? (
         <ul className="project-list">
@@ -153,19 +175,15 @@ export function ProjectSidebar({ canChange }: { canChange: boolean }): ReactNode
         </p>
       ) : null}
       <button
-        id="project-add"
+        id="project-choose"
         type="button"
         className="text-button project-add"
         disabled={!canChange}
-        onClick={() => void add()}
+        onClick={choose}
       >
-        {t('projects.add')}
+        {t('ui.changeFolder')}
         <span aria-hidden="true">↗</span>
       </button>
-      {/*
-       * The legacy session mount still waits on this id to know when the Host finished a workspace switch. It is
-       * hidden because the project list owns the visible add flow; keeping the element avoids a second picker.
-       */}
       <button id="choose-workspace" type="button" hidden disabled={!canChange}>
         {t('ui.changeFolder')}
       </button>
