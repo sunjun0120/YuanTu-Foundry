@@ -75,6 +75,15 @@ test(
     app.process().stderr?.on('data', (chunk) => processLog.push(String(chunk)));
     page.setDefaultTimeout(15000);
     await page.waitForFunction(() => !document.querySelector('#prompt')?.disabled);
+    const rejected = await page.evaluate(
+      (folder) => window.yuantu.projects({ type: 'add', path: folder }),
+      path.join(root, 'missing-workspace'),
+    );
+    assert.equal(
+      rejected.ok,
+      false,
+      'invalid folders return a project error reply rather than rejecting IPC',
+    );
     const added = await page.evaluate(
       (folder) => window.yuantu.projects({ type: 'add', path: folder }),
       b,

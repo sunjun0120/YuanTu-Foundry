@@ -199,25 +199,30 @@ test('the host-less address the parser accepts is one the carrier can actually b
    * and "bindable" are now the same statement rather than two independently written ones.
    */
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-hostless-'));
+  const authToken = randomBytes(32).toString('hex');
   const child = spawn(process.execPath, [hostPath, '--workspace', root, '--listen', ':0'], {
     cwd: root,
     env: {
       ...process.env,
       YUANTU_WORKFLOWS: 'false',
-      YUANTU_HOST_TOKEN: randomBytes(32).toString('hex'),
+      YUANTU_HOST_TOKEN: authToken,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      child.once('close', (code, signal) => resolve({ code, signal }));
+      child.once('error', reject);
+    },
+  );
+  let client: AgentHostClient | undefined;
   t.after(async () => {
-    // The directory cannot go until the process really has: on Windows a killed child still holds its cwd
-    // briefly, and removing first fails with EBUSY rather than cleaning anything up. The liveness check comes
-    // first because a Host that died of a bad port — the case this test exists for — has no exit left to wait
-    // for, and waiting for one anyway hangs the teardown instead of reporting the failure.
-    if (child.exitCode === null && child.signalCode === null) {
-      const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-      child.kill('SIGKILL');
-      await exited;
-    }
+    // Closing the authenticated carrier lets startup Git finish before the Host exits.
+    // Killing only the Host can leave those descendants holding this directory on Windows.
+    if (client) await client.stop();
+    else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    const exit = await closed;
+    if (client) assert.deepEqual(exit, { code: 0, signal: null });
     await rm(root, { recursive: true, force: true });
   });
   let stdout = '';
@@ -228,7 +233,10 @@ test('the host-less address the parser accepts is one the carrier can actually b
     await new Promise((resolve) => setTimeout(resolve, 25));
   // The chosen port is announced on stdout, so the line is the proof a socket was really bound — port 0 asks
   // the OS, and a `NaN` port dies before the callback ever runs.
-  assert.match(stdout, /listening on 127\.0\.0\.1:\d+/, `stdout=${stdout} stderr=${stderr}`);
+  const address = /listening on 127\.0\.0\.1:(\d+)/.exec(stdout);
+  assert.ok(address, `stdout=${stdout} stderr=${stderr}`);
+  ({ client } = await connectClient({ port: Number(address[1]), authToken }));
+  assert.equal((await client.start()).workspace, root);
 });
 
 test('the framing helper is shared, bounded, and survives split characters', async () => {

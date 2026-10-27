@@ -235,11 +235,14 @@ export async function settleProcesses(isolation, { terminate, timeoutMs = 3000 }
         { encoding: 'utf8', windowsHide: true, timeout: 20000 },
       );
       const created = Date.parse(result.stdout?.trim());
-      if (
-        result.status === 0 &&
-        created >= entry.started &&
-        created <= (Number.isFinite(entry.at) ? entry.at : entry.started) + CREATION_GRACE_MS
-      )
+      const latestCreation =
+        (Number.isFinite(entry.at) ? entry.at : entry.started) + CREATION_GRACE_MS;
+      // A force-killed owner cannot record its exit. Its PID can already belong to
+      // another suite by settlement time; positive proof of a newer creation retires
+      // that stale registration without killing or reporting the unrelated process.
+      // A failed identity query still leaves the entry active and fails cleanup.
+      if (result.status === 0 && created > latestCreation) active.delete(pid);
+      if (result.status === 0 && created >= entry.started && created <= latestCreation)
         verified.push(pid);
     }
   }
@@ -248,7 +251,7 @@ export async function settleProcesses(isolation, { terminate, timeoutMs = 3000 }
   while (typeof terminate === 'function' && remaining().length && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 25));
   return {
-    clean: initial.length === 0,
+    clean: initial.every((pid) => !active.has(pid)),
     remaining: remaining(),
     verified,
     terminated: typeof terminate === 'function' ? verified : [],

@@ -879,12 +879,12 @@ void app
               )?.id;
               return { ok: true, registry, addedId };
             };
-            if (command.path) return register(command.path);
+            if (command.path) return await register(command.path);
             if (!window) throw new Error(mainText('desktop.quitting'));
             const picked = await dialog.showOpenDialog(window, { properties: ['openDirectory'] });
             if (picked.canceled || !picked.filePaths[0])
               return { ok: true, registry: await projectWorkspaces.list(), cancelled: true };
-            return register(picked.filePaths[0]);
+            return await register(picked.filePaths[0]);
           }
           switch (command.type) {
             case 'groupCollapse':

@@ -47,6 +47,11 @@ module.exports = {
   // A copied standalone Node is architecture-specific; never silently cross-package it.
   beforePack: async (context) => {
     if (context.electronPlatformName === 'win32') {
+      const { prepareWindowsOutput } = await import('./scripts/prepare-windows-output.mjs');
+      // The release folder also contains executable NSIS artifacts. A Low-labelled checkout must not make
+      // either those artifacts or the unpacked Chromium browser process start at Low integrity.
+      await prepareWindowsOutput(require('node:path').dirname(context.appOutDir));
+      await prepareWindowsOutput(context.appOutDir);
       if (process.platform === 'win32') {
         // NSIS validates TEMP before running installer hooks; custom system locations can fail with exit code 2.
         // Change only this build process's environment, keeping its temporary files in the workspace.

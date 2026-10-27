@@ -188,11 +188,24 @@ test(
         `
       import assert from 'node:assert/strict';
       import { createRequire } from 'node:module';
-      import { writeFile, readFile } from 'node:fs/promises';
+      import { writeFile, readFile, copyFile } from 'node:fs/promises';
+      import { execFileSync } from 'node:child_process';
       import path from 'node:path';
       const config = createRequire(${JSON.stringify(import.meta.url)})('../electron-builder.config.cjs');
-      await config.beforePack({ electronPlatformName: 'win32', arch: 1 });
       if (process.platform === 'win32') {
+        const identity = execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], {encoding:'utf8',windowsHide:true});
+        const sid = identity.match(/S-1-5-21-[0-9-]+/)?.[0];
+        assert.ok(sid);
+        execFileSync('icacls.exe', [process.cwd(), '/grant', '*' + sid + ':(OI)(CI)F'], {windowsHide:true});
+        execFileSync('icacls.exe', [process.cwd(), '/setintegritylevel', '(OI)(CI)L'], {windowsHide:true});
+      }
+      const appOutDir = path.join(process.cwd(), 'release', 'win-unpacked');
+      await config.beforePack({ electronPlatformName: 'win32', arch: 1, appOutDir });
+      if (process.platform === 'win32') {
+        const executable = path.join(appOutDir, 'identity.exe');
+        await copyFile(path.join(process.env.SystemRoot, 'System32', 'whoami.exe'), executable);
+        const groups = execFileSync(executable, ['/groups', '/fo', 'csv', '/nh'], {encoding:'utf8',windowsHide:true});
+        assert.match(groups, /S-1-16-8192/, 'prepack must protect output from an inherited Low label');
         assert.equal(process.env.TEMP, process.env.TMP);
         const relative = path.relative(process.cwd(), process.env.TEMP);
         assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));

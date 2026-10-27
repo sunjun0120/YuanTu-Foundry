@@ -55,6 +55,8 @@ npm.cmd run desktop -- --workspace E:\your-project
 
 首次启动后，在“设置 → 模型设置”中配置端点、模型和密钥。Windows 安装包通过 `npm.cmd run package:windows` 构建；macOS 打包需在对应架构的 Mac 上运行 `npm run package:macos`。产物位于 `dist/release`，签名、安装和目标平台实机运行需要独立验收。
 
+Windows 打包后可运行 `npm.cmd run smoke:windows-package`，用独立测试数据验证沙箱开启的窗口启动、工作区与会话恢复及 Host 退出；该命令不执行安装或卸载。构建时只将生成目录设为可继承的 Medium 完整性级别，防止受 Low 标签影响的开发目录产出无法启动的程序。
+
 ---
 
 <a id="architecture"></a>
@@ -726,7 +728,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 19 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 335 个 | `tests/*.test.ts` |
+| 行为测试文件 | 336 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

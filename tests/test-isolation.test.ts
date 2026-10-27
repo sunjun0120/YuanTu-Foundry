@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, symlinkSync } from 'node:fs';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createIsolation } from '../scripts/test-isolation/environment.mjs';
@@ -372,6 +372,125 @@ test('every spelling that sets a SQLite store directory outside the root is refu
     assert.equal(violation.rule, 'ownership');
   }
 });
+
+test(
+  'Windows settlement does not mistake a reused PID for its exited owner',
+  { skip: process.platform !== 'win32' && 'needs Windows process creation identity' },
+  async (t) => {
+    const parent = await fixture(t);
+    const isolation = await createIsolation(parent, 'reused-pid.test.ts', [], process.env);
+    const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      env: { SystemRoot: process.env.SystemRoot },
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const exited = new Promise((resolve, reject) => {
+      child.once('exit', resolve);
+      child.once('error', reject);
+    });
+    t.after(async () => {
+      child.kill('SIGKILL');
+      await exited;
+    });
+    assert.ok(child.pid);
+    // The ledger belongs to an earlier process with this PID. The live child was created
+    // long after its ownership window, as when Windows reuses a force-killed fixture's PID.
+    await writeFile(
+      isolation.processPath,
+      JSON.stringify({ event: 'owner-start', pid: child.pid, started: 1, at: 2 }) + '\n',
+    );
+    const settled = await settleProcesses(isolation, {
+      terminate: (pid) => {
+        process.kill(pid, 'SIGKILL');
+      },
+    });
+    assert.equal(settled.clean, true);
+    assert.deepEqual(settled.remaining, []);
+    assert.deepEqual(settled.verified, []);
+    assert.deepEqual(settled.terminated, []);
+    assert.equal(child.exitCode, null);
+    assert.equal(child.signalCode, null);
+    assert.doesNotThrow(() => process.kill(child.pid!, 0));
+  },
+);
+
+test('settlement retains an active PID when its ownership cannot be proved', async (t) => {
+  const parent = await fixture(t);
+  const isolation = await createIsolation(parent, 'unverified-pid.test.ts', [], process.env);
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+    env: { SystemRoot: process.env.SystemRoot },
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  const exited = new Promise((resolve, reject) => {
+    child.once('exit', resolve);
+    child.once('error', reject);
+  });
+  t.after(async () => {
+    child.kill('SIGKILL');
+    await exited;
+  });
+  assert.ok(child.pid);
+  await writeFile(
+    isolation.processPath,
+    JSON.stringify({ event: 'owner-start', pid: child.pid, at: Date.now() }) + '\n',
+  );
+  const settled = await settleProcesses(isolation, {
+    terminate: (pid) => {
+      process.kill(pid, 'SIGKILL');
+    },
+    timeoutMs: 0,
+  });
+  assert.equal(settled.clean, false);
+  assert.deepEqual(settled.remaining, [child.pid]);
+  assert.deepEqual(settled.verified, []);
+  assert.deepEqual(settled.terminated, []);
+  assert.doesNotThrow(() => process.kill(child.pid!, 0));
+});
+
+test(
+  'Windows settlement fails closed when the process identity query fails',
+  { skip: process.platform !== 'win32' && 'needs Windows process creation identity' },
+  async (t) => {
+    const parent = await fixture(t);
+    const module = new URL('../scripts/test-isolation/processes.mjs?failed-proof', import.meta.url)
+      .href;
+    for (const proof of [
+      { status: 1, stdout: '2026-01-01T00:00:00.000Z' },
+      { status: null, stdout: '', error: { code: 'ETIMEDOUT' } },
+      { status: 0, stdout: 'invalid creation time' },
+    ]) {
+      const isolation = await createIsolation(parent, 'failed-proof.test.ts', [], process.env);
+      const result = run(
+        isolation,
+        `
+        import childProcess from 'node:child_process';
+        import fs from 'node:fs';
+        // Only the external identity query is replaced; the real settlement checks
+        // a live process against a stale registration and must retain uncertainty.
+        childProcess.spawnSync = () => (${JSON.stringify(proof)});
+        const { settleProcesses } = await import(${JSON.stringify(module)});
+        const processPath = process.env.TMP + '/failed-proof.ndjson';
+        fs.writeFileSync(processPath, JSON.stringify({event:'owner-start',pid:process.pid,started:1,at:2})+'\\n');
+        const settled = await settleProcesses({processPath}, {
+          terminate: () => { throw Error('termination without identity proof'); },
+          timeoutMs: 0,
+        });
+        console.log(JSON.stringify({clean:settled.clean,remaining:settled.remaining,verified:settled.verified,terminated:settled.terminated,pid:process.pid}));
+      `,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const observed = JSON.parse(result.stdout);
+      assert.deepEqual(observed, {
+        clean: false,
+        remaining: [observed.pid],
+        verified: [],
+        terminated: [],
+        pid: observed.pid,
+      });
+    }
+  },
+);
 
 test('settlement detects and cleans an identity-verified abandoned descendant without passing it', async (t) => {
   const parent = await fixture(t);

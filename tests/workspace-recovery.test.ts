@@ -9,7 +9,6 @@ import { pathToFileURL } from 'node:url';
 import { SessionStore, WorkspaceFailure } from '../packages/storage/sqlite.ts';
 import { WorkspaceManager } from '../packages/workspaces/manager.ts';
 import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
-import { openHostServices } from '../apps/agent-host/services.ts';
 import type { Options } from '../apps/shared/args.ts';
 import { git } from './git-fixture.ts';
 
@@ -55,11 +54,6 @@ class Workspace {
   /** A store over this workspace's database, as a new process would open one. */
   open(): SessionStore {
     const store = new SessionStore(this.db);
-    this.stores.push(store);
-    return store;
-  }
-  /** Takes ownership of a store this fixture did not construct, so it is closed before the directory goes. */
-  track(store: SessionStore): SessionStore {
     this.stores.push(store);
     return store;
   }
@@ -589,15 +583,33 @@ test('the Host converges interrupted allocations and imports before serving', as
   await rm(gone.executionRoot, { recursive: true, force: true });
   w.release(first);
 
-  // The Host's own start-up path, which is where the two convergence passes live.
-  const services = await openHostServices(w.options, w.root);
-  // Tracked by the fixture rather than closed here: the *ordering* against the directory removal is the fixture's
-  // job, and a store the fixture does not know about is exactly the one that leaves a `-wal` file locked.
-  w.track(services.store);
-  assert.equal(services.store.workspaceById(never.id)!.state, 'removed');
-  assert.equal(services.store.workspaceById(gone.id)!.state, 'blocked');
+  // Startup also launches background Git housekeeping. Give it a process lifetime:
+  // natural exit drains that work before this fixture can remove its working directory.
+  const recovered = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const { openHostServices } = await import(process.argv[1]);
+         const services = await openHostServices(JSON.parse(process.argv[2]), process.argv[3]);
+         process.once('beforeExit', () => services.store.close());
+         console.log(JSON.stringify(Object.fromEntries(process.argv.slice(4).map(id =>
+           [id, services.store.workspaceById(id)?.state]))));`,
+        new URL('../apps/agent-host/services.ts', import.meta.url).href,
+        JSON.stringify(w.options),
+        w.root,
+        never.id,
+        gone.id,
+        binding.id,
+      ],
+      { windowsHide: true, encoding: 'utf8' },
+    ),
+  );
+  assert.equal(recovered[never.id], 'removed');
+  assert.equal(recovered[gone.id], 'blocked');
   // The live workspace is untouched by either pass.
-  assert.equal(services.store.workspaceById(binding.id)!.state, 'ready');
+  assert.equal(recovered[binding.id], 'ready');
   void results;
 });
 

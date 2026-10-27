@@ -27,14 +27,13 @@
 
 ## 3. 已获得的验证证据
 
-- 全量单测：335 个文件，3361 通过、31 跳过、0 失败。
+- 2026-10-28 最终完整 `npm run check` 通过：336 个文件，3365 通过、31 跳过、0 失败；静态门禁、build、编译客户端冒烟 3/3 均通过。
 - 完整桌面冒烟：19 个套件，78 通过、1 跳过、0 失败；跳过项为未安装 Chromium 的 Agent 浏览器用例。
-- Windows x64 NSIS 安装包已生成，包内容校验通过；完整启动与安装验收见下方限制。
-- 最后项目/布局回归 5/5。完整 `check` 的静态门禁通过，复跑在既有测试子进程清理确认上中断，该文件单独复跑 29/29；不能记作 `check` 整体通过。精确日志标识见 [Phase 8 验证记录](validation-desktop-optimization-phase8-2026-10-27.md)。
+- Windows x64 NSIS 安装包已生成，包内容校验通过。2026-10-28 修复生成目录 Low 标签后，沙箱开启的四次启动、会话/工作区恢复和退出自动验收通过，见 [验收修复记录](validation-desktop-acceptance-fixes-2026-10-28.md)。
+- 项目/布局回归 5/5；后续非法目录错误回执的真实项目冒烟通过。原 `check` 清理中断及目录占用问题均已修复，精确新结果见 [验收修复记录](validation-desktop-acceptance-fixes-2026-10-28.md)，历史过程见 [Phase 8 验证记录](validation-desktop-optimization-phase8-2026-10-27.md)。
 
 ## 4. 仍需外部环境补验
 
-- 新生成的打包程序保持沙箱开启时，在窗口出现前以 `0x80000003` 退出，尚未完成打包窗口启动验收。此前成功的 CDP 脚本含 `--no-sandbox`，不能作为原始安全配置的验收证据；原因尚未确定。
 - 本机已有沙箱组及 offline/online 账号，安装/卸载会影响这些全局账号；未在本机执行安装、升级或卸载，需使用可丢弃 Windows 环境。
 - 真实 Windows 账号隔离、缺失 Chromium 的截图测试、macOS、实体触摸和多显示器 DPI 仍未覆盖。粗指针仿真不替代实体设备验收。
 - 安装包沿用现有未签名配置；本轮没有签名或发布。
@@ -49,4 +48,5 @@ npm run smoke:desktop
 node scripts/run-tests.mjs tests/desktop-projects.smoke.mjs tests/desktop-layout.smoke.mjs
 npm run package:windows
 npm run check:windows-package
+npm run smoke:windows-package
 ```
