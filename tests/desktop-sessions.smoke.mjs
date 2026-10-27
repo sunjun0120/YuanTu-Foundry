@@ -659,6 +659,18 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await mkdir(path.join(root, 'empty'), { recursive: true });
   await mkdir(path.join(root, '.git'), { recursive: true });
   await writeFile(path.join(root, 'notes.txt'), '第一行\nsecond line\n');
+  const sampleSource = [
+    'const answer: number = 42;',
+    '// explain the answer',
+    'const label = "hi";',
+    '',
+  ].join('\n');
+  await writeFile(path.join(root, 'sample.ts'), sampleSource);
+  await writeFile(
+    path.join(root, 'evil.ts'),
+    'const html = "<img src=x onerror=window.workspaceCodeExecuted=true>";\n',
+  );
+  await writeFile(path.join(root, 'big.ts'), 'const value = 1;\n'.repeat(6000));
   const guide = [
     '---',
     'description: hidden preview metadata',
@@ -835,6 +847,49 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   assert.equal(await row('notes.txt').getAttribute('aria-current'), 'true');
   await page.locator('#workspace-tree-tab').click();
   assert.equal(await page.locator('#workspace-tree').isVisible(), true);
+
+  await page.locator('#workspace-tree-tab').click();
+  await row('sample.ts').click();
+  const code = page.locator('.workspace-preview-code');
+  await code.waitFor();
+  assert.equal(await code.textContent(), sampleSource);
+  const tokenColors = () =>
+    code.evaluate((pre) => ({
+      classes: [...pre.querySelectorAll('span')].map((span) => span.className),
+      colors: [
+        ...new Set([...pre.querySelectorAll('span')].map((span) => getComputedStyle(span).color)),
+      ],
+    }));
+  const darkTokens = await tokenColors();
+  for (const token of ['hljs-keyword', 'hljs-string', 'hljs-comment', 'hljs-number'])
+    assert.ok(
+      darkTokens.classes.some((name) => name.split(/\s+/u).includes(token)),
+      `sample.ts is missing ${token}`,
+    );
+  assert.ok(darkTokens.colors.length >= 3, 'dark theme keeps token colours distinct');
+  await page.evaluate(async () => {
+    document.documentElement.dataset.theme = 'light';
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  const lightTokens = await tokenColors();
+  assert.ok(lightTokens.colors.length >= 3, 'light theme keeps token colours distinct');
+  assert.notDeepEqual(lightTokens.colors, darkTokens.colors);
+  await page.evaluate(async () => {
+    document.documentElement.dataset.theme = 'dark';
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  });
+
+  await page.locator('#workspace-tree-tab').click();
+  await row('evil.ts').click();
+  await page.locator('.workspace-preview-code').waitFor();
+  assert.match(await page.locator('.workspace-preview-code').textContent(), /<img src=x/);
+  assert.equal(await page.evaluate(() => window.workspaceCodeExecuted), undefined);
+
+  await page.locator('#workspace-tree-tab').click();
+  await row('big.ts').click();
+  await page.locator('.workspace-preview-text').waitFor();
+  assert.equal(await page.locator('.workspace-preview-code').count(), 0);
+  await page.locator('#workspace-tree-tab').click();
 
   await row('guide.md').click();
   await page.locator('#workspace-preview-body .markdown h1').waitFor();
@@ -1079,7 +1134,15 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await page.locator('.workspace-preview-unsupported').waitFor();
   assert.match(await page.locator('.workspace-preview-unsupported').innerText(), /二进制|binary/);
   await page.locator('#workspace-fullscreen').click();
-  for (const name of ['guide.md', 'long.log', 'logo.png', 'blob.txt'])
+  for (const name of [
+    'guide.md',
+    'long.log',
+    'logo.png',
+    'blob.txt',
+    'sample.ts',
+    'evil.ts',
+    'big.ts',
+  ])
     await tab(name).locator('.workspace-tab-close').click();
   assert.equal(await page.locator('#workspace-tabs .workspace-file-tab').count(), 0);
   assert.equal(

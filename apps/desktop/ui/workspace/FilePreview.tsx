@@ -5,8 +5,9 @@
  * Content that is already a DOM tree — a diff built by the transcript, a markdown document — is hosted in a node
  * this component appends to, because those renderers own their own markup.
  */
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
+import { highlightCode, languageForPath, MAX_HIGHLIGHT_LENGTH } from '../../highlight.ts';
 import { renderMarkdown, type MarkdownActions } from '../../markdown.ts';
 import { FILE_PREVIEW_BYTES } from '../../../../packages/protocol/rpc.ts';
 import { MAX_IMAGE_BYTES } from '../../../../packages/protocol/images.ts';
@@ -36,6 +37,24 @@ function MarkdownHost({ text, actions }: { text: string; actions: MarkdownAction
     return () => document.remove();
   }, [text, actions]);
   return <div ref={host} />;
+}
+
+/**
+ * A highlighted source file.
+ *
+ * `useMemo` keys the highlighted element on the file's own text and language: snapshot or theme updates redraw the
+ * panel without re-tokenizing the file. The element is a `<code>` built by the shared highlighter, never HTML.
+ */
+function CodeHost({ text, language }: { text: string; language: string }): ReactNode {
+  const host = useRef<HTMLPreElement>(null);
+  const code = useMemo(() => highlightCode(text, language), [text, language]);
+  useLayoutEffect(() => {
+    const container = host.current;
+    if (!container) return;
+    container.replaceChildren(code);
+    return () => code.remove();
+  }, [code]);
+  return <pre ref={host} className="workspace-preview-text workspace-preview-code" />;
 }
 
 function OfficeFrame({ html, title }: { html: string; title: string }): ReactNode {
@@ -115,6 +134,10 @@ export function FilePreview({
       const text = file.text ?? '';
       if (/\.(?:md|markdown|mdown)$/i.test(path) && text)
         return <MarkdownHost text={text} actions={actions} />;
+      const language = text ? languageForPath(path) : null;
+      // Past the highlight budget the file stays plain text rather than guessing a language on the main thread.
+      if (language && file.bytes <= MAX_HIGHLIGHT_LENGTH)
+        return <CodeHost text={text} language={language} />;
       return text ? (
         <pre className="workspace-preview-text">{text}</pre>
       ) : (

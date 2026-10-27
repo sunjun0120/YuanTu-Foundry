@@ -1,25 +1,6 @@
 import { marked, type Token } from 'marked';
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import python from 'highlight.js/lib/languages/python';
-import json from 'highlight.js/lib/languages/json';
-import bash from 'highlight.js/lib/languages/bash';
-import css from 'highlight.js/lib/languages/css';
-import xml from 'highlight.js/lib/languages/xml';
-import sql from 'highlight.js/lib/languages/sql';
+import { highlightCode } from './highlight.ts';
 import { t } from './i18n.ts';
-for (const [name, language] of Object.entries({
-  javascript,
-  typescript,
-  python,
-  json,
-  bash,
-  css,
-  xml,
-  sql,
-}))
-  hljs.registerLanguage(name, language);
 export function safeWebUrl(input: string): string | null {
   try {
     if (input.length > 4096 || /[\x00-\x20]/.test(input)) return null;
@@ -238,31 +219,10 @@ export function renderMarkdown(text: string, actions: MarkdownActions): HTMLElem
               });
           });
           header.append(copy);
-          const pre = element('pre'),
-            code = element('code');
-          code.textContent = token.text;
-          if (token.text.length <= 30000 && hljs.getLanguage(language)) {
-            // Highlight.js escapes input. Copy only its text and known span nodes.
-            const parsed = new DOMParser().parseFromString(
-              hljs.highlight(token.text, { language, ignoreIllegals: true }).value,
-              'text/html',
-            );
-            const copyNodes = (from: Node, to: Node) => {
-              for (const child of from.childNodes) {
-                if (child.nodeType === Node.TEXT_NODE)
-                  to.appendChild(document.createTextNode(child.textContent || ''));
-                else if (child instanceof HTMLElement && child.tagName === 'SPAN') {
-                  const span = element('span');
-                  span.className = child.className.replace(/[^a-zA-Z0-9_ -]/g, '');
-                  copyNodes(child, span);
-                  to.appendChild(span);
-                }
-              }
-            };
-            code.replaceChildren();
-            copyNodes(parsed.body, code);
-          }
-          pre.append(code);
+          const pre = element('pre');
+          // The shared highlighter escapes the source and returns only text and token spans; 30 KB keeps a huge
+          // fenced block from stalling the turn that renders it.
+          pre.append(highlightCode(token.text, language === 'text' ? null : language, 30_000));
           block.append(header, pre);
           parent.append(block);
           break;

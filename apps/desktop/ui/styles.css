@@ -196,6 +196,31 @@
   color: #2e6385;
 }
 
+:root[data-theme='dark'] .hljs-keyword,
+:root[data-theme='dark'] .hljs-selector-tag,
+:root[data-theme='dark'] .hljs-literal {
+  color: #c678dd;
+}
+
+:root[data-theme='dark'] .hljs-string,
+:root[data-theme='dark'] .hljs-attr {
+  color: #98c379;
+}
+
+:root[data-theme='dark'] .hljs-number,
+:root[data-theme='dark'] .hljs-built_in {
+  color: #d19a66;
+}
+
+:root[data-theme='dark'] .hljs-comment {
+  color: #7f848e;
+}
+
+:root[data-theme='dark'] .hljs-title,
+:root[data-theme='dark'] .hljs-name {
+  color: #61afef;
+}
+
 .plain-fallback {
   white-space: pre-wrap !important;
 }
@@ -6064,6 +6089,19 @@ body.workspace-resizing * {
   overflow-wrap: anywhere;
 }
 
+.workspace-panel .workspace-preview-code {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.workspace-panel .workspace-preview-code code {
+  display: block;
+  font: inherit;
+  white-space: inherit;
+  color: var(--ink);
+}
+
 .workspace-panel .workspace-preview-document {
   display: block;
   width: 100%;
@@ -6155,18 +6193,8 @@ body.workspace-resizing * {
   color: var(--ink);
 }
 
-.workspace-panel .code-block code,
-.workspace-panel .code-block code span {
+.workspace-panel .code-block code {
   color: var(--ink);
-}
-
-.workspace-panel .code-block .hljs-keyword,
-.workspace-panel .code-block .hljs-title {
-  color: var(--accent);
-}
-
-.workspace-panel .code-block .hljs-comment {
-  color: var(--muted);
 }
 
 .workspace-panel .code-header button {
