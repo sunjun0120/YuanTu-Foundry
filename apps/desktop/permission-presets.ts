@@ -54,8 +54,7 @@ export function permissionPreset(id: PermissionPresetId): PermissionPreset {
 /**
  * Which preset a pair *is*, or `null` when it is one no preset declares.
  *
- * Legacy backends remain custom. Matching one as native would describe account isolation while a weaker
- * backend is actually running; applying an isolated preset must select the current native backend.
+ * Historical backend readings remain custom. Applying an isolated preset always selects the current native backend.
  */
 export function presetIdFor(
   sandbox: SandboxMode,
@@ -73,17 +72,8 @@ export interface PermissionPresetView {
   sandbox: SandboxSettingsView;
   permission: PermissionMode;
 }
-/**
- * `weak-sandbox` is the one way onto the restricted-token backend (`windows`), and only on the person's word.
- *
- * It is offered where the account sandbox cannot be set up (no administrator approval). It keeps the session's
- * approval policy and confines writes to the workspace only partly; reads and the network are not confined. Nothing
- * selects it automatically: `native` is never replaced by it behind the person's back (`sandbox-mode.ts`).
- */
 export type PermissionPresetCommand =
-  | { type: 'get' }
-  | { type: 'set'; preset: PermissionPresetId; acknowledgeHost?: boolean }
-  | { type: 'weak-sandbox'; acknowledgeWeak: true };
+  { type: 'get' } | { type: 'set'; preset: PermissionPresetId; acknowledgeHost?: boolean };
 export type PermissionPresetReply =
   { ok: true; view: PermissionPresetView; message?: string } | { ok: false; error: string };
 export function parsePermissionPresetCommand(input: unknown): PermissionPresetCommand {
@@ -91,14 +81,6 @@ export function parsePermissionPresetCommand(input: unknown): PermissionPresetCo
     throw new Error('Invalid permission preset request');
   const value = input as Record<string, unknown>;
   if (value.type === 'get' && Object.keys(value).length === 1) return { type: 'get' };
-  if (value.type === 'weak-sandbox') {
-    if (
-      value.acknowledgeWeak !== true ||
-      Object.keys(value).some((key) => key !== 'type' && key !== 'acknowledgeWeak')
-    )
-      throw new Error('Confirm that the weaker sandbox does not confine reads or the network');
-    return { type: 'weak-sandbox', acknowledgeWeak: true };
-  }
   if (
     value.type !== 'set' ||
     !isPermissionPresetId(value.preset) ||

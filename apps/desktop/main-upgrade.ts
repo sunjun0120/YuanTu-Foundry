@@ -52,11 +52,8 @@ export async function confirmUpgradeStartup(): Promise<void> {
 
 /**
  * Check, stage and hand over a manually chosen installer, then quit so the detached worker can install it.
- *
- * `quiesce` waits for everything else that may still write to the profile or the database (the paused backups
- * included) before the carrier stops.
  */
-export async function manualUpgrade(ctx: MainContext, quiesce: () => Promise<void>): Promise<void> {
+export async function manualUpgrade(ctx: MainContext): Promise<void> {
   const window = ctx.window;
   if (!window || !app.isPackaged || process.platform !== 'win32') return;
   let stopped = false;
@@ -116,7 +113,6 @@ export async function manualUpgrade(ctx: MainContext, quiesce: () => Promise<voi
     ctx.quitting = true;
     ctx.settingsAbort.abort();
     await Promise.all([...ctx.profileWrites]);
-    await quiesce();
     await service.stop();
     stopped = true;
     await execute(node, copiedHelper, [

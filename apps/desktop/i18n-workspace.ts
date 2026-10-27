@@ -112,8 +112,6 @@ export const workspaceMessages: Record<string, [string, string]> = {
     'No model is configured yet. Open Settings in the lower left, choose Model settings, and enter an endpoint and key to start chatting. Existing sessions stay readable.',
   ],
   'settings.addModelConnection': ['在设置中添加模型连接', 'Add a model connection in settings'],
-  'mcp.empty': ['尚未配置 MCP 服务', 'No MCP services configured'],
-  'mcp.addNew': ['添加新服务…', 'Add a new service...'],
   'ui.appName': ['源图 AI', 'Yuantu AI'],
   'ui.pendingApprovals': ['待审批操作', 'Pending approvals'],
   'ui.questionLabel': ['需要你的回答', 'Your answer is needed'],
@@ -273,7 +271,6 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.welcomeEyebrow': ['聚焦你的项目', 'YOUR PROJECT, IN FOCUS'],
   'ui.settingsEyebrowGeneral': ['偏好设置 / 通用', 'PREFERENCES / GENERAL'],
   'ui.settingsEyebrowModels': ['偏好设置 / 模型', 'PREFERENCES / MODELS'],
-  'ui.settingsEyebrowMcp': ['偏好设置 / MCP', 'PREFERENCES / MCP'],
   'ui.welcomeStart': ['从一个任务开始。', 'Start with a task.'],
   'ui.welcomeSubtitle': [
     '读懂项目，梳理思路，让改动逐步落地。',

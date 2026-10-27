@@ -59,15 +59,12 @@ import { carrierErrorReply } from './carrier-errors.ts';
 import { UiSettingsStore } from './ui-settings-store.ts';
 import { PermissionSettingsStore } from './permission-settings-store.ts';
 import {
-  DEFAULT_PRESET,
   parsePermissionPresetCommand,
   permissionPreset,
   type PermissionPresetReply,
 } from './permission-presets.ts';
 import { runtimePaths, safeError, type MainContext } from './main-context.ts';
 import { SessionChoices, choiceForPreset, type SessionChoice } from './session-choices.ts';
-import { DesktopBackups } from './main-backups.ts';
-import { mcpOAuthDirectory, registerMcpIpc } from './main-mcp.ts';
 import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
 import { workspaceHookReviewer } from './main-hook-trust.ts';
 import { registerAttachmentIpc } from './main-attachment.ts';
@@ -84,7 +81,7 @@ import {
  * The Electron main process: the window, the settings stores, the IPC channels and the Host child's lifecycle.
  *
  * The bindings below are the process's whole mutable state. Self-contained surfaces live in their own modules
- * (`main-upgrade.ts`, `main-backups.ts`, `main-mcp.ts`, `main-attachment.ts`, `main-hook-trust.ts`,
+ * (`main-upgrade.ts`, `main-attachment.ts`, `main-hook-trust.ts`,
  * `session-choices.ts`) and see this state through `ctx` — live getters, never copies.
  */
 let window: BrowserWindow | null = null;
@@ -189,7 +186,6 @@ const choices = new SessionChoices({
   window: () => window,
   sandbox: () => sandboxEnvironment,
 });
-const backups = new DesktopBackups(ctx);
 const reviewWorkspaceHooks = workspaceHookReviewer(() => window);
 
 function hostEnvironment(config?: ProviderConfig): NodeJS.ProcessEnv {
@@ -197,14 +193,28 @@ function hostEnvironment(config?: ProviderConfig): NodeJS.ProcessEnv {
     ...settingsStore.environment(config),
     ...sandboxEnvironment.environment(),
     YUANTU_PERMISSION_POLICY: permissionSettingsStore.file,
-    YUANTU_MCP_OAUTH_DIR: mcpOAuthDirectory(),
+    YUANTU_MCP_OAUTH_DIR: path.join(app.getPath('userData'), 'mcp-oauth'),
     // The Host runs on its own Node; this is how its Windows sandbox learns which Electron must stay out of a grant.
     YUANTU_DESKTOP_EXECUTABLE: process.execPath,
   };
 }
 function modelSettingsView() {
+  const view = settingsStore.view;
+  const selection = service?.selectedModel;
+  const selected = selection?.connectionId
+    ? view.connections.find((row) => row.connectionId === selection.connectionId)
+    : undefined;
   return {
-    ...settingsStore.view,
+    ...view,
+    ...(selected ??
+      (selection?.connectionId
+        ? {
+            connectionId: selection.connectionId,
+            model: '',
+            source: 'empty' as const,
+            error: mainText('settings.connectionMissing'),
+          }
+        : {})),
     environmentProblems: startupEnvironmentProblems(process.env, hostEnvironment()),
   };
 }
@@ -227,6 +237,7 @@ function createService(workspace: string, config?: ProviderConfig): CarrierServi
     hostPath: runtime.hostPath,
     workspace,
     env,
+    modelCatalog: settingsStore.runtimeCatalog,
     ...(startupCheck ? { startupCheck } : {}),
     // The window has no process-record panel, so the carrier does not read one for it. The desktop smoke
     // suites still assert the record (approval decisions, restart persistence); they opt back in explicitly.
@@ -340,7 +351,6 @@ app.on('before-quit', (event) => {
         waitForSandboxInitialization(sandboxInitializing),
         'sandbox setup confirmation',
       );
-      await withinQuitDeadline(backups.quiesce(), 'backup quiesce');
       const results = await Promise.allSettled([
         withinQuitDeadline(service?.stop(), 'Host shutdown'),
         withinQuitDeadline(openingService?.stop(), 'Host shutdown'),
@@ -377,7 +387,6 @@ void app
       },
     );
     await settingsStore.load();
-    backups.start();
     uiSettingsStore = new UiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
     await uiSettingsStore.load();
     /**
@@ -402,7 +411,7 @@ void app
               {
                 label: mainText('upgrade.check'),
                 click: () => {
-                  void manualUpgrade(ctx, () => backups.quiesce());
+                  void manualUpgrade(ctx);
                 },
               },
               {
@@ -524,7 +533,6 @@ void app
     );
     window.webContents.session.setPermissionCheckHandler(() => false);
     const initial = attach(createService(workspace));
-    backups.register();
     registerAttachmentIpc(ctx, () => uiSettingsStore.view.language);
     ipcMain.handle(
       'yuantu:workspace-maintenance',
@@ -632,7 +640,6 @@ void app
         }
       },
     );
-    registerMcpIpc(ctx);
     /** Hold the shell operation guard across both halves of a preset update. */
     const assertPresetChangeAllowed = (): void => {
       if (!service || quitting || switching)
@@ -658,32 +665,6 @@ void app
             }
             return { ok: true, view: choices.view() };
           }
-          if (command.type === 'weak-sandbox') {
-            if (process.platform !== 'win32')
-              throw new Error('The weaker sandbox is only available on Windows');
-            assertPresetChangeAllowed();
-            switching = true;
-            try {
-              await choices.following;
-              const sessionId = service?.snapshot.session.sessionId ?? undefined;
-              const permission = choices.chosen(sessionId).permission;
-              // Leaving full access for a sandbox is not a reason to keep full access's approval floor.
-              const choice: SessionChoice = {
-                sandbox: 'windows',
-                permission:
-                  permission === 'full-access'
-                    ? permissionPreset(DEFAULT_PRESET).permission
-                    : permission,
-              };
-              await choices.apply(choice, sessionId);
-              if (sessionId) choices.remember(sessionId, choice);
-              choices.weakDefault = true;
-              choices.push();
-              return { ok: true, view: choices.view() };
-            } finally {
-              switching = false;
-            }
-          }
           const preset = permissionPreset(command.preset);
           assertPresetChangeAllowed();
           switching = true;
@@ -698,7 +679,7 @@ void app
             await choices.apply(choice, sessionId);
             if (sessionId) choices.remember(sessionId, choice);
             // Choosing a preset is choosing the account sandbox again, for the sessions that follow too.
-            choices.weakDefault = false;
+
             return {
               ok: true,
               view: choices.view(),
@@ -804,10 +785,23 @@ void app
         if (command.type === 'get') return { ok: true, settings: modelSettingsView() };
         submittedKey = 'values' in command ? command.values.apiKey : '';
         if (!service || switching || service.busy) throw new Error(mainText('settingsMain.busy'));
+        if (command.type === 'select') {
+          settingsStore.configFor(command.connectionId);
+          switching = true;
+          try {
+            await service.selectModel(command.connectionId);
+            return { ok: true, settings: modelSettingsView() };
+          } finally {
+            switching = false;
+          }
+        }
         if (command.type === 'delete') {
           switching = true;
           try {
-            await settingsStore.delete(command.connectionId);
+            await settingsStore.withRuntime(
+              () => settingsStore.delete(command.connectionId),
+              (catalog) => service!.configureModels(catalog),
+            );
             return {
               ok: true,
               settings: modelSettingsView(),
@@ -820,11 +814,9 @@ void app
         const preparedGroup =
           command.type === 'save-group' ? settingsStore.prepareGroup(command.values) : null;
         const config =
-          command.type === 'select'
-            ? settingsStore.configFor(command.connectionId)
-            : command.type === 'save-group'
-              ? preparedGroup!.activeConfig
-              : settingsStore.prepare(command.values);
+          command.type === 'save-group'
+            ? preparedGroup!.activeConfig
+            : settingsStore.prepare(command.values);
         switching = true;
         try {
           if (command.type === 'discover') {
@@ -856,39 +848,18 @@ void app
               message: mainText('settingsMain.testSucceeded'),
             };
           }
-          const previous = service.snapshot;
-          const next = createService(previous.workspace, config);
-          openingService = next;
-          try {
-            await next.start(previous.session.sessionId || undefined);
-            if (quitting) throw new Error(mainText('desktop.quitting'));
-            if (command.type === 'select') await settingsStore.select(command.connectionId);
-            else if (preparedGroup) await settingsStore.savePreparedGroup(preparedGroup);
-            else await settingsStore.save(config);
-            if (quitting) throw new Error(mainText('desktop.quitting'));
-            let cleanupWarning = false;
-            try {
-              await service.stop();
-            } catch {
-              cleanupWarning = true;
-            }
-            if (quitting) throw new Error(mainText('desktop.quitting'));
-            attach(next);
-            await choices.following;
-            return {
-              ok: true,
-              settings: modelSettingsView(),
-              message: cleanupWarning
-                ? mainText('settingsMain.savedCleanupWarning')
-                : mainText('settingsMain.saved'),
-            };
-          } finally {
-            try {
-              if (service !== next) await next.stop();
-            } finally {
-              openingService = null;
-            }
-          }
+          await settingsStore.withRuntime(
+            () =>
+              preparedGroup
+                ? settingsStore.savePreparedGroup(preparedGroup)
+                : settingsStore.save(config),
+            (catalog) => service!.configureModels(catalog),
+          );
+          return {
+            ok: true,
+            settings: modelSettingsView(),
+            message: mainText('settingsMain.saved'),
+          };
         } finally {
           switching = false;
         }

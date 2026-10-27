@@ -1,7 +1,6 @@
 // @test-serial desktop-ui: Launches real Electron windows.
 import { waitForPage } from './page-wait.mjs';
 import test from 'node:test';
-import { PRODUCT_SCOPE } from '../packages/protocol/product-scope.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,7 +9,6 @@ import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 process.env.YUANTU_SESSION_TITLES = 'false';
-import { mcpHttpFixture } from './mcp-http-fixture.ts';
 import { chooseSelectOption, readSelectOptions } from './desktop-smoke-support.mjs';
 
 test(
@@ -187,6 +185,14 @@ test(
     }, url);
     assert.equal(saved.a.ok, true);
     assert.equal(saved.b.ok, true);
+    const beforeModelSelection = await page.evaluate(async () => {
+      const state = (await window.yuantu.invoke({ type: 'snapshot' })).state;
+      return {
+        pid: state.hostPid,
+        historyStart: state.session.historyStart,
+        messages: state.session.messages,
+      };
+    });
     const id = await page.evaluate(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
@@ -229,6 +235,34 @@ test(
       ),
       id,
     );
+    const afterModelSelection = await page.evaluate(async () => {
+      const state = (await window.yuantu.invoke({ type: 'snapshot' })).state;
+      const settings = (await window.yuantu.settings({ type: 'get' })).settings;
+      return {
+        pid: state.hostPid,
+        historyStart: state.session.historyStart,
+        messages: state.session.messages,
+        defaultConnectionId: settings.defaultConnectionId,
+      };
+    });
+    assert.equal(
+      afterModelSelection.pid,
+      beforeModelSelection.pid,
+      'model selection keeps the Host process',
+    );
+    assert.equal(afterModelSelection.historyStart, beforeModelSelection.historyStart);
+    assert.deepEqual(afterModelSelection.messages, beforeModelSelection.messages);
+    assert.equal(
+      afterModelSelection.defaultConnectionId,
+      saved.b.settings.defaultConnectionId,
+      'a chat selection does not change the global default',
+    );
+    await page.evaluate(() => window.yuantu.invoke({ type: 'create' }));
+    await page.waitForFunction(() => document.querySelector('#model').value.includes('model-b'));
+    await page.evaluate((sessionId) => window.yuantu.invoke({ type: 'load', id: sessionId }), id);
+    await page.waitForFunction(() => document.querySelector('#model').value.includes('model-a'));
+    assert.equal(await page.locator('#model-switch-status').isHidden(), true);
+    await page.locator('#prompt').fill('保留这份草稿');
     if (process.env.YUANTU_QA_DIR)
       await page.screenshot({
         path: artifactPath('chat-model-picker.png'),
@@ -344,30 +378,19 @@ test(
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
     await page.getByLabel('模型 ID', { exact: true }).fill('changed-model');
-    // Inject a genuine abnormal exit precisely when the old Host begins shutdown.
-    await app.evaluate(() => {
-      const hosts = process
-        ._getActiveHandles()
-        // The bundled Host is what a build launches; the tsc entry is the fallback when no bundle exists.
-        .filter((handle) =>
-          handle.spawnargs?.some((arg) =>
-            /[\\/](?:apps[\\/]agent-host[\\/]main|packages[\\/]tools[\\/]host\.bundle)\.js$/.test(
-              arg,
-            ),
-          ),
-        );
-      if (hosts.length !== 1) throw new Error('Expected one active desktop Host');
-      const host = hosts[0];
-      const end = host.stdin.end.bind(host.stdin);
-      host.stdin.end = (...args) => {
-        host.kill('SIGKILL');
-        return end(...args);
-      };
-    });
+    const pidBeforeSave = await page.evaluate(
+      async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.hostPid,
+    );
     await page.locator('#settings-save').click();
-    await page
-      .getByText('模型配置已保存并生效，但旧进程退出异常，请检查残留进程。', { exact: true })
-      .waitFor();
+    await page.locator('#settings-feedback').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#settings-feedback').getAttribute('data-error'), 'false');
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.hostPid,
+      ),
+      pidBeforeSave,
+      'saving a model also keeps the Host process',
+    );
     assert.equal(
       await page.evaluate(
         async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.ready,
@@ -933,8 +956,9 @@ test(
       'and it does not disturb the conversation it was made in',
     );
     /**
-     * The menu is the four rungs, each with its one-line summary, and never a line about whether the backend can
-     * run: a sandbox that needs setting up is offered above the composer instead.
+     * The menu is the three current rungs, each with its one-line summary, and never a line about whether the backend
+     * can run: a sandbox that needs setting up is offered above the composer instead. Read-only sessions remain
+     * readable but the rung is no longer offered.
      */
     await page.locator('#permission-trigger').click();
     assert.equal(
@@ -945,7 +969,7 @@ test(
       await page
         .locator('#permission-menu [data-preset] .permission-copy > span')
         .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim())),
-      ['仅可查看', '请求批准', '帮我批准', '完全访问权限'],
+      ['请求批准', '帮我批准', '完全访问权限'],
     );
     await page.keyboard.press('Escape');
     /**
@@ -989,226 +1013,6 @@ test(
       () => document.querySelector('#permission-mode').value === 'guarded',
     );
     assert.equal((await pair(page)).view.sandbox.mode, 'native');
-  },
-);
-
-// ---- merged from mcp-settings.smoke.mjs ----
-
-test(
-  'desktop MCP settings test drafts, persist servers and expose saved tools to chat',
-  {
-    skip: PRODUCT_SCOPE.mcpManagement
-      ? false
-      : 'MCP management is outside the current product scope',
-    timeout: 60000,
-  },
-  async (t) => {
-    const root = await mkdtemp(path.join(tmpdir(), 'yuantu-mcp-ui-'));
-    let turn = 0;
-    const modelUrl = await httpFixture(t, (_body, res) =>
-      sendFrames(
-        res,
-        turn++ === 0
-          ? frames('', [{ id: 'list-mcp', name: 'mcp_local_list_tools', input: {} }])
-          : frames('MCP_CHAT_OK'),
-      ),
-    );
-    const remoteUrl = await mcpHttpFixture(t, (body, res) => {
-      if (body.id === undefined) {
-        res.writeHead(202);
-        res.end();
-        return;
-      }
-      const result =
-        body.method === 'initialize'
-          ? {
-              protocolVersion: '2025-03-26',
-              capabilities: { tools: {} },
-              serverInfo: { name: 'fixture', version: '1' },
-            }
-          : { tools: [{ name: 'remote_echo', inputSchema: { type: 'object' } }] };
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
-    });
-    const env = {
-      ...process.env,
-      YUANTU_SANDBOX: 'host',
-      YUANTU_WORKSPACE: root,
-      YUANTU_NODE_PATH: process.execPath,
-      YUANTU_MODEL: 'fixture',
-      YUANTU_MAX_CONTEXT_TOKENS: '128000',
-      YUANTU_API_KEY: 'fixture',
-      YUANTU_BASE_URL: modelUrl,
-      YUANTU_PROTOCOL: 'anthropic',
-      YUANTU_PERMISSION_POLICY: '',
-    };
-    delete env.ELECTRON_RUN_AS_NODE;
-    let app;
-    t.after(async () => {
-      await app?.close();
-      await rm(root, { recursive: true, force: true });
-    });
-    const launch = async () => {
-      app = await electron.launch({
-        executablePath: electronPath,
-        args: [
-          path.resolve('dist/desktop/main.cjs'),
-          '--user-data-dir=' + path.join(root, 'profile'),
-        ],
-        env,
-      });
-      const page = await app.firstWindow();
-      await page.waitForLoadState('domcontentloaded');
-      page.setDefaultTimeout(10000);
-      await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
-      return page;
-    };
-    let page = await launch();
-    await page.locator('#open-settings').click();
-    await page.locator('#mcp-settings').click();
-    await page.locator('#mcp-id').fill('local');
-    await page.locator('#mcp-command').fill(process.execPath);
-    await page.locator('#mcp-args').fill(path.resolve('tests/mcp-fixture.ts') + '\npid.txt');
-    assert.equal(
-      await page.locator('#mcp-env').getAttribute('placeholder'),
-      '{' + '"API_TOKEN":"$' + '{MCP_TOKEN}"}',
-    );
-    await page.locator('#mcp-test').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('连接成功'),
-    );
-    await assert.rejects(readFile(path.join(root, '.yuantu/mcp.json')), { code: 'ENOENT' });
-    const pid = Number(await readFile(path.join(root, 'pid.txt'), 'utf8'));
-    assert.throws(() => process.kill(pid, 0));
-    await page.locator('#mcp-save').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('已保存'),
-    );
-    assert.equal(
-      JSON.parse(await readFile(path.join(root, '.yuantu/mcp.json'), 'utf8')).servers.local
-        .transport,
-      'stdio',
-    );
-    await page.locator('#mcp-new').click();
-    await page.locator('#mcp-id').fill('remote');
-    await page.locator('#mcp-transport').selectOption('http');
-    await page.locator('#mcp-url').fill(remoteUrl);
-    await page.locator('#mcp-test').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('发现 1 个工具'),
-    );
-    await page.locator('#mcp-enabled').uncheck();
-    await page.locator('#mcp-save').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('已保存'),
-    );
-    assert.equal(
-      JSON.parse(await readFile(path.join(root, '.yuantu/mcp.json'), 'utf8')).servers.remote
-        .disabled,
-      true,
-    );
-    // The OAuth block only exists for remote transports, and an invalid draft never reaches disk.
-    assert.equal(await page.locator('#mcp-oauth').isVisible(), true);
-    await page.locator('#mcp-oauth-enabled').check();
-    assert.equal(await page.locator('#mcp-oauth-fields').isVisible(), true);
-    assert.equal(await page.locator('#mcp-revoke').isDisabled(), true);
-    assert.equal(await page.locator('#mcp-authorize').isDisabled(), true);
-    await page.locator('#mcp-oauth-client-secret').fill('plaintext-secret');
-    await page.locator('#mcp-save').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('环境变量占位符'),
-    );
-    assert.equal(
-      JSON.parse(await readFile(path.join(root, '.yuantu/mcp.json'), 'utf8')).servers.remote.oauth,
-      undefined,
-    );
-    await page.locator('#mcp-oauth-redirect-port').fill('80');
-    assert.equal(
-      await page.locator('#mcp-oauth-redirect-port').evaluate((input) => input.checkValidity()),
-      false,
-    );
-    await page.locator('#mcp-oauth-client-secret').fill('${MCP_CLIENT_SECRET}');
-    await page.locator('#mcp-oauth-redirect-port').fill('53682');
-    await page.locator('#mcp-oauth-scopes').fill('mcp.read, mcp.write');
-    await page.locator('#mcp-oauth-client-id').fill('client-id');
-    await page.locator('#mcp-oauth-client-name').fill('YuanTu Agent');
-    await page.locator('#mcp-save').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('已保存'),
-    );
-    assert.deepEqual(
-      JSON.parse(await readFile(path.join(root, '.yuantu/mcp.json'), 'utf8')).servers.remote.oauth,
-      {
-        scopes: ['mcp.read', 'mcp.write'],
-        clientId: 'client-id',
-        clientName: 'YuanTu Agent',
-        clientSecret: '${MCP_CLIENT_SECRET}',
-        redirectPort: 53682,
-      },
-    );
-    // Saving round-trips the OAuth fields, and the panel never persists authorization status.
-    await page.locator('#mcp-transport').selectOption('stdio');
-    assert.equal(await page.locator('#mcp-oauth').isVisible(), false);
-    await page.locator('#mcp-transport').selectOption('http');
-    assert.equal(await page.locator('#mcp-oauth-scopes').inputValue(), 'mcp.read, mcp.write');
-    assert.equal(await page.locator('#mcp-oauth-redirect-port').inputValue(), '53682');
-    assert.equal(await page.locator('#mcp-authorize').isDisabled(), true);
-    await page.screenshot({ path: path.resolve(artifactPath('mcp-settings-ui.png')) });
-    await page.locator('#model-settings').click();
-    assert.equal(await page.locator('#settings-form').isVisible(), true);
-    await page.locator('#settings-back').click();
-    await page.locator('#prompt').fill('list MCP');
-    await page.locator('#send').click();
-    await page.getByRole('button', { name: '允许一次' }).click();
-    await page.getByText('MCP_CHAT_OK', { exact: true }).waitFor();
-    await app.close();
-    page = await launch();
-    await page.locator('#open-settings').click();
-    await page.locator('#mcp-settings').click();
-    await page.locator('#mcp-list').selectOption('remote');
-    assert.equal(await page.locator('#mcp-enabled').isChecked(), false);
-    assert.equal(await page.locator('#mcp-settings').getAttribute('aria-current'), 'page');
-    assert.equal(await page.locator('#model-settings').getAttribute('aria-current'), null);
-    await page.locator('#mcp-headers').fill('{invalid unsaved');
-    await page.locator('#mcp-delete').click();
-    await page.locator('#mcp-delete-yes').click();
-    await page.waitForFunction(() =>
-      document.querySelector('#mcp-feedback').textContent.includes('已删除'),
-    );
-    const saved = JSON.parse(await readFile(path.join(root, '.yuantu/mcp.json'), 'utf8'));
-    assert.ok(saved.servers.local);
-    assert.equal(saved.servers.remote, undefined);
-    const bad = await page.evaluate(() =>
-      window.yuantu.mcp({ type: 'get', path: 'C:/not-allowed' }),
-    );
-    assert.equal(bad.ok, false);
-    const oldView = await page.evaluate(() => window.yuantu.mcp({ type: 'get' }));
-    const other = path.join(root, 'other-workspace');
-    await mkdir(other);
-    await page.locator('#settings-back').click();
-    await app.evaluate(({ dialog }, target) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
-    }, other);
-    const switched = await page.evaluate(() => window.yuantu.invoke({ type: 'chooseWorkspace' }));
-    assert.equal(switched.ok, true);
-    await chooseSelectOption(page, 'model', '模型设置');
-    await page.waitForFunction(
-      (target) => document.querySelector('#mcp-workspace').textContent.includes(target),
-      other,
-    );
-    await page.waitForFunction(() => !document.querySelector('#mcp-save').disabled);
-    assert.equal(await page.locator('#mcp-list option[value="local"]').count(), 0);
-    const stale = await page.evaluate(
-      ({ revision }) =>
-        window.yuantu.mcp({
-          type: 'save',
-          revision,
-          server: { id: 'stale', transport: 'http', url: 'https://example.com' },
-        }),
-      { revision: oldView.view.revision },
-    );
-    assert.equal(stale.ok, false);
-    await assert.rejects(readFile(path.join(other, '.yuantu/mcp.json')), { code: 'ENOENT' });
   },
 );
 

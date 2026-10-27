@@ -3,7 +3,7 @@
  *
  * Every entry is a `[zh-CN, en-US]` pair, so the two languages of one string are always edited together.
  */
-/** Text the main process hands to the page: settings replies, hooks, attachments, quitting and MCP authorisation. */
+/** Text the main process hands to the page: settings replies, hooks, attachments, and quitting. */
 export const mainProcessMessages: Record<string, [string, string]> = {
   'ui.settingsRequestInvalid': ['无效的通用设置请求', 'Invalid interface settings request'],
   'ui.settingsInvalid': ['无效的通用设置', 'Invalid interface settings'],
@@ -145,31 +145,4 @@ export const mainProcessMessages: Record<string, [string, string]> = {
     '模型配置已保存并生效，但旧进程退出异常，请检查残留进程。',
     'The model settings are saved and active, but the previous process exited badly; check for leftover processes.',
   ],
-  'mcpMain.cancelAuthorize': ['已取消 MCP 授权。', 'MCP authorization cancelled.'],
-  'mcpMain.authorizeInProgress': [
-    '已有 MCP 授权正在进行，请先取消或等待它完成。',
-    'An MCP authorization is already in progress; cancel it or wait for it to finish.',
-  ],
-  'mcpMain.busy': [
-    '请等待当前操作结束后再修改或测试 MCP。',
-    'Wait for the current operation to finish before changing or testing MCP.',
-  ],
-  'mcpMain.testSucceeded': [
-    '连接成功，发现 {count} 个工具。测试未保存配置。',
-    'Connected: {count} tools found. The test did not save the configuration.',
-  ],
-  'mcpMain.authorizeUrlInvalid': [
-    'MCP 授权地址必须是 http 或 https 链接。',
-    'The MCP authorization URL must be an http or https link.',
-  ],
-  'mcpMain.authorizeSucceeded': [
-    'MCP 授权完成，浏览器中的授权页现在可以关闭。授权凭证保存在当前用户账户下，仅对本机用户生效。',
-    'MCP authorization is complete; the browser page can be closed. The credential is stored for the current user account on this machine only.',
-  ],
-  'mcpMain.saved': [
-    'MCP 配置已保存，下一轮对话生效。',
-    'MCP configuration saved; it applies to the next turn.',
-  ],
-  'mcpMain.deleted': ['MCP 服务已删除。', 'The MCP server was deleted.'],
-  'mcpMain.revoked': ['MCP 授权已撤销。', 'The MCP authorization was revoked.'],
 };

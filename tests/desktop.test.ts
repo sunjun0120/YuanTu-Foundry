@@ -425,17 +425,6 @@ test('isolated presets select native and the unconfined preset selects host', ()
 
 test('a preset command is validated, including the host acknowledgement it must not bypass', () => {
   assert.deepEqual(parsePermissionPresetCommand({ type: 'get' }), { type: 'get' });
-  // The weaker sandbox is reached only with its own acknowledgement, never as a preset.
-  assert.deepEqual(parsePermissionPresetCommand({ type: 'weak-sandbox', acknowledgeWeak: true }), {
-    type: 'weak-sandbox',
-    acknowledgeWeak: true,
-  });
-  for (const invalid of [
-    { type: 'weak-sandbox' },
-    { type: 'weak-sandbox', acknowledgeWeak: false },
-    { type: 'weak-sandbox', acknowledgeWeak: true, mode: 'host' },
-  ])
-    assert.throws(() => parsePermissionPresetCommand(invalid), /weaker sandbox/);
   assert.deepEqual(parsePermissionPresetCommand({ type: 'set', preset: 'guarded' }), {
     type: 'set',
     preset: 'guarded',
@@ -450,6 +439,9 @@ test('a preset command is validated, including the host acknowledgement it must 
     { type: 'get', extra: 1 },
     { type: 'set' },
     { type: 'set', preset: 'trusted' },
+    { type: 'weak-sandbox', acknowledgeWeak: true },
+    { type: 'weak-sandbox' },
+    { type: 'weak-sandbox', acknowledgeWeak: false },
     { type: 'set', preset: 'guarded', acknowledgeHost: 'yes' },
     { type: 'set', preset: 'guarded', mode: 'native' },
   ])

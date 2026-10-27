@@ -5,7 +5,7 @@ import { carrierMessages } from './i18n-carrier.ts';
  *
  * Every entry is a `[zh-CN, en-US]` pair, so the two languages of one string are always edited together.
  */
-/** Management panels: retained workspaces, carrier errors, backups, upgrades, background tasks, MCP and the first settings groups. */
+/** Management panels: retained workspaces, carrier errors, upgrades, background tasks and the first settings groups. */
 export const panelMessages: Record<string, [string, string]> = {
   'archived.title': ['已归档会话', 'Archived sessions'],
   'archived.note': [
@@ -45,17 +45,6 @@ export const panelMessages: Record<string, [string, string]> = {
   'orphans.state.removing': ['清理中', 'Removing'],
   'orphans.state.removed': ['目录已清理，可恢复', 'Directory removed; recovery available'],
   ...carrierMessages,
-  'backup.title': ['数据备份', 'Data backups'],
-  'backup.restore': ['恢复所选备份', 'Restore selected backup'],
-  'backup.reconnectFailed': [
-    '数据已恢复，但桌面重连失败，请重启应用。恢复前的数据副本保留在：{path}',
-    'Data restored, but desktop reconnection failed. Restart the app. The previous data is preserved at: {path}',
-  ],
-  'backup.confirm': ['恢复 {date} 的数据库快照？', 'Restore the database snapshot from {date}?'],
-  'backup.restoreDetail': [
-    '当前工作区数据库会回到备份时的状态；当前数据库先保存为独立恢复副本。不会修改工作区文件。主对话不会自动续跑；已保存的定时/触发任务和目标唤醒仍按现有规则运行。',
-    'The current workspace database returns to the snapshot state, after preserving the current database as a separate recovery copy. Workspace files are unaffected. The main conversation does not resume automatically; saved scheduled/event tasks and goal wake-ups continue under their existing rules.',
-  ],
   'upgrade.menu': ['应用', 'Application'],
   'upgrade.check': ['检查本地升级包…', 'Check a local upgrade package…'],
   'upgrade.about': ['版本与渠道', 'Version and channel'],
@@ -172,82 +161,6 @@ export const panelMessages: Record<string, [string, string]> = {
   'background.failed': ['失败', 'Failed'],
   'background.exitCode': ['退出码', 'Exit code'],
   'background.pid': ['进程号', 'PID'],
-  'mcp.title': ['MCP 服务', 'MCP Services'],
-  'mcp.description': [
-    '连接外部工具，扩展当前工作区的能力。',
-    'Connect external tools to extend this workspace.',
-  ],
-  'mcp.configured': ['已配置的服务', 'Configured services'],
-  'mcp.add': ['添加服务', 'Add service'],
-  'mcp.reload': ['重新加载', 'Reload'],
-  'mcp.name': ['服务名称', 'Service name'],
-  'mcp.nameNote': [
-    '使用小写字母、数字和下划线，名称以字母开头。',
-    'Use lowercase letters, numbers, and underscores; start with a letter.',
-  ],
-  'mcp.namePlaceholder': ['例如：project_tools', 'Example: project_tools'],
-  'mcp.localProcess': ['本地进程（stdio）', 'Local process (stdio)'],
-  'mcp.url': ['服务地址', 'Service URL'],
-  'mcp.headers': ['请求头（JSON）', 'Request headers (JSON)'],
-  'mcp.deletePrompt': [
-    '删除此服务配置？下一轮对话将不再加载它。',
-    'Delete this service configuration? It will no longer load in the next turn.',
-  ],
-  'mcp.confirmDelete': ['确认删除', 'Confirm delete'],
-  'mcp.transport': ['连接方式', 'Transport'],
-  'mcp.command': ['启动命令', 'Command'],
-  'mcp.commandPlaceholder': ['node 或可执行文件路径', 'node or executable path'],
-  'mcp.args': ['启动参数', 'Arguments'],
-  'mcp.argsPlaceholder': ['每行一个参数', 'One argument per line'],
-  'mcp.cwd': ['工作目录', 'Working directory'],
-  'mcp.cwdPlaceholder': ['.（当前工作区）', '. (current workspace)'],
-  'mcp.env': ['环境变量（JSON）', 'Environment variables (JSON)'],
-  'mcp.enabled': ['启用此服务', 'Enable this service'],
-  'mcp.note': [
-    '密钥请使用环境变量引用；更改环境变量后需重启桌面。测试会连接服务或启动本地进程，仅发现工具，不调用工具。',
-    'Reference secrets through environment variables; restart the desktop after changes. Tests connect or start a local process to discover tools without calling them.',
-  ],
-  'mcp.test': ['测试连接', 'Test connection'],
-  'mcp.save': ['保存服务', 'Save service'],
-  'mcp.delete': ['删除服务', 'Delete service'],
-  'mcp.oauthSection': ['OAuth 授权', 'OAuth authorization'],
-  'mcp.oauthEnabled': ['使用 OAuth 授权', 'Use OAuth authorization'],
-  'mcp.oauthScopes': ['授权范围', 'Scopes'],
-  'mcp.oauthScopesNote': [
-    '多个范围用逗号或空格分隔；留空表示由服务端决定。',
-    'Separate scopes with commas or spaces; leave empty to let the server decide.',
-  ],
-  'mcp.oauthScopesPlaceholder': ['留空表示由服务端决定', 'Empty lets the server decide'],
-  'mcp.oauthClientId': ['客户端 ID', 'Client ID'],
-  'mcp.oauthClientIdPlaceholder': [
-    '留空则自动注册客户端',
-    'Empty registers a client automatically',
-  ],
-  'mcp.oauthClientSecret': ['客户端密钥', 'Client secret'],
-  'mcp.oauthClientSecretNote': [
-    '仅接受 ${ENV_VAR} 形式的环境变量占位符，不会保存明文密钥。',
-    'Only an ${ENV_VAR} environment placeholder is accepted; plaintext secrets are never saved.',
-  ],
-  'mcp.oauthClientSecretPlaceholder': ['${MCP_CLIENT_SECRET}', '${MCP_CLIENT_SECRET}'],
-  'mcp.oauthClientName': ['客户端名称', 'Client name'],
-  'mcp.oauthClientNamePlaceholder': ['YuanTu Agent', 'YuanTu Agent'],
-  'mcp.oauthRedirectPort': ['回调端口', 'Callback port'],
-  'mcp.oauthRedirectPortPlaceholder': ['自动选择', 'Choose automatically'],
-  'mcp.authorize': ['授权', 'Authorize'],
-  'mcp.cancelAuthorize': ['取消授权', 'Cancel authorization'],
-  'mcp.revoke': ['撤销授权', 'Revoke authorization'],
-  'mcp.oauthAuthorized': ['已授权', 'Authorized'],
-  'mcp.oauthAuthorizedUntil': ['已授权，{time} 到期', 'Authorized, expires {time}'],
-  'mcp.oauthNotAuthorized': ['尚未授权', 'Not authorized'],
-  'mcp.oauthMissing': ['此服务未配置 OAuth 授权', 'OAuth is not configured for this service'],
-  'mcp.oauthPending': [
-    '请在浏览器中完成授权，然后返回此页面…',
-    'Complete the authorization in your browser, then return here...',
-  ],
-  'mcp.oauthCancelled': ['已取消 MCP 授权。', 'MCP authorization cancelled.'],
-  'mcp.oauthFailed': ['MCP 授权失败，请重试。', 'MCP authorization failed. Try again.'],
-  'mcp.revoking': ['正在撤销授权…', 'Revoking authorization...'],
-  'mcp.revoked': ['MCP 授权已撤销。', 'MCP authorization revoked.'],
   'general.title': ['通用设置', 'General'],
   'ui.settingsPage': ['偏好设置', 'Preferences'],
   'ui.settingsMenu': ['设置分类', 'Settings sections'],
@@ -346,18 +259,6 @@ export const panelMessages: Record<string, [string, string]> = {
   'sandboxSetup.prompt.title': ['设置 Windows 沙箱', 'Set up the Windows sandbox'],
   'sandboxSetup.prompt.repairTitle': ['修复 Windows 沙箱', 'Repair the Windows sandbox'],
   'sandboxSetup.prompt.dismiss': ['以后再说', 'Not now'],
-  'sandboxSetup.prompt.weak': [
-    '无管理员权限？使用较弱沙箱',
-    'No administrator? Use a weaker sandbox',
-  ],
-  'sandboxSetup.prompt.weakNote': [
-    '以你的账户降权运行命令，不需要管理员确认，但隔离明显更弱。',
-    'Runs commands under a restricted token of your own account. No administrator approval, but much weaker isolation.',
-  ],
-  'sandboxSetup.prompt.weakConfirm': [
-    '使用较弱沙箱（受限令牌）？\n\n命令将以你的账户降权运行，不需要管理员确认，但：\n· 可以读取你能读取的所有文件（包括密钥和配置）；\n· 可以访问网络；\n· 写入只部分限制在工作区。\n\n本次启动中新建的会话也会使用它，在权限菜单中选择任一选项即可切回账户沙箱。',
-    'Use the weaker sandbox (restricted token)?\n\nCommands will run under a restricted token of your own account, with no administrator approval, but they:\n· can read every file you can read (keys and configuration included);\n· can reach the network;\n· are only partly confined to the workspace when writing.\n\nNew sessions in this launch use it too; choose any option in the permissions menu to return to the account sandbox.',
-  ],
   'sandboxSetup.pending': [
     '正在处理，请完成 Windows 管理员确认…',
     'Working; complete the Windows administrator prompt…',
@@ -419,31 +320,14 @@ export const panelMessages: Record<string, [string, string]> = {
     '命令在 Seatbelt 沙箱中运行：只能写入工作区，默认断网。',
     'Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
   ],
-  'permission.sandbox.windows': [
-    '命令在 Windows 受限令牌中运行：只部分限制写入，仍可读取本机文件、访问网络。这是较弱的隔离模式。',
-    'Commands run under a restricted Windows token: writes are only partly confined, and they can still read files on this machine and reach the network. This is the weaker isolation mode.',
-  ],
   'permission.sandbox.account': [
     '命令在专用低权限沙箱账户中运行：只能写入工作区，网络默认断开，读取受白名单限制。',
     'Commands run as a dedicated low-privilege sandbox account: writes stay in the workspace, the network is off by default, and reads are limited to the allowlist.',
   ],
   'permission.chip.unknown': ['权限未读取', 'Permissions unknown'],
-  'permission.chip.weak': ['较弱沙箱', 'Weaker sandbox'],
   'permission.unknownTitle': [
     '未能读取当前会话的权限设置，点击重试。',
     "This session's permissions could not be read. Click to try again.",
-  ],
-  'permission.weakHint': [
-    '选择任一选项即切回账户沙箱。',
-    'Choose any option to return to the account sandbox.',
-  ],
-  'permission.custom.weak': [
-    '当前：较弱沙箱（受限令牌）。读取和网络不受限制。',
-    'Current: weaker sandbox (restricted token). Reads and the network are not confined.',
-  ],
-  'permission.custom.weakBroken': [
-    '较弱沙箱在这台电脑上无法运行：',
-    'The weaker sandbox cannot run on this computer: ',
   ],
   'permission.failure': ['预设切换失败。', 'Unable to apply the preset.'],
   'permission.dialog.title': ['要开启完全访问权限吗？', 'Enable full access?'],

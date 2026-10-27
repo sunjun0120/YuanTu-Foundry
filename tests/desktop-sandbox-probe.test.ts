@@ -43,7 +43,6 @@ test('desktop quit bounds sandbox initialization and still closes both carriers'
       ).waitForSandboxInitialization?.(setup, 20),
     // The handler bounds each step with this; the real one is used so the bound is exercised, not stubbed away.
     withinQuitDeadline,
-    backups: { quiesce: async () => {} },
     service: {
       stop: async () => {
         closed++;

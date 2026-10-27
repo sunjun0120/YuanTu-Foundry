@@ -10,8 +10,6 @@ await build({
     'apps/desktop/main.ts',
     'apps/desktop/attachment-worker.ts',
     'apps/desktop/preload.ts',
-    'apps/desktop/mcp-test-worker.ts',
-    'apps/desktop/database-backup-worker.ts',
     'apps/desktop/sandbox-probe-worker.ts',
   ],
   outdir: 'dist/desktop',

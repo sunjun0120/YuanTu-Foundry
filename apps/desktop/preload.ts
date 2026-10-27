@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { PRODUCT_SCOPE } from '../../packages/protocol/product-scope.ts';
 import type { DesktopBridge, DesktopWireReply } from './contract.ts';
 import { SnapshotMirror, type SnapshotPatch } from './snapshot-patch.ts';
 import type { PermissionPresetView } from './permission-presets.ts';
@@ -14,16 +13,10 @@ const mirror = new SnapshotMirror();
 const bridge: DesktopBridge = {
   workspaceMaintenance: (command) => ipcRenderer.invoke('yuantu:workspace-maintenance', command),
   archivedSessions: () => ipcRenderer.invoke('yuantu:archived-sessions'),
-  ...(PRODUCT_SCOPE.backups
-    ? { backups: (command) => ipcRenderer.invoke('yuantu:backups', command) }
-    : {}),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
   files: (command) => ipcRenderer.invoke('yuantu:files', command),
   openWorkspacePath: (path, action) =>
     ipcRenderer.invoke('yuantu:open-workspace-path', { path, action }),
-  ...(PRODUCT_SCOPE.mcpManagement
-    ? { mcp: (command) => ipcRenderer.invoke('yuantu:mcp', command) }
-    : {}),
   presets: (command) => ipcRenderer.invoke('yuantu:presets', command),
   subscribePresets(listener) {
     const receive = (_event: Electron.IpcRendererEvent, view: PermissionPresetView) =>

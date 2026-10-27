@@ -30,11 +30,7 @@ export function SettingsPage({
   return (
     <Stack gap="lg">
       <div className="settings-page-header">
-        <div className="eyebrow">
-          {t('ui.settingsPage')} / {t('general.title')}
-        </div>
         <h2 id="general-settings-title">{t('general.title')}</h2>
-        <p>{t('general.description')}</p>
       </div>
       <GeneralSettings controller={controller} />
       {problems ? (

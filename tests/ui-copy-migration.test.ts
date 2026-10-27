@@ -143,7 +143,6 @@ test('a Chinese string with two keys is a collision, not a guess', async (t) => 
 test('the legacy dynamic lines read their English from the dictionary', async (t) => {
   t.after(() => setLocale('zh-CN'));
   setLocale('en-US');
-  assert.equal(translate('mcp.title'), 'MCP Services');
   assert.equal(format(translate('ui.sessionActionsFor'), { name: 'abc' }), 'Session actions: abc');
   assert.equal(format(translate('ui.sessionShort'), { id: 'abc123' }), 'Session abc123');
   assert.equal(

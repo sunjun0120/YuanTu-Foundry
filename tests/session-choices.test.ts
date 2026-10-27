@@ -21,6 +21,8 @@ function harness() {
   const failures = { permission: false, sandbox: false, rollback: false };
   const service = {
     snapshot: { session: { sessionId: 's1' } },
+    /** Set while a command that changes what a session holds is running; see `CarrierService.sessionOperation`. */
+    sessionOperation: false,
     async dispatch(command: { type: string; mode: string }) {
       if (failures.sandbox) throw new Error('sandbox switch failed');
       if (failures.rollback && sandboxes.length >= 2) throw new Error('rollback failed');
@@ -42,7 +44,7 @@ function harness() {
     window: () => null,
     sandbox: () => environment as unknown as SandboxEnvironment,
   });
-  return { choices, sandboxes, failures };
+  return { choices, sandboxes, failures, service };
 }
 
 test('a failed approval half puts the sandbox back and the chip shows the pair in force', async () => {
@@ -89,12 +91,35 @@ test('a failure before the sandbox moved leaves nothing to undo and nothing unkn
   assert.equal(choices.view().current, 'guarded');
 });
 
-test('the weaker sandbox is a new session default only after the person chose it', async () => {
-  const { choices } = harness();
-  assert.equal(choices.view().sandbox.mode, 'native');
-  choices.weakDefault = true;
-  assert.equal(choices.chosen('fresh').sandbox, 'windows');
-  assert.equal(choices.view().current, null, 'the restricted token is no preset');
-  choices.weakDefault = false;
-  assert.equal(choices.chosen('fresh').sandbox, 'native');
+/**
+ * Deleting or archiving the open session moves to another one inside a session command, and the state that
+ * command publishes on the way already names the session it is about to show. Following that progress report
+ * dispatched the preset into `sessionOperationBusy`, which was caught and logged as a failed switch (the
+ * `desktop: could not apply the session sandbox` line); the command's own last publish then applied the choice
+ * a second time. The follow now waits for that last publish, and waiting is not a failure.
+ */
+test('a follow that arrives during a session command waits for the command to finish', async () => {
+  const { choices, sandboxes, service } = harness();
+  const logged: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+  try {
+    service.sessionOperation = true;
+    choices.follow('s2');
+    const busyFollow = choices.following;
+    assert.equal(busyFollow, undefined, 'a busy follow started a switch');
+    assert.deepEqual(sandboxes, [], 'a busy follow dispatched the sandbox');
+    service.sessionOperation = false;
+    choices.follow('s2');
+    const applied = choices.following;
+    assert.ok(applied, 'the follow after the command did not start');
+    await applied;
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(logged, [], 'waiting for the command was logged as a failure');
+  assert.deepEqual(sandboxes, ['native']);
+  assert.equal(choices.view().current, 'auto');
 });

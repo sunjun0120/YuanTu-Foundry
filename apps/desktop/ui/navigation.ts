@@ -2,10 +2,7 @@ import { createStore } from './stores.ts';
 
 export type DesktopPage = 'chat' | 'settings';
 export type SettingsPanel =
-  | 'general-settings-content'
-  | 'model-settings-content'
-  | 'workspace-maintenance-content'
-  | 'mcp-panel';
+  'general-settings-content' | 'model-settings-content' | 'workspace-maintenance-content';
 
 /** Navigation survives page transitions; changing a view never recreates its form or transcript. */
 export const navigation = createStore({

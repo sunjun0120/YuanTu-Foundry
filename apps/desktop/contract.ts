@@ -4,17 +4,15 @@
  * The carrier's own vocabulary and state (`CarrierCommand`, `CarrierSnapshot`) live in
  * `packages/carrier/contract.ts` now — they are not Electron's, and a second carrier must not have to copy
  * them. What is left here is the part that only makes sense inside this shell: the extra channels the desktop
- * exposes (attachments, sandbox mode, MCP, permissions, settings) next to the carrier command channel, and the
+ * exposes (attachments, sandbox mode, permissions, settings) next to the carrier command channel, and the
  * reply envelope the IPC handlers answer with.
  */
 import type { AttachmentReply } from './attachment-contract.ts';
-import type { BackupCommand, BackupReply } from './backup-contract.ts';
 import type { FilesCommand, FilesReply } from './files-contract.ts';
 import type {
   WorkspaceMaintenanceCommand,
   WorkspaceMaintenanceReply,
 } from './workspace-maintenance-contract.ts';
-import type { McpCommand, McpReply } from './mcp-contract.ts';
 import type {
   CarrierCommand,
   CarrierSnapshot,
@@ -60,7 +58,6 @@ export interface DesktopBridge {
   workspaceMaintenance(command: WorkspaceMaintenanceCommand): Promise<WorkspaceMaintenanceReply>;
   /** Read on demand by the settings page; unarchiving and deleting go through `invoke`. */
   archivedSessions?(): Promise<ArchivedSessionsReply>;
-  backups?(command: BackupCommand): Promise<BackupReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
   /**
    * The workspace's files, for the read-only tree and preview.
@@ -77,7 +74,6 @@ export interface DesktopBridge {
    * active workspace, rejects links that escape it (including a symlink or junction), and only then asks the shell.
    */
   openWorkspacePath?(path: string, action: WorkspaceFileAction): Promise<OpenWorkspacePathReply>;
-  mcp?(command: McpCommand): Promise<McpReply>;
   /**
    * The two security knobs as one choice, which is now the only way either of them moves.
    *

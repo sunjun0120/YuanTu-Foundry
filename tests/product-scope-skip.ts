@@ -1,8 +1,6 @@
 import { PRODUCT_SCOPE } from '../packages/protocol/product-scope.ts';
 
 const PRODUCT_SCOPE_LABELS: Record<keyof typeof PRODUCT_SCOPE, string> = {
-  mcpManagement: 'MCP management',
-  backups: 'backup management',
   cli: 'CLI',
 };
 

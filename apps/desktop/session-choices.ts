@@ -77,15 +77,10 @@ export class SessionChoices {
   remember(sessionId: string, choice: SessionChoice): void {
     this.sessions.set(sessionId, choice);
   }
-  /**
-   * The person chose the weaker restricted-token sandbox: new sessions start there too, for this launch only and
-   * until a preset is chosen again. Never set without that choice, and never written to disk.
-   */
-  weakDefault = false;
   private defaultChoice(): SessionChoice {
     const mode = this.deps.sandbox().defaultMode;
     return {
-      sandbox: this.weakDefault && mode === 'native' ? 'windows' : mode,
+      sandbox: mode,
       permission: permissionPreset(DEFAULT_PRESET).permission,
     };
   }
@@ -169,6 +164,14 @@ export class SessionChoices {
   follow(sessionId: string): void {
     if ((sessionId === this.showing && this.live !== undefined) || sessionId === this.moving)
       return;
+    /**
+     * A state published while a session command holds the carrier's gate is a progress report, not a settled
+     * session. Deleting or archiving the open session moves to another one *inside* that command, so its
+     * mid-flight publish already carries the new id — acting on it dispatches the preset into
+     * `sessionOperationBusy` and logs a switch that never had a chance to run. The command's own last publish
+     * comes after the gate is released and applies the choice then.
+     */
+    if (this.deps.service()?.sessionOperation) return;
     this.moving = sessionId;
     const following = this.apply(this.choiceFor(sessionId), sessionId)
       .then(() => {

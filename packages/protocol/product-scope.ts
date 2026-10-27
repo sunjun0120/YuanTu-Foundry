@@ -1,7 +1,5 @@
-/** Product surfaces that are temporarily paused. Their implementation is kept for later restoration. */
+/** Product entry availability. */
 export const PRODUCT_SCOPE = {
-  mcpManagement: false,
-  backups: false,
   cli: true,
 } as const;
 

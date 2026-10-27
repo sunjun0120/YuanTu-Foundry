@@ -5,8 +5,6 @@ import { mountWorkspace } from './workspace/workspace-mount.tsx';
 import { mountSubagents } from './conversation/subagents-mount.tsx';
 import { mountTranscript } from './conversation/transcript-mount.tsx';
 import { captureHistoryAnchor, restoreAnchor } from './conversation/scroll-anchor.ts';
-import { setupMcpSettings } from '../renderer-mcp.ts';
-import { PRODUCT_SCOPE } from '../../../packages/protocol/product-scope.ts';
 import type { DesktopReply } from '../contract.ts';
 import { carrierErrorText } from '../carrier-errors.ts';
 import type { CarrierCommand, CarrierSnapshot } from '../../../packages/carrier/contract.ts';
@@ -199,8 +197,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
     const conversation = element('conversation');
 
     let state: CarrierSnapshot | null = runtime.getSnapshot();
-
-    let mcpSettings: ReturnType<typeof setupMcpSettings> | undefined;
 
     let permissionSettings: ReturnType<typeof mountPermissions> | undefined;
 
@@ -557,7 +553,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
 
       renderTasks();
       modelSettings?.updateBusy();
-      mcpSettings?.updateBusy();
       permissionSettings?.updateBusy();
       updateChrome({ configVisible: state.ready && !state.configured });
       const stopError =
@@ -884,6 +879,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
         const first = !state;
         const wasRunning = state?.session.running === true;
         state = next;
+        modelSettings?.updateSession(next.session.sessionId, next.model, next.modelConnectionId);
         // The workspace tree is a snapshot from the Host, not a filesystem watcher. A run that just ended is exactly
         // when the files it wrote are most likely to be looked for, so re-read it once instead of making the person
         // notice the refresh button.
@@ -995,23 +991,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
     );
 
     disposers.push(() => modelSettings?.dispose());
-
-    // MCP service management is temporarily hidden; keep its renderer for restoration.
-    if (PRODUCT_SCOPE.mcpManagement)
-      mcpSettings = setupMcpSettings(
-        () =>
-          Boolean(
-            isOperating() ||
-            composerView.isSending() ||
-            state?.session.running ||
-            state?.session.loading,
-          ),
-        (busy) => {
-          externalBusy = busy;
-          projectSession();
-        },
-        () => state?.workspace,
-      );
 
     permissionSettings = mountPermissions(window.yuantu, {
       onBusy: (busy) => {
