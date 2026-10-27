@@ -128,6 +128,7 @@ test(
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     await page.locator('#open-settings').click();
     assert.equal(await page.locator('#settings-page').isVisible(), true);
+    await page.locator('#chat-page').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#chat-page').isVisible(), false);
     assert.equal(await page.locator('#general-settings-content').isVisible(), true);
     assert.equal(await page.locator('#model-settings-content').isHidden(), true);

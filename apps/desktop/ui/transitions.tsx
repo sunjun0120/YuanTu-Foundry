@@ -18,7 +18,7 @@
 import { Collapse } from '@mantine/core';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { usePrefersReducedMotion } from './reduced-motion.ts';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { EASING, EASING_CSS, MOTION, OFFSET_PX, seconds } from './motion-tokens.ts';
 
 export interface PageTransitionProps {
@@ -26,6 +26,64 @@ export interface PageTransitionProps {
   viewKey: string;
   kind: 'page' | 'settings';
   children: ReactNode;
+  /** Persistent product pages keep drafts, focusable controls and history nodes mounted. */
+  active?: boolean;
+  id?: string;
+  className?: string;
+  'aria-label'?: string;
+  focusId?: string;
+}
+
+function PersistentPage({
+  active = true,
+  kind,
+  viewKey,
+  children,
+  focusId,
+  ...attributes
+}: PageTransitionProps): ReactNode {
+  const reduced = usePrefersReducedMotion();
+  const timing = kind === 'settings' ? MOTION.settings : MOTION.page;
+  const [presence, setPresence] = useState({ target: active, mounted: active });
+  // Derive presence from a new target without an effect or an asynchronous callback deciding navigation.
+  if (presence.target !== active)
+    setPresence({ target: active, mounted: active || presence.mounted });
+  return (
+    <motion.section
+      {...attributes}
+      data-page-pane=""
+      data-page-view={viewKey}
+      data-page-active={String(active)}
+      hidden={!active && (reduced || !presence.mounted)}
+      inert={!active}
+      aria-hidden={!active}
+      initial={false}
+      animate={{ opacity: active ? 1 : 0, y: active || reduced ? 0 : OFFSET_PX }}
+      transition={{
+        duration: reduced ? 0 : seconds(active ? timing.enter : timing.exit),
+        delay: !reduced && active ? seconds(timing.exit) : 0,
+        ease: EASING,
+      }}
+      onAnimationComplete={() => {
+        if (!active)
+          setPresence((current) =>
+            current.target || !current.mounted ? current : { target: false, mounted: false },
+          );
+        else if (focusId) {
+          const focused = document.activeElement;
+          // A person may already be using a field or its popup during entry. Never steal that focus later.
+          if (
+            !focused ||
+            focused === document.body ||
+            focused.closest('[hidden], [inert], [aria-hidden="true"]')
+          )
+            document.getElementById(focusId)?.focus({ preventScroll: true });
+        }
+      }}
+    >
+      {children}
+    </motion.section>
+  );
 }
 
 /** Inert while leaving; `display: contents` keeps the wrapper out of the page's layout. */
@@ -46,7 +104,12 @@ function PresenceWrapper({ children }: { children: ReactNode }): ReactNode {
  * `mode="wait"` sequences exit before enter. Rapid A→B→C switches still end on C: AnimatePresence keys the child,
  * drops the intermediate target and exits whatever is present before entering the latest key.
  */
-export function PageTransition({ viewKey, kind, children }: PageTransitionProps): ReactNode {
+export function PageTransition(props: PageTransitionProps): ReactNode {
+  if (props.active !== undefined) return <PersistentPage {...props} />;
+  return <TransientPage {...props} />;
+}
+
+function TransientPage({ viewKey, kind, children }: PageTransitionProps): ReactNode {
   const reduced = usePrefersReducedMotion();
   const timing = kind === 'settings' ? MOTION.settings : MOTION.page;
   return (

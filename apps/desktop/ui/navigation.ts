@@ -14,10 +14,14 @@ export const navigation = createStore({
   workspaceOpen: false,
   workspaceFullscreen: false,
   workspaceWidth: 560,
+  chatScroll: 0,
 });
 
-export function showPage(page: DesktopPage): void {
-  navigation.set({ ...navigation.getSnapshot(), page });
+export function showPage(
+  page: DesktopPage,
+  chatScroll = navigation.getSnapshot().chatScroll,
+): void {
+  navigation.set({ ...navigation.getSnapshot(), page, chatScroll });
 }
 
 export function showPanel(panel: SettingsPanel): void {

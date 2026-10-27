@@ -8,7 +8,8 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 ## Scope and sequence
 
 - [x] T24a: React owns the product skeleton and one AppShell; preserve drafts, scroll and region state.
-- [ ] T24b: Product page/panel transitions and locale-owned chrome; retire legacy CSS by selector ownership.
+- [x] T24b: Product page/settings-category transitions and legacy CSS retirement by selector ownership.
+- [ ] T25 chrome: React owns dynamic window chrome; remove the old page renderer and finish bootstrap/lifetime cleanup.
 - [x] T25a: Replace region portals with ordinary React children; independent view lifecycle.
 - [ ] T25 slots: React slot ordering, dynamic registration, unload and type contracts.
 - [ ] T25b: Remove legacy page rendering, select/walker dependencies and compatibility-only selectors; audit retained DOM islands.
@@ -38,6 +39,9 @@ Baseline typecheck: `npm run typecheck`, exit 0 (2026-10-27).
 - CSS retirement: six legacy files now contain one retirement comment each (5,983 -> 6 lines); `ui/styles.css` owns component and DOM-island styling through classes, not migrated ids. This relocates needed styles; it is not a claim that total CSS shrank by 5,977 lines. Removed 26 superseded declarations, obsolete select-upgrader rules and a conflicting old dark palette. Existing `!important` count decreased (29 legacy + 4 UI before, 25 UI after).
 - Locale retirement: global DOM walker and native select upgrader removed. Locale subscribers own text/attributes; raw user content is not rewritten. A real Electron test now exercises dynamic React attributes instead of preserving the retired walker's behavior.
 - CSS/DOM-retirement checkpoint: typecheck/lint/layers/cycles/i18n/format/docs/references/isolation all exit 0; final desktop build passes. Style budget 2/2 and full locale/plan-card file 5/5 pass. Layout 4/4, React layer 4/4, language 7/7 and sessions 6/6 passed on the class-based stylesheet; the old-palette regression was fixed and layout rerun green. Product page transitions are the next T24 subtask.
+- Product navigation: normal/reduced motion use cases pass with recorded compositor frames and rAF timelines. Conversation/prompt DOM identity, draft, document attachment and exact scroll position survive page changes; fast cross-frame reversals finish on the latest target. Existing motion fixture 5/5 passes. Layout/settings regressions caught an end-of-animation focus steal; focus recovery now skips an actively used control/popup. Corrected layout and full-page/model-switch cases both pass. The other seven settings cases passed (one existing MCP skip).
+- Navigation checkpoint: typecheck/lint/layers/cycles/i18n/format/docs/references/isolation all exit 0. Delayed exit affects when final geometry can be measured, so layout assertions now wait for settled animation and still enforce exactly one final visible panel.
+- Ruling: Opening settings refreshes the model reading without locking navigation; save/model-switch locks remain. A read-only refresh must not prevent the rapid navigation reversals required by the specification. Request ordering/lifetime cleanup is part of T25.
 
 ## Verification
 

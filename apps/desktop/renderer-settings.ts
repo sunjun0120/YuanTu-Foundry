@@ -11,7 +11,7 @@ import { showSettingsPanel } from './renderer-panels.ts';
 import type { ModelSettingsView } from './settings-contract.ts';
 import { modelLock } from './ui/settings/model-lock.ts';
 import { modelPicker } from './ui/settings/model-picker-state.ts';
-import { showPage } from './ui/navigation.ts';
+import { navigation, showPage } from './ui/navigation.ts';
 
 export function setupModelSettingsEntry(
   isBusy: () => boolean,
@@ -19,7 +19,6 @@ export function setupModelSettingsEntry(
 ): { updateBusy(): void } {
   const byId = <T extends HTMLElement = HTMLElement>(id: string): T =>
     document.getElementById(id) as T;
-  const page = byId('settings-page');
   const switchStatus = byId<HTMLElement>('model-switch-status');
   let view: ModelSettingsView | null = null;
   let pending = false;
@@ -61,31 +60,20 @@ export function setupModelSettingsEntry(
 
   function openSettings(target: 'general' | 'model' = 'general'): void {
     if (pending) return;
-    if (page.hidden) conversationScroll = byId('conversation').scrollTop;
+    if (navigation.getSnapshot().page === 'chat')
+      conversationScroll = byId('conversation').scrollTop;
     window.dispatchEvent(new CustomEvent('yuantu-settings-open'));
-    byId('chat-page').hidden = true;
-    byId('chat-sidebar').hidden = true;
-    page.hidden = false;
-    document.body.dataset.page = 'settings';
-    showPage('settings');
+    showPage('settings', conversationScroll);
     byId(target === 'model' ? 'model-settings' : 'general-settings').dispatchEvent(
       new Event('click'),
     );
-    busy(true);
-    void refreshPicker().finally(() => busy(false));
-    byId<HTMLButtonElement>('settings-back').focus();
+    void refreshPicker();
   }
   function backToChat(): void {
     if (pending) return;
     switchStatus.hidden = true;
-    page.hidden = true;
-    byId('chat-page').hidden = false;
-    byId('chat-sidebar').hidden = false;
-    document.body.dataset.page = 'chat';
-    showPage('chat');
+    showPage('chat', conversationScroll);
     window.dispatchEvent(new CustomEvent('yuantu-settings-close'));
-    byId('conversation').scrollTop = conversationScroll;
-    byId<HTMLButtonElement>('open-settings').focus();
     void refreshPicker();
   }
   function showModelPanel(): void {

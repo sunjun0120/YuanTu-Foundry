@@ -34,7 +34,7 @@ export function showSettingsPanel(panelId: SettingsPanelId): void {
   showPanel(panelId);
   for (const [id, buttonId] of Object.entries(PANELS)) {
     const panel = document.getElementById(id);
-    if (panel) panel.hidden = id !== panelId;
+    if (panel && id === 'mcp-panel') panel.hidden = id !== panelId;
     const button = document.getElementById(buttonId);
     if (!button) continue;
     if (id === panelId) button.setAttribute('aria-current', 'page');

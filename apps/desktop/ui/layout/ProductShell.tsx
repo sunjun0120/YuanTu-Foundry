@@ -1,3 +1,4 @@
+import { PageTransition } from '../transitions.tsx';
 import { useLayoutEffect, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
@@ -13,7 +14,9 @@ export function ProductShell(): ReactNode {
   const view = useReadable(navigation);
   useLayoutEffect(() => {
     document.body.dataset.page = view.page;
-  }, [view.page]);
+    if (view.page === 'chat')
+      document.getElementById('conversation')?.scrollTo({ top: view.chatScroll });
+  }, [view.page, view.chatScroll]);
   return (
     <>
       <DesktopShell
@@ -119,7 +122,14 @@ export function ProductShell(): ReactNode {
         }
         main={
           <>
-            <section id="chat-page" className="chat-page" hidden={view.page !== 'chat'}>
+            <PageTransition
+              viewKey="chat-page"
+              kind="page"
+              active={view.page === 'chat'}
+              focusId="open-settings"
+              id="chat-page"
+              className="chat-page"
+            >
               <header>
                 <div className="chat-heading">
                   <strong id="chat-title" className="chat-title" translate="no" />
@@ -407,38 +417,47 @@ export function ProductShell(): ReactNode {
                   {t('ui.clearQueue')}
                 </button>
               </footer>
-            </section>
-            <section
+            </PageTransition>
+            <PageTransition
+              viewKey="settings-page"
+              kind="page"
+              active={view.page === 'settings'}
+              focusId="settings-back"
               id="settings-page"
               className="settings-page"
               aria-label={t('shell.settingsPage')}
-              hidden={view.page !== 'settings'}
             >
-              <section
+              <PageTransition
+                viewKey="workspace-maintenance-content"
+                kind="settings"
+                active={view.page === 'settings' && view.panel === 'workspace-maintenance-content'}
                 id="workspace-maintenance-content"
                 className="settings-content"
                 aria-labelledby="archived-sessions-title"
-                hidden={view.panel !== 'workspace-maintenance-content'}
               >
                 <ViewSlot name="workspace-settings" />
-              </section>
-              <section
+              </PageTransition>
+              <PageTransition
+                viewKey="general-settings-content"
+                kind="settings"
+                active={view.page === 'settings' && view.panel === 'general-settings-content'}
                 id="general-settings-content"
                 className="settings-content"
                 aria-labelledby="general-settings-title"
-                hidden={view.panel !== 'general-settings-content'}
               >
                 <ViewSlot name="general-settings" />
-              </section>
-              <section
+              </PageTransition>
+              <PageTransition
+                viewKey="model-settings-content"
+                kind="settings"
+                active={view.page === 'settings' && view.panel === 'model-settings-content'}
                 id="model-settings-content"
                 className="settings-content"
                 aria-labelledby="settings-title"
-                hidden={view.panel !== 'model-settings-content'}
               >
                 <ViewSlot name="model-settings" />
-              </section>
-            </section>
+              </PageTransition>
+            </PageTransition>
           </>
         }
         aside={

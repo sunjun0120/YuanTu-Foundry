@@ -367,6 +367,16 @@ test(
       ['general-settings', '#general-settings-content'],
     ]) {
       await page.locator('#' + tab).click();
+      await page.waitForFunction((selector) => {
+        const content = document.querySelector(selector);
+        const settings = document.getElementById('settings-page');
+        return (
+          content &&
+          Number(getComputedStyle(content).opacity) === 1 &&
+          Number(getComputedStyle(settings).opacity) === 1 &&
+          [...settings.children].every((child) => child === content || child.hidden)
+        );
+      }, panel);
       assert.equal(
         await page.locator('#settings-page > .settings-content:visible').count(),
         1,
