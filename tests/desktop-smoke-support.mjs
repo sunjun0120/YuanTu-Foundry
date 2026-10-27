@@ -68,6 +68,18 @@ export async function readSelectOptions(page, id) {
   return labels;
 }
 
+/**
+ * The same, for a Select that has no id: a field inside a card or form, addressed by its visible label.
+ *
+ * `scope` is the locator that owns the field (`form.task-schedule`, `article.task-card`); the option list still lives
+ * in the body portal, so the click lands on the page rather than on the scope.
+ */
+export async function chooseLabeledOption(scope, label, option) {
+  await scope.getByLabel(label, { exact: true }).click();
+  await scope.page().getByRole('option', { name: option, exact: true }).click();
+  await scope.page().getByRole('listbox').waitFor({ state: 'hidden' });
+}
+
 /** Polls `check` every 100 ms until it is truthy, failing after `ms`. */
 export async function waitFor(check, ms = 15000) {
   const end = Date.now() + ms;

@@ -8,7 +8,11 @@ import { tmpdir } from 'node:os';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { choosePermissionPreset, chooseSelectOption } from './desktop-smoke-support.mjs';
+import {
+  chooseLabeledOption,
+  choosePermissionPreset,
+  chooseSelectOption,
+} from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 
@@ -242,7 +246,12 @@ test(
     await card.getByRole('button', { name: '触发设置', exact: true }).click();
     const form = card.locator('.task-schedule');
     await form.waitFor();
-    await form.getByLabel('触发方式', { exact: true }).selectOption('interval');
+    assert.equal(
+      await form.locator('select').count(),
+      0,
+      'the React trigger editor uses visible Mantine controls',
+    );
+    await chooseLabeledOption(form, '触发方式', '固定间隔');
     await form.getByLabel('间隔（分钟，1–10080）', { exact: true }).fill('15');
     await form.getByLabel('启用', { exact: true }).check();
     await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
@@ -268,7 +277,7 @@ test(
       await form.getByLabel('间隔（分钟，1–10080）', { exact: true }).inputValue(),
       '15',
     );
-    await form.getByLabel('触发方式', { exact: true }).selectOption('weekly');
+    await chooseLabeledOption(form, '触发方式', '每周定时');
     await form
       .getByLabel('IANA 时区（每天留空沿用本机）', { exact: true })
       .fill('America/New_York');
@@ -291,7 +300,7 @@ test(
     assert.match(local, /Mon/);
     assert.match(local, /09:00/);
     await card.getByRole('button', { name: '触发设置', exact: true }).click();
-    await form.getByLabel('触发方式', { exact: true }).selectOption('after');
+    await chooseLabeledOption(form, '触发方式', '延迟后，仅一次');
     await form.getByLabel('延迟分钟（1～525600）', { exact: true }).fill('120');
     await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
     await form.waitFor({ state: 'hidden' });
@@ -314,7 +323,7 @@ test(
     );
     assert.equal(state.tasks[0].nextRunAt, anchored);
     await card.getByRole('button', { name: '触发设置', exact: true }).click();
-    await form.getByLabel('触发方式', { exact: true }).selectOption('at');
+    await chooseLabeledOption(form, '触发方式', '指定时刻，仅一次');
     await form
       .getByLabel('绝对时刻（必须包含 UTC 偏移）', { exact: true })
       .fill('2030-01-01T09:00:00+08:00');
@@ -336,7 +345,7 @@ test(
       await form.getByLabel('绝对时刻（必须包含 UTC 偏移）', { exact: true }).inputValue(),
       '2030-01-01T01:00:00.000Z',
     );
-    await form.getByLabel('触发方式', { exact: true }).selectOption('cron');
+    await chooseLabeledOption(form, '触发方式', 'Cron 定时');
     await form.getByLabel('Cron 表达式（五字段）', { exact: true }).fill('0 0 30 2 *');
     await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
     assert.equal(await form.isVisible(), true);
@@ -345,7 +354,7 @@ test(
     await form
       .getByLabel('IANA 时区（每天留空沿用本机）', { exact: true })
       .fill('America/New_York');
-    await form.getByLabel('错过触发', { exact: true }).selectOption('skip');
+    await chooseLabeledOption(form, '错过触发', '跳过漏跑');
     assert.match(await form.locator('.task-schedule-preview').textContent(), /Next|预计下次/);
     await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
     await form.waitFor({ state: 'hidden' });
@@ -370,14 +379,15 @@ test(
       await form.getByLabel('Cron 表达式（五字段）', { exact: true }).inputValue(),
       '0 9 * * 1-5',
     );
-    assert.equal(await form.getByLabel('错过触发', { exact: true }).inputValue(), 'skip');
-    await form.getByLabel('触发方式', { exact: true }).selectOption('event');
+    // A Mantine Select's input shows the option's label; the stored value is asserted from the snapshot above.
+    assert.equal(await form.getByLabel('错过触发', { exact: true }).inputValue(), '跳过漏跑');
+    await chooseLabeledOption(form, '触发方式', '事件触发');
     assert.equal(await form.getByLabel('监听事件', { exact: true }).isDisabled(), false);
     assert.equal(
       await form.getByLabel('来源任务（仅“任务通过验收”）', { exact: true }).isDisabled(),
       false,
     );
-    await form.getByLabel('触发方式', { exact: true }).selectOption('none');
+    await chooseLabeledOption(form, '触发方式', '不自动触发');
     await form.getByRole('button', { name: '保存触发设置', exact: true }).click();
     await form.waitFor({ state: 'hidden' });
     await idle();

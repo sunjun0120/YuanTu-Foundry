@@ -1,16 +1,17 @@
 /**
  * The task list: one card per task, its schedule, approval, steps, acceptance rows and actions.
  *
- * The card reads from `task-view.ts`; the editor forms are still the legacy DOM builders, hosted inside the card
- * they belong to. While a form is open the list is frozen — a progress publish updates the form's disabled/stale
- * state instead of rebuilding it, which is what keeps a half-typed title or a ticked acceptance row from being
- * thrown away by the next task update.
+ * The card reads from `task-view.ts`; both editors are React trees keyed by the open token, so a progress publish
+ * updates their busy/stale state instead of rebuilding them. While an editor is open the list is frozen — which is
+ * what keeps a half-typed title, a ticked acceptance row or a cadence draft from being thrown away by the next task
+ * update.
  */
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import type { Task } from '../../../../packages/protocol/index.ts';
 import { t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
+import { ScheduleEditor } from './ScheduleEditor.tsx';
 import { TaskEditor } from './TaskEditor.tsx';
 import {
   acceptanceRows,
@@ -25,11 +26,11 @@ import {
 
 export interface TaskEditing {
   taskId: string;
-  form?: HTMLFormElement;
   task: Task;
   token: number;
   revision: string;
   stale: boolean;
+  mode: 'edit' | 'schedule';
 }
 
 export interface TaskCardActions {
@@ -41,25 +42,6 @@ export interface TaskCardActions {
   selectionChanged(): void;
   save(command: CarrierCommand, editing: TaskEditing): Promise<void>;
   cancel(): void;
-}
-
-function FormHost({ editing, busy }: { editing: TaskEditing; busy: boolean }): ReactNode {
-  const form = editing.form!;
-  const host = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const container = host.current;
-    if (!container) return;
-    if (form.parentElement !== container) container.replaceChildren(form);
-  }, [form]);
-  useEffect(() => {
-    const fieldset = form.querySelector('fieldset');
-    if (fieldset) fieldset.disabled = busy;
-    const save = form.querySelector<HTMLButtonElement>('button[type=submit]');
-    if (save) save.disabled = busy || editing.stale;
-    const warning = form.querySelector<HTMLElement>('.task-edit-warning');
-    if (warning) warning.textContent = editing.stale ? t('task.staleWarning') : '';
-  }, [editing, busy, form]);
-  return <div ref={host} />;
 }
 
 function Evidence({
@@ -107,8 +89,16 @@ function TaskCard({
             {taskStatusReading(task.status, lang)}
           </span>
         </div>
-        {editing.form ? (
-          <FormHost editing={editing} busy={busy} />
+        {editing.mode === 'schedule' ? (
+          <ScheduleEditor
+            key={editing.token}
+            task={editing.task}
+            tasks={snapshot.tasks}
+            busy={busy}
+            stale={editing.stale}
+            onSave={(command) => actions.save(command, editing)}
+            onCancel={actions.cancel}
+          />
         ) : (
           <TaskEditor
             key={editing.token}

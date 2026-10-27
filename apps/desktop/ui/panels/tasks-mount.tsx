@@ -1,16 +1,16 @@
 /**
- * Mount the React task list and keep the editor forms the legacy builders still own.
+ * Mount the React task list and own the state of whichever editor is open.
  *
- * A progress publish while a form is open updates that form's busy/stale state instead of rebuilding the list: the
- * `TaskConfirmDrafts` set and the form's fields belong to the person, not to the frame that drew them.
+ * A progress publish while an editor is open updates that editor's busy/stale state instead of rebuilding the list:
+ * the `TaskConfirmDrafts` set and the editor's fields belong to the person, not to the frame that drew them.
  */
 import type { ReactNode } from 'react';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
+import type { Task } from '../../../../packages/protocol/index.ts';
 import { TaskConfirmDrafts } from '../../task-confirm-drafts.ts';
 import { useReadable } from '../context.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
 import { registerView } from '../views.tsx';
-import { scheduleEditor, type EditorHost } from '../../renderer-tasks-editors.ts';
 import { TaskCards, type TaskCardActions, type TaskEditing } from './TasksPanel.tsx';
 
 export interface TasksState {
@@ -53,61 +53,22 @@ export function mountTasks(
   let editorToken = 0;
   let latest: CarrierSnapshot | null = null;
 
-  const host = (
-    current: () => { revision: string } | undefined,
-    forget: () => void,
-  ): EditorHost => ({
-    send,
-    button(parent, label, action, disabled = false) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'secondary';
-      button.textContent = label;
-      button.disabled = store.getSnapshot().busy || disabled;
-      button.addEventListener('click', action);
-      parent.append(button);
-      return button;
-    },
-    snapshot: () => latest,
-    busy: () => store.getSnapshot().busy,
-    current,
-    close(next, locked) {
-      forget();
-      editing = null;
-      render(next, locked);
-    },
-  });
+  const open = (task: Task, mode: TaskEditing['mode']) => {
+    editing = {
+      taskId: task.id,
+      task,
+      token: ++editorToken,
+      revision: task.updatedAt,
+      stale: false,
+      mode,
+    };
+    store.set({ ...store.getSnapshot(), editing, tick: store.getSnapshot().tick + 1 });
+  };
 
   const actions: TaskCardActions = {
     send: (command) => void send(command),
-    edit(task) {
-      editing = {
-        taskId: task.id,
-        task,
-        token: ++editorToken,
-        revision: task.updatedAt,
-        stale: false,
-      };
-      store.set({ ...store.getSnapshot(), editing, tick: store.getSnapshot().tick + 1 });
-    },
-    schedule(task) {
-      const form = scheduleEditor(
-        task,
-        host(
-          () => editing ?? undefined,
-          () => (editing = null),
-        ),
-      );
-      editing = {
-        taskId: task.id,
-        task,
-        token: ++editorToken,
-        form,
-        revision: task.updatedAt,
-        stale: false,
-      };
-      store.set({ ...store.getSnapshot(), editing, tick: store.getSnapshot().tick + 1 });
-    },
+    edit: (task) => open(task, 'edit'),
+    schedule: (task) => open(task, 'schedule'),
     confirm(task, indices) {
       if (!indices.length) return;
       void send({
@@ -161,7 +122,7 @@ export function mountTasks(
       const task = next?.tasks.find((entry) => entry.id === editing!.taskId);
       const stale = task?.updatedAt !== editing.revision;
       if (editing.stale !== stale) editing = { ...editing, stale };
-      // The open form freezes the list; only its own busy/stale state moves.
+      // The open editor freezes the list; only its own busy/stale state moves.
       store.set({ ...current, busy, editing, tick: current.tick + 1 });
       return;
     }

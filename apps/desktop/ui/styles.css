@@ -1904,7 +1904,7 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
 
 .task-schedule-fields {
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 
 .task-step-journal summary,
@@ -4773,47 +4773,42 @@ body {
   }
 }
 
-.task-editor {
+.task-editor,
+.task-schedule {
   margin-top: 16px;
 }
 
-.task-editor fieldset {
+.task-editor fieldset,
+.task-schedule fieldset {
   min-width: 0;
   padding: 0;
   margin: 0;
   border: 0;
 }
 
-.task-editor .mantine-InputWrapper-root {
+.task-editor .mantine-InputWrapper-root,
+.task-schedule .mantine-InputWrapper-root {
   margin-bottom: 14px;
 }
 
-.task-field {
+.task-weekdays {
   display: flex;
-  flex-direction: column;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 14px;
+}
+
+.task-schedule small {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.task-schedule-preview {
+  margin: 4px 0 10px;
   color: var(--muted);
   font-size: 12px;
-}
-
-.task-field input,
-.task-field textarea,
-.task-field select {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 9px 11px;
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-size: 13px;
-}
-
-.task-field textarea {
-  min-height: 76px;
-  resize: vertical;
+  overflow-wrap: anywhere;
 }
 
 .task-criterion {
@@ -4829,7 +4824,8 @@ body {
   font-size: 13px;
 }
 
-.task-editor .task-actions {
+.task-editor .task-actions,
+.task-schedule .task-actions {
   margin-top: 16px;
 }
 
