@@ -49,7 +49,7 @@
 - electron-builder 26.15.3 产出 `dist/release/win-unpacked`（Electron 43.5.0，x64）。
 - `npm run check:windows-package` 通过，校验打包 Node 的 SHA-256 为 `3602f2bb1a10f2cbab4c36886218a33c1ab3db87290e73b033c46c77147d0237`。
 
-未完成：用 Playwright 直接启动 `win-unpacked/YuanTu Agent.exe` 失败（打包后的 Electron 不暴露 Playwright 所需的 Node inspector），因此打包后的实际窗口/项目切换路径尚未自动化验证；需要在安装包场景中手工或换用 CDP 方式补验。
+未完成：打包后的 `win-unpacked/YuanTu Agent.exe` 在本机启动后立即退出，退出码 `2147483651`（`0x80000003`），无 stderr；带 `--remote-debugging-port` 时 CDP 端口从未打开，Playwright 也无法 attach。包内容校验通过，但打包后的实际窗口/项目切换尚未验证，需在干净的安装环境复核是打包配置还是本机运行环境导致。
 
 ## 5. 定向验证（本轮及此前）
 
