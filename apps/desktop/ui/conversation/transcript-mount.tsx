@@ -61,6 +61,17 @@ function required<T extends HTMLElement = HTMLElement>(id: string): T {
   return value as T;
 }
 
+/**
+ * Off for now: the automatic verdict fold never reaches the transcript.
+ *
+ * It reads as a second verdict line under every answer while its presentation is being reworked. Nothing else about
+ * the contract changes — it still reaches the snapshot — so restoring the fold is calling `completionNotice` without
+ * this filter. A manual completion notice is not this fold and still shows.
+ */
+function withoutAutomaticVerdict(view: HTMLElement | null): HTMLElement | null {
+  return view?.classList.contains('completion-inline') ? null : view;
+}
+
 function emptyModel(): TranscriptModel {
   return {
     rows: [],
@@ -259,7 +270,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       cards,
       footer,
       runPaused,
-      completion: completionNotice(snapshot, options.onRequestFullAccess),
+      completion: withoutAutomaticVerdict(completionNotice(snapshot, options.onRequestFullAccess)),
       tailKey,
       liveGroupKey: null,
     });

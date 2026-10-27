@@ -166,49 +166,9 @@ test(
         assert.equal(await page.locator('.completion-notice').count(), 0);
         continue;
       }
-      const notice = page.locator('details.completion-inline');
-      await notice.waitFor();
-      assert.equal(
-        await notice.locator(':scope > summary').innerText(),
-        `自动验证 · ${fixture.label}`,
-      );
-      assert.equal(await notice.getAttribute('open'), null);
-      assert.equal(await notice.locator('.completion-details').isVisible(), false);
-      for (const colorScheme of ['dark', 'light']) {
-        await page.emulateMedia({ colorScheme });
-        assert.deepEqual(
-          await notice.evaluate((el) => {
-            const style = getComputedStyle(el);
-            return [style.backgroundColor, style.borderLeftWidth, style.padding];
-          }),
-          ['rgba(0, 0, 0, 0)', '0px', '0px'],
-        );
-        assert.deepEqual(
-          await notice.locator(':scope > summary').evaluate((el) => {
-            const style = getComputedStyle(el);
-            return [style.backgroundColor, style.borderTopWidth, style.padding];
-          }),
-          ['rgba(0, 0, 0, 0)', '0px', '0px'],
-        );
-      }
-      await notice.locator(':scope > summary').focus();
-      await page.keyboard.press('Enter');
-      assert.equal(await notice.locator('.completion-details').isVisible(), true);
-      if (fixture.reason === 'environment-error') {
-        assert.match(await notice.innerText(), /未执行/);
-        assert.match(await notice.innerText(), /spawn EPERM/);
-        assert.doesNotMatch(await notice.innerText(), /不是代码失败|未通过的检查|未通过 ·/);
-      } else if (fixture.evidence.checks.length) {
-        assert.match(await notice.innerText(), /node game-check.mjs/);
-        assert.match(await notice.innerText(), /RECORDED_CHECK_OUTPUT/);
-      }
-      await page.locator('#open-settings').click();
-      await page.locator('#settings-back').click();
-      assert.equal(await notice.getAttribute('open'), '');
-      await notice.locator(':scope > summary').focus();
-      await page.keyboard.press('Space');
-      assert.equal(await notice.locator('.completion-details').isVisible(), false);
-      await page.screenshot({ path: artifactPath(`verification-inline-${fixture.state}.png`) });
+      // The automatic verdict is hidden for now (see `withoutAutomaticVerdict`): the snapshot assertions above still
+      // cover the contract, and this block's presentation checks come back with the fold.
+      assert.equal(await page.locator('details.completion-inline').count(), 0);
     }
   },
 );
