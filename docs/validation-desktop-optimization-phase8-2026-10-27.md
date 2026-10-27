@@ -48,7 +48,7 @@
 
 ## 5. 未完成
 
-- Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，但快照/审批/通知仍只路由给 active Host；后台工作区审批和运行标记未完成。
+- Phase 6 的事件路由：`WorkspaceHostManager` 已保留旧 Host，主进程也订阅所有 Host 并在项目列表显示 `running`/`waiting` 标记；快照与审批操作仍只路由给 active Host，后台审批处理未完成。
 - Phase 7 剩余：每工作区独立会话列表、两级折叠、触摸/键盘完整行为。
 - 打包/安装场景与跨平台手工记录。
 
