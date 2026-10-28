@@ -58,6 +58,23 @@ export function mountAttachments(deps: {
       if (!reply.ok) throw new Error(reply.error);
       return reply.file;
     },
+    stageSource: async (file, workspace) => {
+      // A dropped or picked file has a real path, so the main process copies it instead of the renderer shipping up
+      // to 200 MB through IPC. A pasted file has none (or the bridge refuses the DOM object) and falls back to bytes.
+      let sourcePath = '';
+      try {
+        sourcePath = window.yuantu.sourceArchivePath(file);
+      } catch {
+        sourcePath = '';
+      }
+      const reply = await window.yuantu.stageSourceArchive(
+        sourcePath
+          ? { workspace, name: file.name, path: sourcePath }
+          : { workspace, name: file.name, data: new Uint8Array(await file.arrayBuffer()) },
+      );
+      if (!reply.ok) throw new Error(reply.error);
+      return reply.file;
+    },
     setError: deps.setError,
     onChange: deps.requestRender,
   });

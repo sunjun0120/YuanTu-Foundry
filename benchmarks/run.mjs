@@ -21,6 +21,8 @@ import { SessionController } from '../packages/client/session-controller.ts';
 import { PermissionPolicy } from '../packages/core/permissions.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 
+process.env.YUANTU_BUILTIN_SERVICES = '0';
+
 const results = [];
 const record = (name, value, unit, note = '') => {
   results.push({ name, value, unit, note });

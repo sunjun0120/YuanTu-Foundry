@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { warmToolCache } from '../../packages/builtin-services/index.ts';
 import type { RunResult, Task, TaskAttempt } from '../../packages/protocol/index.ts';
 import { acquireHostLock } from '../../packages/platform/host-lock.ts';
 import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts';
@@ -62,6 +63,7 @@ async function runHost(launch: Launch): Promise<void> {
     }),
   });
   ctx.loopHealth.start();
+  void warmToolCache();
   ctx.carrier = new HostCarrier({ isClosing: () => ctx.closing });
   const wake = createBackgroundWake(ctx);
   ctx.currentAuthority = wake.currentAuthority;

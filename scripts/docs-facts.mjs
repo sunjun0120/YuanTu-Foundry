@@ -98,6 +98,7 @@ function collectTool() {
 }
 
 async function facts() {
+  process.env.YUANTU_BUILTIN_SERVICES = '0';
   const workspace = await mkdtemp(path.join(tmpdir(), 'yuantu-facts-workspace-'));
   /**
    * A terminal manager, because every host that ships passes one.

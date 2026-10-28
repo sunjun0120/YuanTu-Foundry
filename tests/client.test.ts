@@ -921,7 +921,7 @@ test('controller sends images and steers a pending Host approval without stale w
   // The workspace declares no skills of its own; what is listed is what this build ships with.
   assert.deepEqual(
     resources.skills.map((skill) => skill.path),
-    ['builtin:office-documents'],
+    ['builtin:code-analysis-report', 'builtin:office-documents'],
   );
 });
 test('controller rejects a second send during an active run but lets another session open', async (t) => {

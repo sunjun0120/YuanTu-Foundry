@@ -1,3 +1,4 @@
+import { closeBuiltinServices } from '../builtin-services/index.ts';
 import { createHash } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -196,7 +197,9 @@ export async function releaseSessionResources(scope: string): Promise<void> {
 
 /** Closes every pooled resource of the process: the Host at shutdown, a test at its end. */
 export async function closeAllToolResources(): Promise<void> {
-  await Promise.all([...entries].map(([key, entry]) => closeEntry(key, entry)));
+  await Promise.all(
+    [...entries].map(([key, entry]) => closeEntry(key, entry)).concat([closeBuiltinServices()]),
+  );
 }
 
 /** What is pooled right now, by kind and scope; for tests and diagnostics. */

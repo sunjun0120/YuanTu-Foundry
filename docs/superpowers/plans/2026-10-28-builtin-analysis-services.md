@@ -12,11 +12,14 @@
 
 ## Global Constraints
 
-- 第一阶段不做登录、不带任何鉴权头；`ServiceRequester.headers()` 返回空对象，是第二阶段唯一的改动点。
+- 第一阶段不做登录、不带任何鉴权头；`ServiceRequester.headers()` 返回空对象。第二阶段在 `ServiceRequester` 注入令牌，并在 `AnalysisClient` 处理 401 重试（见设计文档第 9 节）。
 - 服务地址只接受 HTTPS；`localhost`、`127.0.0.1`、`[::1]` 允许 http；URL 不得含用户名、密码、query、hash；请求一律 `redirect: 'error'`，且不得离开服务的 origin。
 - 后端返回的工具描述、结果、报告一律是不可信数据。
 - 工具名必须匹配 `^[A-Za-z0-9_-]{1,64}$`（`load_tools` 与注册表的约束）。
+- **只写可擦除语法**：不得使用参数属性（`constructor(private readonly x: T)`）、`enum`、`namespace`；`tsconfig.json` 的 `erasableSyntaxOnly` 会拒绝，Node 的类型擦除也执行不了。字段一律显式声明，构造函数里赋值。
+- **后端工具 schema 必须用注册表同一个 Ajv 编译**（`packages/tools/registry.ts` 导出的 `compileToolSchema`）。注册表用 `strict: true`，自带 `format`、`nullable` 或未知关键字的后端 schema 会抛错；只能丢掉这个工具并记日志，绝不能把异常抛到 `createTools()`。
 - 测试不得修改 `process.env`，也不得写用户主目录：所有入口接收 `env` 参数，测试传入含 `YUANTU_STATE_DIR=<临时目录>` 的对象；测试服务只监听 `127.0.0.1` 的 0 端口。
+- 非产品入口（测试隔离、`scripts/docs-facts.mjs`、`benchmarks/*`）把 `YUANTU_BUILTIN_SERVICES` 设为 `0`：`createTools()` 在这些进程里不得读用户缓存或联网，否则 `npm run check` 的结果取决于运行者机器上的缓存。
 - 运行单个测试：`node scripts/run-tests.mjs tests/<file>.test.ts`。
 - 每个提交信息末尾加一行 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`。
 - 每个任务结束前运行 `npm run typecheck` 与 `npx eslint <改动的文件>`；涉及 README 或设置表时再运行 `npm run docs:check`。
@@ -28,12 +31,13 @@
 3. **报告下载是独立的写入工具 `analysis_download_report`**，而不是在只读分析工具里自动下载：只读工具保持无副作用，写入工作区单独审批。
 4. **任务记录存到工作区 `.yuantu/analysis-tasks.json`**，而不是会话日志：同样能在 Host 重启后找回，实现简单得多。
 5. **上传不报告进度**，只支持取消。
-6. **桌面端只处理源码包**（拖入、粘贴、选择附件时识别 `.zip`/`.tar.gz`/`.tgz`）；分析文件夹由用户在对话里给出工作区内的路径。
+6. **桌面端只处理源码包**（拖入、选择文件时按路径复制到 `analysis-inputs/`；粘贴的文件没有路径时按字节写入）；分析文件夹由用户在对话里给出**工作区内**的路径。设计文档第 5 节的「工作区外分析对象」整条删除：`analysis_upload_source` 仍走 `Workspace.resolve`，工作区外路径一律拒绝。
 7. **上传上限先用清单常量 200 MB**，后端提供声明方式后再改。
 8. **内置服务工具一律不并行**（`isConcurrencySafe` 不声明）：启动异步任务会改变本次运行的作业状态。
-9. **连接是进程级共享的一个**，不走会话资源池：服务是远程 HTTP、本地无会话状态，按会话开连接只是重复握手。Host 关闭时由 `closeAllToolResources` 一并关闭。
+9. **连接是进程级共享的一个**，不走会话资源池：服务是远程 HTTP、本地无会话状态，按会话开连接只是重复握手。Host 关闭时由 `closeAllToolResources` 一并关闭。一次调用失败不会急切关闭这个共享连接（见 Task 3 的 active 计数）。
 10. **不订阅 `notifications/tools/list_changed`**：工具列表在 Host 启动时、以及缓存超过 10 分钟时在后台刷新，下一次运行生效，效果与设计相同、实现更简单。
 11. **agent 本地不校验 GitHub URL**：后端工具是通用注册的，agent 无法可靠判断哪个参数是仓库地址。改为写进后端接口约定：导入工具必须只接受 `https://github.com/<owner>/<repo>`，拒绝其他主机（防止服务端请求伪造）。
+12. **不新增 Electron smoke 测试**：本期的桌面改动（preload、IPC、按路径复制）由主进程单测与渲染层用例覆盖；`npm run check` 不跑 `smoke:desktop`，所以 smoke 不是本期的门禁。将来若新增 smoke，必须登记 `package.json` 的 `smoke:desktop`。
 
 ---
 
@@ -45,16 +49,16 @@
 | `packages/builtin-services/service-request.ts` | `ServiceRequester`：唯一请求出口（同源、禁止重定向、请求头）            |
 | `packages/builtin-services/client.ts`          | `AnalysisClient`：MCP 连接、分页列工具、调用工具；进程级共享实例        |
 | `packages/builtin-services/tool-cache.ts`      | 工具列表缓存的读写                                                      |
-| `packages/builtin-services/schema.ts`          | 工具参数 schema 编译与错误描述                                          |
+| `packages/builtin-services/schema.ts`          | 工具参数 schema 编译（用注册表同一个 Ajv）与错误描述                    |
 | `packages/builtin-services/remote-tools.ts`    | 后端工具 → 原生工具；结果格式化；识别异步任务                           |
 | `packages/builtin-services/tasks.ts`           | `AnalysisTasks`：`analysis` 作业生产者与任务记录持久化                  |
 | `packages/builtin-services/upload.ts`          | `analysis_upload_source` 工具与目录打包                                 |
 | `packages/builtin-services/report.ts`          | `analysis_download_report` 工具                                         |
 | `packages/builtin-services/index.ts`           | 装配入口 `builtinServiceTools`、`warmToolCache`、`closeBuiltinServices` |
-| `apps/desktop/analysis-source.ts`              | 主进程把源码包写进 `analysis-inputs/`                                   |
+| `apps/desktop/analysis-source.ts`              | 主进程把源码包复制进 `analysis-inputs/`                                 |
 | `tests/analysis-service-fixture.ts`            | 假后端：MCP 端点、上传接口、报告下载                                    |
 
-修改：`packages/protocol/jobs.ts`、`packages/protocol/settings.ts`、`packages/mcp/tools.ts`、`packages/catalog/index.ts`、`packages/catalog/resource-pool.ts`、`packages/resources/builtin-skills.ts`、`apps/agent-host/main.ts`、`apps/desktop/main.ts`、`apps/desktop/main-attachment.ts`、`apps/desktop/preload.ts`、`apps/desktop/contract.ts`、`apps/desktop/attachment-contract.ts`、`apps/desktop/i18n-main-process.ts`、`apps/desktop/ui/composer/attachment-model.ts`、`apps/desktop/ui/composer/attachment-mount.tsx`、`scripts/check-layers.mjs`、`README.md`、设计文档。
+修改：`packages/protocol/jobs.ts`、`packages/protocol/settings.ts`、`packages/tools/registry.ts`、`packages/tools/jobs.ts`、`packages/mcp/tools.ts`、`packages/catalog/index.ts`、`packages/catalog/resource-pool.ts`、`packages/resources/builtin-skills.ts`、`apps/agent-host/main.ts`、`apps/desktop/main.ts`、`apps/desktop/main-attachment.ts`、`apps/desktop/preload.ts`、`apps/desktop/contract.ts`、`apps/desktop/attachment-contract.ts`、`apps/desktop/i18n-main-process.ts`、`apps/desktop/ui/composer/attachment-model.ts`、`apps/desktop/ui/composer/attachment-mount.tsx`、`scripts/check-layers.mjs`、`scripts/test-isolation/environment.mjs`、`scripts/docs-facts.mjs`、`benchmarks/run.mjs`、`benchmarks/retrieval.mjs`、`README.md`、设计文档。
 
 ---
 
@@ -63,16 +67,16 @@
 **Files:**
 
 - Create: `packages/builtin-services/manifest.ts`
-- Modify: `packages/protocol/settings.ts`（`ENVIRONMENT` 表）、`scripts/check-layers.mjs:27-39`、`apps/desktop/main.ts:379-388`（`hostEnvironment`）
+- Modify: `packages/protocol/settings.ts`（`ENVIRONMENT` 表）、`scripts/check-layers.mjs:27-39`、`apps/desktop/main.ts:379-388`（`hostEnvironment`）、`scripts/test-isolation/environment.mjs`、`scripts/docs-facts.mjs`、`benchmarks/run.mjs`、`benchmarks/retrieval.mjs`
 - Test: `tests/builtin-services-manifest.test.ts`
 
 **Interfaces:**
 
 - Produces:
-  - `interface BuiltinServiceManifest { id: string; baseUrl: string; mcpPath: string; uploadPath: string; toolPrefix: string; callTimeoutMs: number; maxTools: number; maxUploadBytes: number; maxResultBytes: number; maxReportBytes: number; taskTools: { status: string; result: string; cancel: string } }`
+  - `interface BuiltinServiceManifest { id: string; baseUrl: string; mcpPath: string; uploadPath: string; toolPrefix: string; callTimeoutMs: number; maxTools: number; maxUploadBytes: number; maxResultChars: number; maxReportBytes: number; maxSchemaBytes: number; taskTools: { status: string; result: string; cancel: string } }`
   - `const PRODUCTION_BASE_URL: string | undefined`
   - `function resolveBuiltinService(env?: NodeJS.ProcessEnv): BuiltinServiceManifest | undefined`（地址非法时抛错）
-  - 设置项 `YUANTU_BUILTIN_SERVICES_URL`（string）、`YUANTU_PACKAGED`（boolean）
+  - 设置项 `YUANTU_BUILTIN_SERVICES`（boolean，默认开启）、`YUANTU_BUILTIN_SERVICES_URL`（string）、`YUANTU_PACKAGED`（boolean）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -86,6 +90,22 @@ test('no configured address means no built-in service', () => {
   assert.equal(resolveBuiltinService({}), undefined);
 });
 
+test('the feature switch turns the service off even when an address is set', () => {
+  assert.equal(
+    resolveBuiltinService({
+      YUANTU_BUILTIN_SERVICES: '0',
+      YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:4100',
+    }),
+    undefined,
+  );
+  assert.ok(
+    resolveBuiltinService({
+      YUANTU_BUILTIN_SERVICES: '1',
+      YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:4100',
+    }),
+  );
+});
+
 test('a development override sets the base address and keeps the defaults', () => {
   const manifest = resolveBuiltinService({ YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:4100/' });
   assert.equal(manifest?.baseUrl, 'http://127.0.0.1:4100');
@@ -93,6 +113,7 @@ test('a development override sets the base address and keeps the defaults', () =
   assert.equal(manifest?.uploadPath, '/upload');
   assert.equal(manifest?.toolPrefix, 'scan');
   assert.equal(manifest?.callTimeoutMs, 300_000);
+  assert.equal(manifest?.maxSchemaBytes, 256 * 1024);
   assert.deepEqual(manifest?.taskTools, {
     status: 'task_status',
     result: 'task_result',
@@ -143,6 +164,11 @@ Expected: FAIL，提示找不到模块 `packages/builtin-services/manifest.ts`
 在 `packages/protocol/settings.ts` 的 `ENVIRONMENT` 表中、`YUANTU_SEARCH_BASE_URL` 之后加入：
 
 ```ts
+  /** The feature switch: off means no address, no cache read, no connection — the general agent only. */
+  YUANTU_BUILTIN_SERVICES: {
+    kind: 'boolean',
+    description: '是否启用内置代码分析服务（默认开启；测试隔离环境与非产品入口设 0）',
+  },
   /** Development address of the built-in analysis service; a packaged build ignores it. */
   YUANTU_BUILTIN_SERVICES_URL: { kind: 'string', description: '内置分析服务地址（仅开发构建）' },
   /** Set by the desktop for a packaged app, so development-only overrides stay off in an installed build. */
@@ -158,7 +184,8 @@ Expected: FAIL，提示找不到模块 `packages/builtin-services/manifest.ts`
  *
  * The manifest lives in code rather than in a workspace file: a repository being analysed must not be able to add,
  * replace or switch off the service it is analysed by. Only the address can change, and only in a development
- * build — an installed app reads `PRODUCTION_BASE_URL` and nothing else.
+ * build — an installed app reads `PRODUCTION_BASE_URL` and nothing else. `YUANTU_BUILTIN_SERVICES=0` is the
+ * operator's own off switch, not something a workspace file can set either.
  */
 import { parseSetting } from '../protocol/settings.ts';
 
@@ -173,8 +200,16 @@ export interface BuiltinServiceManifest {
   callTimeoutMs: number;
   maxTools: number;
   maxUploadBytes: number;
-  maxResultBytes: number;
+  maxResultChars: number;
   maxReportBytes: number;
+  /**
+   * Total bytes of backend tool schemas this build will register.
+   *
+   * The service is said to be a primary feature, so its tools stay in the catalog instead of a deferred group —
+   * which means one bad or oversized schema set is paid for by every request. The per-tool bound (64 KiB, from the
+   * MCP schema check) and this total are what keep that bounded.
+   */
+  maxSchemaBytes: number;
   /** Backend tools that answer for asynchronous tasks; reached through `job_*`, never registered as tools. */
   taskTools: { status: string; result: string; cancel: string };
 }
@@ -190,8 +225,9 @@ const DEFAULTS: Omit<BuiltinServiceManifest, 'baseUrl'> = {
   callTimeoutMs: 300_000,
   maxTools: 64,
   maxUploadBytes: 200 * 1024 * 1024,
-  maxResultBytes: 8 * 1024 * 1024,
+  maxResultChars: 8 * 1024 * 1024,
   maxReportBytes: 50 * 1024 * 1024,
+  maxSchemaBytes: 256 * 1024,
   taskTools: { status: 'task_status', result: 'task_result', cancel: 'task_cancel' },
 };
 
@@ -200,6 +236,9 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 export function resolveBuiltinService(
   env: NodeJS.ProcessEnv = process.env,
 ): BuiltinServiceManifest | undefined {
+  // The switch comes first: `0` must mean exactly "the general agent", with no cache read and no connection, so
+  // that non-product entry points (the test isolation, the docs facts, the benchmarks) stay hermetic.
+  if (parseSetting(env, 'YUANTU_BUILTIN_SERVICES') === false) return undefined;
   const packaged = parseSetting(env, 'YUANTU_PACKAGED') === true;
   const override = parseSetting(env, 'YUANTU_BUILTIN_SERVICES_URL') as string | undefined;
   const raw = (!packaged && override) || PRODUCTION_BASE_URL;
@@ -237,16 +276,24 @@ export function resolveBuiltinService(
     ...(app.isPackaged ? { YUANTU_PACKAGED: '1' } : {}),
 ```
 
-- [ ] **Step 7: 运行测试与检查**
+- [ ] **Step 7: 非产品入口关掉这个能力**
 
-Run: `node scripts/run-tests.mjs tests/builtin-services-manifest.test.ts`，Expected: 5 pass
-Run: `npm run typecheck && npm run layers:check && npm run docs:generate && npm run docs:check`
-Expected: 全部通过。`docs:generate` 会更新 README 的设置表；若 `docs:check` 报 README「配置」分组表缺少新键，在该分组表末尾加一行 `| 内置分析服务 | \`YUANTU_BUILTIN_SERVICES_URL\`、\`YUANTU_PACKAGED\` |` 后重跑。
+几处不经过产品装配的入口会调用 `createTools()`；一旦 `PRODUCTION_BASE_URL` 有值，它们就会读运行者的用户缓存、甚至联网，`npm run check` 的结果因此不可复现。分别加一行（都在 `createTools()` 调用之前）：
 
-- [ ] **Step 8: 提交**
+- `scripts/test-isolation/environment.mjs` 的 `Object.assign(env, { ... })` 里，与 `YUANTU_STATE_DIR` 并列加 `YUANTU_BUILTIN_SERVICES: '0'`，并加一句注释说明原因。
+- `scripts/docs-facts.mjs` 在 `facts()` 计算 `createTools` 之前设 `process.env.YUANTU_BUILTIN_SERVICES = '0'`（README 的「工具（空工作区，全部）」是基础目录的事实，不能随服务配置变化）。
+- `benchmarks/run.mjs` 与 `benchmarks/retrieval.mjs` 在导入后、调用 `createTools` 之前同样设置（基准测的是基础目录）。
+
+- [ ] **Step 8: 运行测试与检查**
+
+Run: `node scripts/run-tests.mjs tests/builtin-services-manifest.test.ts`，Expected: 6 pass
+Run: `npm run typecheck && npm run layers:check && npm run test:isolation:check && npm run docs:generate && npm run docs:check`
+Expected: 全部通过。`docs:generate` 会更新 README 的设置表；README「配置」分组表补一行 `| 内置分析服务 | \`YUANTU_BUILTIN_SERVICES\`、\`YUANTU_BUILTIN_SERVICES_URL\`、\`YUANTU_PACKAGED\` |`。
+
+- [ ] **Step 9: 提交**
 
 ```bash
-git add packages/builtin-services/manifest.ts packages/protocol/settings.ts scripts/check-layers.mjs apps/desktop/main.ts tests/builtin-services-manifest.test.ts README.md
+git add packages/builtin-services/manifest.ts packages/protocol/settings.ts scripts/check-layers.mjs apps/desktop/main.ts scripts/test-isolation/environment.mjs scripts/docs-facts.mjs benchmarks/run.mjs benchmarks/retrieval.mjs tests/builtin-services-manifest.test.ts README.md
 git commit -m "feat(builtin-services): add the built-in analysis service manifest"
 ```
 
@@ -333,9 +380,18 @@ export async function analysisServiceFixture(t: TestContext) {
             serverInfo: { name: 'analysis-fixture', version: '1' },
           };
         else if (body.method === 'tools/list') result = { tools: state.tools };
-        else if (body.method === 'tools/call')
-          result = await state.call(body.params.name, body.params.arguments ?? {});
-        else {
+        else if (body.method === 'tools/call') {
+          /**
+           * A failing call is part of what some tests ask for, not a broken fixture: answer 500 and keep this
+           * error out of `errors`, so a test can fail one call and assert the next one still works.
+           */
+          try {
+            result = await state.call(body.params.name, body.params.arguments ?? {});
+          } catch (error) {
+            json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+        } else {
           json(res, 200, {
             jsonrpc: '2.0',
             id: body.id,
@@ -448,14 +504,19 @@ Expected: FAIL，找不到 `service-request.ts`
 import type { BuiltinServiceManifest } from './manifest.ts';
 
 export class ServiceRequester {
+  readonly manifest: BuiltinServiceManifest;
   readonly origin: string;
-  constructor(readonly manifest: BuiltinServiceManifest) {
+  constructor(manifest: BuiltinServiceManifest) {
+    this.manifest = manifest;
     this.origin = new URL(manifest.baseUrl).origin;
   }
   url(pathname: string): string {
     return this.manifest.baseUrl + pathname;
   }
-  /** Headers every request carries. Phase one has none; phase two adds `Authorization` here and nowhere else. */
+  /**
+   * Headers every request carries. Phase one has none. Phase two injects `Authorization` here — which makes the
+   * method async, because the token is fetched over the carrier — and leaves the 401 refresh/retry to the client.
+   */
   headers(): Record<string, string> {
     return {};
   }
@@ -515,6 +576,8 @@ git commit -m "feat(builtin-services): route every service request through one r
 // tests/builtin-services-client.test.ts
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { resolveBuiltinService } from '../packages/builtin-services/manifest.ts';
 import { ServiceRequester } from '../packages/builtin-services/service-request.ts';
 import { AnalysisClient } from '../packages/builtin-services/client.ts';
@@ -570,6 +633,37 @@ test('the cache round-trips and is ignored for another address', async (t) => {
   })!;
   assert.equal(readToolCache(other, env), undefined);
 });
+
+test('a cache whose timestamp cannot be parsed is ignored rather than trusted forever', async (t) => {
+  const root = await tempRoot(t);
+  const env = { YUANTU_STATE_DIR: root, YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:4100' };
+  const manifest = resolveBuiltinService(env)!;
+  const file = path.join(root, 'builtin-services', `${manifest.id}.tools.json`);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify({ baseUrl: manifest.baseUrl, savedAt: 'yesterday', tools: [] }),
+  );
+  assert.equal(readToolCache(manifest, env), undefined);
+});
+
+test('a failed call never leaves the connection unusable for the next one', async (t) => {
+  const { baseUrl, state } = await analysisServiceFixture(t);
+  state.tools = [{ name: 'license_analyze', inputSchema: schema }];
+  const client = new AnalysisClient(
+    new ServiceRequester(resolveBuiltinService({ YUANTU_BUILTIN_SERVICES_URL: baseUrl })!),
+  );
+  t.after(() => client.close());
+  const signal = AbortSignal.timeout(10_000);
+  state.call = () => {
+    throw new Error('backend exploded');
+  };
+  await assert.rejects(client.callTool('license_analyze', {}, signal));
+  state.call = () => ({ content: [{ type: 'text', text: 'recovered' }] });
+  const result = await client.callTool('license_analyze', {}, signal);
+  assert.deepEqual(result.content, [{ type: 'text', text: 'recovered' }]);
+  assert.equal(state.methods.filter((method) => method === 'initialize').length, 2);
+});
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -585,7 +679,8 @@ Expected: FAIL，找不到 `client.ts`
  * One MCP connection to the built-in service, shared by every run in the process.
  *
  * The service is a remote HTTP endpoint with no per-session state on this side, so a session pool would only open
- * the same connection several times. A failed request drops the connection; the next call reconnects.
+ * the same connection several times. A dropped transport forgets itself and the next call reconnects; a call that
+ * merely failed does not take the connection away from the other runs sharing it.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -606,7 +701,19 @@ const MAX_PAGES = 16;
 
 export class AnalysisClient {
   private client?: Promise<Client>;
-  constructor(private readonly requester: ServiceRequester) {}
+  /**
+   * Calls in flight on the shared connection.
+   *
+   * The connection belongs to the process, not to a run, so a failure may only take it down while this call is the
+   * only one using it. The first version closed eagerly on every error, which turned one run's cancellation or call
+   * timeout into another run's connection reset; the count is what keeps a per-call failure from becoming a
+   * cross-run one.
+   */
+  private active = 0;
+  private readonly requester: ServiceRequester;
+  constructor(requester: ServiceRequester) {
+    this.requester = requester;
+  }
   private connect(signal: AbortSignal): Promise<Client> {
     if (this.client) return this.client;
     const pending = (async () => {
@@ -624,6 +731,11 @@ export class AnalysisClient {
         },
       );
       await client.connect(transport, { signal, timeout: HANDSHAKE_TIMEOUT_MS });
+      // A transport that drops is forgotten rather than reused, so the next call reconnects on its own. This is the
+      // one signal that really does mean "the connection is gone", and it needs no judgement about whose call failed.
+      client.onclose = () => {
+        if (this.client === pending) this.client = undefined;
+      };
       return client;
     })();
     this.client = pending;
@@ -633,11 +745,18 @@ export class AnalysisClient {
     return pending;
   }
   private async guard<T>(work: () => Promise<T>): Promise<T> {
+    this.active += 1;
+    let failed = false;
     try {
       return await work();
     } catch (error) {
-      await this.close();
+      failed = true;
       throw error;
+    } finally {
+      this.active -= 1;
+      // Only the last call out closes the door: while a sibling run is still waiting on this connection, closing it
+      // would fail that run's request for a failure that was never its own.
+      if (failed && this.active === 0) await this.close().catch(() => undefined);
     }
   }
   async listTools(signal: AbortSignal): Promise<RemoteTool[]> {
@@ -733,13 +852,17 @@ export function readToolCache(
 ): ToolCache | undefined {
   try {
     const parsed = JSON.parse(readFileSync(cacheFile(manifest, env), 'utf8'));
+    const savedAt = parsed?.savedAt;
+    // A timestamp that cannot be parsed makes "is this stale?" unanswerable, and `Date.parse(undefined-ish)` is
+    // `NaN`, whose comparison with the staleness bound is false — which would keep the bad cache current forever.
     if (
       parsed?.baseUrl !== manifest.baseUrl ||
-      typeof parsed.savedAt !== 'string' ||
+      typeof savedAt !== 'string' ||
+      !Number.isFinite(Date.parse(savedAt)) ||
       !Array.isArray(parsed.tools)
     )
       return undefined;
-    return { savedAt: parsed.savedAt, tools: parsed.tools };
+    return { savedAt, tools: parsed.tools };
   } catch {
     return undefined;
   }
@@ -759,7 +882,7 @@ export async function writeToolCache(
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `node scripts/run-tests.mjs tests/builtin-services-client.test.ts`，Expected: 2 pass
+Run: `node scripts/run-tests.mjs tests/builtin-services-client.test.ts`，Expected: 4 pass
 
 - [ ] **Step 6: 提交**
 
@@ -775,7 +898,7 @@ git commit -m "feat(builtin-services): connect to the analysis service and cache
 **Files:**
 
 - Create: `packages/builtin-services/schema.ts`、`packages/builtin-services/remote-tools.ts`
-- Modify: `packages/mcp/tools.ts`（给 `validateSchemaComplexity` 加 `export`）
+- Modify: `packages/mcp/tools.ts`（给 `validateSchemaComplexity` 加 `export`）、`packages/tools/registry.ts`（导出 `compileToolSchema`）
 - Test: `tests/builtin-services-tools.test.ts`
 
 **Interfaces:**
@@ -784,15 +907,30 @@ git commit -m "feat(builtin-services): connect to the analysis service and cache
 - Produces:
   - `function compileToolSchema(schema: Record<string, unknown>): ValidateFunction`
   - `function schemaErrors(validate: ValidateFunction): string`
-  - `function formatResult(result: CallToolResult, maxBytes: number): ToolResult`
+  - `function formatResult(result: CallToolResult, maxChars: number): ToolResult`（按字符切，不按字节）
   - `function taskStart(result: CallToolResult): { taskId: string } | undefined`
   - `interface TaskStarter { start(input: { scope: string; taskId: string; tool: string; label: string }): { id: string } }`
   - `interface RemoteToolDeps { manifest: BuiltinServiceManifest; client: Pick<AnalysisClient, 'callTool'>; scope: string; tasks?: TaskStarter }`
   - `function remoteTools(deps: RemoteToolDeps, catalog: RemoteTool[]): Tool[]`
 
-- [ ] **Step 1: 导出复杂度检查**
+- [ ] **Step 1: 导出两个编译入口**
 
 `packages/mcp/tools.ts` 中 `function validateSchemaComplexity(schema: unknown): void {` 改为 `export function validateSchemaComplexity(schema: unknown): void {`。
+
+`packages/tools/registry.ts` 在 `compileSchema` 之后加一个导出，让不在这里书写的 schema 也走同一个 Ajv：
+
+```ts
+/**
+ * The compiler every tool schema in this process goes through.
+ *
+ * Exported for tools whose schemas are not written here (the built-in analysis service). Compiling a remote schema
+ * with a second, more lenient Ajv would mean a schema that passes the pre-check and still throws from `register` —
+ * which takes the whole registry down, not one tool.
+ */
+export function compileToolSchema(schema: Tool['inputSchema']): ValidateFunction {
+  return compileSchema(schema);
+}
+```
 
 - [ ] **Step 2: 写失败测试**
 
@@ -849,6 +987,50 @@ test('the tool count stops at maxTools', () => {
       catalog,
     ).length,
     64,
+  );
+});
+
+test('a schema the registry would reject is skipped, not fatal', () => {
+  const tools = remoteTools(
+    { manifest, scope: 's', client: { callTool: async () => ({ content: [] }) } },
+    [
+      // `format` is unknown to the registry's strict Ajv even though a lenient one would compile it.
+      {
+        name: 'date_report',
+        inputSchema: {
+          type: 'object',
+          properties: { d: { type: 'string', format: 'date-time' } },
+        },
+      },
+      { name: 'license_analyze', inputSchema: objectSchema },
+    ],
+  );
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ['scan_license_analyze'],
+  );
+});
+
+test('the total schema budget stops the catalog before maxTools does', () => {
+  const wide = {
+    type: 'object',
+    properties: { note: { type: 'string', description: 'x'.repeat(6000) } },
+    additionalProperties: false,
+  };
+  const tools = remoteTools(
+    {
+      manifest: { ...manifest, maxSchemaBytes: 10_000 },
+      scope: 's',
+      client: { callTool: async () => ({ content: [] }) },
+    },
+    [
+      { name: 'one', inputSchema: wide },
+      { name: 'two', inputSchema: wide },
+    ],
+  );
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ['scan_one'],
   );
 });
 
@@ -968,19 +1150,23 @@ Expected: FAIL，找不到 `remote-tools.ts`
 
 ```ts
 // packages/builtin-services/schema.ts
-import { Ajv, type ValidateFunction } from 'ajv';
-import { Ajv2020 } from 'ajv/dist/2020.js';
+import type { ValidateFunction } from 'ajv';
 import { validateSchemaComplexity } from '../mcp/tools.ts';
+import { compileToolSchema as compileRegisteredSchema } from '../tools/registry.ts';
 
-/** Compiles a backend tool's argument schema with the same size and complexity bounds as a workspace MCP tool. */
+/**
+ * Compiles a backend tool's argument schema exactly as the registry will.
+ *
+ * Same Ajv, same strictness: a schema that fails here is one `registry.register` would throw on, and a throw there
+ * fails the whole run. So a tool whose schema does not compile is skipped by `remoteTools`, with a log line. The
+ * registry's Ajv is draft-07, so the backend contract says not to declare a 2020-12 `$schema` (it would fail here
+ * rather than at registration, which is the point).
+ */
 export function compileToolSchema(schema: Record<string, unknown>): ValidateFunction {
   validateSchemaComplexity(schema);
   if (schema.type !== 'object') throw new Error('Tool schema must describe an object');
   if (schema.$async) throw new Error('Asynchronous tool schema');
-  const ajv = String(schema.$schema ?? '').includes('2020-12')
-    ? new Ajv2020({ strict: false })
-    : new Ajv({ strict: false });
-  const validate = ajv.compile(schema);
+  const validate = compileRegisteredSchema(schema);
   if ('$async' in validate && validate.$async) throw new Error('Asynchronous tool schema');
   return validate;
 }
@@ -1023,7 +1209,16 @@ export interface RemoteToolDeps {
   tasks?: TaskStarter;
 }
 
-export function formatResult(result: CallToolResult, maxBytes: number): ToolResult {
+export function formatResult(result: CallToolResult, maxChars: number): ToolResult {
+  if (result.isError === true) {
+    process.stderr.write(
+      `[builtin-services] backend tool error: ${JSON.stringify(result.content)}\n`,
+    );
+    return {
+      isError: true,
+      content: 'The built-in analysis service could not complete the request.',
+    };
+  }
   const parts: string[] = [];
   for (const item of result.content ?? []) {
     if (item.type === 'text') parts.push(item.text);
@@ -1036,9 +1231,10 @@ export function formatResult(result: CallToolResult, maxBytes: number): ToolResu
   if (result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent));
   const content = parts.join('\n');
   const isError = result.isError === true;
-  // Cut here and say so: the registry then spills what was kept with a notice that does not promise the rest.
-  return content.length > maxBytes
-    ? { isError, content: content.slice(0, maxBytes), truncated: true }
+  // Cut here and say so: the registry then spills what was kept with a notice that does not promise the rest. The
+  // limit is characters, not bytes — the cut is a text cut, and a byte budget would spend it differently per script.
+  return content.length > maxChars
+    ? { isError, content: content.slice(0, maxChars), truncated: true }
     : { isError, content };
 }
 
@@ -1048,17 +1244,31 @@ export function taskStart(result: CallToolResult): { taskId: string } | undefine
 }
 
 function unavailable(error: unknown): ToolResult {
-  const message = (error instanceof Error ? error.message : String(error)).slice(0, 300);
+  // The backend's own words are data, not an answer to hand the model (design §6): log them and answer generically.
+  process.stderr.write(
+    `[builtin-services] call failed: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
   return {
     isError: true,
-    content: `The built-in analysis service is unavailable (${message}); try again later.`,
+    content: 'The built-in analysis service is unavailable; try again later.',
   };
+}
+
+/**
+ * A tool the backend offered but this build cannot register is a fact worth a log line, not a silent hole: the
+ * model must never be told a name it cannot call, and an operator asking "where is that tool?" needs the reason.
+ */
+function skipped(name: string, error: unknown): void {
+  process.stderr.write(
+    `[builtin-services] skipped tool ${name}: ${error instanceof Error ? error.message : String(error)}\n`,
+  );
 }
 
 export function remoteTools(deps: RemoteToolDeps, catalog: RemoteTool[]): Tool[] {
   const taskTools = new Set(Object.values(deps.manifest.taskTools));
   const seen = new Set<string>();
   const tools: Tool[] = [];
+  let schemaBytes = 0;
   for (const remote of catalog) {
     if (tools.length >= deps.manifest.maxTools) break;
     if (typeof remote?.name !== 'string' || taskTools.has(remote.name)) continue;
@@ -1067,9 +1277,20 @@ export function remoteTools(deps: RemoteToolDeps, catalog: RemoteTool[]): Tool[]
     let validate: ReturnType<typeof compileToolSchema>;
     try {
       validate = compileToolSchema(remote.inputSchema);
-    } catch {
+    } catch (error) {
+      skipped(name, error);
       continue;
     }
+    // The per-tool bound is 64 KiB; the total is what keeps an honest but large catalogue from filling every
+    // request's prompt. The backend's order decides which ones make it, so the same cache always gives the same set.
+    const size = Buffer.byteLength(JSON.stringify(remote.inputSchema), 'utf8');
+    if (schemaBytes + size > deps.manifest.maxSchemaBytes) {
+      process.stderr.write(
+        `[builtin-services] tool schemas reached the ${deps.manifest.maxSchemaBytes}-byte budget; the rest of the catalog is not registered\n`,
+      );
+      break;
+    }
+    schemaBytes += size;
     seen.add(name);
     const readOnly = remote.annotations?.readOnlyHint === true;
     tools.push({
@@ -1108,7 +1329,7 @@ export function remoteTools(deps: RemoteToolDeps, catalog: RemoteTool[]): Tool[]
             content: `Started analysis task ${task.taskId} as job ${job.id}. Follow it with job_output {"id":"${job.id}","wait_ms":...}; stop it with job_kill.`,
           };
         }
-        return formatResult(result, deps.manifest.maxResultBytes);
+        return formatResult(result, deps.manifest.maxResultChars);
       },
     });
   }
@@ -1116,15 +1337,17 @@ export function remoteTools(deps: RemoteToolDeps, catalog: RemoteTool[]): Tool[]
 }
 ```
 
+新增回归：后端正常返回 MCP `isError: true`，正文含敏感诊断时，模型侧只收到通用错误，原文仅进入日志；同步调用与异步结果均覆盖。
+
 - [ ] **Step 6: 运行测试确认通过**
 
 Run: `node scripts/run-tests.mjs tests/builtin-services-tools.test.ts tests/mcp.test.ts`
-Expected: 新文件 8 pass；`mcp.test.ts` 不受影响全部通过
+Expected: 新文件 10 pass；`mcp.test.ts` 不受影响全部通过
 
 - [ ] **Step 7: 提交**
 
 ```bash
-git add packages/builtin-services/schema.ts packages/builtin-services/remote-tools.ts packages/mcp/tools.ts tests/builtin-services-tools.test.ts
+git add packages/builtin-services/schema.ts packages/builtin-services/remote-tools.ts packages/mcp/tools.ts packages/tools/registry.ts tests/builtin-services-tools.test.ts
 git commit -m "feat(builtin-services): register backend analysis tools as native tools"
 ```
 
@@ -1135,7 +1358,7 @@ git commit -m "feat(builtin-services): register backend analysis tools as native
 **Files:**
 
 - Create: `packages/builtin-services/tasks.ts`
-- Modify: `packages/protocol/jobs.ts`（`JobKind`）
+- Modify: `packages/protocol/jobs.ts`（`JobKind`）、`packages/tools/jobs.ts`（三段工具描述）
 - Test: `tests/builtin-services-tasks.test.ts`
 
 **Interfaces:**
@@ -1143,12 +1366,16 @@ git commit -m "feat(builtin-services): register backend analysis tools as native
 - Consumes: `AnalysisClient.callTool`、`formatResult`（Task 4）、`TaskStarter`（Task 4）、`JobProducer`/`JobSnapshot`（`packages/protocol/jobs.ts`）、`atomicWriteFile`
 - Produces:
   - `JobKind` 增加 `'analysis'`
-  - `class AnalysisTasks implements TaskStarter { constructor(deps: { file: string; manifest: BuiltinServiceManifest; client: Pick<AnalysisClient, 'callTool'>; sleep?: (ms: number, signal?: AbortSignal) => Promise<void> }); start(...): { id: string }; jobProducer(): JobProducer; flush(): Promise<void> }`
+  - `const MAX_RECORD_OUTPUT = 1_000_000`（单条记录保留的字符上限）
+  - `interface AnalysisTasksDeps { file: string; manifest: BuiltinServiceManifest; client: Pick<AnalysisClient, 'callTool'>; sleep?: (ms: number, signal?: AbortSignal) => Promise<void> }`（模块内部类型，字段声明和构造参数共用）
+  - `class AnalysisTasks implements TaskStarter { constructor(deps: AnalysisTasksDeps); start(...): { id: string }; jobProducer(): JobProducer; flush(): Promise<void> }`（字段显式声明，不用参数属性）
   - `function sharedTasks(root: string, manifest: BuiltinServiceManifest, client: Pick<AnalysisClient, 'callTool'>): AnalysisTasks`
 
-- [ ] **Step 1: 扩展作业类型**
+- [ ] **Step 1: 扩展作业类型与描述**
 
 `packages/protocol/jobs.ts`：`export type JobKind = 'command' | 'subagent';` 改为 `export type JobKind = 'command' | 'subagent' | 'analysis';`。运行 `npm run typecheck`，若有对 `JobKind` 的穷举分支报错，为 `'analysis'` 补上与 `'command'` 相同的展示分支。
+
+`packages/tools/jobs.ts` 的三段描述都补上第三类作业，否则模型不知道分析任务也会出现在这里：`job_list` 的 “background commands and sub-agents”、`job_output` 的 “A command reports its output ring; a sub-agent reports its own transcript”、`job_kill` 的 “a command and its process tree, or what a sub-agent is doing”，各加一句 “and asynchronous analysis tasks (the analysis class)”。空列表那句同样补上。
 
 - [ ] **Step 2: 写失败测试**
 
@@ -1157,31 +1384,35 @@ git commit -m "feat(builtin-services): register backend analysis tools as native
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import type { AnalysisClient } from '../packages/builtin-services/client.ts';
 import { resolveBuiltinService } from '../packages/builtin-services/manifest.ts';
-import { AnalysisTasks } from '../packages/builtin-services/tasks.ts';
+import { AnalysisTasks, MAX_RECORD_OUTPUT } from '../packages/builtin-services/tasks.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 const manifest = resolveBuiltinService({ YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:4100' })!;
 const noSleep = async () => {};
 
-function backend(statuses: string[]) {
+/**
+ * A stand-in backend, typed as the producer sees its client.
+ *
+ * The annotation is load-bearing: without it the object literals below widen `type: 'text'` to `string`, and the
+ * mock stops being assignable to `Pick<AnalysisClient, 'callTool'>` (whose results are `CallToolResult`).
+ */
+function backend(statuses: string[], result = 'GPL-3.0: 2 packages') {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
-  return {
-    calls,
-    client: {
-      async callTool(name: string, args: Record<string, unknown>) {
-        calls.push({ name, args });
-        if (name === 'task_status')
-          return {
-            content: [],
-            structuredContent: { status: statuses.shift() ?? 'running', message: 'scanning' },
-          };
-        if (name === 'task_result')
-          return { content: [{ type: 'text', text: 'GPL-3.0: 2 packages' }] };
-        return { content: [{ type: 'text', text: 'cancelled' }] };
-      },
+  const client: Pick<AnalysisClient, 'callTool'> = {
+    async callTool(name, args) {
+      calls.push({ name, args });
+      if (name === 'task_status')
+        return {
+          content: [],
+          structuredContent: { status: statuses.shift() ?? 'running', message: 'scanning' },
+        };
+      if (name === 'task_result') return { content: [{ type: 'text', text: result }] };
+      return { content: [{ type: 'text', text: 'cancelled' }] };
     },
   };
+  return { calls, client };
 }
 
 test('a started task is listed and its result arrives through job_output', async (t) => {
@@ -1235,6 +1466,25 @@ test('waitMs 0 asks once and returns the running state', async (t) => {
   assert.equal(snapshot.status, 'running');
   assert.match(snapshot.output, /scanning/);
   assert.equal(calls.length, 1);
+});
+
+test('one task record keeps a bounded amount of output', async (t) => {
+  const root = await tempRoot(t);
+  const { client } = backend(['completed'], 'x'.repeat(MAX_RECORD_OUTPUT + 10));
+  const tasks = new AnalysisTasks({
+    file: path.join(root, 'tasks.json'),
+    manifest,
+    client,
+    sleep: noSleep,
+  });
+  const { id } = tasks.start({ scope: 's', taskId: 't-6', tool: 'vuln_scan', label: 'x' });
+  const snapshot = await tasks.jobProducer().output({ id, scope: 's', cursor: 0, waitMs: 0 });
+  assert.equal(snapshot.status, 'completed');
+  assert.equal(snapshot.truncated, true);
+  assert.ok(
+    snapshot.output.length <= MAX_RECORD_OUTPUT + 200,
+    'the record and the file it is rewritten into stay bounded',
+  );
 });
 
 test('job_kill cancels on the backend once, and is idempotent', async (t) => {
@@ -1335,25 +1585,42 @@ interface TaskRecord {
   createdAt: string;
   finishedAt?: string;
   output: string;
+  /** Set once this record's own output cap dropped something, and reported on every snapshot afterwards. */
+  truncated?: boolean;
+}
+
+interface AnalysisTasksDeps {
+  file: string;
+  manifest: BuiltinServiceManifest;
+  client: Pick<AnalysisClient, 'callTool'>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 const STATUSES = new Set(['queued', 'running', 'completed', 'failed', 'cancelled']);
 const SETTLED = new Set(['completed', 'failed', 'cancelled']);
 const MAX_RECORDS = 200;
 const KILL_TIMEOUT_MS = 30_000;
+/**
+ * How much output one task record keeps.
+ *
+ * A record is streamed back through `job_output` and the whole file is rewritten on every poll, so this bounds both
+ * what one result can cost the workspace file and how much a single poll has to serialise.
+ */
+export const MAX_RECORD_OUTPUT = 1_000_000;
+const TRUNCATION_NOTE = '\n[the rest of this task’s output was dropped]\n';
 
 export class AnalysisTasks implements TaskStarter {
   private records: TaskRecord[];
   private saving: Promise<void> = Promise.resolve();
+  /** The newest record set waiting to be written; the loop below always writes the latest one. */
+  private queued: Buffer | undefined;
+  private writing = false;
+  /** Per record, the poll already in flight, so two `job_output` calls do not ask the backend twice. */
+  private readonly polling = new Map<string, Promise<void>>();
+  private readonly deps: AnalysisTasksDeps;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
-  constructor(
-    private readonly deps: {
-      file: string;
-      manifest: BuiltinServiceManifest;
-      client: Pick<AnalysisClient, 'callTool'>;
-      sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-    },
-  ) {
+  constructor(deps: AnalysisTasksDeps) {
+    this.deps = deps;
     this.sleep = deps.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
     try {
       const parsed = JSON.parse(readFileSync(deps.file, 'utf8'));
@@ -1385,14 +1652,31 @@ export class AnalysisTasks implements TaskStarter {
   flush(): Promise<void> {
     return this.saving;
   }
+  /**
+   * Writes the newest record set, coalescing bursts.
+   *
+   * A task that reports progress every second used to serialise and rewrite the whole file on every poll. Here one
+   * write is in flight at a time and it always picks up the latest snapshot, so a burst costs one rewrite instead of
+   * one per poll, and `flush()` still waits for the newest one.
+   */
   private save(): void {
-    const body = Buffer.from(JSON.stringify(this.records));
-    this.saving = this.saving
-      .then(async () => {
-        await mkdir(path.dirname(this.deps.file), { recursive: true });
-        await atomicWriteFile(this.deps.file, body);
-      })
-      .catch(() => {});
+    this.queued = Buffer.from(JSON.stringify(this.records));
+    if (this.writing) return;
+    this.writing = true;
+    this.saving = (async () => {
+      try {
+        while (this.queued) {
+          const body = this.queued;
+          this.queued = undefined;
+          await mkdir(path.dirname(this.deps.file), { recursive: true });
+          await atomicWriteFile(this.deps.file, body);
+        }
+      } catch {
+        // A record that could not be written is not a failed task: the in-memory answer stays usable.
+      } finally {
+        this.writing = false;
+      }
+    })();
   }
   private find(id: string, scope: string): TaskRecord {
     const record = this.records.find((entry) => entry.id === id && entry.scope === scope);
@@ -1406,7 +1690,34 @@ export class AnalysisTasks implements TaskStarter {
       signal ?? AbortSignal.timeout(this.deps.manifest.callTimeoutMs),
     );
   }
-  private async refresh(record: TaskRecord, signal?: AbortSignal): Promise<void> {
+  /** Appends to one record without letting it grow past `MAX_RECORD_OUTPUT`; the cut is reported as `truncated`. */
+  private append(record: TaskRecord, text: string): void {
+    if (record.output.length >= MAX_RECORD_OUTPUT) {
+      record.truncated = true;
+      return;
+    }
+    record.output += text;
+    if (record.output.length > MAX_RECORD_OUTPUT) {
+      record.output = `${record.output.slice(0, MAX_RECORD_OUTPUT)}${TRUNCATION_NOTE}`;
+      record.truncated = true;
+    }
+  }
+  /**
+   * Polls once, or joins the poll already in flight for this record.
+   *
+   * `job_output` is registered as concurrency safe, so two sibling calls can name the same task. Without this both
+   * would send `task_status` (and then `task_result`) and append the same answer twice.
+   */
+  private refresh(record: TaskRecord, signal?: AbortSignal): Promise<void> {
+    const running = this.polling.get(record.id);
+    if (running) return running;
+    const work = this.poll(record, signal).finally(() => {
+      if (this.polling.get(record.id) === work) this.polling.delete(record.id);
+    });
+    this.polling.set(record.id, work);
+    return work;
+  }
+  private async poll(record: TaskRecord, signal?: AbortSignal): Promise<void> {
     const reply = await this.call(this.deps.manifest.taskTools.status, record, signal);
     const status = (reply.structuredContent ?? {}) as {
       status?: unknown;
@@ -1422,12 +1733,13 @@ export class AnalysisTasks implements TaskStarter {
     ]
       .filter(Boolean)
       .join(' ');
-    if (!record.output.endsWith(`${line}\n`)) record.output += `${line}\n`;
-    record.status = status.status;
+    if (!record.output.endsWith(`${line}\n`)) this.append(record, `${line}\n`);
     if (status.status === 'completed') {
       const result = await this.call(this.deps.manifest.taskTools.result, record, signal);
-      record.output += `${formatResult(result, this.deps.manifest.maxResultBytes).content}\n`;
+      if (result.isError) throw new Error('Analysis result is temporarily unavailable');
+      this.append(record, `${formatResult(result, this.deps.manifest.maxResultChars).content}\n`);
     }
+    record.status = status.status;
     if (SETTLED.has(record.status)) record.finishedAt = new Date().toISOString();
     this.save();
   }
@@ -1442,7 +1754,7 @@ export class AnalysisTasks implements TaskStarter {
       ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}),
       output: record.output.slice(cursor),
       nextCursor: record.output.length,
-      truncated: false,
+      truncated: record.truncated === true,
       detail: { taskId: record.taskId, tool: record.tool },
     };
   }
@@ -1477,7 +1789,7 @@ export class AnalysisTasks implements TaskStarter {
           );
           record.status = 'cancelled';
           record.finishedAt = new Date().toISOString();
-          record.output += 'cancelled\n';
+          this.append(record, 'cancelled\n');
           this.save();
         }
         return this.snapshot(record, 0);
@@ -1504,15 +1816,19 @@ export function sharedTasks(
 }
 ```
 
+**并发修正（上面的示例必须在实现时一并修改）：** 每条任务使用串行状态转换或版本令牌协调 `poll`、`kill` 和结果获取。取消成功后，任何先前启动的轮询或结果请求不得覆盖终态或追加过期结果；并发 `kill` 共享在途取消请求，后端返回 `isError` 或请求失败时不得标记已取消。结果获取失败时保留可重试状态，后续 `job_output` 必须重试结果，不能仅因后端状态为 completed 就跳过。调用方取消不得让其他调用的共享轮询意外失败；持久化终态与结果须一致。
+
+新增确定性回归：使用 entered/release barrier 控制轮询和取消的先后顺序，验证取消后旧轮询不能改回 running；并发取消只发送一次；取消失败保持可重试；结果第一次失败、第二次成功后能取得完整结果；重启后仍能取回结果。
+
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `node scripts/run-tests.mjs tests/builtin-services-tasks.test.ts`，Expected: 5 pass
+Run: `node scripts/run-tests.mjs tests/builtin-services-tasks.test.ts`，Expected: 6 pass
 Run: `npm run typecheck`，Expected: 通过
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add packages/builtin-services/tasks.ts packages/protocol/jobs.ts tests/builtin-services-tasks.test.ts
+git add packages/builtin-services/tasks.ts packages/protocol/jobs.ts packages/tools/jobs.ts tests/builtin-services-tasks.test.ts
 git commit -m "feat(builtin-services): follow asynchronous analysis tasks as jobs"
 ```
 
@@ -1558,6 +1874,8 @@ async function workspace(t: Parameters<typeof tempRoot>[0]) {
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, '.git'), { recursive: true });
   await mkdir(path.join(root, 'node_modules', 'x'), { recursive: true });
+  await mkdir(path.join(root, 'analysis-reports', 'p-1'), { recursive: true });
+  await mkdir(path.join(root, 'analysis-inputs'), { recursive: true });
   await writeFile(path.join(root, 'src', 'a.ts'), 'export const a = 1;\n');
   await writeFile(path.join(root, 'package.json'), '{}');
   await writeFile(path.join(root, '.env'), 'SECRET=1');
@@ -1565,10 +1883,12 @@ async function workspace(t: Parameters<typeof tempRoot>[0]) {
   await writeFile(path.join(root, '.git', 'HEAD'), 'ref');
   await writeFile(path.join(root, 'node_modules', 'x', 'index.js'), '');
   await writeFile(path.join(root, 'source.zip'), Buffer.from('PK\x03\x04fake'));
+  await writeFile(path.join(root, 'analysis-reports', 'p-1', 'old.pdf'), '%PDF');
+  await writeFile(path.join(root, 'analysis-inputs', 'old.zip'), Buffer.from('PK\x03\x04old'));
   return root;
 }
 
-test('a directory plan leaves out VCS, dependencies and credential files', async (t) => {
+test('a directory plan leaves out VCS, dependencies, credentials and earlier analysis files', async (t) => {
   const root = await workspace(t);
   const plan = await planDirectory(root, 1024 * 1024, new AbortController().signal);
   assert.deepEqual(plan.files.map((file) => file.relative.split(path.sep).join('/')).sort(), [
@@ -1576,7 +1896,7 @@ test('a directory plan leaves out VCS, dependencies and credential files', async
     'source.zip',
     'src/a.ts',
   ]);
-  assert.equal(plan.skipped, 4);
+  assert.equal(plan.skipped, 6);
   await assert.rejects(planDirectory(root, 10, new AbortController().signal), /upload limit/);
 });
 
@@ -1631,6 +1951,13 @@ test('other files, credential paths and bad replies are refused', async (t) => {
   const result = await (await tool.prepare!({ path: 'source.zip' }, ctx())).execute(ctx());
   assert.equal(result.isError, true);
   assert.match(result.content, /project_id/);
+  state.uploadReply = { status: 200, body: { project_id: '../escape' } };
+  const escaping = await (await tool.prepare!({ path: 'source.zip' }, ctx())).execute(ctx());
+  assert.equal(escaping.isError, true);
+  state.uploadReply = { status: 500, body: { message: 'backend exploded: secret detail' } };
+  const failed = await (await tool.prepare!({ path: 'source.zip' }, ctx())).execute(ctx());
+  assert.equal(failed.isError, true);
+  assert.doesNotMatch(failed.content, /secret detail/);
 });
 ```
 
@@ -1641,172 +1968,11 @@ Expected: FAIL，找不到 `upload.ts`
 
 - [ ] **Step 3: 实现**
 
-```ts
-// packages/builtin-services/upload.ts
-/**
- * `analysis_upload_source`: the one place code leaves this machine.
- *
- * An archive is sent as it is. A directory is zipped first, leaving out version control, dependency folders, the
- * internal `.yuantu` directory and every credential file name the file tools protect; the approval says how many
- * files and bytes go out and how many were left behind.
- */
-import { openAsBlob } from 'node:fs';
-import { lstat, readdir, readFile } from 'node:fs/promises';
-import path from 'node:path';
-import JSZip from 'jszip';
-import type { PreparedTool, Tool, ToolContext, ToolResult } from '../protocol/index.ts';
-import { isCredentialFileName } from '../platform/credential-paths.ts';
-import { Workspace } from '../tools/files.ts';
-import type { ServiceRequester } from './service-request.ts';
+**实现要求（此任务必须先完成下列边界，再运行测试）：**
 
-const ARCHIVE = /\.(zip|tar\.gz|tgz)$/i;
-const PROJECT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-const SKIPPED_DIRECTORIES = new Set([
-  '.git',
-  '.hg',
-  '.svn',
-  'node_modules',
-  '.yuantu',
-  '.venv',
-  '__pycache__',
-]);
-const MAX_FILES = 100_000;
+实现 `uploadSourceTool`、`planDirectory` 与打包逻辑，保持本任务的接口、排除规则、审批描述和 multipart 协议。审批之前生成文件清单；审批之后重新验证每个路径的所有祖先与文件身份，拒绝链接、junction 和变更的文件，且读取时保证验证与读取之间不能通过替换路径越界。不能只在 `lstat` 后直接按路径 `readFile`：这仍有竞态。归档文件也必须在执行时验证身份和实际大小；目录打包必须限制实际读取总量与压缩包大小。若平台不能提供可靠的句柄级约束，则拒绝该上传，不得退回不安全路径读取。
 
-export interface PackPlan {
-  files: { relative: string; absolute: string; size: number }[];
-  bytes: number;
-  skipped: number;
-}
-
-const excluded = (name: string): boolean => isCredentialFileName(name) || /^\.env/i.test(name);
-
-export async function planDirectory(
-  dir: string,
-  maxBytes: number,
-  signal: AbortSignal,
-): Promise<PackPlan> {
-  const plan: PackPlan = { files: [], bytes: 0, skipped: 0 };
-  const walk = async (current: string): Promise<void> => {
-    signal.throwIfAborted();
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      const absolute = path.join(current, entry.name);
-      if (entry.isSymbolicLink()) {
-        plan.skipped++;
-      } else if (entry.isDirectory()) {
-        if (SKIPPED_DIRECTORIES.has(entry.name)) plan.skipped++;
-        else await walk(absolute);
-      } else if (entry.isFile()) {
-        if (excluded(entry.name)) {
-          plan.skipped++;
-          continue;
-        }
-        const { size } = await lstat(absolute);
-        plan.bytes += size;
-        if (plan.bytes > maxBytes)
-          throw new Error(
-            `Directory is larger than the ${Math.floor(maxBytes / 1048576)} MB upload limit`,
-          );
-        plan.files.push({ relative: path.relative(dir, absolute), absolute, size });
-        if (plan.files.length > MAX_FILES)
-          throw new Error(`Directory has more than ${MAX_FILES} files`);
-      }
-    }
-  };
-  await walk(dir);
-  return plan;
-}
-
-async function packDirectory(plan: PackPlan, signal: AbortSignal): Promise<Buffer> {
-  const zip = new JSZip();
-  for (const file of plan.files) {
-    signal.throwIfAborted();
-    zip.file(file.relative.split(path.sep).join('/'), await readFile(file.absolute));
-  }
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-}
-
-export function uploadSourceTool(deps: { root: string; requester: ServiceRequester }): Tool {
-  const { manifest } = deps.requester;
-  const limitMb = Math.floor(manifest.maxUploadBytes / 1048576);
-  const send = async (blob: Blob, filename: string, ctx: ToolContext): Promise<ToolResult> => {
-    const form = new FormData();
-    form.append('file', blob, filename);
-    const response = await deps.requester.fetch(deps.requester.url(manifest.uploadPath), {
-      method: 'POST',
-      body: form,
-      signal: ctx.signal,
-    });
-    const text = await response.text();
-    if (!response.ok)
-      return {
-        isError: true,
-        content: `Upload failed with HTTP ${response.status}: ${text.slice(0, 300)}`,
-      };
-    let projectId: unknown;
-    try {
-      projectId = JSON.parse(text).project_id;
-    } catch {
-      projectId = undefined;
-    }
-    if (typeof projectId !== 'string' || !PROJECT_ID.test(projectId))
-      return { isError: true, content: 'The upload reply did not contain a valid project_id' };
-    return {
-      isError: false,
-      content: JSON.stringify({ project_id: projectId, filename, bytes: blob.size }),
-    };
-  };
-  const prepare = async (
-    args: Record<string, unknown>,
-    ctx: ToolContext,
-  ): Promise<PreparedTool> => {
-    const requested = String(args.path);
-    const absolute = await new Workspace(deps.root).resolve(requested);
-    const info = await lstat(absolute);
-    if (info.isFile()) {
-      if (!ARCHIVE.test(absolute))
-        throw new Error('Only .zip, .tar.gz and .tgz archives or directories can be uploaded');
-      if (info.size > manifest.maxUploadBytes)
-        throw new Error(`Archive is larger than the ${limitMb} MB upload limit`);
-      return {
-        approvalDescription: `Uploads ${requested} (${info.size} bytes) to ${manifest.baseUrl}`,
-        execute: async (run) => send(await openAsBlob(absolute), path.basename(absolute), run),
-      };
-    }
-    if (!info.isDirectory())
-      throw new Error('Only .zip, .tar.gz and .tgz archives or directories can be uploaded');
-    const plan = await planDirectory(absolute, manifest.maxUploadBytes, ctx.signal);
-    const name = `${path.basename(absolute) || 'workspace'}.zip`;
-    return {
-      approvalDescription: `Zips ${plan.files.length} files (${plan.bytes} bytes) from ${requested} and uploads them to ${manifest.baseUrl}; ${plan.skipped} version-control, dependency, link or credential entries are left out`,
-      execute: async (run) => {
-        const zip = await packDirectory(plan, run.signal);
-        if (zip.length > manifest.maxUploadBytes)
-          return {
-            isError: true,
-            content: `Packed archive is larger than the ${limitMb} MB upload limit`,
-          };
-        return send(new Blob([new Uint8Array(zip)]), name, run);
-      },
-    };
-  };
-  return {
-    name: 'analysis_upload_source',
-    description:
-      'Upload a source archive (.zip, .tar.gz, .tgz) or a directory inside the workspace to the built-in code analysis service, and get the project_id the analysis tools take. A directory is zipped first without version control, dependency folders, .yuantu or credential files. A GitHub repository needs no upload: give its URL to the service import tool instead.',
-    permission: 'external',
-    inputSchema: {
-      type: 'object',
-      properties: { path: { type: 'string', minLength: 1, maxLength: 1024 } },
-      required: ['path'],
-      additionalProperties: false,
-    },
-    prepare,
-    async execute(args, ctx) {
-      return (await prepare(args, ctx)).execute(ctx);
-    },
-  };
-}
-```
+新增回归：审批后将子目录替换成指向工作区外的 junction、替换归档或扩大文件，验证不发送任何工作区外内容且不突破大小上限；覆盖审批后并发替换与取消。Windows junction 用例须在具备创建权限的环境执行，跳过不能算通过。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -1851,6 +2017,8 @@ import { tempRoot } from './temp-fixture.ts';
 const ctx = (): ToolContext => ({
   signal: new AbortController().signal,
   approve: async () => true,
+  /** The stub is what proves the returned change carries its journal id, which is what undo is keyed by. */
+  fileJournal: { prepare: () => 'journal-1', applied: () => {} },
 });
 
 async function setup(t: Parameters<typeof tempRoot>[0]) {
@@ -1877,6 +2045,7 @@ test('a linked report is saved under analysis-reports and recorded as a new file
   assert.equal(prepared.change?.kind, 'create');
   const result = await prepared.execute(ctx());
   assert.equal(result.isError, false);
+  assert.equal(result.change?.id, 'journal-1');
   assert.deepEqual(JSON.parse(result.content), {
     path: 'analysis-reports/p-1/summary.pdf',
     bytes: 13,
@@ -1929,163 +2098,11 @@ Expected: FAIL，找不到 `report.ts`
 
 - [ ] **Step 3: 实现**
 
-```ts
-// packages/builtin-services/report.ts
-/**
- * `analysis_download_report`: saves a report or SBOM the service linked into the workspace.
- *
- * Only a link on the service's own origin is fetched, only document and SBOM types are kept, the file name has to
- * agree with the type, and an existing file is never replaced. The write goes through the file journal like any
- * other new file, so the change list shows it and undo can remove it.
- */
-import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import type { FileChange, PreparedTool, Tool, ToolContext } from '../protocol/index.ts';
-import { Workspace } from '../tools/files.ts';
-import type { ServiceRequester } from './service-request.ts';
+**实现要求（此任务必须先完成下列边界，再运行测试）：**
 
-const PROJECT_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-const TYPES: Record<string, string> = {
-  'application/pdf': '.pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-  'text/html': '.html',
-  'application/json': '.json',
-  'application/vnd.cyclonedx+json': '.json',
-  'application/spdx+json': '.json',
-  'application/xml': '.xml',
-  'text/xml': '.xml',
-  'application/vnd.cyclonedx+xml': '.xml',
-};
+实现 `downloadReportTool`，保持同源、禁止重定向、类型/扩展名、大小上限、独占创建和文件日志要求。任何 `mkdir` 或文件写入之前，先验证目标的完整祖先链；对不存在的目录，从已验证的工作区根逐层安全创建，并在创建和打开期间防止目录被替换为链接或 junction。不能先用普通递归 `mkdir` 再调用 `Workspace.resolve`；无法保证边界时拒绝写入。文件创建失败不得留下已应用的 journal 记录。
 
-function fileName(url: URL): string {
-  let base = path.posix.basename(url.pathname);
-  try {
-    base = decodeURIComponent(base);
-  } catch {
-    // An undecodable name is sanitised as it is.
-  }
-  const safe = base
-    .replace(/[^A-Za-z0-9._-]/g, '_')
-    .replace(/^\.+/, '')
-    .slice(0, 100);
-  return safe || 'report';
-}
-
-async function readCapped(response: Response, max: number): Promise<Buffer> {
-  const tooLarge = () => new Error(`Report is larger than ${Math.floor(max / 1048576)} MB`);
-  if (Number(response.headers.get('content-length') ?? '0') > max) throw tooLarge();
-  const reader = response.body?.getReader();
-  if (!reader) return Buffer.alloc(0);
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.length;
-    if (total > max) {
-      await reader.cancel();
-      throw tooLarge();
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks);
-}
-
-export function downloadReportTool(deps: { root: string; requester: ServiceRequester }): Tool {
-  const prepare = async (args: Record<string, unknown>): Promise<PreparedTool> => {
-    const raw = String(args.url);
-    if (!deps.requester.sameOrigin(raw))
-      throw new Error('Only reports on the built-in analysis service address can be downloaded');
-    const projectId = String(args.project_id);
-    if (!PROJECT_ID.test(projectId) || projectId.includes('..'))
-      throw new Error('Invalid project_id');
-    const name = fileName(new URL(raw));
-    const relative = `analysis-reports/${projectId}/${name}`;
-    const change: FileChange = {
-      path: relative,
-      kind: 'create',
-      patch: `+ report downloaded from ${deps.requester.manifest.baseUrl}`,
-      added: 1,
-      removed: 0,
-      truncated: false,
-    };
-    return {
-      change,
-      approvalDescription: `Downloads ${raw} into ${relative}`,
-      async execute(ctx: ToolContext) {
-        const response = await deps.requester.fetch(raw, { signal: ctx.signal });
-        if (!response.ok)
-          return { isError: true, content: `Report download failed with HTTP ${response.status}` };
-        const type = (response.headers.get('content-type') ?? '')
-          .split(';')[0]!
-          .trim()
-          .toLowerCase();
-        const extension = TYPES[type];
-        if (!extension)
-          return { isError: true, content: `Report type ${type || 'unknown'} is not accepted` };
-        if (!name.toLowerCase().endsWith(extension))
-          return {
-            isError: true,
-            content: `Report type ${type} does not match the file name ${name}`,
-          };
-        let bytes: Buffer;
-        try {
-          bytes = await readCapped(response, deps.requester.manifest.maxReportBytes);
-        } catch (error) {
-          return { isError: true, content: error instanceof Error ? error.message : String(error) };
-        }
-        // `relative` is built from a checked project id and a sanitised name, so its directory is safe to create
-        // before the workspace check resolves the file itself.
-        await mkdir(path.join(deps.root, 'analysis-reports', projectId), { recursive: true });
-        const absolute = await new Workspace(deps.root).resolve(relative, true);
-        // Refused before the journal hears of it; the exclusive write below still guards a race.
-        if (existsSync(absolute))
-          return {
-            isError: true,
-            content: `${relative} already exists; rename or delete it first`,
-          };
-        const journalId = ctx.fileJournal?.prepare(change, null, bytes);
-        try {
-          await writeFile(absolute, bytes, { flag: 'wx' });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'EEXIST')
-            return {
-              isError: true,
-              content: `${relative} already exists; rename or delete it first`,
-            };
-          throw error;
-        }
-        if (journalId) ctx.fileJournal!.applied(journalId);
-        return {
-          isError: false,
-          change,
-          content: JSON.stringify({ path: relative, bytes: bytes.length, type }),
-        };
-      },
-    };
-  };
-  return {
-    name: 'analysis_download_report',
-    description:
-      "Save a report or SBOM file that the built-in analysis service linked in a result into analysis-reports/<project_id>/ in the workspace, then hand it over with present. Only links on the service's own address are accepted.",
-    permission: 'write',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', minLength: 1, maxLength: 2048 },
-        project_id: { type: 'string', minLength: 1, maxLength: 128 },
-      },
-      required: ['url', 'project_id'],
-      additionalProperties: false,
-    },
-    prepare: (args) => prepare(args),
-    async execute(args, ctx) {
-      return (await prepare(args)).execute(ctx);
-    },
-  };
-}
-```
+新增回归：`analysis-reports` 或项目目录是指向工作区外的 junction 时拒绝，且外部不创建目录或文件；覆盖检查后目录被替换、并发创建、取消、已有文件与 journal 状态。Windows junction 用例须在具备创建权限的环境执行，跳过不能算通过。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -2167,6 +2184,28 @@ test('a warmed cache registers the backend tools next to upload and download', a
     'scan_license_analyze',
   ]);
   assert.deepEqual(jobs.list('s'), [], 'the analysis job producer is registered and empty');
+});
+
+test('a backend schema the registry would reject does not break the catalog', async (t) => {
+  const root = await tempRoot(t);
+  const { baseUrl, state } = await analysisServiceFixture(t);
+  t.after(() => closeBuiltinServices());
+  state.tools = [
+    // `format` is rejected by the registry's strict Ajv (the tool is skipped with a log line).
+    {
+      name: 'date_report',
+      inputSchema: { type: 'object', properties: { d: { type: 'string', format: 'date-time' } } },
+    },
+    { name: 'license_analyze', inputSchema: schema, annotations: { readOnlyHint: true } },
+  ];
+  const env = { YUANTU_STATE_DIR: root, YUANTU_BUILTIN_SERVICES_URL: baseUrl };
+  await warmToolCache(env);
+  const names = builtinServiceTools(root, 's', new JobRegistry(), env).map((tool) => tool.name);
+  assert.deepEqual(names.sort(), [
+    'analysis_download_report',
+    'analysis_upload_source',
+    'scan_license_analyze',
+  ]);
 });
 
 test('warming an unreachable service does not throw', async (t) => {
@@ -2259,6 +2298,9 @@ export function builtinServiceTools(
   if (!manifest) return [];
   const { requester, client } = sharedService(manifest);
   const tasks = sharedTasks(root, manifest, client);
+  // One producer per registry: `JobRegistry` refuses a second `analysis` producer, and a registry is built once per
+  // run (`createTools`), so this can be a plain register. A cache miss means this run has only upload and download;
+  // the background warm below is what gives the *next* run the backend's tools.
   jobs.register(tasks.jobProducer());
   const cache = readToolCache(manifest, env);
   if (!cache || Date.now() - Date.parse(cache.savedAt) > STALE_MS) void warmToolCache(env);
@@ -2307,7 +2349,8 @@ export async function closeAllToolResources(): Promise<void> {
 `apps/agent-host/main.ts` 导入 `import { warmToolCache } from '../../packages/builtin-services/index.ts';`，在 `runHost` 的 `ctx.loopHealth.start();` 之后加：
 
 ```ts
-// The first run should already see the analysis tools; a refresh that fails only leaves the cache as it was.
+// Warm the tool list now; a Host that starts with no cache gives its first run upload and download only, and the
+// run after it the backend's tools. A refresh that fails only leaves the cache as it was.
 void warmToolCache();
 ```
 
@@ -2323,10 +2366,13 @@ description: 用内置代码分析服务分析源码包或 GitHub 仓库，并�
 
 # 代码分析报告
 
+## 前提
+- 只有在工具列表里能看到 \`analysis_upload_source\`（或后端的导入工具）时才使用本技能。看不到就告诉用户「本构建未启用内置代码分析服务」，不要假装分析过，也不要凭记忆写结论。
+
 ## 流程
 1. 获取 project_id：本地源码包或工作区目录用 analysis_upload_source；GitHub 仓库把 URL 交给服务的导入工具。
 2. 按用户关心的方面调用 scan_* 工具（许可证、漏洞、可维护性、SBOM 等）。返回 job id 的是异步任务，用 job_output 带 wait_ms 等待结果，不要自己反复调用分析工具。
-3. 结果里有报告链接时，用 analysis_download_report 保存，再用 present 交付后端的标准报告。
+3. 结果里有报告链接时，用 analysis_download_report 保存，再用 present 交付后端的标准报告；工具列表里没有 analysis_download_report 时，把链接直接告诉用户。
 4. 用户要求定制报告时，按 office-documents 技能用 office_create 写 Word 报告。
 
 ## 报告规则
@@ -2349,7 +2395,7 @@ const BUILTIN: Record<string, string> = {
 - [ ] **Step 8: 运行测试确认通过**
 
 Run: `node scripts/run-tests.mjs tests/builtin-services-catalog.test.ts tests/mcp.test.ts tests/host-carrier.test.ts`
-Expected: 新文件 4 pass，其余全部通过
+Expected: 新文件 5 pass，其余全部通过
 Run: `npm run typecheck && npm run layers:check && npm run cycles:check`，Expected: 通过
 
 - [ ] **Step 9: 提交**
@@ -2366,15 +2412,15 @@ git commit -m "feat(builtin-services): offer the analysis service in every tool 
 **Files:**
 
 - Create: `apps/desktop/analysis-source.ts`
-- Modify: `apps/desktop/attachment-contract.ts`、`apps/desktop/i18n-main-process.ts`、`apps/desktop/main-attachment.ts`、`apps/desktop/main.ts:864`、`apps/desktop/preload.ts:95`、`apps/desktop/contract.ts:95`、`apps/desktop/ui/composer/attachment-model.ts`、`apps/desktop/ui/composer/attachment-mount.tsx`
+- Modify: `apps/desktop/attachment-contract.ts`、`apps/desktop/i18n-main-process.ts`、`apps/desktop/main-attachment.ts`、`apps/desktop/preload.ts:95`、`apps/desktop/contract.ts:95`、`apps/desktop/ui/composer/attachment-model.ts`、`apps/desktop/ui/composer/attachment-mount.tsx`
 - Test: `tests/analysis-source.test.ts`、`tests/desktop-react-attachments.test.ts`（追加用例）
 
 **Interfaces:**
 
 - Produces:
   - `attachment-contract.ts`：`const SOURCE_ARCHIVE: RegExp`、`const MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024`、`function sourceArchiveNote(path: string, size: number): string`、`type SourceArchiveReply = { ok: true; file: { path: string; size: number } } | { ok: false; error: string }`
-  - `analysis-source.ts`：`function stageSourceArchive(workspace: string, name: string, data: Uint8Array): Promise<{ path: string; size: number }>`
-  - 预加载 API `window.yuantu.stageSourceArchive(input: { workspace: string; name: string; data: Uint8Array }): Promise<SourceArchiveReply>`
+  - `analysis-source.ts`：`function stageSourceArchive(workspace: string, name: string, source: { path: string } | { data: Uint8Array }): Promise<{ path: string; size: number }>`（有路径就 `copyFile`，没有路径才写字节）
+  - 预加载 API `window.yuantu.sourceArchivePath(file: File): string`（`webUtils.getPathForFile`）与 `window.yuantu.stageSourceArchive(input: { workspace: string; name: string; path?: string; data?: Uint8Array }): Promise<SourceArchiveReply>`
   - 附件控制器依赖新增可选项 `stageSource?(file: File, workspace: string): Promise<{ path: string; size: number }>`
   - 文案键 `analysis.sourceInvalid`、`analysis.sourceTooLarge`、`attach.rendererSourceBytes`
 
@@ -2384,36 +2430,61 @@ git commit -m "feat(builtin-services): offer the analysis service in every tool 
 // tests/analysis-source.test.ts
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, readFile, symlink } from 'node:fs/promises';
+import { readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { stageSourceArchive } from '../apps/desktop/analysis-source.ts';
 import { tempRoot } from './temp-fixture.ts';
 
-test('an archive is written under analysis-inputs without replacing an earlier one', async (t) => {
+/** A file the way the renderer's drag-and-drop hands one over: a real path outside the workspace. */
+async function sourceFile(t: Parameters<typeof tempRoot>[0], name: string): Promise<string> {
+  const directory = await tempRoot(t);
+  const file = path.join(directory, name);
+  await writeFile(file, 'one');
+  return file;
+}
+
+test('a dropped archive is copied under analysis-inputs without replacing an earlier one', async (t) => {
   const root = await tempRoot(t);
-  const first = await stageSourceArchive(root, 'app.tar.gz', Buffer.from('one'));
-  const second = await stageSourceArchive(root, 'app.tar.gz', Buffer.from('two'));
+  const source = await sourceFile(t, 'app.tar.gz');
+  const first = await stageSourceArchive(root, 'app.tar.gz', { path: source });
+  await writeFile(source, 'two');
+  const second = await stageSourceArchive(root, 'app.tar.gz', { path: source });
   assert.deepEqual(first, { path: 'analysis-inputs/app.tar.gz', size: 3 });
   assert.deepEqual(second, { path: 'analysis-inputs/app-1.tar.gz', size: 3 });
   assert.equal(await readFile(path.join(root, 'analysis-inputs', 'app.tar.gz'), 'utf8'), 'one');
 });
 
+test('a pasted archive with no path is written from its bytes', async (t) => {
+  const root = await tempRoot(t);
+  const staged = await stageSourceArchive(root, 'app.zip', { data: Buffer.from('PK') });
+  assert.deepEqual(staged, { path: 'analysis-inputs/app.zip', size: 2 });
+  assert.equal(await readFile(path.join(root, 'analysis-inputs', 'app.zip'), 'utf8'), 'PK');
+});
+
 test('names that are not archives, carry a path or are empty are refused', async (t) => {
   const root = await tempRoot(t);
   for (const name of ['notes.txt', '../app.zip', 'dir/app.zip', 'a:b.zip'])
-    await assert.rejects(stageSourceArchive(root, name, Buffer.from('x')));
-  await assert.rejects(stageSourceArchive(root, 'app.zip', new Uint8Array()));
+    await assert.rejects(stageSourceArchive(root, name, { data: Buffer.from('x') }));
+  await assert.rejects(stageSourceArchive(root, 'app.zip', { data: new Uint8Array() }));
+  await assert.rejects(
+    stageSourceArchive(root, 'app.zip', { path: path.join(await tempRoot(t), 'missing.zip') }),
+  );
 });
 
 test(
-  'a linked analysis-inputs directory is refused',
-  { skip: process.platform === 'win32' },
+  'a linked source file or a linked analysis-inputs directory is refused',
+  { skip: process.platform === 'win32' ? 'symlink creation needs privileges on Windows' : false },
   async (t) => {
     const root = await tempRoot(t);
     const outside = await tempRoot(t);
-    await mkdir(outside, { recursive: true });
-    await symlink(outside, path.join(root, 'analysis-inputs'));
-    await assert.rejects(stageSourceArchive(root, 'app.zip', Buffer.from('x')));
+    const linkedInputs = await tempRoot(t);
+    const real = path.join(outside, 'real.zip');
+    await writeFile(real, 'x');
+    const link = path.join(outside, 'link.zip');
+    await symlink(real, link);
+    await assert.rejects(stageSourceArchive(root, 'link.zip', { path: link }));
+    await symlink(outside, path.join(linkedInputs, 'analysis-inputs'));
+    await assert.rejects(stageSourceArchive(linkedInputs, 'app.zip', { path: real }));
   },
 );
 ```
@@ -2507,90 +2578,67 @@ export function sourceArchiveNote(path: string, size: number): string {
 
 - [ ] **Step 6: 主进程写入**
 
-```ts
-// apps/desktop/analysis-source.ts
-/**
- * Puts a source archive the user attached into the workspace, where `analysis_upload_source` can send it.
- *
- * The archive is written as it is — never unpacked here — under `analysis-inputs/`, and an earlier archive with the
- * same name is kept: the new one gets a numbered name instead.
- */
-import { lstat, mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { MAX_SOURCE_ARCHIVE_BYTES, SOURCE_ARCHIVE } from './attachment-contract.ts';
-import { mainText } from './i18n.ts';
-
-const INPUTS = 'analysis-inputs';
-
-export async function stageSourceArchive(
-  workspace: string,
-  name: string,
-  data: Uint8Array,
-): Promise<{ path: string; size: number }> {
-  if (
-    !SOURCE_ARCHIVE.test(name) ||
-    path.basename(name) !== name ||
-    /[\\/:*?"<>|\x00-\x1f]/.test(name)
-  )
-    throw new Error(mainText('analysis.sourceInvalid'));
-  if (!data.byteLength || data.byteLength > MAX_SOURCE_ARCHIVE_BYTES)
-    throw new Error(mainText('analysis.sourceTooLarge'));
-  const directory = path.join(workspace, INPUTS);
-  await mkdir(directory, { recursive: true });
-  if (!(await lstat(directory)).isDirectory()) throw new Error(mainText('analysis.sourceInvalid'));
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const candidate = attempt
-      ? name.replace(SOURCE_ARCHIVE, (extension) => `-${attempt}${extension}`)
-      : name;
-    try {
-      await writeFile(path.join(directory, candidate), data, { flag: 'wx' });
-      return { path: `${INPUTS}/${candidate}`, size: data.byteLength };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
-  }
-  throw new Error(mainText('analysis.sourceInvalid'));
-}
-```
-
-注意：`lstat` 对符号链接返回链接本身，`isDirectory()` 为 false，因此链接目录会被拒绝。
+通过 `PathLease` 锁定工作区、`analysis-inputs` 和来源文件的完整祖先链；辅助进程只持有句柄，源码包由本进程在租约期间按路径读取（并核对卷序列号与文件索引与所持句柄一致），在受保护的目录中独占创建，重名按编号重试。不得先检查路径再用普通 `copyFile` 或 `writeFile`，否则目录或来源文件可在检查后被替换。Windows 外及辅助进程不可用时拒绝，不能降级为不安全的路径操作。限制实际字节数并覆盖来源父目录 junction、目标目录 junction、重名、空文件与大小上限。
 
 - [ ] **Step 7: IPC 与预加载**
 
-`apps/desktop/main-attachment.ts`：导入 `stageSourceArchive` 与 `SourceArchiveReply`；函数签名的 `ctx` 类型改为 `Pick<MainContext, 'assertSender' | 'service'>`；在已有 `ipcMain.handle('yuantu:attachment', …)` 之后加：
+`apps/desktop/main-attachment.ts`：导入 `stageSourceArchive` 与 `SourceArchiveReply`；函数签名的 `ctx` 类型改为 `Pick<MainContext, 'assertSender' | 'service' | 'services'>`；在已有 `ipcMain.handle('yuantu:attachment', …)` 之后加：
 
 ```ts
 ipcMain.handle('yuantu:analysis-source', async (event, input): Promise<SourceArchiveReply> => {
   try {
     ctx.assertSender(event);
-    const workspace = ctx.service?.snapshot.workspace;
+    // Any open project's workspace is acceptable, not only the focused one: a second window's composer is still
+    // this app's, and `ctx.service` alone would refuse its drops while another project has focus.
+    const workspaces = new Set<string>();
+    for (const service of [ctx.service, ...(ctx.services ?? [])])
+      if (service) workspaces.add(service.snapshot.workspace);
+    const workspace = input?.workspace;
+    const filePath = typeof input?.path === 'string' && input.path ? input.path : undefined;
+    const data = input?.data instanceof Uint8Array ? input.data : undefined;
+    // Exactly one source: a path to copy, or the bytes of a pasted file. Both or neither is a bad request.
     if (
-      !workspace ||
       !input ||
-      input.workspace !== workspace ||
+      typeof workspace !== 'string' ||
+      !workspaces.has(workspace) ||
       typeof input.name !== 'string' ||
-      !(input.data instanceof Uint8Array)
+      Boolean(filePath) === Boolean(data)
     )
       throw new Error(mainText('analysis.sourceInvalid'));
-    return { ok: true, file: await stageSourceArchive(workspace, input.name, input.data) };
+    return {
+      ok: true,
+      file: await stageSourceArchive(
+        workspace,
+        input.name,
+        filePath ? { path: filePath } : { data: data as Uint8Array },
+      ),
+    };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : mainText('attach.failed') };
   }
 });
 ```
 
-`apps/desktop/main.ts:864` 的调用 `registerAttachmentIpc(ctx, …)` 不变（`ctx` 已含 `service`）。
+（`input` 必须正好给出 `path` 或 `data` 之一：两者都给或都不给都是无效请求。）
 
-`apps/desktop/preload.ts` 在 `readAttachment` 一行之后加：
+`apps/desktop/preload.ts`：从 `electron` 额外导入 `webUtils`，并在 `readAttachment` 一行之后加：
 
 ```ts
+  sourceArchivePath: (file) => webUtils.getPathForFile(file),
   stageSourceArchive: (input) => ipcRenderer.invoke('yuantu:analysis-source', input),
 ```
 
 `apps/desktop/contract.ts` 在 `readAttachment(...)` 声明之后加：
 
 ```ts
-  stageSourceArchive(input: { workspace: string; name: string; data: Uint8Array }): Promise<SourceArchiveReply>;
+  /** The real path behind a dropped or picked `File`; an empty string for a pasted one. */
+  sourceArchivePath(file: File): string;
+  stageSourceArchive(input: {
+    workspace: string;
+    name: string;
+    path?: string;
+    data?: Uint8Array;
+  }): Promise<SourceArchiveReply>;
 ```
 
 并从 `./attachment-contract.ts` 导入 `SourceArchiveReply` 类型。
@@ -2621,11 +2669,19 @@ ipcMain.handle('yuantu:analysis-source', async (event, input): Promise<SourceArc
 
 ```tsx
     stageSource: async (file, workspace) => {
-      const reply = await window.yuantu.stageSourceArchive({
-        workspace,
-        name: file.name,
-        data: new Uint8Array(await file.arrayBuffer()),
-      });
+      // A dropped or picked file has a real path, so the main process copies it instead of the renderer shipping up
+      // to 200 MB through IPC. A pasted file has none (or the bridge refuses the DOM object) and falls back to bytes.
+      let sourcePath = '';
+      try {
+        sourcePath = window.yuantu.sourceArchivePath(file);
+      } catch {
+        sourcePath = '';
+      }
+      const reply = await window.yuantu.stageSourceArchive(
+        sourcePath
+          ? { workspace, name: file.name, path: sourcePath }
+          : { workspace, name: file.name, data: new Uint8Array(await file.arrayBuffer()) },
+      );
       if (!reply.ok) throw new Error(reply.error);
       return reply.file;
     },
@@ -2635,7 +2691,7 @@ ipcMain.handle('yuantu:analysis-source', async (event, input): Promise<SourceArc
 
 Run: `node scripts/run-tests.mjs tests/analysis-source.test.ts tests/desktop-react-attachments.test.ts tests/desktop-i18n.test.ts`
 Expected: 全部通过
-Run: `npm run typecheck && npm run i18n:check && npm run lint`，Expected: 通过
+Run: `npm run typecheck && npm run i18n:check && npm run test:isolation:check && npm run lint`，Expected: 通过
 
 - [ ] **Step 10: 提交**
 
@@ -2659,15 +2715,19 @@ git commit -m "feat(desktop): stage attached source archives for the analysis se
 // tests/builtin-services-flow.test.ts
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolContext } from '../packages/protocol/index.ts';
 import { JobRegistry } from '../packages/protocol/jobs.ts';
+import { AnalysisClient } from '../packages/builtin-services/client.ts';
 import {
   builtinServiceTools,
   closeBuiltinServices,
   warmToolCache,
 } from '../packages/builtin-services/index.ts';
+import { resolveBuiltinService } from '../packages/builtin-services/manifest.ts';
+import { ServiceRequester } from '../packages/builtin-services/service-request.ts';
+import { AnalysisTasks, sharedTasks } from '../packages/builtin-services/tasks.ts';
 import { analysisServiceFixture } from './analysis-service-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
 
@@ -2682,7 +2742,7 @@ const schema = {
   additionalProperties: false,
 };
 
-test('upload, synchronous analysis, asynchronous analysis and report download run end to end', async (t) => {
+test('upload, sync analysis, async analysis, cancel, restart and report download run end to end', async (t) => {
   const root = await tempRoot(t);
   await writeFile(path.join(root, 'repo.zip'), Buffer.from('PK\x03\x04fake'));
   const { baseUrl, state } = await analysisServiceFixture(t);
@@ -2692,11 +2752,14 @@ test('upload, synchronous analysis, asynchronous analysis and report download ru
     { name: 'vuln_scan', inputSchema: schema, annotations: { readOnlyHint: true } },
   ];
   let polls = 0;
+  let started = 0;
+  const calls: string[] = [];
   state.reports.set('p-1-sbom.json', {
     type: 'application/vnd.cyclonedx+json',
     body: Buffer.from('{"bomFormat":"CycloneDX"}'),
   });
   state.call = (name) => {
+    calls.push(name);
     if (name === 'license_analyze')
       return {
         content: [
@@ -2705,11 +2768,14 @@ test('upload, synchronous analysis, asynchronous analysis and report download ru
         ],
       };
     if (name === 'vuln_scan')
-      return { content: [], structuredContent: { task_id: 't-9', status: 'queued' } };
+      return {
+        content: [],
+        structuredContent: { task_id: `t-${++started}`, status: 'queued' },
+      };
     if (name === 'task_status')
       return { content: [], structuredContent: { status: ++polls > 1 ? 'completed' : 'running' } };
     if (name === 'task_result') return { content: [{ type: 'text', text: 'CVE-2024-0001 high' }] };
-    return { content: [] };
+    return { content: [{ type: 'text', text: 'cancelled' }] };
   };
   const env = { YUANTU_STATE_DIR: root, YUANTU_BUILTIN_SERVICES_URL: baseUrl };
   await warmToolCache(env);
@@ -2729,20 +2795,58 @@ test('upload, synchronous analysis, asynchronous analysis and report download ru
     .execute({ project_id: projectId }, ctx());
   assert.match(license.content, /GPL-3.0: 1/);
 
-  const started = await tools.get('scan_vuln_scan')!.execute({ project_id: projectId }, ctx());
-  assert.match(started.content, /analysis-t-9/);
+  // The first asynchronous task runs to completion through `job_output`.
+  const first = await tools.get('scan_vuln_scan')!.execute({ project_id: projectId }, ctx());
+  assert.match(first.content, /analysis-t-1/);
   assert.deepEqual(
     jobs.list('session-1').map((job) => job.id),
-    ['analysis-t-9'],
+    ['analysis-t-1'],
   );
   const done = await jobs.output({
-    id: 'analysis-t-9',
+    id: 'analysis-t-1',
     scope: 'session-1',
     cursor: 0,
     waitMs: 30_000,
   });
   assert.equal(done.status, 'completed');
   assert.match(done.output, /CVE-2024-0001/);
+
+  // The second one is cancelled through the same job vocabulary, once.
+  const second = await tools.get('scan_vuln_scan')!.execute({ project_id: projectId }, ctx());
+  assert.match(second.content, /analysis-t-2/);
+  assert.equal((await jobs.kill({ id: 'analysis-t-2', scope: 'session-1' })).status, 'cancelled');
+  assert.equal(calls.filter((name) => name === 'task_cancel').length, 1);
+
+  // Host restart: records are read back from the workspace file and answered without touching the backend. The
+  // writer coalesces, so wait for the newest snapshot first; a second `sharedTasks` call returns the same record set.
+  await sharedTasks(root, resolveBuiltinService(env)!, {
+    callTool: async () => ({ content: [] }),
+  }).flush();
+  const taskFile = path.join(root, '.yuantu', 'analysis-tasks.json');
+  const persisted = JSON.parse(await readFile(taskFile, 'utf8')) as {
+    id: string;
+    status: string;
+  }[];
+  assert.deepEqual(
+    persisted.map((record) => [record.id, record.status]),
+    [
+      ['analysis-t-1', 'completed'],
+      ['analysis-t-2', 'cancelled'],
+    ],
+  );
+  const restartedClient = new AnalysisClient(new ServiceRequester(resolveBuiltinService(env)!));
+  t.after(() => restartedClient.close());
+  const restarted = new AnalysisTasks({
+    file: taskFile,
+    manifest: resolveBuiltinService(env)!,
+    client: restartedClient,
+    sleep: async () => {},
+  });
+  const remembered = await restarted
+    .jobProducer()
+    .output({ id: 'analysis-t-1', scope: 'session-1', cursor: 0, waitMs: 0 });
+  assert.equal(remembered.status, 'completed');
+  assert.match(remembered.output, /CVE-2024-0001/);
 
   const report = await (
     await tools.get('analysis_download_report')!.prepare!(
@@ -2764,12 +2868,24 @@ Expected: 1 pass（这一步验证的是前面各任务的组合，全部实现�
 1. 分层表在 `packages/mcp` 行之后加一行（层号按 `LAYERS` 顺序重排后续行的层号）：
    `| 7 | \`packages/builtin-services\` | 内置代码分析服务：清单、唯一请求出口、工具注册、异步任务、上传与报告下载 | mcp, platform, protocol, tools |`
 2. 「按宿主与工作区追加的工具」表加一行：
-   `| 内置分析服务 | 应用配置了服务地址（开发构建用 \`YUANTU_BUILTIN_SERVICES_URL\`） | \`analysis_upload_source\`、\`analysis_download_report\`、\`scan_<后端工具名>\`（异步任务以 \`analysis\` 作业出现在 \`job_*\` 中） |`
-3. 运行 `npm run docs:generate && npm run docs:check && npm run references:check`，按报错补齐。
+   `| 内置分析服务 | 应用启用了服务（\`YUANTU_BUILTIN_SERVICES\` 默认开启；开发构建用 \`YUANTU_BUILTIN_SERVICES_URL\` 换地址） | \`analysis_upload_source\`、\`analysis_download_report\`、\`scan_<后端工具名>\`（异步任务以 \`analysis\` 作业出现在 \`job_*\` 中） |`
+3. 「技能」那一行补上新技能：`\`load_skill\`（内置 \`office-documents\`、\`code-analysis-report\`）`。
+4. 配置分组表末尾加一行：`| 内置分析服务 | \`YUANTU_BUILTIN_SERVICES\`、\`YUANTU_BUILTIN_SERVICES_URL\`、\`YUANTU_PACKAGED\` |`。
+5. 运行 `npm run docs:generate && npm run docs:check && npm run references:check`，按报错补齐。
 
 - [ ] **Step 4: 同步设计文档**
 
-把本计划开头「相对设计文档的调整」8 条写回设计文档对应章节：第 1 节清单改为代码常量；第 2 节删去延迟加载组；第 3 节删去上传进度、写明桌面端只接收源码包；第 4 节任务记录位置改为 `.yuantu/analysis-tasks.json`、报告下载改为 `analysis_download_report` 工具；第 1 节生命周期改为进程级共享连接；第 2 节工具列表改为按启动与 10 分钟过期刷新；第 7 节上传上限改为「第一阶段为清单常量 200 MB」，GitHub 拉取工具一条补上「只接受 `https://github.com/<owner>/<repo>`，拒绝其他主机」。
+把本计划开头「相对设计文档的调整」**12 条**逐条写回对应章节，并补齐这一轮修正：
+
+- 第 1 节：清单改为代码常量；正式地址缺失时不注册任何工具；关闭开关 `YUANTU_BUILTIN_SERVICES`；生命周期改为进程级共享连接（一次调用失败不拆连接）；只复用 `packages/mcp` 的关闭等待、schema 复杂度检查与输出截断，不复用它的连接池。
+- 第 2 节：删去延迟加载组，改为常驻 + `maxTools`/`maxSchemaBytes` 双上限；只读工具免审批但一律独占；schema 必须用注册表同一个 Ajv 编译（否则一个带 `format` 的后端 schema 会让整次运行失败）；工具列表按启动预热与 10 分钟过期刷新，并写明首次安装第一个会话的缓存空窗；跳过工具要记日志。
+- 第 3 节：删去上传进度；桌面端只处理源码包，且按路径由主进程复制（粘贴无路径才退回字节）；工作区外路径不再由桌面登记。
+- 第 4 节：任务记录在 `.yuantu/analysis-tasks.json`、单条记录有输出上限、写盘合并；`job_*` 的描述包含第三类作业；报告下载是独立的写入工具，报告文件名必须与 content-type 的扩展名一致。
+- 第 5 节：删掉「工作区外分析对象」整条；补上「主进程通过受保护句柄读取并暂存一个常规文件，不跟随链接、不读内容进对话」。
+- 第 6 节：增加一条「后端错误正文只进日志，工具结果只给通用错误」。
+- 第 7 节：报告链接的文件名/扩展名要求；project id 与 task id 的字符集；上传上限为第一阶段常量；GitHub 导入工具只接受 `https://github.com/<owner>/<repo>`。
+- 第 8 节：按实际覆盖重写（取消与重启找回进入流程测试；桌面改动只由主进程与渲染层用例覆盖，本期不加 smoke）。
+- 第 9 节：删除「只改请求头」的说法，改为「令牌注入 + 401 重试」两个改动点，并写明 `getAccessToken` 是异步的。
 
 - [ ] **Step 5: 全量检查**
 

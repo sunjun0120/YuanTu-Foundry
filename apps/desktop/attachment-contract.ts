@@ -41,3 +41,13 @@ export function splitAttachmentPrompt(content: string): {
     return { prompt: content, files: [] };
   }
 }
+
+/** Source archives go into the workspace for the analysis service instead of being read as text. */
+export const SOURCE_ARCHIVE = /\.(zip|tar\.gz|tgz)$/i;
+export const MAX_SOURCE_ARCHIVE_BYTES = 200 * 1024 * 1024;
+export type SourceArchiveReply =
+  { ok: true; file: { path: string; size: number } } | { ok: false; error: string };
+/** What the model reads about a staged archive: where it is and which tool sends it. */
+export function sourceArchiveNote(path: string, size: number): string {
+  return `Source archive saved in the workspace at ${path} (${size} bytes). To analyse it, upload it with analysis_upload_source using that path.`;
+}

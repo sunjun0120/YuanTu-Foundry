@@ -103,6 +103,10 @@ export function compiledSchemaCount(): number {
   return compiledSchemas.size;
 }
 
+export function compileToolSchema(schema: Tool['inputSchema']): ValidateFunction {
+  return compileSchema(schema);
+}
+
 export class ToolRegistry {
   /**
    * The jobs this registry's session owns.

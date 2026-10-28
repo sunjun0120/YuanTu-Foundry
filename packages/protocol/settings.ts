@@ -562,6 +562,9 @@ export const ENVIRONMENT = {
   YUANTU_SEARCH_PROVIDER: { kind: 'string', description: '联网搜索提供方' },
   YUANTU_SEARCH_API_KEY: { kind: 'string', description: '联网搜索密钥' },
   YUANTU_SEARCH_BASE_URL: { kind: 'string', description: '联网搜索端点' },
+  YUANTU_BUILTIN_SERVICES: { kind: 'boolean', description: '是否启用内置代码分析服务' },
+  YUANTU_BUILTIN_SERVICES_URL: { kind: 'string', description: '内置分析服务地址（仅开发构建）' },
+  YUANTU_PACKAGED: { kind: 'boolean', description: '是否为安装包运行' },
   YUANTU_WORKFLOWS: { kind: 'boolean', description: '是否启用持久任务调度' },
   /**
    * Whether the Host spends one small model call naming a session before its first reply.

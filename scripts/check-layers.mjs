@@ -32,6 +32,7 @@ const LAYERS = [
   ['tools'],
   ['lsp', 'office', 'resources'],
   ['knowledge', 'mcp'],
+  ['builtin-services'],
   ['catalog'],
   ['core'],
   ['client'],

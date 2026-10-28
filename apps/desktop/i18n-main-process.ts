@@ -101,6 +101,18 @@ export const mainProcessMessages: Record<string, [string, string]> = {
   ],
   'attach.rendererImageBytes': ['单张图片不能超过 5MB', 'One image cannot be larger than 5MB'],
   'attach.rendererImageRead': ['图片读取失败', 'Reading the image failed'],
+  'attach.rendererSourceBytes': [
+    '源码包不能超过 200MB',
+    'A source archive cannot be larger than 200MB',
+  ],
+  'analysis.sourceInvalid': [
+    '只能添加 .zip、.tar.gz 或 .tgz 源码包',
+    'Only .zip, .tar.gz or .tgz source archives can be added.',
+  ],
+  'analysis.sourceTooLarge': [
+    '源码包为空或超过 200MB',
+    'The source archive is empty or larger than 200MB.',
+  ],
   'attach.rendererDocumentBytes': ['单个文件不能超过 20MB', 'One file cannot be larger than 20MB'],
   'attach.rendererFailure': ['{name}：{message}', '{name}: {message}'],
   /**

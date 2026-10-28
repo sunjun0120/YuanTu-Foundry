@@ -135,7 +135,7 @@ type Request =
   | { kind: 'prompts' }
   | { kind: 'prompt'; name: string; args: Record<string, unknown> };
 
-function validateSchemaComplexity(schema: unknown): void {
+export function validateSchemaComplexity(schema: unknown): void {
   let encoded: string;
   try {
     encoded = JSON.stringify(schema);

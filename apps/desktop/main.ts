@@ -384,6 +384,7 @@ function hostEnvironment(config?: ProviderConfig): NodeJS.ProcessEnv {
     YUANTU_MCP_OAUTH_DIR: path.join(app.getPath('userData'), 'mcp-oauth'),
     // The Host runs on its own Node; this is how its Windows sandbox learns which Electron must stay out of a grant.
     YUANTU_DESKTOP_EXECUTABLE: process.execPath,
+    ...(app.isPackaged ? { YUANTU_PACKAGED: '1' } : {}),
   };
 }
 function modelSettingsView() {

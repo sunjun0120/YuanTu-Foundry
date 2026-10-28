@@ -171,8 +171,8 @@
           },
           {
             "role": "user",
-            "chars": 421,
-            "digest": "908ef3c3acfaedf7",
+            "chars": 483,
+            "digest": "035150f5e5a4d86a",
             "toolCalls": []
           },
           {
@@ -274,7 +274,7 @@
           "source": "skills",
           "round": 0,
           "notes": 1,
-          "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\noffice-documents: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
+          "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\ncode-analysis-report: 用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。\noffice-documents: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
         }
       },
       {
@@ -290,6 +290,11 @@
         "data": {
           "instructions": [],
           "skills": [
+            {
+              "name": "code-analysis-report",
+              "description": "用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。",
+              "path": "builtin:code-analysis-report"
+            },
             {
               "name": "office-documents",
               "description": "Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.",
@@ -939,7 +944,7 @@
         "data": {
           "message": {
             "role": "user",
-            "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\noffice-documents: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
+            "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\ncode-analysis-report: 用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。\noffice-documents: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
           }
         }
       },
@@ -960,6 +965,11 @@
         "data": {
           "instructions": [],
           "skills": [
+            {
+              "name": "code-analysis-report",
+              "description": "用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。",
+              "path": "builtin:code-analysis-report"
+            },
             {
               "name": "office-documents",
               "description": "Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.",
@@ -1030,7 +1040,7 @@
           },
           "cacheKnown": false,
           "runId": "<run:1>",
-          "replacedChars": 17049,
+          "replacedChars": 17112,
           "surfaceChars": 860,
           "maxTokens": 3250
         }
@@ -1185,7 +1195,7 @@
       },
       {
         "role": "user",
-        "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\noffice-documents: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
+        "content": "<runtime-context source=\"skills\">\nMachine-written snapshot of the skills this workspace offers, announced when the set changed. If this conversation holds more than one, the last is the current one.\nAvailable skills (use load_skill to read relevant guidance):\ncode-analysis-report: 用内置代码分析服务分析源码包或 GitHub 仓库，并写出有据可查的分析报告。\noffice-documents: Plan, write and check Word reports, Excel workbooks and PowerPoint decks with office_create, office_edit and office_preview.\n</runtime-context>"
       },
       {
         "role": "user",

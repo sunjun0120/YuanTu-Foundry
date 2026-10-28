@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { DesktopBridge, DesktopWireReply, CarrierCommand, DesktopReply } from './contract.ts';
 import {
   WorkspaceMirrors,
@@ -93,6 +93,8 @@ const bridge: DesktopBridge = {
   subscribeBrowser: (listener) => on('yuantu:browser-event', listener),
   archivedSessions: () => scoped('yuantu:archived-sessions'),
   readAttachment: (input) => ipcRenderer.invoke('yuantu:attachment', input),
+  sourceArchivePath: (file) => webUtils.getPathForFile(file),
+  stageSourceArchive: (input) => ipcRenderer.invoke('yuantu:analysis-source', input),
   files: (command) => scoped('yuantu:files', command),
   openWorkspacePath: (path, action) => scoped('yuantu:open-workspace-path', { path, action }),
   presets: (command) => scoped('yuantu:presets', command),

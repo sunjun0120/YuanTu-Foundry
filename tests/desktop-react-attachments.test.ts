@@ -172,3 +172,50 @@ test('the MIME type comes from the extension first and the claimed type second',
   assert.equal(imageMimeType({ name: 'a.bin', type: 'image/webp' }), 'image/webp');
   assert.equal(imageMimeType({ name: 'a.txt', type: 'text/plain' }), undefined);
 });
+
+test('a source archive is staged into the workspace and attached as a note', async () => {
+  const staged: string[] = [];
+  const errors: (string | null)[] = [];
+  const controller = createAttachmentsController({
+    getContext: () => ({
+      sessionId: 's',
+      workspace: '/w',
+      supportsVision: false,
+      disabled: false,
+      promptText: '',
+    }),
+    readImage: async () => '',
+    readDocument: async (entry) => documentOf(entry.name, 'should not be read'),
+    stageSource: async (entry, workspace) => {
+      staged.push(`${workspace}:${entry.name}`);
+      return { path: `analysis-inputs/${entry.name}`, size: entry.size };
+    },
+    setError: (message) => errors.push(message),
+    onChange: () => {},
+  });
+  await controller.attach([file('repo.zip', 'application/zip', 30 * 1024 * 1024)]);
+  assert.deepEqual(staged, ['/w:repo.zip']);
+  assert.equal(controller.documents().length, 1);
+  assert.match(controller.documents()[0]!.text, /analysis-inputs\/repo\.zip/);
+  assert.match(controller.documents()[0]!.text, /analysis_upload_source/);
+  assert.deepEqual(errors.filter(Boolean), []);
+});
+
+test('without a staging path an archive goes through the document reader as before', async () => {
+  const read: string[] = [];
+  const controller = createAttachmentsController({
+    getContext: () => ({
+      sessionId: 's',
+      workspace: '/w',
+      supportsVision: false,
+      disabled: false,
+      promptText: '',
+    }),
+    readImage: async () => '',
+    readDocument: async (entry) => (read.push(entry.name), documentOf(entry.name, 'x')),
+    setError: () => {},
+    onChange: () => {},
+  });
+  await controller.attach([file('repo.zip')]);
+  assert.deepEqual(read, ['repo.zip']);
+});

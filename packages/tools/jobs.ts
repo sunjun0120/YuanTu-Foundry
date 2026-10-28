@@ -113,7 +113,7 @@ export function jobTools(scope: string): Tool[] {
       name: 'job_list',
       isConcurrencySafe: parallelRead,
       description:
-        'List every long-running job this session started — background commands and sub-agents in one list — with the id used to read or stop each one. Use it before job_output or job_kill when you do not already have an id.',
+        'List every long-running job this session started — background commands, sub-agents and asynchronous analysis tasks in one list — with the id used to read or stop each one. Use it before job_output or job_kill when you do not already have an id.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       execute: async (_args, context) => {
         try {
@@ -135,7 +135,7 @@ export function jobTools(scope: string): Tool[] {
             isError: false,
             content: listed.length
               ? listed.map(line).join('\n')
-              : 'This session has no jobs. Commands started with start_command and sub-agents delegated with delegate_task both appear here.',
+              : 'This session has no jobs. Commands, sub-agents and asynchronous analysis tasks appear here.',
           };
         } catch (error) {
           return { isError: true, content: failure(error) };
@@ -146,7 +146,7 @@ export function jobTools(scope: string): Tool[] {
       name: 'job_output',
       isConcurrencySafe: parallelRead,
       description:
-        'Read one job by id and get its new output since cursor, or wait up to wait_ms for some. A command reports its output ring; a sub-agent reports its own transcript, so a child left behind by an earlier process still answers.',
+        'Read one job by id and get its new output since cursor, or wait up to wait_ms for some. A command reports its output ring; a sub-agent reports its own transcript; an analysis job reports its status and result.',
       inputSchema: {
         type: 'object',
         properties: {

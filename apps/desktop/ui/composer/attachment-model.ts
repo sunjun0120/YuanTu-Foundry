@@ -12,6 +12,9 @@
 import {
   attachmentPrompt,
   MAX_DOCUMENT_BYTES,
+  MAX_SOURCE_ARCHIVE_BYTES,
+  SOURCE_ARCHIVE,
+  sourceArchiveNote,
   type DocumentAttachment,
 } from '../../attachment-contract.ts';
 import type { ImageAttachment } from '../../../../packages/protocol/index.ts';
@@ -19,7 +22,8 @@ import { validateImages, MAX_IMAGE_BYTES } from '../../../../packages/protocol/i
 import { format, t } from '../../i18n.ts';
 import { createStore, type ReadableStore } from '../stores.ts';
 
-export type AttachmentFailure = 'count' | 'vision' | 'imageBytes' | 'imageRead' | 'documentBytes';
+export type AttachmentFailure =
+  'count' | 'vision' | 'imageBytes' | 'imageRead' | 'documentBytes' | 'sourceBytes';
 
 const FAILURE_KEYS: Record<AttachmentFailure, string> = {
   count: 'attach.rendererCount',
@@ -27,6 +31,7 @@ const FAILURE_KEYS: Record<AttachmentFailure, string> = {
   imageBytes: 'attach.rendererImageBytes',
   imageRead: 'attach.rendererImageRead',
   documentBytes: 'attach.rendererDocumentBytes',
+  sourceBytes: 'attach.rendererSourceBytes',
 };
 
 export function attachmentFailureText(kind: AttachmentFailure): string {
@@ -94,6 +99,7 @@ export function createAttachmentsController(deps: {
   readImage(file: File): Promise<string>;
   /** Hand a document to the main process and get its extracted form back. */
   readDocument(file: File): Promise<DocumentAttachment>;
+  stageSource?(file: File, workspace: string): Promise<{ path: string; size: number }>;
   setError(message: string | null): void;
   onChange(): void;
 }): AttachmentsController {
@@ -160,6 +166,15 @@ export function createAttachmentsController(deps: {
                 name: file.name || 'pasted-image.png',
               });
               validateImages(nextImages);
+            } else if (deps.stageSource && SOURCE_ARCHIVE.test(file.name)) {
+              if (file.size > MAX_SOURCE_ARCHIVE_BYTES)
+                throw new Error(attachmentFailureText('sourceBytes'));
+              const staged = await deps.stageSource(file, workspace);
+              nextDocuments.push({
+                name: file.name,
+                size: staged.size,
+                text: sourceArchiveNote(staged.path, staged.size),
+              });
             } else {
               if (file.size > MAX_DOCUMENT_BYTES)
                 throw new Error(attachmentFailureText('documentBytes'));

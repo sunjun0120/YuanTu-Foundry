@@ -1,3 +1,4 @@
+import type { SourceArchiveReply } from './attachment-contract.ts';
 /**
  * The Electron IPC bridge: what the renderer is allowed to ask the main process.
  *
@@ -93,6 +94,13 @@ export interface DesktopBridge {
   /** Read on demand by the settings page; unarchiving and deleting go through `invoke`. */
   archivedSessions?(): Promise<ArchivedSessionsReply>;
   readAttachment(input: { name: string; data: Uint8Array }): Promise<AttachmentReply>;
+  sourceArchivePath(file: File): string;
+  stageSourceArchive(input: {
+    workspace: string;
+    name: string;
+    path?: string;
+    data?: Uint8Array;
+  }): Promise<SourceArchiveReply>;
   /**
    * The workspace's files, for the read-only tree and preview.
    *

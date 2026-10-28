@@ -6,7 +6,7 @@
  * meant a third pair. These types describe the answers, not the kinds: a producer supplies them and the
  * registry dispatches on which producer owns an id.
  */
-export type JobKind = 'command' | 'subagent';
+export type JobKind = 'command' | 'subagent' | 'analysis';
 /** One job as every consumer sees it, whichever producer owns it. */
 export interface JobSnapshot {
   id: string;

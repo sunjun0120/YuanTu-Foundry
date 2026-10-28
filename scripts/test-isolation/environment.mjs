@@ -62,6 +62,8 @@ export async function createIsolation(parentRoot, file, resources = [], baseEnv 
     // Native acceptance fixtures select their backend explicitly at the operation boundary.
     YUANTU_SANDBOX: 'host',
     YUANTU_STATE_DIR: paths.state,
+    // Tests must not read a user's analysis-service cache or contact the backend.
+    YUANTU_BUILTIN_SERVICES: '0',
     // Temporary workspaces sit inside this repository, so a Host or CLI a test starts must not write to its
     // `.git/info/exclude`; the cases that exercise the exclusion enable it explicitly.
     YUANTU_GIT_EXCLUDE: '0',

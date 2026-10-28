@@ -1,3 +1,4 @@
+import { builtinServiceTools } from '../builtin-services/index.ts';
 import path from 'node:path';
 import { officeTools } from '../office/tools.ts';
 import { deliveryTool } from '../tools/delivery.ts';
@@ -165,6 +166,7 @@ export function createTools(
     : mcpTools(root);
   registry.onClose(mcp.close);
   for (const tool of mcp.tools) registry.register(tool);
+  for (const tool of builtinServiceTools(root, scope, registry.jobs)) registry.register(tool);
   const heldLsp = pooled ? acquireLspManager(root, scope) : undefined;
   const lsp = heldLsp?.value ?? new LspManager(root);
   const annotate = parseSetting(process.env, 'YUANTU_LSP_AFTER_EDIT') !== false;

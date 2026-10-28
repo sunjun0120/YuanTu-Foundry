@@ -24,6 +24,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
+process.env.YUANTU_BUILTIN_SERVICES = '0';
+
 const args = process.argv.slice(2);
 const options = {
   out: null,
