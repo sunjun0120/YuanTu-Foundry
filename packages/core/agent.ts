@@ -40,6 +40,7 @@ import { RunSteps } from './run-steps.ts';
 import { RunSurface } from './run-surface.ts';
 import { settleAnswerRound } from './run-verdict.ts';
 import { createProviderMeasurement } from './run-provider.ts';
+import { textOnlyProvider } from './text-only-provider.ts';
 import { RunQueue, type InputMode, type QueuedInput } from './run-queue.ts';
 import { requestRunRound } from './run-request.ts';
 import { ResidentTurnSettlements } from './run-residency.ts';
@@ -399,10 +400,11 @@ export class Agent {
        *
        * One factory for both purposes: an answer call and a compaction summary are measured by the same clock
        * and recorded as the same kind of fact, so the run's provider time includes the summaries rather than
-       * quietly omitting them (see `run-provider.ts`).
+       * quietly omitting them (see `run-provider.ts`). A text-only connection is never sent a tool's pictures
+       * (`text-only-provider.ts`).
        */
       const measureProvider = createProviderMeasurement({
-        provider,
+        provider: this.options.supportsVision === false ? textOnlyProvider(provider) : provider,
         store,
         sessionId: input.sessionId,
         runId,

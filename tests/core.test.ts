@@ -1424,6 +1424,96 @@ test('text-only connections reject new and historical images before provider req
   assert.equal(requests, 0);
   assert.equal(ctx.store.get(ctx.session.id).activeRun, null);
 });
+for (const supportsVision of [false, undefined])
+  test(`tool pictures reach a model only if it accepts images (supportsVision: ${supportsVision})`, async (t) => {
+    const pixel = {
+      mimeType: 'image/png' as const,
+      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    };
+    let sent: Message[] = [];
+    let turn = 0;
+    const ctx = await fixture(
+      t,
+      {
+        async complete(request) {
+          if (turn++ === 0)
+            return {
+              ...reply(''),
+              finishReason: 'tool_calls',
+              toolCalls: [{ id: 'picture', name: 'picture_tool', arguments: {} }],
+            };
+          sent = request.messages;
+          return reply();
+        },
+      },
+      { supportsVision },
+    );
+    ctx.tools.register({
+      name: 'picture_tool',
+      description: 'Returns a picture',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { isError: false, content: 'one picture', images: [pixel] };
+      },
+    });
+    assert.equal(
+      (await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'look' })).status,
+      'completed',
+    );
+    const result = sent.find((message) => message.role === 'tool');
+    assert.equal(result?.role, 'tool');
+    if (result?.role !== 'tool') return;
+    if (supportsVision === false) {
+      assert.equal(result.images, undefined);
+      assert.match(
+        result.content,
+        /^one picture\n\[1 image\(s\) not sent: the current model does not accept images/,
+      );
+    } else {
+      assert.equal(result.images?.length, 1);
+      assert.equal(result.content, 'one picture');
+    }
+    // The transcript keeps the picture, so switching back to a vision model shows it again.
+    const stored = ctx.store.messages(ctx.session.id).find((message) => message.role === 'tool');
+    assert.equal(stored?.role === 'tool' ? stored.images?.length : undefined, 1);
+  });
+test('a picture an earlier vision model saw is not sent after switching to a text-only one', async (t) => {
+  const pixel = {
+    mimeType: 'image/png' as const,
+    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  };
+  let sent: Message[] = [];
+  const ctx = await fixture(
+    t,
+    {
+      async complete(request) {
+        sent = request.messages;
+        return reply();
+      },
+    },
+    { supportsVision: false },
+  );
+  ctx.store.append(ctx.session.id, { role: 'user', content: 'show it' });
+  ctx.store.append(ctx.session.id, {
+    role: 'assistant',
+    content: '',
+    toolCalls: [{ id: 'old', name: 'read_image', arguments: { path: 'a.png' } }],
+  });
+  ctx.store.append(ctx.session.id, {
+    role: 'tool',
+    toolCallId: 'old',
+    content: 'Image a.png attached.',
+    isError: false,
+    images: [pixel],
+  });
+  assert.equal(
+    (await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'continue' })).status,
+    'completed',
+  );
+  const result = sent.find((message) => message.role === 'tool');
+  assert.equal(result?.role === 'tool' ? result.images : 'missing', undefined);
+  assert.match(result?.content ?? '', /not sent: the current model does not accept images/);
+});
 test('each user turn persists the selected model identity without changing provider content', async (t) => {
   const identity = { model: 'model-a', protocol: 'openai', connectionId: 'connection-a' };
   const ctx = await fixture(
