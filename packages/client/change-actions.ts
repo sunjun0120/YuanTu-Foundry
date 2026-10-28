@@ -1,4 +1,4 @@
-import type { StoredFileChange } from '../storage/sqlite.ts';
+import type { StoredFileChange } from '../protocol/file-changes.ts';
 
 export type FileChangeStatus = StoredFileChange['status'];
 

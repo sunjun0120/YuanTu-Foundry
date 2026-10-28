@@ -1,5 +1,5 @@
 import type { FileChange, Message } from '../../packages/protocol/index.ts';
-import type { StoredFileChange } from '../../packages/storage/session-schema.ts';
+import type { StoredFileChange } from '../../packages/protocol/file-changes.ts';
 import { isRuntimeContext } from '../../packages/protocol/context.ts';
 
 export interface TurnChangedFile {
