@@ -12,6 +12,9 @@ module.exports = {
    */
   asar: false,
   npmRebuild: false,
+  // Chromium's own UI strings (context menus, dialogs). The application speaks only these two languages, and the
+  // other 53 locale packs are ~45 MB.
+  electronLanguages: ['zh-CN', 'en-US'],
   // Package only compiled code, excluding release artifacts and unpacked apps.
   files: [
     'dist/apps/**/*',

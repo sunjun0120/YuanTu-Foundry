@@ -234,6 +234,8 @@ export interface ToolResult {
 export interface PreparedTool {
   change?: FileChange;
   approvalDescription?: string;
+  /** Trusted tool-owned boundary explanation for fixed Host operations that do not launch guest programs. */
+  approvalIsolation?: string;
   execute(context: ToolContext): Promise<ToolResult>;
 }
 export interface Tool extends ToolSpec {

@@ -297,8 +297,12 @@ export interface Approval {
    */
   escalation?: { network: 'unrestricted' };
 }
+/**
+ * `timeout` is a person who could have answered and did not; `unavailable` is nobody to ask at all. The model is
+ * told different things for the two, so an approver's own deadline must not report `unavailable`.
+ */
 export type ApprovalDecisionSource =
-  'user' | 'policy' | 'launch-options' | 'task-approval' | 'unavailable';
+  'user' | 'policy' | 'launch-options' | 'task-approval' | 'unavailable' | 'timeout';
 export type Approver = ((approval: Approval, signal: AbortSignal) => Promise<boolean>) & {
   /** The decision just made for this call. Omitted by legacy human approvers. */
   decisionSource?: (approval: Approval) => ApprovalDecisionSource | undefined;

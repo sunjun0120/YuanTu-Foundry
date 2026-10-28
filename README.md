@@ -382,7 +382,9 @@ Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩�
 
 `npm.cmd run package:windows` 生成普通安装包；`npm.cmd run package:windows:candidate:dir` 使用已用 GPG 校验的官方 Node 候选（`WINDOWS_SANDBOX_NODE_CANDIDATE` 可指定其他候选）。打包不再校验 helper 签名，也不再要求以固定签名者重新签名 `node.exe`：`yuantu-sandbox.exe` 按安装目录中的固定位置定位，找不到就报错。官方 Node 下载仍用发布者 GPG 签名的 `SHASUMS256.txt.asc` 校验；`npm.cmd run check:windows-package` 校验 helper 存在、打包运行时与来源记录。正式发行仍需完成目标 Windows 上的账户、WFP 与安装包实机验收。
 
-全部原生 Git 工具与 stdio MCP 在非 `host` 模式仍明确拒绝：它们尚未接入原生进程启动器。远程 HTTP/SSE MCP、网页抓取和浏览器不受命令沙箱约束。显式 `host` 表示无操作系统隔离，命令可访问宿主其他位置和网络。macOS 取消按进程组执行，主动脱离进程组的子孙回收尚未解决；后台记录不会将其标为整棵进程树清理已确认。macOS 真机隔离与签名/公证验收仍需在 Mac 完成：打包走 `scripts/prepare-macos-package.mjs` 与 `npm run package:macos`，真机探针走 `npm run check:macos-sandbox`。
+原生模式下，Git 只读查询通过原生执行环境运行；`git_stage`、`git_commit`、`git_worktree_create` 经现有审批使用专用 Host 元数据代理，只允许固定的本地仓库操作，普通命令对 `.git` 的写保护保持。只读策略拒绝这些写入；提交会核对批准的 index 和 HEAD，审批期间变化则要求重新审批。发现、验证和写入均使用工作区外的可信 Git 程序；原生写入要求选定工作区就是仓库根。代理拒绝链接或共享硬链接元数据、配置 include/includeIf、外部对象库和 partial clone；禁用 hooks、外部过滤器、自动维护和远程协议。配置了 clean/smudge/process 或 required 过滤器（例如 Git LFS）的仓库会明确拒绝原生暂存和 checkout，避免并发修改 attributes 后改变文件格式；提交已有暂存内容和取消暂存仍可用。Git 写入代理属于受控的宿主操作，不代表 Git 写入进程本身受 OS 沙箱隔离；`host` 模式保留现有 hooks/filter 行为。stdio MCP 在非 `host` 模式仍明确拒绝，因为其本地服务进程尚未接入原生启动器。
+
+远程 HTTP/SSE MCP、网页抓取和浏览器不受命令沙箱约束。显式 `host` 表示无操作系统隔离，命令可访问宿主其他位置和网络。macOS 取消按进程组执行，主动脱离进程组的子孙回收尚未解决；后台记录不会将其标为整棵进程树清理已确认。macOS 真机隔离与签名/公证验收仍需在 Mac 完成：打包走 `scripts/prepare-macos-package.mjs` 与 `npm run package:macos`，真机探针走 `npm run check:macos-sandbox`。
 
 ### 外部钩子桥
 
@@ -728,7 +730,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 68 个 / 36.6 KB | `createTools().specs()` |
+| 工具（空工作区，全部） | 68 个 / 36.8 KB | `createTools().specs()` |
 | 工具（只读运行） | 35 个 / 17.1 KB | `specs({ readOnly: true })` |
 | 工具（默认按需加载，首个请求） | 24 个 / 14.6 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |

@@ -139,7 +139,8 @@ export function createRunApprover(options: RunApproverOptions): Approver {
       const approvalId = randomUUID();
       const abort = () => finish(false);
       // The Host's own bound on the wait, so a run cannot be held open by a client that stopped listening.
-      const timer = setTimeout(() => finish(false, 'unavailable'), 120_000);
+      // A client was there to ask, so running out of time is a timeout, not "nobody to ask".
+      const timer = setTimeout(() => finish(false, 'timeout'), 120_000);
       const finish = (allow: boolean, source: ApprovalDecisionSource = 'user') => {
         record(approvalSources, approval, source);
         clearTimeout(timer);

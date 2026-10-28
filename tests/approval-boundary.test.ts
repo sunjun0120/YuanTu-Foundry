@@ -4,7 +4,10 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import { describeExecutionBoundary, executionPolicy } from '../packages/tools/execution-policy.ts';
 import { windowsAccountCapabilities } from '../packages/tools/execution-capabilities.ts';
 import { createApprover } from '../apps/cli/terminal.ts';
-import type { Approval } from '../packages/protocol/index.ts';
+import type { Approval, ApprovalDecisionSource } from '../packages/protocol/index.ts';
+import { createRunApprover } from '../apps/agent-host/approvals.ts';
+import type { Options } from '../apps/shared/args.ts';
+import type { SessionStore } from '../packages/storage/sqlite.ts';
 
 test('the boundary sentence says what each backend declares, and no more', () => {
   assert.match(describeExecutionBoundary(executionPolicy('host')), /no operating-system isolation/);
@@ -169,3 +172,30 @@ test('launch options never grant a network escalation', async () => {
   assert.equal(await call({ network: 'unrestricted' }), false);
 });
 
+test("the Host's own approval deadline is a timeout, not a missing responder", async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sent: unknown[] = [];
+  const approvalSources = new WeakMap<object, ApprovalDecisionSource>();
+  const approve = createRunApprover({
+    options: {} as Options,
+    store: {} as SessionStore,
+    sessionId: 's1',
+    policy: () => undefined,
+    wake: false,
+    unattendedTaskId: undefined,
+    runId: () => 'r1',
+    approvals: new Map(),
+    approvalSources,
+    send: (data) => sent.push(data),
+  });
+  const approval: Approval = {
+    kind: 'command',
+    description: 'echo',
+    toolCall: {} as Approval['toolCall'],
+  };
+  const decision = approve(approval, new AbortController().signal);
+  assert.equal(sent.length, 1);
+  t.mock.timers.tick(120_000);
+  assert.equal(await decision, false);
+  assert.equal(approve.decisionSource?.(approval), 'timeout');
+});

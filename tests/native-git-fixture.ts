@@ -25,6 +25,8 @@ export async function fixture(t: test.TestContext) {
       },
     });
   await git(['init']);
+  await git(['config', 'user.name', 'Native Fixture']);
+  await git(['config', 'user.email', 'native@example.invalid']);
   await writeFile(path.join(root, 'tracked.txt'), 'before\n');
   await git(['add', 'tracked.txt']);
   await git([

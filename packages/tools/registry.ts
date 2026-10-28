@@ -639,7 +639,7 @@ export class ToolRegistry {
       const approval = entry.tool.permission
         ? {
             kind: entry.tool.permission,
-            description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}${entry.tool.permission === 'command' && callPolicy ? '\n' + describeExecutionBoundary(callPolicy) : ''}`,
+            description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}${entry.tool.permission === 'command' && callPolicy ? '\n' + (prepared?.approvalIsolation ?? describeExecutionBoundary(callPolicy)) : ''}`,
             toolCall: call,
             ...(prepared?.change ? { change: prepared.change } : {}),
             ...(entry.tool.permission === 'command' && callPolicy
@@ -692,9 +692,11 @@ export class ToolRegistry {
             errorResult(
               decision.timedOut
                 ? `Permission was not granted: nobody answered the approval request within ${decision.budgetMs}ms. Nothing was executed; do not retry without new authorization.`
-                : source === 'unavailable'
-                  ? 'Permission was not granted: no approval responder is available. Nothing was executed; do not retry without new authorization.'
-                  : 'Permission denied by user. Do not retry the operation without new authorization.',
+                : source === 'timeout'
+                  ? 'Permission was not granted: nobody answered the approval request before it timed out. Nothing was executed; do not retry without new authorization.'
+                  : source === 'unavailable'
+                    ? 'Permission was not granted: no approval responder is available. Nothing was executed; do not retry without new authorization.'
+                    : 'Permission denied by user. Do not retry the operation without new authorization.',
             ),
           );
         }
@@ -751,7 +753,8 @@ export class ToolRegistry {
           dispatchSignal.throwIfAborted();
           if (
             !isDeepStrictEqual(refreshed?.change, prepared.change) ||
-            refreshed?.approvalDescription !== prepared.approvalDescription
+            refreshed?.approvalDescription !== prepared.approvalDescription ||
+            refreshed?.approvalIsolation !== prepared.approvalIsolation
           )
             throw new Error('Operation changed after approval; request a new tool call.');
           const live = context.executionPolicyForCall?.();

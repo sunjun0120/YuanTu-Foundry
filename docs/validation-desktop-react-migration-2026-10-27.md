@@ -1,10 +1,8 @@
 # 桌面 React 迁移最终验收（2026-10-27）
 
-**结论：迁移完成，本记录是可复核的交付证据。** 计划 `docs/superpowers/plans/2026-10-26-desktop-react-typescript-migration.md`
-的 M1–M7 任务全部落地；产品由单一 React 根渲染，六份旧 CSS 退休，兼容 id 表清零，翻译 walker 与 select upgrader
-删除。保留的过渡形态（内容 DOM 岛、休眠 MCP 面板）在下方明确列出，不是遗漏。完成状态摘要见
-`docs/desktop-react-migration-status-2026-10-27.md`，逐任务流水见
-`docs/superpowers/plans/2026-10-27-desktop-react-completion-ledger.md`。
+**结论：迁移完成，本记录是可复核的交付证据。** React + TypeScript 迁移的 M1–M7 任务全部落地；产品由单一
+React 根渲染，六份旧 CSS 退休，兼容 id 表清零，翻译 walker 与 select upgrader 删除。保留的过渡形态
+（内容 DOM 岛、休眠 MCP 面板）在下方明确列出，不是遗漏。本文保留当时的验收结果与限制，已完成的计划和进度文档已清理。
 
 ## 1. 环境与基线
 

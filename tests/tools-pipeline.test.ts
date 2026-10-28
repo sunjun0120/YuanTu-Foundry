@@ -195,7 +195,7 @@ test('a refusal names who refused it: a preset, an unanswered wait, or the user'
       execute: async () => ((bodyRan = true), { isError: false, content: '' }),
     }),
   );
-  const denying = (source?: 'policy' | 'unavailable' | 'user') => {
+  const denying = (source?: 'policy' | 'unavailable' | 'timeout' | 'user') => {
     const approve = (async () => false) as ToolContext['approve'];
     if (source) approve.decisionSource = () => source;
     return approve;
@@ -217,6 +217,10 @@ test('a refusal names who refused it: a preset, an unanswered wait, or the user'
   );
   assert.match(unavailable.content, /no approval responder is available/i);
   assert.doesNotMatch(unavailable.content, /denied by user/i);
+  // An approver's own deadline ran out on a person who could have answered: a timeout, not "nobody to ask".
+  const timedOut = await registry.execute(call('echo'), context({ approve: denying('timeout') }));
+  assert.match(timedOut.content, /^Permission was not granted: nobody answered/);
+  assert.doesNotMatch(timedOut.content, /no approval responder|denied by user/i);
   assert.equal(bodyRan, false);
 });
 

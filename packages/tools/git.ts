@@ -10,6 +10,13 @@ import { localExecutionEnvironment } from './execution-environment.ts';
 import { currentExecutionPolicy, executionPolicy } from './execution-policy.ts';
 import { samePath } from '../platform/workspace-paths.ts';
 import { repositoryWorktreeParent } from '../platform/worktree-home.ts';
+import {
+  nativeGitWrites,
+  nativeGitExecutable,
+  nativeGitIdentityQuery,
+  prepareNativeGitWrite,
+  type GitInvocation,
+} from './git-native-write.ts';
 
 /**
  * The read-only tools in this module may overlap a sibling call from the same assistant message.
@@ -57,6 +64,17 @@ function gitEnvironment(includeGlobal = false): NodeJS.ProcessEnv {
   env.GIT_TERMINAL_PROMPT = '0';
   env.GCM_INTERACTIVE = 'Never';
   env.LC_ALL = 'C';
+  if (includeGlobal) {
+    for (const name of [
+      'HOME',
+      'USERPROFILE',
+      'HOMEDRIVE',
+      'HOMEPATH',
+      'XDG_CONFIG_HOME',
+      'GIT_CONFIG_GLOBAL',
+    ])
+      if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
   return env;
 }
 
@@ -100,26 +118,28 @@ async function captureGit(
   root: string,
   args: readonly string[],
   signal: AbortSignal,
-  options: { includeGlobal?: boolean; safeDirectory?: string } = {},
+  options: { includeGlobal?: boolean; safeDirectory?: string; invocation?: GitInvocation } = {},
 ): Promise<{ content: string; truncated: boolean }> {
   signal.throwIfAborted();
   const config = resolveSandboxConfig();
   const argv = [...gitCommandLine(options.safeDirectory ?? root), ...args];
+  const program =
+    config.mode === 'host' || options.invocation ? 'git' : await nativeGitExecutable(root);
   const managed =
-    config.mode === 'host'
+    config.mode === 'host' || options.invocation
       ? undefined
       : await (
           await localExecutionEnvironment(
             root,
             currentExecutionPolicy() ?? executionPolicy(config.mode, config),
           )
-        ).processes.start('git', argv, '.', signal, gitEnvironment(false));
+        ).processes.start(program, argv, '.', signal, gitEnvironment(false));
   return new Promise((resolve, reject) => {
     const child =
       managed?.child ??
-      spawn('git', argv, {
+      spawn(options.invocation?.executable ?? 'git', options.invocation?.args ?? argv, {
         cwd: root,
-        env: gitEnvironment(options.includeGlobal === true),
+        env: options.invocation?.env ?? gitEnvironment(options.includeGlobal === true),
         shell: false,
         windowsHide: true,
         detached: process.platform !== 'win32',
@@ -243,11 +263,6 @@ function withGitErrors(prepared: PreparedTool): PreparedTool {
   };
 }
 
-function requireMetadataWrites(): void {
-  if (resolveSandboxConfig().mode !== 'host')
-    throw new Error('Git writes to protected repository metadata require explicit host mode');
-}
-
 function contained(parent: string, target: string): boolean {
   const relative = path.relative(parent, target);
   return (
@@ -297,7 +312,7 @@ async function managedWorktreeMetadata(repository: string, metadata: string): Pr
   }
 }
 
-async function repositoryRoot(root: string, signal: AbortSignal): Promise<string> {
+async function repositoryRoot(root: string, signal: AbortSignal, writing = false): Promise<string> {
   const workspace = await realpath(root);
   // Discovery has to precede the containment proof, so it cannot name the
   // repository as safe yet. Both calls are read-only ref lookups that run no
@@ -310,6 +325,8 @@ async function repositoryRoot(root: string, signal: AbortSignal): Promise<string
   ).trim();
   const repository = await realpath(top);
   const metadata = await realpath(gitDirectory);
+  if (writing && resolveSandboxConfig().mode !== 'host' && !samePath(workspace, repository))
+    throw new Error('Controlled Git writes require the selected repository root as the workspace');
   /*
    * A workspace that is a *subdirectory* of a repository is ordinary (a monorepo package, `projects/<name>`),
    * and refusing it silently made `git_diff` an English dead end: "must be contained in the workspace" says
@@ -351,6 +368,10 @@ async function gitConfig(
   asBool = false,
 ): Promise<string> {
   try {
+    if (resolveSandboxConfig().mode !== 'host') {
+      const invocation = await nativeGitIdentityQuery(root, key, asBool, gitEnvironment(true));
+      return (await captureGit(root, [], signal, { invocation })).content.trim();
+    }
     return (
       await git(root, ['config', '--get', ...(asBool ? ['--bool'] : []), key], signal, {
         includeGlobal: true,
@@ -402,23 +423,50 @@ async function prepareStage(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<PreparedTool> {
-  requireMetadataWrites();
-  const repository = await repositoryRoot(root, context.signal);
+  const native = nativeGitWrites();
+  const repository = await repositoryRoot(root, context.signal, true);
   const paths = safePaths(args.paths);
   if (!paths.length) throw new Error('paths must list at least one repository-relative path');
   const unstage = args.unstage === true;
+  const broker = native
+    ? await prepareNativeGitWrite(
+        repository,
+        { kind: 'stage', paths, unstage },
+        (argv, signal) => git(repository, argv, signal),
+        context.signal,
+      )
+    : undefined;
   return withGitErrors({
+    ...(native
+      ? {
+          approvalIsolation:
+            'Isolation: controlled local Git metadata operation on the Host; repository programs and remote protocols are disabled. Ordinary commands remain sandboxed.',
+        }
+      : {}),
     approvalDescription: [
       `${unstage ? 'Unstage' : 'Stage'} ${paths.length} path(s): ${describePaths(paths)}`,
       unstage ? 'Runs: git reset -q HEAD -- <paths>' : 'Runs: git add -- <paths>',
+      ...(native
+        ? [
+            'Controlled Host Git metadata operation; hooks are disabled. Staging refuses repositories with configured filters.',
+          ]
+        : []),
     ].join('\n'),
     async execute(ctx: ToolContext) {
       // `git restore --staged` cannot run before the first commit; `git reset` can.
-      const output = await git(
-        repository,
-        unstage ? ['reset', '-q', 'HEAD', '--', ...paths] : ['add', '--', ...paths],
-        ctx.signal,
-      );
+      const output = broker
+        ? (
+            await broker.execute(
+              (invocation, signal) => captureGit(repository, [], signal, { invocation }),
+              gitEnvironment(),
+              ctx.signal,
+            )
+          ).content
+        : await git(
+            repository,
+            unstage ? ['reset', '-q', 'HEAD', '--', ...paths] : ['add', '--', ...paths],
+            ctx.signal,
+          );
       const staged = await stagedPaths(repository, ctx.signal);
       return {
         isError: false,
@@ -440,36 +488,60 @@ async function prepareCommit(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<PreparedTool> {
-  requireMetadataWrites();
-  const repository = await repositoryRoot(root, context.signal);
+  const native = nativeGitWrites();
+  const repository = await repositoryRoot(root, context.signal, true);
   const message = commitMessage(args.message);
   const staged = await stagedPaths(repository, context.signal);
   if (!staged.length) throw new Error('Nothing is staged; run git_stage before git_commit');
   const identity = await commitPreconditions(repository, context.signal);
   const noVerify = args.no_verify === true;
+  const broker = native
+    ? await prepareNativeGitWrite(
+        repository,
+        { kind: 'commit', message, identity },
+        (argv, signal) => git(repository, argv, signal),
+        context.signal,
+      )
+    : undefined;
   return withGitErrors({
+    ...(native
+      ? {
+          approvalIsolation:
+            'Isolation: controlled local Git metadata operation on the Host; repository programs and remote protocols are disabled. Ordinary commands remain sandboxed.',
+        }
+      : {}),
     approvalDescription: [
       `Commit ${staged.length} staged file(s) as ${identity.name} <${identity.email}>: ${describePaths(staged)}`,
       `Message:\n${message}`,
-      noVerify
-        ? 'WARNING: no_verify is set, so repository hooks will be skipped.'
-        : 'Repository hooks will run; they may execute repository-controlled programs.',
+      native
+        ? 'Controlled Host Git metadata operation; repository hooks and filters are disabled. The approved index and HEAD are checked before updating the reference.'
+        : noVerify
+          ? 'WARNING: no_verify is set, so repository hooks will be skipped.'
+          : 'Repository hooks will run; they may execute repository-controlled programs.',
     ].join('\n'),
     async execute(ctx: ToolContext) {
-      const output = await git(
-        repository,
-        [
-          '-c',
-          `user.name=${identity.name}`,
-          '-c',
-          `user.email=${identity.email}`,
-          'commit',
-          '-m',
-          message,
-          ...(noVerify ? ['--no-verify'] : []),
-        ],
-        ctx.signal,
-      );
+      const output = broker
+        ? (
+            await broker.execute(
+              (invocation, signal) => captureGit(repository, [], signal, { invocation }),
+              gitEnvironment(),
+              ctx.signal,
+            )
+          ).content
+        : await git(
+            repository,
+            [
+              '-c',
+              `user.name=${identity.name}`,
+              '-c',
+              `user.email=${identity.email}`,
+              'commit',
+              '-m',
+              message,
+              ...(noVerify ? ['--no-verify'] : []),
+            ],
+            ctx.signal,
+          );
       const head = (await git(repository, ['rev-parse', 'HEAD'], ctx.signal)).trim();
       return {
         isError: false,
@@ -503,8 +575,8 @@ async function prepareWorktreeCreate(
   args: Record<string, unknown>,
   context: ToolContext,
 ): Promise<PreparedTool> {
-  requireMetadataWrites();
-  const repository = await repositoryRoot(root, context.signal);
+  const native = nativeGitWrites();
+  const repository = await repositoryRoot(root, context.signal, true);
   if (
     repository !== (await realpath(root)) ||
     !(await lstat(path.join(repository, '.git'))).isDirectory()
@@ -523,10 +595,27 @@ async function prepareWorktreeCreate(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  const broker = native
+    ? await prepareNativeGitWrite(
+        repository,
+        { kind: 'worktree', branch, target },
+        (argv, signal) => git(repository, argv, signal),
+        context.signal,
+      )
+    : undefined;
   return withGitErrors({
+    ...(native
+      ? {
+          approvalIsolation:
+            'Isolation: controlled local Git metadata operation on the Host; repository programs and remote protocols are disabled. Ordinary commands remain sandboxed.',
+        }
+      : {}),
     approvalDescription:
       `Create branch ${branch} from HEAD and check it out at ${target}.` +
-      '\nThe current worktree and its uncommitted changes stay in place. Checkout filters may run.',
+      '\nThe current worktree and its uncommitted changes stay in place.' +
+      (native
+        ? ' Controlled Host Git metadata operation; hooks are disabled and repositories with configured filters are refused.'
+        : ' Checkout filters may run.'),
     async execute(ctx) {
       ctx.signal.throwIfAborted();
       const parent = await worktreeParent(repository, true);
@@ -537,11 +626,15 @@ async function prepareWorktreeCreate(
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      const output = await git(
-        repository,
-        ['worktree', 'add', '-b', branch, destination, 'HEAD'],
-        ctx.signal,
-      );
+      const output = broker
+        ? (
+            await broker.execute(
+              (invocation, signal) => captureGit(repository, [], signal, { invocation }),
+              gitEnvironment(),
+              ctx.signal,
+            )
+          ).content
+        : await git(repository, ['worktree', 'add', '-b', branch, destination, 'HEAD'], ctx.signal);
       return {
         isError: false,
         content: bounded(
@@ -694,7 +787,7 @@ export function gitTools(root: string): Tool[] {
       name: 'git_stage',
       permission: 'command',
       description:
-        'Stage or unstage explicit repository-relative paths in the index. Does not commit, push, or touch the working tree. Staging can run repository-configured clean filters declared in .gitattributes, so it requires command approval; the approval shows the exact paths and operation.',
+        'Stage or unstage explicit repository-relative paths in the index. Does not commit, push, or touch the working tree. Requires command approval. In native mode a controlled Host metadata operation refuses staging in repositories with configured filters; ordinary commands remain sandboxed. In host mode staging can run repository-configured clean filters.',
       inputSchema: schema({
         paths: requiredPaths,
         unstage: { type: 'boolean' },
@@ -708,7 +801,7 @@ export function gitTools(root: string): Tool[] {
       name: 'git_commit',
       permission: 'command',
       description:
-        'Create one commit from the currently staged changes with the given message. Repository hooks run by default; pass no_verify to skip them. Refuses when nothing is staged, when no author identity is configured, or when the repository requires GPG signing. Never amends, rebases, or pushes.',
+        'Create one commit from the currently staged changes with the given message. Native mode uses a controlled Host metadata operation with hooks disabled and checks that the approved index and HEAD are unchanged. In host mode repository hooks run by default; pass no_verify to skip them. Refuses when nothing is staged, no author identity is configured, or GPG signing is required. Never amends, rebases, or pushes.',
       inputSchema: schema({
         message: { type: 'string', minLength: 1, maxLength: MAX_COMMIT_MESSAGE },
         no_verify: { type: 'boolean' },
