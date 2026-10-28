@@ -67,38 +67,39 @@ Windows 打包后可运行 `npm.cmd run smoke:windows-package`，用独立测试
 
 ### 分层与真实依赖
 
-包按单向分层组织：每个包只引用**更低层**的包，类型引用也算在内。层次的唯一声明处是 [scripts/check-layers.mjs](scripts/check-layers.mjs) 的 `LAYERS`（包）与 `APP_LAYERS`（入口），`npm run layers:check` 拒绝任何逆向引用：入口位于所有包之上，可以引用任意包，但入口之间只能引用更低层的入口（`apps/shared` 在下，`apps/agent-host`、`apps/cli`、`apps/desktop` 同层、互不引用），包永远不引用入口；文件级的值引用环由 `npm run cycles:check` 另行把关。从低到高：
+包按单向分层组织：每个包只引用**更低层**的包，类型引用也算在内。层次的唯一声明处是 [scripts/check-layers.mjs](scripts/check-layers.mjs) 的 `LAYERS`（包）与 `APP_LAYERS`（入口），`npm run layers:check` 拒绝任何逆向引用：入口位于所有包之上，可以引用任意包，但入口之间只能引用更低层的入口（`apps/shared` 在下，`apps/agent-host`、`apps/cli`、`apps/desktop` 同层、互不引用），包永远不引用入口；`apps/desktop` 另受 `APP_PACKAGES` 白名单约束，不能引用 `core`、`tools`、`storage` 等内核包（唯一例外是只读的会话检索模块），内核只经 Host 子进程触达；文件级的值引用环由 `npm run cycles:check` 另行把关。从低到高：
 
-| 层  | 包                          | 职责                                                                                     | 内部依赖                                                             |
-| --- | --------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 0   | `packages/formats`          | 无依赖的纯解析器：cron 与日历规则、PNG/JPEG/GIF/WebP 结构校验、FTS 文本归一化            | —                                                                    |
-| 1   | `packages/protocol`         | 类型真源：消息/事件/RPC/设置表/失败码/限额，以及任务定义与触发器的校验                   | formats                                                              |
-| 1   | `packages/platform`         | 进程身份、用户状态目录、凭据脱敏、工作区路径、原子写入                                   | —                                                                    |
-| 2   | `packages/providers`        | 三种模型协议的适配器、SSE、缓存、端点发现、容量目录                                      | platform, protocol                                                   |
-| 2   | `packages/search`           | 工作区文件清单、文本扫描与检索服务                                                       | protocol                                                             |
-| 2   | `packages/storage`          | SQLite 会话日志、事件、投影检查点、租约、检索                                            | formats, platform, protocol                                          |
-| 3   | `packages/maintenance`      | 数据库维护（备份、校验、恢复、压缩）的调度面                                             | platform, storage                                                    |
-| 3   | `packages/workspaces`       | 子代理工作区：快照、隔离副本、结果导出与导入                                             | platform, protocol, storage                                          |
-| 4   | `packages/tools`            | 工具执行管线、注册表、沙箱、后台命令、终端、文件工具与文件日志                           | platform, protocol, search, storage, workspaces                      |
-| 5   | `packages/lsp`              | 语言服务器管理（启动、诊断、定义、重命名、代码操作）                                     | protocol, tools                                                      |
-| 5   | `packages/office`           | DOCX / XLSX / PPTX 读写与预览                                                            | protocol, tools                                                      |
-| 5   | `packages/resources`        | Skills、声明式扩展、外部钩子桥                                                           | platform, protocol, tools                                            |
-| 6   | `packages/knowledge`        | markdown 记忆与文档索引（FTS5）                                                          | formats, platform, protocol, resources                               |
-| 6   | `packages/mcp`              | MCP 客户端（stdio/http/sse）与 OAuth 2.1                                                 | platform, protocol, resources, tools                                 |
-| 7   | `packages/builtin-services` | 内置代码分析服务与异步作业                                                               | mcp, platform, protocol, tools                                       |
-| 8   | `packages/catalog`          | `createTools()`：把基础工具与 LSP、MCP、Office、知识、扩展、技能装配成一次运行的工具目录 | knowledge, lsp, mcp, office, protocol, resources, search, tools      |
-| 9   | `packages/core`             | 内核：agent 循环、上下文预算、子代理、任务、目标、计划、投影                             | knowledge, platform, protocol, resources, storage, tools, workspaces |
-| 10  | `packages/client`           | 宿主客户端：传输缝隙、JSONL RPC、会话状态机                                              | core, platform, protocol, storage                                    |
-| 11  | `packages/carrier`          | 载体契约与服务：一套命令词表 + 快照 + 四条增量通道                                       | client, core, platform, protocol, providers, tools                   |
+| 层  | 包                          | 职责                                                                                                                                                 | 内部依赖                                                                                    |
+| --- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 0   | `packages/formats`          | 无依赖的纯解析器：cron 与日历规则、PNG/JPEG/GIF/WebP 结构校验、FTS 文本归一化                                                                        | —                                                                                           |
+| 1   | `packages/protocol`         | 类型真源：消息/事件/RPC/设置表/失败码/限额，以及任务定义与触发器的校验                                                                               | formats                                                                                     |
+| 1   | `packages/platform`         | 进程身份、用户状态目录、凭据脱敏、工作区路径、原子写入、子进程环境、进程树、工具时限暂停                                                             | —                                                                                           |
+| 2   | `packages/providers`        | 三种模型协议的适配器、SSE、缓存、端点发现、容量目录                                                                                                  | platform, protocol                                                                          |
+| 2   | `packages/search`           | 工作区文件清单、文本扫描与检索服务                                                                                                                   | platform, protocol                                                                          |
+| 2   | `packages/sandbox`          | 操作系统沙箱：Windows 专用账户后端与原生助手、macOS seatbelt、执行策略与能力                                                                         | platform, protocol                                                                          |
+| 2   | `packages/storage`          | SQLite 会话日志、事件、投影检查点、租约、检索                                                                                                        | formats, platform, protocol                                                                 |
+| 3   | `packages/maintenance`      | 数据库维护（备份、校验、恢复、压缩）的调度面                                                                                                         | platform, storage                                                                           |
+| 3   | `packages/workspaces`       | 子代理工作区：快照、隔离副本、结果导出与导入                                                                                                         | platform, protocol, storage                                                                 |
+| 4   | `packages/tools`            | 工具执行管线、注册表、后台命令、终端、文件工具与文件日志                                                                                             | platform, protocol, sandbox, search, storage, workspaces                                    |
+| 5   | `packages/lsp`              | 语言服务器管理（启动、诊断、定义、重命名、代码操作）                                                                                                 | platform, protocol, sandbox, tools                                                          |
+| 5   | `packages/office`           | DOCX / XLSX / PPTX 读写与预览                                                                                                                        | platform, protocol, tools                                                                   |
+| 5   | `packages/resources`        | Skills、声明式扩展、外部钩子桥                                                                                                                       | platform, protocol, sandbox, tools                                                          |
+| 6   | `packages/knowledge`        | markdown 记忆与文档索引（FTS5）                                                                                                                      | formats, platform, protocol, resources                                                      |
+| 6   | `packages/mcp`              | MCP 客户端（stdio/http/sse）与 OAuth 2.1                                                                                                             | platform, protocol, resources, sandbox, tools                                               |
+| 7   | `packages/builtin-services` | 内置代码分析服务与异步作业                                                                                                                           | mcp, platform, protocol, tools                                                              |
+| 8   | `packages/catalog`          | `createTools()`：把基础工具与 LSP、MCP、Office、知识、扩展、技能装配成一次运行的工具目录                                                             | builtin-services, knowledge, lsp, mcp, office, platform, protocol, resources, search, tools |
+| 9   | `packages/core`             | 内核：agent 循环（`run/`）、上下文预算（`context/`）、子代理（`subagents/`）、完成判定（`completion/`）、提示词（`prompt/`）、任务、目标、计划、投影 | knowledge, platform, protocol, resources, sandbox, storage, tools, workspaces               |
+| 10  | `packages/client`           | 宿主客户端：传输缝隙、JSONL RPC、会话状态机                                                                                                          | core, platform, protocol                                                                    |
+| 11  | `packages/carrier`          | 载体契约与服务：一套命令词表 + 快照 + 四条增量通道                                                                                                   | client, platform, protocol, providers, sandbox                                              |
 
-`packages/tools` 只提供工具管线和基础工具；把各领域工具拼成目录的装配点在它之上的 `packages/catalog`，所以 LSP、MCP、Office 等领域包可以依赖工具管线，而不会和装配点互相引用。
+`packages/tools` 只提供工具管线和基础工具，命令在哪个沙箱里跑由下层的 `packages/sandbox` 决定；把各领域工具拼成目录的装配点在它之上的 `packages/catalog`，所以 LSP、MCP、Office 等领域包可以依赖工具管线，而不会和装配点互相引用。
 
-| 入口              | 职责                                                                 | 内部依赖                                                                                                  |
-| ----------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `apps/shared`     | CLI 与 Host 共用的装配层：沙箱默认值、容量解析、store、`createAgent` | catalog, core, platform, protocol, providers, storage, tools, workspaces                                  |
-| `apps/cli`        | 一次性命令行：命令词表与计数见[生成事实](#facts)                     | shared, core, mcp, protocol, providers, resources, storage, tools                                         |
-| `apps/agent-host` | 长驻 Host：JSONL(stdin) RPC 服务端 + 任务调度器                      | shared, client, core, platform, protocol, providers, resources, storage, tools, workspaces                |
-| `apps/desktop`    | Electron 主进程 + preload + 渲染层；自持一个 Host 子进程             | carrier, client, core, maintenance, mcp, office, platform, protocol, providers, resources, storage, tools |
+| 入口              | 职责                                                                 | 内部依赖                                                                                                                               |
+| ----------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/shared`     | CLI 与 Host 共用的装配层：沙箱默认值、容量解析、store、`createAgent` | catalog, core, platform, protocol, providers, sandbox, storage, tools, workspaces                                                      |
+| `apps/cli`        | 一次性命令行：命令词表与计数见[生成事实](#facts)                     | shared, core, mcp, platform, protocol, providers, resources, sandbox, storage, tools, workspaces                                       |
+| `apps/agent-host` | 长驻 Host：JSONL(stdin) RPC 服务端 + 任务调度器                      | shared, builtin-services, catalog, client, core, office, platform, protocol, providers, resources, sandbox, storage, tools, workspaces |
+| `apps/desktop`    | Electron 主进程 + preload + 渲染层；自持一个 Host 子进程             | builtin-services, carrier, client, maintenance, office, platform, protocol, providers, resources, sandbox, storage（仅只读会话检索）   |
 
 `packages/carrier` 是这套架构的接缝：`CarrierService` 是「面向任何界面层的客户端状态机」，它回答「界面该看到什么」，所有答案都来自 Host 应答；包里不允许出现 Electron、DOM 或 `apps/` 引用（由 `tests/carrier.test.ts` 从源码文本上钉住），因此另一种界面层可以复用它而不必改动内核。
 
