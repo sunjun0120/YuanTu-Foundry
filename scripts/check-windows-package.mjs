@@ -63,6 +63,12 @@ export async function validateWindowsPackage(directory, { inspect = true } = {})
   for (const excluded of ['@napi-rs/canvas', '@napi-rs/canvas-win32-x64-msvc'])
     if (await stat(path.join(resources, 'app/node_modules', excluded)).catch(() => null))
       throw new Error(`Packaged app still contains ${excluded}`);
+  // Inlined by the bundles, so packaging a copy means a runtime import escaped them (see `electron-builder.config.cjs`).
+  for (const bundled of ['docx', 'jszip', 'mammoth', 'pptxgenjs', 'xlsx'])
+    if (await stat(path.join(resources, 'app/node_modules', bundled)).catch(() => null))
+      throw new Error(`Packaged app still contains bundled dependency ${bundled}`);
+  for (const entry of ['pdf.mjs', 'pdf.worker.mjs'])
+    await readFile(path.join(resources, 'app/node_modules/pdfjs-dist/legacy/build', entry));
   const info = inspect
     ? await inspectWindowsRuntime(path.join(resources, 'runtime/node.exe'))
     : null;
