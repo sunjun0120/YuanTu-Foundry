@@ -60,6 +60,7 @@ test('desktop quit bounds sandbox initialization and still closes both carriers'
     release = resolve;
   });
   let closed = 0;
+  let searchKilled = 0;
   const errors: string[] = [];
   runInNewContext(stripTypeScriptTypes(source.slice(start, end)), {
     app: {
@@ -72,6 +73,12 @@ test('desktop quit bounds sandbox initialization and still closes both carriers'
     quitAllowed: false,
     browserViews: null,
     workspaceHosts: null,
+    projectSearchVersion: 0,
+    projectSearchWorker: {
+      kill: () => {
+        searchKilled++;
+      },
+    },
     profileWrites: new Set(),
     settingsAbort: new AbortController(),
     sandboxInitializing: pending,
@@ -113,6 +120,7 @@ test('desktop quit bounds sandbox initialization and still closes both carriers'
   release();
   assert.equal(completed, true, 'stalled initialization must not block app quit forever');
   assert.equal(closed, 2, 'initialization timeout must not skip owned carrier cleanup');
+  assert.equal(searchKilled, 1, 'quit must stop a running project search worker');
   assert.match(errors.join('\n'), /unconfirmed/i);
 });
 
