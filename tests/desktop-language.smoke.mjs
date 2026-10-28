@@ -8,7 +8,11 @@ import path from 'node:path';
 import { _electron as electron } from 'playwright';
 import electronPath from 'electron';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
-import { artifactPath, chooseSelectOption } from './desktop-smoke-support.mjs';
+import {
+  artifactPath,
+  chooseSelectOption,
+  setWindowContentSize,
+} from './desktop-smoke-support.mjs';
 process.env.YUANTU_SESSION_TITLES = 'false';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { waitForPage } from './page-wait.mjs';
@@ -393,6 +397,9 @@ test(
     const pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.setDefaultTimeout(15_000);
+    // The catalog's placement depends on the window width. Pin a width a smaller CI desktop would produce, so
+    // the narrow layout is what this test checks on every machine, not only on those narrower than the default.
+    await setWindowContentSize(app, page, 900, 700);
     await page.waitForFunction(() => !document.querySelector('#prompt').disabled);
     await page.locator(`[data-session-id="${parent.id}"]`).click();
     await page.locator('#open-subagents').waitFor({ state: 'visible' });
@@ -471,6 +478,8 @@ test(
     const page = await app.firstWindow();
     await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(15_000);
+    // Same narrow width as the catalog test above: the row must stay clickable beside the sidebar.
+    await setWindowContentSize(app, page, 900, 700);
     await waitForPage(page, () => !document.querySelector('#prompt').disabled);
     await page.locator(`[data-session-id="${parent.id}"]`).click();
     await page.locator('#open-subagents').hover();

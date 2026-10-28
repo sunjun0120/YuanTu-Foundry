@@ -5,11 +5,11 @@
  * owned a popup menu and the dialog, and the search box was wired beside them. The rules worth keeping are small and
  * easy to lose in a rewrite:
  *
- * - the list is a **window** over the newest sessions (four rows, then "show more"); a search shows every match;
+ * - the list is a **window** over the newest sessions (five rows, then "show more"); a search shows every match;
  * - a row says whether its session runs or waits on a person, and that status is not a reason to disable the row —
  *   several sessions run at once, and switching to another one must stay possible;
- * - rename/delete ask in a dialog; an empty rename is refused before anything is sent, and a failed command keeps
- *   the dialog open with the reason;
+ * - rename edits the row in place and delete asks in a dialog (both share `dialog`); an empty rename is refused
+ *   before anything is sent, and a failed command keeps the field or dialog open with the reason;
  * - the menu and dialog are refused while the window is blocked (a run that must not be disturbed).
  */
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
@@ -18,7 +18,7 @@ import { t } from '../../i18n.ts';
 import { createStore, type ReadableStore } from '../stores.ts';
 
 /** Rows shown before "show more"; a search always shows every match. */
-export const COLLAPSED_ROWS = 4;
+export const COLLAPSED_ROWS = 3;
 
 /** What a row says about its session's live run: running at all, and how many interactions wait on a person. */
 export interface SessionActivity {

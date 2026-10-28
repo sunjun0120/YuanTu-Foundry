@@ -181,42 +181,74 @@ export function WorkspacePanel({
   const activeBrowser = active.kind === 'browser' ? state.browserTabs.get(active.id) : undefined;
   const separator = workspacePath(selected, state.workspace);
   const projectName = workspaceName(state.workspace);
-  const tabs: ReactNode[] = [
-    <button
-      key="new"
-      id="workspace-new-tab"
-      type="button"
-      role="tab"
-      aria-controls="workspace-new-tab-page"
-      aria-selected={active.kind === 'new'}
-      tabIndex={active.kind === 'new' ? 0 : -1}
-      className="workspace-tab"
-      onClick={() => {
-        rememberScroll();
-        controller.openNewTab();
-      }}
-    >
-      <Icon kind="plus" />
-      <span>{t('workspace.newTab')}</span>
-    </button>,
-    <button
-      key="tree"
-      id="workspace-tree-tab"
-      type="button"
-      role="tab"
-      aria-controls="workspace-tree"
-      aria-selected={active.kind === 'files'}
-      tabIndex={active.kind === 'files' ? 0 : -1}
-      className="workspace-tab"
-      onClick={() => {
-        rememberScroll();
-        controller.openFiles();
-      }}
-    >
-      <Icon kind="folder" />
-      <span>{t('workspace.open')}</span>
-    </button>,
-  ];
+  const closeAndFocus = (close: () => void): void => {
+    rememberScroll();
+    close();
+    if (!controller.store.getSnapshot().open) document.getElementById('open-workspace')?.focus();
+  };
+  const tabs: ReactNode[] = [];
+  if (state.startOpen) {
+    tabs.push(
+      <div key="new" className={`workspace-tab-item${active.kind === 'new' ? ' active' : ''}`}>
+        <button
+          id="workspace-new-tab"
+          type="button"
+          role="tab"
+          aria-controls="workspace-new-tab-page"
+          aria-selected={active.kind === 'new'}
+          tabIndex={active.kind === 'new' ? 0 : -1}
+          className="workspace-tab"
+          onClick={() => {
+            rememberScroll();
+            controller.openNewTab();
+          }}
+        >
+          <Icon kind="home" />
+          <span>{t('workspace.startTab')}</span>
+        </button>
+        <button
+          type="button"
+          className="workspace-tab-close"
+          aria-label={t('workspace.closeTab', { name: t('workspace.startTab') })}
+          data-tooltip={t('workspace.closeTab', { name: t('workspace.startTab') })}
+          onClick={() => closeAndFocus(() => controller.closeStart())}
+        >
+          <Icon kind="close" />
+        </button>
+      </div>,
+    );
+  }
+  if (state.filesOpen) {
+    tabs.push(
+      <div key="tree" className={`workspace-tab-item${active.kind === 'files' ? ' active' : ''}`}>
+        <button
+          id="workspace-tree-tab"
+          type="button"
+          role="tab"
+          aria-controls="workspace-tree"
+          aria-selected={active.kind === 'files'}
+          tabIndex={active.kind === 'files' ? 0 : -1}
+          className="workspace-tab"
+          onClick={() => {
+            rememberScroll();
+            controller.openFiles();
+          }}
+        >
+          <Icon kind="folder" />
+          <span>{t('workspace.open')}</span>
+        </button>
+        <button
+          type="button"
+          className="workspace-tab-close"
+          aria-label={t('workspace.closeTab', { name: t('workspace.open') })}
+          data-tooltip={t('workspace.closeTab', { name: t('workspace.open') })}
+          onClick={() => closeAndFocus(() => controller.closeFiles())}
+        >
+          <Icon kind="close" />
+        </button>
+      </div>,
+    );
+  }
   for (const path of state.tabOrder) {
     const file = state.tabs.get(path);
     if (!file) continue;
@@ -224,7 +256,7 @@ export function WorkspacePanel({
     tabs.push(
       <div
         key={file.path}
-        className={`workspace-file-tab${isActive ? ' active' : ''}`}
+        className={`workspace-tab-item workspace-file-tab${isActive ? ' active' : ''}`}
         data-path={file.path}
       >
         <button
@@ -250,8 +282,7 @@ export function WorkspacePanel({
           aria-label={t('workspace.closeTab', { name: fileName(file.path) })}
           data-tooltip={t('workspace.closeTab', { name: fileName(file.path) })}
           onClick={() => {
-            rememberScroll();
-            controller.closeTab(file.path);
+            closeAndFocus(() => controller.closeTab(file.path));
           }}
         >
           <Icon kind="close" />
@@ -266,7 +297,7 @@ export function WorkspacePanel({
     tabs.push(
       <div
         key={id}
-        className={`workspace-file-tab workspace-browser-tab${isActive ? ' active' : ''}`}
+        className={`workspace-tab-item workspace-file-tab workspace-browser-tab${isActive ? ' active' : ''}`}
         data-browser-tab={id}
       >
         <button
@@ -291,8 +322,7 @@ export function WorkspacePanel({
           aria-label={t('workspace.closeTab', { name: browser.title || t('browser.untitled') })}
           data-tooltip={t('workspace.closeTab', { name: browser.title || t('browser.untitled') })}
           onClick={() => {
-            rememberScroll();
-            controller.closeBrowserTab(id);
+            closeAndFocus(() => controller.closeBrowserTab(id));
           }}
         >
           <Icon kind="close" />
@@ -370,7 +400,9 @@ export function WorkspacePanel({
             role="tablist"
             aria-label={t('workspace.tabs')}
             onKeyDown={(event) => {
-              const all = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+              const all = [
+                ...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'),
+              ].filter((tab) => !tab.hidden);
               const current = all.findIndex((tab) => tab === document.activeElement);
               const next =
                 event.key === 'Home'
@@ -389,18 +421,21 @@ export function WorkspacePanel({
             }}
           >
             {tabs}
+            <button
+              id="workspace-new-tab-plus"
+              type="button"
+              className="workspace-new-tab"
+              aria-label={t('workspace.newTab')}
+              data-tooltip={t('workspace.newTab')}
+              title={t('workspace.newTab')}
+              onClick={() => {
+                rememberScroll();
+                controller.openNewTab();
+              }}
+            >
+              <Icon kind="plus" />
+            </button>
           </div>
-          <button
-            id="workspace-new-tab-plus"
-            type="button"
-            className="workspace-new-tab"
-            aria-label={t('workspace.newTab')}
-            data-tooltip={t('workspace.newTab')}
-            title={t('workspace.newTab')}
-            onClick={() => controller.openNewTab()}
-          >
-            <Icon kind="plus" />
-          </button>
           <div className="workspace-panel-actions">
             <button
               id="workspace-fullscreen"
@@ -442,6 +477,7 @@ export function WorkspacePanel({
         </header>
         <div
           id="workspace-location"
+          hidden={active.kind !== 'file'}
           className="workspace-location"
           translate="no"
           title={separator}

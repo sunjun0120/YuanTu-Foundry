@@ -25,6 +25,8 @@ export interface RunStatusInput {
   questions?: number;
   /** Whether the Host connection is usable. */
   ready: boolean;
+  /** No workspace is open, so there is no Host to connect to; the line says what to do instead of only "not ready". */
+  noWorkspace?: boolean;
   loading: boolean;
   activity?: {
     kind: 'model' | 'tool';
@@ -62,7 +64,8 @@ export function runStatusText(input: RunStatusInput): string {
   // A question is also the run waiting on the person, and it used to read 正在执行工具…: the tool that asked is
   // still open, and the status line described work that had stopped.
   if (input.questions) return t('ui.runStatus.awaitingAnswer');
-  if (!input.ready) return t('ui.runStatus.connecting');
+  if (!input.ready)
+    return t(input.noWorkspace ? 'ui.runStatus.noWorkspace' : 'ui.runStatus.connecting');
   if (input.loading) return t('ui.runStatus.loadingSession');
   if (input.status === 'running') {
     // Before the tool has a command to run, the useful fact is what it is waiting for — not that a tool is active.

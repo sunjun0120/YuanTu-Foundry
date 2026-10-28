@@ -4,6 +4,8 @@
  * The row says whether its session runs or waits on a person, but it is **not disabled** for a run: several sessions
  * run at once, and switching to another one has to stay possible. The status icon sits where the menu trigger appears
  * on hover; the label goes on the row, because the icon is drawn but never hovered.
+ *
+ * Rename edits the title in place, like a project name: the row becomes a field until Enter saves or Escape leaves.
  */
 import type { ReactNode } from 'react';
 import { locale, t } from '../../i18n.ts';
@@ -61,6 +63,52 @@ export function SessionRow({
   const activity: SessionActivity | undefined = state.activity.get(item.id);
   const label = sessionStatusLabel(activity);
   const selected = item.id === state.currentId;
+  const editing = state.dialog?.kind === 'rename' && state.dialog.targetId === item.id;
+  if (editing && state.dialog) {
+    const dialog = state.dialog;
+    return (
+      <div className="session-row session-row-editing">
+        <form
+          className="project-rename session-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void controller.confirmDialog();
+          }}
+        >
+          <input
+            id="session-title-input"
+            aria-label={t('session.nameLabel')}
+            aria-invalid={dialog.error ? 'true' : undefined}
+            title={dialog.error || undefined}
+            maxLength={120}
+            autoComplete="off"
+            autoFocus
+            disabled={dialog.saving}
+            value={dialog.value}
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) => controller.setDialogValue(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              controller.cancelDialog();
+            }}
+          />
+          <button
+            type="submit"
+            aria-label={t('session.saveName')}
+            disabled={dialog.saving || !dialog.value.trim()}
+          >
+            ✓
+          </button>
+        </form>
+        {dialog.error ? (
+          <p className="session-rename-error" role="alert">
+            {dialog.error}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className={`session-row${label ? ' has-status' : ''}`}>
       <button

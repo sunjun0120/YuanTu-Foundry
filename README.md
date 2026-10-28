@@ -576,7 +576,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 左侧“项目”可添加本地工作区、重命名显示名称及从列表移除，项目整体与各工作区可分别折叠并保存状态。每个工作区保留自己的 Host、会话数据库、搜索和权限；切换工作区不停止后台任务，“待处理”可直接回答其他工作区的审批和问题。移除只更新项目列表，磁盘文件和历史保留；运行、排队或等待处理时禁止移除。最后一项移除后保持空列表，可重新添加原目录恢复历史。首次默认目录为 `<userData>/workspace`，安装目录及其子目录不能注册为工作区。
 
-右侧展开和 `+` 进入固定“新建标签页”，提供工作区文件与内置浏览器入口。浏览器使用独立 `WebContentsView`，无 Node 或应用桥接；其 cookie/localStorage 保存在应用数据目录的 `Partitions/yuantu-browser`，网页标签跨工作区保留、退出应用后不恢复，浏览数据仍保留。它与 Agent 的 `browser_*` 工具独立，网页内容不会自动发送给模型。当前不支持下载、POST 新窗口及依赖 opener 回传的登录；在系统浏览器重试需要用户重新操作，不会重放 POST 或共享登录态。源码预览复用语法高亮，超过 64 KiB 的可见文本回退纯文本。
+右侧展开和 `+` 进入“开始”页，提供工作区文件与内置浏览器入口。标签栏中每个标签都可关闭；关闭最后一个标签会直接折叠面板，下次展开回到“开始”页。浏览器使用独立 `WebContentsView`，无 Node 或应用桥接；其 cookie/localStorage 保存在应用数据目录的 `Partitions/yuantu-browser`，网页标签跨工作区保留、退出应用后不恢复，浏览数据仍保留。它与 Agent 的 `browser_*` 工具独立，网页内容不会自动发送给模型。当前不支持下载、POST 新窗口及依赖 opener 回传的登录；在系统浏览器重试需要用户重新操作，不会重放 POST 或共享登录态。源码预览复用语法高亮，超过 64 KiB 的可见文本回退纯文本。
 
 | 面板       | 内容                                                                                                                                                                                                             |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -728,7 +728,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 19 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 336 个 | `tests/*.test.ts` |
+| 行为测试文件 | 338 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

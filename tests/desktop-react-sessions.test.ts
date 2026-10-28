@@ -44,6 +44,7 @@ function fixture(options: { fail?: boolean } = {}) {
         session('c'),
         session('d'),
         session('e'),
+        session('f'),
       ],
       currentId: 'a',
       blocked: overrides.blocked ?? false,
@@ -89,20 +90,20 @@ test('the list is a window of the newest sessions until it is expanded', () => {
   assert.equal(visibleSessions(state).length, COLLAPSED_ROWS);
   assert.equal(sessionsFoldable(state), true);
   controller.toggleExpanded();
-  assert.equal(visibleSessions(controller.store.getSnapshot()).length, 5);
+  assert.equal(visibleSessions(controller.store.getSnapshot()).length, 6);
   assert.equal(sessionsFoldable(controller.store.getSnapshot()), true);
 });
 
 test('a search shows every match and drops the fold', () => {
   const { controller } = fixture();
   controller.update({
-    sessions: [session('a'), session('b'), session('c'), session('d'), session('e')],
+    sessions: [session('a'), session('b'), session('c'), session('d'), session('e'), session('f')],
     currentId: 'a',
     blocked: false,
     searching: true,
   });
   const state = controller.store.getSnapshot();
-  assert.equal(visibleSessions(state).length, 5);
+  assert.equal(visibleSessions(state).length, 6);
   assert.equal(sessionsFoldable(state), false);
 });
 

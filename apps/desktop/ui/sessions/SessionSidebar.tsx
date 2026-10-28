@@ -1,7 +1,7 @@
 /**
- * The sidebar's session list, search box and row menu.
+ * The sidebar's session list and row menu. Global search lives beside the project heading.
  *
- * The list is a keyed render rather than a patch; the window (four rows) only grows when the person asks, and a
+ * The list is a keyed render rather than a patch; the window (three rows) only grows when the person asks, and a
  * search shows every match. The menu is one popup for every row, positioned beside the anchor and closed by Escape,
  * an outside click, scrolling or a switch — the same lifetime the legacy popup had.
  */
@@ -11,7 +11,6 @@ import { t } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
 import { useLocale } from '../i18n.ts';
 import {
-  searchEmpty,
   sessionsFoldable,
   visibleSessions,
   type SessionSidebarController,
@@ -28,10 +27,7 @@ export function SessionSidebar({
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const menu = useRef<HTMLDivElement>(null);
-  const search = useRef<HTMLInputElement>(null);
-  const openButton = useRef<HTMLButtonElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const focusFirst = useRef(false);
 
   const cancelClose = (): void => {
@@ -97,121 +93,11 @@ export function SessionSidebar({
 
   useEffect(() => () => cancelClose(), []);
 
-  // Search lifecycle: opening resets and focuses, an outside click or Escape closes and re-reads the whole list.
-  useEffect(() => {
-    if (!state.searchOpen) return;
-    const focus = (): void => {
-      if (!state.blocked) search.current?.focus();
-    };
-    focus();
-    requestAnimationFrame(focus);
-    const onPointer = (event: PointerEvent): void => {
-      const target = event.target as Node;
-      if (search.current?.contains(target) || openButton.current?.contains(target)) return;
-      if (searchTimer.current) clearTimeout(searchTimer.current);
-      controller.closeSearch();
-      void controller.submitQuery('');
-    };
-    document.addEventListener('pointerdown', onPointer);
-    return () => document.removeEventListener('pointerdown', onPointer);
-  }, [state.searchOpen, state.blocked, controller]);
-
-  useEffect(
-    () => () => {
-      if (searchTimer.current) clearTimeout(searchTimer.current);
-    },
-    [],
-  );
-
-  const closeSearch = (refocus: boolean): void => {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    controller.closeSearch();
-    void controller.submitQuery('');
-    if (refocus) openButton.current?.focus();
-  };
-
   const showAll = state.expanded || state.searching;
   const foldable = sessionsFoldable(state);
-  const empty = searchEmpty(state);
 
   return (
     <>
-      <div id="session-search-row" className="session-search-row">
-        <div id="recent-sessions-label" className="section-label" hidden={state.searchOpen}>
-          {t('ui.recentSessions')}{' '}
-          <span id="session-count">
-            {state.sessions.length}
-            {state.hasMore ? '+' : ''}
-          </span>
-        </div>
-        <button
-          ref={openButton}
-          id="open-session-search"
-          className="open-session-search"
-          aria-expanded={state.searchOpen}
-          aria-controls="session-search"
-          type="button"
-          aria-label={t('ui.searchSessions')}
-          title={t('ui.searchSessions')}
-          disabled={state.blocked}
-          hidden={state.searchOpen}
-          onClick={() => {
-            controller.openSearch();
-            void controller.submitQuery('');
-          }}
-        >
-          <svg className="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-            <circle cx="7" cy="7" r="4.25"></circle>
-            <path d="m10.2 10.2 3.3 3.3"></path>
-          </svg>
-        </button>
-        <input
-          ref={search}
-          id="session-search"
-          className="session-search"
-          type="search"
-          maxLength={200}
-          placeholder={t('ui.searchSessionsOrMessages')}
-          aria-label={t('ui.searchSessions')}
-          hidden={!state.searchOpen}
-          disabled={state.blocked}
-          value={state.query}
-          onChange={(event) => {
-            const query = event.currentTarget.value;
-            controller.setQuery(query);
-            if (searchTimer.current) clearTimeout(searchTimer.current);
-            searchTimer.current = setTimeout(() => void controller.submitQuery(query), 180);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') closeSearch(true);
-          }}
-        />
-        <button
-          id="clear-session-search"
-          className="clear-session-search"
-          type="button"
-          aria-label={t('ui.clearSessionSearch')}
-          title={t('ui.clearSessionSearch')}
-          hidden={!state.searchOpen}
-          disabled={state.blocked}
-          onClick={() => closeSearch(true)}
-        >
-          <svg
-            className="clear-search-icon"
-            viewBox="0 0 16 16"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path d="m4 4 8 8M12 4l-8 8"></path>
-          </svg>
-        </button>
-      </div>
-      <p id="session-search-note" className="session-search-note" hidden>
-        {t('ui.searchNameOnly')}
-      </p>
-      <p id="session-search-empty" className="session-empty session-search-empty" hidden={!empty}>
-        {t('ui.noMatchingSessions')}
-      </p>
       <nav
         id="sessions"
         aria-label={t('ui.sessionList')}
@@ -253,7 +139,7 @@ export function SessionSidebar({
             aria-expanded={state.expanded}
             onClick={() => controller.toggleExpanded()}
           >
-            {state.expanded ? t('ui.showFewerSessions') : t('ui.showMoreSessions')}
+            {state.expanded ? t('ui.showFewerSessions') : t('projects.showMoreSessions')}
           </button>
         ) : null}
       </nav>

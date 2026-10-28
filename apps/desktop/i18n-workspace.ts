@@ -321,6 +321,10 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.runStatus.awaitingApproval': ['等待你的确认', 'Waiting for your confirmation'],
   'ui.runStatus.awaitingAnswer': ['等待你的回答', 'Waiting for your answer'],
   'ui.runStatus.connecting': ['连接未就绪', 'The connection is not ready'],
+  'ui.runStatus.noWorkspace': [
+    '连接未就绪：要先选择工作区',
+    'The connection is not ready: choose a workspace first',
+  ],
   'ui.runStatus.loadingSession': ['正在加载会话…', 'Loading the session…'],
   /**
    * The exported conversation.
@@ -341,13 +345,27 @@ export const workspaceMessages: Record<string, [string, string]> = {
   // language sweep exists to catch, and it would only be caught on the surfaces the sweep opens.
   'workspace.title': ['工作区文件', 'Workspace files'],
   'projects.title': ['项目', 'Projects'],
+  'projects.showMoreSessions': ['展开显示', 'Show more'],
+  'projects.search': ['全局搜索', 'Global search'],
+  'projects.searchPlaceholder': ['搜索会话或消息', 'Search conversations or messages'],
+  'projects.searchHint': [
+    '搜索所有已添加项目，每个项目最多显示 50 条结果。',
+    'Search all added projects. Up to 50 results per project.',
+  ],
+  'projects.searching': ['正在搜索…', 'Searching...'],
+  'projects.searchFailed': ['无法搜索项目：{name}', 'Could not search project: {name}'],
+  'projects.openFailed': [
+    '无法打开会话，请重试。',
+    'Could not open the conversation. Please try again.',
+  ],
   'projects.add': ['添加工作区', 'Add workspace'],
   'projects.empty': ['还没有工作区', 'No workspaces yet'],
   'projects.rename': ['重命名', 'Rename'],
   'projects.remove': ['移除', 'Remove'],
-  'projects.removeConfirm': [
-    '确认从列表移除，磁盘文件保留？',
-    'Remove from the list? Files on disk stay.',
+  'projects.removeTitle': ['移除项目？', 'Remove project?'],
+  'projects.removeDescription': [
+    '“{name}”将从列表移除，磁盘上的文件会保留。',
+    '“{name}” leaves the list; its files on disk stay.',
   ],
   'projects.unavailable': ['不可用', 'Unavailable'],
   'projects.running': ['运行中', 'Running'],
@@ -359,6 +377,7 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'workspace.open': ['文件', 'Files'],
   'workspace.openTitle': ['显示工作区文件', 'Show workspace files'],
   'workspace.newTab': ['新建标签页', 'New tab'],
+  'workspace.startTab': ['开始', 'Start'],
   'workspace.filesTab': ['工作区文件', 'Workspace files'],
   'workspace.filesTabHint': ['浏览项目中的文件', 'Browse the files in this workspace'],
   'workspace.browserTab': ['浏览器', 'Browser'],

@@ -430,6 +430,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
             approvals: session.approvals.length,
             questions: session.questions.length,
             ready: state.ready,
+            noWorkspace: !state.workspace,
             loading: session.loading,
             activity: session.statisticsActivity,
             tools: session.tools.length,

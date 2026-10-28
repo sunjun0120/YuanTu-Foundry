@@ -96,7 +96,7 @@ export const conversationMessages: Record<string, [string, string]> = {
     'Send a message or describe a task...',
   ],
   'ui.newSession': ['新建会话', 'New session'],
-  'ui.untitledSession': ['新增会话', 'New session'],
+  'ui.untitledSession': ['新会话', 'New session'],
   'ui.workspace': ['工作区', 'Workspace'],
   'ui.changeFolder': ['更换目录', 'Change folder'],
   'ui.recentSessions': ['最近会话', 'Recent sessions'],

@@ -90,6 +90,25 @@ export async function waitFor(check, ms = 15000) {
   throw new Error('Launcher did not reach expected state');
 }
 
+/**
+ * Pin the window's content box, so a test of a narrow layout runs at that width on every desktop.
+ *
+ * The window opens at the product's default 1220x860, which is wider than some CI displays: a runner that
+ * cannot fit it lays the page out narrower, and a test that never said which width it exercises passes
+ * locally and fails there. `setContentSize` is in DIPs, the same unit media queries read.
+ */
+export async function setWindowContentSize(app, page, width, height) {
+  await app.evaluate(
+    ({ BrowserWindow }, size) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height),
+    { width, height },
+  );
+  await page.waitForFunction(
+    (size) => Math.abs(innerWidth - size.width) <= 2 && Math.abs(innerHeight - size.height) <= 2,
+    { width, height },
+  );
+}
+
 /** Where a smoke run writes screenshots and other artifacts a person may want to look at. */
 export function artifactPath(relative) {
   return path.join(

@@ -33,6 +33,7 @@ import {
 } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { existsSync, realpathSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
@@ -100,6 +101,9 @@ import {
 let window: BrowserWindow | null = null;
 let browserViews: BrowserViews | null = null;
 let projectWorkspaces: ProjectWorkspaces | null = null;
+/** Only the latest global query owns a worker; obsolete queries must not accumulate while typing. */
+let projectSearchWorker: ReturnType<typeof execFile> | undefined;
+let projectSearchVersion = 0;
 let workspaceHosts: WorkspaceHostManager<CarrierService> | null = null;
 /** Background workspace state for the left sidebar: running and waiting counts, not a second renderer snapshot. */
 const workspaceRuntime = new Map<string, ProjectRuntimeView>();
@@ -225,6 +229,7 @@ function watchHost(workspaceId: string, host: CarrierService, empty = false): vo
               return {
                 id: session.id,
                 title: session.title ?? '',
+                createdAt: session.createdAt,
                 running: Boolean(session.activeRun),
                 waiting,
               };
@@ -536,6 +541,8 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   if (quitting) return;
   quitting = true;
+  ++projectSearchVersion;
+  projectSearchWorker?.kill();
   settingsAbort.abort();
   void (async () => {
     try {
@@ -887,6 +894,36 @@ void app
             return await register(picked.filePaths[0]);
           }
           switch (command.type) {
+            case 'search': {
+              const version = ++projectSearchVersion;
+              projectSearchWorker?.kill();
+              const registry = await projectWorkspaces.list();
+              if (version !== projectSearchVersion) throw new Error('Search was superseded');
+              const search = await new Promise<
+                import('./project-workspaces-contract.ts').ProjectSessionSearch
+              >((resolve, reject) => {
+                const child = execFile(
+                  runtimePaths().nodePath,
+                  [path.join(__dirname, 'project-search-worker.cjs')],
+                  { windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
+                  (error, stdout) => {
+                    if (projectSearchWorker === child) projectSearchWorker = undefined;
+                    if (error) return reject(error);
+                    try {
+                      resolve(JSON.parse(stdout));
+                    } catch (failure) {
+                      reject(failure);
+                    }
+                  },
+                );
+                projectSearchWorker = child;
+                child.stdin?.on('error', reject);
+                child.stdin?.end(
+                  JSON.stringify({ workspaces: registry.workspaces, query: command.query }),
+                );
+              });
+              return { ok: true, registry, search };
+            }
             case 'groupCollapse':
               return {
                 ok: true,

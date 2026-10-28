@@ -774,6 +774,10 @@ summary:focus-visible {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* The scrollbar takes the sidebar's right padding and its gutter is always reserved, so the bar sits on the
+     sidebar's edge and expanding a project never narrows the rows. */
+  margin-right: -10px;
+  scrollbar-gutter: stable;
 }
 
 .project-sidebar > .section-label {
@@ -783,8 +787,21 @@ summary:focus-visible {
 .project-group-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   margin: 18px 0 9px;
+  min-height: 30px;
+  flex: 0 0 auto;
+}
+.project-group-controls {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.project-default-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 .project-group-toggle,
 .project-add-button {
@@ -795,11 +812,153 @@ summary:focus-visible {
   cursor: pointer;
 }
 .project-group-toggle {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  font-size: 14px;
   text-align: left;
 }
+.project-group-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+.project-search-button,
 .project-add-button {
+  display: grid;
+  place-items: center;
   min-width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.project-search-button:hover,
+.project-add-button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.project-search-button svg,
+.project-add-button svg {
+  width: 17px;
+  height: 17px;
+}
+.project-search-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  padding: 0 5px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+.project-search-field:focus-within {
+  border-color: var(--muted);
+}
+.project-search-field > svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+.project-search-input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  outline: none;
+}
+.project-search-input::-webkit-search-cancel-button {
+  display: none;
+}
+.project-search-field button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.project-search-field button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.project-search-field button svg {
+  width: 14px;
+  height: 14px;
+}
+.project-search-hint,
+.project-search-results p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.project-search-results {
+  min-height: 0;
+  overflow: auto;
+}
+.project-search-project {
+  gap: 8px;
+  color: var(--ink);
+  font-size: 14px;
+}
+.project-search-project > svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+.project-search-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-search-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px 0 38px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.project-search-result span {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-search-result small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.project-search-result.selected,
+.project-search-result:hover:enabled,
+.project-search-result:focus-visible {
+  background: var(--hover);
 }
 .workspace-interactions h3 {
   margin: 18px 0 8px;
@@ -814,6 +973,7 @@ summary:focus-visible {
   }
   .project-actions button,
   .project-disclosure,
+  .project-search-button,
   .project-add-button {
     min-width: 36px;
     min-height: 36px;
@@ -828,25 +988,31 @@ summary:focus-visible {
 .project-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 16px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .project-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  border-radius: 7px;
+  margin-bottom: 0;
+  padding: 0;
 }
-
-.project-row:hover,
-.project-row:focus-within,
-.project-row.selected {
-  background: var(--hover);
+.project-search-results .project-row {
+  margin-bottom: 16px;
+}
+.project-row-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 10px;
+}
+.project-row.selected > .project-row-header,
+.project-row-header:hover,
+.project-row-header:focus-within {
+  background: var(--raised);
 }
 
 .project-name {
@@ -855,8 +1021,11 @@ summary:focus-visible {
   overflow: hidden;
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--ink);
+  font-size: 14px;
+  min-height: 36px;
+  padding: 0;
+  cursor: pointer;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -865,7 +1034,7 @@ summary:focus-visible {
 .project-row.selected .project-name,
 .project-name[aria-current='true'] {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .project-name {
@@ -873,16 +1042,31 @@ summary:focus-visible {
   align-items: center;
   gap: 6px;
 }
+.project-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .project-disclosure {
   flex: 0 0 auto;
-  width: 16px;
-  height: 20px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 36px;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--ink);
   font-size: 9px;
+  cursor: pointer;
+}
+.project-disclosure svg {
+  width: 20px;
+  height: 20px;
+}
+.project-row.selected .project-disclosure {
+  color: var(--ink);
 }
 
 .project-disclosure:hover,
@@ -908,7 +1092,7 @@ summary:focus-visible {
   flex-basis: 100%;
   flex-direction: column;
   gap: 1px;
-  margin: 1px 0 3px 10px;
+  margin: 2px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -926,19 +1110,33 @@ summary:focus-visible {
   overflow: hidden;
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--ink);
+  min-height: 36px;
+  padding: 0 8px 0 38px;
+  border-radius: 10px;
+  font-size: 13px;
   text-align: left;
   white-space: nowrap;
 }
 
 .project-sessions button span:first-child {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.project-sessions small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.project-session-content {
+  margin-top: 2px;
 }
 
 .project-sessions button:hover,
 .project-sessions button:focus-visible {
+  background: var(--hover);
   color: var(--ink);
 }
 
@@ -948,8 +1146,9 @@ summary:focus-visible {
   opacity: 0;
 }
 
-.project-row:hover .project-actions,
-.project-row:focus-within .project-actions {
+.project-row-header:hover .project-actions,
+.project-row-header:focus-within .project-actions,
+.project-row.selected > .project-row-header .project-actions {
   opacity: 1;
 }
 
@@ -962,8 +1161,8 @@ summary:focus-visible {
 
 .project-actions button {
   display: flex;
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -972,11 +1171,42 @@ summary:focus-visible {
   color: var(--muted);
   font-size: 12px;
 }
+.project-actions button svg {
+  width: 20px;
+  height: 20px;
+}
 
 .project-actions button:hover,
 .project-actions button:focus-visible {
   background: var(--raised);
   color: var(--ink);
+}
+
+/* The project menu is a Mantine dropdown; it wears the session row menu's look so both `⋯` menus match. */
+.mantine-Menu-dropdown.project-menu {
+  min-width: 132px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sidebar);
+  color: var(--ink);
+  box-shadow: 0 6px 22px #263d2926;
+}
+.project-menu .mantine-Menu-item {
+  padding: 9px 12px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.project-menu .mantine-Menu-item:hover,
+.project-menu .mantine-Menu-item:focus-visible,
+.project-menu .mantine-Menu-item[data-hovered] {
+  background: var(--hover);
+}
+.project-menu .mantine-Menu-item.danger-text {
+  color: #cb756e;
 }
 
 .project-rename {
@@ -1004,23 +1234,26 @@ summary:focus-visible {
   color: var(--ink);
 }
 
-.project-remove {
-  display: flex;
-  flex-basis: 100%;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 2px;
-  color: var(--muted);
-  font-size: 10px;
+.session-row-editing {
+  display: block;
 }
-
-.project-remove button {
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--raised);
-  color: var(--ink);
-  font-size: 10px;
+.session-rename {
+  align-items: center;
+  min-height: 36px;
+  padding: 0 8px 0 38px;
+}
+.session-rename input {
+  height: 26px;
+  font-size: 13px;
+}
+.session-rename button {
+  height: 26px;
+  min-width: 26px;
+}
+.session-rename-error {
+  margin: 2px 8px 4px 38px;
+  color: #cb756e;
+  font-size: 11px;
 }
 
 .project-empty,
@@ -1836,13 +2069,6 @@ select {
   background: var(--raised, #fff);
   box-shadow: 0 14px 40px rgb(0 0 0 / 20%);
   color: var(--ink, #1b1c1e);
-}
-
-@media (max-width: 1200px) {
-  .subagents-popover {
-    right: 0;
-    left: auto;
-  }
 }
 
 .subagent-catalog {
@@ -2989,21 +3215,6 @@ body[data-subagent-page='open'] .chat-page .jump-to-latest {
   line-height: 1.7;
 }
 
-.session-title-label {
-  display: block;
-  margin: 16px 0 6px;
-  font-size: 12px;
-}
-
-.session-title-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 10px;
-  border: 1px solid #cdd2c3;
-  border-radius: 7px;
-  font: inherit;
-}
-
 .session-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -3600,26 +3811,27 @@ body {
 }
 
 .chat-sidebar .sessions {
-  padding-bottom: 16px;
+  padding-bottom: 2px;
 }
 
 .chat-sidebar .session-row {
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 
 .chat-sidebar .session-item {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 9px 4px 9px 12px;
+  min-height: 36px;
+  padding: 0 8px 0 38px;
   color: var(--ink);
-  border-radius: 7px;
+  border-radius: 10px;
 }
 
 .chat-sidebar .session-item strong {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: inherit;
   font-weight: 500;
 }
@@ -3652,10 +3864,11 @@ body {
 
 .chat-sidebar .session-load-more {
   width: 100%;
-  padding: 8px 12px;
-  font-size: 12px;
+  min-height: 36px;
+  padding: 0 8px 0 38px;
+  font-size: 13px;
   color: var(--muted);
-  border-radius: 7px;
+  border-radius: 10px;
 }
 
 .chat-sidebar .session-load-more:hover:enabled {
@@ -3665,7 +3878,7 @@ body {
 
 .chat-sidebar .session-toggle {
   display: block;
-  padding: 9px 12px;
+  padding: 0 8px 0 38px;
   text-align: left;
   background: transparent;
   border: 0;
@@ -3830,7 +4043,6 @@ body {
 
 .chat-page .conversation {
   padding: 32px max(28px, calc((100% - 780px) / 2));
-  scrollbar-color: var(--line) transparent;
 }
 
 .chat-page .welcome {
@@ -5124,6 +5336,10 @@ body {
   background: transparent;
 }
 
+.chat-page .statistics-popover header strong {
+  color: var(--ink);
+}
+
 .statistics-popover dl {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -5428,13 +5644,6 @@ body {
   color: var(--ink);
 }
 
-@media (max-width: 1200px) {
-  .background-popover {
-    right: 0;
-    left: auto;
-  }
-}
-
 .background-popover .background-list {
   gap: 0;
 }
@@ -5567,6 +5776,8 @@ textarea {
   box-shadow: none !important;
 }
 
+/* `.composer-bottom .secondary` sets a font size; the `+` glyph must stay hidden behind the drawn cross. */
+.chat-page .composer-bottom .attach-image,
 .chat-page .attach-image {
   width: 32px;
   height: 32px;
@@ -6139,7 +6350,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   padding-right: 8px;
@@ -6371,7 +6582,7 @@ textarea {
   font-size: 12px;
 }
 
-.workspace-panel .workspace-file-tab {
+.workspace-panel .workspace-tab-item {
   display: flex;
   align-items: center;
   flex: 0 1 auto;
@@ -6422,13 +6633,14 @@ textarea {
   color: var(--muted);
 }
 
-.workspace-panel .workspace-file-tab.active,
+.workspace-panel .workspace-tab-item.active,
 .workspace-panel .workspace-tab[aria-selected='true'] {
   background: var(--raised);
   color: var(--ink);
 }
 
-.workspace-panel .workspace-tab-close:hover {
+.workspace-panel .workspace-tab-close:hover,
+.workspace-panel .workspace-tab-close:focus-visible {
   background: var(--hover);
   color: var(--ink);
 }

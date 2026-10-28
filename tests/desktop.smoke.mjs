@@ -147,6 +147,8 @@ test(
     await page.waitForLoadState('domcontentloaded');
     page.setDefaultTimeout(10000);
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+    // The list shows three rows until it is unfolded; every fixture row has to be reachable.
+    await page.locator('.session-toggle[aria-expanded="false"]').first().click();
     for (const fixture of sessions) {
       await page.locator(`[data-session-id="${fixture.id}"]`).first().click();
       await waitForPage(
@@ -814,7 +816,7 @@ test(
     await app.evaluate(({ dialog }) => {
       dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
     });
-    await page.getByRole('button', { name: '更换目录' }).click();
+    await page.getByRole('button', { name: '添加工作区' }).click();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
       await page.getByRole('textbox', { name: '任务描述' }).inputValue(),
@@ -826,7 +828,7 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, badRoot);
-    await page.getByRole('button', { name: '更换目录' }).click();
+    await page.getByRole('button', { name: '添加工作区' }).click();
     await page.locator('.project-error[role="alert"]').waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
@@ -963,7 +965,7 @@ test(
     );
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     await page.getByRole('heading', { name: '从一个任务开始。' }).waitFor();
-    await page.locator('#chat-title').getByText('新增会话', { exact: true }).waitFor();
+    await page.locator('#chat-title').getByText('新会话', { exact: true }).waitFor();
     await app.close();
     app = undefined;
     page = await launch();
@@ -989,7 +991,7 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, otherRoot);
-    await page.getByRole('button', { name: '更换目录' }).click();
+    await page.getByRole('button', { name: '添加工作区' }).click();
     await page.waitForFunction(
       (target) =>
         document.querySelector('#workspace').textContent === target &&
@@ -1000,7 +1002,7 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, root);
-    await page.getByRole('button', { name: '更换目录' }).click();
+    await page.getByRole('button', { name: '添加工作区' }).click();
     await page.waitForFunction(
       (target) =>
         document.querySelector('#workspace').textContent === target &&

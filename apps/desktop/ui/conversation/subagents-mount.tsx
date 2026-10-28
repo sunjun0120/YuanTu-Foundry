@@ -23,6 +23,7 @@ import type { Message } from '../../../../packages/protocol/index.ts';
 import { isRuntimeContext } from '../../../../packages/protocol/context.ts';
 import { locale, onLocaleChange, translate } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
+import { placeHeaderPopover } from '../header-popover.ts';
 import { useLocale } from '../i18n.ts';
 import { registerView } from '../views.tsx';
 import { createStore, type ReadableStore } from '../stores.ts';
@@ -174,11 +175,19 @@ export function mountSubagents(deps: SubagentsMountOptions): SubagentsHandle {
     popover.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
   }
+  /**
+   * The catalog is the other header popover that must stay inside the chat column; the placement itself is shared
+   * with the background list so the two can never drift apart at a narrow window.
+   */
+  function placeCatalog(): void {
+    placeHeaderPopover(popover);
+  }
   function openCatalog(): void {
     if (!views.length) return;
     clearTimeout(closeTimer);
     popover.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
+    placeCatalog();
   }
   /**
    * The trigger's own copy and the catalog's accessible name.
@@ -330,6 +339,7 @@ export function mountSubagents(deps: SubagentsMountOptions): SubagentsHandle {
   anchor.addEventListener('pointerleave', onScheduleClose);
   popover.addEventListener('pointerenter', onCancelClose);
   trigger.addEventListener('click', openCatalog);
+  window.addEventListener('resize', placeCatalog);
   document.addEventListener('click', onDocumentClick);
   document.addEventListener('keydown', onDocumentKeydown);
   chatTitle.addEventListener('click', onTitleClick);
@@ -482,6 +492,7 @@ export function mountSubagents(deps: SubagentsMountOptions): SubagentsHandle {
       anchor.removeEventListener('pointerleave', onScheduleClose);
       popover.removeEventListener('pointerenter', onCancelClose);
       trigger.removeEventListener('click', openCatalog);
+      window.removeEventListener('resize', placeCatalog);
       document.removeEventListener('click', onDocumentClick);
       document.removeEventListener('keydown', onDocumentKeydown);
       chatTitle.removeEventListener('click', onTitleClick);

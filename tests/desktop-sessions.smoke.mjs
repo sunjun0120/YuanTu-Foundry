@@ -133,6 +133,14 @@ test(
       await more(id).hover();
       await page.getByRole('menuitem', { name, exact: true }).click();
     };
+    // Rename edits the row in place: Enter saves and the field gives the row back.
+    const rename = async (id, title) => {
+      await open(id, '重命名');
+      await page.locator('#session-title-input').fill(title);
+      await page.locator('#session-title-input').press('Enter');
+      await page.locator('#session-title-input').waitFor({ state: 'detached' });
+      await idle();
+    };
     const confirm = async () => {
       await page.locator('#session-dialog-confirm').click();
       await page.locator('#session-dialog').waitFor({ state: 'hidden' });
@@ -165,9 +173,8 @@ test(
     );
     await page.keyboard.press('Escape');
     assert.equal(await page.getByRole('menu').isVisible(), false);
-    await open(other.id, '重命名');
-    await page.locator('#session-title-input').fill('已重命名的其他会话');
-    await confirm();
+    await rename(other.id, '已重命名的其他会话');
+    assert.equal(await page.locator('#session-dialog').isVisible(), false);
     assert.match(await row(other.id).innerText(), /已重命名的其他会话/);
     assert.equal(
       await page.locator('#sessions .selected').getAttribute('data-session-id'),
@@ -176,7 +183,7 @@ test(
     assert.equal(await page.locator('#prompt').inputValue(), '未发送的草稿');
     assert.equal(await page.locator('#session-search').isVisible(), false);
     await page.locator('#open-session-search').click();
-    assert.equal(await page.locator('#recent-sessions-label').isVisible(), false);
+    assert.equal(await page.locator('#recent-sessions-label').count(), 0);
     assert.equal(await page.locator('#session-search').isVisible(), true);
     assert.equal(await page.locator('#session-search').inputValue(), '');
     assert.equal(
@@ -189,7 +196,7 @@ test(
       input.addEventListener('blur', () => window.searchBlurCount++);
     });
     await page.waitForFunction(
-      () => document.querySelectorAll('#sessions .session-item').length === 1,
+      () => document.querySelectorAll('.project-search-result').length === 1,
     );
     await idle();
     assert.equal(
@@ -200,29 +207,22 @@ test(
     await page.locator('#session-search-empty').waitFor({ state: 'visible' });
     assert.equal(await page.evaluate(() => window.searchBlurCount), 0);
     assert.equal(await page.locator('#session-search-empty').innerText(), '无匹配会话');
-    assert.equal(await page.locator('#session-search-note').isVisible(), false);
+    assert.equal(await page.locator('#session-search-note').count(), 0);
     await idle();
     assert.equal(
       await page.locator('#session-search').evaluate((el) => el === document.activeElement),
       true,
     );
-    await page.locator('#clear-session-search').click();
-    assert.equal(await page.locator('#session-search').inputValue(), '');
-    assert.equal(await page.locator('#clear-session-search').isVisible(), false);
-    assert.equal(await page.locator('#session-search-empty').isVisible(), false);
+    await page.getByRole('button', { name: '关闭搜索', exact: true }).click();
+    await page.locator('#session-search').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#open-session-search').isVisible(), true);
-    assert.equal(await page.locator('#close-session-search').count(), 0);
     assert.equal(await page.locator('#session-search').isVisible(), false);
-    await page.waitForFunction(
-      () => document.querySelectorAll('#sessions .session-item').length === 2,
-    );
+    assert.equal(await page.locator('#sessions .session-item').count(), 2);
+    assert.equal(await page.locator('#prompt').inputValue(), '未发送的草稿');
     await page.locator('#open-session-search').click();
     assert.equal(await page.locator('#session-search').inputValue(), '');
-    assert.equal(
-      await page.locator('#session-search').evaluate((el) => el === document.activeElement),
-      true,
-    );
-    await page.locator('#prompt').click();
+    await page.keyboard.press('Escape');
+    await page.locator('#session-search').waitFor({ state: 'hidden' });
     await open(other.id, '删除');
     await page.locator('#session-dialog-cancel').click();
     assert.equal(await row(other.id).count(), 1);
@@ -234,9 +234,7 @@ test(
       source.id,
     );
     assert.equal(await page.locator('#prompt').inputValue(), '未发送的草稿');
-    await open(source.id, '重命名');
-    await page.locator('#session-title-input').fill('登录流程');
-    await confirm();
+    await rename(source.id, '登录流程');
     await app.close();
     app = undefined;
     page = await launch();
@@ -1240,6 +1238,25 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await page.keyboard.press('ArrowRight');
   assert.equal(await page.locator('#workspace-tree').isVisible(), true);
   for (const name of extraFiles) await tab(name).locator('.workspace-tab-close').click();
+  // Every tab has its own close control. Closing the start tab leaves files; closing the only remaining tab folds
+  // the panel, and the next open starts there again.
+  await page
+    .locator('#workspace-new-tab')
+    .locator('xpath=..')
+    .locator('.workspace-tab-close')
+    .click();
+  assert.equal(await page.locator('#workspace-new-tab').count(), 0);
+  assert.equal(await page.locator('#workspace-tree').isVisible(), true);
+  await page
+    .locator('#workspace-tree-tab')
+    .locator('xpath=..')
+    .locator('.workspace-tab-close')
+    .click();
+  await page.waitForFunction(() => document.body.dataset.workspaceView === 'closed');
+  assert.equal(await page.locator('#workspace-panel').isVisible(), false);
+  await page.locator('#open-workspace').click();
+  await page.locator('#workspace-new-tab-page').waitFor();
+  assert.equal(await page.locator('#workspace-new-tab span').innerText(), '开始');
   await page.locator('#workspace-close').click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'closed');
   assert.equal(await page.locator('#workspace-panel').isVisible(), false);

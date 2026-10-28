@@ -37,6 +37,7 @@ export class ProjectWorkspacesError extends Error {
 
 export type ProjectWorkspaceCommand =
   | { type: 'list' }
+  | { type: 'search'; query: string }
   | { type: 'groupCollapse'; collapsed: boolean }
   | { type: 'prepare'; id: string }
   | { type: 'add'; path?: string }
@@ -50,7 +51,12 @@ export interface ProjectRuntimeView {
   ready: boolean;
   running: boolean;
   waiting: number;
-  sessions: { id: string; title: string; running: boolean; waiting: number }[];
+  sessions: { id: string; title: string; createdAt?: string; running: boolean; waiting: number }[];
+}
+
+export interface ProjectSessionSearch {
+  hits: { workspaceId: string; sessionId: string; title: string; createdAt?: string }[];
+  errors: { workspaceId: string; error: string }[];
 }
 
 export type ProjectWorkspaceReply =
@@ -58,6 +64,7 @@ export type ProjectWorkspaceReply =
       ok: true;
       registry: ProjectWorkspacesFile;
       runtime?: Record<string, ProjectRuntimeView>;
+      search?: ProjectSessionSearch;
       cancelled?: boolean;
       addedId?: string;
       target?: import('./workspace-routing.ts').WorkspaceTarget;
@@ -69,6 +76,11 @@ export function parseProjectWorkspaceCommand(input: unknown): ProjectWorkspaceCo
   if (!record(input) || typeof input.type !== 'string') throw new Error('Invalid project command');
   const type = input.type;
   if (type === 'list') return { type };
+  if (type === 'search') {
+    if (typeof input.query !== 'string' || input.query.length > 200)
+      throw new Error('Invalid session search');
+    return { type, query: input.query };
+  }
   if (type === 'groupCollapse') {
     if (typeof input.collapsed !== 'boolean') throw new Error('Invalid collapse state');
     return { type, collapsed: input.collapsed };

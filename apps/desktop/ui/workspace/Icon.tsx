@@ -8,8 +8,17 @@
 import type { ReactNode } from 'react';
 
 const PATHS = {
+  'chevron-down': 'm7 10 5 5 5-5',
+  'chevron-right': 'm10 7 5 5-5 5',
+  search: 'M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0Zm-1.5 5 5 5',
+  compose: 'M14 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M19 3l2 2-9 9-4 1 1-4Z',
+  home: 'm3 11 9-8 9 8M5 9v11h5v-6h4v6h5V9',
   folder: 'M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
+  'folder-closed':
+    'M3 10h18M3 10V6a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
   'folder-open': 'M3 17V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v2M3 20l3-9h16l-3 9Z',
+  'folder-plus':
+    'M3 7V5a2 2 0 0 1 2-2h5l3 3h3M3 7h10M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6M20 3v6M17 6h6',
   file: 'M14 2H5v20h14V7Zm0 0v5h5M8 12h8M8 16h8',
   markdown: 'M14 2H5v20h14V7Zm0 0v5h5',
   close: 'm6 6 12 12M6 18 18 6',
@@ -19,6 +28,7 @@ const PATHS = {
   restore: 'M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5',
   refresh: 'M20 7v5h-5M20 12a8 8 0 1 0-2 6M20 7l-3-3',
   plus: 'M12 5v14M5 12h14',
+  'plus-circle': 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 5v8m-4-4h8',
   globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 0c3 3 3 15 0 18M3 12h18',
 } as const;
 

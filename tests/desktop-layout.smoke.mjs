@@ -597,12 +597,11 @@ test(
         attributeFilter: ['hidden'],
       });
     });
-    // Exercise both sides of the 1200px breakpoint: the compact panel aligns its right edge to the button.
-    // Read the actual content size because Windows display scaling can round setContentSize by a pixel.
-    for (const { width, alignment } of [
-      { width: 1232, alignment: 'left' },
-      { width: 900, alignment: 'right' },
-    ]) {
+    // Both sides of the old 1200px breakpoint: the panel now aligns its left edge to the button and only slides
+    // when it would leave the chat column, so the narrow width has to clear the fixed sidebar rather than slide
+    // its left half under it. Read the actual content size because Windows display scaling can round
+    // setContentSize by a pixel.
+    for (const width of [1232, 900]) {
       await page.locator('#chat-title').hover();
       await page.locator('#background-popover').waitFor({ state: 'hidden' });
       const contentSize = await app.evaluate(({ BrowserWindow }, width) => {
@@ -615,32 +614,30 @@ test(
         contentSize,
       );
       const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-      assert.equal(viewport.width <= 1200, alignment === 'right');
       await page.locator('#open-background').hover();
       await page.locator('#background-popover').waitFor({ state: 'visible' });
       const triggerBounds = await page.locator('#open-background').boundingBox();
       const popoverBounds = await page.locator('#background-popover').boundingBox();
-      assert.ok(triggerBounds && popoverBounds);
-      const triggerEdge = triggerBounds.x + (alignment === 'right' ? triggerBounds.width : 0);
-      const popoverEdge = popoverBounds.x + (alignment === 'right' ? popoverBounds.width : 0);
+      const sidebarBounds = await page.locator('#chat-sidebar').boundingBox();
+      assert.ok(triggerBounds && popoverBounds && sidebarBounds);
       const gap = popoverBounds.y - (triggerBounds.y + triggerBounds.height);
-      const geometry = JSON.stringify({ viewport, alignment, triggerBounds, popoverBounds });
+      const geometry = JSON.stringify({ viewport, triggerBounds, popoverBounds, sidebarBounds });
       t.diagnostic('background popover geometry: ' + geometry);
       assert.ok(popoverBounds.width <= 340, `background list is too wide: ${geometry}`);
       assert.ok(
-        Math.abs(popoverEdge - triggerEdge) <= 2,
-        `background list should align its ${alignment} edge with its header button: ${geometry}`,
+        Math.abs(popoverBounds.x - triggerBounds.x) <= 2,
+        `background list should align its left edge with its header button: ${geometry}`,
       );
       assert.ok(
         Math.abs(gap - 8) <= 2,
         `background list should open below its button: ${geometry}`,
       );
       assert.ok(
-        popoverBounds.x >= 0 &&
+        popoverBounds.x >= sidebarBounds.x + sidebarBounds.width &&
           popoverBounds.x + popoverBounds.width <= viewport.width &&
           popoverBounds.y >= 0 &&
           popoverBounds.y + popoverBounds.height <= viewport.height,
-        `background list should fit inside the viewport: ${geometry}`,
+        `background list should stay inside the chat column and the viewport: ${geometry}`,
       );
     }
     const row = page.locator('#background-list .background-card').first();

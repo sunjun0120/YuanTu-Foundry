@@ -11,6 +11,7 @@ await build({
     'apps/desktop/attachment-worker.ts',
     'apps/desktop/preload.ts',
     'apps/desktop/sandbox-probe-worker.ts',
+    'apps/desktop/project-search-worker.ts',
   ],
   outdir: 'dist/desktop',
   outExtension: { '.js': '.cjs' },

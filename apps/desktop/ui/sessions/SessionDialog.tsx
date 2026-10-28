@@ -1,8 +1,8 @@
 /**
- * The rename/delete dialog for one session.
+ * The delete dialog for one session. Rename shares the controller's dialog state but edits in the row itself.
  *
  * The native `<dialog>` gives the window's usual focus trap and Escape; React decides when it is open and what the
- * buttons do. Rename focuses and selects the title; delete puts focus on Cancel, so Enter alone never deletes.
+ * buttons do. Focus starts on Cancel, so Enter alone never deletes.
  */
 import { useEffect, useRef, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
@@ -14,9 +14,8 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
   useLocale();
   const state = useReadable(controller.store);
   const dialog = useRef<HTMLDialogElement>(null);
-  const title = useRef<HTMLInputElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
-  const current = state.dialog;
+  const current = state.dialog?.kind === 'delete' ? state.dialog : null;
 
   useEffect(() => {
     const element = dialog.current;
@@ -24,10 +23,7 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
     if (current) {
       if (!element.open) {
         element.showModal();
-        if (current.kind === 'rename') {
-          title.current?.focus();
-          title.current?.select();
-        } else cancel.current?.focus();
+        cancel.current?.focus();
       }
     } else if (element.open) element.close();
   }, [current]);
@@ -43,7 +39,7 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
         controller.cancelDialog();
       }}
       onClose={() => {
-        if (controller.store.getSnapshot().dialog) controller.cancelDialog();
+        if (controller.store.getSnapshot().dialog?.kind === 'delete') controller.cancelDialog();
       }}
     >
       <form
@@ -53,30 +49,8 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
           void controller.confirmDialog();
         }}
       >
-        <h2 id="session-dialog-title">
-          {current?.kind === 'delete' ? t('session.deleteTitle') : t('session.renameTitle')}
-        </h2>
+        <h2 id="session-dialog-title">{t('session.deleteTitle')}</h2>
         <p id="session-dialog-description">{current ? dialogDescription(current) : ''}</p>
-        <label
-          id="session-title-label"
-          className="session-title-label"
-          htmlFor="session-title-input"
-          hidden={current?.kind !== 'rename'}
-        >
-          {t('session.nameLabel')}
-        </label>
-        <input
-          ref={title}
-          id="session-title-input"
-          className="session-title-input"
-          maxLength={120}
-          autoComplete="off"
-          hidden={current?.kind !== 'rename'}
-          required={current?.kind === 'rename'}
-          disabled={!current || current.saving}
-          value={current?.value ?? ''}
-          onChange={(event) => controller.setDialogValue(event.currentTarget.value)}
-        />
         <p
           id="session-dialog-error"
           className="session-dialog-error"
@@ -101,7 +75,7 @@ export function SessionDialog({ controller }: { controller: SessionSidebarContro
             className="primary"
             disabled={current?.saving ?? false}
           >
-            {current?.kind === 'delete' ? t('session.confirmDelete') : t('session.saveName')}
+            {t('session.confirmDelete')}
           </button>
         </div>
       </form>

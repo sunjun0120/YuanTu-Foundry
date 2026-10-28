@@ -52,10 +52,14 @@ export interface WorkspaceState {
   workspace: string;
   open: boolean;
   fullscreen: boolean;
-  /** The fixed new/files tabs or the active file tab; `selected` is the file path derived from it. */
+  /** The selected tab; `selected` is the file path derived from it. */
   active: PanelTab;
   selected: string | null;
-  /** Open file tabs in open order; the fixed new/files tabs are not in this list. */
+  /** The start page tab is in the strip. Closing the last tab folds the panel and restores this page. */
+  startOpen: boolean;
+  /** The files tab is in the strip. Choosing "Workspace files" again restores it after it is closed. */
+  filesOpen: boolean;
+  /** Open file tabs in open order; the start and files tabs are not in this list. */
   tabOrder: readonly string[];
   expanded: ReadonlySet<string>;
   listings: ReadonlyMap<string, WorkspaceListing>;
@@ -71,10 +75,14 @@ export interface WorkspaceController {
   setWorkspace(workspace: string): boolean;
   setOpen(open: boolean): void;
   setFullscreen(fullscreen: boolean): void;
-  /** Activate the fixed new-tab page. */
+  /** Activate the start page. */
   openNewTab(): void;
-  /** Activate the fixed files tab, reading the root directory when it has not been read yet. */
+  /** Activate the files tab, reading the root directory when it has not been read yet. */
   openFiles(): void;
+  /** Close the start page, or fold the panel when it is the last tab. */
+  closeStart(): void;
+  /** Close the files tab, or fold the panel when it is the last tab. */
+  closeFiles(): void;
   /** Create a browser tab in the main process and activate it. */
   openBrowser(): Promise<string>;
   activateBrowser(id: string): void;
@@ -133,6 +141,8 @@ export function createWorkspaceController(deps: {
   let fullscreen = false;
   let active: PanelTab = { kind: 'new' };
   let selected: string | null = null;
+  let startOpen = true;
+  let filesOpen = false;
   let tabOrder: string[] = [];
   let generation = 0;
   let listingRound = 0;
@@ -150,6 +160,8 @@ export function createWorkspaceController(deps: {
     fullscreen,
     active,
     selected,
+    startOpen,
+    filesOpen,
     tabOrder,
     expanded,
     listings,
@@ -167,6 +179,8 @@ export function createWorkspaceController(deps: {
         fullscreen,
         active,
         selected,
+        startOpen,
+        filesOpen,
         tabOrder,
         expanded,
         listings,
@@ -177,8 +191,44 @@ export function createWorkspaceController(deps: {
       });
   };
   const setActive = (next: PanelTab): void => {
+    // Activating a closable built-in tab makes it present again; a closed start page is never the active tab.
+    if (next.kind === 'new') startOpen = true;
+    else if (next.kind === 'files') filesOpen = true;
     active = next;
     selected = next.kind === 'file' ? next.path : null;
+  };
+  /** The strip order: start, files, then file tabs and browser tabs in the order they were opened. */
+  const tabList = (): PanelTab[] => {
+    const list: PanelTab[] = [];
+    if (startOpen) list.push({ kind: 'new' });
+    if (filesOpen) list.push({ kind: 'files' });
+    for (const path of tabOrder) list.push({ kind: 'file', path });
+    for (const id of browserOrder) list.push({ kind: 'browser', id });
+    return list;
+  };
+  const isCurrent = (candidate: PanelTab): boolean => {
+    if (candidate.kind !== active.kind) return false;
+    if (candidate.kind === 'file' && active.kind === 'file') return candidate.path === active.path;
+    if (candidate.kind === 'browser' && active.kind === 'browser')
+      return candidate.id === active.id;
+    return true;
+  };
+  /**
+   * A tab was removed at `index`. Select its right neighbour, else its left, and fold the panel when that was the
+   * last tab; the next open starts on the start page. The start tab is restored as the panel folds so the strip is
+   * never empty when it comes back.
+   */
+  const finishClose = (closed: PanelTab, index: number): void => {
+    const wasCurrent = isCurrent(closed);
+    const remaining = tabList();
+    if (!remaining.length) {
+      setActive({ kind: 'new' });
+      open = false;
+      fullscreen = false;
+    } else if (wasCurrent) {
+      setActive(remaining[index] ?? remaining[index - 1] ?? remaining[0]!);
+    }
+    publish();
   };
   const emptyBrowserState = (id: string): BrowserState => ({
     id,
@@ -285,6 +335,18 @@ export function createWorkspaceController(deps: {
       publish();
       if (open && !listings.has('')) void loadDirectory('');
     },
+    closeStart() {
+      if (!startOpen) return;
+      const index = tabList().findIndex((tab) => tab.kind === 'new');
+      startOpen = false;
+      finishClose({ kind: 'new' }, index);
+    },
+    closeFiles() {
+      if (!filesOpen) return;
+      const index = tabList().findIndex((tab) => tab.kind === 'files');
+      filesOpen = false;
+      finishClose({ kind: 'files' }, index);
+    },
     async openBrowser() {
       if (!deps.browser) throw new Error('Browser is unavailable');
       if (browserOrder.length >= MAX_BROWSER_TABS) throw new Error('Browser tab limit reached');
@@ -311,16 +373,12 @@ export function createWorkspaceController(deps: {
     },
     closeBrowserTab(id) {
       if (!browserTabs.has(id)) return;
+      const index = tabList().findIndex((tab) => tab.kind === 'browser' && tab.id === id);
       void deps.browser?.({ type: 'destroy', id });
-      const index = browserOrder.indexOf(id);
       browserTabs = new Map(browserTabs);
       browserTabs.delete(id);
       browserOrder = browserOrder.filter((entry) => entry !== id);
-      if (active.kind === 'browser' && active.id === id) {
-        const next = browserOrder[index] ?? browserOrder[index - 1];
-        setActive(next ? { kind: 'browser', id: next } : { kind: 'new' });
-      }
-      publish();
+      finishClose({ kind: 'browser', id }, index);
     },
     select(path) {
       setActive(path === null ? { kind: 'files' } : { kind: 'file', path });
@@ -373,18 +431,14 @@ export function createWorkspaceController(deps: {
       if (fresh) await readTab(tab);
     },
     closeTab(path) {
-      const index = tabOrder.indexOf(path);
-      const wasActive = selected === path;
       const tab = tabs.get(path);
-      if (tab?.documentUrl) URL.revokeObjectURL(tab.documentUrl);
+      if (!tab) return;
+      const index = tabList().findIndex((entry) => entry.kind === 'file' && entry.path === path);
+      if (tab.documentUrl) URL.revokeObjectURL(tab.documentUrl);
       tabs = new Map(tabs);
       tabs.delete(path);
       tabOrder = tabOrder.filter((entry) => entry !== path);
-      if (wasActive) {
-        const next = tabOrder[index] ?? tabOrder[index - 1];
-        setActive(next ? { kind: 'file', path: next } : { kind: 'files' });
-      }
-      publish();
+      finishClose({ kind: 'file', path }, index);
     },
     setTabScroll(path, top) {
       const tab = tabs.get(path);

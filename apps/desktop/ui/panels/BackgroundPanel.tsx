@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { CarrierCommand, CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import { locale, t } from '../../i18n.ts';
 import { useReadable } from '../context.tsx';
+import { placeHeaderPopover } from '../header-popover.ts';
 import { useLocale } from '../i18n.ts';
 import type { ReadableStore } from '../stores.ts';
 import { backgroundView } from './background-model.ts';
@@ -101,7 +102,11 @@ export function BackgroundPanel({
    */
   const syncOpen = useCallback(
     (next: boolean): void => {
-      if (popover.current) popover.current.hidden = !next;
+      if (popover.current) {
+        popover.current.hidden = !next;
+        // The placement is measured once the panel is in the document, and before React's render agrees.
+        if (next) placeHeaderPopover(popover.current);
+      }
       button.current?.setAttribute('aria-expanded', String(next));
       setOpen(next);
     },
@@ -121,11 +126,17 @@ export function BackgroundPanel({
       syncOpen(false);
       button.current?.focus();
     };
+    // A window resize while the list is open re-measures it against the new column; a closed one returns at once.
+    const onResize = (): void => {
+      if (popover.current) placeHeaderPopover(popover.current);
+    };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onResize);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onResize);
       clearTimeout(closeTimer.current);
     };
   }, [setOpen, syncOpen]);
