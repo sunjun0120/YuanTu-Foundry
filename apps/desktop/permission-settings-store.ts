@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { PermissionPolicy } from '../../packages/core/permissions.ts';
+import { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import { permissionPolicyForMode, type PermissionMode } from './permission-settings.ts';
 
 const defaultMode: PermissionMode = 'ask';

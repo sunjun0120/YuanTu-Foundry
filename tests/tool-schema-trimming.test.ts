@@ -11,7 +11,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';

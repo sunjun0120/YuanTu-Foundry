@@ -1,4 +1,4 @@
-import type { PermissionPolicySource } from '../../packages/core/permissions.ts';
+import type { PermissionPolicySource } from '../../packages/protocol/permission-policy.ts';
 
 /**
  * The four approval floors, and the policy each one is.

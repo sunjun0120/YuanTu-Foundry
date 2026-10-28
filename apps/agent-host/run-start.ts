@@ -16,7 +16,7 @@ import type {
 } from '../../packages/protocol/index.ts';
 import type { InvariantViolation } from '../../packages/protocol/invariants.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
-import { PermissionPolicy } from '../../packages/core/permissions.ts';
+import { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
 import { RoundEvidence } from '../../packages/core/goal-progress.ts';
 import { executionPolicy as callExecutionPolicy } from '../../packages/tools/execution-policy.ts';

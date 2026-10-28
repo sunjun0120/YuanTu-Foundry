@@ -40,7 +40,7 @@ import { mountSandboxSetup } from './sandbox/mount.tsx';
 import { mountWorkspaceSettings } from './settings/workspace-mount.tsx';
 import { mountPermissions } from './permissions/mount.tsx';
 import { locale, t, format, onLocaleChange } from '../i18n.ts';
-import { environmentBlockedCode } from '../../../packages/tools/environment-blocked.ts';
+import { environmentBlockedCode } from '../../../packages/protocol/environment-blocked.ts';
 import { localizedRunError, runErrorWantsModelSettings } from '../renderer-error-text.ts';
 import type { ReactNode } from 'react';
 import {

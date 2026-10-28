@@ -18,7 +18,7 @@ import { COMPLETION_LIMITS } from '../protocol/completion.ts';
 import type { CheckFailureReason } from '../protocol/index.ts';
 import type { Approver } from '../protocol/index.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
-import { environmentBlockedCode } from '../tools/environment-blocked.ts';
+import { environmentBlockedCode } from '../protocol/environment-blocked.ts';
 import { sandboxLaunchFailure, sandboxChildSpawnBlocked } from '../tools/sandbox-launch-failure.ts';
 import {
   VerificationAssertionError,

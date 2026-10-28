@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import mammoth from 'mammoth';
 import { OfficeUnavailableError, runOfficeAutomation, type OfficeFormat } from './automation.ts';
-import { environmentBlockedMessage } from '../tools/environment-blocked.ts';
+import { environmentBlockedMessage } from '../protocol/environment-blocked.ts';
 import type { OfficePreview } from './preview.ts';
 import { readPptxSlides } from './read.ts';
 import { runSpreadsheetOperation, spreadsheetPreviewHtml } from './spreadsheet.ts';

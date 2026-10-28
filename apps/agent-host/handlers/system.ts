@@ -1,6 +1,6 @@
 import { parseSandboxMode } from '../../../packages/tools/sandbox-mode.ts';
 import { refreshAccountBackend } from '../../../packages/tools/sandbox-account.ts';
-import { PermissionPolicy } from '../../../packages/core/permissions.ts';
+import { PermissionPolicy } from '../../../packages/protocol/permission-policy.ts';
 import { negotiateHostVersion } from '../../../packages/protocol/host-wire.ts';
 import {
   executionPolicy,

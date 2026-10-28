@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 const approval: Approval = {
   kind: 'command',

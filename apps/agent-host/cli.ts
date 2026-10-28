@@ -1,5 +1,5 @@
-import type { PermissionPolicy } from '../../packages/core/permissions.ts';
-import { readPermissionPolicy } from '../../packages/core/permissions.ts';
+import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
+import { readPermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import { assertEnvironment, parseSetting } from '../../packages/protocol/settings.ts';
 import { resolveSandboxConfig, type SandboxConfig } from '../../packages/tools/sandbox.ts';
 import { parseArgs, type Options } from '../shared/args.ts';

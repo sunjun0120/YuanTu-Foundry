@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolProgressGuard, type ToolObservation } from '../packages/core/tool-progress.ts';
 import { createTools } from '../packages/catalog/index.ts';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import { digestFileStates } from '../packages/tools/file-state-digest.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import type {

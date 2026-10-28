@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { SessionStore } from '../storage/sqlite.ts';
 import { logProjection } from './log-projection.ts';
-import { PermissionPolicy, type PermissionPolicySource } from './permissions.ts';
+import { PermissionPolicy, type PermissionPolicySource } from '../protocol/permission-policy.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
 import type {

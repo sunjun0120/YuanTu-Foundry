@@ -1,18 +1,18 @@
 import { readFileSync, statSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import type { Approval } from '../protocol/index.ts';
+import type { Approval } from './index.ts';
 import type {
   PermissionDecision,
   PermissionRule,
   PermissionPolicyView,
   PermissionPolicySource,
-} from '../protocol/permissions.ts';
+} from './permissions.ts';
 export type {
   PermissionDecision,
   PermissionRule,
   PermissionPolicySource,
   PermissionPolicyView,
-} from '../protocol/permissions.ts';
+} from './permissions.ts';
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }

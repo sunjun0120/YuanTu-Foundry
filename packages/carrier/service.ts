@@ -14,7 +14,7 @@ import { credentialsPath } from '../providers/credentials.ts';
 import { statSync } from 'node:fs';
 import type { SessionInfo } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
-import type { PermissionPolicySource } from '../core/permissions.ts';
+import type { PermissionPolicySource } from '../protocol/permission-policy.ts';
 import type { SandboxMode } from '../tools/sandbox-provider.ts';
 import type { FileEffect, NetworkEffect } from '../protocol/execution.ts';
 import { parseCarrierCommand, type CarrierSnapshot } from './contract.ts';

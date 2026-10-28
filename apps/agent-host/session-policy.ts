@@ -2,7 +2,7 @@ import { backgroundAuthority } from '../../packages/core/background-deliveries.t
 import { executionPolicy, withExecutionPolicy } from '../../packages/tools/execution-policy.ts';
 import type { HostContext } from './state.ts';
 import type { ExecutionPolicy } from '../../packages/protocol/execution.ts';
-import type { PermissionPolicy } from '../../packages/core/permissions.ts';
+import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 
 /** The permission policy a live session runs under: its own override, else the process default. */
 export function sessionPermissionPolicy(

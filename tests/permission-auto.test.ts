@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { PermissionSettingsStore } from '../apps/desktop/permission-settings-store.ts';

@@ -9,7 +9,7 @@ import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sand
 import {
   EnvironmentBlockedError,
   environmentBlockedCode,
-} from '../packages/tools/environment-blocked.ts';
+} from '../packages/protocol/environment-blocked.ts';
 import {
   inspectWindowsSandboxLeases,
   leaseBlockedError,

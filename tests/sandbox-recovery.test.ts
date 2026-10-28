@@ -13,7 +13,7 @@ import {
   recoverSandboxLease,
 } from '../apps/desktop/sandbox-recovery.ts';
 import { leaseBlockedError } from '../packages/tools/windows-sandbox-recovery.ts';
-import { environmentBlockedCode } from '../packages/tools/environment-blocked.ts';
+import { environmentBlockedCode } from '../packages/protocol/environment-blocked.ts';
 import type { WindowsSandboxLeaseReport } from '../packages/tools/windows-sandbox-recovery.ts';
 
 const needsRestore: WindowsSandboxLeaseReport = {

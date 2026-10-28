@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import {
   resolveSandboxConfig,
   setSandboxMode,

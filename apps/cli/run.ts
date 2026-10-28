@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
-import type { PermissionPolicy } from '../../packages/core/permissions.ts';
+import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import type { SessionStore } from '../../packages/storage/sqlite.ts';
 import type { Approver, Plan, Questioner } from '../../packages/protocol/index.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';

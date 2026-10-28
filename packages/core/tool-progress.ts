@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
-import { environmentBlockedCode } from '../tools/environment-blocked.ts';
+import { environmentBlockedCode } from '../protocol/environment-blocked.ts';
 import type { FileStateDigest } from '../tools/file-state-digest.ts';
 import { projectChangedPaths } from './work-evidence.ts';
 

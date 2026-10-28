@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { environmentBlockedMessage } from '../tools/environment-blocked.ts';
+import { environmentBlockedMessage } from '../protocol/environment-blocked.ts';
 
 export type OfficeFormat = 'docx' | 'xlsx' | 'pptx';
 export type OfficeOperation =

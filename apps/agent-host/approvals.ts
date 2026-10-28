@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DeferredApprovalError } from '../../packages/protocol/failure.ts';
-import type { PermissionPolicy } from '../../packages/core/permissions.ts';
+import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import type {
   Approval,
   ApprovalDecisionSource,

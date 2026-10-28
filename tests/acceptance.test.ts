@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
-import { EnvironmentBlockedError } from '../packages/tools/environment-blocked.ts';
+import { EnvironmentBlockedError } from '../packages/protocol/environment-blocked.ts';
 import {
   SANDBOX_LAUNCH_FAILED_EXIT,
   SANDBOX_LAUNCH_FAILED_PREFIX,

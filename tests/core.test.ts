@@ -18,7 +18,7 @@ import { emptyStatistics, addStatistics, addUsage } from '../packages/protocol/s
 import { redactSecrets } from '../packages/platform/redact.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
 import { RunSurface } from '../packages/core/run-surface.ts';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { storeFixture } from './temp-fixture.ts';
 

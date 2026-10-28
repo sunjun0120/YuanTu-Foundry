@@ -9,7 +9,7 @@ import { WorkspaceResultsService } from '../packages/workspaces/results.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 import { ResourceLocks } from '../apps/agent-host/resource-locks.ts';
-import { PermissionPolicy } from '../packages/core/permissions.ts';
+import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 import { HookRegistry } from '../packages/tools/registry.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';

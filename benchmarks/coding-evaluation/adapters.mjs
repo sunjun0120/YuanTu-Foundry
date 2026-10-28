@@ -233,7 +233,9 @@ export async function runHostSample(input, signal) {
     pathToFileURL(path.join(input.frozen.runtimeDirectory, 'packages/client/host-client.ts')).href
   );
   const { PermissionPolicy } = await import(
-    pathToFileURL(path.join(input.frozen.runtimeDirectory, 'packages/core/permissions.ts')).href
+    pathToFileURL(
+      path.join(input.frozen.runtimeDirectory, 'packages/protocol/permission-policy.ts'),
+    ).href
   );
   const policy = {
     version: 1,

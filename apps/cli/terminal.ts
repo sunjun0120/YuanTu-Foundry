@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline/promises';
-import type { PermissionPolicy } from '../../packages/core/permissions.ts';
+import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import type {
   Approver,
   ApprovalDecisionSource,

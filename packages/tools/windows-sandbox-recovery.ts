@@ -9,7 +9,7 @@ import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { toolEnvironment } from './environment.ts';
 import { testResource, testWindowsSandboxStateDirectory } from '../platform/test-lifecycle.ts';
-import { EnvironmentBlockedError } from './environment-blocked.ts';
+import { EnvironmentBlockedError } from '../protocol/environment-blocked.ts';
 
 function powershellPath(): string {
   const root = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { requireProductEntry } from '../../packages/protocol/product-scope.ts';
-import { readPermissionPolicy } from '../../packages/core/permissions.ts';
+import { readPermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import { assertEnvironment } from '../../packages/protocol/settings.ts';
 import { parseArgs } from '../shared/args.ts';
 import {
