@@ -457,7 +457,7 @@ test('the runner worker cannot read the workspace it was started in', async (t) 
   await writeFile(path.join(root, '.env'), 'SECRET=hunter2\n');
   const runtime = await tempRoot(t, 'yuantu-runner-');
   const sources = path.join(projectRoot, 'packages', 'tools');
-  for (const file of ['code-process-entry.ts', 'environment.ts'])
+  for (const file of ['code-process-entry.ts', 'program-runtime.ts'])
     await writeFile(path.join(runtime, file), await readFile(path.join(sources, file)));
   await writeFile(path.join(runtime, 'package.json'), '{"type":"module"}\n');
   await writeFile(

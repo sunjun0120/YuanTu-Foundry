@@ -10,7 +10,7 @@ const sourceAssets = [
   accountHelper,
   path.join(root, 'packages/tools/code-process-entry.ts'),
   path.join(root, 'packages/tools/code-worker.ts'),
-  path.join(root, 'packages/platform/child-environment.ts'),
+  path.join(root, 'packages/tools/program-runtime.ts'),
 ];
 
 export function accountAcceptanceSkip(platform = process.platform, env = process.env) {

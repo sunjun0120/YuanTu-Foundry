@@ -7,7 +7,7 @@ import { resolveSandboxConfig } from '../sandbox/sandbox-provider.ts';
 import type { ToolContext } from '../protocol/index.ts';
 import type { CodeWorkerData, CallRequest, WorkerMessage } from './code-worker.ts';
 import type { ChildProcess } from 'node:child_process';
-import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from '../platform/child-environment.ts';
+import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from './program-runtime.ts';
 
 const FRAME_BYTES = 1_048_576;
 const TOTAL_BYTES = 8_388_608;

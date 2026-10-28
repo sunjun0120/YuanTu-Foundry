@@ -46,7 +46,7 @@ test('account CI setup verifies readiness and cleanup uses the uninstall entry',
       .filter((args) => args.includes('YuanTuSandboxUsers:RX'))
       .map((args) => args[0]!.split(/[\\/]/).at(-1))
       .sort(),
-    ['code-process-entry.ts', 'code-worker.ts', 'environment.ts', 'yuantu-sandbox.exe'],
+    ['code-process-entry.ts', 'code-worker.ts', 'program-runtime.ts', 'yuantu-sandbox.exe'],
   );
   commands.length = 0;
   await manageWindowsAccounts('cleanup', { platform: 'win32', env, run });

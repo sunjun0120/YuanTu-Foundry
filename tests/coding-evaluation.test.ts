@@ -131,11 +131,11 @@ test('production manifests omit Rust build caches while preserving target source
   const native = 'packages/sandbox/windows-sandbox/native';
   const kept = [
     'apps/target/index.ts',
-    'packages/target/index.ts',
     `${native}/Cargo.lock`,
     `${native}/Cargo.toml`,
     `${native}/src/main.rs`,
     `${native}/src/target/mod.rs`,
+    'packages/target/index.ts',
   ];
   const cached = `${native}/target/debug/incremental/cache.bin`;
   for (const relative of [...kept, cached]) {

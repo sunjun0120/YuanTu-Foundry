@@ -35,7 +35,7 @@ const productionRoots = new Set(['apps', 'packages', 'tests', 'scripts']);
 const excludedDirectories =
   /(^|\/)(?:node_modules|dist|\.git|\.scratch|\.yuantu|\.codex|\.agents|\.aws|__pycache__)(\/|$)/i;
 // This crate's Cargo output is a build cache, not a frozen input. Source modules named `target` stay included.
-const rustBuildDirectories = /^packages\/tools\/windows-sandbox\/native\/target(?:\/|$)/i;
+const rustBuildDirectories = /^packages\/sandbox\/windows-sandbox\/native\/target(?:\/|$)/i;
 /**
  * Credential *data* is excluded; a source module that happens to be named
  * `credentials.ts` is product code and must stay in the snapshot. The former

@@ -3,7 +3,7 @@ import { mkdir, readdir, lstat, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from '../packages/platform/child-environment.ts';
+import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from '../packages/tools/program-runtime.ts';
 
 const project = fileURLToPath(new URL('..', import.meta.url));
 const expected = new Set([
