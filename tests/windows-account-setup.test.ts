@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as setupModule from '../apps/desktop/sandbox-setup.ts';
 import { systemHandlers } from '../apps/agent-host/handlers/system.ts';
-import { configureAccountBackend } from '../packages/tools/sandbox-account.ts';
-import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
+import { configureAccountBackend } from '../packages/sandbox/sandbox-account.ts';
+import { nativeSandboxBackend } from '../packages/sandbox/sandbox-mode.ts';
 import type { HostContext } from '../apps/agent-host/state.ts';
 
 const report = (ready = false, problems = ready ? [] : ['accounts-missing']) =>

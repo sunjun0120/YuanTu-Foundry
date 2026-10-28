@@ -15,8 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { toolEnvironment } from './environment.ts';
-import { withoutToolDeadline } from './call-runtime.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
+import { withoutToolDeadline } from '../platform/deadline-suspension.ts';
 import { windowsAccountCapabilities } from './execution-capabilities.ts';
 import { windowsShell, windowsShellArgs } from './windows-shell.ts';
 import {
@@ -37,7 +37,7 @@ import { quoteWindowsArgument, windowsProgramNeedsShell } from './windows-comman
 
 const assetRoot =
   typeof __dirname === 'string'
-    ? path.resolve(__dirname, '../packages/tools/windows-sandbox')
+    ? path.resolve(__dirname, '../packages/sandbox/windows-sandbox')
     : fileURLToPath(new URL('./windows-sandbox/', import.meta.url));
 
 /** Runs the helper with fixed arguments and answers its stdout; replaced in tests. */

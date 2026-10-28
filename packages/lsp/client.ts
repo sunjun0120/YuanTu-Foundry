@@ -6,8 +6,8 @@ import {
   executionPolicy,
   snapshotExecutionPolicy,
   currentExecutionPolicy,
-} from '../tools/execution-policy.ts';
-import { resolveSandboxConfig } from '../tools/sandbox.ts';
+} from '../sandbox/execution-policy.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 import {
   MessageDecoder,

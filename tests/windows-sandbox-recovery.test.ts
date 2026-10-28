@@ -8,10 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWriteFile } from '../packages/platform/write-all.ts';
-import { workspaceSandboxSid } from '../packages/tools/windows-sandbox-recovery.ts';
-import { toolEnvironment } from '../packages/tools/environment.ts';
+import { workspaceSandboxSid } from '../packages/sandbox/windows-sandbox-recovery.ts';
+import { toolEnvironment } from '../packages/platform/child-environment.ts';
 
-const helper = fileURLToPath(new URL('../packages/tools/windows-sandbox/acl.ps1', import.meta.url));
+const helper = fileURLToPath(
+  new URL('../packages/sandbox/windows-sandbox/acl.ps1', import.meta.url),
+);
 const powershell = path.join(
   process.env.SystemRoot ?? 'C:\\Windows',
   'System32/WindowsPowerShell/v1.0/powershell.exe',

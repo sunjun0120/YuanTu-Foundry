@@ -13,8 +13,8 @@ import {
 import path from 'node:path';
 import { fixture } from './native-git-fixture.ts';
 import { git } from './git-fixture.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
-import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
+import { registerSandboxProvider, sandboxProvider } from '../packages/sandbox/sandbox.ts';
 
 test('native Git reads use the owned execution environment and preserve repository metadata', async (t) => {
   const { root, tools, policy, counts } = await fixture(t);

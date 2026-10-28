@@ -1,7 +1,7 @@
 import { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { refreshAccountReadiness } from '../packages/tools/sandbox-account.ts';
-import { stopBrokers } from '../packages/tools/sandbox-account-broker.ts';
+import { refreshAccountReadiness } from '../packages/sandbox/sandbox-account.ts';
+import { stopBrokers } from '../packages/sandbox/sandbox-account-broker.ts';
 import { accountAcceptanceSkip } from '../scripts/windows-account-ci.mjs';
 
 export const windowsAccountTests = { skip: accountAcceptanceSkip(), timeout: 120_000 };

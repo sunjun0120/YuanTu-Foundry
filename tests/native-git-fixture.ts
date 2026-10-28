@@ -6,12 +6,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import {
   sandboxProvider,
   registerSandboxProvider,
   type SandboxPlan,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 
 export async function fixture(t: test.TestContext) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-native-git-'));

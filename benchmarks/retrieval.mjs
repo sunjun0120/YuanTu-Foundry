@@ -164,7 +164,7 @@ async function measureViaService(root, entry, backendName) {
   const { WorkspaceSearchService } = await import('../packages/search/service.ts');
   const { searchOptions } = await import('../packages/search/text.ts');
   const { createSearchBackend } = await import('../packages/tools/search-backend.ts');
-  const { executionPolicy } = await import('../packages/tools/execution-policy.ts');
+  const { executionPolicy } = await import('../packages/sandbox/execution-policy.ts');
   const service = new WorkspaceSearchService(workspaceAccess(new Workspace(root)), {
     indexDirectory: null,
   });

@@ -5,11 +5,11 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createTools } from '../packages/catalog/index.ts';
-import { toolEnvironment, workerExecArgv } from '../packages/tools/environment.ts';
+import { toolEnvironment, workerExecArgv } from '../packages/platform/child-environment.ts';
 import { projectRoot } from './process-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
-import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
-import { accountCommand } from '../packages/tools/sandbox-account.ts';
+import { registerSandboxProvider, sandboxProvider } from '../packages/sandbox/sandbox.ts';
+import { accountCommand } from '../packages/sandbox/sandbox-account.ts';
 
 const execFileAsync = promisify(execFile);
 

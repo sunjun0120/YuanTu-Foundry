@@ -7,8 +7,8 @@ name: Windows sandbox accounts
 on:
   push:
     paths:
-      - 'packages/tools/windows-sandbox/native/**'
-      - 'packages/tools/sandbox*.ts'
+      - 'packages/sandbox/windows-sandbox/native/**'
+      - 'packages/sandbox/**'
       - 'tests/sandbox-account-native.test.ts'
       - 'tests/*native.test.ts'
       - 'tests/*program-process*.test.ts'
@@ -27,8 +27,8 @@ on:
       - '.github/workflows/windows-account-sandbox.yml'
   pull_request:
     paths:
-      - 'packages/tools/windows-sandbox/native/**'
-      - 'packages/tools/sandbox*.ts'
+      - 'packages/sandbox/windows-sandbox/native/**'
+      - 'packages/sandbox/**'
       - 'tests/sandbox-account-native.test.ts'
       - 'tests/*native.test.ts'
       - 'tests/*program-process*.test.ts'
@@ -61,13 +61,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: packages/tools/windows-sandbox/native -> target
+          workspaces: packages/sandbox/windows-sandbox/native -> target
       - name: Helper unit and execution-path tests
-        run: cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml
+        run: cargo test --locked --manifest-path packages/sandbox/windows-sandbox/native/Cargo.toml
       - name: Sandbox account real acceptance
         env:
           YUANTU_SANDBOX_ACCOUNT_ACCEPTANCE: '1'
-        run: cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml --test account_acceptance -- --nocapture
+        run: cargo test --locked --manifest-path packages/sandbox/windows-sandbox/native/Cargo.toml --test account_acceptance -- --nocapture
       - run: npm ci
       # The same backend through the TypeScript provider a Host uses (debug helper built by the steps above).
       - name: Sandbox account provider acceptance

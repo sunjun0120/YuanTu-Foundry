@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSandboxConfig, setSandboxMode } from '../packages/tools/sandbox-provider.ts';
+import { resolveSandboxConfig, setSandboxMode } from '../packages/sandbox/sandbox-provider.ts';
 import {
   defaultSandboxMode,
   parseSandboxSettingsCommand,
@@ -8,7 +8,7 @@ import {
 import { permissionPreset } from '../apps/desktop/permission-presets.ts';
 import { parseCarrierCommand } from '../packages/carrier/contract.ts';
 import { applySandboxDefaults, executionEnvironment } from '../apps/shared/runtime.ts';
-import { sandboxProvider } from '../packages/tools/sandbox.ts';
+import { sandboxProvider } from '../packages/sandbox/sandbox.ts';
 
 test('the retired Windows token backend cannot be selected for execution', () => {
   assert.throws(() => resolveSandboxConfig({ YUANTU_SANDBOX: 'windows' }), /removed.*native/i);

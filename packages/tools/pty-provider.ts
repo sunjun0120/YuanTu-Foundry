@@ -1,4 +1,4 @@
-import { killTree } from './process.ts';
+import { killTree } from '../platform/process-tree.ts';
 import { testResource } from '../platform/test-lifecycle.ts';
 /**
  * The terminal *seam*: what a PTY backend is, and who decides which one a terminal gets.

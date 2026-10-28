@@ -1,8 +1,8 @@
-import { checkSandboxAvailability, resolveSandboxConfig } from '../../packages/tools/sandbox.ts';
+import { checkSandboxAvailability, resolveSandboxConfig } from '../../packages/sandbox/sandbox.ts';
 import { defaultSandboxMode, type SandboxMode } from './sandbox-settings.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { toolEnvironment } from '../../packages/tools/environment.ts';
+import { toolEnvironment } from '../../packages/platform/child-environment.ts';
 
 const executeFile = promisify(execFile);
 

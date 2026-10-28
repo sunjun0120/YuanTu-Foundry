@@ -1001,7 +1001,8 @@ test('a desktop with no usable native reports why, without changing where sessio
    * new session starts in stays `native` — the fail-closed default. The old store *did* have a fail-closed path
    * (it rewrote a file); there is no file to rewrite now, which is the point of the mode being per session.
    */
-  const { sandboxProvider, registerSandboxProvider } = await import('../packages/tools/sandbox.ts');
+  const { sandboxProvider, registerSandboxProvider } =
+    await import('../packages/sandbox/sandbox.ts');
   const original = sandboxProvider('native');
   registerSandboxProvider({ ...original, available: async () => 'Native fixture unavailable' });
   try {

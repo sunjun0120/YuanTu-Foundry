@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { killTree } from './process.ts';
+import { killTree } from '../platform/process-tree.ts';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { resolveSandboxConfig } from './sandbox-provider.ts';
-import { markSandboxStarted } from './sandbox.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox-provider.ts';
+import { markSandboxStarted } from '../sandbox/sandbox.ts';
 import { ptyProvider, type PtyProcess } from './pty-provider.ts';
 import { Workspace } from './files.ts';
 import { localExecutionEnvironment } from './execution-environment.ts';
@@ -11,12 +11,12 @@ import {
   executionPolicy,
   snapshotExecutionPolicy,
   currentExecutionPolicy,
-} from './execution-policy.ts';
+} from '../sandbox/execution-policy.ts';
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 import { bounded, failure } from './registry.ts';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { OutputRing } from './output-ring.ts';
-import { windowsShell } from './windows-shell.ts';
+import { windowsShell } from '../sandbox/windows-shell.ts';
 
 /**
  * Terminals: the one kind of work a command runner cannot express.

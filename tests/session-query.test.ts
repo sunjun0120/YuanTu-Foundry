@@ -12,7 +12,7 @@ import {
 } from '../packages/core/session-query.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import type { ModelRequest, Provider, Tool, ToolContext } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';
 

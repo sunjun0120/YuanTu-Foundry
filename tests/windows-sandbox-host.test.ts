@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { startHost, connectClient } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
-import { quoteWindowsArgument } from '../packages/tools/windows-command.ts';
+import { quoteWindowsArgument } from '../packages/sandbox/windows-command.ts';
 import { tempRoot } from './temp-fixture.ts';
 import { useAccountTests, windowsAccountTests } from './windows-account-fixture.ts';
 

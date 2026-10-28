@@ -1,4 +1,4 @@
-import { resolveSandboxConfig } from './sandbox.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import { commandTool } from './command.ts';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -6,8 +6,8 @@ import { open, lstat, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import type { Tool, ToolContext, ToolResult } from '../protocol/index.ts';
 import { bounded, failure, MAX_TOOL_OUTPUT } from './registry.ts';
-import { killTree } from './process.ts';
-import { toolEnvironment } from './environment.ts';
+import { killTree } from '../platform/process-tree.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
 
 interface Validation {
   id: string;

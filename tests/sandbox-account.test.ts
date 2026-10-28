@@ -15,19 +15,19 @@ import {
   refreshAccountReadiness,
   windowsAccountSandboxProvider,
   type HelperRunner,
-} from '../packages/tools/sandbox-account.ts';
+} from '../packages/sandbox/sandbox-account.ts';
 import {
   brokerPipe,
   parseBrokerAnnouncement,
   stopBrokers,
   type BrokerLauncher,
-} from '../packages/tools/sandbox-account-broker.ts';
-import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+} from '../packages/sandbox/sandbox-account-broker.ts';
+import { nativeSandboxBackend } from '../packages/sandbox/sandbox-mode.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { withSandboxPreparation, type SandboxPlan } from '../packages/tools/sandbox-provider.ts';
+import { withSandboxPreparation, type SandboxPlan } from '../packages/sandbox/sandbox-provider.ts';
 import { tempRoot } from './temp-fixture.ts';
-import { windowsShell, windowsShellArgs } from '../packages/tools/windows-shell.ts';
+import { windowsShell, windowsShellArgs } from '../packages/sandbox/windows-shell.ts';
 
 const windowsOnly = process.platform !== 'win32' && 'the account backend only runs on Windows';
 const PIPE = '\\\\.\\pipe\\yuantu-sbx-broker-' + '0123456789abcdef0123456789abcdef';
@@ -594,7 +594,7 @@ test('a workspace keeps one capability SID, distinct from every other workspace'
 
 test('independent Hosts agree on a capability and retain every workspace mapping', async (t) => {
   const state = await tempRoot(t, 'yuantu-account-multiprocess-');
-  const moduleUrl = new URL('../packages/tools/sandbox-account.ts', import.meta.url).href;
+  const moduleUrl = new URL('../packages/sandbox/sandbox-account.ts', import.meta.url).href;
   const workers = Array.from({ length: 4 }, (_, index) => {
     const uniqueRoot = path.join(state, `workspace-${index}`);
     const child = spawn(

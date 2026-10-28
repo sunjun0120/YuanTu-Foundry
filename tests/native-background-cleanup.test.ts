@@ -7,12 +7,12 @@ import childProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { BackgroundCommands } from '../packages/tools/background.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import {
   registerSandboxProvider,
   sandboxProvider,
   type SandboxPlan,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 
 test('a failed force-stop still records cleanup uncertainty as a ToolCleanupError', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-background-stop-error-'));

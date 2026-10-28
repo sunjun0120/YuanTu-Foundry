@@ -1,7 +1,7 @@
 /** Ordinary Node broker; guest code never runs in the Agent Host process. */
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
-import { guestResourceLimits, PROGRAM_PROTOCOL } from './environment.ts';
+import { guestResourceLimits, PROGRAM_PROTOCOL } from '../platform/child-environment.ts';
 import type { CodeWorkerData } from './code-worker.ts';
 /**
  * Leave the workspace before any worker exists.

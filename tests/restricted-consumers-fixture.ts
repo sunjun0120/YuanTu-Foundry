@@ -2,7 +2,7 @@ import test from 'node:test';
 import { mkdtemp, rm, stat, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';
 import { windowsAccountTests, nativeAccountTests } from './windows-account-fixture.ts';
 

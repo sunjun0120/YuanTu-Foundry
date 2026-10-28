@@ -16,8 +16,8 @@
  *   refused" to "run it on the host anyway" is the one fallback that must never exist.
  */
 import { localExecutionEnvironment } from './execution-environment.ts';
-import { executionPolicy } from './execution-policy.ts';
-import { resolveSandboxConfig } from './sandbox.ts';
+import { executionPolicy } from '../sandbox/execution-policy.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import { resolveSearchBinary, type ResolvedSearchBinary } from '../search/ripgrep-assets.ts';
 import { runRipgrep, type ManagedSearchProcess } from '../search/ripgrep.ts';
 import type { SearchBackend } from '../search/types.ts';

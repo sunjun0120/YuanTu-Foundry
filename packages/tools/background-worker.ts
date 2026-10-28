@@ -1,4 +1,4 @@
-import { stopSandboxProcess, markSandboxStarted, type SandboxPlan } from './sandbox.ts';
+import { stopSandboxProcess, markSandboxStarted, type SandboxPlan } from '../sandbox/sandbox.ts';
 import { BufferedOutput } from './background-output.ts';
 import { createOutputDecoder } from './output-decoder.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';

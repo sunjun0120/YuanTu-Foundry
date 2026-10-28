@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
-import { toolEnvironment } from './environment.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
 import path from 'node:path';
-import { killOrphans, killTree } from './process.ts';
+import { killOrphans, killTree } from '../platform/process-tree.ts';
 import {
   registerSandboxProvider,
   resolveSandboxConfig,

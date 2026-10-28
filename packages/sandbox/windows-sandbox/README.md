@@ -30,7 +30,7 @@ The earlier SYSTEM-service design is retained as [historical reference](ENHANCED
 
 本机只做构建和只读检查；真实建户/删户只在一次性 GitHub Actions Windows runner 上做（见 `.github/workflows/windows-account-sandbox.yml`）。不要在本机执行账户初始化或卸载，除非你明确要在这台机器上使用账户沙箱。
 
-1. 构建 helper：`npm run build:windows-sandbox`。它同时写入 `packages/tools/windows-sandbox/yuantu-sandbox.exe` 和 `dist/packages/tools/windows-sandbox/yuantu-sandbox.exe`；安装包和 `npm run build` 都从这里取。
+1. 构建 helper：`npm run build:windows-sandbox`。它同时写入 `packages/sandbox/windows-sandbox/yuantu-sandbox.exe` 和 `dist/packages/sandbox/windows-sandbox/yuantu-sandbox.exe`；安装包和 `npm run build` 都从这里取。
 2. 启动开发版桌面：`npm run desktop`（会先构建）。打开设置 → 通用 → **Windows 沙箱账户**，点“管理员初始化”。未提权时会弹一次 UAC；从已经提权的终端启动时直接在本进程执行，不再弹 UAC。开发版和正式版走同一套流程。
 3. 初始化成功后，系统里会多出：
    - 本地账户 `YuanTuSandboxOffline`、`YuanTuSandboxOnline`，以及本地组 `YuanTuSandboxUsers`；
@@ -39,7 +39,7 @@ The earlier SYSTEM-service design is retained as [historical reference](ENHANCED
    - `%USERPROFILE%\.yuantu\sandbox-state\windows-account\setup_marker.json`（版本、账户/组 SID、离线过滤配置）和 `credentials.json`（DPAPI 加密的密码）；
    - 工作区授权、默认只读白名单，以及桌面 profile 下祖先目录的 traverse/read-attributes 授权记录。
 4. 卸载：在同一设置页点“卸载沙箱账户”。它会先删除 `setup_marker.json`，再以桌面用户身份撤销工作区/读取授权，最后删除账户、组、WFP 过滤器和凭据。确认已清理干净：
-   - `packages/tools/windows-sandbox/yuantu-sandbox.exe account-status --verify` 应报告 `accounts-missing`、`group-missing`、`firewall-missing`，`ready` 为 false；
+   - `packages/sandbox/windows-sandbox/yuantu-sandbox.exe account-status --verify` 应报告 `accounts-missing`、`group-missing`、`firewall-missing`，`ready` 为 false；
    - `net user YuanTuSandboxOffline`、`net user YuanTuSandboxOnline`、`net localgroup YuanTuSandboxUsers` 都应失败；
    - 状态目录里没有 `setup_marker.json` 和 `credentials.json`，`read-grants.json` / `traverse-grants.json` 的 `grants` 为空。`account-status` 只看标记和凭据，清理后必须用 `--verify` 才能看到账户/WFP 的真实状态。
 5. 如果管理员初始化无法完成（UAC 被拒、策略不允许建本地账户或改防火墙），隔离命令会停止并提示修复，不会回退到已移除的旧后端。CI 使用 `scripts/windows-account-ci.mjs setup` / `cleanup` 管理一次性 runner 的账户，`check:windows-sandbox` 及 `check:windows-desktop-sandbox` 要求账户旅程无跳过。

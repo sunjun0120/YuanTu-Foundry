@@ -4,18 +4,18 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
-import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { EnvironmentBlockedError } from '../packages/protocol/environment-blocked.ts';
 import {
   SANDBOX_LAUNCH_FAILED_EXIT,
   SANDBOX_LAUNCH_FAILED_PREFIX,
-} from '../packages/tools/sandbox-launch-failure.ts';
+} from '../packages/sandbox/sandbox-launch-failure.ts';
 import { verifyCompletionAcceptance } from '../packages/core/task-acceptance.ts';
 import {
   registerSandboxProvider,
   sandboxProvider,
   type SandboxPlan,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 
 test('one sandbox startup blocker skips remaining commands but still checks files', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-blocked-'));

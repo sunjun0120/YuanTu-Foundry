@@ -7,14 +7,14 @@ import { HookRegistry } from '../packages/tools/hooks.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { currentExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { currentExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { installHookBridge } from '../packages/resources/hook-bridge.ts';
-import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import {
   registerSandboxProvider,
   sandboxProvider,
   resolveSandboxConfig,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 
 test('hook inherits the live call file and network policy instead of the launch default', () => {
   withExecutionPolicy(

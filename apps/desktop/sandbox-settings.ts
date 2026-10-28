@@ -1,12 +1,12 @@
-import { appSandboxMode } from '../../packages/tools/sandbox-mode.ts';
-import type { SandboxMode } from '../../packages/tools/sandbox.ts';
+import { appSandboxMode } from '../../packages/sandbox/sandbox-mode.ts';
+import type { SandboxMode } from '../../packages/sandbox/sandbox.ts';
 
 /**
  * What the desktop needs to know about the sandbox: which mode a session is in, which image, and whether the
  * backend it names can actually run here.
  *
  * The mode used to be a *desktop* setting with its own file, written by a form, applied by restarting the
- * carrier process. It is a **per-session** choice now (`packages/tools/sandbox-provider.ts` reads the mode per
+ * carrier process. It is a **per-session** choice now (`packages/sandbox/sandbox-provider.ts` reads the mode per
  * command, so the Host can be told to switch without a restart), and what is left for a deployment to say is
  * the default a new session starts from — `YUANTU_SANDBOX` when the launch environment names one, `native`
  * otherwise. That is a fact about how the program was started, not a preference, which is why nothing here

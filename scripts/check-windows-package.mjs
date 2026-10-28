@@ -35,7 +35,7 @@ export async function validateWindowsPackage(directory, { inspect = true } = {})
   }
   const helperHashes = {};
   for (const name of ['yuantu-sandbox.exe', 'acl.ps1']) {
-    const relative = `dist/packages/tools/windows-sandbox/${name}`;
+    const relative = `dist/packages/sandbox/windows-sandbox/${name}`;
     const packaged = path.join(resources, 'app', relative);
     const digest = sha256(await readFile(packaged));
     if (digest !== sha256(await readFile(path.join(project, relative))))

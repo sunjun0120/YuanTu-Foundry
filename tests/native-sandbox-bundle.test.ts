@@ -25,13 +25,13 @@ async function bundleTo(options: BuildOptions) {
 test('CommonJS desktop bundle loads native providers and their packaged helper', async (t) => {
   const root = await tempRoot(t, 'yuantu-native-bundle-');
   const desktop = path.join(root, 'dist/desktop');
-  const assets = path.join(root, 'dist/packages/tools/windows-sandbox');
+  const assets = path.join(root, 'dist/packages/sandbox/windows-sandbox');
   await mkdir(desktop, { recursive: true });
   await mkdir(assets, { recursive: true });
-  await copyFile('packages/tools/windows-sandbox/acl.ps1', path.join(assets, 'acl.ps1'));
+  await copyFile('packages/sandbox/windows-sandbox/acl.ps1', path.join(assets, 'acl.ps1'));
   const result = await build({
     stdin: {
-      contents: `import { sandboxProviders, checkSandboxAvailability } from './packages/tools/sandbox.ts'; console.log(JSON.stringify(sandboxProviders().map(p => p.mode))); void checkSandboxAvailability('host').then(answer => console.log(answer));`,
+      contents: `import { sandboxProviders, checkSandboxAvailability } from './packages/sandbox/sandbox.ts'; console.log(JSON.stringify(sandboxProviders().map(p => p.mode))); void checkSandboxAvailability('host').then(answer => console.log(answer));`,
       resolveDir: process.cwd(),
       sourcefile: 'native-bundle-entry.ts',
       loader: 'ts',
@@ -63,7 +63,7 @@ test('CommonJS desktop bundle loads native providers and their packaged helper',
 test('CommonJS desktop regex search loads its packaged worker from another cwd', async (t) => {
   const root = await tempRoot(t, 'yuantu-search #%-');
   const desktop = path.join(root, 'dist/desktop');
-  const assets = path.join(root, 'dist/packages/tools/windows-sandbox');
+  const assets = path.join(root, 'dist/packages/sandbox/windows-sandbox');
   const workspace = path.join(root, 'workspace');
   await mkdir(desktop, { recursive: true });
   await mkdir(assets, { recursive: true });
@@ -80,7 +80,7 @@ test('CommonJS desktop regex search loads its packaged worker from another cwd',
     path.join(workspace, 'locale.txt'),
     ['I', 'i', 'İ', 'ı', '中文', 'a+b[0]', 'S', 'ſ'].join('\n') + '\n',
   );
-  await copyFile('packages/tools/windows-sandbox/acl.ps1', path.join(assets, 'acl.ps1'));
+  await copyFile('packages/sandbox/windows-sandbox/acl.ps1', path.join(assets, 'acl.ps1'));
   /**
    * Keep esbuild from writing into the temporary fixture directly; the test process writes its in-memory output so
    * the regression runs consistently even when the esbuild executable has restricted filesystem integrity labels.

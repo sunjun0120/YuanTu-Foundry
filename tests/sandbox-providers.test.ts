@@ -19,7 +19,7 @@ import {
   stopSandbox,
   type SandboxPlan,
   type SandboxProvider,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 
 test('local sandbox scratch is cleaned only after its process has stopped', async (t) => {
   const original = sandboxProvider('windows-account');

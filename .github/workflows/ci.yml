@@ -127,11 +127,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: packages/tools/windows-sandbox/native -> target
+          workspaces: packages/sandbox/windows-sandbox/native -> target
       - name: Windows sandbox helper safety and refusal regressions
         run: |
           npm run build:windows-sandbox
-          cargo test --locked --manifest-path packages/tools/windows-sandbox/native/Cargo.toml
+          cargo test --locked --manifest-path packages/sandbox/windows-sandbox/native/Cargo.toml
           node scripts/run-tests.mjs tests/windows-sandbox-setup.test.ts tests/sandbox-started.test.ts tests/acceptance.test.ts tests/native-git.test.ts
       - run: npm run build
       # Electron's lazy installation writes into node_modules, outside an isolated test worker's ownership.

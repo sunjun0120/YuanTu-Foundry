@@ -1,16 +1,16 @@
-import { cleanupSandbox, markSandboxStarted, type SandboxPlan } from './sandbox.ts';
+import { cleanupSandbox, markSandboxStarted, type SandboxPlan } from '../sandbox/sandbox.ts';
 import { localExecutionEnvironment, executionPolicy } from './execution-environment.ts';
-import { resolveSandboxConfig } from './sandbox.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { CommandJournal, JobProducer, JobSnapshot } from '../protocol/jobs.ts';
 import type { Tool, ToolContext } from '../protocol/index.ts';
 import { Workspace } from './files.ts';
-import { killTree } from './process.ts';
+import { killTree } from '../platform/process-tree.ts';
 import { OutputRing } from './output-ring.ts';
-import { toolEnvironment } from './environment.ts';
-import { snapshotExecutionPolicy } from './execution-policy.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
+import { snapshotExecutionPolicy } from '../sandbox/execution-policy.ts';
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 /**
  * How much of a command's output is kept once the process is gone.

@@ -13,7 +13,7 @@ import electronPath from 'electron';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { waitForPage } from './page-wait.mjs';
 import { verificationNudge } from './desktop-smoke-support.mjs';
-import { quoteWindowsArgument } from '../packages/tools/windows-command.ts';
+import { quoteWindowsArgument } from '../packages/sandbox/windows-command.ts';
 import { windowsAccountTests, useAccountTests } from './windows-account-fixture.ts';
 import { accountHelper } from '../scripts/windows-account-ci.mjs';
 

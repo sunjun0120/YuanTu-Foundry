@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { toolEnvironment } from '../../packages/tools/environment.ts';
-import { parseAccountStatus } from '../../packages/tools/sandbox-account.ts';
+import { toolEnvironment } from '../../packages/platform/child-environment.ts';
+import { parseAccountStatus } from '../../packages/sandbox/sandbox-account.ts';
 
 /**
  * What the settings page asks for. A read root is added by picking a directory in the native dialog and removed by

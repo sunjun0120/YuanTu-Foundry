@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { toolEnvironment } from './environment.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
 import { testResource, testWindowsSandboxStateDirectory } from '../platform/test-lifecycle.ts';
 import { EnvironmentBlockedError } from '../protocol/environment-blocked.ts';
 
@@ -80,7 +80,7 @@ function run(
 
 const aclHelper =
   typeof __dirname === 'string'
-    ? path.resolve(__dirname, '../packages/tools/windows-sandbox/acl.ps1')
+    ? path.resolve(__dirname, '../packages/sandbox/windows-sandbox/acl.ps1')
     : fileURLToPath(new URL('./windows-sandbox/acl.ps1', import.meta.url));
 // Capture trusted application code once. Guest workspace edits must never become host cleanup code.
 // Read on first use rather than at import: every Host imports this module, most never prepare a Windows sandbox,

@@ -11,9 +11,9 @@ import {
   resolveSeatbeltPaths,
   inspectSeatbeltWorkspace,
   seatbeltSandboxProvider,
-} from '../packages/tools/sandbox-seatbelt.ts';
-import type { SandboxPlan } from '../packages/tools/sandbox-provider.ts';
-import { markSandboxStarted, stopSandbox } from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox-seatbelt.ts';
+import type { SandboxPlan } from '../packages/sandbox/sandbox-provider.ts';
+import { markSandboxStarted, stopSandbox } from '../packages/sandbox/sandbox.ts';
 
 test('Seatbelt quoting keeps policy syntax inside the path string and refuses controls', () => {
   assert.equal(seatbeltQuote('/tmp/a"\\b'), '"/tmp/a\\"\\\\b"');

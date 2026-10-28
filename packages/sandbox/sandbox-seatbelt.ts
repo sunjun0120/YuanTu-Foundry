@@ -17,7 +17,7 @@ import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { toolEnvironment } from './environment.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
 import { SeatbeltScratchRegistry } from './seatbelt-scratch.ts';
 import {
   insideWorkspace,

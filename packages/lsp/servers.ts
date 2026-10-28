@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { toolEnvironment } from '../tools/environment.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
 
 export interface LspServerDefinition {
   language: string;

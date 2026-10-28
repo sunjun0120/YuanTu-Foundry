@@ -24,7 +24,10 @@ test('the NSIS uninstaller removes the sandbox accounts, but never during an upd
     ),
   );
   assert.match(macro, /nsExec::Exec '"\$R0" account-uninstall'/);
-  const names = await readFile('packages/tools/windows-sandbox/native/src/account/mod.rs', 'utf8');
+  const names = await readFile(
+    'packages/sandbox/windows-sandbox/native/src/account/mod.rs',
+    'utf8',
+  );
   for (const constant of ['OFFLINE', 'ONLINE', 'GROUP']) {
     const name = new RegExp(`pub const ${constant}: &str = "([^"]+)";`).exec(names)?.[1];
     assert.ok(name, constant);

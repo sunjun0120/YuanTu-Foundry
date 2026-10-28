@@ -20,16 +20,16 @@ import {
   configureAccountBackend,
   refreshAccountReadiness,
   windowsAccountSandboxProvider,
-} from '../packages/tools/sandbox-account.ts';
-import { stopBrokers } from '../packages/tools/sandbox-account-broker.ts';
-import { nativeSandboxBackend } from '../packages/tools/sandbox-mode.ts';
-import type { SandboxConfig, SandboxPlan } from '../packages/tools/sandbox-provider.ts';
+} from '../packages/sandbox/sandbox-account.ts';
+import { stopBrokers } from '../packages/sandbox/sandbox-account-broker.ts';
+import { nativeSandboxBackend } from '../packages/sandbox/sandbox-mode.ts';
+import type { SandboxConfig, SandboxPlan } from '../packages/sandbox/sandbox-provider.ts';
 import { projectRoot } from './process-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 const helper = path.join(
   projectRoot,
-  'packages/tools/windows-sandbox/native/target/debug/yuantu-sandbox.exe',
+  'packages/sandbox/windows-sandbox/native/target/debug/yuantu-sandbox.exe',
 );
 const skip =
   process.platform !== 'win32'
@@ -177,7 +177,7 @@ test(
     // A forking test runner, through the shell like an acceptance check.
     const forks = path.join(
       projectRoot,
-      'packages/tools/windows-sandbox/native/tests/fixtures/forks',
+      'packages/sandbox/windows-sandbox/native/tests/fixtures/forks',
     );
     for (const name of ['a.test.cjs', 'b.test.cjs'])
       await import('node:fs/promises').then((fs) =>

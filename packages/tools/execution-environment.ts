@@ -10,15 +10,18 @@ import {
   cleanupSandbox,
   stopSandbox,
   markSandboxStarted,
-} from './sandbox.ts';
+} from '../sandbox/sandbox.ts';
 import type { ExecutionPolicy, ExecutionCapabilities } from '../protocol/execution.ts';
-import type { TerminalSize } from './sandbox-provider.ts';
-import { snapshotExecutionPolicy, requireExecutionCapabilities } from './execution-policy.ts';
+import type { TerminalSize } from '../sandbox/sandbox-provider.ts';
+import {
+  snapshotExecutionPolicy,
+  requireExecutionCapabilities,
+} from '../sandbox/execution-policy.ts';
 export {
   executionPolicy,
   withExecutionPolicy,
   requireExecutionCapabilities,
-} from './execution-policy.ts';
+} from '../sandbox/execution-policy.ts';
 
 /** A paired local backend: commands and file operations share the same canonical path identity. */
 export async function localExecutionEnvironment(root: string, policy: ExecutionPolicy) {

@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { killTree } from '../packages/tools/process.ts';
+import { killTree } from '../packages/platform/process-tree.ts';
 
 /** A child that stays alive until something ends it. */
 function liveChild(): ChildProcess {

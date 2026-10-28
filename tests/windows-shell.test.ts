@@ -9,7 +9,7 @@ import {
   windowsShell,
   windowsShellArgs,
   windowsShellLabel,
-} from '../packages/tools/windows-shell.ts';
+} from '../packages/sandbox/windows-shell.ts';
 import { executionEnvironment } from '../apps/shared/runtime.ts';
 import { tempRoot } from './temp-fixture.ts';
 

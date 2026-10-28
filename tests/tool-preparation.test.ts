@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
-import { currentSandboxPreparation } from '../packages/tools/sandbox-provider.ts';
+import { currentSandboxPreparation } from '../packages/sandbox/sandbox-provider.ts';
 import { storeFixture } from './temp-fixture.ts';
 import type {
   AgentEvent,

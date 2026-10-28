@@ -2,12 +2,12 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { localExecutionEnvironment } from './execution-environment.ts';
-import { executionPolicy } from './execution-policy.ts';
-import { resolveSandboxConfig } from './sandbox-provider.ts';
+import { executionPolicy } from '../sandbox/execution-policy.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox-provider.ts';
 import type { ToolContext } from '../protocol/index.ts';
 import type { CodeWorkerData, CallRequest, WorkerMessage } from './code-worker.ts';
 import type { ChildProcess } from 'node:child_process';
-import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from './environment.ts';
+import { PROGRAM_PROTOCOL, PROGRAM_NODE_MAJOR } from '../platform/child-environment.ts';
 
 const FRAME_BYTES = 1_048_576;
 const TOTAL_BYTES = 8_388_608;

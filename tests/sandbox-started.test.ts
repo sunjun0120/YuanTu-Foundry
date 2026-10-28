@@ -10,7 +10,7 @@ import {
   markSandboxStarted,
   cleanupSandbox,
   type SandboxPlan,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 import { commandTool } from '../packages/tools/command.ts';
 import {
   localExecutionEnvironment,

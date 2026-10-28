@@ -27,7 +27,7 @@ import ts from 'typescript';
 const LAYERS = [
   ['formats'],
   ['protocol', 'platform'],
-  ['providers', 'search', 'storage'],
+  ['providers', 'sandbox', 'search', 'storage'],
   ['maintenance', 'workspaces'],
   ['tools'],
   ['lsp', 'office', 'resources'],

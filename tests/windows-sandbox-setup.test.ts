@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { parseSandboxSetupCommand } from '../apps/desktop/sandbox-setup.ts';
 
 const helper = fileURLToPath(
-  new URL('../packages/tools/windows-sandbox/yuantu-sandbox.exe', import.meta.url),
+  new URL('../packages/sandbox/windows-sandbox/yuantu-sandbox.exe', import.meta.url),
 );
 const windows = { skip: process.platform !== 'win32' && 'needs Windows' };
 

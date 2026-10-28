@@ -18,7 +18,8 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { runWithDeadline, withoutToolDeadline } from '../packages/tools/call-runtime.ts';
+import { runWithDeadline } from '../packages/tools/call-runtime.ts';
+import { withoutToolDeadline } from '../packages/platform/deadline-suspension.ts';
 import {
   TOOL_DEADLINE_DEFAULTS,
   TOOL_TIMEOUT_MARKER,

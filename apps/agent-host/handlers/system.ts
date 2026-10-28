@@ -1,11 +1,11 @@
-import { parseSandboxMode } from '../../../packages/tools/sandbox-mode.ts';
-import { refreshAccountBackend } from '../../../packages/tools/sandbox-account.ts';
+import { parseSandboxMode } from '../../../packages/sandbox/sandbox-mode.ts';
+import { refreshAccountBackend } from '../../../packages/sandbox/sandbox-account.ts';
 import { PermissionPolicy } from '../../../packages/protocol/permission-policy.ts';
 import { negotiateHostVersion } from '../../../packages/protocol/host-wire.ts';
 import {
   executionPolicy,
   requireExecutionCapabilities,
-} from '../../../packages/tools/execution-policy.ts';
+} from '../../../packages/sandbox/execution-policy.ts';
 import { ownedSession, required } from '../params.ts';
 import type { Handler } from '../dispatch.ts';
 

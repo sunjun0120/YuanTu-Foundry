@@ -1,6 +1,6 @@
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
-import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
+import { withExecutionPolicy as underExecutionPolicy } from '../sandbox/execution-policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import { redactSecrets } from '../platform/redact.ts';
 

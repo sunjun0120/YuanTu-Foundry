@@ -21,7 +21,10 @@ import { workspaceResultTools } from '../../../packages/tools/workspaces.ts';
 import { createRunApprover } from '../approvals.ts';
 import { sessionExecutionPolicy, sessionPermissionPolicy } from '../session-policy.ts';
 import { releaseSnapshotsIfIdle } from '../snapshot-release.ts';
-import { executionPolicy, withExecutionPolicy } from '../../../packages/tools/execution-policy.ts';
+import {
+  executionPolicy,
+  withExecutionPolicy,
+} from '../../../packages/sandbox/execution-policy.ts';
 import { metadataWritesAllowed } from '../../shared/runtime.ts';
 
 /**

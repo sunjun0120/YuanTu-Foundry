@@ -1,4 +1,4 @@
-import { stopSandbox, cleanupSandbox, markSandboxStarted } from './sandbox.ts';
+import { stopSandbox, cleanupSandbox, markSandboxStarted } from '../sandbox/sandbox.ts';
 import { spawn } from 'node:child_process';
 import type { Tool } from '../protocol/index.ts';
 import { toolOutput } from '../protocol/tool-result.ts';
@@ -6,14 +6,14 @@ import type { ToolOutputContract } from '../protocol/tool-result.ts';
 import { MAX_TOOL_OUTPUT } from './registry.ts';
 import { Workspace } from './files.ts';
 import { localExecutionEnvironment, executionPolicy } from './execution-environment.ts';
-import { resolveSandboxConfig } from './sandbox.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import { createOutputDecoder } from './output-decoder.ts';
 import {
   SANDBOX_CHILD_SPAWN_NOTE,
   WINDOWS_ACCOUNT_ACCESS_NOTE,
   sandboxChildSpawnBlocked,
   windowsAccountAccessDenied,
-} from './sandbox-launch-failure.ts';
+} from '../sandbox/sandbox-launch-failure.ts';
 
 /**
  * How much command output is held in memory before collection stops. Well above the tool-result limit, so

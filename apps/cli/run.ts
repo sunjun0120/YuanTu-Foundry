@@ -13,7 +13,7 @@ import {
 import { validateImages, MAX_IMAGE_BYTES } from '../../packages/protocol/images.ts';
 import { resolveRunLimits } from '../../packages/protocol/settings.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
-import { resolveSandboxConfig } from '../../packages/tools/sandbox-provider.ts';
+import { resolveSandboxConfig } from '../../packages/sandbox/sandbox-provider.ts';
 import { normalizeCompletionSpec } from '../../packages/core/completion-contract.ts';
 import { SubAgentResidency } from '../../packages/core/residency.ts';
 import { TerminalSessions } from '../../packages/tools/terminal.ts';

@@ -115,7 +115,7 @@ test('compiled background command resolves and cleans up its JavaScript supervis
 
 test('compiled programs resolve the JavaScript broker and guest beside the installed tools', async (t) => {
   const { createTools } = await import('../dist/packages/catalog/index.js');
-  const { executionPolicy } = await import('../dist/packages/tools/execution-policy.js');
+  const { executionPolicy } = await import('../dist/packages/sandbox/execution-policy.js');
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-compiled-program-'));
   const tools = createTools(root);
   t.after(async () => {

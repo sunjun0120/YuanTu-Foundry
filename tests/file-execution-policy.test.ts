@@ -10,11 +10,11 @@ import {
   requireExecutionCapabilities,
   withExecutionPolicy,
   currentExecutionPolicy,
-} from '../packages/tools/execution-policy.ts';
+} from '../packages/sandbox/execution-policy.ts';
 import {
   registerExecutionCapabilities,
   seatbeltCapabilities,
-} from '../packages/tools/execution-capabilities.ts';
+} from '../packages/sandbox/execution-capabilities.ts';
 import type { ExecutionPolicy, FileEffect } from '../packages/protocol/execution.ts';
 import { nativeModes } from './native-platform.ts';
 

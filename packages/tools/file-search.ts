@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ToolOutputContract } from '../protocol/tool-result.ts';
 import { MAX_MATCH_TEXT } from '../search/text.ts';
 import { COVERAGE_SCHEMA, type Coverage, type FileEntry } from '../search/types.ts';
-import { workerExecArgv } from './environment.ts';
+import { workerExecArgv } from '../platform/child-environment.ts';
 import { MAX_TOOL_OUTPUT, TRUNCATION_MARKER } from './registry.ts';
 import { Worker } from 'node:worker_threads';
 

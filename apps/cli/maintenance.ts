@@ -38,7 +38,7 @@ import { readStandardInput } from './terminal.ts';
 import {
   inspectWindowsSandboxLeases,
   recoverWindowsSandboxLeases,
-} from '../../packages/tools/windows-sandbox-recovery.ts';
+} from '../../packages/sandbox/windows-sandbox-recovery.ts';
 
 /**
  * The commands that open no session store: database maintenance, workspace resources, settings, the model

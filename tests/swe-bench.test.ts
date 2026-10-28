@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createTools } from '../packages/catalog/index.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';

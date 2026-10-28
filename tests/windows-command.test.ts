@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   quoteWindowsArgument,
   windowsProgramNeedsShell,
-} from '../packages/tools/windows-command.ts';
+} from '../packages/sandbox/windows-command.ts';
 
 test('the quoting rule is the one Windows de-parses', () => {
   // Not a style check: the launcher hands `CreateProcessAsUser` one string that the child parses back into

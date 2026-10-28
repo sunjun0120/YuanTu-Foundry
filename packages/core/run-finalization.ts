@@ -9,7 +9,7 @@ import type {
 import { describeViolations } from '../protocol/invariants.ts';
 import type { SessionStatistics } from '../protocol/statistics.ts';
 import type { SessionStore } from '../storage/sqlite.ts';
-import { withExecutionPolicy as underExecutionPolicy } from '../tools/execution-policy.ts';
+import { withExecutionPolicy as underExecutionPolicy } from '../sandbox/execution-policy.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import type { AgentOptions } from './agent-options.ts';
 import type { RunCompletion } from './run-completion.ts';

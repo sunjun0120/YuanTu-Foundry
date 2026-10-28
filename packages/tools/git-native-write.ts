@@ -15,8 +15,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { samePath } from '../platform/workspace-paths.ts';
 import { repositoryWorktreeParent } from '../platform/worktree-home.ts';
-import { currentExecutionPolicy } from './execution-policy.ts';
-import { resolveSandboxConfig } from './sandbox-provider.ts';
+import { currentExecutionPolicy } from '../sandbox/execution-policy.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox-provider.ts';
 
 type ReadGit = (args: readonly string[], signal: AbortSignal) => Promise<string>;
 export interface GitInvocation {

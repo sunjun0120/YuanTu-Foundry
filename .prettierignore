@@ -7,7 +7,7 @@ package-lock.json
 # format:check slow and let a generated file fail a gate unrelated to the source tree.
 .scratch/
 .claude/
-packages/tools/windows-sandbox/native/target/
+packages/sandbox/windows-sandbox/native/target/
 # Immutable SWE experiment evidence and deterministic generated reports retain their byte hashes.
 benchmarks/swe-bench/runs/full-2026-10-24/before/
 benchmarks/swe-bench/runs/full-2026-10-24/after/

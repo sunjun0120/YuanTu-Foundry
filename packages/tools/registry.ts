@@ -5,13 +5,13 @@ import {
   executionPolicy,
   snapshotExecutionPolicy,
   withExecutionPolicy,
-} from './execution-policy.ts';
+} from '../sandbox/execution-policy.ts';
 import {
   resolveSandboxConfig,
   sandboxProvider,
   withSandboxPreparation,
   type SandboxMode,
-} from './sandbox-provider.ts';
+} from '../sandbox/sandbox-provider.ts';
 import type { ValidateFunction } from 'ajv';
 import type { ExecutionPolicy } from '../protocol/execution.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';

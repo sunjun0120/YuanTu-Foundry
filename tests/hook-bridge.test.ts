@@ -29,7 +29,7 @@ import {
 import { resolveRunLimits } from '../packages/protocol/settings.ts';
 import { Agent } from '../packages/core/agent.ts';
 import type { ModelResponse, Provider, ToolContext } from '../packages/protocol/index.ts';
-import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { toolCall } from './provider-fixture.ts';
 
 const reply = (text = 'Finished'): ModelResponse => ({

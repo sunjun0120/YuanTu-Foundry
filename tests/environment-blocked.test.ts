@@ -4,8 +4,8 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
-import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
+import { registerSandboxProvider, sandboxProvider } from '../packages/sandbox/sandbox.ts';
 import {
   EnvironmentBlockedError,
   environmentBlockedCode,
@@ -14,7 +14,7 @@ import {
   inspectWindowsSandboxLeases,
   leaseBlockedError,
   recoverWindowsSandboxLeases,
-} from '../packages/tools/windows-sandbox-recovery.ts';
+} from '../packages/sandbox/windows-sandbox-recovery.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 

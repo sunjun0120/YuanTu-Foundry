@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { SeatbeltScratchRegistry } from '../packages/tools/seatbelt-scratch.ts';
+import { SeatbeltScratchRegistry } from '../packages/sandbox/seatbelt-scratch.ts';
 
 test('unused owned scratch can be removed without trusting mutable plan paths', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yuantu-seatbelt-owner-'));

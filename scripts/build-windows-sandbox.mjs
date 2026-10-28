@@ -14,7 +14,7 @@ if (args.length) {
     throw new Error('Staged helper output must stay inside project scratch');
 }
 if (process.platform === 'win32') {
-  const crate = path.join(project, 'packages/tools/windows-sandbox/native');
+  const crate = path.join(project, 'packages/sandbox/windows-sandbox/native');
   const inheritedFlags = process.env.CARGO_ENCODED_RUSTFLAGS
     ? process.env.CARGO_ENCODED_RUSTFLAGS.split('\u001f')
     : (process.env.RUSTFLAGS ?? '').split(/\s+/).filter(Boolean);
@@ -41,7 +41,7 @@ if (process.platform === 'win32') {
   const source = path.join(crate, 'target/release/yuantu-sandbox.exe');
   for (const destination of outputDirectory
     ? [outputDirectory]
-    : ['packages/tools/windows-sandbox', 'dist/packages/tools/windows-sandbox']) {
+    : ['packages/sandbox/windows-sandbox', 'dist/packages/sandbox/windows-sandbox']) {
     const directory = path.resolve(project, destination);
     await mkdir(directory, { recursive: true });
     await copyFile(source, path.join(directory, 'yuantu-sandbox.exe'));

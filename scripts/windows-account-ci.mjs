@@ -4,13 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-export const accountHelper = path.join(root, 'packages/tools/windows-sandbox/yuantu-sandbox.exe');
+export const accountHelper = path.join(root, 'packages/sandbox/windows-sandbox/yuantu-sandbox.exe');
 // Source-mode PTC reads these modules; the helper is copied out of Cargo's hard-linked target tree.
 const sourceAssets = [
   accountHelper,
   path.join(root, 'packages/tools/code-process-entry.ts'),
   path.join(root, 'packages/tools/code-worker.ts'),
-  path.join(root, 'packages/tools/environment.ts'),
+  path.join(root, 'packages/platform/child-environment.ts'),
 ];
 
 export function accountAcceptanceSkip(platform = process.platform, env = process.env) {

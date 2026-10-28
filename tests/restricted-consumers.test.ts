@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { LspClient } from '../packages/lsp/client.ts';
 import { LspManager } from '../packages/lsp/manager.ts';
-import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
+import { sandboxProvider, registerSandboxProvider } from '../packages/sandbox/sandbox.ts';
 import { fixture, own, workspace } from './restricted-consumers-fixture.ts';
 
 test('cancelling LSP startup during workspace resolution prevents backend preparation', async (t) => {

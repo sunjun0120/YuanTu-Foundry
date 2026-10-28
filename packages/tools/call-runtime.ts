@@ -1,25 +1,8 @@
 import type { ToolContext, ToolResult, ToolScope } from '../protocol/index.ts';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ToolDispatch } from '../protocol/tool-hooks.ts';
+import { withSuspendableDeadline, type SuspendDeadline } from '../platform/deadline-suspension.ts';
 import type { ToolExecution } from './pipeline.ts';
 import { ToolTimeoutError, resolveToolDeadline, type ToolDeadlinePolicy } from './timeouts.ts';
-
-type SuspendDeadline = () => () => void;
-const executionDeadlines = new AsyncLocalStorage<readonly SuspendDeadline[]>();
-
-/**
- * Workspace authorization is preparation, not tool execution. Exclude only its awaited time from every
- * enclosing tool budget (including a program awaiting an inner command). Overlapping waits suspend a budget
- * once, and resuming preserves its remaining time. Cancellation signals remain live throughout the wait.
- */
-export async function withoutToolDeadline<T>(work: () => Promise<T>): Promise<T> {
-  const resume = (executionDeadlines.getStore() ?? []).map((suspend) => suspend());
-  try {
-    return await work();
-  } finally {
-    for (const release of resume.reverse()) release();
-  }
-}
 
 /**
  * The bounds one tool call runs inside: the wrapper chain's dispatch, the approval wait and the body's deadline.
@@ -156,8 +139,7 @@ export async function runWithDeadline(
     };
   };
   arm();
-  const enclosing = executionDeadlines.getStore() ?? [];
-  const call = Promise.resolve().then(() => executionDeadlines.run([...enclosing, suspend], body));
+  const call = Promise.resolve().then(() => withSuspendableDeadline(suspend, body));
   // The abandoned attempt may still settle — it was *asked* to stop, not guaranteed to have stopped — and by
   // then nothing is reading it. An unhandled rejection here would take the process down for a call the run
   // already reported as failed.

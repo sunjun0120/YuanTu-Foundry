@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
-import { executionPolicy, withExecutionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { useAccountTests } from './windows-account-fixture.ts';
 import { LspClient } from '../packages/lsp/client.ts';
 import { pathToUri } from '../packages/lsp/protocol.ts';

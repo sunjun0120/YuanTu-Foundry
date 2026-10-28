@@ -6,9 +6,9 @@ import {
   markSandboxStarted,
   resolveSandboxConfig,
   withSandboxPreparation,
-} from '../tools/sandbox.ts';
-import { executionPolicy } from '../tools/execution-policy.ts';
-import type { SandboxPlan } from '../tools/sandbox-provider.ts';
+} from '../sandbox/sandbox.ts';
+import { executionPolicy } from '../sandbox/execution-policy.ts';
+import type { SandboxPlan } from '../sandbox/sandbox-provider.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -19,7 +19,10 @@ import type { CheckFailureReason } from '../protocol/index.ts';
 import type { Approver } from '../protocol/index.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { environmentBlockedCode } from '../protocol/environment-blocked.ts';
-import { sandboxLaunchFailure, sandboxChildSpawnBlocked } from '../tools/sandbox-launch-failure.ts';
+import {
+  sandboxLaunchFailure,
+  sandboxChildSpawnBlocked,
+} from '../sandbox/sandbox-launch-failure.ts';
 import {
   VerificationAssertionError,
   VerificationDefinitionError,

@@ -128,7 +128,7 @@ test('production manifests omit Rust build caches while preserving target source
   const { captureSourceManifest, freezeInputs, assertFrozen } = await moduleFor('materialize.mjs');
   const root = await temporary(t);
   const source = path.join(root, 'source');
-  const native = 'packages/tools/windows-sandbox/native';
+  const native = 'packages/sandbox/windows-sandbox/native';
   const kept = [
     'apps/target/index.ts',
     'packages/target/index.ts',

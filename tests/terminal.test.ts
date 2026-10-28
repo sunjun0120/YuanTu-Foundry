@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { TerminalSessions } from '../packages/tools/terminal.ts';
-import { registerSandboxProvider, sandboxProvider } from '../packages/tools/sandbox.ts';
+import { registerSandboxProvider, sandboxProvider } from '../packages/sandbox/sandbox.ts';
 import {
   NODE_PTY,
   nodePtyProvider,

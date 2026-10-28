@@ -17,7 +17,7 @@ export default tseslint.config(
       'vendor/',
       '.scratch/',
       '.yuantu/',
-      'packages/tools/windows-sandbox/native/',
+      'packages/sandbox/windows-sandbox/native/',
     ],
   },
   {

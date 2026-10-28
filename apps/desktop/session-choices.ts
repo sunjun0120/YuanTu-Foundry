@@ -29,7 +29,7 @@ export function choiceForPreset(preset: PermissionPreset): SessionChoice {
  * The pair a session is in, and the pair the live carrier is actually enforcing.
  *
  * Two facts rather than one, because they can differ for as long as it takes to move — and because the carrier
- * is *one process serving every session* (`packages/tools/sandbox-provider.ts` reads the mode per command), so
+ * is *one process serving every session* (`packages/sandbox/sandbox-provider.ts` reads the mode per command), so
  * "which pair is session X in" is knowledge only the desktop has. `sessions` remembers a choice for as long as
  * the window is open; a session nobody has chosen for starts at the default, which is the whole of "a new
  * session resets": there is nothing to clear, because the choice was never kept anywhere else.

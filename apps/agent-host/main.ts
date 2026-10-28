@@ -2,7 +2,7 @@
 import { warmToolCache } from '../../packages/builtin-services/index.ts';
 import type { RunResult, Task, TaskAttempt } from '../../packages/protocol/index.ts';
 import { acquireHostLock } from '../../packages/platform/host-lock.ts';
-import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts';
+import { refreshAccountReadiness } from '../../packages/sandbox/sandbox-account.ts';
 import { safeError } from '../shared/runtime.ts';
 import { createVerifier } from './approvals.ts';
 import { createBackgroundWake } from './background-wake.ts';

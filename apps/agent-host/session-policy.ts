@@ -1,5 +1,5 @@
 import { backgroundAuthority } from '../../packages/core/background-deliveries.ts';
-import { executionPolicy, withExecutionPolicy } from '../../packages/tools/execution-policy.ts';
+import { executionPolicy, withExecutionPolicy } from '../../packages/sandbox/execution-policy.ts';
 import type { HostContext } from './state.ts';
 import type { ExecutionPolicy } from '../../packages/protocol/execution.ts';
 import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';

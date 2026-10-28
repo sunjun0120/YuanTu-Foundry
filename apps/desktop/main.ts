@@ -12,7 +12,7 @@ import {
   type SandboxSetupReply,
   type SandboxSetupView,
 } from './sandbox-setup.ts';
-import { refreshAccountBackend } from '../../packages/tools/sandbox-account.ts';
+import { refreshAccountBackend } from '../../packages/sandbox/sandbox-account.ts';
 import { parseFilesCommand, type FilesReply } from './files-contract.ts';
 import { maintainWorkspace } from './workspace-maintenance.ts';
 import {
@@ -665,7 +665,7 @@ void app
     });
     const sandboxHelper = path.resolve(
       __dirname,
-      '../packages/tools/windows-sandbox/yuantu-sandbox.exe',
+      '../packages/sandbox/windows-sandbox/yuantu-sandbox.exe',
     );
     // A missing helper is a broken installation, not a setting: the window stays silent about it, the log says
     // so once, and a sandboxed command that is refused names the reinstall.

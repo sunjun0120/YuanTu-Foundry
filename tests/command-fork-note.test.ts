@@ -17,12 +17,12 @@ import {
   registerSandboxProvider,
   sandboxProvider,
   type SandboxPlan,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 import {
   WINDOWS_ACCOUNT_ACCESS_NOTE,
   sandboxChildSpawnBlocked,
   windowsAccountAccessDenied,
-} from '../packages/tools/sandbox-launch-failure.ts';
+} from '../packages/sandbox/sandbox-launch-failure.ts';
 const node = (script: string): SandboxPlan['args'] => ['-e', script];
 
 function planFor(root: string, backend: SandboxPlan['backend'], script: string): SandboxPlan {

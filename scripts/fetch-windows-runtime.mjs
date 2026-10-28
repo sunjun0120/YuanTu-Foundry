@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, validateRuntimeCandidate } from './windows-runtime-product.mjs';
 import { inspectWindowsRuntime, assertWindowsRuntime } from './windows-runtime.mjs';
-import { toolEnvironment } from '../packages/tools/environment.ts';
+import { toolEnvironment } from '../packages/platform/child-environment.ts';
 
 const execute = promisify(execFile);
 const project = fileURLToPath(new URL('..', import.meta.url));

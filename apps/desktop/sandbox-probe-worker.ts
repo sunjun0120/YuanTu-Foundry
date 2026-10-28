@@ -1,6 +1,6 @@
 /** Run functional OS probes with the same standalone Node runtime used by the Host. */
-import { checkSandboxAvailability, parseSandboxMode } from '../../packages/tools/sandbox.ts';
-import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts';
+import { checkSandboxAvailability, parseSandboxMode } from '../../packages/sandbox/sandbox.ts';
+import { refreshAccountReadiness } from '../../packages/sandbox/sandbox-account.ts';
 
 async function main(): Promise<void> {
   await refreshAccountReadiness();

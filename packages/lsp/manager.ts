@@ -1,5 +1,5 @@
-import { resolveSandboxConfig } from '../tools/sandbox.ts';
-import { executionPolicy, currentExecutionPolicy } from '../tools/execution-policy.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
+import { executionPolicy, currentExecutionPolicy } from '../sandbox/execution-policy.ts';
 import { LspClient } from './client.ts';
 import {
   languageForFile,

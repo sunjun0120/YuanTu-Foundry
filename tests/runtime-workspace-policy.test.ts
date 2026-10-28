@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createAgent, metadataWritesAllowed } from '../apps/shared/runtime.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import type { ExecutionPolicy } from '../packages/protocol/execution.ts';
 import { frames, httpFixture, sendFrames, systemText } from './http-fixture.ts';
 import { nativeSkip } from './native-platform.ts';

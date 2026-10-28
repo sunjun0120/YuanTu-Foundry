@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { describeExecutionBoundary, executionPolicy } from '../packages/tools/execution-policy.ts';
-import { windowsAccountCapabilities } from '../packages/tools/execution-capabilities.ts';
+import {
+  describeExecutionBoundary,
+  executionPolicy,
+} from '../packages/sandbox/execution-policy.ts';
+import { windowsAccountCapabilities } from '../packages/sandbox/execution-capabilities.ts';
 import { createApprover } from '../apps/cli/terminal.ts';
 import type { Approval, ApprovalDecisionSource } from '../packages/protocol/index.ts';
 import { createRunApprover } from '../apps/agent-host/approvals.ts';

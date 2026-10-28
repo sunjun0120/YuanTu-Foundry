@@ -8,7 +8,7 @@ import {
   stopSandbox,
   markSandboxStarted,
   withSandboxPreparation,
-} from '../tools/sandbox.ts';
+} from '../sandbox/sandbox.ts';
 import type { ClaudeHookEvent, HookDeclaration } from './hook-config.ts';
 import { hookMatcherMatches } from './hook-config.ts';
 /**

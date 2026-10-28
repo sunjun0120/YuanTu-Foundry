@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type { OfficeFormat } from './automation.ts';
-import { workerExecArgv } from '../tools/environment.ts';
+import { workerExecArgv } from '../platform/child-environment.ts';
 
 export { MAX_OFFICE_BYTES } from './inspect.ts';
 

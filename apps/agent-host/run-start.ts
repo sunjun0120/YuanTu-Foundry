@@ -19,7 +19,7 @@ import { parseSetting } from '../../packages/protocol/settings.ts';
 import { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
 import { runGoalRounds } from '../../packages/core/goal-driver.ts';
 import { RoundEvidence } from '../../packages/core/goal-progress.ts';
-import { executionPolicy as callExecutionPolicy } from '../../packages/tools/execution-policy.ts';
+import { executionPolicy as callExecutionPolicy } from '../../packages/sandbox/execution-policy.ts';
 import { reconcilePendingFileChanges } from '../../packages/tools/file-undo.ts';
 import { createAgent } from '../shared/runtime.ts';
 import { createRunApprover, createRunQuestioner } from './approvals.ts';

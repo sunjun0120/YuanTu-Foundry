@@ -1,10 +1,10 @@
-import { resolveSandboxConfig } from '../../packages/tools/sandbox.ts';
-import { windowsShell, windowsShellLabel } from '../../packages/tools/windows-shell.ts';
-import { appSandboxMode } from '../../packages/tools/sandbox-mode.ts';
+import { resolveSandboxConfig } from '../../packages/sandbox/sandbox.ts';
+import { windowsShell, windowsShellLabel } from '../../packages/sandbox/windows-shell.ts';
+import { appSandboxMode } from '../../packages/sandbox/sandbox-mode.ts';
 import {
   executionPolicy as callExecutionPolicy,
   withExecutionPolicy,
-} from '../../packages/tools/execution-policy.ts';
+} from '../../packages/sandbox/execution-policy.ts';
 import type { ExecutionPolicy } from '../../packages/protocol/execution.ts';
 import type { BackgroundCommands } from '../../packages/tools/background.ts';
 import type { TerminalSessions } from '../../packages/tools/terminal.ts';

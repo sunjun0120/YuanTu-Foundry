@@ -18,7 +18,7 @@ import {
   recoverWindowsSandboxLeases,
   type WindowsSandboxLeaseReport,
   type WindowsSandboxLeaseState,
-} from '../../packages/tools/windows-sandbox-recovery.ts';
+} from '../../packages/sandbox/windows-sandbox-recovery.ts';
 
 export type SandboxRecoveryCommand = { type: 'status' } | { type: 'recover' };
 export interface SandboxRecoveryView {

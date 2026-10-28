@@ -14,7 +14,7 @@ use windows_sys::Win32::{
     System::{Console::*, Threading::PROCESS_QUERY_LIMITED_INFORMATION},
 };
 
-/// Protocol with the verifier: see packages/tools/sandbox-launch-failure.ts.
+/// Protocol with the verifier: see packages/sandbox/sandbox-launch-failure.ts.
 pub const LAUNCH_FAILED_EXIT: u32 = 125;
 pub const LAUNCH_FAILED_PREFIX: &str = "YuantuSandbox launch failed: ";
 

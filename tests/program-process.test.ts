@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
-import { executionPolicy } from '../packages/tools/execution-policy.ts';
+import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { validateCodeMessage } from '../packages/tools/code-process.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
@@ -136,7 +136,8 @@ test('program disconnect preserves known results and waits for an in-flight tool
 });
 
 test('unavailable native program backend refuses without host execution', async (t) => {
-  const { sandboxProvider, registerSandboxProvider } = await import('../packages/tools/sandbox.ts');
+  const { sandboxProvider, registerSandboxProvider } =
+    await import('../packages/sandbox/sandbox.ts');
   const original = sandboxProvider('seatbelt');
   registerSandboxProvider({
     ...original,

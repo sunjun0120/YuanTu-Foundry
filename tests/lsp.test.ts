@@ -30,7 +30,7 @@ import {
 import { LspClient } from '../packages/lsp/client.ts';
 import { LspManager } from '../packages/lsp/manager.ts';
 import { attachDiagnostics, lspTools } from '../packages/lsp/tools.ts';
-import { sandboxProvider, registerSandboxProvider } from '../packages/tools/sandbox.ts';
+import { sandboxProvider, registerSandboxProvider } from '../packages/sandbox/sandbox.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 // ---- merged from lsp.test.ts ----

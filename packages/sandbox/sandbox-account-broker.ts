@@ -7,7 +7,7 @@
  * lost its runner exits with code 3; the next command simply starts a fresh one.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { toolEnvironment } from './environment.ts';
+import { toolEnvironment } from '../platform/child-environment.ts';
 
 export type SandboxAccount = 'offline' | 'online';
 

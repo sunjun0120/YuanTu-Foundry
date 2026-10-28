@@ -1,4 +1,4 @@
-import { resolveSandboxConfig } from '../tools/sandbox.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';

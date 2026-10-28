@@ -10,7 +10,7 @@ import {
   setSandboxMode,
   sandboxProvider,
   registerSandboxProvider,
-} from '../packages/tools/sandbox.ts';
+} from '../packages/sandbox/sandbox.ts';
 import {
   executionPolicy,
   withExecutionPolicy,

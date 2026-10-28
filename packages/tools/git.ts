@@ -1,13 +1,13 @@
-import { resolveSandboxConfig } from './sandbox.ts';
+import { resolveSandboxConfig } from '../sandbox/sandbox.ts';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import type { PreparedTool, Tool, ToolContext, ToolResult } from '../protocol/index.ts';
 import { bounded, MAX_TOOL_OUTPUT } from './registry.ts';
-import { killTree } from './process.ts';
+import { killTree } from '../platform/process-tree.ts';
 import { localExecutionEnvironment } from './execution-environment.ts';
-import { currentExecutionPolicy, executionPolicy } from './execution-policy.ts';
+import { currentExecutionPolicy, executionPolicy } from '../sandbox/execution-policy.ts';
 import { samePath } from '../platform/workspace-paths.ts';
 import { repositoryWorktreeParent } from '../platform/worktree-home.ts';
 import {

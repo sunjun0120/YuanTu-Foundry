@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { killTree } from '../tools/process.ts';
+import { killTree } from '../platform/process-tree.ts';
 import { parseSetting } from '../protocol/settings.ts';
 import { OfficeUnavailableError, type OfficeFormat } from './automation.ts';
 
