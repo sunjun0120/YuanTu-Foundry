@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import { HookRegistry, ToolRegistry } from '../packages/tools/registry.ts';
-import { createRunCompletion } from '../packages/core/run-completion.ts';
+import { createRunCompletion } from '../packages/core/run/completion.ts';
 import type { ModelRequest, Plan, Provider, ToolCall } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';
 

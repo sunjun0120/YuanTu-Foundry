@@ -13,7 +13,7 @@ import type { AgentHostClient } from './host-client.ts';
 import { readDisplayHistory } from './display-history.ts';
 import { deepFreeze } from './freeze.ts';
 import { approvalKey } from './approval-key.ts';
-import type { InputMode, QueuedInput } from '../core/run-queue.ts';
+import type { InputMode, QueuedInput } from '../core/run/queue.ts';
 import { validateUserInput } from '../protocol/images.ts';
 import type {
   CompletionRepairPolicy,

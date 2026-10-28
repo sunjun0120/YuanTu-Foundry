@@ -13,7 +13,7 @@ import {
   assemblePrompt,
   definePromptSection,
   type PromptSection,
-} from '../packages/core/prompt-sections.ts';
+} from '../packages/core/prompt/sections.ts';
 
 const part = (
   name: string,

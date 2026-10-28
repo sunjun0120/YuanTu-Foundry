@@ -6,7 +6,7 @@ import path from 'node:path';
 import { capacityResolver, createAgent } from '../apps/shared/runtime.ts';
 import { parseArgs } from '../apps/shared/args.ts';
 import { catalogCapacity } from '../packages/providers/capacity.ts';
-import { resolveCompactionSpec } from '../packages/core/compaction-policy.ts';
+import { resolveCompactionSpec } from '../packages/core/context/compaction-policy.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import type { AgentEvent } from '../packages/protocol/index.ts';

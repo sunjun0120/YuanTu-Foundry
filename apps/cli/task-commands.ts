@@ -2,7 +2,10 @@ import path from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
 import type { SessionStore, TaskCreate } from '../../packages/storage/sqlite.ts';
 import type { Approver } from '../../packages/protocol/index.ts';
-import { verifyTaskAcceptance, type TaskBaselines } from '../../packages/core/task-acceptance.ts';
+import {
+  verifyTaskAcceptance,
+  type TaskBaselines,
+} from '../../packages/core/completion/task-acceptance.ts';
 import type { Options } from '../shared/args.ts';
 import { resolveWorkspace, safeError, display } from '../shared/runtime.ts';
 

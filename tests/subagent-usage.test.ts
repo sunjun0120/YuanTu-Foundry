@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
-import { createResidentMessageTool } from '../packages/core/run-residency.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
+import { createResidentMessageTool } from '../packages/core/run/residency.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelResponse, Provider, Usage } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';

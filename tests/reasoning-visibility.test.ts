@@ -8,7 +8,7 @@ import { ResponsesProvider } from '../packages/providers/responses.ts';
 import { AnthropicProvider } from '../packages/providers/anthropic.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
 import { ModelFailure } from '../packages/protocol/failure.ts';
-import { estimateInputTokens } from '../packages/core/budget.ts';
+import { estimateInputTokens } from '../packages/core/context/budget.ts';
 import type {
   AgentEvent,
   Message,

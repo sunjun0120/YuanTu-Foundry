@@ -14,8 +14,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import { cacheKeyFor } from '../packages/core/cache-key.ts';
-import { prepareContext } from '../packages/core/context.ts';
+import { cacheKeyFor } from '../packages/core/context/cache-key.ts';
+import { prepareContext } from '../packages/core/context/context.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelRequest, ModelResponse, ToolSpec } from '../packages/protocol/index.ts';

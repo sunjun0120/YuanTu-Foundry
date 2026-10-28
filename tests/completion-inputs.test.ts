@@ -16,7 +16,7 @@ import {
   CompletionInputLimitError,
   COMPLETION_INPUT_EXCLUDED_SEGMENTS,
   snapshotCompletionInputs,
-} from '../packages/core/completion-inputs.ts';
+} from '../packages/core/completion/inputs.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { workspaceGitEnvironment } from '../packages/workspaces/git.ts';
 import { WORKSPACE_SCALE_LIMITS } from '../packages/protocol/workspaces.ts';

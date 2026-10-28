@@ -12,11 +12,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import { prepareContext } from '../packages/core/context.ts';
-import { estimateInputTokens } from '../packages/core/budget.ts';
-import { forecastRequest, windowPressure } from '../packages/core/forecast.ts';
-import { COMPACTION_DEFAULTS } from '../packages/core/compaction-policy.ts';
-import { TokenCalibration } from '../packages/core/calibration.ts';
+import { prepareContext } from '../packages/core/context/context.ts';
+import { estimateInputTokens } from '../packages/core/context/budget.ts';
+import { forecastRequest, windowPressure } from '../packages/core/context/forecast.ts';
+import { COMPACTION_DEFAULTS } from '../packages/core/context/compaction-policy.ts';
+import { TokenCalibration } from '../packages/core/context/calibration.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';

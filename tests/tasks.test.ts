@@ -25,12 +25,16 @@ import {
   triggerSource,
   latestScheduledAt,
 } from '../packages/protocol/task-trigger.ts';
-import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
+import {
+  capturePathSnapshot,
+  verifyAcceptance,
+  MAX_CHECKS,
+} from '../packages/core/completion/acceptance.ts';
 import { nextCalendarRun, latestCalendarRun } from '../packages/formats/calendar.ts';
 
 /** Han characters, for the cases that assert which language a generated string is in. */
 const HAN = /\p{Script=Han}/u;
-import type { AcceptanceSpec } from '../packages/core/acceptance.ts';
+import type { AcceptanceSpec } from '../packages/core/completion/acceptance.ts';
 import { storeFixture, tempRoot } from './temp-fixture.ts';
 
 // ---- merged from task-spec.test.ts ----

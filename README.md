@@ -448,7 +448,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 
 ### 旧结果缩短与提前压缩
 
-旧工具结果在模型看到之前会被缩短（`packages/core/shrink.ts`），提示写明删了多少字符、完整文本在磁盘的哪个路径，`read_file` 可以分页读回。预算按 **token** 而不是字符：字符预算在中文下要多花三倍上下文（1 200 字符≈英文 400 token、中文 1 200 token），所以预算是同一个数，切成多少字符由这段文字自己的密度决定。最新的若干条永不缩短，且**结构上**保证「最后一次工具调用之后的那批结果」永不缩短。缩短发生在压缩之前——它不花预算，先做便宜的。压缩略微提前发生：如果现在付得起摘要、发完这一轮就付不起了，那就现在做，花掉的预算略早，换来的是历史还在。手动压缩不受这条可负担性门禁约束。
+旧工具结果在模型看到之前会被缩短（`packages/core/context/shrink.ts`），提示写明删了多少字符、完整文本在磁盘的哪个路径，`read_file` 可以分页读回。预算按 **token** 而不是字符：字符预算在中文下要多花三倍上下文（1 200 字符≈英文 400 token、中文 1 200 token），所以预算是同一个数，切成多少字符由这段文字自己的密度决定。最新的若干条永不缩短，且**结构上**保证「最后一次工具调用之后的那批结果」永不缩短。缩短发生在压缩之前——它不花预算，先做便宜的。压缩略微提前发生：如果现在付得起摘要、发完这一轮就付不起了，那就现在做，花掉的预算略早，换来的是历史还在。手动压缩不受这条可负担性门禁约束。
 
 历史摘要**活在对话里**，不是 system 提示词的一段：它是请求的第一条 user 消息，用 `<compacted-summary>` 包起来并写明「只是上下文、不是更高优先级的指令」。原因是 provider 的提示缓存是**逐字节前缀**——摘要若挂在 system 末尾，每次压缩都会把 system 与整份工具目录一起作废，此后整场会话都读不到缓存；放进对话后，每次压缩只是**替换**那条快照，system 提示词与它的缓存键跨压缩逐字节不变（`tests/snapshots/compaction-before-answering.json` 把这一点钉在两轮的 digest 与 cacheKey 上）。摘要请求重放的是同一个前缀：同一条快照 + 同一批消息 + 末尾一条指令，所以那次请求读的正是上一轮写下的缓存条目。摘要不是自由散文：指令要求固定八段 markdown（目标 / 决策与约束 / 已完成 / 当前状态 / 待确认问题 / 下一步 / 不确定处 / 附件），顺序固定、空段写 `None.`、不许加别的标题——摘要每压缩一次就被重写一遍，散文每过一遍都会悄悄丢掉一段，固定骨架把「没写」变成必须回答的问题。模型若把 `<compacted-summary>` 连壳一起回给你，落盘时会剥掉这层壳（否则每压缩一次就套一层），而它**原样说了什么**记在同一条 `context.compacted` 记录的 `rawOutput` 里（没剥壳时该字段不出现，沉默即「存的就是它说的」）；同一记录还带 `protocol`（适配器名，快照里叫 provider）、`model` 与 `maxTokens`，与每轮的 `context.envelope` 一起回答「这条摘要是在什么信封下产生的」。
 
@@ -578,7 +578,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 
 主进程负责窗口、单实例锁、设置存储、IPC 与 Host 子进程的生命周期；preload 用 `contextBridge` 暴露工作区命令与状态订阅，渲染层只与 `window.yuantu` 交互。应用窗口开启 `contextIsolation`、`sandbox`、`nodeIntegration: false`，拒绝自身页面导航和弹窗，外部打开只接受无凭据的 `http`/`https`。
 
-界面使用 React、TypeScript、Mantine 与 Motion，业务状态由 `CarrierSnapshot` 和流式订阅投影，按区块 key 更新。对话区只画对话：`<runtime-context source="…">`（`workspace-outline` / `memory` / `skills` / `task`）这类**机器写给模型的快照**留在会话与日志里、也照旧发给模型，但不作为消息画出来；识别由 `packages/core/runtime-context.ts` 的 `isRuntimeSnapshot()` 提供（与写快照的那一端共用同一个包装标签）。`<compacted-summary>` 仍作为对话摘要显示。
+界面使用 React、TypeScript、Mantine 与 Motion，业务状态由 `CarrierSnapshot` 和流式订阅投影，按区块 key 更新。对话区只画对话：`<runtime-context source="…">`（`workspace-outline` / `memory` / `skills` / `task`）这类**机器写给模型的快照**留在会话与日志里、也照旧发给模型，但不作为消息画出来；识别由 `packages/core/context/runtime.ts` 的 `isRuntimeSnapshot()` 提供（与写快照的那一端共用同一个包装标签）。`<compacted-summary>` 仍作为对话摘要显示。
 
 左侧“项目”可添加本地工作区、重命名显示名称及从列表移除，项目整体与各工作区可分别折叠并保存状态。每个工作区保留自己的 Host、会话数据库、搜索和权限；切换工作区不停止后台任务，“待处理”可直接回答其他工作区的审批和问题。移除只更新项目列表，磁盘文件和历史保留；运行、排队或等待处理时禁止移除。最后一项移除后保持空列表，可重新添加原目录恢复历史。首次默认目录为 `<userData>/workspace`，安装目录及其子目录不能注册为工作区。
 

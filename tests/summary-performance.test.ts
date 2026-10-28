@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareContext } from '../packages/core/context.ts';
+import { prepareContext } from '../packages/core/context/context.ts';
 import { contextMessageSize } from '../packages/protocol/images.ts';
-import { shortenMessages } from '../packages/core/shrink.ts';
-import { forecastRequest } from '../packages/core/forecast.ts';
+import { shortenMessages } from '../packages/core/context/shrink.ts';
+import { forecastRequest } from '../packages/core/context/forecast.ts';
 import type { Message, ModelRequest, ModelResponse } from '../packages/protocol/index.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 import { isSummaryRequest } from './summary-request.ts';
-import { TokenCalibration } from '../packages/core/calibration.ts';
+import { TokenCalibration } from '../packages/core/context/calibration.ts';
 import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(t: test.TestContext) {

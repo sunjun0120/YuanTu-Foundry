@@ -1,6 +1,6 @@
 /** The view a session controller publishes: snapshot, pending interactions, sub-agent cards and live deltas. */
-import type { ContextBreakdown } from '../core/budget.ts';
-import type { QueuedInput } from '../core/run-queue.ts';
+import type { ContextBreakdown } from '../core/context/budget.ts';
+import type { QueuedInput } from '../core/run/queue.ts';
 import type { CompletionRecord } from '../protocol/completion.ts';
 import type { PresentedFile } from '../protocol/deliverables.ts';
 import type { Goal } from '../protocol/goals.ts';

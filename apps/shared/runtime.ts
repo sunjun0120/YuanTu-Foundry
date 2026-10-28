@@ -31,7 +31,7 @@ import {
   automaticOutputBudget,
   discoverAutomaticCapacities,
 } from '../../packages/providers/automatic-capacity.ts';
-import type { SubAgentResidency } from '../../packages/core/residency.ts';
+import type { SubAgentResidency } from '../../packages/core/subagents/residency.ts';
 import type { InvariantRegistry } from '../../packages/core/invariants.ts';
 import type { PermissionPolicyView } from '../../packages/protocol/permissions.ts';
 import type { AgentEvent, Approver, Provider, Questioner } from '../../packages/protocol/index.ts';

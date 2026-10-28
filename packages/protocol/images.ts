@@ -107,7 +107,7 @@ const sizedReplacer = (key: string, value: unknown): unknown =>
  *
  * The context budget asks this of the whole conversation on every request and again for every candidate cut while
  * compacting, and a long session is megabytes of JSON each time. Messages are immutable by the same convention
- * `packages/core/budget.ts` already relies on for its byte sizes (the store's fold is handed out as-is, and every
+ * `packages/core/context/budget.ts` already relies on for its byte sizes (the store's fold is handed out as-is, and every
  * transformation builds a new message), so identity is a sound key and a `WeakMap` lets the entries go with them.
  */
 const messageChars = new WeakMap<object, number>();

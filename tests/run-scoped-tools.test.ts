@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
 import { sessionQueryTools } from '../packages/core/session-query.ts';
 import { RUN_SCOPED_TOOLS, ToolRegistry } from '../packages/tools/registry.ts';
 import type { Disposer } from '../packages/tools/dispatch.ts';

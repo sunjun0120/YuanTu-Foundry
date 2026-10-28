@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { firstHolding, lastHolding } from '../packages/core/boundary-search.ts';
+import { firstHolding, lastHolding } from '../packages/core/context/boundary-search.ts';
 
 /** The walk `prepareContext` used to do for a batch: forward, stopping at the first candidate that fails. */
 function walkLast(length: number, holds: (index: number) => boolean): number {

@@ -12,8 +12,8 @@ import {
   COMPACTION_DEFAULTS,
   resolveCompactionSpec,
   retentionStart,
-} from '../packages/core/compaction-policy.ts';
-import { estimateMessageTokens } from '../packages/core/budget.ts';
+} from '../packages/core/context/compaction-policy.ts';
+import { estimateMessageTokens } from '../packages/core/context/budget.ts';
 import type { Message } from '../packages/protocol/index.ts';
 
 test('the threshold sits under the window, with the output reservation and headroom taken out first', () => {

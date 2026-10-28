@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { SubAgentResidency } from '../../packages/core/residency.ts';
+import type { SubAgentResidency } from '../../packages/core/subagents/residency.ts';
 import { createProvider, readConfig } from '../../packages/providers/index.ts';
 import { MODEL_LIMIT_KEYS, parseSetting } from '../../packages/protocol/settings.ts';
 import type {

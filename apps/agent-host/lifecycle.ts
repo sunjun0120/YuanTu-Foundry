@@ -1,6 +1,6 @@
 import { RunCancellation } from '../../packages/protocol/run-cancellation.ts';
 import { parseSetting } from '../../packages/protocol/settings.ts';
-import { RESIDENCY_DEFAULTS } from '../../packages/core/residency.ts';
+import { RESIDENCY_DEFAULTS } from '../../packages/core/subagents/residency.ts';
 import { closeAllToolResources } from '../../packages/catalog/resource-pool.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import { safeError } from '../shared/runtime.ts';

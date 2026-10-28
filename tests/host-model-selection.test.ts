@@ -4,7 +4,7 @@ import type { ServerResponse } from 'node:http';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { startHost, connectClient } from './host-process-fixture.ts';
 import { HostModelRuntime } from '../apps/agent-host/model-runtime.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
 import { storeFixture } from './temp-fixture.ts';
 
 test('live model selection preserves the Host and isolates sessions, credentials and limits', async (t) => {

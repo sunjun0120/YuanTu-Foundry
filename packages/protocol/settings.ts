@@ -155,7 +155,7 @@ export interface RunDefaults {
    *
    * Below the 24,000-character bound every tool result is produced with, which is what gives this pass a range
    * in which it can fire at all. Code points rather than bytes because the cut is a character cut: a byte budget
-   * would spend three times as much on one script as on another (see `packages/core/prune.ts`).
+   * would spend three times as much on one script as on another (see `packages/core/context/prune.ts`).
    */
   toolResultPruneThresholdChars: number;
   /** Code points a pruned result keeps at its head, where a log says what it was doing. */

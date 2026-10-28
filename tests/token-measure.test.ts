@@ -23,8 +23,8 @@ import {
   estimateMessageTokens,
   measureRequest,
   type ContextBreakdown,
-} from '../packages/core/budget.ts';
-import { forecastRequest } from '../packages/core/forecast.ts';
+} from '../packages/core/context/budget.ts';
+import { forecastRequest } from '../packages/core/context/forecast.ts';
 import type { ImageAttachment, Message, ToolSpec } from '../packages/protocol/index.ts';
 
 interface Oracle {

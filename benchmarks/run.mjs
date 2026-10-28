@@ -16,7 +16,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
-import { forecastRequest } from '../packages/core/forecast.ts';
+import { forecastRequest } from '../packages/core/context/forecast.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
@@ -310,7 +310,7 @@ async function workspace() {
 // runs) but **how many times a message is serialised**, which is deterministic and is what the two rules below
 // pin: once per message per forecast, and none at all for a message the same process has already measured.
 //
-// `JSON.stringify` is wrapped rather than the estimator instrumented: a counter inside `packages/core/budget.ts`
+// `JSON.stringify` is wrapped rather than the estimator instrumented: a counter inside `packages/core/context/budget.ts`
 // would exist only for this file, and what is being counted — the serialisation of a message — is exactly what
 // the wrapper can see. The wrapper is installed for the duration of the measurement and restored by `finally`.
 {

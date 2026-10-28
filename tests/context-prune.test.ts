@@ -18,9 +18,9 @@ import {
   pruneMessages,
   protectedBoundary,
   worthPruning,
-} from '../packages/core/prune.ts';
-import { recentStart } from '../packages/core/shrink.ts';
-import { contextSeams } from '../packages/core/run-context.ts';
+} from '../packages/core/context/prune.ts';
+import { recentStart } from '../packages/core/context/shrink.ts';
+import { contextSeams } from '../packages/core/run/context.ts';
 import { resolveRunLimits } from '../packages/protocol/settings.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { SPILL_DIRECTORY } from '../packages/tools/spill.ts';

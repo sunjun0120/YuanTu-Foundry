@@ -14,13 +14,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
-import { estimateInputTokens } from '../packages/core/budget.ts';
+import { estimateInputTokens } from '../packages/core/context/budget.ts';
 import {
   RUNTIME_SNAPSHOT_SOURCES,
   lastRuntimeSnapshot,
   runtimeSnapshotMessage,
   runtimeSnapshotText,
-} from '../packages/core/runtime-context.ts';
+} from '../packages/core/context/runtime.ts';
 import { contextTail, isMachineContext, isRuntimeContext } from '../packages/protocol/context.ts';
 import { resetRepoMapCache } from '../packages/tools/repo-map.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';

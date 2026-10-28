@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { createResidentMessageTool } from '../packages/core/run-residency.ts';
+import { createResidentMessageTool } from '../packages/core/run/residency.ts';
 import type { WorkspaceBinding } from '../packages/protocol/workspaces.ts';
 import type { SessionStatistics } from '../packages/protocol/statistics.ts';
 import type { ToolContext } from '../packages/protocol/index.ts';

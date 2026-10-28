@@ -15,15 +15,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
+import { SubAgentProviderRegistry } from '../packages/core/subagents/providers.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
 import {
   readChildResult,
   reportFromChild,
   subprocessProvider,
-} from '../packages/core/subagent-subprocess.ts';
+} from '../packages/core/subagents/subprocess.ts';
 import { pausedSkip } from './product-scope-skip.ts';
-import type { ResolvedSubAgentStartRequest } from '../packages/core/subagent-providers.ts';
+import type { ResolvedSubAgentStartRequest } from '../packages/core/subagents/providers.ts';
 import { tempRoot } from './temp-fixture.ts';
 
 /** A start request as the coordinator would build it, with only what this provider reads. */

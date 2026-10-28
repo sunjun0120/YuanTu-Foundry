@@ -1,8 +1,8 @@
 import type { Message, ToolSpec, Usage } from './index.ts';
 
-/** The wrapper a runtime snapshot is announced in (`packages/core/runtime-context.ts` writes it). */
+/** The wrapper a runtime snapshot is announced in (`packages/core/context/runtime.ts` writes it). */
 export const RUNTIME_CONTEXT_TAG = 'runtime-context';
-/** The wrapper a compaction summary is written in (`packages/core/context.ts` writes it). */
+/** The wrapper a compaction summary is written in (`packages/core/context/context.ts` writes it). */
 export const COMPACTION_SUMMARY_TAG = 'compacted-summary';
 /**
  * Whether a message is a runtime snapshot rather than something a person said.

@@ -19,7 +19,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SubAgentResidency, type ResidentTurnResult } from '../packages/core/residency.ts';
+import {
+  SubAgentResidency,
+  type ResidentTurnResult,
+} from '../packages/core/subagents/residency.ts';
 
 const idle: ResidentTurnResult = {
   usage: { inputTokens: 1, outputTokens: 1 },

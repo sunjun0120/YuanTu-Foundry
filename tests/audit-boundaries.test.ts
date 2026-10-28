@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertPrunePolicy, codePointLength, pruneContent } from '../packages/core/prune.ts';
+import {
+  assertPrunePolicy,
+  codePointLength,
+  pruneContent,
+} from '../packages/core/context/prune.ts';
 import { resolveRunLimits, RUN_DEFAULTS } from '../packages/protocol/settings.ts';
 import { PRUNE_NOTICE_MAX_CHARS } from '../packages/protocol/prune-policy.ts';
 import type { ImageAttachment, ToolContext, ToolResult } from '../packages/protocol/index.ts';

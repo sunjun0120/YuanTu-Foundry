@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldCheckpointStream } from '../packages/core/run-request.ts';
+import { shouldCheckpointStream } from '../packages/core/run/request.ts';
 
 test('the first fragment is saved at once, and nothing new is never saved', () => {
   assert.equal(shouldCheckpointStream(10, 0, 0), true);

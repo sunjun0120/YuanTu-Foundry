@@ -15,7 +15,7 @@ import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { Agent } from '../packages/core/agent.ts';
-import { EXPLORE_TOOLS } from '../packages/core/subagents.ts';
+import { EXPLORE_TOOLS } from '../packages/core/subagents/delegation.ts';
 import { contextMessageSize } from '../packages/protocol/images.ts';
 import { validateImages } from '../packages/protocol/images.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';

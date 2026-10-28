@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { Agent } from '../packages/core/agent.ts';
-import { prepareContext } from '../packages/core/context.ts';
+import { prepareContext } from '../packages/core/context/context.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { contextTail, surfaceAt } from '../packages/protocol/context.ts';
 import { contextMessageSize } from '../packages/protocol/images.ts';

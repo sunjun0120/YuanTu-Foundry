@@ -4,9 +4,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRunEmit, type RunEmit } from '../packages/core/run-emit.ts';
-import { createChildTurns } from '../packages/core/run-child-turns.ts';
-import { createResidentMessageTool } from '../packages/core/run-residency.ts';
+import { createRunEmit, type RunEmit } from '../packages/core/run/emit.ts';
+import { createChildTurns } from '../packages/core/run/child-turns.ts';
+import { createResidentMessageTool } from '../packages/core/run/residency.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import type { AgentEvent } from '../packages/protocol/index.ts';
 import type { SessionStatistics } from '../packages/protocol/statistics.ts';

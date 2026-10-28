@@ -128,7 +128,7 @@ const SCENARIOS: Scenario[] = [
     ],
     prompt: 'Continue. ' + 'next '.repeat(140),
     // The character budget covers the system prompt and the run's own tool schemas as well as the transcript
-    // (see `size()` in packages/core/context.ts), and the kernel installs session retrieval on every run. The
+    // (see `size()` in packages/core/context/context.ts), and the kernel installs session retrieval on every run. The
     // summary request replays that same fixed part — system prompt, tool schemas — plus the instruction, so the
     // budget has to leave room for a *batch* of about 10 KB as well; at 14 000 the first turn could not be
     // summarized at all. The seeded turns are sized against that: the first turn is small enough to summarize

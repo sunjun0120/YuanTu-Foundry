@@ -33,8 +33,8 @@ import {
   SUBAGENT_CEILINGS,
   SUBAGENT_DEFAULTS,
   SubAgentCoordinator,
-} from '../packages/core/subagents.ts';
-import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
+} from '../packages/core/subagents/delegation.ts';
+import { SubAgentProviderRegistry } from '../packages/core/subagents/providers.ts';
 import {
   CLI_COMMANDS,
   CLI_MAINTENANCE_COMMANDS,

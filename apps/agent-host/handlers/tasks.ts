@@ -2,7 +2,7 @@ import { DeferredApprovalError } from '../../../packages/protocol/failure.ts';
 import {
   verifyTaskAcceptance,
   type TaskBaselines,
-} from '../../../packages/core/task-acceptance.ts';
+} from '../../../packages/core/completion/task-acceptance.ts';
 import { proposeTask } from '../../../packages/core/task-planner.ts';
 import type { Approver } from '../../../packages/protocol/index.ts';
 import { addUsage, emptyStatistics } from '../../../packages/protocol/statistics.ts';

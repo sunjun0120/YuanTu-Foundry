@@ -17,45 +17,45 @@ import { discoverSkills } from '../resources/skills.ts';
 import { goalTools } from '../tools/goal.ts';
 import type { AgentOptions, AgentRunInput } from './agent-options.ts';
 import { admitVisibleBackground } from './background-deliveries.ts';
-import { TokenCalibration, calibrationRoute } from './calibration.ts';
-import { prepareContext, type PreparedContext } from './context.ts';
+import { TokenCalibration, calibrationRoute } from './context/calibration.ts';
+import { prepareContext, type PreparedContext } from './context/context.ts';
 import { createPlanningTools, type PlanningTools } from './plan-tools.ts';
-import { assemblePrompt, type PromptTrace } from './prompt-sections.ts';
-import { abandonRun, submitPrompt } from './run-admission.ts';
-import { RunAim } from './run-aim.ts';
-import { createRunCompletion } from './run-completion.ts';
-import { createAutomaticVerification } from './automatic-verification.ts';
-import { buildContextInput } from './run-context.ts';
-import { createRunDelegation, registerRunReport } from './run-delegation.ts';
-import { createRunEmit, type RunEmission } from './run-emit.ts';
-import { RunEnvelopes } from './run-envelope.ts';
-import { checkRunEnd, finalizeRun } from './run-finalization.ts';
-import { RunInbox } from './run-inbox.ts';
-import { injectContext, userMessage } from './run-input.ts';
-import { createRunInteraction } from './run-interaction.ts';
-import { StepBlockedError, settleThrownRun, stepEndReason } from './run-outcome.ts';
-import { approvedPlanNotice, createRunPromptSections, planPhaseNotice } from './run-prompt.ts';
-import { createRunAnnouncements } from './run-snapshots.ts';
-import { RunSteps } from './run-steps.ts';
-import { RunSurface } from './run-surface.ts';
-import { settleAnswerRound } from './run-verdict.ts';
-import { createProviderMeasurement } from './run-provider.ts';
+import { assemblePrompt, type PromptTrace } from './prompt/sections.ts';
+import { abandonRun, submitPrompt } from './run/admission.ts';
+import { RunAim } from './run/aim.ts';
+import { createRunCompletion } from './run/completion.ts';
+import { createAutomaticVerification } from './completion/automatic-verification.ts';
+import { buildContextInput } from './run/context.ts';
+import { createRunDelegation, registerRunReport } from './run/delegation.ts';
+import { createRunEmit, type RunEmission } from './run/emit.ts';
+import { RunEnvelopes } from './run/envelope.ts';
+import { checkRunEnd, finalizeRun } from './run/finalization.ts';
+import { RunInbox } from './run/inbox.ts';
+import { injectContext, userMessage } from './run/input.ts';
+import { createRunInteraction } from './run/interaction.ts';
+import { StepBlockedError, settleThrownRun, stepEndReason } from './run/outcome.ts';
+import { approvedPlanNotice, createRunPromptSections, planPhaseNotice } from './run/prompt.ts';
+import { createRunAnnouncements } from './run/snapshots.ts';
+import { RunSteps } from './run/steps.ts';
+import { RunSurface } from './run/surface.ts';
+import { settleAnswerRound } from './run/verdict.ts';
+import { createProviderMeasurement } from './run/provider.ts';
 import { textOnlyProvider } from './text-only-provider.ts';
-import { RunQueue, type InputMode, type QueuedInput } from './run-queue.ts';
-import { requestRunRound } from './run-request.ts';
-import { ResidentTurnSettlements } from './run-residency.ts';
-import { loadRunTask, registerTaskStepTool, startRunTask } from './run-task.ts';
-import { createToolBatch } from './run-tools.ts';
+import { RunQueue, type InputMode, type QueuedInput } from './run/queue.ts';
+import { requestRunRound } from './run/request.ts';
+import { ResidentTurnSettlements } from './run/residency.ts';
+import { loadRunTask, registerTaskStepTool, startRunTask } from './run/task.ts';
+import { createToolBatch } from './run/tools.ts';
 import { ToolProgressGuard, toolProgressNotice } from './tool-progress.ts';
-import { projectChangedPaths } from './work-evidence.ts';
+import { projectChangedPaths } from './completion/work-evidence.ts';
 import { sessionQueryTools } from './session-query.ts';
-import { subAgentJobProducer } from './subagent-jobs.ts';
+import { subAgentJobProducer } from './subagents/jobs.ts';
 import {
   SubAgentCoordinator,
   resolveSubAgentOptions,
   type ResolvedSubAgentOptions,
-} from './subagents.ts';
-import { captureTaskBaselines, type TaskBaselines } from './task-acceptance.ts';
+} from './subagents/delegation.ts';
+import { captureTaskBaselines, type TaskBaselines } from './completion/task-acceptance.ts';
 export type { AgentOptions } from './agent-options.ts';
 
 /**
@@ -92,7 +92,7 @@ export function runBudgetExhausted(
 export class Agent {
   private options: AgentOptions;
   private serialToolRoutes = new Set<string>();
-  /** The live queue of each running session, and the log behind it once nothing runs (see `run-inbox.ts`). */
+  /** The live queue of each running session, and the log behind it once nothing runs (see `run/inbox.ts`). */
   private inbox: RunInbox;
   private subagents?: ResolvedSubAgentOptions;
   /**
@@ -322,7 +322,7 @@ export class Agent {
         error: string | undefined,
         /** Why the run ended, when the reason has a name. Absent is a real answer: some failures are prose only. */
         code: FailureCode | undefined,
-        /** The failure itself, when the thing that threw was one this runtime named (see `run-outcome.ts`). */
+        /** The failure itself, when the thing that threw was one this runtime named (see `run/outcome.ts`). */
         endpointFailure: RunFailure | undefined,
         result!: RunResult;
       /** Every event type this run emitted, which is what the protocol invariant checks at the end. */
@@ -400,7 +400,7 @@ export class Agent {
        *
        * One factory for both purposes: an answer call and a compaction summary are measured by the same clock
        * and recorded as the same kind of fact, so the run's provider time includes the summaries rather than
-       * quietly omitting them (see `run-provider.ts`). A text-only connection is never sent a tool's pictures
+       * quietly omitting them (see `run/provider.ts`). A text-only connection is never sent a tool's pictures
        * (`text-only-provider.ts`).
        */
       const measureProvider = createProviderMeasurement({
@@ -428,7 +428,7 @@ export class Agent {
       this.inbox.open(input.sessionId, { runId, queue, emit });
       /**
        * The approval and question adapters, which own the *record* of each request and each answer rather than
-       * the decision itself (see `run-interaction.ts`). `readOnly` is passed as a getter because the run can
+       * the decision itself (see `run/interaction.ts`). `readOnly` is passed as a getter because the run can
        * tighten it mid-flight, and the adapter must read the value in force when a call arrives.
        */
       ({ approve: approveTool, ask: askTool } = createRunInteraction({
@@ -513,7 +513,7 @@ export class Agent {
         return true;
       };
       /**
-       * Learned from provider usage, and carried across runs of this session; see `packages/core/calibration.ts`.
+       * Learned from provider usage, and carried across runs of this session; see `packages/core/context/calibration.ts`.
        *
        * The route is resolved once per run because it is what the recorded measurement is *about*: a session whose
        * next run aims at a different model must not inherit the previous model's error, and one that declares no
@@ -557,7 +557,7 @@ export class Agent {
           nextMessageId: () => ++messageCounter,
         });
       }
-      // The step the log has open, its timing, and the one way it closes (see `run-steps.ts`).
+      // The step the log has open, its timing, and the one way it closes (see `run/steps.ts`).
       const steps = new RunSteps({ store, sessionId: input.sessionId, runId, statistics, emit });
       try {
         signal.throwIfAborted();
@@ -617,7 +617,7 @@ export class Agent {
         /**
          * The model tool-call batch, one per run.
          *
-         * It owns the group scheduler, the bounded pool and the context a call runs in (see `run-tools.ts`); this
+         * It owns the group scheduler, the bounded pool and the context a call runs in (see `run/tools.ts`); this
          * run owns the seams it reads. The read-only flag, the round's policies, the approver pair, the human-turn
          * fact and the program catalog are passed as getters on purpose: every one of them is reassigned between
          * rounds — or, for the approver, assigned a few lines below — and a call has to run under whatever is in
@@ -671,7 +671,7 @@ export class Agent {
           skills,
         });
         emit('resources.loaded', { instructions: instructions.files, skills });
-        // The model each round aims at, and the transitions between them (see `run-aim.ts`).
+        // The model each round aims at, and the transitions between them (see `run/aim.ts`).
         const aim = new RunAim({
           store,
           sessionId: input.sessionId,
@@ -682,7 +682,7 @@ export class Agent {
           maxContextTokens,
           maxOutputTokens,
         });
-        // What each round asked the model to read (see `run-envelope.ts`).
+        // What each round asked the model to read (see `run/envelope.ts`).
         const envelopes = new RunEnvelopes(store, input.sessionId, runId);
         /**
          * The round loop, which counts rounds without bounding them.
@@ -852,7 +852,7 @@ export class Agent {
           if (context.compactionProblem !== undefined)
             compactionRetryRound = round + 1 + COMPACTION_RETRY_ROUNDS;
           signal.throwIfAborted();
-          // Recorded as the round is decided on it, from the prompt `prepareContext` returned (see `run-envelope.ts`).
+          // Recorded as the round is decided on it, from the prompt `prepareContext` returned (see `run/envelope.ts`).
           const recordEnvelope = (prepared: PreparedContext): void =>
             envelopes.record({
               round,
@@ -986,14 +986,14 @@ export class Agent {
           // point is written as one batch by the next read or by the end of the run.
           store.flush(input.sessionId);
           // The calls run inside the batch that owns their grouping, their effect journal and the order their
-          // results are recorded in (see `run-tools.ts`); what comes back is what the model is told *after* those
+          // results are recorded in (see `run/tools.ts`); what comes back is what the model is told *after* those
           // results, which is the loop's own step.
           await automaticVerification.beforeTools(response.toolCalls);
           const { injected, changedGoals, observations } = await batch.run(response.toolCalls);
           automaticVerification.observe(observations);
           for (const goal of changedGoals) announcements.goal(goal);
           // Context a post-execute policy asked to inject becomes a persisted user message *after* the
-          // batch's tool results, never a field riding along inside a tool block (see `run-input.ts`).
+          // batch's tool results, never a field riding along inside a tool block (see `run/input.ts`).
           for (const entry of injected)
             injectContext(store, input.sessionId, emit, entry.notes.join('\n\n'), {
               source: 'post-execute',

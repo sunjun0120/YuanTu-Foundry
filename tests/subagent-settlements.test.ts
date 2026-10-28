@@ -10,8 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent, type AgentOptions } from '../packages/core/agent.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
-import { settlementNotices, settlementNoticeText } from '../packages/core/settlements.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
+import { settlementNotices, settlementNoticeText } from '../packages/core/subagents/settlements.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';

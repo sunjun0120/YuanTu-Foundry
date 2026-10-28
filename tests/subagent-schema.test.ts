@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import type { SubAgentOptions } from '../packages/core/subagents.ts';
-import type { ResolvedSubAgentStartRequest } from '../packages/core/subagent-providers.ts';
+import type { SubAgentOptions } from '../packages/core/subagents/delegation.ts';
+import type { ResolvedSubAgentStartRequest } from '../packages/core/subagents/providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';

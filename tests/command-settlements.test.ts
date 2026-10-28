@@ -14,7 +14,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { commandJournal, commandRecords } from '../packages/core/command-jobs.ts';
-import { commandNotices, commandNoticeText } from '../packages/core/settlements.ts';
+import { commandNotices, commandNoticeText } from '../packages/core/subagents/settlements.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { BackgroundCommands } from '../packages/tools/background.ts';
 import { createTools } from '../packages/catalog/index.ts';

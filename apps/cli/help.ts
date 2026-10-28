@@ -1,5 +1,5 @@
 import { CLI_COMMANDS, CLI_MAINTENANCE_COMMANDS } from '../shared/cli-commands.ts';
-import { SUBAGENT_CEILINGS, SUBAGENT_DEFAULTS } from '../../packages/core/subagents.ts';
+import { SUBAGENT_CEILINGS, SUBAGENT_DEFAULTS } from '../../packages/core/subagents/delegation.ts';
 import { RUN_DEFAULTS } from '../../packages/protocol/settings.ts';
 
 export const HELP = `YuanTu Agent — independent coding agent (Node.js >=24)

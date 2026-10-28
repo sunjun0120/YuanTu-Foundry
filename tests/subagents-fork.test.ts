@@ -7,14 +7,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import { forkSeed } from '../packages/core/fork.ts';
-import { EXPLORE_TOOLS } from '../packages/core/subagents.ts';
+import { forkSeed } from '../packages/core/subagents/fork.ts';
+import { EXPLORE_TOOLS } from '../packages/core/subagents/delegation.ts';
 import {
   SubAgentCapabilityError,
   SubAgentProviderRegistry,
   inProcessProvider,
-} from '../packages/core/subagent-providers.ts';
-import type { SubAgentProvider } from '../packages/core/subagent-providers.ts';
+} from '../packages/core/subagents/providers.ts';
+import type { SubAgentProvider } from '../packages/core/subagents/providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { Message, ModelRequest, ModelResponse, Provider } from '../packages/protocol/index.ts';

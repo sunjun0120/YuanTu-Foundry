@@ -6,7 +6,7 @@ import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { AgentEvent, ModelResponse } from '../packages/protocol/index.ts';
 import { isSummaryRequest } from './summary-request.ts';
 import { addStatistics, emptyStatistics } from '../packages/protocol/statistics.ts';
-import { createRunEmit, type RunEmission } from '../packages/core/run-emit.ts';
+import { createRunEmit, type RunEmission } from '../packages/core/run/emit.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 import { storeFixture } from './temp-fixture.ts';
 

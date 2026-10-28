@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareContext } from '../packages/core/context.ts';
-import { projectToolResults } from '../packages/core/context-tool-results.ts';
-import { TokenCalibration } from '../packages/core/calibration.ts';
+import { prepareContext } from '../packages/core/context/context.ts';
+import { projectToolResults } from '../packages/core/context/tool-results.ts';
+import { TokenCalibration } from '../packages/core/context/calibration.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import type { Message } from '../packages/protocol/index.ts';
 import { storeFixture } from './temp-fixture.ts';

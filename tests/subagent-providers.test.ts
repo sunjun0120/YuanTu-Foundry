@@ -21,8 +21,8 @@ import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { AgentEvent, Provider, RunResult } from '../packages/protocol/index.ts';
-import { SubAgentProviderRegistry } from '../packages/core/subagent-providers.ts';
-import type { SubAgentProvider } from '../packages/core/subagent-providers.ts';
+import { SubAgentProviderRegistry } from '../packages/core/subagents/providers.ts';
+import type { SubAgentProvider } from '../packages/core/subagents/providers.ts';
 import { storeFixture } from './temp-fixture.ts';
 
 async function fixture(
@@ -221,7 +221,7 @@ test('an unknown provider name is refused, by the schema the model was given', a
 test('a provider name that was never registered is refused by the registry, for a host-driven path', async () => {
   // The other half of the refusal above: no schema is consulted when the *host* names the provider, so the
   // registry's own check is what a misconfigured deployment hits — and it names what does exist.
-  const { SubAgentProviderRegistry } = await import('../packages/core/subagent-providers.ts');
+  const { SubAgentProviderRegistry } = await import('../packages/core/subagents/providers.ts');
   const registry = new SubAgentProviderRegistry();
   registry.register(stubProvider('alternate', ['outputSchema']));
   assert.throws(

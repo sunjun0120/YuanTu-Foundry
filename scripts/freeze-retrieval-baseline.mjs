@@ -46,7 +46,7 @@ const ALLOWLIST = [
   'packages/tools/repo-map.ts',
   'packages/catalog/index.ts',
   'packages/knowledge/store.ts',
-  'packages/core/agent-notices.ts',
+  'packages/core/prompt/notices.ts',
   'packages/protocol/settings.ts',
   'apps/desktop/tool-card-model.ts',
   'apps/desktop/tool-cards.ts',

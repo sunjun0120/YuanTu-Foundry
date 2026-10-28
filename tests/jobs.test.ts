@@ -13,9 +13,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
-import { subAgentJobProducer } from '../packages/core/subagent-jobs.ts';
-import { settlementNotices } from '../packages/core/settlements.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
+import { subAgentJobProducer } from '../packages/core/subagents/jobs.ts';
+import { settlementNotices } from '../packages/core/subagents/settlements.ts';
 import { JobRegistry } from '../packages/protocol/jobs.ts';
 import type {
   CommandJournal,

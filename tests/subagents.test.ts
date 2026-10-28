@@ -11,12 +11,12 @@ import {
   SubAgentCoordinator,
   resolveSubAgentOptions,
   type SubAgentOptions,
-} from '../packages/core/subagents.ts';
+} from '../packages/core/subagents/delegation.ts';
 import {
   SUBAGENT_CAPABILITIES,
   SubAgentProviderRegistry,
   inProcessProvider,
-} from '../packages/core/subagent-providers.ts';
+} from '../packages/core/subagents/providers.ts';
 import { RunFailure } from '../packages/protocol/failure.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { createTools } from '../packages/catalog/index.ts';

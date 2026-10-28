@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { createTools } from '../packages/catalog/index.ts';
-import { lastRuntimeSnapshot } from '../packages/core/runtime-context.ts';
+import { lastRuntimeSnapshot } from '../packages/core/context/runtime.ts';
 import {
   CHECK_FAILURE_REASONS,
   COMPLETION_LIMITS,
@@ -23,7 +23,7 @@ import {
   nextRepeatedFailures,
   renderCompletionFeedback,
   type CompletionDecisionInput,
-} from '../packages/core/completion.ts';
+} from '../packages/core/completion/completion.ts';
 import { storeFixture } from './temp-fixture.ts';
 
 test('only an assertion failure is handed back to the model as repair work', () => {

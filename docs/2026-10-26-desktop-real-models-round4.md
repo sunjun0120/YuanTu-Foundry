@@ -48,7 +48,7 @@
   `Task side effect outcome unknown; inspect state before retrying.`；
 - 数据库里第一次 `run_command`（探测不存在的 notes.md，退出码 1）的 `task_effects` 行一直是 `pending`。
 
-**根因。** `packages/core/run-tools.ts` 只在 `!result.isError` 时结算任务副作用。命令退出码非零是 `isError: true`，但结果同时带有 `commandExecuted: true`，说明命令确实运行并返回了退出码，副作用结果并不未知。该 `pending` 行随后被任务收尾判定为“结果未知”，覆盖了已经通过的验收。
+**根因。** `packages/core/run/tools.ts` 只在 `!result.isError` 时结算任务副作用。命令退出码非零是 `isError: true`，但结果同时带有 `commandExecuted: true`，说明命令确实运行并返回了退出码，副作用结果并不未知。该 `pending` 行随后被任务收尾判定为“结果未知”，覆盖了已经通过的验收。
 
 **修复。** 副作用在“命令已执行并返回”时结算，即使退出码非零：
 

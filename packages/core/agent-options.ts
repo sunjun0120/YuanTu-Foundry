@@ -17,9 +17,9 @@ import type { ToolRegistry } from '../tools/registry.ts';
 import type { WorkspaceManager } from '../workspaces/manager.ts';
 import type { WorkspaceApply, WorkspaceResults } from '../workspaces/results.ts';
 import type { InvariantRegistry } from './invariants.ts';
-import type { SubAgentResidency } from './residency.ts';
-import type { SubAgentProvider } from './subagent-providers.ts';
-import type { SubAgentOptions } from './subagents.ts';
+import type { SubAgentResidency } from './subagents/residency.ts';
+import type { SubAgentProvider } from './subagents/providers.ts';
+import type { SubAgentOptions } from './subagents/delegation.ts';
 
 export interface AgentOptions {
   /**
@@ -94,7 +94,7 @@ export interface AgentOptions {
    * them for more instead of delegating the same ground again.
    *
    * Without one, delegation stays one-shot: the child runs, reports, and its activation is gone. The
-   * residency is host-owned because it must outlive runs; see `packages/core/residency.ts` for the
+   * residency is host-owned because it must outlive runs; see `packages/core/subagents/residency.ts` for the
    * trade-offs it brings (children own their tools, and their usage is attributed to their own sessions).
    */
   subagentResidency?: SubAgentResidency;

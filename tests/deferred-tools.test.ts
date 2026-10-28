@@ -12,7 +12,7 @@ import {
   deferredToolUsage,
   loadedTools,
 } from '../packages/tools/deferred-tools.ts';
-import { LoadedDeferredTools, loadedDeferredTools } from '../packages/core/run-catalog.ts';
+import { LoadedDeferredTools, loadedDeferredTools } from '../packages/core/run/catalog.ts';
 import { editSnippet } from '../packages/tools/file-change.ts';
 import { presentedSchema } from '../packages/tools/presented-schema.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';

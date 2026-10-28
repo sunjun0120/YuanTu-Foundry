@@ -373,7 +373,7 @@ export function formatRepoMap(map: RepoMap, budgetChars = REPO_MAP_PROMPT_BUDGET
  * changes, so the map is memoised against the paths and metadata of the bounded source-file inventory.
  * Unchanged calls only inspect metadata; changed calls re-read file heads. That memo makes it affordable to
  * ask once per round, since the caller announces the outline into the conversation rather than the system prompt
- * (`packages/core/runtime-context.ts`) and the announcement has to notice the round that changed the tree.
+ * (`packages/core/context/runtime.ts`) and the announcement has to notice the round that changed the tree.
  * `YUANTU_REPO_MAP=off` disables it entirely for callers that would rather spend those tokens elsewhere.
  */
 const cache = new Map<string, { key: string; map: RepoMap; budgetChars: number; text: string }>();

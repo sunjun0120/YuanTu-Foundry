@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { runtimeSnapshotMessage } from '../packages/core/runtime-context.ts';
+import { runtimeSnapshotMessage } from '../packages/core/context/runtime.ts';
 import { frames, httpFixture, sendFrames, systemText } from './http-fixture.ts';
 import { generateSessionTitle } from '../packages/core/session-title.ts';
 import { OpenAIProvider } from '../packages/providers/openai.ts';

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contextBreakdown, estimateInputTokens } from '../packages/core/budget.ts';
-import type { ContextBreakdown } from '../packages/core/budget.ts';
-import { forecastRequest } from '../packages/core/forecast.ts';
+import { contextBreakdown, estimateInputTokens } from '../packages/core/context/budget.ts';
+import type { ContextBreakdown } from '../packages/core/context/budget.ts';
+import { forecastRequest } from '../packages/core/context/forecast.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import type { Message, ToolSpec } from '../packages/protocol/index.ts';

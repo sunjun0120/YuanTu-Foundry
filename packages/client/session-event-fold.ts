@@ -8,7 +8,7 @@ import type {
 } from '../protocol/index.ts';
 import type { CompletionRecord } from '../protocol/completion.ts';
 import type { ToolResultOutput } from '../protocol/tool-result.ts';
-import type { ContextBreakdown } from '../core/budget.ts';
+import type { ContextBreakdown } from '../core/context/budget.ts';
 import type { SessionSnapshot, SubAgentView } from './session-view.ts';
 
 /**

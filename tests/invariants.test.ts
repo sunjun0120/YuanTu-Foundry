@@ -74,7 +74,7 @@ async function fixture(
 /**
  * I1 — model-visible ⇒ reconstructable from the store.
  *
- * Promise (`packages/core/context.ts`): the message history a request
+ * Promise (`packages/core/context/context.ts`): the message history a request
  * carries is exactly the stored transcript from the persisted compaction boundary onward, and history
  * that was summarised away reaches the model only as the persisted summary. A future change that
  * injects model-visible content without persisting it would break every reader that reconstructs a

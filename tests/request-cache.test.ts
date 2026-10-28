@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenAIProvider } from '../packages/providers/openai.ts';
-import { createProviderMeasurement } from '../packages/core/run-provider.ts';
+import { createProviderMeasurement } from '../packages/core/run/provider.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import type { ModelRequest } from '../packages/protocol/index.ts';
 import { httpFixture } from './http-fixture.ts';

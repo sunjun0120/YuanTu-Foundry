@@ -8,11 +8,11 @@
  * every copy of the old one. That is not hypothetical: the first attempt at this change rewrote eleven
  * compaction tests before discovering that the criteria were spread over ten files, and was reverted.
  *
- * The prefix comes from `packages/core/context.ts` — the constant production code builds the instruction from,
+ * The prefix comes from `packages/core/context/context.ts` — the constant production code builds the instruction from,
  * not a test-only seam invented for the fixtures.
  */
 import type { ModelRequest } from '../packages/protocol/index.ts';
-import { SUMMARY_INSTRUCTION_PREFIX } from '../packages/core/context.ts';
+import { SUMMARY_INSTRUCTION_PREFIX } from '../packages/core/context/context.ts';
 
 /** The text a message carries, whether the wire spelled it as a string or as a content-block array. */
 export function contentText(content: unknown): string {

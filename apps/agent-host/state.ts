@@ -4,7 +4,7 @@ import { parseSetting } from '../../packages/protocol/settings.ts';
 import { underSessionPolicy, sessionLifecycleReadOnly } from './session-policy.ts';
 import type { BackgroundAuthority } from '../../packages/core/background-deliveries.ts';
 import type { PermissionPolicy } from '../../packages/protocol/permission-policy.ts';
-import { SubAgentResidency } from '../../packages/core/residency.ts';
+import { SubAgentResidency } from '../../packages/core/subagents/residency.ts';
 import type {
   Approval,
   ApprovalDecisionSource,

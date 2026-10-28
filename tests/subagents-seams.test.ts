@@ -9,19 +9,22 @@ import {
   SubAgentProviderRegistry,
   UnknownSubAgentProviderError,
   inProcessProvider,
-} from '../packages/core/subagent-providers.ts';
+} from '../packages/core/subagents/providers.ts';
 import type {
   ResolvedSubAgentStartRequest,
   SubAgentCapability,
   SubAgentOutcome,
   SubAgentProvider,
-} from '../packages/core/subagent-providers.ts';
+} from '../packages/core/subagents/providers.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { createTools } from '../packages/catalog/index.ts';
 import type { ModelResponse, ModelRequest, Provider } from '../packages/protocol/index.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
-import { SubAgentCoordinator, resolveSubAgentOptions } from '../packages/core/subagents.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
+import {
+  SubAgentCoordinator,
+  resolveSubAgentOptions,
+} from '../packages/core/subagents/delegation.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { storeFixture } from './temp-fixture.ts';
 import { reply, toolCall } from './provider-fixture.ts';

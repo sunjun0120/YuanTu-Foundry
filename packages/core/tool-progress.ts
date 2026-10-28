@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ToolCall, ToolResult } from '../protocol/index.ts';
 import { environmentBlockedCode } from '../protocol/environment-blocked.ts';
 import type { FileStateDigest } from '../tools/file-state-digest.ts';
-import { projectChangedPaths } from './work-evidence.ts';
+import { projectChangedPaths } from './completion/work-evidence.ts';
 
 export interface ToolObservation {
   call: ToolCall;

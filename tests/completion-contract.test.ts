@@ -19,7 +19,7 @@ import {
   planCompletionSpec,
   taskCompletionSpec,
   taskCompletionStepId,
-} from '../packages/core/completion-contract.ts';
+} from '../packages/core/completion/contract.ts';
 import { COMPLETION_REPAIR_CEILINGS, type Plan, type Task } from '../packages/protocol/index.ts';
 
 const minimal = {

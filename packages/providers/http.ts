@@ -139,7 +139,7 @@ export function failureForStatus(response: Response): RunFailure {
  * That wait is a different clock from the stream's idle timeout, and the evaluation configures them
  * independently because a reasoning model may think for a minute before its first byte, so a
  * 30-second bound on time-to-first-byte cuts exactly the requests that were working. Nothing has been produced
- * when this fires — the body was never opened — which lets the zero-byte policy in `run-request.ts` consider
+ * when this fires — the body was never opened — which lets the zero-byte policy in `run/request.ts` consider
  * one bounded re-send. The endpoint may still bill the original request.
  */
 export async function fetchModel(

@@ -8,7 +8,7 @@ import { executionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { validateCodeMessage } from '../packages/tools/code-process.ts';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { workflowTool } from '../packages/core/workflow.ts';
+import { workflowTool } from '../packages/core/subagents/workflow.ts';
 
 import { fixture } from './program-process-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';

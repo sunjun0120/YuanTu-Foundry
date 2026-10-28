@@ -4,7 +4,7 @@ import path from 'node:path';
 import { Agent } from '../packages/core/agent.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
-import { prepareContext, SUMMARY_SECTIONS } from '../packages/core/context.ts';
+import { prepareContext, SUMMARY_SECTIONS } from '../packages/core/context/context.ts';
 import type {
   AgentEvent,
   Message,
@@ -16,8 +16,8 @@ import { AgentHostClient } from '../packages/client/host-client.ts';
 import { httpFixture, frames, sendFrames, systemText } from './http-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
-import { TokenCalibration, calibrationRoute } from '../packages/core/calibration.ts';
-import { estimateInputTokens, estimateMessageTokens } from '../packages/core/budget.ts';
+import { TokenCalibration, calibrationRoute } from '../packages/core/context/calibration.ts';
+import { estimateInputTokens, estimateMessageTokens } from '../packages/core/context/budget.ts';
 // "Which request is the summary request" has one answer and it lives in production code: the instruction is the
 // request's last message now, so `request.system.includes('context summary')` — the criterion these fixtures used
 // to carry — matches nothing at all.
@@ -69,7 +69,7 @@ test('a compaction leaves the system prompt and its key alone, and changes only 
    * It used to record the *cost*: the running summary lived in the system prompt's `<conversation_summary>`
    * section, so every compaction rewrote the first part of every request — and a provider's prompt cache is a
    * byte-exact prefix, so a change to its last section invalidated the system prompt and every tool schema with
-   * it. The summary is the first message of the transcript now (`summarySnapshot` in `packages/core/context.ts`),
+   * it. The summary is the first message of the transcript now (`summarySnapshot` in `packages/core/context/context.ts`),
    * which a compaction *replaces* rather than appends to, so the two requests below differ exactly where the
    * conversation does and nowhere else.
    */

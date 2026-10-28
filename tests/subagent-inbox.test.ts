@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../packages/core/agent.ts';
-import { SubAgentResidency } from '../packages/core/residency.ts';
-import type { ResidentTurnResult } from '../packages/core/residency.ts';
-import { createResidentMessageTool } from '../packages/core/run-residency.ts';
-import type { ChildTurns } from '../packages/core/run-subagents.ts';
+import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
+import type { ResidentTurnResult } from '../packages/core/subagents/residency.ts';
+import { createResidentMessageTool } from '../packages/core/run/residency.ts';
+import type { ChildTurns } from '../packages/core/run/subagents.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { subagentInboxProjection } from '../packages/storage/projections.ts';
 import type { PendingSubagentMessage } from '../packages/storage/projections.ts';

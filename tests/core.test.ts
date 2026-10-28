@@ -13,11 +13,11 @@ import type {
   AgentEvent,
   Approver,
 } from '../packages/protocol/index.ts';
-import { RunQueue } from '../packages/core/run-queue.ts';
+import { RunQueue } from '../packages/core/run/queue.ts';
 import { emptyStatistics, addStatistics, addUsage } from '../packages/protocol/statistics.ts';
 import { redactSecrets } from '../packages/platform/redact.ts';
 import { ToolProgressGuard } from '../packages/core/tool-progress.ts';
-import { RunSurface } from '../packages/core/run-surface.ts';
+import { RunSurface } from '../packages/core/run/surface.ts';
 import { PermissionPolicy } from '../packages/protocol/permission-policy.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
 import { storeFixture } from './temp-fixture.ts';
@@ -2050,8 +2050,8 @@ test('diagnostics keep numeric token limits while redacting credential values', 
 test('the transcript cache holds a full fan-out and the residents beside their parent', async () => {
   // An LRU smaller than the set of sessions read in turn misses on every read; see `LOG_CACHE_ENTRIES`.
   const { LOG_CACHE_ENTRIES } = await import('../packages/storage/session-schema.ts');
-  const { SUBAGENT_CEILINGS } = await import('../packages/core/subagents.ts');
-  const { RESIDENCY_DEFAULTS } = await import('../packages/core/residency.ts');
+  const { SUBAGENT_CEILINGS } = await import('../packages/core/subagents/delegation.ts');
+  const { RESIDENCY_DEFAULTS } = await import('../packages/core/subagents/residency.ts');
   assert.ok(
     LOG_CACHE_ENTRIES >= 1 + SUBAGENT_CEILINGS.maxConcurrency + RESIDENCY_DEFAULTS.maxResident,
   );

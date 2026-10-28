@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { commandTool } from '../packages/tools/command.ts';
-import { verifyAcceptance } from '../packages/core/acceptance.ts';
+import { verifyAcceptance } from '../packages/core/completion/acceptance.ts';
 import { validationTools } from '../packages/tools/validation.ts';
 import { BackgroundCommands } from '../packages/tools/background.ts';
 import { sandboxProvider, registerSandboxProvider } from '../packages/sandbox/sandbox.ts';

@@ -3,14 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { capturePathSnapshot, verifyAcceptance, MAX_CHECKS } from '../packages/core/acceptance.ts';
+import {
+  capturePathSnapshot,
+  verifyAcceptance,
+  MAX_CHECKS,
+} from '../packages/core/completion/acceptance.ts';
 import { executionPolicy, withExecutionPolicy } from '../packages/sandbox/execution-policy.ts';
 import { EnvironmentBlockedError } from '../packages/protocol/environment-blocked.ts';
 import {
   SANDBOX_LAUNCH_FAILED_EXIT,
   SANDBOX_LAUNCH_FAILED_PREFIX,
 } from '../packages/sandbox/sandbox-launch-failure.ts';
-import { verifyCompletionAcceptance } from '../packages/core/task-acceptance.ts';
+import { verifyCompletionAcceptance } from '../packages/core/completion/task-acceptance.ts';
 import {
   registerSandboxProvider,
   sandboxProvider,

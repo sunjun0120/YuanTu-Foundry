@@ -1,6 +1,6 @@
-import { calibrationRoute, TokenCalibration } from '../../../packages/core/calibration.ts';
-import { prepareContext, withoutSummarySection } from '../../../packages/core/context.ts';
-import { contextSeams } from '../../../packages/core/run-context.ts';
+import { calibrationRoute, TokenCalibration } from '../../../packages/core/context/calibration.ts';
+import { prepareContext, withoutSummarySection } from '../../../packages/core/context/context.ts';
+import { contextSeams } from '../../../packages/core/run/context.ts';
 import { contextBoundaries, foldContextEnvelopes } from '../../../packages/protocol/context.ts';
 import { resolveRunLimits } from '../../../packages/protocol/settings.ts';
 import { createProvider, readConfig } from '../../../packages/providers/index.ts';
