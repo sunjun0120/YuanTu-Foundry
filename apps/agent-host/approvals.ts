@@ -61,7 +61,7 @@ export function createVerifier(options: VerifierOptions): Approver {
     if (
       decision !== 'ask' &&
       ((approval.kind === 'write' && options.options.allowWrite) ||
-        (approval.kind === 'command' && options.options.allowCommand))
+        (approval.kind === 'command' && options.options.allowCommand && !approval.escalation))
     ) {
       record(options.approvalSources, approval, 'launch-options');
       return true;
@@ -121,7 +121,7 @@ export function createRunApprover(options: RunApproverOptions): Approver {
     if (
       decision !== 'ask' &&
       ((approval.kind === 'write' && options.options.allowWrite) ||
-        (approval.kind === 'command' && options.options.allowCommand))
+        (approval.kind === 'command' && options.options.allowCommand && !approval.escalation))
     ) {
       record(approvalSources, approval, 'launch-options');
       return Promise.resolve(true);

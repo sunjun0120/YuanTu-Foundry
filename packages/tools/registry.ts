@@ -13,6 +13,7 @@ import {
   type SandboxMode,
 } from './sandbox-provider.ts';
 import type { ValidateFunction } from 'ajv';
+import type { ExecutionPolicy } from '../protocol/execution.ts';
 import { DeferredApprovalError } from '../protocol/failure.ts';
 import { JobRegistry } from '../protocol/jobs.ts';
 import type { PermissionPolicyView } from '../protocol/permissions.ts';
@@ -618,23 +619,38 @@ export class ToolRegistry {
         context.signal.throwIfAborted();
       }
 
+      // A call that asks for the network its session denies is approved, and run, as the call it really is.
+      let callPolicy = context.executionPolicy;
+      if (callPolicy)
+        try {
+          callPolicy = callExecutionPolicy(entry.tool, call.arguments, callPolicy);
+        } catch (error) {
+          return materialize(
+            errorResult(
+              `This command asked for network access, which its execution backend cannot provide: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+        }
+      const escalated = callPolicy !== context.executionPolicy;
+
       invariant.enter(execution, 'prepare');
       let prepared = await entry.tool.prepare?.(call.arguments, scope);
       context.signal.throwIfAborted();
       const approval = entry.tool.permission
         ? {
             kind: entry.tool.permission,
-            description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}${entry.tool.permission === 'command' && context.executionPolicy ? '\n' + describeExecutionBoundary(context.executionPolicy) : ''}`,
+            description: `${call.name}: ${JSON.stringify(call.arguments)}${prepared?.approvalDescription ? '\n' + prepared.approvalDescription : entry.tool.approvalDescription ? '\n' + entry.tool.approvalDescription : ''}${entry.tool.permission === 'command' && callPolicy ? '\n' + describeExecutionBoundary(callPolicy) : ''}`,
             toolCall: call,
             ...(prepared?.change ? { change: prepared.change } : {}),
-            ...(entry.tool.permission === 'command' && context.executionPolicy
+            ...(entry.tool.permission === 'command' && callPolicy
               ? {
                   boundary: {
-                    processFiles: context.executionPolicy.processFiles,
-                    network: context.executionPolicy.network,
+                    processFiles: callPolicy.processFiles,
+                    network: callPolicy.network,
                   },
                 }
               : {}),
+            ...(escalated ? { escalation: { network: 'unrestricted' as const } } : {}),
           }
         : undefined;
 
@@ -691,7 +707,7 @@ export class ToolRegistry {
           ),
         );
 
-      let dispatchPolicy = context.executionPolicy!;
+      let dispatchPolicy = callPolicy!;
       const refreshDispatch = async (dispatchSignal: AbortSignal) => {
         dispatchSignal.throwIfAborted();
         if (approval && context.permissionPolicyForCall?.() !== approvedPolicy) {
@@ -715,8 +731,10 @@ export class ToolRegistry {
           }
           dispatchSignal.throwIfAborted();
         }
-        const next = snapshotExecutionPolicy(
-          context.executionPolicyForCall?.() ?? context.executionPolicy!,
+        const next = callExecutionPolicy(
+          entry.tool,
+          call.arguments,
+          snapshotExecutionPolicy(context.executionPolicyForCall?.() ?? context.executionPolicy!),
         );
         if (entry.tool.permission === 'write' && next.files === 'read-only')
           throw new Error("File mutation is refused by this call's read-only execution policy");
@@ -736,8 +754,12 @@ export class ToolRegistry {
             refreshed?.approvalDescription !== prepared.approvalDescription
           )
             throw new Error('Operation changed after approval; request a new tool call.');
+          const live = context.executionPolicyForCall?.();
           if (
-            !isDeepStrictEqual(context.executionPolicyForCall?.() ?? next, next) ||
+            !isDeepStrictEqual(
+              live ? callExecutionPolicy(entry.tool, call.arguments, live) : next,
+              next,
+            ) ||
             (approval && context.permissionPolicyForCall?.() !== approvedPolicy)
           )
             throw new Error(
@@ -938,6 +960,30 @@ async function commandBlocker(mode: SandboxMode): Promise<Error | undefined> {
   } catch {
     return undefined;
   }
+}
+/**
+ * The policy one call runs under: its session's, or the same with the network when the call asks for it.
+ *
+ * Only a `command` tool whose session denies the network can escalate. A classifier that throws asks for nothing.
+ */
+function callExecutionPolicy(
+  tool: Tool,
+  args: Record<string, unknown>,
+  policy: ExecutionPolicy,
+): ExecutionPolicy {
+  if (tool.permission !== 'command' || policy.network !== 'denied') return policy;
+  let requested = false;
+  try {
+    requested = tool.requestsNetwork?.(args) === true;
+  } catch {
+    requested = false;
+  }
+  if (!requested) return policy;
+  return executionPolicy(policy.mode, {
+    files: policy.files,
+    image: policy.image,
+    requestedNetwork: 'unrestricted',
+  });
 }
 export { ToolPipelineInvariant };
 export type { PipelineStage, PostToolDecision, ToolExecution, ToolExecutionResult };

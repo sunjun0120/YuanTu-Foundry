@@ -74,7 +74,13 @@ export function approvalSummary(approval: Approval): ApprovalSummary {
     why: format(t(`approval.why.${approval.kind}`), { tool }),
     ...(approval.change ? {} : { subject: subjectOf(args) }),
     ...(directory ? { directory } : {}),
-    ...(approval.boundary ? { boundary: boundaryText(approval.boundary) } : {}),
+    ...(approval.boundary
+      ? {
+          boundary: approval.escalation
+            ? `${t('approval.escalation.network')}${boundaryText(approval.boundary)}`
+            : boundaryText(approval.boundary),
+        }
+      : {}),
     ...(config ? { projectConfig: t(`approval.projectConfig.${config}`) } : {}),
   };
 }

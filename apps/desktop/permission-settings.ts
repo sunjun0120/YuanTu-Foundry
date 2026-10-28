@@ -115,6 +115,8 @@ export function permissionPolicyForMode(mode: PermissionMode): PermissionPolicyS
         { effect: 'ask', kind: 'external' },
         // Raw keystrokes into an open terminal cannot be read as one command line, so they always ask.
         { effect: 'ask', tool: 'terminal_send' },
+        // A command that can reach the network can also send away whatever it can read, so it is never routine.
+        { effect: 'ask', kind: 'command', network: 'unrestricted' },
         ...RISKY_COMMAND_PATTERNS.map((pattern) => ({
           effect: 'ask' as const,
           kind: 'command' as const,

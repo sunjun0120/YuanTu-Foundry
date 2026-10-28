@@ -132,8 +132,11 @@ export class PermissionPolicy implements PermissionPolicyView {
         typeof rule.effect !== 'string' ||
         !['allow', 'deny', 'ask'].includes(rule.effect) ||
         Object.keys(rule).some(
-          (k) => !['effect', 'kind', 'tool', 'arguments', 'match'].includes(k),
+          (k) => !['effect', 'kind', 'tool', 'arguments', 'match', 'network'].includes(k),
         ) ||
+        (rule.network !== undefined &&
+          rule.network !== 'denied' &&
+          rule.network !== 'unrestricted') ||
         (rule.match !== undefined &&
           (rule.arguments !== undefined ||
             !object(rule.match) ||
@@ -169,6 +172,10 @@ export class PermissionPolicy implements PermissionPolicyView {
         (rule.tool === undefined || rule.tool === approval.toolCall.name) &&
         (rule.arguments === undefined ||
           isDeepStrictEqual(rule.arguments, approval.toolCall.arguments)) &&
+        (rule.network === undefined ||
+          (approval.boundary
+            ? approval.boundary.network === rule.network
+            : rule.effect !== 'allow')) &&
         matches(rule, this.compiled[index], approval.toolCall.arguments),
     );
     return (['deny', 'ask', 'allow'] as const).find((effect) =>
@@ -191,6 +198,7 @@ export class PermissionPolicy implements PermissionPolicyView {
         rule.effect === 'deny' &&
         rule.arguments === undefined &&
         rule.match === undefined &&
+        rule.network === undefined &&
         (rule.kind === undefined || rule.kind === tool.permission) &&
         (rule.tool === undefined || rule.tool === tool.name),
     );

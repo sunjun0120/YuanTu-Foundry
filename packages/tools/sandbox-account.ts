@@ -567,7 +567,7 @@ async function accountPrepare(request: SandboxRequest): Promise<SandboxPlan> {
       'sandbox account: the automatic read roots could not be refreshed',
       refreshed.error,
     );
-  const account: SandboxAccount = request.config.network === 'denied' ? 'offline' : 'online';
+  const account: SandboxAccount = request.config.network === 'unrestricted' ? 'online' : 'offline';
   let pipe: string;
   try {
     pipe = await brokerPipe(configuration.helper, account, configuration.launch);
@@ -622,7 +622,7 @@ async function accountCleanup(plan: SandboxPlan): Promise<void> {
 export const windowsAccountSandboxProvider: SandboxProvider = {
   mode: 'windows-account',
   description:
-    'Windows sandbox accounts: commands run as a dedicated low-privilege local account under a write-restricted token; writes only to the workspace (and its own scratch), no read of your profile, network blocked by WFP when denied. Needs a one-time administrator initialization.',
+    'Windows sandbox accounts: commands run as a dedicated low-privilege local account under a write-restricted token; writes only to the workspace (and its own scratch), no read of your profile, network blocked by WFP unless explicitly allowed. Needs a one-time administrator initialization.',
   capabilities: windowsAccountCapabilities,
   available: () => readiness(),
   prepare: accountPrepare,

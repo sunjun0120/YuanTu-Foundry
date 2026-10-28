@@ -1,4 +1,5 @@
 import type { Approval } from './index.ts';
+import type { NetworkEffect } from './execution.ts';
 export type PermissionDecision = 'allow' | 'deny' | 'ask';
 export interface PermissionRule {
   effect: PermissionDecision;
@@ -12,6 +13,11 @@ export interface PermissionRule {
    * form, case-insensitively.
    */
   match?: Record<string, string>;
+  /**
+   * The network the call's execution backend leaves open (`Approval.boundary.network`). A call without a
+   * boundary has an unknown network: `deny` and `ask` rules match it, `allow` rules do not.
+   */
+  network?: NetworkEffect;
 }
 export interface PermissionPolicySource {
   version: 1;

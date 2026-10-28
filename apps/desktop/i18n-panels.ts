@@ -309,8 +309,8 @@ export const panelMessages: Record<string, [string, string]> = {
     'Writes and commands are confirmed one by one. ',
   ],
   'permission.boundary.auto': [
-    '工作区写入和普通命令自动批准；删除、推送、提权、下载执行等风险命令及联网工具仍会询问。',
-    'Workspace writes and ordinary commands are approved automatically; risky commands (deleting, pushing, raising privileges, downloading and running code) and network tools still ask. ',
+    '工作区写入和普通命令自动批准；删除、推送、提权、下载执行等风险命令、可联网的命令及联网工具仍会询问。',
+    'Workspace writes and ordinary commands are approved automatically; risky commands (deleting, pushing, raising privileges, downloading and running code), commands that can reach the network, and network tools still ask. ',
   ],
   'permission.boundary.unconfined': [
     '不再逐项确认；命令直接在本机运行，没有任何系统隔离。',
@@ -321,8 +321,8 @@ export const panelMessages: Record<string, [string, string]> = {
     'Commands run in the Seatbelt sandbox: writes stay in the workspace and the network is off by default.',
   ],
   'permission.sandbox.account': [
-    '命令在专用低权限沙箱账户中运行：只能写入工作区，网络默认断开，读取受白名单限制。',
-    'Commands run as a dedicated low-privilege sandbox account: writes stay in the workspace, the network is off by default, and reads are limited to the allowlist.',
+    '命令在专用低权限沙箱账户中运行：只能写入工作区，网络默认断开；不能读取你的用户目录，但其他磁盘上普通用户可读的文件仍可读取。',
+    'Commands run as a dedicated low-privilege sandbox account: writes stay in the workspace and the network is off by default; your profile is not readable, but files on other drives that ordinary users can read still are.',
   ],
   'permission.chip.unknown': ['权限未读取', 'Permissions unknown'],
   'permission.unknownTitle': [

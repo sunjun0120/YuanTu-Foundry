@@ -258,6 +258,13 @@ export interface Tool extends ToolSpec {
    * "safe only when the sibling differs" — a call whose safety depends on a sibling stays exclusive.
    */
   isConcurrencySafe?(args: Record<string, unknown>): boolean;
+  /**
+   * Whether this `command` call asks for the network its session's policy denies.
+   *
+   * Pure, like `isConcurrencySafe`. A `true` runs this one call with unrestricted network, and its approval carries
+   * `escalation` so launch options cannot grant it: a person or an explicit policy rule has to.
+   */
+  requestsNetwork?(args: Record<string, unknown>): boolean;
   prepare?(args: Record<string, unknown>, context: ToolContext): Promise<PreparedTool>;
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }

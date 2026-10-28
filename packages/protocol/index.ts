@@ -291,6 +291,11 @@ export interface Approval {
    * `description`, so an interface can say it in the reader's language at the moment they decide.
    */
   boundary?: Pick<ExecutionPolicy, 'processFiles' | 'network'>;
+  /**
+   * What this call asks for beyond its session's policy. `boundary` already describes the escalated call; this
+   * marks that it is one, so `--allow-command` and similar blanket approvals do not grant it.
+   */
+  escalation?: { network: 'unrestricted' };
 }
 export type ApprovalDecisionSource =
   'user' | 'policy' | 'launch-options' | 'task-approval' | 'unavailable';

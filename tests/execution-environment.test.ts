@@ -488,8 +488,11 @@ test('capability checks separate process filesystem confinement from network and
       requireExecutionCapabilities(executionPolicy('host'), { processFiles: 'workspace-write' }),
     /filesystem/,
   );
+  // The account backend is offline unless a policy grants the network, and a call needing it must not pass.
+  requireExecutionCapabilities(executionPolicy('windows-account'), { network: 'denied' });
   assert.throws(
-    () => requireExecutionCapabilities(executionPolicy('windows-account'), { network: 'denied' }),
+    () =>
+      requireExecutionCapabilities(executionPolicy('windows-account'), { network: 'unrestricted' }),
     /network/,
   );
   assert.throws(

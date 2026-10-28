@@ -30,12 +30,13 @@ export function seatbeltCapabilities(config: Configuration): ExecutionCapabiliti
 /**
  * The sandbox account backend enforces both file policies and both network policies for real: read-only drops
  * the workspace capability from the token, and a denied network runs the command as the offline account that
- * WFP blocks. Network stays open by default, as `native` on Windows always was.
+ * WFP blocks. Network is denied by default, as on Seatbelt: reads reach other drives, so an open network would
+ * let any approved command send them away. One command asks for the network through its own approval.
  */
 export function windowsAccountCapabilities(config: Configuration): ExecutionCapabilities {
   return Object.freeze({
     processFiles: config.files ?? 'workspace-write',
-    network: config.network ?? 'unrestricted',
+    network: config.network ?? 'denied',
     pathKind: 'local',
     links: 'refused',
   });

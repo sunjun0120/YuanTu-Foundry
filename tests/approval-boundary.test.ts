@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { describeExecutionBoundary, executionPolicy } from '../packages/tools/execution-policy.ts';
+import { windowsAccountCapabilities } from '../packages/tools/execution-capabilities.ts';
+import { createApprover } from '../apps/cli/terminal.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 
 test('the boundary sentence says what each backend declares, and no more', () => {
@@ -89,3 +91,81 @@ test('a command approval carries the boundary of the backend it will run on; oth
   });
   assert.equal(approvals[1]!.boundary, undefined);
 });
+
+test('the Windows account backend denies the network unless a policy names it', () => {
+  assert.equal(
+    windowsAccountCapabilities({ mode: 'windows-account', image: 'native' }).network,
+    'denied',
+  );
+  assert.equal(
+    windowsAccountCapabilities({
+      mode: 'windows-account',
+      image: 'native',
+      network: 'unrestricted',
+    }).network,
+    'unrestricted',
+  );
+});
+
+test('a command that asks for the network is approved and run as that escalated call', async () => {
+  const registry = new ToolRegistry();
+  const seen: (string | undefined)[] = [];
+  registry.register({
+    name: 'fake_command',
+    description: 'A command-permission tool that can ask for the network.',
+    inputSchema: {
+      type: 'object',
+      properties: { network: { type: 'boolean' } },
+      additionalProperties: false,
+    },
+    permission: 'command',
+    requestsNetwork: (args) => args.network === true,
+    execute: async (_args, ctx) => {
+      seen.push(ctx.executionPolicy?.network);
+      return { content: 'ran', isError: false };
+    },
+  });
+  const approvals: Approval[] = [];
+  const context = {
+    signal: new AbortController().signal,
+    approve: async (approval: Approval) => {
+      approvals.push(approval);
+      return true;
+    },
+    executionPolicy: executionPolicy('seatbelt'),
+  };
+  await registry.execute({ id: '1', name: 'fake_command', arguments: {} }, context);
+  await registry.execute({ id: '2', name: 'fake_command', arguments: { network: true } }, context);
+  assert.deepEqual(seen, ['denied', 'unrestricted']);
+  assert.equal(approvals[0]!.escalation, undefined);
+  assert.equal(approvals[0]!.boundary?.network, 'denied');
+  assert.deepEqual(approvals[1]!.escalation, { network: 'unrestricted' });
+  assert.equal(approvals[1]!.boundary?.network, 'unrestricted');
+  assert.match(approvals[1]!.description, /it can reach the network/);
+  // A session that already has the network has nothing to escalate.
+  await registry.execute(
+    { id: '3', name: 'fake_command', arguments: { network: true } },
+    { ...context, executionPolicy: executionPolicy('host') },
+  );
+  assert.equal(approvals[2]!.escalation, undefined);
+});
+
+test('launch options never grant a network escalation', async () => {
+  const approve = createApprover(
+    { allowCommand: true, json: true } as unknown as Parameters<typeof createApprover>[0],
+    undefined,
+  );
+  const call = (escalation?: Approval['escalation']) =>
+    approve(
+      {
+        kind: 'command',
+        description: '',
+        toolCall: { id: 'c', name: 'run_command', arguments: { command: 'npm install' } },
+        ...(escalation ? { escalation } : {}),
+      },
+      new AbortController().signal,
+    );
+  assert.equal(await call(), true);
+  assert.equal(await call({ network: 'unrestricted' }), false);
+});
+

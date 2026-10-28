@@ -76,17 +76,23 @@ export function commandTool(root: string, invocation?: { command: string; argv: 
     permission: 'command',
     output: RUN_COMMAND_OUTPUT,
     description:
-      'Run an approved shell command and wait for it: the default for any command that finishes on its own (tests, builds, git, scripts, one-off reads), returning stdout, stderr and exit code in one step. Runs under the selected execution backend and its file/network policy (native isolation is platform-dependent; host mode is unrestricted). Do not detach or background the process; for a server or watcher that keeps running, use start_command.',
+      'Run an approved shell command and wait for it: the default for any command that finishes on its own (tests, builds, git, scripts, one-off reads), returning stdout, stderr and exit code in one step. Runs under the selected execution backend and its file/network policy (native isolation is platform-dependent; host mode is unrestricted). Do not detach or background the process; for a server or watcher that keeps running, use start_command. The native sandbox blocks the network by default; set network to true only for a command that genuinely needs it (installing dependencies, fetching), which asks the user to approve that one command.',
     inputSchema: {
       type: 'object',
       properties: {
         command: { type: 'string', minLength: 1, maxLength: 16_000 },
         cwd: { type: 'string', minLength: 1, maxLength: 4096 },
         timeout_ms: { type: 'integer', minimum: 100, maximum: 300_000 },
+        network: {
+          type: 'boolean',
+          description:
+            'Run this one command with network access when the sandbox otherwise blocks it. Requires approval.',
+        },
       },
       required: ['command'],
       additionalProperties: false,
     },
+    requestsNetwork: (args) => args.network === true,
     async execute(args, ctx) {
       const command = String(args.command);
       const cwd = await new Workspace(root).resolve(String(args.cwd ?? '.'));

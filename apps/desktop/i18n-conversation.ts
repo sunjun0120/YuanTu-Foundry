@@ -393,6 +393,10 @@ export const conversationMessages: Record<string, [string, string]> = {
   ],
   'approval.network.denied': ['网络访问已阻止', 'network access is blocked'],
   'approval.network.unrestricted': ['可以访问网络', 'it can reach the network'],
+  'approval.escalation.network': [
+    '这条命令请求临时联网，当前会话默认断网。',
+    'This command asks for the network, which this session otherwise blocks. ',
+  ],
   'approval.raw': ['完整操作参数', 'Full operation details'],
   'approval.allow': ['允许一次', 'Allow once'],
   'approval.projectConfig.commands': [

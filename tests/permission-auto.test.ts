@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
 import { PermissionPolicy } from '../packages/core/permissions.ts';
 import type { Approval } from '../packages/protocol/index.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
@@ -15,8 +16,18 @@ import type { SandboxEnvironment } from '../apps/desktop/sandbox-environment.ts'
 import { tempRoot } from './temp-fixture.ts';
 
 const policy = new PermissionPolicy(permissionPolicyForMode('auto'));
-const approval = (kind: Approval['kind'], name: string, args: Record<string, unknown>) =>
-  ({ kind, toolCall: { id: 'c1', name, arguments: args } }) as unknown as Approval;
+// A command approval carries the boundary its backend declares; the default native sandbox denies the network.
+const approval = (
+  kind: Approval['kind'],
+  name: string,
+  args: Record<string, unknown>,
+  network: 'denied' | 'unrestricted' = 'denied',
+) =>
+  ({
+    kind,
+    toolCall: { id: 'c1', name, arguments: args },
+    ...(kind === 'command' ? { boundary: { processFiles: 'workspace-write', network } } : {}),
+  }) as unknown as Approval;
 const command = (line: string) =>
   policy.decide(approval('command', 'run_command', { command: line }));
 
@@ -53,6 +64,55 @@ test('auto still asks for risky commands, raw terminal input and external tools'
     'ask',
   );
   assert.equal(policy.decide(approval('external', 'browser_open', { url: 'https://x' })), 'ask');
+});
+
+test('auto asks for any command that can reach the network, and for one whose network is unknown', () => {
+  assert.equal(
+    policy.decide(approval('command', 'run_command', { command: 'npm test' }, 'unrestricted')),
+    'ask',
+  );
+  assert.equal(
+    policy.decide({
+      kind: 'command',
+      description: '',
+      toolCall: { id: 'c1', name: 'run_command', arguments: { command: 'npm test' } },
+    }),
+    'ask',
+  );
+  // An unknown network never satisfies an allow rule that names one.
+  const allowOffline = new PermissionPolicy({
+    version: 1,
+    rules: [{ effect: 'allow', kind: 'command', network: 'denied' }],
+  });
+  assert.equal(
+    allowOffline.decide({
+      kind: 'command',
+      description: '',
+      toolCall: { id: 'c1', name: 'run_command', arguments: {} },
+    }),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      new PermissionPolicy({
+        version: 1,
+        rules: [{ effect: 'ask', kind: 'command', network: 'open' }],
+      }),
+    /Invalid permission rule/,
+  );
+});
+
+test('an auto policy saved before the network rule is still read as auto, and upgraded', async (t) => {
+  const file = path.join(await tempRoot(t, 'yuantu-auto-legacy-'), 'permission-policy.json');
+  const current = permissionPolicyForMode('auto');
+  await writeFile(
+    file,
+    JSON.stringify({ ...current, rules: current.rules.filter((rule) => !rule.network) }),
+  );
+  const store = new PermissionSettingsStore(file);
+  await store.load();
+  assert.equal(store.view, 'auto');
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), current);
 });
 
 test('the auto policy round-trips through the persisted policy file', async (t) => {

@@ -365,7 +365,9 @@ export const taskHandlers: Readonly<Record<string, Handler>> = {
                 decision === 'allow' ||
                 (decision !== 'ask' &&
                   ((approval.kind === 'write' && ctx.options.allowWrite) ||
-                    (approval.kind === 'command' && ctx.options.allowCommand)))
+                    (approval.kind === 'command' &&
+                      ctx.options.allowCommand &&
+                      !approval.escalation)))
               )
                 return true;
               ctx.store.deferTaskApproval(sessionId, taskId, approval);

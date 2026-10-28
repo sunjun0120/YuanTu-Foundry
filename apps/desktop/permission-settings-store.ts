@@ -17,6 +17,15 @@ function modeFromPolicy(input: unknown): PermissionMode | undefined {
     isDeepStrictEqual(input, permissionPolicyForMode(mode)),
   );
   if (mode) return mode;
+  // `auto` before it asked for every command that can reach the network.
+  const auto = permissionPolicyForMode('auto');
+  if (
+    isDeepStrictEqual(input, {
+      ...auto,
+      rules: auto.rules.filter((rule) => rule.network === undefined),
+    })
+  )
+    return 'auto';
   // Older versions called the write-allow policy “workspace”; preserve its behavior.
   if (
     isDeepStrictEqual(input, {

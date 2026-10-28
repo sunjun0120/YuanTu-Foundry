@@ -356,13 +356,13 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 ```
 
 - `--allow-write` 放行内置文件工具写入工作区。
-- `--allow-command` 放行所选执行后端中的 shell 命令，权限范围取决于该后端；它同时批准 Git、LSP 与验证工具的命令权限，但工具仍须满足后端约束；它**不放行** MCP 与浏览器工具。
+- `--allow-command` 放行所选执行后端中的 shell 命令，权限范围取决于该后端；它同时批准 Git、LSP 与验证工具的命令权限，但工具仍须满足后端约束；它**不放行** MCP 与浏览器工具，也不放行在断网会话里用 `network: true` 申请临时联网的 `run_command`（这类调用必须由人或显式策略规则批准）。
 - 管道、非交互输入与 `--json` 模式下，未显式允许的写入和命令**默认拒绝**：CLI 在非 TTY 或 `--json` 时直接不提问。
 - `Ctrl+C` 取消模型请求、等待中的审批、等待中的提问与前台命令；已写入的文件不会自动回滚。
 
 ### 权限策略
 
-用 `--permission-policy <file>` 或 `YUANTU_PERMISSION_POLICY` 指定可信 JSON 规则。`deny` 优先于 `ask`，再优先于 `allow`；deny/ask 覆盖 `--allow-command` 与 `--allow-write`；不匹配则保留原审批行为。规则按 kind、精确工具名和**完整** arguments 对象匹配——arguments 不是命令前缀白名单。需要按模式匹配时改用 `match`（与 `arguments` 互斥）：按参数名给出通配符，`*` 匹配任意串、`?` 匹配单个字符、`\` 转义，所列参数都必须是字符串且全部命中，例如 `{ "effect": "allow", "tool": "run_command", "match": { "command": "npm test*" } }`、`{ "effect": "deny", "kind": "write", "match": { "path": "config/secrets/*" } }`。两类规则的语义刻意不对称：`allow` 区分大小写，并且**永远不会**放行含 shell 控制字符（``; & | ` $ < > ( ) { }``、换行）或 `..` 路径段的值，所以 `npm test*` 放行不了 `npm test; curl … | sh`，`src/*` 也碰不到 `src/../.git/hooks`；`deny`/`ask` 不区分大小写，并同时按归一化路径（`\` 视为 `/`、去掉开头的 `./`、合并重复斜杠）比对。超过 64 KiB 的参数不逐字比对：不会被 allow 模式放行，一律命中 deny/ask 模式。匹配是线性的通配算法，不经正则，不会灾难性回溯。带 `match` 的 deny 只拒绝命中的调用，不会把工具从模型可见的目录里隐藏。命令类审批会附一行 `Isolation:`，按本次调用所用后端**声明**的能力说明它能挡住什么、挡不住什么（例如 Windows 受限令牌只部分限制写入，读取与网络不受限）。CLI 与 Host 用 `--allow-*` 与策略文件表达这四档；桌面把它们和沙箱捆成四档（仅可查看 = 只读、请求批准 = 逐项询问、帮我批准 = 工作区写入与普通命令自动批准、完全访问权限 = 完全访问 + 宿主执行），只能整档选择；新会话默认“帮我批准”。
+用 `--permission-policy <file>` 或 `YUANTU_PERMISSION_POLICY` 指定可信 JSON 规则。`deny` 优先于 `ask`，再优先于 `allow`；deny/ask 覆盖 `--allow-command` 与 `--allow-write`；不匹配则保留原审批行为。规则按 kind、精确工具名和**完整** arguments 对象匹配——arguments 不是命令前缀白名单。需要按模式匹配时改用 `match`（与 `arguments` 互斥）：按参数名给出通配符，`*` 匹配任意串、`?` 匹配单个字符、`\` 转义，所列参数都必须是字符串且全部命中，例如 `{ "effect": "allow", "tool": "run_command", "match": { "command": "npm test*" } }`、`{ "effect": "deny", "kind": "write", "match": { "path": "config/secrets/*" } }`。两类规则的语义刻意不对称：`allow` 区分大小写，并且**永远不会**放行含 shell 控制字符（``; & | ` $ < > ( ) { }``、换行）或 `..` 路径段的值，所以 `npm test*` 放行不了 `npm test; curl … | sh`，`src/*` 也碰不到 `src/../.git/hooks`；`deny`/`ask` 不区分大小写，并同时按归一化路径（`\` 视为 `/`、去掉开头的 `./`、合并重复斜杠）比对。超过 64 KiB 的参数不逐字比对：不会被 allow 模式放行，一律命中 deny/ask 模式。匹配是线性的通配算法，不经正则，不会灾难性回溯。带 `match` 的 deny 只拒绝命中的调用，不会把工具从模型可见的目录里隐藏。规则还可以写 `network`（`denied` 或 `unrestricted`），按本次调用后端留给命令的网络匹配，例如 `{ "effect": "ask", "kind": "command", "network": "unrestricted" }`；没有执行边界的调用网络未知，只命中 deny/ask。命令类审批会附一行 `Isolation:`，按本次调用所用后端**声明**的能力说明它能挡住什么、挡不住什么。CLI 与 Host 用 `--allow-*` 与策略文件表达这四档；桌面把它们和沙箱捆成四档（仅可查看 = 只读、请求批准 = 逐项询问、帮我批准 = 工作区写入与普通命令自动批准，但可联网的命令仍询问、完全访问权限 = 完全访问 + 宿主执行），只能整档选择；新会话默认“帮我批准”。
 
 ### 命令沙箱
 
@@ -370,7 +370,7 @@ npm.cmd run dev -- run "修改代码并运行测试" --workspace E:\your-project
 
 `YUANTU_SANDBOX` 接受 `native`、`windows-account`、`seatbelt`、`host`；旧 `windows` 只作为迁移来源识别，执行时提示改用 `native` 或显式 `host`。CLI、Host 与桌面默认 `native`：Windows 使用专用低权限账户（`windows-account`），macOS 使用 Seatbelt；其他系统明确拒绝。应用命令及 hook 启动配置中的旧 `windows` 会迁到 `native`，隔离预设不再保留旧后端。旧 `docker`/`sbx` 配置给出迁移错误，不回退宿主。旧镜像字段仅作配置兼容，不参与执行。桌面启动配置决定新会话起点；会话切换即时作用于后续命令，已启动进程保留创建策略。
 
-文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 默认工作区可写、命令断网；只读仍允许本次调用的私有 scratch。Windows 的旧受限令牌后端（`windows`）与弱沙箱入口已移除：它只提供部分写入边界，读取与网络不受限，因此不再作为可选执行后端；历史 ACL 日志仍可用 `sandbox-recover` 恢复。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，WFP 断网，子进程可正常 fork）；`native` 在 Windows 上始终选择它，未初始化或标记版本不对时拒绝执行并提示去设置页初始化/修复，**不会自动回退**到已移除的旧后端。基础验收入口为 `npm.cmd run check:windows-sandbox`，隔离边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
+文件权限由 `YUANTU_SANDBOX_FILES=read-only|workspace-write` 指定，网络由 `YUANTU_SANDBOX_NETWORK=denied|unrestricted` 独立指定。macOS 与 Windows 默认都是工作区可写、命令断网；只读仍允许本次调用的私有 scratch。断网会话里，`run_command` 可用 `network: true` 为单条命令申请联网，这次调用的审批会标明是临时联网，`--allow-command` 不会自动批准它。Windows 的旧受限令牌后端（`windows`）与弱沙箱入口已移除：它只提供部分写入边界，读取与网络不受限，因此不再作为可选执行后端；历史 ACL 日志仍可用 `sandbox-recover` 恢复。`windows-account` 后端使用专用低权限本地账户（一次管理员初始化，默认以 WFP 断网的离线账户运行，子进程可正常 fork）；它读不到你的用户目录，但其他磁盘上对普通用户可读的文件仍可读取；`native` 在 Windows 上始终选择它，未初始化或标记版本不对时拒绝执行并提示去设置页初始化/修复，**不会自动回退**到已移除的旧后端。基础验收入口为 `npm.cmd run check:windows-sandbox`，隔离边界见 [Windows 沙箱说明](packages/tools/windows-sandbox/README.md)。
 
 命令、后台任务、程序 runner、验证、终端与 LSP 通过统一执行环境启动。终端/LSP 保留创建策略，切换后只能查看或关闭；重新启动才应用新策略。hook 默认继承当前调用策略，显式 `YUANTU_SANDBOX_HOOK` 可以指定后端。后端不可用或无法满足权限要求时拒绝执行，清理由持有原始计划的进程完成。
 
@@ -388,7 +388,7 @@ Windows 包内运行时使用 Node 官方 `win-x64` 发行版，版本、压缩�
 
 工作区里的命令钩子走另一条路：`.claude/settings.json` 与 `.yuantu/hooks.json` 被读成上面管线里的普通钩子，因此顺序、超时与可撤销性自动一致。退出码就是契约：`0` 放行、`2` 拒绝（stderr 是理由）、**其他非零码是「钩子坏了」而不是「拒绝」**，只记录不否决。`permissionDecision: 'ask'` 映射为拒绝——这次调用里没有通道能替 hook 去问人。钩子命令通过所选沙箱执行；运行器故障不触发宿主重试。整座桥可用 `YUANTU_HOOK_BRIDGE=0` 关闭。
 
-**钩子只在工作区被信任后才安装。** 声明来自仓库，打开一个克隆来的仓库并发出第一条消息不应就执行其中的 `SessionStart`、`UserPromptSubmit` 等命令（默认原生沙箱在 Windows 上不限制读取与网络）。信任记录按工作区保存为全部声明（来源文件、事件、matcher、命令，按声明顺序）以及命令中引用的工作区内已存在常规文件内容哈希（按 token 出现顺序）的 SHA-256 摘要，存放在用户状态目录的 `hook-trust.json`（默认 `~/.yuantu/hook-trust.json`，随 `YUANTU_STATE_DIR` 移动），从不写入工作区；状态目录落在工作区内时拒绝记录、也不认可其中的记录。只有当前摘要与记录一致时 Host 才安装钩子；任何一处命令、matcher、事件、来源文件或被引用文件内容变化都会使信任失效（超时秒数不计入摘要）。文件读取失败或超过 4 MiB 时拒绝信任，不以截断内容代替完整哈希。命令采用支持引号路径的简单分词，不展开变量，也不递归追踪脚本导入。
+**钩子只在工作区被信任后才安装。** 声明来自仓库，打开一个克隆来的仓库并发出第一条消息不应就执行其中的 `SessionStart`、`UserPromptSubmit` 等命令（默认原生沙箱在 Windows 上虽然断网，但仍能读取其他磁盘上对普通用户可读的文件）。信任记录按工作区保存为全部声明（来源文件、事件、matcher、命令，按声明顺序）以及命令中引用的工作区内已存在常规文件内容哈希（按 token 出现顺序）的 SHA-256 摘要，存放在用户状态目录的 `hook-trust.json`（默认 `~/.yuantu/hook-trust.json`，随 `YUANTU_STATE_DIR` 移动），从不写入工作区；状态目录落在工作区内时拒绝记录、也不认可其中的记录。只有当前摘要与记录一致时 Host 才安装钩子；任何一处命令、matcher、事件、来源文件或被引用文件内容变化都会使信任失效（超时秒数不计入摘要）。文件读取失败或超过 4 MiB 时拒绝信任，不以截断内容代替完整哈希。命令采用支持引号路径的简单分词，不展开变量，也不递归追踪脚本导入。
 
 - **桌面端**在启动或切换到某工作区、Host 启动之前检查：发现未信任的钩子时弹窗列出每条命令及其来源文件，选择「信任并启用」写入记录，「本次不启用」不写任何记录，本次桌面进程内同一组声明不再询问，下次启动或声明变化后再问。
 - **Host 与 CLI 不交互**：遇到未信任的钩子一律不启用，并在 stderr 打印一次 `[hook] … not enabled` 提示，说明来源文件与处理办法。
@@ -728,9 +728,9 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 68 个 / 36.2 KB | `createTools().specs()` |
+| 工具（空工作区，全部） | 68 个 / 36.6 KB | `createTools().specs()` |
 | 工具（只读运行） | 35 个 / 17.1 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 24 个 / 14.3 KB | `specs({ loaded: new Set() })` |
+| 工具（默认按需加载，首个请求） | 24 个 / 14.6 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |

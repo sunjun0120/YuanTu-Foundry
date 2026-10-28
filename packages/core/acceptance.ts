@@ -4,8 +4,10 @@ import {
   stopSandbox,
   cleanupSandbox,
   markSandboxStarted,
+  resolveSandboxConfig,
   withSandboxPreparation,
 } from '../tools/sandbox.ts';
+import { executionPolicy } from '../tools/execution-policy.ts';
 import type { SandboxPlan } from '../tools/sandbox-provider.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -516,10 +518,14 @@ async function verifyOne(
         .map((part) => (/[\s"]/u.test(part) ? JSON.stringify(part) : part))
         .join(' ');
       if (approve) {
+        // The boundary `runCommand` will run under, so a policy rule on the network can read it.
+        const config = resolveSandboxConfig();
+        const policy = executionPolicy(config.mode, config);
         const allowed = await approve(
           {
             kind: 'command',
             description: `Verification command: ${commandLine}`,
+            boundary: { processFiles: policy.processFiles, network: policy.network },
             toolCall: {
               id: `acceptance:${spec.id}`,
               name: 'run_command',

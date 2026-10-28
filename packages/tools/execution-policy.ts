@@ -78,9 +78,8 @@ export function snapshotExecutionPolicy(policy: ExecutionPolicy): ExecutionPolic
  * One sentence, for an approval, of what the backend behind this call will and will not stop.
  *
  * Read from the policy's *declared* capabilities rather than from the platform, so it cannot say more than the
- * backend promises: the Windows token backend is a partial write boundary that leaves reads and the network
- * open, and a person approving a command there should be told so at the moment they decide, not only in a
- * README.
+ * backend promises: a person approving a command should learn what stays open at the moment they decide, not
+ * only in a README. `workspace-write-partial` remains for a registered backend that declares it.
  */
 export function describeExecutionBoundary(policy: ExecutionPolicy): string {
   const files =

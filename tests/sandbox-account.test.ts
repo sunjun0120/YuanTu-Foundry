@@ -831,7 +831,16 @@ test(
       config: { mode: 'windows-account', image: '', files: 'read-only' },
     });
     assert.deepEqual(JSON.parse(await readFile(read.args[4]!, 'utf8')).capabilities, []);
+    // No network named is the offline account; only an explicit grant starts the online one.
+    assert.deepEqual(starts, ['offline']);
+    const online = await windowsAccountSandboxProvider.prepare({
+      root,
+      cwd: root,
+      command: 'npm install',
+      config: { mode: 'windows-account', image: '', network: 'unrestricted' },
+    });
     assert.deepEqual(starts.sort(), ['offline', 'online']);
+    await windowsAccountSandboxProvider.cleanup(online);
 
     // A terminal asks the runner for a console of its size.
     const terminal = await windowsAccountSandboxProvider.prepare({
@@ -860,5 +869,9 @@ test('the account backend declares both file and both network policies', () => {
   const denied = executionPolicy('windows-account', { files: 'read-only', network: 'denied' });
   assert.equal(denied.processFiles, 'read-only');
   assert.equal(denied.network, 'denied');
-  assert.equal(executionPolicy('windows-account').network, 'unrestricted');
+  assert.equal(executionPolicy('windows-account').network, 'denied');
+  assert.equal(
+    executionPolicy('windows-account', { network: 'unrestricted' }).network,
+    'unrestricted',
+  );
 });

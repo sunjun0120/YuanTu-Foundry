@@ -33,6 +33,18 @@ test('a command approval reads in Chinese and leads with the command, not the JS
   );
 });
 
+test('a network escalation says so before the isolation sentence', (t) => {
+  t.after(() => setLocale('zh-CN'));
+  setLocale('zh-CN');
+  const summary = approvalSummary({
+    ...command,
+    boundary: { processFiles: 'workspace-write', network: 'unrestricted' },
+    escalation: { network: 'unrestricted' },
+  });
+  assert.match(summary.boundary!, /^这条命令请求临时联网/);
+  assert.match(summary.boundary!, /可以访问网络/);
+});
+
 test('a write approval with a diff names no separate subject', () => {
   const summary = approvalSummary({
     kind: 'write',

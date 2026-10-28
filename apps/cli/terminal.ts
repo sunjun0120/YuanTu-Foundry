@@ -55,7 +55,7 @@ export function createApprover(
     if (
       decision !== 'ask' &&
       ((approval.kind === 'write' && options.allowWrite) ||
-        (approval.kind === 'command' && options.allowCommand))
+        (approval.kind === 'command' && options.allowCommand && !approval.escalation))
     ) {
       approvalSources.set(approval.toolCall, 'launch-options');
       return true;
