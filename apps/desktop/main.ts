@@ -13,12 +13,6 @@ import {
   type SandboxSetupView,
 } from './sandbox-setup.ts';
 import { refreshAccountBackend } from '../../packages/sandbox/sandbox-account.ts';
-import { parseFilesCommand, type FilesReply } from './files-contract.ts';
-import { maintainWorkspace } from './workspace-maintenance.ts';
-import {
-  parseWorkspaceMaintenanceCommand,
-  type WorkspaceMaintenanceReply,
-} from './workspace-maintenance-contract.ts';
 import {
   app,
   BrowserWindow,
@@ -38,12 +32,7 @@ import { pathToFileURL } from 'node:url';
 import { existsSync, realpathSync } from 'node:fs';
 import { CarrierService, parseCarrierCommand } from '../../packages/carrier/index.ts';
 import type { CarrierSnapshot } from '../../packages/carrier/index.ts';
-import type {
-  ArchivedSessionsReply,
-  DesktopWireReply,
-  OpenWorkspacePathReply,
-} from './contract.ts';
-import { workspaceFilePath } from './workspace-file-path.ts';
+import type { DesktopWireReply } from './contract.ts';
 import { BrowserViews } from './browser-views.ts';
 import { parseBrowserCommand, type BrowserReply } from './browser-contract.ts';
 import { ProjectWorkspacesStore } from './project-workspaces-store.ts';
@@ -82,6 +71,7 @@ import { SessionChoices, choiceForPreset, type SessionChoice } from './session-c
 import { confirmUpgradeStartup, desktopRelease, manualUpgrade } from './main-upgrade.ts';
 import { workspaceHookReviewer } from './main-hook-trust.ts';
 import { registerAttachmentIpc } from './main-attachment.ts';
+import { registerWorkspaceIpc } from './main-workspace.ts';
 import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
@@ -1059,124 +1049,10 @@ void app
         }
       },
     );
-    ipcMain.handle(
-      'yuantu:workspace-maintenance',
-      async (event, input: unknown): Promise<WorkspaceMaintenanceReply> => {
-        try {
-          assertSender(event);
-          const envelope = input as { target?: unknown; command?: unknown };
-          const command = parseWorkspaceMaintenanceCommand(envelope?.command);
-          const service = envelope.target ? routedService(envelope.target) : null;
-          const choices = service ? routeFor(service).choices : undefined;
-          if (!service || quitting || switching) throw new Error(mainText('desktop.quitting'));
-          const current = service;
-          const workspace = current.snapshot.workspace;
-          if (command.type === 'list')
-            return { ok: true, workspace, items: await current.orphanWorkspaces() };
-          switching = true;
-          try {
-            const sessionId = current.snapshot.session.sessionId;
-            return await maintainWorkspace({
-              service: current,
-              command,
-              workspace,
-              policyReady: choices?.following,
-              isCurrent: () =>
-                !quitting &&
-                current === service &&
-                current.snapshot.workspace === workspace &&
-                current.snapshot.session.sessionId === sessionId,
-            });
-          } finally {
-            switching = false;
-          }
-        } catch (error) {
-          return carrierErrorReply(error);
-        }
-      },
-    );
-    ipcMain.handle(
-      'yuantu:archived-sessions',
-      async (event, input: unknown): Promise<ArchivedSessionsReply> => {
-        try {
-          assertSender(event);
-          const service = routedService((input as { target?: unknown })?.target);
-          if (!service || quitting) throw new Error(mainText('desktop.quitting'));
-          const current = service;
-          const workspace = current.snapshot.workspace;
-          return { ok: true, workspace, sessions: await current.archivedSessions() };
-        } catch (error) {
-          return carrierErrorReply(error);
-        }
-      },
-    );
-    ipcMain.handle('yuantu:files', async (event, input: unknown): Promise<FilesReply> => {
-      try {
-        assertSender(event);
-        const envelope = input as { target?: unknown; command?: unknown };
-        const command = parseFilesCommand(envelope?.command);
-        const service = envelope.target ? routedService(envelope.target) : null;
-        if (!service || quitting) throw new Error(mainText('desktop.quitting'));
-        /**
-         * A round trip to the Host, and nothing else.
-         *
-         * This handler deliberately does not touch the filesystem: the workspace's containment rule and its
-         * ignore list belong to the process that owns the workspace, and a reader here would be a second copy
-         * of them — the copy that quietly lists what the file tools refuse.
-         */
-        return command.type === 'list'
-          ? {
-              ok: true,
-              listing: await service.listWorkspaceFiles(
-                command.path === undefined || !command.path ? {} : { path: command.path },
-              ),
-            }
-          : {
-              ok: true,
-              preview: await service.readWorkspaceFile({
-                path: command.path,
-                ...(command.locale ? { locale: command.locale } : {}),
-              }),
-            };
-      } catch (error) {
-        return { ok: false, error: safeError(error) };
-      }
+    registerWorkspaceIpc(ctx, {
+      routedService: (target) => routedService(target),
+      choices: (host) => routeFor(host).choices,
     });
-    ipcMain.handle(
-      'yuantu:open-workspace-path',
-      async (event, input: unknown): Promise<OpenWorkspacePathReply> => {
-        try {
-          assertSender(event);
-          const envelope = input as { target?: unknown; command?: unknown };
-          const service = routedService(envelope?.target);
-          input = envelope.command;
-          if (!service || quitting) throw new Error(mainText('desktop.quitting'));
-          if (!input || typeof input !== 'object') throw new Error('Invalid path request');
-          const { path: requested, action } = input as {
-            path?: unknown;
-            action?: unknown;
-          };
-          if (typeof requested !== 'string' || !requested || requested.length > 4096)
-            throw new Error('Invalid workspace path');
-          if (requested.includes('\0')) throw new Error('Invalid workspace path');
-          if (action !== 'open' && action !== 'reveal') throw new Error('Invalid file action');
-          /**
-           * Resolve twice: the first check keeps `..` inside the workspace, and the real path check refuses a
-           * symlink or junction that points out of it. The runtime directory is never a user-facing file.
-           */
-          const root = realpathSync.native(service.snapshot.workspace);
-          const target = workspaceFilePath(root, requested);
-          if (action === 'reveal') shell.showItemInFolder(target);
-          else {
-            const failure = await shell.openPath(target);
-            if (failure) throw new Error(failure);
-          }
-          return { ok: true };
-        } catch (error) {
-          return { ok: false, error: safeError(error) };
-        }
-      },
-    );
     /** Hold the shell operation guard across both halves of a preset update. */
     const assertPresetChangeAllowed = (): void => {
       if (!service || quitting || switching)
