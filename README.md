@@ -7,6 +7,8 @@ kind: 'project-readme'
 
 独立实现的编程 Agent 内核，当前交付 Windows/macOS Electron 桌面客户端，由本地 JSONL Agent Host 驱动。模型协议、会话存储、工具管线与扩展点都是本项目自己的实现。
 
+它首先是一个通用编程 Agent。源码审计/合规分析能力（SBOM、许可证、漏洞、可维护性检查与报告）正在接入，由后端分析服务提供：只有在用户添加源码包、给出 GitHub 仓库或提出分析要求时才按需加载，不改变通用使用方式；被分析的代码作为分析对象处理，不作为工作区信任。
+
 需要 **Node.js 24 或更新版本**。工程是 ESM，TypeScript 源码由 Node 的类型擦除直接运行，`npm run build` 的产物只是分发形式。
 
 ## 目录
