@@ -43,6 +43,36 @@ const LAYERS = [
  * desktop starts a Host as a child process and talks to it through `packages/carrier`, so it imports no other app.
  */
 const APP_LAYERS = [['shared'], ['agent-host', 'cli', 'desktop']];
+/**
+ * The packages an app may import, for the apps that must not assemble a kernel themselves.
+ *
+ * The layer order lets an app import any package, which is right for the Host and the CLI and wrong for the
+ * desktop: it reaches the kernel only through a Host it talks to over `carrier`, so an import of `core`, `tools`
+ * or `storage` from its main process is a second, unsupervised copy of state the Host owns. Widening this list is
+ * a deliberate edit, the same as moving a package between layers. An entry naming a file (`storage/x.ts`) admits
+ * that one module and nothing else of its package.
+ */
+const APP_PACKAGES = new Map([
+  [
+    'apps/desktop',
+    new Set([
+      'builtin-services',
+      'carrier',
+      'client',
+      'formats',
+      'maintenance',
+      'office',
+      'platform',
+      'protocol',
+      'providers',
+      'resources',
+      'sandbox',
+      // The cross-project search reads unopened projects' indexes without starting a Host per project; the
+      // reader checks the schema version so a database another build migrated is reported, not misread.
+      'storage/session-index-reader.ts',
+    ]),
+  ],
+]);
 /** The one non-TSX module allowed to reach a component: the entry that mounts the React tree. */
 const TSX_BOUNDARY_EXEMPT = new Set(['apps/desktop/renderer.ts']);
 /** Every module the gates read: TSX is scanned so the boundary check can see its edges. */
@@ -149,8 +179,19 @@ for (const file of files) {
     if (!specifier.startsWith('.')) continue;
     const to = unitOf(path.resolve(path.dirname(file), specifier));
     if (to === undefined || to === from) continue;
-    // An app may use any package: packages sit below every app, so only app-to-app edges need the order.
-    if (from.startsWith('apps/') && !to.startsWith('apps/')) continue;
+    // Packages sit below every app, so only app-to-app edges need the order; an app with a package list is
+    // held to it instead.
+    if (from.startsWith('apps/') && !to.startsWith('apps/')) {
+      const allowed = APP_PACKAGES.get(from);
+      const module = path
+        .relative(packagesRoot, path.resolve(path.dirname(file), specifier))
+        .replaceAll('\\', '/');
+      if (allowed && !allowed.has(to) && !allowed.has(module))
+        problems.push(
+          `${path.relative(root, file).replaceAll('\\', '/')} imports ${specifier} (${from} may not import packages/${to}; see APP_PACKAGES)`,
+        );
+      continue;
+    }
     edges++;
     if (!rank.has(to) || rank.get(to) >= rank.get(from))
       problems.push(
