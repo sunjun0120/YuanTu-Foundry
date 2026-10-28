@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import {
@@ -16,7 +16,7 @@ import { until } from './wait-fixture.ts';
 test('a cold automatic wake retains its read-only authority after a permission update', async (t) => {
   const url = await httpFixture(t, (_body, response) => sendFrames(response, frames('done')));
   let id = '';
-  const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     id = store.create(hostRoot(file)).id;
     store.recordEvent(id, 'command.started', { id: 'finished' });
@@ -64,7 +64,7 @@ test('cold completed records notify by default, opt-in wakes once and streams in
     sendFrames(res, frames('Background reviewed.'));
   });
   let sessionId = '';
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     sessionId = store.create(hostRoot(file)).id;
     store.recordEvent(sessionId, 'command.started', { id: 'finished', command: 'fixture' });
@@ -147,7 +147,7 @@ test('a completion arriving in the final foreground response continues without l
       setTimeout(() => sendFrames(res, frames('Automatic finished.')), 100);
     }
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (db) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (db) => {
     file = db;
     const store = new SessionStore(db);
     sessionId = store.create(hostRoot(db)).id;
@@ -187,7 +187,7 @@ test('automatic wake budget cancels a stalled provider and cancellation pauses f
     requests++;
   });
   let sessionId = '';
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     sessionId = store.create(hostRoot(file)).id;
     store.recordEvent(sessionId, 'command.started', { id: 'finished' });
@@ -232,7 +232,7 @@ test('a slow session hook cannot admit a second main run before the first slot i
     hook,
     'export const hooks={sessionStart:async()=>{await new Promise(r=>setTimeout(r,300));}};',
   );
-  const host = await listeningHost(
+  const host = await startHost(
     t,
     // One slot, so the second session competes for the same reservation the first one is holding.
     { YUANTU_BASE_URL: url, YUANTU_HOOKS_MODULE: hook, YUANTU_HOST_MAX_RUNS: '1' },

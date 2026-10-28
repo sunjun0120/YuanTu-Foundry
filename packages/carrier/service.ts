@@ -67,8 +67,8 @@ const AUDIT_PAGE = 500;
  *
  * - `SpawnedHostOptions` — this carrier owns the Host process. It supervises it, names it in failure reports
  *   (`hostPid`), and restarts it after a crash.
- * - `ConnectedHostOptions` — somebody else produced a link to an already-running Host (a web carrier behind a
- *   socket bridge, an embedded host). There is no process to restart, so a dead link is reported as failed and
+ * - `ConnectedHostOptions` — somebody else produced a link to an already-running Host (a Host process a test or
+ *   an embedder started itself). There is no process to restart, so a dead link is reported as failed and
  *   reconnecting is the carrier's own business.
  */
 export interface CarrierOptions {

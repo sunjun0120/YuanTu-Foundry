@@ -8,7 +8,7 @@ import { parseArgs } from '../apps/shared/args.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { discoverAutomaticCapacities } from '../packages/providers/automatic-capacity.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 
 async function fixture(t: test.TestContext, catalog: unknown, status = 200) {
   const root = await mkdtemp(path.join(tmpdir(), 'yuantu-auto-capacity-'));
@@ -209,7 +209,7 @@ test(
         sendFrames(res, frames('After cancellation'));
       }
     });
-    const host = await listeningHost(t, {
+    const host = await startHost(t, {
       YUANTU_BASE_URL: endpoint,
       YUANTU_MAX_CONTEXT_TOKENS: '',
       YUANTU_MAX_OUTPUT_TOKENS: '',
@@ -251,7 +251,7 @@ test(
         sendFrames(res, frames('A useful summary or reply.'));
       }
     });
-    const host = await listeningHost(t, {
+    const host = await startHost(t, {
       YUANTU_API_KEY: 'synthetic-compaction-key',
       YUANTU_BASE_URL: endpoint,
       YUANTU_MAX_CONTEXT_TOKENS: '',

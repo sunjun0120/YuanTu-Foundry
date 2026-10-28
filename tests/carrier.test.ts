@@ -9,7 +9,7 @@
  *
  * 1. the package has no Electron and no DOM in it (read from the sources, not promised in a comment), and
  * 2. one service drives both transport shapes — a Host it spawned itself, and a Host somebody else started and
- *    handed it a socket to — in plain Node, with no shell anywhere in the process.
+ *    handed it the link to — in plain Node, with no shell anywhere in the process.
  *
  * The second point is the whole project: everything above the transport is shared code, so a second carrier
  * wires up a link and gets the state machine rather than a copy of it.
@@ -27,9 +27,8 @@ import {
   refreshScopeFor,
   spawnedCarrier,
 } from '../packages/carrier/index.ts';
-import { socketTransport } from '../packages/client/host-transport.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
-import { connectSocket, listeningHost } from './listening-host-fixture.ts';
+import { startHost } from './host-process-fixture.ts';
 import { projectRoot } from './process-fixture.ts';
 import { withoutComments } from '../scripts/i18n-gate.mjs';
 import { nativeSkip } from './native-platform.ts';
@@ -37,7 +36,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 
 test('session export reads complete display history without changing the visible session', async (t) => {
   let sessionId = '';
-  const host = await listeningHost(t, {}, (file) => {
+  const host = await startHost(t, {}, (file) => {
     const store = new SessionStore(file);
     try {
       sessionId = store.create(path.dirname(file)).id;
@@ -47,10 +46,8 @@ test('session export reads complete display history without changing the visible
       store.close();
     }
   });
-  const socket = await connectSocket(host.port);
   const carrier = connectedCarrier({
-    transport: socketTransport(socket),
-    authToken: host.authToken,
+    transport: host.transport(),
     env: {},
   });
   host.beforeStop(() => carrier.stop());
@@ -136,11 +133,9 @@ test('a created task is published while its model proposal is still pending', as
         ),
       );
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const socket = await connectSocket(host.port);
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const carrier = connectedCarrier({
-    transport: socketTransport(socket),
-    authToken: host.authToken,
+    transport: host.transport(),
     env: {
       YUANTU_API_KEY: 'fixture',
       YUANTU_MODEL: 'fixture',
@@ -456,13 +451,13 @@ test(
   },
 );
 
-test('the same service drives a Host it did not start, over a socket', async (t) => {
-  const url = await httpFixture(t, (_, res) => sendFrames(res, frames('From a listening Host')));
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
-  const socket = await connectSocket(host.port);
+test('the same service drives a Host it did not start, over a link it was handed', async (t) => {
+  const url = await httpFixture(t, (_, res) =>
+    sendFrames(res, frames('From a Host it did not start')),
+  );
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const carrier = connectedCarrier({
-    transport: socketTransport(socket),
-    authToken: host.authToken,
+    transport: host.transport(),
     env: {
       YUANTU_API_KEY: 'fixture',
       YUANTU_MODEL: 'fixture',
@@ -478,15 +473,13 @@ test('the same service drives a Host it did not start, over a socket', async (t)
   assert.equal(carrier.snapshot.workspace, host.root);
   assert.equal(carrier.snapshot.hostPid, null, "the process is not this carrier's to name");
   const snapshot = await carrier.dispatch({ type: 'send', prompt: 'Hello' });
-  assert.equal(snapshot.session.messages.at(-1)?.content, 'From a listening Host');
+  assert.equal(snapshot.session.messages.at(-1)?.content, 'From a Host it did not start');
 });
 
 test('a carrier that does not own the Host reports the break instead of restarting it', async (t) => {
-  const host = await listeningHost(t, {});
-  const socket = await connectSocket(host.port);
+  const host = await startHost(t, {});
   const carrier = connectedCarrier({
-    transport: socketTransport(socket),
-    authToken: host.authToken,
+    transport: host.transport(),
     env: {},
   });
   t.after(() => carrier.stop().catch(() => {}));

@@ -46,14 +46,6 @@ async function main(): Promise<void> {
     return;
   }
   const [command, ...args] = positionals as [string, ...string[]];
-  // Refused rather than ignored: the CLI is a carrier, not a Host — it runs the kernel in-process and never
-  // serves a socket (the desktop is the carrier that spawns a Host) — so `--listen` could only ever be a
-  // mistake about which program serves one. Silently accepting it would look like the CLI was reachable over
-  // the network when it is not.
-  if (options.listen !== undefined)
-    throw new Error(
-      'The CLI does not serve a socket; start the Agent Host with --listen [host:]port instead',
-    );
   if (await runStandaloneCommand(command, args, options)) return;
   assertSessionCommand(command, args);
   const permissionPolicy = readPermissionPolicy(

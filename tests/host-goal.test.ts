@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
-import { connectClient, listeningHost, waitForStderr } from './listening-host-fixture.ts';
+import { connectClient, startHost, waitForStderr } from './host-process-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { newGoal } from '../packages/protocol/goals.ts';
 
@@ -56,7 +56,7 @@ test(
       const call = calls[step as keyof typeof calls];
       sendFrames(res, frames(call ? 'Working' : 'Round finished', call ? [call] : []));
     });
-    const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_BASE_URL: url });
     workspace = host.root;
     const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
@@ -105,7 +105,7 @@ test('query convergence does not restart itself through an active goal', async (
         ]),
       );
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -162,7 +162,7 @@ test('a Host keeps running rounds until the session goal is finished', async (t)
       );
     else sendFrames(res, frames('Done.'));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -217,7 +217,7 @@ test('a continuation round that only repeats earlier work does not buy another o
       );
     else sendFrames(res, frames('Still looking.'));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -280,7 +280,7 @@ test('a continuation round cannot re-aim the goal the runtime started it for', a
     // The goal is completed by now, so a second `complete` would be refused and the round would never end.
     else sendFrames(res, frames('Done.'));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -328,7 +328,7 @@ test('a goal that has spent its rounds is recorded as blocked, not left looking 
       );
     else sendFrames(res, frames('That is the whole budget.'));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -365,7 +365,7 @@ test('a task run is not extended by a goal, because its rounds belong to its att
   });
   let seeded = '';
   let workspace = '';
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (dbPath) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (dbPath) => {
     const store = new SessionStore(dbPath);
     try {
       const session = store.create(path.dirname(dbPath));

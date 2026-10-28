@@ -54,15 +54,12 @@ export interface SpawnedHostOptions extends HostClientLimits {
 /**
  * The carrier shape: somebody else produced a link to an already-running Host.
  *
- * A browser cannot spawn a process, so a web carrier connects to a Host that is already up — over a
- * WebSocket bridged to its TCP listener, or over any other duplex link — and hands the client a transport.
- * Everything above the transport (framing, request ids, timeouts, redaction, status) is the same code, which
+ * A test or an embedder that starts the Host itself hands the client a transport over that process
+ * (`processTransport`) or over any other duplex link. Everything above the transport (framing, request ids, timeouts, redaction, status) is the same code, which
  * is the point of the split.
  */
 export interface ConnectedHostOptions extends HostClientLimits {
   transport: HostTransport;
-  /** Out-of-band credential for an opt-in loopback TCP Host. Never load it from the workspace. */
-  authToken?: string;
   env?: NodeJS.ProcessEnv;
 }
 export type HostClientOptions = SpawnedHostOptions | ConnectedHostOptions;
@@ -262,9 +259,6 @@ export class AgentHostClient {
         'host.info',
         {
           protocolVersions: [...HOST_PROTOCOL_VERSIONS],
-          ...(isConnected(this.options) && this.options.authToken !== undefined
-            ? { authToken: this.options.authToken }
-            : {}),
         },
         this.options.startupTimeoutMs ?? Math.max(this.options.requestTimeoutMs ?? 10_000, 10_000),
       );
@@ -462,10 +456,7 @@ export class AgentHostClient {
     else entry.reject(new Error('Invalid Host response'));
   }
   private redact(message: string): string {
-    const clean = redactSecrets(message, { ...process.env, ...this.options.env });
-    return isConnected(this.options) && this.options.authToken
-      ? clean.split(this.options.authToken).join('[redacted]')
-      : clean;
+    return redactSecrets(message, { ...process.env, ...this.options.env });
   }
   private cleanResult(value: unknown): unknown {
     if (!value || typeof value !== 'object') return value;

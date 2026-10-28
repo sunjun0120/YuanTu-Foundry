@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 
 test('the desktop Host automatically verifies a plain request with no caller-supplied contract', async (t) => {
   let requests = 0;
@@ -33,7 +33,7 @@ test('the desktop Host automatically verifies a plain request with no caller-sup
         : frames('Done'),
     );
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   host.beforeStop(() => client.stop());
   await client.start();

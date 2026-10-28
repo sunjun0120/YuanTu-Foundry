@@ -33,7 +33,7 @@ for (const [highWaterMark, decodeStrings] of [
       carrier.close();
       output.destroy();
     });
-    await carrier.attach();
+    carrier.attach();
     const reply = { text: decodeStrings ? 'x'.repeat(16_000_000) : '你'.repeat(5_333_333) };
     for (let i = 0; i < 7; i++) carrier.send(reply);
     assert.equal(carrier.connected, false);
@@ -55,7 +55,7 @@ test('buffered writes below an ordinary high water mark count toward the ceiling
     carrier.close();
     output.destroy();
   });
-  await carrier.attach();
+  carrier.attach();
   carrier.send({ text: 'x'.repeat(60_000) });
   const queued = output.writableLength;
   carrier.send({ text: 'x'.repeat(63_999_988) });
@@ -78,7 +78,7 @@ test('ordinary close still delivers the final cancellation reply', async (t) => 
     carrier.close();
     output.destroy();
   });
-  await carrier.attach();
+  carrier.attach();
   carrier.close();
   const reply = { id: 'cancelled-run', result: { status: 'cancelled' } };
   carrier.send(reply);
@@ -102,7 +102,7 @@ test('a slow reader that drains receives a fresh output budget', async (t) => {
     carrier.close();
     output.destroy();
   });
-  await carrier.attach();
+  carrier.attach();
   const reply = { text: 'x'.repeat(16_000_000) };
   for (let i = 0; i < 3; i++) carrier.send(reply);
   while (output.writableLength) {
@@ -137,7 +137,7 @@ test('a reader can replenish a partially drained queue without being disconnecte
     carrier.close();
     output.destroy();
   });
-  await carrier.attach();
+  carrier.attach();
   const reply = { text: '你'.repeat(5_333_333) };
   for (let i = 0; i < 3; i++) carrier.send(reply);
   for (let i = 0; i < 5; i++) {
@@ -154,7 +154,7 @@ test('a stdio carrier refuses an unterminated frame instead of buffering it with
   const input = new PassThrough();
   const carrier = carrierWith(input);
   t.after(() => carrier.close());
-  const iterator = (await carrier.attach())[Symbol.asyncIterator]();
+  const iterator = carrier.attach()[Symbol.asyncIterator]();
   const megabyte = Buffer.alloc(1_000_000, 0x61);
   // More than the frame ceiling, and not one newline in it: this is what a peer that never frames a request sends.
   for (let sent = 0; sent < Math.ceil(MAX_INPUT_BYTES / megabyte.length) + 2; sent++) {
@@ -178,7 +178,7 @@ test('an ordinary line still reaches the serve loop through the same framing', a
   const input = new PassThrough();
   const carrier = carrierWith(input);
   t.after(() => carrier.close());
-  const iterator = (await carrier.attach())[Symbol.asyncIterator]();
+  const iterator = carrier.attach()[Symbol.asyncIterator]();
   const line = JSON.stringify({ id: 'one', method: 'host.info', params: {} });
   input.write(Buffer.from(line + '\n', 'utf8'));
   const first = await iterator.next();

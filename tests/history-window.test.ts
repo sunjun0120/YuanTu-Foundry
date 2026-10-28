@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import type { AgentHostClient } from '../packages/client/host-client.ts';
 import type { AgentEvent, Message } from '../packages/protocol/index.ts';
 
@@ -176,7 +176,7 @@ test('a run end reads only the newest page, keeps the older pages already loaded
 
 test('a real Host loads recent history and pages backwards without losing messages or statistics', async (t) => {
   let sessionId = '';
-  const host = await listeningHost(t, {}, (db) => {
+  const host = await startHost(t, {}, (db) => {
     const store = new SessionStore(db);
     sessionId = store.create(path.dirname(db)).id;
     for (let i = 0; i < 350; i++) store.append(sessionId, { role: 'user', content: `Entry ${i}` });
@@ -225,7 +225,7 @@ test('a real Host loads recent history and pages backwards without losing messag
 test('a bounded history window reconstructs an oversized message without reading the next window', async (t) => {
   let sessionId = '';
   const large = '中'.repeat(5_100_000);
-  const host = await listeningHost(t, {}, (db) => {
+  const host = await startHost(t, {}, (db) => {
     const store = new SessionStore(db);
     sessionId = store.create(path.dirname(db)).id;
     store.append(sessionId, {

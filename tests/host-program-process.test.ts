@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { useAccountTests, windowsAccountTests } from './windows-account-fixture.ts';
@@ -44,7 +44,7 @@ test(
           ]),
         );
     });
-    const host = await listeningHost(t, {
+    const host = await startHost(t, {
       YUANTU_SANDBOX: 'native',
       YUANTU_BASE_URL: url,
     });

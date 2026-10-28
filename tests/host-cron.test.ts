@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 
 test('cold Host skips stale cron and automatically delivers only the latest occurrence of another', async (t) => {
   let requests = 0;
@@ -15,7 +15,7 @@ test('cold Host skips stale cron and automatically delivers only the latest occu
   let sessionId = '',
     latestId = '',
     skipId = '';
-  const host = await listeningHost(
+  const host = await startHost(
     t,
     { YUANTU_BASE_URL: url, YUANTU_WORKFLOWS: 'true', YUANTU_WORKFLOW_INTERVAL_MS: '1000' },
     (file) => {

@@ -8,7 +8,7 @@ import type { HostServices } from '../apps/agent-host/services.ts';
 import { createDispatcher } from '../apps/agent-host/dispatch.ts';
 import { HookRegistry } from '../packages/tools/hooks.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { loadHookDeclarations } from '../packages/resources/hook-config.ts';
 import { hookTrustFile, trustWorkspaceHooks } from '../packages/resources/hook-trust.ts';
@@ -152,7 +152,7 @@ test('real Host planning lifecycle never launches workspace hooks, including shu
     explicitId = '';
   // Trust is read from the user state directory, so the Host gets its own, outside the workspace.
   const state = await tempRoot(t, 'yuantu-hook-trust-');
-  const host = await listeningHost(
+  const host = await startHost(
     t,
     {
       YUANTU_SANDBOX: 'host',
@@ -222,7 +222,7 @@ appendFileSync('lifecycle.jsonl', Buffer.concat(chunks).toString('utf8') + '\n')
   } finally {
     await client.stop();
   }
-  // A connected client owns only its socket; the independently launched Host finishes hooks afterwards.
+  // A connected client owns only its link; the independently launched Host finishes hooks afterwards.
   if (host.child.exitCode === null)
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(

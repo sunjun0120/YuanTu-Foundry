@@ -11,7 +11,7 @@ export type {
  * Exported because it is the package's reason to exist for anyone who is not this repository's desktop — a
  * carrier supplies a `HostTransport` and gets the whole protocol, rather than a copy of the client.
  */
-export { lineFramer, socketTransport, stdioTransport } from './host-transport.ts';
+export { lineFramer, processTransport, stdioTransport } from './host-transport.ts';
 export type { HostTransport, HostTransportExit } from './host-transport.ts';
 export { SessionController } from './session-controller.ts';
 export type {

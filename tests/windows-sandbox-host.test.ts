@@ -7,7 +7,7 @@ import { createServer } from 'node:net';
 import { execFile } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { promisify } from 'node:util';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { quoteWindowsArgument } from '../packages/tools/windows-command.ts';
@@ -68,7 +68,7 @@ test(
     t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
-    const host = await listeningHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
     await mkdir(path.join(host.root, '.codex'), { recursive: true });
     const script = path.join(host.root, 'probe.cjs');
     const report = path.join(host.root, 'probe-result.json');
@@ -179,7 +179,7 @@ test(
         ]),
       );
     });
-    const host = await listeningHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
     const pidFile = path.join(host.root, 'descendant.pid');
     const script = path.join(host.root, 'wait.cjs');
     await writeFile(

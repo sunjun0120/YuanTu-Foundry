@@ -103,7 +103,7 @@ export type Dispatcher = (
  */
 export interface HostContext {
   models: HostModelRuntime;
-  /** The parsed command line, including the `--listen` address when the carrier is a socket. */
+  /** The parsed command line. */
   options: HostLaunch['options'];
   /** The one workspace this Host serves; every session it accepts has to resolve to it. */
   workspace: string;

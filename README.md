@@ -96,7 +96,7 @@ Windows 打包后可运行 `npm.cmd run smoke:windows-package`，用独立测试
 | ----------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `apps/shared`     | CLI 与 Host 共用的装配层：沙箱默认值、容量解析、store、`createAgent` | catalog, core, platform, protocol, providers, storage, tools, workspaces                                  |
 | `apps/cli`        | 一次性命令行：命令词表与计数见[生成事实](#facts)                     | shared, core, mcp, protocol, providers, resources, storage, tools                                         |
-| `apps/agent-host` | 长驻 Host：JSONL(stdin 或 TCP) RPC 服务端 + 任务调度器               | shared, client, core, platform, protocol, providers, resources, storage, tools, workspaces                |
+| `apps/agent-host` | 长驻 Host：JSONL(stdin) RPC 服务端 + 任务调度器                      | shared, client, core, platform, protocol, providers, resources, storage, tools, workspaces                |
 | `apps/desktop`    | Electron 主进程 + preload + 渲染层；自持一个 Host 子进程             | carrier, client, core, maintenance, mcp, office, platform, protocol, providers, resources, storage, tools |
 
 `packages/carrier` 是这套架构的接缝：`CarrierService` 是「面向任何界面层的客户端状态机」，它回答「界面该看到什么」，所有答案都来自 Host 应答；包里不允许出现 Electron、DOM 或 `apps/` 引用（由 `tests/carrier.test.ts` 从源码文本上钉住），因此另一种界面层可以复用它而不必改动内核。
@@ -120,7 +120,7 @@ CarrierService ── AgentHostClient ── JSONL ──► apps/agent-host（�
                                     界面看到的一切 ← 日志投影
 ```
 
-CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `createAgent()` 直接跑内核，并明确拒绝 `--listen`（提示改用 Agent Host）。
+CLI 走另一条路：它不经 `CarrierService`，而是在自己进程里 `createAgent()` 直接跑内核。
 
 ### 关键装配
 
@@ -541,17 +541,15 @@ JS 钩子必须由人显式指定模块路径（`--hooks <module>` 或 `YUANTU_H
 
 ### CLI
 
-`apps/cli/main.ts` 是单文件入口。需要模型凭据的命令只有五个（`run`、`resume`、`plan`、`plan-execute`、`task-retry`），其余命令与维护命令都不需要；命令词表、计数与维护命令见[生成事实](#facts)，真源是 `apps/shared/cli-commands.ts`——帮助文本的 `Usage:` 段由那份清单渲染，`docs:check` 会核对上面这句里点名的命令，所以两者不可能各说一套。交互模式下**进度全部走 stderr**，stdout 只留答复本身，因此它可以安全地接管道；`--json` 模式把事件、结果与计划都变成 JSONL。它明确拒绝 `--listen`：要对外服务请用 Agent Host。
+`apps/cli/main.ts` 是单文件入口。需要模型凭据的命令只有五个（`run`、`resume`、`plan`、`plan-execute`、`task-retry`），其余命令与维护命令都不需要；命令词表、计数与维护命令见[生成事实](#facts)，真源是 `apps/shared/cli-commands.ts`——帮助文本的 `Usage:` 段由那份清单渲染，`docs:check` 会核对上面这句里点名的命令，所以两者不可能各说一套。交互模式下**进度全部走 stderr**，stdout 只留答复本身，因此它可以安全地接管道；`--json` 模式把事件、结果与计划都变成 JSONL。
 
 CLI 与 Host 的 `main()` 第一行都做环境检查：**认不出的 `YUANTU_*` 变量与取值不合法的已知变量都会被列出并拒绝启动**，拼错的名字给出最近似名建议，且一次报出全部问题。库代码（`packages/core`、`packages/client`）不做这项检查——嵌入方进程里可能有别的 `YUANTU_*` 变量，判断环境是否合法是宿主的决定。
 
 ### Agent Host
 
-长驻进程，在 stdin/stdout 或 TCP 上提供 JSONL JSON-RPC。报文只有四种形状：请求 `{id, method, params}`、成功 `{id, result}`、失败 `{id, error}`、事件 `{event}`；此外还有**没有 id 的 error**，表示「拒绝这条链路」而不是回答某个请求。方法数与它的真源见[生成事实](#facts)：下表按域分组，每一行都必须与 `HostMethods` 的方法集合一致，`docs:check` 会逐个核对（多列、漏列、拼错都会失败）。
+长驻进程，只在 stdin/stdout 上提供 JSONL JSON-RPC，由启动它的载体独占；载体关闭 stdin 时 Host 随之退出。报文只有四种形状：请求 `{id, method, params}`、成功 `{id, result}`、失败 `{id, error}`、事件 `{event}`；此外还有**没有 id 的 error**，表示「拒绝这条链路」而不是回答某个请求。方法数与它的真源见[生成事实](#facts)：下表按域分组，每一行都必须与 `HostMethods` 的方法集合一致，`docs:check` 会逐个核对（多列、漏列、拼错都会失败）。
 
-桌面默认使用 stdio，不需要 TCP 凭据。显式启用 `--listen [host:]port` 时，只允许 IPv4 回环地址 `127.x.x.x`，必须从可信启动环境设置 `YUANTU_HOST_TOKEN`；密钥接受 32–512 个 ASCII 字母、数字、下划线或连字符，建议使用随机生成的 32 字节值。未配置密钥或尝试绑定非回环地址时，在打开数据库前拒绝启动。
-
-TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCarrier({ transport, authToken })` 显式传入相同密钥。首条请求必须是带 `params.authToken` 的 `host.info`；Host 验证并移除密钥后才接入普通 RPC，失败连接不会取得会话控制权。握手帧上限 4 KiB、等待上限 5 秒、最多 8 条待认证连接；认证后单请求帧上限 16 MiB，包含没有换行符的未完成帧。此 TCP 入口不提供直接远程监听或 TLS，远程使用需由外部受保护通道转发到回环地址。
+Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子进程；自行启动 Host 的测试或嵌入方把该进程交给 `processTransport(child)`，再传给 `AgentHostClient({ transport })` 或 `connectedCarrier({ transport })`，此时客户端不负责重启它。单请求帧上限 16 MiB，包含没有换行符的未完成帧。
 
 | 域         | 方法                                                                                                                                                                                                       |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -622,13 +620,12 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 
 <!-- settings:start -->
 
-**由代码算出**：共 74 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 73 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
 | --- | --- | --- |
 | `YUANTU_API_KEY` | `string` | 模型 API 密钥 |
-| `YUANTU_HOST_TOKEN` | `32–512 ASCII letters, digits, _ or -` | TCP Host 认证密钥（仅启用 --listen 时必需） |
 | `YUANTU_BASE_URL` | `string` | 模型端点 |
 | `YUANTU_MODEL` | `string` | 模型 ID |
 | `YUANTU_PROTOCOL` | `anthropic` / `openai` / `openai-responses` | 协议适配器 |
@@ -730,7 +727,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
 | 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
 | 桌面冒烟套件 | 22 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 338 个 | `tests/*.test.ts` |
+| 行为测试文件 | 337 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |
@@ -765,7 +762,7 @@ TCP 客户端通过 `AgentHostClient({ transport, authToken })` 或 `connectedCa
 - **子代理默认只往下走一层**（`maxDepth: 1`），且不会比父运行活得更久——要拿结果就必须在运行结束前 collect。
 - **运行时不变量与钩子都不是沙箱**：同步的可信 JS 与忽略取消信号的异步钩子需要硬终止保证时，应由嵌入方放进 worker。
 - **guest 脚本使用独立 Node 进程**：`run_code` 与 `workflow` 复用 host 与 Windows/macOS 原生执行后端，启动时先核对 runner 协议及 Node 版本，再发送脚本。内部 Worker 的 V8 堆上限 256MB，console 输出 8KB，RPC 帧及总输出有上限。每条工具 RPC 经 catalog 校验、原有审批和并发管线；失联保留已知收据，未确认效果阻止自动续跑。程序**不获得工具之外的能力**：`tools.*`、`console`、`agent()`/`parallel()` 等表面及其返回的 Promise 和 Error 都在 VM 上下文内部构造，跨边界只传字符串、数字和布尔值，桥接函数没有原型链，因此 `tools.read_file.constructor('return process')()` 这类写法拿到的是被禁止字符串生成代码的上下文内 `Function`，而不是 Worker 的 `process`；联网只能经 `web_fetch` 等需审批的工具，读文件只能经遵守凭据排除规则的文件工具。这条边界之下还有两层纵深防御：Worker realm 在程序启动前删除 `fetch`、`WebSocket`、`EventSource`；runner 进程的 `--allow-fs-read` 只放行 runner 自身目录，入口在创建 Worker 前切换到该目录（Node 的 Permission Model 会把 Worker 的工作目录隐式加入可读范围，而 runner 是在工作区里启动的）。以上都依赖 V8 realm 隔离，不能替代对抗恶意代码的 OS 沙箱：直接效果最终仍取决于所选 OS backend；Windows 仍是部分写入边界，host 不提供 OS 隔离。旧容器入口已移除，不能回退 host。独立 runner 的构建产物由 `scripts/build-program-runner.mjs` 生成，验收边界需在目标平台实测。
-- **CLI 不是 Host**：它不监听端口，`--listen` 会被明确拒绝。
+- **CLI 不是 Host**：它在自己进程里运行内核，不提供 JSON-RPC 服务。
 - **数据保护由存储层负责**：旧库迁移前自动备份，桌面不再调度每日备份，也不自动恢复。较新 schema 的库仍拒绝打开；维护命令复用离线校验与保全流程。恢复后主对话不自动续跑，已保存的定时/触发任务和目标唤醒仍按现有规则运行。
 - 环境检查只做在 CLI 与 Host，库代码不做——嵌入方进程里可能存在别的 `YUANTU_*` 变量。
 

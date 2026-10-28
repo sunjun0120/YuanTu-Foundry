@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import type { Socket } from 'node:net';
 import { HOST_RESPONSE_FRAME_BYTES } from '../protocol/host-wire.ts';
 
 /**
@@ -8,20 +7,20 @@ import { HOST_RESPONSE_FRAME_BYTES } from '../protocol/host-wire.ts';
  *
  * The client began life as "spawn a child and talk JSONL over its stdio", which welded three separate
  * concerns together: process supervision, byte-stream framing, and the request/event protocol. Only the
- * first two are carrier-specific — a desktop loads a Host as a child process, while a browser cannot spawn
- * anything and has to reach an already-running Host over a socket. Naming the seam is what makes the second
- * carrier a matter of writing one of these rather than a second client.
+ * first two are carrier-specific — the desktop spawns and supervises its Host, while a test or an embedder may
+ * start the Host itself and only hand over the link. Naming the seam is what makes that a matter of writing
+ * one of these rather than a second client.
  *
  * A transport is deliberately dumb: it moves whole lines and reports that the far side is gone. It knows
  * nothing about requests, ids, redaction or status, which is why `AgentHostClient` is unchanged in behaviour
- * whether it holds a child process or a socket.
+ * whichever transport it holds.
  */
 export interface HostTransportExit {
   code: number | null;
   signal: NodeJS.Signals | null;
 }
 export interface HostTransport {
-  /** Named in failure messages: `process 1234`, `127.0.0.1:43121`, an in-memory pair. */
+  /** Named in failure messages: `process 1234`, an in-memory pair. */
   readonly label: string;
   /** The OS process behind the link, when there is one. Supervision names the process that died. */
   readonly pid: number | undefined;
@@ -37,7 +36,7 @@ export interface HostTransport {
   onError(listener: (error: Error) => void): () => void;
   /** The far side is gone. Fires once. */
   onExit(listener: (exit: HostTransportExit) => void): () => void;
-  /** Ask it to stop gracefully (close stdin, half-close a socket). */
+  /** Ask it to stop gracefully (close stdin). */
   end(): void;
   /** Stop it now, after the graceful path has timed out. */
   kill(): void;
@@ -196,50 +195,6 @@ class StdioTransport extends TransportBase implements HostTransport {
     this.child.stderr.destroy();
   }
 }
-class SocketTransport extends TransportBase implements HostTransport {
-  private socket: Socket;
-  private framer: ReturnType<typeof lineFramer>;
-  constructor(socket: Socket, maxFrameBytes: number) {
-    super();
-    this.socket = socket;
-    this.framer = lineFramer({
-      maxFrameBytes,
-      onLine: (line) => this.announceLine(line),
-      onError: (error) => this.announceError(error),
-    });
-    socket.on('data', (chunk: Buffer) => this.framer.write(chunk));
-    let failed = false;
-    socket.on('error', (error: Error) => {
-      failed = true;
-      this.announceDiagnostic(error.message);
-      this.announceError(error);
-    });
-    // 'close' rather than 'end': a half-closed peer that never finishes its side must still settle.
-    socket.once('close', (hadError) =>
-      this.announceExit({ code: failed || hadError ? null : 0, signal: null }),
-    );
-  }
-  get label(): string {
-    return this.socket.remoteAddress
-      ? `${this.socket.remoteAddress}:${this.socket.remotePort}`
-      : 'Agent Host socket';
-  }
-  get pid(): undefined {
-    return undefined;
-  }
-  get writable(): boolean {
-    return !this.socket.destroyed && this.socket.writable;
-  }
-  send(line: string): boolean {
-    return this.socket.write(line);
-  }
-  end(): void {
-    this.socket.end();
-  }
-  kill(): void {
-    this.socket.destroy();
-  }
-}
 export interface StdioTransportOptions {
   nodePath: string;
   hostPath: string;
@@ -271,10 +226,17 @@ export function stdioTransport(options: StdioTransportOptions): HostTransport {
     options.onSpawnError,
   );
 }
-/** A connection somebody else accepted — a browser's WebSocket bridge, a TCP socket, a test pair. */
-export function socketTransport(
-  socket: Socket,
+/**
+ * A Host process somebody else started, reached through its stdio.
+ *
+ * The client does not supervise it: there is no restart, and stopping the client ends the link the same way the
+ * process's own owner would (closing stdin). A test that needs the Host's stderr or exit, or an embedder that
+ * launches the Host its own way, holds the child and hands this to `connectedCarrier`. On POSIX, spawn it
+ * `detached` like `stdioTransport` does, so `kill` can end its process group.
+ */
+export function processTransport(
+  child: ChildProcessWithoutNullStreams,
   maxFrameBytes = HOST_RESPONSE_FRAME_BYTES,
 ): HostTransport {
-  return new SocketTransport(socket, maxFrameBytes);
+  return new StdioTransport(child, maxFrameBytes, () => {});
 }

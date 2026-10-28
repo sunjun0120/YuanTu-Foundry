@@ -80,11 +80,10 @@ export function installSignals(shutdown: () => void): () => void {
 /**
  * Own a carrier for as long as it lasts, and unwind everything when it goes away.
  *
- * The Host is owned by the carrier that started it: stdin EOF, a socket that dropped, and a signal all end the
- * same way, which is why the shutdown path is entered from a `finally` rather than from each of them. The
- * signal handlers are installed *before* the carrier is attached, because with `--listen` the wait for a client
- * is unbounded and an interrupt during it has to unwind gracefully rather than kill a process that already
- * holds a database and a pty.
+ * The Host is owned by the carrier that started it: stdin EOF and a signal end the same way, which is why the
+ * shutdown path is entered from a `finally` rather than from each of them. The signal handlers are installed
+ * *before* the carrier is attached, so an interrupt at any point unwinds gracefully rather than killing a
+ * process that already holds a database and a pty.
  *
  * The teardown order is the rest of the contract and must not be rearranged. In-flight requests are awaited
  * before anything they are using closes; the signal listeners are removed before the long unwinding starts, so a
@@ -112,7 +111,7 @@ export async function serveHost(ctx: HostContext): Promise<void> {
   try {
     // Started only once the read loop is live, so a trigger that fires immediately can dispatch
     // through the same path as any other request.
-    const input = await ctx.carrier.attach();
+    const input = ctx.carrier.attach();
     // Read through the one reader of environment settings, and compare against the boolean it returns:
     // `YUANTU_WORKFLOWS` is declared a boolean, so testing for the *string* `'off'` (which the environment
     // validator rejects outright) meant `YUANTU_WORKFLOWS=false` started the scheduler rather than stopping it.
@@ -156,10 +155,9 @@ export async function serveHost(ctx: HostContext): Promise<void> {
     clearInterval(reaper);
     stopReclaim?.();
     await release(shutdown);
+    // Every answer is written now, including those of the runs the shutdown aborted; stdout is flushed by the
+    // exit itself.
     await Promise.allSettled([...ctx.tasks]);
-    // Every answer is written now, including those of the runs the shutdown aborted; a socket peer gets them
-    // before the connection ends (stdout is flushed by the exit itself).
-    await release(() => ctx.carrier.drain());
     // A failed release must not skip the remaining resources, but it must not turn shutdown into success.
     await residentCleanup.get(ctx)?.catch((error: unknown) => {
       residentFailed = true;

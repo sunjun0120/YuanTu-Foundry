@@ -7,8 +7,7 @@ import type { AgentEvent, RunResult } from '../packages/protocol/index.ts';
 import { emptyStatistics } from '../packages/protocol/statistics.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { setBackgroundPolicy, backgroundState } from '../packages/core/background-deliveries.ts';
-import { listeningHost, connectClient, connectSocket } from './listening-host-fixture.ts';
-import { socketTransport } from '../packages/client/host-transport.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { until } from './wait-fixture.ts';
 
@@ -115,7 +114,7 @@ test('cold automatic readiness waits for policy restore and preserves unselected
     version: 1 as const,
     rules: [{ effect: 'deny' as const, kind: 'write' as const }],
   };
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     try {
       ids = [store.create(path.dirname(file)).id, store.create(path.dirname(file)).id];
@@ -128,10 +127,8 @@ test('cold automatic readiness waits for policy restore and preserves unselected
       store.close();
     }
   });
-  const socket = await connectSocket(host.port);
   const client = new AgentHostClient({
-    transport: socketTransport(socket),
-    authToken: host.authToken,
+    transport: host.transport(),
     deferAutomatic: true,
   });
   t.after(() => client.stop().catch(() => {}));
@@ -158,7 +155,7 @@ test('normal carrier EOF joins automatic cancellation and persists terminal rece
   const url = await httpFixture(t, () => {
     requests++;
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     try {
       sessionId = store.create(path.dirname(file)).id;
@@ -167,11 +164,11 @@ test('normal carrier EOF joins automatic cancellation and persists terminal rece
       store.close();
     }
   });
-  const { client, socket } = await connectClient(host);
+  const { client, transport } = await connectClient(host);
   await client.start();
   await until(() => requests === 1);
   const exited = new Promise<number | null>((r) => host.child.once('exit', r));
-  socket.end();
+  transport.end();
   assert.equal(await exited, 0);
   assert.doesNotMatch(host.stderr(), /database is not open/);
   const store = new SessionStore(host.dbPath);
@@ -192,7 +189,7 @@ test('controller Stop aborts the real automatic provider and pauses future wakes
     requests++;
     res.once('close', () => (closed = true));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     try {
       sessionId = store.create(path.dirname(file)).id;
@@ -201,10 +198,8 @@ test('controller Stop aborts the real automatic provider and pauses future wakes
       store.close();
     }
   });
-  const socket = await connectSocket(host.port);
   const client = new AgentHostClient({
-    transport: socketTransport(socket),
-    authToken: host.authToken,
+    transport: host.transport(),
     deferAutomatic: true,
   });
   t.after(() => client.stop().catch(() => {}));
@@ -244,7 +239,7 @@ test('legacy automatic opt-in without authority waits for explicit policy restor
     requests++;
     sendFrames(res, frames('Restored'));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (file) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (file) => {
     const store = new SessionStore(file);
     try {
       sessionId = store.create(path.dirname(file)).id;

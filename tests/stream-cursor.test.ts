@@ -20,7 +20,7 @@ import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry, HookRegistry } from '../packages/tools/registry.ts';
 import { SessionController } from '../packages/client/session-controller.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
-import { connectClient, listeningHost } from './listening-host-fixture.ts';
+import { connectClient, startHost } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import type { AgentEvent, Provider } from '../packages/protocol/index.ts';
 import { tempRoot, storeFixture } from './temp-fixture.ts';
@@ -98,7 +98,7 @@ test('every live frame carries the log position it is ordered against', async (t
 });
 
 test('a session can be replayed from a cursor, and only what is missing comes back', async (t) => {
-  const host = await listeningHost(t, {});
+  const host = await startHost(t, {});
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
@@ -152,7 +152,7 @@ test('a session can be replayed from a cursor, and only what is missing comes ba
 });
 
 test('a client that missed a fact finds out and catches up without the Host restarting', async (t) => {
-  const host = await listeningHost(t, {});
+  const host = await startHost(t, {});
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
@@ -223,7 +223,7 @@ test('a cursor is a position in the log, and it only ever moves forward', async 
 });
 
 test('a client that cannot check assumes a gap rather than reporting a level view', async (t) => {
-  const host = await listeningHost(t, {});
+  const host = await startHost(t, {});
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
@@ -278,7 +278,7 @@ test('a catch-up during a live run leaves the run alone', async (t) => {
     // retryable (packages/protocol/retry.ts), which turns a one-request test into a retry ladder.
     return held.then(() => sendFrames(res, frames('late answer')));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();
@@ -334,7 +334,7 @@ test('the success assertions above are not vacuous: a run refused by the endpoin
       }),
     );
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => undefined));
   await client.start();

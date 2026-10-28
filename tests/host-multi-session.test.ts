@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { ServerResponse } from 'node:http';
 import path from 'node:path';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { isMachineContext } from '../packages/protocol/context.ts';
 
@@ -47,7 +47,7 @@ async function sessions(t: Parameters<typeof httpFixture>[0], count: number, env
   let ids: string[] = [];
   const markers = Array.from({ length: count }, (_, index) => `marker-${index}`);
   const endpoint = await heldEndpoint(t, markers);
-  const host = await listeningHost(
+  const host = await startHost(
     t,
     { YUANTU_BASE_URL: endpoint.url, YUANTU_SESSION_TITLES: '0', ...env },
     (file) => {

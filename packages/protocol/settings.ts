@@ -1,5 +1,4 @@
 import { DEFAULT_MAX_OUTPUT_TOKENS } from './limits.ts';
-import { hostAuthTokenProblem } from './host-auth.ts';
 import { assertPrunePolicyFits } from './prune-policy.ts';
 import { BUILTIN_PROTOCOLS } from './index.ts';
 import {
@@ -280,12 +279,6 @@ export interface EnvironmentSpec {
  */
 export const ENVIRONMENT = {
   YUANTU_API_KEY: { kind: 'string', description: '模型 API 密钥' },
-  YUANTU_HOST_TOKEN: {
-    kind: 'string',
-    validate: hostAuthTokenProblem,
-    shape: '32–512 ASCII letters, digits, _ or -',
-    description: 'TCP Host 认证密钥（仅启用 --listen 时必需）',
-  },
   YUANTU_BASE_URL: { kind: 'string', description: '模型端点' },
   YUANTU_MODEL: { kind: 'string', description: '模型 ID' },
   YUANTU_PROTOCOL: {

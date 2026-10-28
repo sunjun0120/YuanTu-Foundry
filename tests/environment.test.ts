@@ -22,7 +22,7 @@ import {
   resolveRunLimits,
 } from '../packages/protocol/settings.ts';
 import { readConfig } from '../packages/providers/config.ts';
-import { parseArgs, parseListen } from '../apps/shared/args.ts';
+import { parseArgs } from '../apps/shared/args.ts';
 import { projectRoot } from './process-fixture.ts';
 import { pausedSkip } from './product-scope-skip.ts';
 
@@ -299,28 +299,6 @@ test('every YUANTU_* name the project reads is registered', async () => {
     [],
     'a setting read anywhere in the project must be registered, or the environment check would refuse a key the code needs',
   );
-});
-
-test('the --listen rule is one function, and the host-less form means loopback', () => {
-  /**
-   * The rule used to exist twice — validated by `parseArgs`, re-derived by the Host carrier that binds it — and
-   * the two disagreed on the documented `[host:]port` spelling with the host omitted, which killed the Host at
-   * startup. These are the cases that pin the shared answer, including the one the carrier got wrong.
-   */
-  assert.deepEqual(parseListen(':8080'), { host: '127.0.0.1', port: 8080 });
-  assert.deepEqual(parseListen('0'), { host: '127.0.0.1', port: 0 });
-  assert.deepEqual(parseListen('127.0.0.1:0'), { host: '127.0.0.1', port: 0 });
-  assert.deepEqual(parseListen(' localhost:43120 '), { host: 'localhost', port: 43120 });
-  // The port is the part that is range-checked, and the whole value has to be the port: these are the shapes a
-  // dropped colon or a bad paste produces.
-  for (const bad of ['', ':', ':abc', 'not-a-port', '65536', 'host:', '1:2:3', '-1'])
-    assert.throws(
-      () => parseListen(bad),
-      /--listen must be \[host:\]port/,
-      `expected ${bad} to be refused`,
-    );
-  assert.throws(() => parseArgs(['--listen', 'not-a-port']), /--listen must be \[host:\]port/);
-  assert.equal(parseArgs(['--listen', ':0']).options.listen, ':0');
 });
 
 test('a cache mode inherited from Object.prototype is not a mode', () => {

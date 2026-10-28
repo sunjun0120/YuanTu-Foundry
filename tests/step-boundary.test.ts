@@ -16,7 +16,7 @@ import { HookRegistry, ToolRegistry } from '../packages/tools/registry.ts';
 import { foldSteps, inFlightStep, STEP_END_REASONS } from '../packages/protocol/steps.ts';
 import type { StepEndReason, StepRecord } from '../packages/protocol/steps.ts';
 import type { ModelResponse, Provider } from '../packages/protocol/index.ts';
-import { connectClient, listeningHost } from './listening-host-fixture.ts';
+import { connectClient, startHost } from './host-process-fixture.ts';
 import { httpFixture } from './http-fixture.ts';
 import { storeFixture } from './temp-fixture.ts';
 
@@ -248,7 +248,7 @@ test('a run whose process died leaves one open step, and the interruption names 
     );
     // Deliberately never ends: the run stays in this step until the process is gone.
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();

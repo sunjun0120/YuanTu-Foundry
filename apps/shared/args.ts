@@ -6,14 +6,6 @@ export interface Options {
   hooks?: string;
   workspace?: string;
   db?: string;
-  /**
-   * `[host:]port` to serve the JSONL protocol on instead of stdin/stdout.
-   *
-   * A browser cannot spawn or pipe into a Host process, so a second carrier needs a way to reach one that is
-   * already running. The wire format is unchanged — same protocol version, same framing — because only the
-   * carrier changes.
-   */
-  listen?: string;
   /** Path to a JSON completion contract, read and normalized before any model request is made. */
   completionSpec?: string;
   json: boolean;
@@ -126,23 +118,6 @@ function checkNumber(name: string, field: string, value: number): number {
     throw new Error(`${name} must be at most ${ceiling}`);
   return value;
 }
-/**
- * The one rule for `--listen`, shared with the carrier that binds it.
- *
- * It used to be written twice — validated here, re-parsed in `apps/agent-host/carrier.ts` — and the two
- * disagreed on the documented `[host:]port` spelling with the host left out. This one accepted `:8080`
- * (the host group is `*`, and only the port is range-checked), while the carrier split on the last colon,
- * saw the separator at index 0, took the whole string as the port and bound `Number(':8080')` — `NaN`, which
- * throws inside `listen()`. A form the parser accepts therefore killed the Host at startup. One parser
- * removes the class instead of the instance.
- */
-export function parseListen(value: string): { host: string; port: number } {
-  const match = /^(?:([^:]*):)?(\d{1,5})$/.exec(value.trim());
-  const port = match ? Number(match[2]) : -1;
-  if (!match || !Number.isSafeInteger(port) || port < 0 || port > 65_535)
-    throw new Error('--listen must be [host:]port');
-  return { host: match[1] || '127.0.0.1', port };
-}
 export function parseArgs(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -174,7 +149,6 @@ export function parseArgs(
     | 'permissionPolicy'
     | 'taskId'
     | 'hooks'
-    | 'listen'
     | 'completionSpec'
     | 'subagentWorkspace'
   > = {
@@ -183,7 +157,6 @@ export function parseArgs(
     '--permission-policy': 'permissionPolicy',
     '--task-id': 'taskId',
     '--hooks': 'hooks',
-    '--listen': 'listen',
     /**
      * A completion contract, as a path to a JSON file.
      *
@@ -261,13 +234,6 @@ export function parseArgs(
       else options[numbers[arg]!] = checkNumber(arg, numbers[arg]!, Number(value)) as never;
     } else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`);
     else positionals.push(arg);
-  }
-  if (options.listen !== undefined) {
-    // Parsed here rather than passed through, so a mistyped address fails at startup instead of the first
-    // time a carrier tries to connect. Port 0 asks the OS for a free port, which is what a test or a
-    // per-user desktop wants; the chosen port is reported on stdout. The carrier binds through the same
-    // function, which is what keeps "accepted here" and "bindable there" the same statement.
-    parseListen(options.listen);
   }
   if (options.autoCompactTokens !== undefined && options.maxContextTokens === undefined)
     throw new Error('Auto-compact threshold requires a context window');

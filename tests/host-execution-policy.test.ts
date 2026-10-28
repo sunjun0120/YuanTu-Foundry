@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
 import { permissionPolicyForMode } from '../apps/desktop/permission-settings.ts';
 import { nativeSkip } from './native-platform.ts';
 
 test('the Host advertises and echoes the file and network policy it was given', async (t) => {
-  const host = await listeningHost(t, { YUANTU_SANDBOX: 'host' });
+  const host = await startHost(t, { YUANTU_SANDBOX: 'host' });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   const info = await client.start();
@@ -27,7 +27,7 @@ test('the Host advertises and echoes the file and network policy it was given', 
 });
 
 test('unsupported and retired selections are rejected before changing the Host selection', async (t) => {
-  const host = await listeningHost(t, { YUANTU_SANDBOX: 'host' });
+  const host = await startHost(t, { YUANTU_SANDBOX: 'host' });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -68,7 +68,7 @@ test(
           ]),
         );
     });
-    const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
     const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
@@ -140,7 +140,7 @@ test(
           ]),
         );
     });
-    const host = await listeningHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_SANDBOX: 'native', YUANTU_BASE_URL: url });
     const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
@@ -207,7 +207,7 @@ test(
           ]),
         );
     });
-    const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
     const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();
@@ -267,7 +267,7 @@ test('the Host selects the visible session policy without changing another sessi
         ]),
       );
   });
-  const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -316,7 +316,7 @@ test(
           ]),
         );
     });
-    const host = await listeningHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
+    const host = await startHost(t, { YUANTU_SANDBOX: 'host', YUANTU_BASE_URL: url });
     const { client } = await connectClient(host);
     t.after(() => client.stop().catch(() => {}));
     await client.start();

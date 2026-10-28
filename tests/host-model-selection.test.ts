@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ServerResponse } from 'node:http';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 import { HostModelRuntime } from '../apps/agent-host/model-runtime.ts';
 import { SubAgentResidency } from '../packages/core/residency.ts';
 import { storeFixture } from './temp-fixture.ts';
@@ -13,7 +13,7 @@ test('live model selection preserves the Host and isolates sessions, credentials
     requests.push({ model: body.model, key: headers['x-api-key'], output: body.max_tokens });
     sendFrames(res, frames(`reply-${body.model}`));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   host.beforeStop(() => client.stop());
   await client.start();
@@ -81,7 +81,7 @@ test('an active run keeps its admitted configuration across subsequent model cal
       arrived();
     } else sendFrames(res, frames('finished'));
   });
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   host.beforeStop(() => client.stop());
   await client.start();
@@ -112,7 +112,7 @@ test('an active run keeps its admitted configuration across subsequent model cal
 });
 
 test('invalid model catalogs cannot replace the active catalog or alter execution policy', async (t) => {
-  const host = await listeningHost(t, {});
+  const host = await startHost(t, {});
   const { client } = await connectClient(host);
   host.beforeStop(() => client.stop());
   await client.start();

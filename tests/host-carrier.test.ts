@@ -1,51 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { connect, Socket } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { AgentHostClient, HostDisconnectedError } from '../packages/client/host-client.ts';
-import { lineFramer, socketTransport } from '../packages/client/host-transport.ts';
+import { HostDisconnectedError } from '../packages/client/host-client.ts';
+import { lineFramer } from '../packages/client/host-transport.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { frames, httpFixture, sendFrames } from './http-fixture.ts';
-import { connectClient, listeningHost } from './listening-host-fixture.ts';
+import { connectClient, startHost } from './host-process-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
 
-test('socket connection errors reach transport consumers and cannot look like clean exits', async () => {
-  const socket = new Socket();
-  const transport = socketTransport(socket);
-  const failure = new Error('fixture ECONNRESET');
-  const errors: Error[] = [];
-  transport.onError((error) => errors.push(error));
-  const closed = new Promise<{ code: number | null }>((resolve) => transport.onExit(resolve));
-  socket.destroy(failure);
-  assert.notEqual((await closed).code, 0);
-  assert.deepEqual(errors, [failure]);
-});
-
-// ---- a carrier that cannot spawn a process ----
+// ---- a carrier that did not start the Host ----
 //
 // The client was "spawn a child and pipe JSONL through its stdio", which welded process supervision, byte
-// framing and the request protocol into one thing. A browser can do none of the first two: it cannot spawn a
-// process, and the Host it needs to reach is already running somewhere. These tests pin the split — the same
-// client class, the same protocol version, the same framing, over a link somebody else opened — and the Host's
-// side of it (`--listen`), including what it refuses.
+// framing and the request protocol into one thing. These tests pin the split — the same client class, the same
+// protocol version, the same framing, over a link to a Host somebody else started — and that stdio is the only
+// carrier the Host serves.
 
 const hostPath = path.resolve('apps/agent-host/main.ts');
 
-test('a client with no process of its own drives a Host over a socket', async (t) => {
+test('the Host serves only stdio and refuses a listening address', async (t) => {
+  const root = await tempRoot(t, 'yuantu-carrier-listen-');
+  const child = spawn(
+    process.execPath,
+    [hostPath, '--workspace', root, '--listen', '127.0.0.1:0'],
+    {
+      cwd: root,
+      env: { ...process.env, YUANTU_WORKFLOWS: 'false' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  let stderr = '';
+  child.stderr!.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
+  const code = await new Promise<number | null>((resolve) =>
+    child.once('exit', (value) => resolve(value)),
+  );
+  assert.notEqual(code, 0);
+  assert.match(stderr, /Unknown option: --listen/);
+});
+
+test('a client that did not start the Host drives it over the link it was handed', async (t) => {
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('ready')));
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   const info = await client.start();
   assert.equal(info.runtime, 'yuantu');
   assert.equal(info.protocolVersion, 1);
   assert.equal(info.workspace, host.root);
-  // No child process to name: the pid belongs to whoever started the Host, not to this client.
-  assert.equal(client.pid, undefined);
+  // The process belongs to whoever started it: this client reports its pid but will not restart it.
+  assert.equal(client.pid, host.child.pid);
   const session = await client.request('session.create', {});
   assert.ok(session.id);
   const sessions = await client.request('session.list', {});
@@ -58,9 +61,9 @@ test('a client with no process of its own drives a Host over a socket', async (t
   assert.equal(result.text, 'ready');
 });
 
-test('live events reach a socket carrier the same way they reach stdio', async (t) => {
+test('live events reach a carrier that did not start the Host', async (t) => {
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('done')));
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url });
+  const host = await startHost(t, { YUANTU_BASE_URL: url });
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -74,38 +77,11 @@ test('live events reach a socket carrier the same way they reach stdio', async (
   assert.ok(seen.includes('run.finished'), seen.join(','));
 });
 
-test('a second carrier is refused rather than sharing one Host', async (t) => {
-  const host = await listeningHost(t, {});
-  const { client } = await connectClient(host);
-  t.after(() => client.stop().catch(() => {}));
-  await client.start();
-  // The Host holds the approvals, the active runs and the workspace lock for the sessions it serves, so a
-  // second client is told the truth about that instead of quietly sharing them.
-  const second = connect({ host: '127.0.0.1', port: host.port });
-  const refusal = await new Promise<string>((resolve) => {
-    let buffer = '';
-    second.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      if (buffer.includes('\n')) resolve(buffer);
-    });
-    second.once('close', () => resolve(buffer));
-  });
-  second.destroy();
-  assert.match(refusal, /already has a connected client/);
-  // A client that insists anyway settles with the Host's own words rather than a parse error.
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const socket = connect({ host: '127.0.0.1', port: host.port });
-    await new Promise<void>((resolve) => socket.once('connect', () => resolve()));
-    const rejected = new AgentHostClient({ transport: socketTransport(socket), env: {} });
-    await assert.rejects(rejected.start(), /already has a connected client/);
-  }
-});
-
-test('a large reply is framed on a socket exactly as it is on stdio', async (t) => {
+test('a large reply is framed as one line without mojibake', async (t) => {
   const url = await httpFixture(t, (_, res) => sendFrames(res, frames('ok')));
   // The transcript is seeded before the Host starts, because the Host owns the database once it is up.
   const seeded: string[] = [];
-  const host = await listeningHost(t, { YUANTU_BASE_URL: url }, (dbPath) => {
+  const host = await startHost(t, { YUANTU_BASE_URL: url }, (dbPath) => {
     const store = new SessionStore(dbPath);
     try {
       const session = store.create(path.dirname(dbPath));
@@ -133,22 +109,26 @@ test('a large reply is framed on a socket exactly as it is on stdio', async (t) 
   assert.match(serialized, /199: /);
 });
 
-test('a carrier that disappears settles pending work as a disconnection', async (t) => {
-  const host = await listeningHost(t, {});
-  const { client, socket } = await connectClient(host);
+test('a Host that disappears settles pending work as a disconnection', async (t) => {
+  const host = await startHost(t, {});
+  const { client } = await connectClient(host);
   await client.start();
   const pending = client.request('session.list', {});
-  socket.destroy();
+  host.child.kill('SIGKILL');
   await assert.rejects(pending, (error: unknown) => {
     assert.ok(error instanceof HostDisconnectedError, String(error));
     return true;
   });
   assert.equal(client.status, 'failed');
-  assert.equal(client.recoverable, false, 'a socket client has no process to restart');
+  assert.equal(
+    client.recoverable,
+    false,
+    'a client that did not start the Host does not restart it',
+  );
 });
 
-test('stopping a socket carrier stops the Host with it', async (t) => {
-  const host = await listeningHost(t, {});
+test('stopping the carrier stops the Host with it', async (t) => {
+  const host = await startHost(t, {});
   const { client } = await connectClient(host);
   await client.start();
   const exited = new Promise<number | null>((resolve) =>
@@ -156,13 +136,13 @@ test('stopping a socket carrier stops the Host with it', async (t) => {
   );
   await client.stop();
   assert.equal(client.status, 'stopped');
-  // A Host is owned by the carrier that attached to it: the connection ending is the same event as stdin
-  // EOF, so the process is expected to go away on its own rather than linger unowned.
+  // A Host is owned by the carrier that attached to it: stdin EOF means the process goes away on its own rather
+  // than lingering unowned.
   assert.equal(await exited, 0);
 });
 
-test('a Host that only listens is a real Host: the same dispatch answers on it', async (t) => {
-  const host = await listeningHost(t, {});
+test('a Host started elsewhere is a real Host: the same dispatch answers on it', async (t) => {
+  const host = await startHost(t, {});
   const { client } = await connectClient(host);
   t.after(() => client.stop().catch(() => {}));
   await client.start();
@@ -173,70 +153,6 @@ test('a Host that only listens is a real Host: the same dispatch answers on it',
   assert.equal(health.activeRuns, 0);
   assert.ok(health.maxActiveRuns >= 1);
   await assert.rejects(client.request('session.rename', { sessionId: 'nope', title: 'x' }));
-});
-
-test('the Host refuses an address it cannot parse before it serves anything', async (t) => {
-  const root = await tempRoot(t, 'yuantu-carrier-bad-');
-  const child = spawn(process.execPath, [hostPath, '--workspace', root, '--listen', 'not-a-port'], {
-    cwd: root,
-    env: { ...process.env, YUANTU_WORKFLOWS: 'false' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stderr = '';
-  child.stderr!.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
-  const code = await new Promise<number | null>((resolve) =>
-    child.once('exit', (value) => resolve(value)),
-  );
-  assert.notEqual(code, 0);
-  assert.match(stderr, /--listen must be \[host:\]port/);
-});
-
-test('the host-less address the parser accepts is one the carrier can actually bind', async (t) => {
-  /**
-   * `--listen` is documented as `[host:]port`, and the parser accepted `:8080` while the carrier re-derived
-   * the port from the same string as `Number(':8080')` — `NaN` — which throws inside `listen()` and took the
-   * Host down. An omitted host means loopback; the point of this case is that "accepted on the command line"
-   * and "bindable" are now the same statement rather than two independently written ones.
-   */
-  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-carrier-hostless-'));
-  const authToken = randomBytes(32).toString('hex');
-  const child = spawn(process.execPath, [hostPath, '--workspace', root, '--listen', ':0'], {
-    cwd: root,
-    env: {
-      ...process.env,
-      YUANTU_WORKFLOWS: 'false',
-      YUANTU_HOST_TOKEN: authToken,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.once('close', (code, signal) => resolve({ code, signal }));
-      child.once('error', reject);
-    },
-  );
-  let client: AgentHostClient | undefined;
-  t.after(async () => {
-    // Closing the authenticated carrier lets startup Git finish before the Host exits.
-    // Killing only the Host can leave those descendants holding this directory on Windows.
-    if (client) await client.stop();
-    else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    const exit = await closed;
-    if (client) assert.deepEqual(exit, { code: 0, signal: null });
-    await rm(root, { recursive: true, force: true });
-  });
-  let stdout = '';
-  let stderr = '';
-  child.stdout!.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')));
-  child.stderr!.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')));
-  for (let i = 0; i < 400 && !stdout.includes('listening on'); i++)
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  // The chosen port is announced on stdout, so the line is the proof a socket was really bound — port 0 asks
-  // the OS, and a `NaN` port dies before the callback ever runs.
-  const address = /listening on 127\.0\.0\.1:(\d+)/.exec(stdout);
-  assert.ok(address, `stdout=${stdout} stderr=${stderr}`);
-  ({ client } = await connectClient({ port: Number(address[1]), authToken }));
-  assert.equal((await client.start()).workspace, root);
 });
 
 test('the framing helper is shared, bounded, and survives split characters', async () => {

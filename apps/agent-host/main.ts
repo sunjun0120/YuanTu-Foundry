@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import type { RunResult, Task, TaskAttempt } from '../../packages/protocol/index.ts';
-import { parseSetting } from '../../packages/protocol/settings.ts';
 import { acquireHostLock } from '../../packages/platform/host-lock.ts';
 import { refreshAccountReadiness } from '../../packages/tools/sandbox-account.ts';
 import { safeError } from '../shared/runtime.ts';
@@ -63,11 +62,7 @@ async function runHost(launch: Launch): Promise<void> {
     }),
   });
   ctx.loopHealth.start();
-  ctx.carrier = new HostCarrier({
-    listen: options.listen,
-    authToken: parseSetting(process.env, 'YUANTU_HOST_TOKEN') as string | undefined,
-    isClosing: () => ctx.closing,
-  });
+  ctx.carrier = new HostCarrier({ isClosing: () => ctx.closing });
   const wake = createBackgroundWake(ctx);
   ctx.currentAuthority = wake.currentAuthority;
   ctx.captureAuthority = wake.captureAuthority;

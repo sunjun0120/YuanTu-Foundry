@@ -8,7 +8,7 @@ export interface HostPendingRequest {
 }
 type Entry = HostPendingRequest & { timer?: NodeJS.Timeout };
 
-/** Owns request identity and deadlines, independently of process/socket supervision. */
+/** Owns request identity and deadlines, independently of transport supervision. */
 export class HostRequests {
   private entries = new Map<string, Entry>();
   get size(): number {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { httpFixture, frames, sendFrames } from './http-fixture.ts';
-import { listeningHost, connectClient } from './listening-host-fixture.ts';
+import { startHost, connectClient } from './host-process-fixture.ts';
 
 test('one-shot Host approval recovery keeps one logical delivery and records automatic attempts', async (t) => {
   let requests = 0;
@@ -20,7 +20,7 @@ test('one-shot Host approval recovery keeps one logical delivery and records aut
         : frames('Done'),
     );
   });
-  const host = await listeningHost(t, {
+  const host = await startHost(t, {
     YUANTU_BASE_URL: url,
     YUANTU_WORKFLOWS: 'true',
     YUANTU_WORKFLOW_INTERVAL_MS: '1000',

@@ -344,7 +344,7 @@ export interface HostMethods {
     };
   };
   'run.queue.clear': { params: { sessionId: string }; result: { cleared: true } };
-  'host.info': { params: { protocolVersions?: number[]; authToken?: string }; result: HostInfo };
+  'host.info': { params: { protocolVersions?: number[] }; result: HostInfo };
   'runtime.ready': { params: Record<string, never>; result: { ready: true } };
   'model.configure': { params: ModelCatalogConfiguration; result: { revision: number } };
   'model.select': { params: { sessionId: string; connectionId: string }; result: ModelSelection };

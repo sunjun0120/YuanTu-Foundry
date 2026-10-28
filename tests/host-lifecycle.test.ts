@@ -22,13 +22,12 @@ function host(dispose: () => Promise<void>) {
     queueWake() {},
     residency: { disposeAll: dispose },
     carrier: {
-      async attach() {
+      attach() {
         return (async function* () {})();
       },
       close() {
         closed.push('carrier');
       },
-      async drain() {},
     },
     terminals: {
       async closeAllAndWait() {
@@ -57,7 +56,7 @@ function host(dispose: () => Promise<void>) {
 test('a rejected carrier request is observed and preserved while Host resources close', async () => {
   const failure = new Error('fixture reply pipe closed');
   const { ctx, closed } = host(async () => {});
-  ctx.carrier.attach = async () =>
+  ctx.carrier.attach = () =>
     (async function* () {
       yield 'request';
       await setImmediate();
@@ -140,7 +139,7 @@ for (const seam of ['attach', 'terminals', 'store'] as const) {
       throw residentFailure;
     });
     if (seam === 'attach')
-      t.mock.method(ctx.carrier, 'attach', async () => {
+      t.mock.method(ctx.carrier, 'attach', () => {
         throw otherFailure;
       });
     else if (seam === 'terminals')
