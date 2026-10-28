@@ -6,9 +6,19 @@ import type { SkillInfo } from '../protocol/skills.ts';
  * They are text in the build rather than `SKILL.md` files beside it: a resource file would have to be copied
  * into each bundle (the desktop main process, the Host, the CLI) and found again at runtime, and a skill that
  * silently failed to load in one of them is worse than none. A workspace skill of the same name replaces the
- * built-in one, the same way `.yuantu/skills` replaces `.agents/skills`.
+ * built-in one, the same way `.yuantu/skills` replaces `.agents/skills` — except for the protected ones below.
  */
 export const BUILTIN_SKILL_PREFIX = 'builtin:';
+
+/**
+ * Built-in skills a workspace cannot replace.
+ *
+ * The code analysis skill governs reports about the code in the workspace, which may be the very repository being
+ * analysed; a `SKILL.md` it carries must not be able to tell the model what to leave out.
+ */
+export function isProtectedBuiltinSkill(name: string): boolean {
+  return name === 'code-analysis-report';
+}
 
 const OFFICE_DOCUMENTS = `---
 name: office-documents

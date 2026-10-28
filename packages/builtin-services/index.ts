@@ -14,7 +14,7 @@ import { resolveBuiltinService } from './manifest.ts';
 import { PathLease } from './path-lease.ts';
 import { remoteTools } from './remote-tools.ts';
 import { downloadReportTool } from './report.ts';
-import { sharedTasks } from './tasks.ts';
+import { forgetSharedTasks, sharedTasks } from './tasks.ts';
 import { readToolCache, writeToolCache } from './tool-cache.ts';
 import { uploadSourceTool } from './upload.ts';
 
@@ -87,5 +87,6 @@ export function builtinServiceTools(
 }
 
 export function closeBuiltinServices(): Promise<void> {
+  forgetSharedTasks();
   return closeAnalysisClients();
 }

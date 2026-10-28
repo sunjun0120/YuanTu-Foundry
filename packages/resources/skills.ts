@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { resourceEntries, resourceText } from './files.ts';
-import { builtinSkills, builtinSkillText } from './builtin-skills.ts';
+import { builtinSkills, builtinSkillText, isProtectedBuiltinSkill } from './builtin-skills.ts';
 import type { SkillInfo } from '../protocol/skills.ts';
 
 export type { SkillInfo } from '../protocol/skills.ts';
@@ -9,7 +9,7 @@ export function discoverSkills(workspace: string): SkillInfo[] {
   let found = 0;
   for (const base of ['.agents/skills', '.yuantu/skills'])
     for (const name of resourceEntries(workspace, base)) {
-      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) continue;
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name) || isProtectedBuiltinSkill(name)) continue;
       const file = path.posix.join(base, name, 'SKILL.md');
       let text: string;
       try {
@@ -28,7 +28,8 @@ export function discoverSkills(workspace: string): SkillInfo[] {
       skills.set(name, { name, description: description.slice(0, 256), path: file });
     }
   if (found > 64) throw new Error('At most 64 skills are supported');
-  // Built-in skills come last so a workspace skill of the same name replaces them; they do not count toward
+  // Built-in skills come last so a workspace skill of the same name replaces them (a protected one was never read
+  // above, so it cannot); they do not count toward
   // the workspace limit, which is a statement about what a project may declare.
   for (const skill of builtinSkills()) if (!skills.has(skill.name)) skills.set(skill.name, skill);
   return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));

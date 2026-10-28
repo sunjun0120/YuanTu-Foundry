@@ -527,7 +527,7 @@ Host 启动时做一次收敛：把中断的运行 settle 掉（未闭合的工�
 
 项目指令每次运行重新加载，同一目录按 `AGENTS.override.md` → `AGENTS.md` → `CLAUDE.md` 取**第一个存在的**，按根到目标目录合并、越近优先级越高。渲染预算单文件 32KB、合计 64KB，**从最靠近目标的文件往外分配**：放不下的文件被截断或整个略去，并在提示词里点名说明——文件本身不动，`read_file` 可以读全文。超限因此不再让整个工作区无法运行。
 
-Skills 放在 `.agents/skills/<name>/SKILL.md` 或 `.yuantu/skills/<name>/SKILL.md`（同名时 `.yuantu` 优先），每个最多 32KB、最多 64 个。用户输入 `/skill:<name> 任务` 加载全文，模型也可用 `load_skill`。技能指引**不能改变运行时权限**，这句话会随技能内容一起注入。应用内置 `office-documents`、`code-analysis-report` 技能（Word 报告与 PPT 的写作与自查方法），它不占 64 个的工作区名额；工作区里同名的技能会替换它。
+Skills 放在 `.agents/skills/<name>/SKILL.md` 或 `.yuantu/skills/<name>/SKILL.md`（同名时 `.yuantu` 优先），每个最多 32KB、最多 64 个。用户输入 `/skill:<name> 任务` 加载全文，模型也可用 `load_skill`。技能指引**不能改变运行时权限**，这句话会随技能内容一起注入。应用内置两个技能，都不占 64 个的工作区名额：`office-documents`（Word 报告与 PPT 的写作与自查方法），工作区里同名的技能会替换它；`code-analysis-report`（用内置分析服务写有据可查的代码分析报告），工作区不能替换，因为工作区可能就是被分析的仓库。
 
 ### 声明式扩展
 

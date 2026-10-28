@@ -7,6 +7,8 @@ import {
   closeBuiltinServices,
   warmToolCache,
 } from '../packages/builtin-services/index.ts';
+import { resolveBuiltinService } from '../packages/builtin-services/manifest.ts';
+import { sharedTasks } from '../packages/builtin-services/tasks.ts';
 import { builtinSkills } from '../packages/resources/builtin-skills.ts';
 import { analysisServiceFixture } from './analysis-service-fixture.ts';
 import { tempRoot } from './temp-fixture.ts';
@@ -86,6 +88,19 @@ test('a backend schema the registry would reject does not break the catalog', as
     'analysis_upload_source',
     'scan_license_analyze',
   ]);
+});
+
+test('a workspace task set follows the service address and is dropped at close', async (t) => {
+  const root = await tempRoot(t);
+  const client = { callTool: async () => ({ content: [] }) };
+  const first = resolveBuiltinService({ YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:1' })!;
+  const moved = resolveBuiltinService({ YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:2' })!;
+  const tasks = sharedTasks(root, first, client);
+  assert.equal(sharedTasks(root, first, client), tasks);
+  const elsewhere = sharedTasks(root, moved, client);
+  assert.notEqual(elsewhere, tasks, 'another address gets its own client, not the old one');
+  await closeBuiltinServices();
+  assert.notEqual(sharedTasks(root, moved, client), elsewhere, 'close forgets the task sets');
 });
 
 test('warming an unreachable service does not throw', async (t) => {

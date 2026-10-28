@@ -245,6 +245,39 @@ test('cancelling one waiter does not cancel a shared poll', async (t) => {
   assert.equal(calls, 1);
 });
 
+test('aborting one job_kill does not fail another waiting on the same cancellation', async (t) => {
+  const root = await tempRoot(t);
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const client: Pick<AnalysisClient, 'callTool'> = {
+    async callTool(_name, _args, signal) {
+      calls++;
+      entered();
+      await barrier;
+      signal.throwIfAborted();
+      return { content: [] };
+    },
+  };
+  const tasks = new AnalysisTasks({ file: path.join(root, 'tasks.json'), manifest, client });
+  const id = tasks.start({ scope: 's', taskId: 'kill-waiters', tool: 'scan', label: 'scan' }).id;
+  const controller = new AbortController();
+  const first = tasks.jobProducer().kill({ id, scope: 's', signal: controller.signal });
+  await started;
+  const second = tasks.jobProducer().kill({ id, scope: 's' });
+  controller.abort();
+  release();
+  await assert.rejects(first);
+  assert.equal((await second).status, 'cancelled');
+  assert.equal(calls, 1);
+});
+
 test('concurrent cancellations share a request and failures remain retryable', async (t) => {
   const root = await tempRoot(t);
   let entered!: () => void;

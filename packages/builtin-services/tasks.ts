@@ -163,26 +163,7 @@ export class AnalysisTasks implements TaskStarter {
       );
       this.polling.set(record.id, work);
     }
-    if (!signal) return work;
-    return new Promise<void>((resolve, reject) => {
-      const abort = () => {
-        cleanup();
-        reject(signal.reason);
-      };
-      const cleanup = () => signal.removeEventListener('abort', abort);
-      signal.addEventListener('abort', abort, { once: true });
-      if (signal.aborted) return abort();
-      work.then(
-        () => {
-          cleanup();
-          resolve();
-        },
-        (error) => {
-          cleanup();
-          reject(error);
-        },
-      );
-    });
+    return follow(work, signal);
   }
   private async poll(record: TaskRecord, signal?: AbortSignal): Promise<void> {
     const before = {
@@ -264,13 +245,16 @@ export class AnalysisTasks implements TaskStarter {
       kill: async ({ id, scope, signal }) => {
         const record = this.find(id, scope);
         if (!SETTLED.has(record.status)) {
+          signal?.throwIfAborted();
           let pending = this.cancelling.get(record.id);
           if (!pending) {
+            // The request is shared, so it runs on its own timeout; each caller's signal only ends its own wait,
+            // as with a shared poll. The first caller's signal used to cancel it for every caller.
             pending = (async () => {
               const reply = await this.call(
                 this.deps.manifest.taskTools.cancel,
                 record,
-                signal ?? AbortSignal.timeout(KILL_TIMEOUT_MS),
+                AbortSignal.timeout(KILL_TIMEOUT_MS),
               );
               if (reply.isError) throw new Error('Analysis cancellation failed');
               if (!SETTLED.has(record.status)) {
@@ -284,7 +268,7 @@ export class AnalysisTasks implements TaskStarter {
             this.cancelling.set(record.id, pending);
             void pending.finally(() => this.cancelling.delete(record.id)).catch(() => {});
           }
-          await pending;
+          await follow(pending, signal);
         }
         return this.snapshot(record, 0);
       },
@@ -292,19 +276,57 @@ export class AnalysisTasks implements TaskStarter {
   }
 }
 
-const shared = new Map<string, AnalysisTasks>();
+/** Waits for shared work on behalf of one caller: an abort rejects this wait only, never the work. */
+function follow(work: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return work;
+  return new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) return abort();
+    work.then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
 
-/** One record set per workspace, shared by every run there. */
+const shared = new Map<string, { baseUrl: string; tasks: AnalysisTasks }>();
+
+/**
+ * One record set per workspace, shared by every run there.
+ *
+ * It holds the client it was made with, so it is made again when the service address changes rather than keep
+ * asking the old one; one instance per file still means one writer.
+ */
 export function sharedTasks(
   root: string,
   manifest: BuiltinServiceManifest,
   client: Pick<AnalysisClient, 'callTool'>,
 ): AnalysisTasks {
   const file = path.join(path.resolve(root), '.yuantu', 'analysis-tasks.json');
-  let tasks = shared.get(file);
-  if (!tasks) {
-    tasks = new AnalysisTasks({ file, manifest, client });
-    shared.set(file, tasks);
-  }
+  const entry = shared.get(file);
+  if (entry?.baseUrl === manifest.baseUrl) return entry.tasks;
+  const tasks = new AnalysisTasks({ file, manifest, client });
+  shared.set(file, { baseUrl: manifest.baseUrl, tasks });
   return tasks;
+}
+
+/**
+ * Forgets every record set, with the clients they hold; the next run reads its workspace file again.
+ *
+ * Called when the clients are closed: a set kept past that would reconnect its closed client on the next poll,
+ * outside anything that closes it.
+ */
+export function forgetSharedTasks(): void {
+  shared.clear();
 }
