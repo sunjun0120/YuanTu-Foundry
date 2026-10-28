@@ -2,7 +2,18 @@ import path from 'node:path';
 import { readFile, mkdir, writeFile, lstat } from 'node:fs/promises';
 import { copyFiles, inventory, inventoryLinked, hash } from './materialize.mjs';
 
+/**
+ * Dev dependencies the source Host still imports at runtime.
+ *
+ * The desktop bundles inline the Office libraries, so they are devDependencies and never packaged (see
+ * `electron-builder.config.cjs` and `scripts/check-windows-package.mjs`). A frozen runtime runs the Host from its
+ * TypeScript sources rather than a bundle, so it needs them installed like any production dependency.
+ */
+const SOURCE_RUNTIME_DEV_DEPENDENCIES = ['docx', 'jszip', 'mammoth', 'pptxgenjs', 'xlsx'];
+
 /** Clone existing installed production dependencies, never install or use the network.
+ * Production means what the source Host imports: `dependencies` plus the declared
+ * `SOURCE_RUNTIME_DEV_DEPENDENCIES`, unless the caller names `packages` itself.
  * The receipt binds exact file content and package versions to the frozen lockfile.
  * Missing/linked/version-drifted installations are preparation blockers.
  */
@@ -77,7 +88,13 @@ export async function copyLockedDependencies({ sourceDirectory, targetDirectory,
       await visit(dependency, directory);
     }
   }
-  for (const name of packages ?? Object.keys(metadata.dependencies ?? {})) await visit(name);
+  const runtime = [
+    ...Object.keys(metadata.dependencies ?? {}),
+    ...SOURCE_RUNTIME_DEV_DEPENDENCIES.filter((name) =>
+      Object.hasOwn(metadata.devDependencies ?? {}, name),
+    ),
+  ];
+  for (const name of packages ?? runtime) await visit(name);
   const files = await inventory(path.join(target, 'node_modules'), { includeExcluded: true });
   const receipt = {
     version: 1,

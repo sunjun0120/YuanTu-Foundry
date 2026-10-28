@@ -656,6 +656,47 @@ test('private dependencies are copied from locked versions and reject linked sou
   );
 });
 
+test('the dev dependencies the source Host imports are copied, other dev dependencies are not', async (t) => {
+  const { copyLockedDependencies } = await moduleFor('dependencies.mjs');
+  const root = await temporary(t);
+  const source = path.join(root, 'dependency-source'),
+    target = path.join(root, 'dependency-target');
+  await mkdir(target);
+  const lock = JSON.stringify({
+    packages: {
+      'node_modules/a': { version: '1.0.0' },
+      'node_modules/mammoth': { version: '1.0.0' },
+      'node_modules/eslint': { version: '1.0.0' },
+    },
+  });
+  for (const name of ['a', 'mammoth', 'eslint']) {
+    await mkdir(path.join(source, 'node_modules', name), { recursive: true });
+    await writeFile(
+      path.join(source, 'node_modules', name, 'package.json'),
+      JSON.stringify({ name, version: '1.0.0' }),
+    );
+  }
+  await writeFile(
+    path.join(source, 'package.json'),
+    JSON.stringify({
+      dependencies: { a: '1.0.0' },
+      devDependencies: { mammoth: '1.0.0', eslint: '1.0.0' },
+    }),
+  );
+  await writeFile(path.join(source, 'package-lock.json'), lock);
+  await writeFile(path.join(target, 'package-lock.json'), lock);
+  const receipt = await copyLockedDependencies({
+    sourceDirectory: source,
+    targetDirectory: target,
+  });
+  // The Office libraries are inlined into the desktop bundles but imported by the source Host a frozen runtime
+  // runs; without them the Host dies on its first import (`Cannot find package 'mammoth'`).
+  assert.deepEqual(receipt.packages.map((entry: { name: string }) => entry.name).sort(), [
+    'a',
+    'mammoth',
+  ]);
+});
+
 test('nested locked dependencies are copied once with private bytes and complete receipts', async (t) => {
   const { copyLockedDependencies } = await moduleFor('dependencies.mjs');
   const { inventory, hash } = await moduleFor('materialize.mjs');
