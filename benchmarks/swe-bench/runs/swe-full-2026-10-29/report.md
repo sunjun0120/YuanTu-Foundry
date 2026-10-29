@@ -1,58 +1,91 @@
-# 五十题复测：运行时 cd44c31（2026-10-29）
+# SWE-bench Verified 子集评测
 
-批次 `swe-full-20261029-v1`，运行时 `cd44c314fa92896952deabe1cfe70b6cfa1f8dc4`（本次 HEAD），模型 `DeepSeek-V4.1-Flash-1017`，OpenAI 协议，no-commands，每题一次。50 题全部尝试，无一重试。
+批次：swe-full-20261029-v1。真实模型批次：是。
 
-配置：`maxOutputTokens=16384`、`requestTimeoutMs=600000`、`streamIdleTimeoutMs=60000`、`responseHeadersTimeoutMs=120000`、`zeroByteRetries=1`、`instanceTimeoutMs=1200000`、`investigationMs=240000`、`promptCache=auto`、`maxObservedRequestsPerSample=100`、`maxKnownTokensPerSample=2000000`。
+| 指标 | A |
+| --- | --- |
+| 计划题数 | 50 |
+| resolved | 37 |
+| unresolved | 7 |
+| error（含未判定） | 6 |
+| 待验收 | 0 |
+| 实际判定 resolved + unresolved | 44 |
+| 空补丁 | 6 |
+| 修改测试文件 | 3 |
+| 通过率（全部计划题为分母） | 74.0% |
+| Wilson 95% 区间 | 60.4%–84.1% |
 
-**本文件只有生成侧结果。40 题直接生成补丁，4 题因观察阈值被中止但已收集到补丁，合计 44 题有补丁；6 题空补丁。官方判定尚未执行——resolved/unresolved 必须由 `swe-bench-eval` 工作流给出，未跑之前不能报告通过率。**
+| 分布 | A 中位数 / 最小 / 最大 |
+| --- | --- |
+| rounds | 24.5 / 10 / 70 |
+| inputTokens | 400717 / 81355 / 1921660 |
+| outputTokens | 30907.5 / 2344 / 174040 |
+| cachedInputTokens | 319232 / 76800 / 1715328 |
+| durationMs | 263963.2902500003 / 38118.83070000075 / 1200134.9557999987 |
 
-## 生成结果
+## 逐题追溯
 
-| 指标 | 本次（cd44c31） | 10-25（91fa342） |
-| --- | ---: | ---: |
-| 计划 / 尝试 | 50 / 50 | 50 / 50 |
-| 有补丁 | **44** | 39 |
-| 空补丁 | **6** | 11 |
-| 观察预算中止但保留补丁 | 4 | 0 |
-| 请求 | 1,528 | 1,102 |
-| 输入 token | 29,917,744 | 17,488,284 |
-| 输出 token | 2,246,930 | 1,487,179 |
-| 缓存输入 token | 26,431,744 | 15,149,056 |
-| 单题耗时中位数 | 264 秒 | 324 秒 |
-| 轮数中位数 | 25 | 21 |
-| 单题输入中位数 | 400,717 | 296,265 |
-| 单题输出中位数 | 30,908 | 24,218 |
-| 逐题耗时之和 | 4.78 小时 | 4.91 小时 |
-| 修改测试文件 | 3 | 6 |
+| instance | A 结论 | A 证据 |
+| --- | --- | --- |
+| astropy__astropy-14309 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/astropy__astropy-14309/report.json`（sha256 3101b4a8e82798b1f70a56f7a9948bbb32db901d6ecccb2c870a03312bbef1bc） |
+| astropy__astropy-14598 | error | empty-patch-not-graded |
+| django__django-10880 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-10880/report.json`（sha256 b1a463b27e9f59d0d2c75dc66ee8cd46b586f20a514cb35df6632189d7f9579d） |
+| django__django-10999 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-10999/report.json`（sha256 1e2864412f0c0934ba87c520e08f58cea87bebe36f218e22a5dae2c8d6acb948） |
+| django__django-11099 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-11099/report.json`（sha256 783e252651c6cc7cc963c7673895cd27c265b2720927d04893f3de55773a4dd7） |
+| django__django-11149 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-11149/report.json`（sha256 4b3f5924489cbbce32ac087f62dbb2ee9d284decf99a7837b5fa8fe2076a928a） |
+| django__django-11451 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-11451/report.json`（sha256 0e2fa193e1ccbc4a4770958a15ae31bc763e624949783c1caad0f89607eaeb06） |
+| django__django-11815 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-11815/report.json`（sha256 092e5a11f2a57a45b83f66e83ab92b531e88777c267619a8736db26e6f2676cf） |
+| django__django-11885 | error | empty-patch-not-graded |
+| django__django-12155 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-12155/report.json`（sha256 0b8fbc47afbfe6b4d02b88c342c150b808b4a32b497235a838ab2997476f585d） |
+| django__django-12276 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-12276/report.json`（sha256 d74486092cdaacc44812b30e7c2c00893fa57b34664832ef3a5d3a284a0223d9） |
+| django__django-12419 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-12419/report.json`（sha256 002db7b3bf143b84229831a7bc597013a48e5bf5408c88b4a91c68de73c90a4e） |
+| django__django-13028 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-13028/report.json`（sha256 3c3fbde0bbf87498064d4c34f1d993849c86bcdc9729cd67241ad0b3c5d28ba2） |
+| django__django-13089 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-13089/report.json`（sha256 cf1e4a7c63307c0412d4bb14a8b6e06516bb480b2787d3b6fe9bd0301024f4ba） |
+| django__django-13343 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-13343/report.json`（sha256 c58c63121846f2cbfa6608ebba7fe33e94a1a61f0bc5726b247aec199a0d41f8） |
+| django__django-13363 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-13363/report.json`（sha256 ec15d014998e89c2317ae5bb18bd57c4f5e163d997874a662f6888f2ddb6496d） |
+| django__django-13964 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-13964/report.json`（sha256 57dc1ce8b8d1516ce102fd2a9f06520c0749de7166a88c685678f1100dd2e5bc） |
+| django__django-14559 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-14559/report.json`（sha256 016f5e85d83e29e60287d8bce2e532ab2f63fce7d890b51187c001471965fe60） |
+| django__django-14771 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-14771/report.json`（sha256 d78fe559d299e147ac69dfeb8e12863d84f26d5f6ce826f97b6f27c336c41cfb） |
+| django__django-15561 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-15561/report.json`（sha256 1df63f809aeeccaa31def86f2f713576feb65a2f3a0a25323bb00fab4734ad3e） |
+| django__django-15957 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-15957/report.json`（sha256 f37f67168c93210a1cfa4c60b5ba795c9dedc160ba151ce7c359f17416773f89） |
+| django__django-16569 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-16569/report.json`（sha256 163dbb048ba0a124817da0feddab7a30ff6175f2a2f32df23b1147807df322b1） |
+| django__django-16877 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-16877/report.json`（sha256 ba03e2791e314cb85c336d5a5a080fecbb3450a344f36751bfa7cb4c22b5ee79） |
+| django__django-16950 | error | empty-patch-not-graded |
+| django__django-17084 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/django__django-17084/report.json`（sha256 d79f0f0a6b03d63c5249956ab76cc17849545c3de8458f4d61664c90de8963ea） |
+| matplotlib__matplotlib-24627 | error | empty-patch-not-graded |
+| matplotlib__matplotlib-24870 | error | empty-patch-not-graded |
+| matplotlib__matplotlib-25122 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/matplotlib__matplotlib-25122/report.json`（sha256 d6e6087de7321c07b1294f8dab12b74c0500745371a810a250b9f8173b4285d8） |
+| mwaskom__seaborn-3187 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/mwaskom__seaborn-3187/report.json`（sha256 15f9c7d66e708b7b53408efeae1047451de97e19ee02e71edd160bd9187fba32） |
+| pallets__flask-5014 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/pallets__flask-5014/report.json`（sha256 0a2ad8be764698b129e3371cbf63c3363c816b87a6d1404c42779f49afafce9a） |
+| psf__requests-1921 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/psf__requests-1921/report.json`（sha256 22d23d32b90de030086eb84e3e3b7bc1874dbd6f9e471a44eade28978c3bcd9a） |
+| pydata__xarray-4075 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/pydata__xarray-4075/report.json`（sha256 2ca95ac41d9ed4956e03ccd47e88008a82d1b14b41f7f2edc1612adb75bae6ad） |
+| pydata__xarray-7229 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/pydata__xarray-7229/report.json`（sha256 751be2eb314cc6bdd95e35b87deea990a2a23ee2957d76137c6ae845164f94fb） |
+| pylint-dev__pylint-4604 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/pylint-dev__pylint-4604/report.json`（sha256 63a8c07aa86b2b70aaec8c059c2c9a8a1df0a794f32ed62ec5e215f43a7500ed） |
+| pytest-dev__pytest-5631 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/pytest-dev__pytest-5631/report.json`（sha256 fa7d8c45af6a784ef6a63c2c386f30767fa8114134aa872e631e1bc6a4a9ebaa） |
+| pytest-dev__pytest-5809 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/pytest-dev__pytest-5809/report.json`（sha256 8cde956263e0800509ac85fc00303a71ea67631fd0fb7fe5f316fa1a7f760946） |
+| scikit-learn__scikit-learn-13124 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-13124/report.json`（sha256 fc9c689e7aa5233bf3d9e839c7f0149e2f3688dceb44100a92eca82cb2751134） |
+| scikit-learn__scikit-learn-13328 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-13328/report.json`（sha256 e30ec39b6fea2ec294e0adda21f6587642fb2003c7f6e889419d4f0f30364c95） |
+| scikit-learn__scikit-learn-25931 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/scikit-learn__scikit-learn-25931/report.json`（sha256 4859821ae48d154c7afdc710bb726e0272924a816789acc5d05669f5e9369742） |
+| sphinx-doc__sphinx-10449 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sphinx-doc__sphinx-10449/report.json`（sha256 046dbbe2b4db2d4374638e8d5e1f809402073586869f73358231e1024f9a52d1） |
+| sphinx-doc__sphinx-10614 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sphinx-doc__sphinx-10614/report.json`（sha256 36aef15a07353825ff2f94920b20f8b6dcf26c17c9d1853aa75fd82440e92a2f） |
+| sphinx-doc__sphinx-10673 | error | empty-patch-not-graded |
+| sphinx-doc__sphinx-7910 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sphinx-doc__sphinx-7910/report.json`（sha256 b758c52bc5f7e6858850687f34fa425a8f5c3bd72373b5a5051f2d95576bfb34） |
+| sympy__sympy-13551 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-13551/report.json`（sha256 f6bfc75e012de54b098e130ddbda3615225ce10750390db96a91d2baed2a60a8） |
+| sympy__sympy-13798 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-13798/report.json`（sha256 e3817243c1b571d7d19c699f28755451594affd6853d6abecf25038912ee3ef0） |
+| sympy__sympy-18199 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-18199/report.json`（sha256 c69d469bf6885c2f20bb5654f7456a482698bbb4fe3f8bb6fb01045d8a387218） |
+| sympy__sympy-20916 | unresolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-20916/report.json`（sha256 4fc1785299e03cbfa67463f40aed17f612ac31cf2a044b18b97362407190194c） |
+| sympy__sympy-23950 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-23950/report.json`（sha256 0cbaf7a63223e6f35fdbddeb7f36f2129f2d0b2bc70e71b8536117773d063feb） |
+| sympy__sympy-24443 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-24443/report.json`（sha256 ee7c2c3333d07f94a21a2c3ecf01af0f99412fb23de69a5c8c1a3afa1c368473） |
+| sympy__sympy-24562 | resolved | `logs/run_evaluation/swe-full-20261029-40822038477-1/yuantu@cd44c31+DeepSeek-V4.1-Flash-1017/sympy__sympy-24562/report.json`（sha256 5faba6a015869f9a191819c96913955280b9b2b967ddc21fb5100c40b13ada33） |
 
-- 空补丁从 11 降到 6，但总 token 明显上升：输入 1.71 倍、输出 1.51 倍。补丁多出来的部分来自更长的探索，不是更省的路径。
-- 4 个 `invalid` 样本是**观察阈值中止**：3 个触发 200 万已知 token 上限，1 个触发 20 分钟单题上限。中止前已改文件，补丁按工装规则照常收集。
+## 边界与成本
 
-## 空补丁原因（6 例）
+- 生成模式为 no-commands，Agent 不能运行测试；数字只用于版本间对比，不与能执行代码的排行榜 Agent 直接比较。
+- 固定 50 题子集（冒烟仅 5 题），每版本一次，没有重复采样，结论粒度粗。工装完成、真实任务结果、与排行榜可比是三件事，各自需要证据。
+- 官方 error 表示未得到有效判定，保留在总分母，单独列出原因；不能直接归因为模型失败。空补丁也未被官方判定，并单列数量。
+- 不同模型、promptCache、子集、提示模板或生成配置的结果拒绝比较。轮数来自已结束步骤，token 完整性以保存的 usage 标志为准；未知不当成已知零。
+- 费用公式：单题费用 = 输入 token × 输入单价 + 输出 token × 输出单价，缓存部分按缓存单价；全量两版本费用 = 冒烟平均单题费用 × 50 × 2。单价未提供时只报告 token，不推算金额。
+- A 已知 token 合计：输入 29917744、输出 2246930、缓存输入 26431744；完整：false。
+- 请求数与 token 阈值是观察后取消，不是硬费用上限。完整性不明的 token 不能用来承诺费用上界。
 
-| 实例 | 原因 | 请求 | 耗时 |
-| --- | --- | ---: | ---: |
-| `astropy__astropy-14598` | 输出额度耗尽：16384 token 全是推理，0 可见字符 | 18 | 329s |
-| `matplotlib__matplotlib-24627` | 输出额度耗尽：15847 推理 token，工具参数只写到一半 | 18 | 386s |
-| `django__django-11885` | DSML 调用与原生调用/禁用工具冲突，直接报错 | 18 | 466s |
-| `django__django-16950` | 同上 | 18 | 482s |
-| `matplotlib__matplotlib-24870` | 正常结束（completed），全程没有改文件 | 24 | 328s |
-| `sphinx-doc__sphinx-10673` | 正常结束（completed），全程没有改文件 | 20 | 454s |
-
-与 10-25 的差异：那一批 7 例是“DSML 文本被静默当最终回答”，本轮代码已有 DSML 解析，冲突时明确报错（`DSML calls conflict with native calls or disabled tools`），不再静默产出空补丁。**明确报错比静默丢弃诚实，但这 2 题依然没有解决。**
-
-## 修改测试文件的样本（3 例）
-
-`pytest-dev__pytest-5809`、`sympy__sympy-13551`、`sympy__sympy-23950`。按工装约定不因修改测试文件剔除样本，单独列出供审查；官方判定仍以验收器为准。
-
-## 解释边界
-
-- 本批一次、50 题、无重复采样；与 10-25 不是严格配对：运行时、模型网关等待时长、`streamIdleTimeoutMs`（30s→60s）、`zeroByteRetries`（0→1）都变了，配置差异进入 `configHash`（`c964ba69…` 对 `7ab04323…`）。
-- 没有官方判定之前，“44 题有补丁”不等于“44 题通过”。补丁是否正确只能由官方验收器判定。
-- 本机 no-commands，不能与可执行代码的排行榜成绩直接比较。
-
-## 复现
-
-- 配置：`.scratch/swe-bench/swe-full-20261029-control/manifest.json`
-- 生成：`.scratch/swe-bench/swe-full-20261029-v1/`（`results.jsonl`、`predictions.jsonl`、`evidence/`、`work/`）
-- 官方验收：`node benchmarks/swe-bench/evaluate.mjs`（仅 GitHub-hosted Linux runner），随后 `ingest.mjs` / `report.mjs`
+观察阈值建议（每题已知输入与输出 token 中位数的 3 倍）：A 1340363；该建议不是费用硬上限。
