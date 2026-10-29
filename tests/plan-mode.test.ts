@@ -692,10 +692,12 @@ async function planRun(
   const plan = store.createPlan(session.id);
   const events: AgentEvent[] = [];
   const requests: string[] = [];
+  const offered: string[][] = [];
   let round = 0;
   const provider: Provider = {
     async complete(request) {
       requests.push(systemText(request.system));
+      offered.push(request.tools.map((tool) => tool.name));
       const response = script[Math.min(round, script.length - 1)]!;
       round++;
       return response;
@@ -724,6 +726,8 @@ async function planRun(
     result,
     /** The system prompt each round was sent, in order: what the model was actually told. */
     requests,
+    /** The tool names each round was offered, in order. */
+    offered,
     /** What the model read back from each tool call, in order. */
     toolResults: () =>
       store
@@ -782,6 +786,18 @@ test('an approved plan lifts read-only mode in the same run, and only from the n
   assert.ok(!prompt.includes('Planning mode: you have read-only tools'));
   // The round that asked was still told it was read-only: the lift is a step boundary, not a mid-round switch.
   assert.match(run.requests[0]!, /Planning mode: you have read-only tools/);
+});
+test('once the plan is approved, the planning tools leave the catalogue', async (t) => {
+  // Offered after the approval, either tool could only fail with "Plan is already approved".
+  const run = await planRun(t, [toolCall('c1', 'exit_plan_mode', PLAN_ARGS), reply()], {
+    question: approveAnswer,
+  });
+  assert.equal(run.result.status, 'completed');
+  assert.ok(run.offered[0]!.includes('exit_plan_mode'), 'the planning round is offered it');
+  assert.ok(run.offered[0]!.includes('submit_plan'));
+  const after = run.offered.at(-1)!;
+  assert.ok(!after.includes('exit_plan_mode'), after.join(', '));
+  assert.ok(!after.includes('submit_plan'), after.join(', '));
 });
 test('declining the plan keeps this run read-only and records nothing', async (t) => {
   const run = await planRun(

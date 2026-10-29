@@ -319,6 +319,8 @@ export class Agent {
       let askTool!: Questioner;
       let humanWaitMs: () => number = () => 0;
       let planning: PlanningTools | undefined;
+      /** Uninstalls the planning tools; called when the plan is approved mid-run, and again (harmlessly) at run end. */
+      const planningTools: (() => void)[] = [];
       if (input.planPhase) {
         planning = createPlanningTools({
           store,
@@ -330,7 +332,8 @@ export class Agent {
           onProposed: (plan) => emit('plan.proposed', { plan }),
           onApproved: (plan) => emit('plan.approved', { plan, runId }),
         });
-        for (const tool of planning.tools) runScoped.push(tools.replace(tool));
+        for (const tool of planning.tools) planningTools.push(tools.replace(tool));
+        runScoped.push(...planningTools);
       }
       const usage: Usage = { inputTokens: 0, outputTokens: 0 };
       const statistics = emptyStatistics();
@@ -784,6 +787,9 @@ export class Agent {
             progressGuard.resetOscillation();
             resetQueryPhase();
             readOnly = false;
+            // The planning phase is over, so its tools leave the catalogue: offered after the approval, either one
+            // could only fail with "Plan is already approved". Removed before `setPlanNotice` rebuilds the catalogue.
+            for (const dispose of planningTools) dispose();
             automaticVerification.register(approved);
             surface.setPlanNotice(approvedPlanNotice(approved));
             // The delegation guard was built with this run's original promise; a run that may now write may also
