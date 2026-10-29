@@ -291,10 +291,10 @@ test('the two backends agree, match for match, on the same fixture', async (t) =
 /**
  * The packaged layout: the only one where the fast path is actually shipped.
  *
- * Every asset test above runs with this module where a checkout keeps it, so `buildRoot()` is `<repo>/build` and
+ * Every asset test above runs with this module where a checkout keeps it, so `buildRoots()` find `<repo>/build` and
  * both the lock and the binary are found there. That says nothing about the application. In a package the module
- * sits under `resources/app/dist/packages/search`, `buildRoot()` resolves to `resources/app/dist/build` — a
- * directory no package contains — and both files have to come from `process.resourcesPath` instead. The lock and
+ * sits under `resources/app/dist/packages/search`, `buildRoots()` resolve under `resources/app` — to
+ * directories no package contains — and both files have to come from `process.resourcesPath` instead. The lock and
  * the binary are looked up by two separate code paths, so only a test that builds the packaged shape makes them
  * meet; a staging script that forgets the lock, or a runtime that never looks beside its own resources, fails
  * here instead of in a release that silently ships a program it never runs.
@@ -366,14 +366,16 @@ test('a packaged layout reaches its verified binary through resourcesPath alone'
     pathToFileURL(module).href
   )) as typeof import('../packages/search/ripgrep-assets.ts');
   /**
-   * The candidate list is asserted, not assumed: the second entry is the compiled-layout path and the assertion
-   * above already proved no such directory exists, so a lock read successfully can only have come from the
+   * The candidate list is asserted, not assumed: the later entries are the compiled-layout paths and the
+   * assertions above prove no such directory exists, so a lock read successfully can only have come from the
    * staged resources.
    */
   assert.deepEqual(packaged.lockFiles(), [
     path.join(stage, 'search-assets', 'search-assets.lock.json'),
     path.join(stage, 'app', 'dist', 'build', 'search-assets.lock.json'),
+    path.join(stage, 'app', 'build', 'search-assets.lock.json'),
   ]);
+  assert.equal(existsSync(path.join(stage, 'app', 'build')), false);
   assert.deepEqual(await packaged.loadSearchAssetLock(), repoLock);
   // What the lookup used to read, and nothing else: this is the null that made the packaged fast path dead code.
   assert.equal(
@@ -392,6 +394,57 @@ test('a packaged layout reaches its verified binary through resourcesPath alone'
     `resolved inside the package rather than the checkout: ${resolved.executable}`,
   );
 });
+
+/**
+ * The compiled checkout: `npm run desktop`, the CLI's `bin` and the Host bundle all run from `dist/`.
+ *
+ * There `buildRoot()` from the module alone is `dist/build`, which no build writes, and no `resourcesPath` points at
+ * staged assets either. The checkout's own `build/` sits one level above `dist/`, so a compiled module has to look
+ * there, or every run from the build silently falls back to the built-in scanner. `tools` is where the Host bundle
+ * inlines this module.
+ */
+for (const directory of ['search', 'tools']) {
+  test(`a compiled checkout reaches its verified binary from dist/packages/${directory}`, async (t) => {
+    const key = platformArchKey();
+    const repoLock = await loadSearchAssetLock();
+    const target = repoLock?.targets[key];
+    const source = repoLock && path.join('build', 'search-assets', repoLock.version, key);
+    if (!repoLock || !target || !source || !existsSync(path.join(source, binaryName()))) {
+      t.diagnostic(`no verified ${key} asset is prepared in this checkout`);
+      return;
+    }
+
+    const checkout = await tempDir(t, 'yuantu-rg-compiled-');
+    const assets = path.join(checkout, 'build', 'search-assets', repoLock.version, key);
+    await mkdir(assets, { recursive: true });
+    await copyFile(path.join(source, binaryName()), path.join(assets, binaryName()));
+    await copyFile(
+      path.join('build', 'search-assets.lock.json'),
+      path.join(checkout, 'build', 'search-assets.lock.json'),
+    );
+    const compiled = path.join(checkout, 'dist', 'packages', directory);
+    await mkdir(compiled, { recursive: true });
+    await writeFile(path.join(checkout, 'package.json'), '{"type":"module"}\n');
+    const module = path.join(compiled, 'ripgrep-assets.ts');
+    await copyFile(
+      fileURLToPath(new URL('../packages/search/ripgrep-assets.ts', import.meta.url)),
+      module,
+    );
+
+    const loaded = (await import(
+      pathToFileURL(module).href
+    )) as typeof import('../packages/search/ripgrep-assets.ts');
+    assert.deepEqual(await loaded.loadSearchAssetLock(), repoLock);
+    const workspace = await tempDir(t, 'yuantu-rg-compiled-workspace-');
+    const resolved = await loaded.resolveSearchBinary({ workspaceRoot: workspace });
+    assert.ok(resolved, 'a compiled checkout resolves the binary in its build directory');
+    assert.equal(resolved.sha256, target.binarySha256);
+    assert.ok(
+      resolved.executable.startsWith(path.join(checkout, 'build')),
+      `resolved from the checkout's build directory: ${resolved.executable}`,
+    );
+  });
+}
 
 /**
  * The real thing, when this checkout has a verified asset.

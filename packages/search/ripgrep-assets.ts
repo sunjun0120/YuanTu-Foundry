@@ -39,14 +39,24 @@ export function platformArchKey(platform = process.platform, arch = process.arch
   return `${platform}-${arch}`;
 }
 
-/** The directory holding the checked-in lock file, resolved from this module rather than the workspace. */
-export function buildRoot(): string {
-  return fileURLToPath(new URL('../../build', import.meta.url));
+/**
+ * The directories that may hold the checked-in lock file, resolved from this module rather than the workspace.
+ *
+ * From source the module is `packages/search/` and the checkout's `build/` is two levels up. Compiled (tsc output
+ * in `dist/packages/search/`, or the Host bundle in `dist/packages/tools/`) two levels up is `dist/`, which holds no
+ * `build/`, so the checkout's one beside `dist/` is the candidate there.
+ */
+export function buildRoots(): string[] {
+  const above = fileURLToPath(new URL('../../', import.meta.url));
+  const roots = [path.join(above, 'build')];
+  if (path.basename(above.replace(/[\\/]$/, '')) === 'dist')
+    roots.push(path.join(above, '..', 'build'));
+  return roots;
 }
 
 /** Where per-target assets live once `scripts/prepare-search-assets.mjs` has verified them. */
-export function assetDirectory(version: string, key = platformArchKey()): string {
-  return path.join(buildRoot(), 'search-assets', version, key);
+function assetDirectoriesUnder(version: string, key: string): string[] {
+  return buildRoots().map((root) => path.join(root, 'search-assets', version, key));
 }
 
 /** `process.resourcesPath` when this build is a packaged desktop application, otherwise `null`. */
@@ -60,14 +70,14 @@ function resourcesRoot(): string | null {
  *
  * A packaged desktop application carries the binary as a resource beside its own `app.asar`, so
  * `process.resourcesPath` is the first candidate there; a checkout, a CLI install or a test finds it in the
- * `build` directory next to this module. Both are checked by digest, so trying two places costs one failed
- * lookup and never widens what is trusted.
+ * checkout's `build` directory (`buildRoots`). All are checked by digest, so trying several places costs a failed
+ * lookup each and never widens what is trusted.
  */
 export function assetDirectories(version: string, key = platformArchKey()): string[] {
   const directories: string[] = [];
   const resources = resourcesRoot();
   if (resources) directories.push(path.join(resources, 'search-assets', version, key));
-  directories.push(assetDirectory(version, key));
+  directories.push(...assetDirectoriesUnder(version, key));
   return directories;
 }
 
@@ -78,15 +88,15 @@ export function assetDirectories(version: string, key = platformArchKey()): stri
  * A packaged application stages its verified binary under `resources/search-assets`, and a lock that is only
  * ever looked for beside the compiled module makes that binary *unreachable*: the runtime answers "no verified
  * asset" while a verified asset sits next to its own `resources`. The compiled layout is what exposes it —
- * `buildRoot()` from `resources/app/dist/packages/search` is `resources/app/dist/build`, and no package
- * contains that directory at all. So `scripts/copy-search-assets.mjs` stages the lock beside the binary it
+ * `buildRoots()` from `resources/app/dist/packages/search` are `resources/app/dist/build` and
+ * `resources/app/build`, and no package contains either directory. So `scripts/copy-search-assets.mjs` stages the lock beside the binary it
  * describes, and this list looks there first.
  */
 export function lockFiles(): string[] {
   const files: string[] = [];
   const resources = resourcesRoot();
   if (resources) files.push(path.join(resources, 'search-assets', 'search-assets.lock.json'));
-  files.push(path.join(buildRoot(), 'search-assets.lock.json'));
+  for (const root of buildRoots()) files.push(path.join(root, 'search-assets.lock.json'));
   return files;
 }
 
