@@ -234,7 +234,8 @@ test(
       `"${process.execPath}" -e "const s=require('net').connect(443,'${host}');s.setTimeout(4000);s.on('connect',()=>{console.log('CONNECTED');s.destroy()});s.on('timeout',()=>{console.log('BLOCKED');s.destroy()});s.on('error',e=>console.log('BLOCKED '+e.code))"`;
     const offline = await command(a, connect('1.1.1.1'), { network: 'denied' });
     assert.doesNotMatch(offline.output, /CONNECTED/);
-    const online = await command(a, connect('1.1.1.1'));
+    // Windows denies the network unless a command asks for it, so the online case has to ask.
+    const online = await command(a, connect('1.1.1.1'), { network: 'unrestricted' });
     assert.match(online.output, /CONNECTED/);
   },
 );
