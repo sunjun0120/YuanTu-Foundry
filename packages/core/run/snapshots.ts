@@ -4,6 +4,7 @@ import { contextTail } from '../../protocol/context.ts';
 import { admitGoalRound, type Goal } from '../../protocol/goals.ts';
 import type { CompletionStep, Task } from '../../protocol/index.ts';
 import { discoverSkills } from '../../resources/skills.ts';
+import { builtinServiceConfigured } from '../../builtin-services/manifest.ts';
 import type { SessionStore } from '../../storage/sqlite.ts';
 import { repoMapContext } from '../../tools/repo-map.ts';
 import {
@@ -146,7 +147,10 @@ export function createRunAnnouncements(options: RunAnnouncementsOptions): RunAnn
     }
     announce('memory', memoryContext(workspace));
     // Read per round: a skill written during the run is available from the next round.
-    announce('skills', skillsCatalogue(discoverSkills(workspace)));
+    announce(
+      'skills',
+      skillsCatalogue(discoverSkills(workspace, { analysisService: builtinServiceConfigured() })),
+    );
     /**
      * The outline is refreshed at the start of a run, and within one only when the model can no longer see it.
      *

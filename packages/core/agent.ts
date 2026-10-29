@@ -14,6 +14,7 @@ import { resolveRunLimits } from '../protocol/settings.ts';
 import { emptyStatistics } from '../protocol/statistics.ts';
 import { loadInstructions } from '../tools/instructions.ts';
 import { discoverSkills } from '../resources/skills.ts';
+import { builtinServiceConfigured } from '../builtin-services/manifest.ts';
 import { goalTools } from '../tools/goal.ts';
 import type { AgentOptions, AgentRunInput } from './agent-options.ts';
 import { admitVisibleBackground } from './background-deliveries.ts';
@@ -562,7 +563,7 @@ export class Agent {
       try {
         signal.throwIfAborted();
         const instructions = loadInstructions(workspace);
-        const skills = discoverSkills(workspace);
+        const skills = discoverSkills(workspace, { analysisService: builtinServiceConfigured() });
         // The goal notice and the runtime snapshots the conversation carries (see `./run-snapshots.ts`).
         const announcements = createRunAnnouncements({
           store,

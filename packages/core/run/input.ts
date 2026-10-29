@@ -1,5 +1,6 @@
 import type { ImageAttachment, Message } from '../../protocol/index.ts';
 import { expandSkill } from '../../resources/skills.ts';
+import { builtinServiceConfigured } from '../../builtin-services/manifest.ts';
 import type { SessionStore } from '../../storage/sqlite.ts';
 import type { AgentOptions } from '../agent-options.ts';
 import type { RunEmit } from './emit.ts';
@@ -27,7 +28,7 @@ export function userMessage(options: {
   modelInfo: AgentOptions['modelInfo'];
 }): Message {
   const { workspace, prompt, createdAt, images, modelInfo } = options;
-  const expanded = expandSkill(workspace, prompt);
+  const expanded = expandSkill(workspace, prompt, { analysisService: builtinServiceConfigured() });
   return {
     role: 'user',
     createdAt,

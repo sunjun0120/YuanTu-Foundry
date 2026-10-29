@@ -7,7 +7,11 @@ import {
   closeBuiltinServices,
   warmToolCache,
 } from '../packages/builtin-services/index.ts';
-import { resolveBuiltinService } from '../packages/builtin-services/manifest.ts';
+import {
+  builtinServiceConfigured,
+  PRODUCTION_BASE_URL,
+  resolveBuiltinService,
+} from '../packages/builtin-services/manifest.ts';
 import { sharedTasks } from '../packages/builtin-services/tasks.ts';
 import { builtinSkills } from '../packages/resources/builtin-skills.ts';
 import { analysisServiceFixture } from './analysis-service-fixture.ts';
@@ -112,5 +116,31 @@ test('warming an unreachable service does not throw', async (t) => {
 });
 
 test('the code analysis report skill is built in', () => {
-  assert.ok(builtinSkills().some((skill) => skill.name === 'code-analysis-report'));
+  assert.ok(
+    builtinSkills({ analysisService: true }).some((skill) => skill.name === 'code-analysis-report'),
+  );
+  assert.equal(
+    builtinSkills().some((skill) => skill.name === 'code-analysis-report'),
+    false,
+  );
+});
+
+test('the service counts as configured exactly where its tools can be registered', () => {
+  assert.equal(builtinServiceConfigured({ YUANTU_BUILTIN_SERVICES: '0' }), false);
+  assert.equal(
+    builtinServiceConfigured({ YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:9' }),
+    true,
+  );
+  // An installed app ignores the development override, and an unusable address registers nothing.
+  assert.equal(
+    builtinServiceConfigured({
+      YUANTU_PACKAGED: '1',
+      YUANTU_BUILTIN_SERVICES_URL: 'http://127.0.0.1:9',
+    }),
+    PRODUCTION_BASE_URL !== undefined,
+  );
+  assert.equal(
+    builtinServiceConfigured({ YUANTU_BUILTIN_SERVICES_URL: 'http://example.com' }),
+    false,
+  );
 });

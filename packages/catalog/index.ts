@@ -1,4 +1,5 @@
 import { builtinServiceTools } from '../builtin-services/index.ts';
+import { builtinServiceConfigured } from '../builtin-services/manifest.ts';
 import path from 'node:path';
 import { officeTools } from '../office/tools.ts';
 import { deliveryTool } from '../tools/delivery.ts';
@@ -264,7 +265,8 @@ export function createTools(
         onFailure: bridge.onFailure ?? ((message) => process.stderr.write(`[hook] ${message}\n`)),
       }),
     );
-  if (discoverSkills(root).length)
+  const skillOptions = { analysisService: builtinServiceConfigured() };
+  if (discoverSkills(root, skillOptions).length)
     registry.register({
       name: 'load_skill',
       isConcurrencySafe: parallelRead,
@@ -278,7 +280,7 @@ export function createTools(
       },
       execute: async (args) => ({
         isError: false,
-        content: expandSkill(root, `/skill:${String(args.name)}`).prompt,
+        content: expandSkill(root, `/skill:${String(args.name)}`, skillOptions).prompt,
       }),
     });
   return registry;

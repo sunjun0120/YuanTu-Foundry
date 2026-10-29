@@ -75,3 +75,15 @@ export function resolveBuiltinService(
     throw new Error('Built-in service URL must use HTTPS (http only on loopback)');
   return { ...DEFAULTS, baseUrl: url.origin + url.pathname.replace(/\/+$/, '') };
 }
+
+/**
+ * Whether this build and environment have a service to offer at all: the condition `builtinServiceTools` registers
+ * anything under, so a skill that works only through those tools is listed exactly where they can exist.
+ */
+export function builtinServiceConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  try {
+    return resolveBuiltinService(env) !== undefined;
+  } catch {
+    return false;
+  }
+}

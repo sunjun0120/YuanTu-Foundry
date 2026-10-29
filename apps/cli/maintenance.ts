@@ -20,6 +20,7 @@ import {
 } from '../../packages/protocol/settings.ts';
 import { loadInstructions } from '../../packages/tools/instructions.ts';
 import { discoverSkills } from '../../packages/resources/skills.ts';
+import { builtinServiceConfigured } from '../../packages/builtin-services/manifest.ts';
 import { extensionTools } from '../../packages/resources/extensions.ts';
 import { readMcpConfigs } from '../../packages/mcp/config.ts';
 import {
@@ -212,7 +213,7 @@ export async function runStandaloneCommand(
       JSON.stringify(
         {
           instructions: loadInstructions(root).files,
-          skills: discoverSkills(root),
+          skills: discoverSkills(root, { analysisService: builtinServiceConfigured() }),
           extensions: extensionTools(root).map((t) => t.name),
         },
         null,

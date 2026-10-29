@@ -119,16 +119,24 @@ const BUILTIN: Record<string, string> = {
   'code-analysis-report': CODE_ANALYSIS_REPORT,
 };
 
-export function builtinSkills(): SkillInfo[] {
-  return Object.entries(BUILTIN).map(([name, text]) => ({
-    name,
-    description:
-      text
-        .match(/^description:\s*(.+)$/m)?.[1]
-        ?.trim()
-        .slice(0, 256) ?? name,
-    path: BUILTIN_SKILL_PREFIX + name,
-  }));
+/** What decides which built-in skills a build lists; this layer cannot ask `builtin-services` itself. */
+export interface BuiltinSkillOptions {
+  /** The analysis service is configured (`builtinServiceConfigured`); without it the analysis skill has no tools. */
+  analysisService?: boolean;
+}
+
+export function builtinSkills(options: BuiltinSkillOptions = {}): SkillInfo[] {
+  return Object.entries(BUILTIN)
+    .filter(([name]) => name !== 'code-analysis-report' || options.analysisService === true)
+    .map(([name, text]) => ({
+      name,
+      description:
+        text
+          .match(/^description:\s*(.+)$/m)?.[1]
+          ?.trim()
+          .slice(0, 256) ?? name,
+      path: BUILTIN_SKILL_PREFIX + name,
+    }));
 }
 
 /** The body of a built-in skill by its catalogue path, or `undefined` for a path that names a workspace file. */

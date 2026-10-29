@@ -918,10 +918,11 @@ test('controller sends images and steers a pending Host approval without stale w
   assert.equal(typedUserMessages(controller.snapshot.messages).length, 2);
   await assert.rejects(readFile(path.join(root, 'blocked.txt')), { code: 'ENOENT' });
   const resources = await client.request('resources.list', {});
-  // The workspace declares no skills of its own; what is listed is what this build ships with.
+  // The workspace declares no skills of its own; what is listed is what this build ships with. No analysis
+  // service is configured here, so its skill, which has no tools without one, is not offered.
   assert.deepEqual(
     resources.skills.map((skill) => skill.path),
-    ['builtin:code-analysis-report', 'builtin:office-documents'],
+    ['builtin:office-documents'],
   );
 });
 test('controller rejects a second send during an active run but lets another session open', async (t) => {

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { extensionTools } from '../../../packages/resources/extensions.ts';
 import { loadInstructions } from '../../../packages/tools/instructions.ts';
 import { discoverSkills } from '../../../packages/resources/skills.ts';
+import { builtinServiceConfigured } from '../../../packages/builtin-services/manifest.ts';
 import { sniffImageType, MAX_IMAGE_BYTES } from '../../../packages/protocol/images.ts';
 import {
   FILE_PREVIEW_BYTES,
@@ -39,7 +40,7 @@ function officeFormatOf(relative: string): OfficeFormat | undefined {
 export const fileHandlers: Readonly<Record<string, Handler>> = {
   'resources.list': async (ctx) => ({
     instructions: loadInstructions(ctx.workspace).files,
-    skills: discoverSkills(ctx.workspace),
+    skills: discoverSkills(ctx.workspace, { analysisService: builtinServiceConfigured() }),
     extensions: extensionTools(ctx.workspace).map((t) => t.name),
   }),
   'files.list': async (ctx, params) => {
