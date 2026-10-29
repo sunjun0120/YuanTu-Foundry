@@ -16,7 +16,9 @@ test(
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-output-integrity-'));
     t.after(() => rm(root, { recursive: true, force: true }));
-    const identity = await exec('whoami.exe', ['/user', '/fo', 'csv', '/nh'], {
+    const original = path.join(process.env.SystemRoot ?? 'C:/Windows', 'System32/whoami.exe');
+    // By absolute path: a PATH with Git's usr/bin ahead of System32 resolves 'whoami.exe' to coreutils' whoami.
+    const identity = await exec(original, ['/user', '/fo', 'csv', '/nh'], {
       windowsHide: true,
     });
     const sid = identity.stdout.match(/S-1-5-21-[0-9-]+/)?.[0];
@@ -26,7 +28,6 @@ test(
     const output = path.join(root, 'output');
     await prepareWindowsOutput(output);
     const executable = path.join(output, 'identity.exe');
-    const original = path.join(process.env.SystemRoot ?? 'C:/Windows', 'System32/whoami.exe');
     await copyFile(original, executable);
     const { stdout } = await exec(executable, ['/groups', '/fo', 'csv', '/nh'], {
       windowsHide: true,

@@ -503,7 +503,11 @@ test('the workspace file surface is bounded by the file tools own rules', async 
   await writeFile(path.join(root, 'README.md'), '# 项目\n\n说明\n', 'utf8');
   // The extension says text; the bytes say otherwise. The preview has to answer from the bytes.
   await writeFile(path.join(root, 'notes.txt'), Buffer.from([0x00, 0x01, 0x02, 0xff]));
-  const png = await readFile(path.join(projectRoot, 'apps/desktop/img/logo-dark.png'));
+  // A real one-pixel PNG, inline so the fixture does not depend on which images the product ships.
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64',
+  );
   await writeFile(path.join(root, 'logo.png'), png);
   await writeFile(
     path.join(root, 'huge.png'),

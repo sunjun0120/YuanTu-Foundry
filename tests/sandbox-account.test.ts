@@ -216,6 +216,16 @@ const announcing: BrokerLauncher = () => {
   return child as unknown as ChildProcess;
 };
 
+/**
+ * The tool budget the authorization fixture runs under, and how long a test holds authorization open.
+ *
+ * The budget also covers the work before authorization starts (the account check and the broker launch), which
+ * on a machine busy with the parallel suite took longer than the 100 ms it used to be and timed the tool out
+ * before the wait under test began. The hold is past the budget, so outlasting it still proves the wait is
+ * excluded from it.
+ */
+const AUTHORIZATION_BUDGET_MS = 500;
+const AUTHORIZATION_HOLD_MS = AUTHORIZATION_BUDGET_MS + 200;
 /** Exercises the real provider/registry wait without provisioning accounts or launching a command. */
 async function authorizationBudgetFixture(
   t: TestContext,
@@ -251,7 +261,7 @@ async function authorizationBudgetFixture(
     },
   });
   const registry = new ToolRegistry();
-  registry.deadlines = { defaultMs: 100 };
+  registry.deadlines = { defaultMs: AUTHORIZATION_BUDGET_MS };
   registry.register({
     name: 'authorize',
     description: 'Prepare a command through the Windows account provider',
@@ -307,7 +317,7 @@ test(
         settled = true;
       })
       .catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await new Promise((resolve) => setTimeout(resolve, AUTHORIZATION_HOLD_MS));
     assert.equal(settled, false, 'authorization must be excluded from the tool execution budget');
     assert.deepEqual(fixture.progress, [true]);
     assert.equal(fixture.helperSignal()?.aborted, false);
@@ -329,7 +339,7 @@ test(
       );
     });
     await fixture.active;
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    await new Promise((resolve) => setTimeout(resolve, AUTHORIZATION_HOLD_MS));
     fixture.release();
     const result = await fixture.result;
     assert.equal(afterStarted, true, 'the tool must reach its post-authorization work');

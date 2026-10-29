@@ -193,7 +193,8 @@ test(
       import path from 'node:path';
       const config = createRequire(${JSON.stringify(import.meta.url)})('../electron-builder.config.cjs');
       if (process.platform === 'win32') {
-        const identity = execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], {encoding:'utf8',windowsHide:true});
+        // By absolute path: a PATH with Git's usr/bin ahead of System32 resolves 'whoami.exe' to coreutils' whoami.
+        const identity = execFileSync(path.join(process.env.SystemRoot, 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {encoding:'utf8',windowsHide:true});
         const sid = identity.match(/S-1-5-21-[0-9-]+/)?.[0];
         assert.ok(sid);
         execFileSync('icacls.exe', [process.cwd(), '/grant', '*' + sid + ':(OI)(CI)F'], {windowsHide:true});
