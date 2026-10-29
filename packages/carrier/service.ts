@@ -12,7 +12,7 @@ import { readConfig } from '../providers/config.ts';
 import type { ModelCatalogConfiguration, ModelSelection } from '../protocol/model-configuration.ts';
 import { credentialsPath } from '../providers/credentials.ts';
 import { statSync } from 'node:fs';
-import type { SessionInfo } from '../protocol/index.ts';
+import type { Message, SessionInfo } from '../protocol/index.ts';
 import type { HostMethods } from '../protocol/rpc.ts';
 import type { PermissionPolicySource } from '../protocol/permission-policy.ts';
 import type { SandboxMode } from '../sandbox/sandbox-provider.ts';
@@ -23,10 +23,11 @@ import { BackgroundPanel } from './background-panel.ts';
 import { SubAgentTranscriptViewer } from './subagent-transcript.ts';
 import { runTaskCommand, type TaskCommandContext } from './task-commands.ts';
 import {
-  EXECUTION_COMMANDS,
   EXECUTION_POLICY_CAPABILITY,
   MANAGING_COMMANDS,
+  RUN_INTERACTION_COMMANDS,
   describeSelection,
+  executesUnderPolicy,
 } from './command-policy.ts';
 import {
   FULL_REFRESH,
@@ -53,6 +54,13 @@ const SESSION_PAGE = 100;
 const SESSION_REQUEST_MAX = 500;
 /** How many audit entries one request asks for; the carrier keeps `AUDIT_WINDOW` of them. */
 const AUDIT_PAGE = 500;
+/**
+ * The most messages one export reads: the newest ones, with the count of those left out.
+ *
+ * An export used to read the whole history, images included, into this process at once; a long session is the
+ * one an export is most likely to be asked of.
+ */
+export const EXPORT_MESSAGE_LIMIT = 5_000;
 
 /**
  * The client state machine every carrier shares: sessions, run state, transcript projection, pending
@@ -93,8 +101,16 @@ export interface CarrierOptions {
   startupCheck?: () => void;
 }
 export class CarrierService {
-  /** Read a fixed transcript window for the shell without changing the visible history or selection. */
-  async exportTranscript(sessionId: string) {
+  /**
+   * Read a fixed transcript window for the shell without changing the visible history or selection.
+   *
+   * The window is the newest `EXPORT_MESSAGE_LIMIT` messages; `omitted` counts the older ones it left out. Images
+   * are dropped from the answer: the export is text, and holding them would keep every attachment alive for it.
+   */
+  async exportTranscript(
+    sessionId: string,
+  ): Promise<{ title: string | undefined; messages: Message[]; omitted: number }> {
+    if (!this.ready || this.client.status !== 'ready') throw new CarrierError('hostNotReady');
     const client = this.client;
     const first = await client.request('session.get', {
       sessionId,
@@ -102,10 +118,17 @@ export class CarrierService {
       offset: 0,
       tail: 1,
     });
-    const history = await readDisplayHistory(client, sessionId, Infinity, 0, {
-      ...(first.totalMessages === undefined ? {} : { endOffset: first.totalMessages }),
+    const total = first.totalMessages;
+    const start = total === undefined ? 0 : Math.max(0, total - EXPORT_MESSAGE_LIMIT);
+    const history = await readDisplayHistory(client, sessionId, EXPORT_MESSAGE_LIMIT, start, {
+      ...(total === undefined ? {} : { endOffset: total }),
     });
-    return { title: first.session.title, messages: history.messages };
+    const messages = history.messages.map((message) => {
+      if (!('images' in message)) return message;
+      const { images: _images, ...text } = message as Message & { images?: unknown };
+      return text as Message;
+    });
+    return { title: first.session.title, messages, omitted: history.startOffset };
   }
 
   private client: AgentHostClient;
@@ -318,7 +341,19 @@ export class CarrierService {
            * log", and a rebuilt session when it is not.
            */
           this.interrupted = false;
-          void this.controller.catchUp().catch(() => undefined);
+          // The link is back, so the failure it reported is over: a window that kept "failed" and the disconnect
+          // notice looked broken while every command worked. The panels were not watched while it was down.
+          if (this.ready) {
+            this.startupStage = 'ready';
+            if (this.error instanceof CarrierError && this.error.code === 'hostDisconnected')
+              this.error = null;
+          }
+          void this.controller
+            .catchUp()
+            .catch(() => undefined)
+            .then(() => (this.ready ? this.refresh() : undefined))
+            .catch(() => undefined)
+            .finally(() => this.publish());
         }
         this.publish();
       }),
@@ -568,12 +603,17 @@ export class CarrierService {
    * are assigned and shared the same way, so a publish no longer clones each of them and the window's sender can
    * tell an unchanged one by reference instead of serializing it.
    */
+  /**
+   * Whether the open session can send: its selected connection says so, or the environment resolves one.
+   *
+   * Its own getter so the commands that only need this answer do not build a whole snapshot to read one field.
+   */
+  private get configured(): boolean {
+    return this.selectedModel?.configured ?? this.isConfigured({ ...process.env, ...this.env });
+  }
   get snapshot(): CarrierSnapshot {
     const env = { ...process.env, ...this.env };
-    const selected =
-      this.modelSelection?.sessionId === this.controller.sessionId
-        ? this.modelSelection.value
-        : undefined;
+    const selected = this.selectedModel;
     const configured = selected?.configured ?? this.isConfigured(env);
     return {
       sessionQuery: this.sessionQuery,
@@ -724,12 +764,15 @@ export class CarrierService {
     const failed = settled.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;
   }
+  /** Orders the changes panel's own reads; see `refreshChanges`. */
+  private changesVersion = 0;
   private async refreshChanges(id: string | null): Promise<void> {
-    const version = this.searchVersion;
+    const version = ++this.changesVersion;
     const changes = id ? await this.client.request('changes.list', { sessionId: id }) : [];
-    // Published under the same guard as the session list: two overlapping refreshes can cross a session switch,
-    // and a stale reply landing last would show the file changes of a session the user has left.
-    if (version === this.searchVersion && id === this.controller.sessionId)
+    // Two overlapping refreshes can cross a session switch, and a stale reply landing last would show the file
+    // changes of a session the user has left. The guard is this panel's own: it used to borrow the session list's,
+    // which every title or other-session run event bumps, so a valid reply was dropped and the panel went stale.
+    if (version === this.changesVersion && id === this.controller.sessionId)
       this.changes = deepFreeze(changes);
   }
   /** Refresh independently when a fallback or a background-generated title becomes available. */
@@ -943,7 +986,7 @@ export class CarrierService {
   private async restoreModels(): Promise<void> {
     if (!this.modelCatalog) return;
     if (!this.client.supports('model-configuration-v1'))
-      throw new Error('Host does not support live model configuration');
+      throw new CarrierError('modelConfigurationUnsupported');
     await this.client.request('model.configure', this.modelCatalog);
   }
   private async refreshModelSelection(): Promise<void> {
@@ -955,16 +998,16 @@ export class CarrierService {
   async configureModels(catalog: ModelCatalogConfiguration): Promise<void> {
     for (const connection of catalog.connections) this.modelSecrets.add(connection.apiKey);
     if (!this.client.supports('model-configuration-v1'))
-      throw new Error('Host does not support live model configuration');
+      throw new CarrierError('modelConfigurationUnsupported');
     await this.client.request('model.configure', catalog);
     this.modelCatalog = structuredClone(catalog);
     await this.refreshModelSelection();
     this.publish();
   }
   async selectModel(connectionId: string): Promise<ModelSelection> {
-    if (this.busy || this.restoring || this.managing) throw new CarrierError('operationBusy');
+    if (this.busy) throw new CarrierError('operationBusy');
     const sessionId = this.controller.sessionId;
-    if (!sessionId) throw new Error('No session selected');
+    if (!sessionId) throw new CarrierError('sessionRequired');
     const value = await this.client.request('model.select', { sessionId, connectionId });
     if (sessionId === this.controller.sessionId) this.modelSelection = { sessionId, value };
     this.publish();
@@ -1003,6 +1046,8 @@ export class CarrierService {
       if (this.client.supports('runtime.ready')) await this.client.request('runtime.ready', {});
       this.ready = true;
       this.startupStage = 'ready';
+      // A start that succeeded leaves nothing to report; a failure from an earlier start or link must not outlive it.
+      this.error = null;
       this.backgroundPanel.start();
     } catch (error) {
       this.startupStage = 'failed';
@@ -1032,7 +1077,7 @@ export class CarrierService {
       client: this.client,
       controller: this.controller,
       tasks: this.tasks,
-      configured: this.snapshot.configured,
+      configured: this.configured,
       setTasks: (tasks) => {
         this.tasks = deepFreeze(tasks);
         this.publish();
@@ -1052,7 +1097,7 @@ export class CarrierService {
     if (!this.ready || this.client.status !== 'ready')
       throw new CarrierError(this.recovering ? 'hostRecovering' : 'hostNotReady');
     if (
-      EXECUTION_COMMANDS.has(command.type) &&
+      executesUnderPolicy(command) &&
       this.unconfirmedPolicies.has(this.controller.sessionId ?? '')
     )
       throw new CarrierError('policyUnconfirmed');
@@ -1099,6 +1144,10 @@ export class CarrierService {
       return this.snapshot;
     }
     if (command.type === 'pollBackground' || command.type === 'refreshBackground') {
+      // The panel reads the open session only, so answering a poll for another session's job with it would
+      // report that job as gone; see `CarrierCommand`.
+      if (command.type === 'pollBackground' && command.sessionId !== this.controller.sessionId)
+        throw new CarrierError('backgroundNotInSession');
       await this.backgroundPanel.refresh();
       return this.snapshot;
     }
@@ -1115,9 +1164,14 @@ export class CarrierService {
      * ask whether the plan should be approved (or to wait for a tool approval). Those answers are not mutations
      * racing the plan — they are the only way it can finish — so the managing gate must not close on them.
      * `cancel` belongs here for the same reason: a person must always be able to stop the run they are staring at.
+     * While the managing command is itself a run, the commands that talk to or only read that run pass as well
+     * (`RUN_INTERACTION_COMMANDS`); a rename or a delete still keeps them out.
      */
     const interactive =
-      command.type === 'approve' || command.type === 'questionAnswer' || command.type === 'cancel';
+      command.type === 'approve' ||
+      command.type === 'questionAnswer' ||
+      command.type === 'cancel' ||
+      (RUN_INTERACTION_COMMANDS.has(command.type) && this.controller.running);
     if (this.restoring || (this.managing && !interactive))
       throw new CarrierError('sessionOperationBusy');
     const manages = MANAGING_COMMANDS.has(command.type);
@@ -1218,7 +1272,7 @@ export class CarrierService {
           break;
         }
         case 'send':
-          if (!this.snapshot.configured) throw new CarrierError('modelNotConfigured');
+          if (!this.configured) throw new CarrierError('modelNotConfigured');
           await this.controller.send(
             command.prompt,
             command.images,

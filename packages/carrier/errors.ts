@@ -25,10 +25,13 @@ const messages = {
   policyUnconfirmed:
     'Execution policy is unconfirmed: Agent Host did not acknowledge the last sandbox selection. Select and confirm a preset before running again.',
   modelNotConfigured: 'Open Model settings and enter an endpoint, model ID and API key.',
+  modelConfigurationUnsupported:
+    'This Agent Host does not support live model configuration; upgrade the Host.',
   draftPlanningFailed:
     'The draft was saved, but automatic planning did not finish; edit it before execution. {message}',
   sessionRequired: 'Create or load a session first',
   subagentNotInSession: 'That sub-agent does not belong to this session',
+  backgroundNotInSession: 'That background command does not belong to the open session',
   sessionOperationBusy: 'Session operation is in progress',
   runBusy: 'Wait for the current run or loading operation to finish',
   operationBusy: 'Wait for the current operation to finish',

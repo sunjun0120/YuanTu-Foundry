@@ -219,6 +219,16 @@ test('the exported conversation is written in the interface language and keeps i
     /^# 发布检查\n/,
     'a session title is content, not copy',
   );
+  // An export that left older messages out says so, in the interface language, before the first one.
+  assert.match(
+    conversationMarkdown({ title: 'T', messages, omitted: 12, language: 'en-US' }),
+    /^# T\n\n> This session is long; 12 earlier messages were left out\.\n\n## You/,
+  );
+  assert.match(
+    conversationMarkdown({ title: 'T', messages, omitted: 12 }),
+    /已省略较早的 12 条消息/,
+  );
+  assert.doesNotMatch(conversationMarkdown({ title: 'T', messages, omitted: 0 }), /省略/);
 });
 
 test('a refusal the kernel writes in English gets one sentence in the interface language', (t) => {

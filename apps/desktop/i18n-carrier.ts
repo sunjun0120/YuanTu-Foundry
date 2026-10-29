@@ -56,9 +56,17 @@ export const carrierMessages: Record<`carrier.${CarrierErrorCode}`, [string, str
     'The draft was saved, but automatic planning did not finish; edit it before execution. {message}',
   ],
   'carrier.sessionRequired': ['请先创建或打开会话。', 'Create or load a session first'],
+  'carrier.modelConfigurationUnsupported': [
+    '当前 Agent Host 不支持在线配置模型，请升级 Host。',
+    'This Agent Host does not support live model configuration; upgrade the Host.',
+  ],
   'carrier.subagentNotInSession': [
     '该子代理不属于当前会话。',
     'That sub-agent does not belong to this session',
+  ],
+  'carrier.backgroundNotInSession': [
+    '该后台命令不属于当前会话。',
+    'That background command does not belong to the open session',
   ],
   'carrier.sessionOperationBusy': [
     '会话操作正在进行，请稍候。',

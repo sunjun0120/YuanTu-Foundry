@@ -50,7 +50,8 @@ import { validateUserInput } from '../protocol/images.ts';
  * carrier from inventing a second parser.
  */
 export type CarrierCommand =
-  | ({ type: 'export'; suggestedName: string } & ({ content: string } | { sessionId: string }))
+  /** `suggestedName` is optional on the wire; the shell falls back to its own default name. */
+  | ({ type: 'export'; suggestedName?: string } & ({ content: string } | { sessionId: string }))
   | {
       type:
         | 'snapshot'
@@ -70,6 +71,13 @@ export type CarrierCommand =
       policy: HostMethods['background.policy']['params']['policy'];
       reset?: boolean;
     }
+  /**
+   * Read one job of the open session's background panel now.
+   *
+   * The panel owns each job's output cursor, so `cursor` is the caller's view of how far it has read and is not a
+   * position the service rewinds to; a job that is not the open session's is refused rather than silently answered
+   * with another session's panel.
+   */
   | { type: 'pollBackground'; id: string; sessionId: string; cursor: number }
   /**
    * Confine this carrier's commands to one sandbox mode, from the next command on.

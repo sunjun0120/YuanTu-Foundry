@@ -19,8 +19,11 @@ export function conversationMarkdown(input: {
   title?: string | undefined;
   messages: readonly ExportableMessage[];
   language?: UiLanguage;
+  /** How many older messages the export left out; see `CarrierService.exportTranscript`. */
+  omitted?: number;
 }): string {
-  const text = (key: string) => (input.language ? translate(key, input.language) : t(key));
+  const text = (key: string, values?: Record<string, number>) =>
+    input.language ? translate(key, input.language, values) : t(key, values);
   const title = input.title?.trim() || text('ui.export.untitled');
   const roleOf = (role: string): string =>
     role === 'user'
@@ -28,7 +31,10 @@ export function conversationMarkdown(input: {
       : role === 'assistant'
         ? text('ui.export.roleAssistant')
         : text('ui.export.roleTool');
-  return `# ${title}\n\n${input.messages
+  const notice = input.omitted
+    ? `> ${text('ui.export.omitted', { count: input.omitted })}\n\n`
+    : '';
+  return `# ${title}\n\n${notice}${input.messages
     .map((message) => `## ${roleOf(message.role)}\n\n${message.content}`)
     .join('\n\n')}`;
 }

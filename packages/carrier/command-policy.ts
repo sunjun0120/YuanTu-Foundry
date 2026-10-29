@@ -30,6 +30,37 @@ export const EXECUTION_COMMANDS = new Set<string>([
   'undo',
   'compact',
 ]);
+/**
+ * Whether a command puts the Host to work, which an unconfirmed policy refuses.
+ *
+ * Declining is not work: denying an approval, dismissing a question or rejecting a task approval only unblocks a run
+ * without running anything, and refusing them left `cancel` as the only way out of a run waiting on a person.
+ */
+export function executesUnderPolicy(command: {
+  type: string;
+  allow?: boolean;
+  cancelled?: boolean;
+}): boolean {
+  if (!EXECUTION_COMMANDS.has(command.type)) return false;
+  if ((command.type === 'approve' || command.type === 'taskApproval') && command.allow === false)
+    return false;
+  if (command.type === 'questionAnswer' && command.cancelled === true) return false;
+  return true;
+}
+/**
+ * Commands that talk to the run a managing command is waiting on, or only read what that run shows.
+ *
+ * `planExecute`, `taskStart`, `taskRetry`, `goal` and `plan` hold `managing` for the whole run they start, so the
+ * gate would otherwise refuse a follow-up message, the queue, an older page or a sub-agent card for as long as the
+ * run lasts — all of which a run started by an ordinary `send` allows. They pass only while that run is in flight.
+ */
+export const RUN_INTERACTION_COMMANDS = new Set<string>([
+  'enqueue',
+  'clearQueue',
+  'loadOlder',
+  'subagentTranscript',
+  'closeSubagentTranscript',
+]);
 /** One selection, as the error text names it: what a person chose versus what came back. */
 export function describeSelection(selection: {
   mode: string;

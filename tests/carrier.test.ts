@@ -59,6 +59,7 @@ test('session export reads complete display history without changing the visible
   assert.equal(exported.messages.length, 150);
   assert.equal(exported.messages[0]?.content, 'EXPORT_MESSAGE_0');
   assert.equal(exported.messages.at(-1)?.content, 'EXPORT_MESSAGE_149');
+  assert.equal(exported.omitted, 0);
   assert.equal(carrier.snapshot.session.messages.length, 100);
   await carrier.dispatch({ type: 'create' });
   const visibleId = carrier.snapshot.session.sessionId;
@@ -255,6 +256,140 @@ test('a managing command cannot close the door on the answer it is waiting for',
     service.dispatch({ type: 'questionAnswer', id: 'q2', answers: [{ id: 'plan', selected: [] }] }),
     /Session operation is in progress/,
   );
+});
+
+/** A dispatch-ready service with no Host behind it; the fields are the ones `dispatch` reads before its switch. */
+function bareService(controller: Record<string, unknown>, calls: string[]): any {
+  const service = Object.create(CarrierService.prototype) as any;
+  service.restoring = false;
+  service.managing = false;
+  service.ready = true;
+  service.recovering = false;
+  service.recovery = null;
+  service.client = { status: 'ready', request: async (method: string) => calls.push(method) };
+  service.unconfirmedPolicies = new Set();
+  service.error = null;
+  service.transcript = {
+    open: async () => calls.push('transcript'),
+    close: () => calls.push('close'),
+  };
+  service.backgroundPanel = { refresh: async () => calls.push('background') };
+  service.controller = { sessionId: 's1', running: false, ...controller };
+  service.refresh = async () => {};
+  service.publish = () => {};
+  service.modelSelection = { sessionId: 's1' };
+  Object.defineProperty(service, 'snapshot', { value: { session: {} } });
+  return service;
+}
+
+test('a run a managing command started still takes follow-ups, its queue and its sub-agent cards', async () => {
+  const calls: string[] = [];
+  const service = bareService(
+    {
+      enqueue: async (prompt: string) => calls.push(`enqueue:${prompt}`),
+      clearQueue: async () => calls.push('clearQueue'),
+      loadOlder: async () => calls.push('loadOlder'),
+    },
+    calls,
+  );
+  // `planExecute` holds `managing` for the whole run it starts.
+  service.managing = true;
+  service.controller.running = true;
+  await service.dispatch({ type: 'enqueue', prompt: 'and then', mode: 'follow-up' });
+  await service.dispatch({ type: 'clearQueue' });
+  await service.dispatch({ type: 'loadOlder' });
+  await service.dispatch({ type: 'subagentTranscript', subagentId: 'a', childSessionId: 'c' });
+  await service.dispatch({ type: 'closeSubagentTranscript' });
+  assert.deepEqual(calls, ['enqueue:and then', 'clearQueue', 'loadOlder', 'transcript', 'close']);
+  // A managing command that is not a run — a rename, a delete — still keeps them out.
+  service.controller.running = false;
+  await assert.rejects(
+    service.dispatch({ type: 'subagentTranscript', subagentId: 'a', childSessionId: 'c' }),
+    /Session operation is in progress/,
+  );
+  // And a managing run does not open the door to commands that change the session.
+  service.controller.running = true;
+  await assert.rejects(
+    service.dispatch({ type: 'load', id: 's2' }),
+    /Session operation is in progress/,
+  );
+});
+
+test('an unconfirmed policy refuses work but never a refusal', async () => {
+  const calls: string[] = [];
+  const service = bareService(
+    {
+      approve: async (id: string, allow: boolean) => calls.push(`approve:${id}:${allow}`),
+      dismissQuestion: async (id: string) => calls.push(`dismiss:${id}`),
+      answerQuestion: async (id: string) => calls.push(`answer:${id}`),
+    },
+    calls,
+  );
+  service.unconfirmedPolicies.add('s1');
+  await service.dispatch({ type: 'approve', id: 'a1', allow: false });
+  await service.dispatch({ type: 'questionAnswer', id: 'q1', cancelled: true });
+  assert.deepEqual(calls, ['approve:a1:false', 'dismiss:q1']);
+  await assert.rejects(
+    service.dispatch({ type: 'approve', id: 'a2', allow: true }),
+    /Execution policy is unconfirmed/,
+  );
+  await assert.rejects(
+    service.dispatch({
+      type: 'questionAnswer',
+      id: 'q2',
+      answers: [{ id: 'x', selected: ['yes'] }],
+    }),
+    /Execution policy is unconfirmed/,
+  );
+  assert.deepEqual(calls, ['approve:a1:false', 'dismiss:q1']);
+});
+
+test('a background poll for another session is refused instead of answered with the open one', async () => {
+  const calls: string[] = [];
+  const service = bareService({}, calls);
+  await service.dispatch({ type: 'pollBackground', id: 'job', sessionId: 's1', cursor: 0 });
+  assert.deepEqual(calls, ['background']);
+  await assert.rejects(
+    service.dispatch({ type: 'pollBackground', id: 'job', sessionId: 's2', cursor: 0 }),
+    /does not belong to the open session/,
+  );
+  assert.deepEqual(calls, ['background']);
+});
+
+test('the changes panel keeps its reply when the session list refreshes underneath it', async () => {
+  const service = Object.create(CarrierService.prototype) as any;
+  service.changesVersion = 0;
+  service.searchVersion = 0;
+  service.controller = { sessionId: 's1' };
+  service.client = {
+    request: async () => {
+      // A title update or another session's run refreshes the sidebar while this read is in flight.
+      service.searchVersion++;
+      return [{ id: 'change' }];
+    },
+  };
+  await service.refreshChanges('s1');
+  assert.deepEqual(service.changes, [{ id: 'change' }]);
+});
+
+test('a link that comes back clears the failure it reported and reads the panels again', async () => {
+  const carrier = connectedCarrier({
+    transport: { send() {}, close() {} } as any,
+    env: {},
+  }) as any;
+  let refreshed = 0;
+  carrier.ready = true;
+  carrier.refresh = async () => {
+    refreshed++;
+  };
+  carrier.controller.catchUp = async () => false;
+  carrier.client.setStatus('failed');
+  assert.equal(carrier.snapshot.startupStage, 'failed');
+  assert.equal(carrier.snapshot.errorDetail?.code, 'hostDisconnected');
+  carrier.client.setStatus('ready');
+  assert.equal(carrier.snapshot.startupStage, 'ready');
+  assert.equal(carrier.snapshot.errorDetail, null);
+  await waitFor(() => refreshed === 1, 'the panels to be read again');
 });
 
 test('each command refreshes only the panels its effect moves; unknown or session-wide commands keep the full read', () => {

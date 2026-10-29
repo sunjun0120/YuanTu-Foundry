@@ -338,6 +338,10 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.export.roleUser': ['你', 'You'],
   'ui.export.roleAssistant': ['助手', 'Assistant'],
   'ui.export.roleTool': ['工具', 'Tool'],
+  'ui.export.omitted': [
+    '会话过长，已省略较早的 {count} 条消息。',
+    'This session is long; {count} earlier messages were left out.',
+  ],
   'ui.composerHint': [
     'Enter 发送 · Shift + Enter 换行',
     'Enter to send · Shift + Enter for a new line',

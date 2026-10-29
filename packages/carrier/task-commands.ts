@@ -116,10 +116,11 @@ export async function runTaskCommand(
     case 'taskRefresh':
       return;
     case 'taskVerify': {
+      const sessionId = requireSession(context);
       context.setRestoring(true);
       try {
         await client.request('task.verify', {
-          sessionId: controller.sessionId!,
+          sessionId,
           taskId: command.taskId,
         });
       } finally {
