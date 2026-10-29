@@ -662,7 +662,9 @@ test('an approved task is announced, and a step that completes updates it in pla
   const agent = new Agent({ store, provider, tools: createTools(root), approve: async () => true });
   await agent.run({ sessionId, taskId: task.id, prompt: '开始' });
 
-  assert.equal(requests.length, 2, 'the checkpoint and the answer are two rounds');
+  // The checkpoint and the answer, then one repair round for the step left open: a pending manual criterion no
+  // longer ends the run while there is model work left, and the identical failure after it stops the run.
+  assert.equal(requests.length, 3, 'the checkpoint, the answer and one repair round');
   assert.equal(
     new Set(requests.map((request) => request.system)).size,
     1,

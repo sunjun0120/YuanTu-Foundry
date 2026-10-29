@@ -126,7 +126,7 @@ export function completionContractText(
       ? ` Failing checks: ${summary.failedCheckIds.join(', ')}.`
       : '') +
     (unfinished.length
-      ? `\nRecord progress on each step with the step tool as you finish it; ${String(unfinished.length)} step(s) are still open, and a step the definition declares is never skipped by declaring it so.`
+      ? `\nRecord progress on each step with completion_step (task_step in a task run) as you finish it; ${String(unfinished.length)} step(s) are still open, and a step the definition declares is never skipped by declaring it so.`
       : '\nEvery declared step is completed. The acceptance checks decide the rest; you cannot confirm a criterion yourself.')
   );
 }

@@ -219,6 +219,35 @@ test('unknown effects, a changed definition, cancellation and manual judgement a
   );
 });
 
+test('a pending manual criterion does not stop the repair of a failing automated check', () => {
+  const manual = {
+    id: 'manual:0',
+    kind: 'manual' as const,
+    passed: false,
+    detail: 'Awaiting explicit user confirmation',
+    durationMs: 0,
+    failureReason: 'manual-review' as const,
+  };
+  const failing = failure('assertion-failed');
+  const decision = decideCompletion(
+    input({
+      manualPending: true,
+      evidence: { ...failing, checks: [...failing.checks, manual] },
+    }),
+  );
+  assert.equal(decision.action, 'repair', 'red tests are repaired before a person is asked');
+  assert.ok(decision.action === 'repair' && decision.feedback.includes('manual:0'));
+  assert.ok(
+    decision.action === 'repair' && /do not try to satisfy or confirm them/.test(decision.feedback),
+  );
+  // With the automated checks passing, what is left is the person's judgement.
+  const passed = decideCompletion(
+    input({ evidence: { ...passing, passed: false, checks: [...passing.checks, manual] } }),
+  );
+  assert.equal(passed.action, 'review');
+  assert.equal(passed.summary.reason, 'manual-review');
+});
+
 test('an empty or unusable definition is never repaired towards', () => {
   assert.equal(
     decideCompletion(input({ definitionNonEmpty: false })).summary.reason,

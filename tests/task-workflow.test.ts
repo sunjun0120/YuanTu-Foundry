@@ -262,7 +262,9 @@ test('old run plus verification cannot authorize confirmation of a revised task'
     taskId: edited.id,
   });
   await assert.rejects(f.confirm(verified.task), /Execute the current task definition/);
-  assert.equal(f.requests(), 1);
+  // Two: the step left open is the model's work, so it gets one repair round before the repeat stops the run —
+  // the pending manual criterion no longer ends the run while there is still something the model can do.
+  assert.equal(f.requests(), 2);
 });
 
 test('slow task planning outlives ordinary RPC timeout without starting tools', async (t) => {
@@ -287,7 +289,8 @@ test('slow task retry outlives ordinary RPC timeout', async (t) => {
     prompt: 'Perform the task',
   });
   assert.equal(result.status, 'needs_review');
-  assert.equal(f.requests(), 1);
+  // The open step buys one repair round before the identical failure stops the run (see the test above).
+  assert.equal(f.requests(), 2);
 });
 
 test('creating a task cannot forge manual completion before verification', async (t) => {

@@ -100,6 +100,17 @@ function failedChecks(evidence: AcceptanceEvidence) {
   return evidence.checks.filter((check) => !check.passed);
 }
 
+/**
+ * The failures another model round could address: every failed check except a criterion only a person settles.
+ *
+ * A pending manual criterion is reported as a failed check so every reader sees it, but it is not a reason to stop
+ * the repair of the automated ones — a run whose tests are red must not hand itself to a reviewer while the
+ * machine can still say what is wrong.
+ */
+function automatedFailures(evidence: AcceptanceEvidence) {
+  return failedChecks(evidence).filter((check) => check.kind !== 'manual');
+}
+
 function unfinishedSteps(steps: readonly CompletionStep[]) {
   return steps.filter((step) => step.status !== 'completed');
 }
@@ -145,7 +156,9 @@ function baseSummary(
  * asked to try again.
  */
 export function decideCompletion(input: CompletionDecisionInput): CompletionDecision {
-  const failed = failedChecks(input.evidence);
+  const failed = automatedFailures(input.evidence);
+  const manualPending =
+    input.manualPending || failedChecks(input.evidence).some((check) => check.kind === 'manual');
   const unfinished = unfinishedSteps(input.steps);
   const repeated = nextRepeatedFailures({
     previous: input.summary.repeatedFailures,
@@ -176,9 +189,10 @@ export function decideCompletion(input: CompletionDecisionInput): CompletionDeci
   // There is nothing for the model to repair *towards*: a contract with no criteria cannot be satisfied, and
   // asking the model to invent the acceptance criteria would be handing it the definition of its own success.
   if (!input.definitionNonEmpty) return review('empty-acceptance');
-  if (input.manualPending) return review('manual-review');
 
   if (!failed.length && !unfinished.length) {
+    // Everything a model can do is done; what is left, if anything, is a person's judgement.
+    if (manualPending) return review('manual-review');
     return {
       action: 'complete',
       // `finalizing` is the honest name: the checks pass, and the run has not yet proved the workspace is stable,
@@ -277,7 +291,8 @@ export function renderCompletionFeedback(input: CompletionFeedbackInput): string
   );
   lines.push('');
   lines.push(`Full evidence: ${input.evidenceLocation}.`);
-  const failed = failedChecks(input.evidence);
+  const failed = automatedFailures(input.evidence);
+  const manual = failedChecks(input.evidence).filter((check) => check.kind === 'manual');
   lines.push('');
   lines.push(`Failed checks (${String(failed.length)}):`);
   for (const check of failed) {
@@ -290,13 +305,19 @@ export function renderCompletionFeedback(input: CompletionFeedbackInput): string
         `  exit code: ${String(check.command.exitCode ?? check.command.signal ?? 'unknown')}${check.command.timedOut ? ' (timed out)' : ''}`,
       );
   }
+  if (manual.length) {
+    lines.push('');
+    lines.push(
+      `Awaiting the user's confirmation (${String(manual.length)}): ${manual.map((check) => check.id).join(', ')}. Only a person can settle these; do not try to satisfy or confirm them yourself.`,
+    );
+  }
   const unfinished = unfinishedSteps(input.steps);
   lines.push('');
   lines.push(`Unfinished steps (${String(unfinished.length)}):`);
   for (const step of unfinished) lines.push(`- ${step.id} [${step.status}] ${step.description}`);
   lines.push('');
   lines.push(
-    'Next permitted action: fix the causes of the failures above in the workspace, mark the steps you actually finish with the step tool, and then finish. Do not restate the task or claim completion without new evidence; the same acceptance checks run again.',
+    'Next permitted action: fix the causes of the failures above in the workspace, mark the steps you actually finish with completion_step (task_step in a task run), and then finish. Do not restate the task or claim completion without new evidence; the same acceptance checks run again.',
   );
   lines.push('');
   lines.push(

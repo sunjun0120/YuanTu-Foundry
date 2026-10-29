@@ -210,3 +210,49 @@ test('a resumed contract still compares against the baseline its first run recor
   assert.equal(resumed.status, 'needs_review');
   assert.notEqual(resumed.completion?.state, 'verified');
 });
+
+test('a resumed contract keeps counting the failure it stopped on as a repeat', async (t) => {
+  /**
+   * The repeat detector compares against the last failure's fingerprint, and a resume restores the count without
+   * it used to: the first failure after a resume read as new, so resuming bought another round of the same broken
+   * state. With the fingerprint restored, the same failure with nothing changed stops at once.
+   */
+  const { root, store, session } = await fixture(t);
+  const marker: CompletionSpec = {
+    ...spec,
+    objective: 'Write the marker',
+    acceptance: [
+      {
+        description: 'marker.txt says ok',
+        met: false,
+        check: { id: 'marker', kind: 'file-contains', path: 'marker.txt', expected: 'ok' },
+      },
+    ],
+  };
+  const first = await agentWith(root, store, [{ text: 'Not yet.' }]).run({
+    sessionId: session.id,
+    prompt: 'Write it',
+    completion: marker,
+  });
+  assert.equal(first.completion?.reason, 'repeated-failure');
+  const contractId = store.completionCurrent(session.id)?.contractId;
+  assert.ok(contractId);
+  let requests = 0;
+  const counting = scripted([{ text: 'Still not.' }]);
+  const resumed = await new Agent({
+    store,
+    tools: createTools(root),
+    approve: async () => true,
+    provider: {
+      ...counting,
+      complete: (request) => {
+        requests++;
+        return counting.complete(request);
+      },
+    },
+  }).run({ sessionId: session.id, prompt: 'Continue', resumeCompletionId: contractId });
+  assert.equal(resumed.status, 'needs_review');
+  assert.equal(resumed.completion?.reason, 'repeated-failure');
+  assert.equal(requests, 1, 'no repair round was spent on a failure already seen twice');
+  assert.equal(resumed.completion?.repeatedFailures, 3);
+});

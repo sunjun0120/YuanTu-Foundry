@@ -22,16 +22,16 @@ export type TaskBaselines = Record<string, PathSnapshot>;
  * The order of this union is the precedence the verifier applies: the first condition that holds decides, and the
  * order is not arbitrary. "The definition cannot be executed" outranks "the definition is empty" (an unusable
  * check is a definition problem whether or not there are others), both outrank progress (there is no point
- * discussing steps against a definition that cannot be judged), progress outranks a human's pending judgement
- * (asking the model to fix what a person has to sign off is not repair), and failing checks come last because
- * they are the only class another model round may address.
+ * discussing steps against a definition that cannot be judged), and progress and failing checks outrank a
+ * human's pending judgement: both are work another model round may still do, and a person asked to sign off on a
+ * run whose automated checks are red would be reviewing work that is not finished.
  */
 export type TaskCompletionReason =
   | 'invalid-definition'
   | 'empty-acceptance'
   | 'unfinished-steps'
-  | 'manual-review'
-  | 'checks-failed';
+  | 'checks-failed'
+  | 'manual-review';
 
 export interface TaskVerification {
   evidence: AcceptanceEvidence;
@@ -221,10 +221,10 @@ export async function verifyCompletionAcceptance(
       ? 'empty-acceptance'
       : unfinished.length
         ? 'unfinished-steps'
-        : manualPending
-          ? 'manual-review'
-          : !evidence.passed
-            ? 'checks-failed'
+        : !evidence.passed
+          ? 'checks-failed'
+          : manualPending
+            ? 'manual-review'
             : undefined;
   const passed = completionReason === undefined;
   const combinedEvidence: AcceptanceEvidence = {

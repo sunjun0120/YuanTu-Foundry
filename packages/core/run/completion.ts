@@ -363,6 +363,17 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
     state.repairRounds = record.summary.repairRounds;
     state.repeatedFailures = record.summary.repeatedFailures;
     if (record.repairStartedAt !== undefined) state.repairStartedAt = record.repairStartedAt;
+    /**
+     * What the repeat detector compares against comes back with the count it qualifies.
+     *
+     * Restoring the count without the fingerprint made the first failure after a resume read as new, so the same
+     * broken state could be retried past `maxRepeatedFailures` by resuming. The input digest comes back too: a
+     * workspace somebody edited between the two runs is progress, and without the digest it could not be told apart.
+     */
+    if (record.summary.repeatedFailures > 0 && record.failureFingerprint !== undefined)
+      state.previousFailureFingerprint = record.failureFingerprint;
+    if (record.summary.inputDigest !== undefined)
+      state.previousInputDigest = record.summary.inputDigest;
     store.recordEvent(sessionId, 'completion.updated', {
       runId,
       contractId: state.contractId,
@@ -837,7 +848,9 @@ export function createRunCompletion(options: RunCompletionOptions): RunCompletio
       evidence: state.taskVerification.evidence,
       definitionValid: state.taskVerification.completionReason !== 'invalid-definition',
       definitionNonEmpty: roundAcceptance.length > 0,
-      manualPending: state.taskVerification.completionReason === 'manual-review',
+      // Read from the definition rather than from the verdict's reason: the reason names the first condition that
+      // holds, so a failing check would hide a pending manual criterion from the decision.
+      manualPending: roundAcceptance.some((item) => !item.check && !item.met),
       pendingEffects: false,
       definitionChanged: roundHash !== state.contractDefinitionHash,
       cancelled: false,
