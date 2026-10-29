@@ -31,6 +31,14 @@ jobs:
           }
       - run: npm ci
       - run: npm run typecheck
+      # `npm test` includes the helper's PE-header contract, which reads the built binary rather than a
+      # source file. `package:windows` builds that binary too, but only after this step would already
+      # have failed; the CI gate installs the toolchain and builds it first for the same reason.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/sandbox/windows-sandbox/native -> target
+      - run: npm run build:windows-sandbox
       # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
       - run: npm test
         env:
