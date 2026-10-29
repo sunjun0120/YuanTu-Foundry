@@ -864,6 +864,79 @@ test('the same failure after edits in between is noticed, then concluded', () =>
   assert.equal(guard.observeRound([edit, test()]), 'continue');
 });
 
+test('a command failing the same way is the same failure whatever it took to run', () => {
+  const guard = new ToolProgressGuard();
+  const edit = {
+    call: { id: 'edit', name: 'write_file', arguments: { path: 'a.ts' } },
+    result: { isError: false, content: 'written' },
+  };
+  let run = 0;
+  const test = (assertion = 'expected 1, got 2') => {
+    run++;
+    const stdout = `not ok 1 - adds\n  ${assertion}\n# duration_ms ${100 + run * 7}.25\nTests: 1 failed in ${run}.4s`;
+    return {
+      call: { id: `test-${run}`, name: 'run_command', arguments: { command: 'npm test' } },
+      result: {
+        isError: true,
+        content: JSON.stringify({ exitCode: 1, stdout, stderr: '' }),
+        output: {
+          render: 'command-output' as const,
+          value: { command: 'npm test', exitCode: 1, durationMs: 900 + run * 13, stdout },
+        },
+      },
+    };
+  };
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'repeat-failure');
+  // The assertion is still compared: a different one is progress.
+  assert.equal(guard.observeRound([edit, test('expected 1, got 3')]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'continue');
+  assert.equal(guard.observeRound([edit, test()]), 'conclude');
+});
+
+test('web and language-server reads repeating unchanged are repeated queries', () => {
+  const guard = new ToolProgressGuard();
+  const round = () => [
+    {
+      call: { id: 'search', name: 'web_search', arguments: { query: 'node test runner' } },
+      result: { isError: false, content: 'same hits' },
+    },
+    {
+      call: { id: 'read', name: 'read_file', arguments: { path: 'a.ts' } },
+      result: { isError: false, content: 'same file' },
+    },
+    {
+      call: { id: 'hover', name: 'lsp_hover', arguments: { path: 'a.ts', line: 1 } },
+      result: { isError: false, content: 'same type' },
+    },
+  ];
+  assert.equal(guard.observeRound(round()), 'continue');
+  assert.equal(guard.observeRound(round()), 'continue');
+  assert.equal(guard.observeRound(round()), 'warn');
+  assert.equal(guard.observeRound(round()), 'conclude');
+});
+
+test('a policy note repeated every round is not a new intervention', () => {
+  const guard = new ToolProgressGuard();
+  const note = 'Remember to run the formatter.';
+  const query = () => [
+    {
+      call: { id: 'read', name: 'read_file', arguments: { path: 'a.txt' } },
+      result: { isError: false, content: 'stable', additionalContext: [note] },
+    },
+  ];
+  assert.equal(guard.newIntervention([note]), true);
+  guard.reset();
+  assert.equal(guard.observeWrites(query()), 'continue');
+  for (let i = 0; i < 3; i++) {
+    assert.equal(guard.newIntervention([note]), false);
+    assert.equal(guard.observeRound(query()), i === 2 ? 'warn' : 'continue');
+  }
+  // Something the run has not been told is still an intervention.
+  assert.equal(guard.newIntervention([note, 'The build target changed.']), true);
+});
+
 test('programs deriving new results from the same file are not unchanged queries', async (t) => {
   let turns = 0;
   const ctx = await fixture(t, {

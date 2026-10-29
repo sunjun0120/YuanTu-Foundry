@@ -74,7 +74,55 @@ const OSCILLATION_MAX_HUNKS = 4_096;
 const INVESTIGATION_WARN_ROUNDS = 12;
 const INVESTIGATION_CONCLUDE_ROUNDS = 20;
 const INVESTIGATION_DEFAULT_MS = 240_000;
-const queries = new Set(['read_file', 'list_files', 'search_files', 'git_status', 'git_diff']);
+/**
+ * Calls that only read, so a round of them repeating unchanged is a model asking the same question again.
+ *
+ * Any tool outside this set resets the comparison, which is why it has to name every read a model reaches for
+ * while investigating: one `web_search` in a round of repeated reads used to hide the repetition entirely.
+ * `job_output` stays out on purpose — polling a running job is supposed to return the same thing until it moves.
+ */
+const queries = new Set([
+  'read_file',
+  'list_files',
+  'search_files',
+  'repo_map',
+  'git_status',
+  'git_diff',
+  'git_log',
+  'git_branches',
+  'git_worktrees',
+  'web_search',
+  'web_fetch',
+  'lsp_diagnostics',
+  'lsp_definition',
+  'lsp_references',
+  'lsp_hover',
+  'lsp_symbols',
+  'lsp_workspace_symbols',
+]);
+/** Calls that collect a job already running: waiting on one is not a new investigation round. */
+const collections = new Set(['job_list', 'job_output']);
+/** Fields of a structured result that differ on every run of the same call, and so say nothing about it. */
+const volatileFields = new Set(['durationMs', 'elapsedMs', 'startedAt', 'finishedAt']);
+/**
+ * A failure's text with the parts that change on every run masked out.
+ *
+ * Test runners print how long they took, and a command result carries its own duration, so two runs of the same
+ * test that fail the same way were never byte-identical — the repeated-failure check could not fire for the
+ * loop it exists for. Durations and timestamps are masked; everything else, the assertion included, still has to
+ * match.
+ */
+const stableFailureText = (value: string): string =>
+  value
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<time>')
+    .replace(/\b(duration(?:_ms)?|elapsed|time)([:=\s]+)\d+(?:\.\d+)?/gi, '$1$2<n>')
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds|µs|μs|ns)\b/g, '<duration>');
+const stableFailureOutput = (value: unknown): unknown =>
+  value === undefined
+    ? undefined
+    : stableFailureText(
+        JSON.stringify(value, (key, item) => (volatileFields.has(key) ? undefined : item)),
+      );
 const normalizedPath = (value: string): string => value.replaceAll('\\', '/').replace(/^\.\//, '');
 const digest = (value: unknown): string =>
   createHash('sha256')
@@ -136,6 +184,8 @@ export class ToolProgressGuard {
   private oscillationWrites = 0;
   private oscillationPrompted: 0 | 1 | 2 = 0;
   private oscillationEvents: EditOscillation[] = [];
+  /** Notes policies have already injected in this run, by digest (`newIntervention`). */
+  private interventions = new Set<string>();
   reset(): void {
     this.resetQueries();
     this.failures.clear();
@@ -143,6 +193,25 @@ export class ToolProgressGuard {
     this.investigationRounds = 0;
     this.investigationStarted = (this.options.now ?? Date.now)();
     this.investigationWarned = false;
+  }
+  /**
+   * Whether context a policy injected after a round is something the run has not been told before.
+   *
+   * A policy speaking is an intervention, and an intervention clears the counters. But a post-execute hook that
+   * attaches the same note to every round is not a new one each time: treating it as such reset the failure and
+   * query counts every round, so a run with such a hook could repeat itself until its budget ran out.
+   */
+  newIntervention(notes: readonly string[]): boolean {
+    let fresh = false;
+    for (const note of notes) {
+      const key = digest(note);
+      if (this.interventions.has(key)) continue;
+      fresh = true;
+      this.interventions.add(key);
+      while (this.interventions.size > 256)
+        this.interventions.delete(this.interventions.values().next().value!);
+    }
+    return fresh;
   }
   /** What a person or a policy speaking resets: the oscillation evidence, and only that. */
   resetOscillation(): void {
@@ -263,12 +332,7 @@ export class ToolProgressGuard {
       return;
     }
     // Collecting an already-running job is not a new investigation round.
-    if (
-      !observations.length ||
-      observations.every(({ call }) =>
-        ['job_output', 'wait_job', 'collect_command'].includes(call.name),
-      )
-    )
+    if (!observations.length || observations.every(({ call }) => collections.has(call.name)))
       return;
     this.investigationRounds++;
     const elapsed = (this.options.now ?? Date.now)() - this.investigationStarted;
@@ -290,7 +354,12 @@ export class ToolProgressGuard {
     let highest = 0;
     for (const { call, result } of observations) {
       if (!result.isError || environmentBlockedCode(result.content)) continue;
-      const key = digest([call.name, call.arguments, result.content, result.output]);
+      const key = digest([
+        call.name,
+        call.arguments,
+        stableFailureText(result.content),
+        stableFailureOutput(result.output),
+      ]);
       const count = (this.failures.get(key) ?? 0) + 1;
       this.failures.delete(key);
       this.failures.set(key, count);
@@ -325,7 +394,10 @@ export class ToolProgressGuard {
           ) ||
           result.change ||
           result.images?.length ||
-          result.additionalContext?.length,
+          // Policy context is new evidence only the first time it is said; a repeat of it is not (see
+          // `newIntervention`), and the run resets this comparison itself when it is new.
+          (result.additionalContext?.length &&
+            result.additionalContext.some((note) => !this.interventions.has(digest(note)))),
       )
     ) {
       this.resetQueries();

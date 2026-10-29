@@ -1011,10 +1011,14 @@ export class Agent {
               callId: entry.callId,
               notes: entry.notes.length,
             });
-          let progress =
-            injected.length || changedGoals.length
-              ? (progressGuard.reset(), progressGuard.observeWrites(observations))
-              : progressGuard.observeRound(observations);
+          // Only a note the run has not seen counts as an intervention: a hook repeating itself every round would
+          // otherwise clear the failure and query counts every round (`ToolProgressGuard.newIntervention`).
+          const intervened =
+            changedGoals.length > 0 ||
+            progressGuard.newIntervention(injected.flatMap((entry) => entry.notes));
+          let progress = intervened
+            ? (progressGuard.reset(), progressGuard.observeWrites(observations))
+            : progressGuard.observeRound(observations);
           // One record per hit, not one per notice: the count and the signal are what a later review reads the
           // cost of a run from, and the prompt is only two of the hits.
           for (const hit of progressGuard.takeOscillationEvents()) {
