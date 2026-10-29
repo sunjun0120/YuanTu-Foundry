@@ -22,3 +22,6 @@ benchmarks/swe-bench/runs/b123-small22-2026-10-25/
 
 # Frozen full-evaluation inputs, generated results and official import preserve their original bytes.
 benchmarks/swe-bench/runs/swe-full-2026-10-25/
+
+# Frozen 2026-10-29 official evaluation records and generated reports preserve their original bytes.
+benchmarks/swe-bench/runs/swe-full-2026-10-29/

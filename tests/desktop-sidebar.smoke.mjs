@@ -227,6 +227,12 @@ test(
     );
     await page.locator('#open-workspace').click();
     await page.locator('#workspace-new-tab-page').waitFor();
+    await page.waitForFunction(() =>
+      document
+        .querySelector('.desktop-shell')
+        .getAnimations()
+        .every((a) => a.playState !== 'running'),
+    );
     assert.equal(
       await page.locator('.workspace-panel').evaluate((el) => getComputedStyle(el).backgroundColor),
       'rgb(255, 255, 255)',

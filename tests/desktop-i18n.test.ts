@@ -201,7 +201,7 @@ test(
 );
 
 test(
-  'selecting and submitting plan approval preserves the card and conversation scroll positions',
+  'long plan questions use conversation scrolling and preserve it when selected or submitted',
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await planApprovalPage(t);
@@ -214,7 +214,14 @@ test(
         conversation: document.querySelector('#conversation')!.scrollTop,
       }));
     const before = await scroll();
-    assert.ok(before.card > 100, 'the plan must require scrolling to reach approval');
+    assert.equal(before.card, 0, 'the question card must not scroll internally');
+    assert.equal(
+      await page
+        .locator('.question-card')
+        .evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
+      true,
+      'the card grows to fit its content',
+    );
     assert.ok(before.conversation > 100, 'the conversation must already be scrolled');
     await option.click();
     const selected = await scroll();
@@ -242,16 +249,14 @@ test(
 );
 
 test(
-  'switching to another question starts its card at the top, and only switching does',
+  'question paging preserves drafts, uses a single-row fixed input and keeps collapse controls usable',
   { timeout: 30000, skip: electronSkip },
   async (t) => {
     const page = await planApprovalPage(t);
     if (!page) return;
     await page.evaluate(String.raw`
       (() => {
-        // Both questions are long enough to scroll inside the card's max-height, so "the card is at its top" is
-        // an assertion that can fail rather than a value the browser clamps for a small question.
-        const long = '这一题需要足够长才能在卡片里滚动，才能分辨换题后是否真的回到了顶端。'.repeat(60);
+        const long = '长问题随对话区域滚动，选项和提交按钮仍需可达。'.repeat(60);
         window.pagedQuestions=[{id:'paged',request:{questions:[
           {id:'one',header:'第一题',question:long,options:[{label:'继续'}]},
           {id:'two',header:'第二题',question:long,options:[{label:'返回'}]}
@@ -262,24 +267,33 @@ test(
     const card = page.locator('.question-card');
     const count = card.locator('.question-count');
     await count.filter({ hasText: '1/2' }).waitFor();
-    await card.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
-    assert.ok((await card.evaluate((element) => element.scrollTop)) > 100);
+    const input = card.locator('.question-input');
+    const inputLayout = await input.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      resize: getComputedStyle(element).resize,
+    }));
+    assert.ok(inputLayout.height <= 44, `answer input should be one row: ${inputLayout.height}`);
+    assert.equal(inputLayout.resize, 'none');
+    await input.fill('保留这一题的答案');
     await card.locator('.question-next').click();
     await count.filter({ hasText: '2/2' }).waitFor();
-    assert.ok(
-      (await card.evaluate((element) => element.scrollTop)) < 4,
-      'the second question opens at its top',
-    );
-    await card.evaluate((element) => {
-      element.scrollTop = 200;
-    });
+    assert.equal(await input.inputValue(), '');
     await card.locator('.question-prev').click();
     await count.filter({ hasText: '1/2' }).waitFor();
-    assert.ok(
-      (await card.evaluate((element) => element.scrollTop)) < 4,
-      'going back to the first question also starts at its top',
+    assert.equal(await input.inputValue(), '保留这一题的答案');
+    const collapse = card.getByRole('button', { name: '收起', exact: true });
+    assert.equal(await collapse.locator('svg').isVisible(), true);
+    assert.equal(await collapse.getAttribute('aria-expanded'), 'true');
+    await collapse.click();
+    assert.equal(await card.locator('.question-body').isVisible(), false);
+    const expand = card.getByRole('button', { name: '展开', exact: true });
+    assert.equal(await expand.getAttribute('aria-expanded'), 'false');
+    await expand.click();
+    assert.equal(await input.isVisible(), true);
+    assert.equal(await input.inputValue(), '保留这一题的答案');
+    assert.equal(
+      await card.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
+      true,
     );
   },
 );

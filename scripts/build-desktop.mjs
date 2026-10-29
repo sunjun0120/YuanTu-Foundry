@@ -44,10 +44,4 @@ await build({
 });
 await copyFile('package.json', 'dist/desktop/package-version.json');
 await writeFile('dist/desktop/release.json', JSON.stringify({ maxSchemaVersion: SCHEMA_VERSION }));
-await mkdir('dist/desktop/img', { recursive: true });
-await Promise.all(
-  ['logo-dark.png', 'logo-light.png'].map((name) =>
-    copyFile(`apps/desktop/img/${name}`, `dist/desktop/img/${name}`),
-  ),
-);
 console.log('[build] Desktop build complete.');

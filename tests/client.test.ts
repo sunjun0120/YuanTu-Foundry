@@ -18,6 +18,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createProvider } from '../packages/providers/index.ts';
 import type { HostTransport } from '../packages/client/host-transport.ts';
 import { tempRoot } from './temp-fixture.ts';
+import type { PresentedFile } from '../packages/protocol/deliverables.ts';
 
 // Transport fixtures supply checks so automatic verification does not add unrelated model turns.
 function fileCompletion(file: string, expected: string): CompletionSpec {
@@ -1309,6 +1310,7 @@ test('a live statistics update travels on its own channel instead of republishin
           messages: [],
         };
       if (method === 'plan.get') return null;
+      if (method === 'deliverables.get') return [];
       if (method === 'subagents.list') return [];
       if (method === 'changes.list') return [];
       if (method === 'background.list') return [];
@@ -1397,6 +1399,7 @@ test('sandbox preparation is folded per call and cannot outlive its call or its 
           messages: [],
         };
       if (method === 'plan.get') return null;
+      if (method === 'deliverables.get') return [];
       if (method === 'subagents.list') return [];
       if (method === 'changes.list') return [];
       if (method === 'background.list') return [];
@@ -1627,6 +1630,7 @@ interface ScriptedHost {
 function scriptedHost(
   options: {
     messages?: Message[] | ((call: number) => Message[]);
+    deliverables?: () => PresentedFile[];
     /** What `session.get` says the session's active run is: the only identity an old Host offers. */
     activeRun?: string | null | ((call: number) => string | null);
     /** Answers `run.queue.get`, per call, so a test can change the answer mid-read. */
@@ -1704,7 +1708,7 @@ function scriptedHost(
       if (method === 'plan.get') return null;
       if (method === 'subagents.list') return [];
       if (method === 'todos.get') return { todos: [], change: null };
-      if (method === 'deliverables.get') return [];
+      if (method === 'deliverables.get') return options.deliverables?.() ?? [];
       if (method === 'goal.get') return null;
       throw new Error(`Unexpected method: ${method}`);
     },
@@ -1785,6 +1789,91 @@ const queued = (prompt: string) => ({
   prompt,
   createdAt: '2026-10-10T00:00:00.000Z',
   imageCount: 0,
+});
+
+test('live deliverables keep earlier turns and receive settled positions after completion', async (t) => {
+  const old: PresentedFile = {
+    path: 'report.md',
+    description: 'old',
+    bytes: 10,
+    sha256: 'a'.repeat(64),
+    at: '',
+    runId: 'run-old',
+    afterIndex: 1,
+  };
+  const revised = { ...old, description: 'revised', runId: 'run-A', afterIndex: 3 };
+  let finished = false;
+  const host = scriptedHost({
+    activeRun: () => (finished ? null : 'run-A'),
+    inbox: () => ({ running: !finished, items: [], ...(!finished ? { runId: 'run-A' } : {}) }),
+    deliverables: () => (finished ? [old, revised] : [old]),
+    messages: () => [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'first answer', toolCalls: [] },
+      { role: 'user', content: 'second' },
+      ...(finished
+        ? [{ role: 'assistant' as const, content: 'second answer', toolCalls: [] }]
+        : []),
+    ],
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  host.emit({ type: 'deliverable.presented', data: { files: [{ ...old, description: 'draft' }] } });
+  host.emit({ type: 'deliverable.presented', data: { files: [revised] } });
+  assert.deepEqual(
+    controller.snapshot.deliverables.map((file) => file.description),
+    ['old', 'revised'],
+  );
+  assert.equal(controller.snapshot.deliverables[1]?.afterIndex, undefined);
+  finished = true;
+  host.emit({
+    type: 'run.finished',
+    data: {
+      result: {
+        runId: 'run-A',
+        sessionId: 'session-1',
+        status: 'completed',
+        text: 'second answer',
+        usage: { inputTokens: 0, outputTokens: 0 },
+      },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller.snapshot.loading, false);
+  assert.deepEqual(
+    controller.snapshot.deliverables.map((file) => file.afterIndex),
+    [1, 3],
+  );
+  assert.ok(
+    host.requests
+      .filter((request) => request.method === 'deliverables.get')
+      .every((request) => request.params.byTurn === true),
+  );
+});
+
+test('a completed delivery read before settled history is refreshed even without a moved run', async (t) => {
+  let reads = 0;
+  const host = scriptedHost({
+    messages: [
+      { role: 'user', content: 'ask' },
+      { role: 'assistant', content: 'done', toolCalls: [] },
+    ],
+    deliverables: () => [
+      {
+        path: 'report.md',
+        bytes: 10,
+        sha256: 'a'.repeat(64),
+        at: '',
+        runId: 'run-A',
+        ...(reads++ > 0 ? { afterIndex: 1 } : {}),
+      },
+    ],
+  });
+  const controller = new SessionController(host.client);
+  t.after(() => controller.dispose());
+  await controller.load('session-1');
+  assert.equal(controller.snapshot.deliverables[0]?.afterIndex, 1);
 });
 
 test('a read that is overtaken does not write its answers over the newer one', async (t) => {
@@ -1894,7 +1983,18 @@ test('a run that ends while the session is loading is read back as history', asy
   // The race the read has to survive: the transcript is fetched while the run is live and the run is gone by the
   // time the read asks about it. Adopting the end without re-reading would leave a window showing a session that
   // stopped in the middle of the very run that just ended.
+  let deliveryReads = 0;
   const host = scriptedHost({
+    deliverables: () => [
+      {
+        path: 'report.md',
+        bytes: 10,
+        sha256: 'a'.repeat(64),
+        at: '',
+        runId: 'run-A',
+        ...(deliveryReads++ > 0 ? { afterIndex: 1 } : {}),
+      },
+    ],
     inbox: () => ({ running: false, items: [] }),
     activeRun: (call) => (call === 0 ? 'run-A' : null),
     messages: (call): Message[] =>
@@ -1917,6 +2017,11 @@ test('a run that ends while the session is loading is read back as history', asy
     controller.snapshot.messages.map((message) => message.content),
     ['start', 'finished while you were reading'],
     'and its turn is in the transcript, not lost with it',
+  );
+  assert.equal(
+    controller.snapshot.deliverables[0]?.afterIndex,
+    1,
+    'a delivery read before the run ended must be refreshed with its final position',
   );
 });
 

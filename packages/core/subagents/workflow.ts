@@ -82,6 +82,14 @@ export interface WorkflowDeps {
    * the script-side check use the smaller number, and the coordinator still enforces what is actually left.
    */
   maxAgents?: number;
+  /**
+   * The deployment's default tool budget, applied when a call states no `timeoutMs`.
+   *
+   * The registry exempts `workflow` from that default so a caller can ask for a longer bound or none (`0`), and the
+   * tool owns its bound instead. Without this the exemption and the tool's own silence added up to no bound at all:
+   * a script stuck in a loop held the run open until somebody pressed Stop, which an unattended run never gets.
+   */
+  defaultTimeoutMs?: () => number | undefined;
   /** Tests only: see `CodeWorkerData.exposeProcessForTests`. The coordinator never sets it. */
   exposeProcessForTests?: boolean;
 }
@@ -166,7 +174,8 @@ export function workflowTool(deps: WorkflowDeps): Tool {
           isError: true,
           content: 'timeoutMs must be a non-negative integer (0 = no deadline).',
         };
-      const timeoutMs = requestedTimeout === undefined ? undefined : (requestedTimeout as number);
+      const timeoutMs =
+        requestedTimeout === undefined ? deps.defaultTimeoutMs?.() : (requestedTimeout as number);
       const worker = await startCodeProcess(
         {
           code,

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import ts from 'typescript';
+import { EVAL_TESTS } from './test-execution-policy.ts';
 
 export interface TestSelection {
   tests: string[];
@@ -58,7 +59,10 @@ export async function selectTests(root: string, changed: string[]): Promise<Test
   const files = (
     await Promise.all(['tests', 'packages', 'apps', 'scripts'].map((dir) => sources(root, dir)))
   ).flat();
-  const tests = files.filter((file) => unit.test(file)).sort();
+  // The grading suites are not part of the suite this selector reasons about; `npm run test:eval`
+  // owns them, and `npm test` does not discover them either.
+  const graded = new Set<string>(EVAL_TESTS);
+  const tests = files.filter((file) => unit.test(file) && !graded.has(file)).sort();
   const known = new Set(files);
   const full = (reason: string): TestSelection => ({ tests, full: true, reason });
   const changes = [...new Set(changed.map(normalize))];
@@ -67,18 +71,32 @@ export async function selectTests(root: string, changed: string[]): Promise<Test
   );
   if (!code.length)
     return { tests: [], full: false, reason: changes.length ? 'Documentation only' : 'No changes' };
-  // Subprocess entry points, authorization, persistence and shared contracts have implicit consumers.
+  /**
+   * Changes that still mean "run everything".
+   *
+   * The packages below are the runtime's shared contracts and its most widely imported modules; a
+   * change to one of them reaches code the import graph cannot name, so they keep the whole suite.
+   * The harness and shared fixtures are the same idea one level up: they decide how every other
+   * file runs, or are spawned by name from tests that never import them.
+   *
+   * `apps/` is deliberately absent. Its entry points are spawned by subprocess, and the selector
+   * already follows the path literals those spawns use, so a change lands on the tests that start
+   * it — measured here as 48 files for `apps/agent-host/handlers/*` and 4 for `apps/desktop/ui/*`.
+   * A desktop change also keeps its Electron smoke gate, which `check-changed` runs separately
+   * because those files are not `.test.ts` and so are never part of this selection.
+   */
+  const contract = /^packages\/(?:core|protocol|storage|tools|client|carrier|sdk)\//;
+  const sharedFixture = (file: string) => file.startsWith('tests/') && !unit.test(file);
   if (
     code.some(
       (file) =>
-        /^(?:apps\/|scripts\/|packages\/(?:core|protocol|storage|tools|client|carrier|sdk)\/)/.test(
-          file,
-        ) ||
-        (file.startsWith('tests/') && !unit.test(file)),
+        contract.test(file) ||
+        sharedFixture(file) ||
+        // The harness decides how every other file runs, so it is never a local change.
+        file.startsWith('scripts/'),
     )
-  ) {
-    return full('Runtime entry point, validation script or shared critical module changed');
-  }
+  )
+    return full('Shared contract, test harness, validation script or shared fixture changed');
   if (code.some((file) => !source.test(file) || !known.has(file))) {
     return full('Configuration, fixture, deleted source or unknown file changed');
   }
@@ -128,8 +146,15 @@ export async function selectTests(root: string, changed: string[]): Promise<Test
       queue.push(...(reverse.get(next) ?? []));
     }
     if (!affected.size) return full(`No reliable test mapping: ${change}`);
-    for (const file of affected) selected.add(file);
+    // Grading suites answer a milestone, not an edit: `npm run test:eval` owns them.
+    for (const file of affected) if (!graded.has(file)) selected.add(file);
   }
+  if (!selected.size)
+    return {
+      tests: [],
+      full: false,
+      reason: 'Only grading suites are affected; run npm run test:eval',
+    };
   return {
     tests: [...selected].sort(),
     full: false,

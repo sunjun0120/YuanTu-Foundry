@@ -119,6 +119,11 @@ export const AGENT_EVENT_TYPES = [
    * much of this allowance a round already used.
    */
   'llm.zero-byte-retry',
+  /**
+   * An attempt that spent its whole output allowance on reasoning, with nothing shown, was sent again once with a
+   * note asking for the action instead of more deliberation. Its own allowance, for the same reason as above.
+   */
+  'llm.reasoning-resend',
   'provider.degraded',
   /**
    * A write that undid an earlier one in the same run: the whole file went back to a state it already had, or

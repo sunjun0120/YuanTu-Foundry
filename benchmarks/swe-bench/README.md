@@ -37,7 +37,7 @@ node scripts/run-tests.mjs tests/swe-bench.test.ts
 
 以 [manifest.example.json](manifest.example.json) 为模板，在本地副本填写获批模型、协议、端点、限制及子集哈希。凭据只来自 `YUANTU_API_KEY`，不写入 manifest。示例默认不授权真实请求。
 
-后续批次示例将响应头等待设为 `responseHeadersTimeoutMs=120000`，流空闲设为 `streamIdleTimeoutMs=60000`，每轮允许一次零字节重发（`zeroByteRetries=1`），输出额度为 `16384`，请求总时限为 `600000`。响应头超时发生在收到 `Response` 之前，报 `Model response headers timeout`；流空闲超时发生在响应体开始读取后，报 `Model stream idle timeout`。10 月 25 日全量的 4 个超时空补丁属于前者，单独放宽流空闲时间不能解决。零字节重发仍可能产生费用，只适用于没有响应体字节和已解析事件的连接失败，并保留事件记录；它不重试题目，也不重发已有正文或推理字节的请求。旧 manifest 的缺省语义和冻结批次不变；这些显式设置进入配置身份，不能与旧配置当作同条件比较。
+后续批次示例将响应头等待设为 `responseHeadersTimeoutMs=120000`，流空闲设为 `streamIdleTimeoutMs=60000`，每轮允许一次零字节重发（`zeroByteRetries=1`），输出额度为 `32768`，请求总时限为 `600000`。输出额度从 `16384` 提高到 `32768`，是因为 10 月 29 日五十题中有 2 个空补丁的单轮输出几乎全被推理占满（16384 中 16384 和 15847），工具调用来不及写完。响应头超时发生在收到 `Response` 之前，报 `Model response headers timeout`；流空闲超时发生在响应体开始读取后，报 `Model stream idle timeout`。10 月 25 日全量的 4 个超时空补丁属于前者，单独放宽流空闲时间不能解决。零字节重发仍可能产生费用，只适用于没有响应体字节和已解析事件的连接失败，并保留事件记录；它不重试题目，也不重发已有正文或推理字节的请求。旧 manifest 的缺省语义和冻结批次不变；这些显式设置进入配置身份，不能与旧配置当作同条件比较。
 
 DeepSeek 的 OpenAI Chat 路由还兼容本轮声明工具对应的完整 DSML 调用块：只解析正文末尾未引用的调用，工具名和全部参数必须先通过当前声明的 JSON Schema，之后照常执行工具审批、路径限制及沙箱检查。普通示例、代码块和引用保留为文本；格式残缺、未知工具或参数不符会明确失败，不能冒充完成。`YUANTU_DEEPSEEK_COMPAT=off` 关闭该兼容；其他模型仅在显式设为 `on` 时启用。此修复不改变历史评估结果。
 

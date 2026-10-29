@@ -13,6 +13,7 @@ import { t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
 import { ScheduleEditor } from './ScheduleEditor.tsx';
 import { TaskEditor } from './TaskEditor.tsx';
+import { ProgressMark } from './ProgressMark.tsx';
 import {
   acceptanceRows,
   evidenceReading,
@@ -124,6 +125,11 @@ function TaskCard({
     <article className="task-card" data-task-id={task.id}>
       <div className="task-card-header">
         <h3>{task.title}</h3>
+        {task.steps.length ? (
+          <span className="task-progress">
+            {task.steps.filter((step) => step.status === 'completed').length}/{task.steps.length}
+          </span>
+        ) : null}
         <span className={`task-status ${task.status}`}>{taskStatusReading(task.status, lang)}</span>
       </div>
       <p className="task-description">{task.description}</p>
@@ -181,7 +187,20 @@ function TaskCard({
       ) : null}
       <ol className="task-steps">
         {task.steps.map((step, index) => (
-          <li key={index}>{`${step.status} · ${step.description}`}</li>
+          <li key={index} className={`progress-row progress-${step.status}`}>
+            <ProgressMark
+              completed={step.status === 'completed'}
+              label={
+                step.status === 'pending' || step.status === 'completed'
+                  ? t(`ui.todoStatus.${step.status}`)
+                  : undefined
+              }
+            />
+            <span className="progress-label">{step.description}</span>
+            {step.status !== 'pending' && step.status !== 'completed' ? (
+              <span className="progress-note">{taskStatusReading(step.status, lang)}</span>
+            ) : null}
+          </li>
         ))}
       </ol>
       {rows.map((row) => (

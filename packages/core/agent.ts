@@ -77,6 +77,13 @@ let messageCounter = 0;
  */
 const COMPACTION_RETRY_ROUNDS = 3;
 /**
+ * Rounds the act phase after the investigation cutoff allows without a project change: rounds of reads, and rounds
+ * whose edit was refused (old text not found, malformed patch). Counted apart because the 2026-10-29 sample
+ * ended runs mid-repair — a refused edit, the read for its exact text, a second refused edit — on the read count.
+ */
+const ACT_NO_CHANGE_ROUNDS = 3;
+const ACT_FAILED_EDIT_ROUNDS = 4;
+/**
  * The rounds of a compaction wait the session's previous run left unspent, `0` when there is none.
  *
  * Read from the log rather than kept in memory, because the next run is often a new one — a goal continuation, a
@@ -489,8 +496,14 @@ export class Agent {
           !automaticVerification.hasProjectWork &&
           !store.goal(input.sessionId),
       });
-      const queryState: { phase: 'none' | 'act' | 'conclude' } = { phase: 'none' };
+      /**
+       * After the investigation cutoff: `act` offers file editors and targeted reads, `edit` is one last round of
+       * editors alone once those rounds are spent, and `conclude` offers nothing.
+       */
+      const queryState: { phase: 'none' | 'act' | 'edit' | 'conclude' } = { phase: 'none' };
       let noChangeActRounds = 0;
+      // A refused edit is the model trying to make the change, not widening the search, so it has its own count.
+      let failedEditActRounds = 0;
       let releaseAct: (() => void) | undefined;
       let refreshProgressTools: (() => void) | undefined;
       const setQueryPhase = (next: typeof queryState.phase): void => {
@@ -505,11 +518,14 @@ export class Agent {
               ...tools.namesWithEffect('workspace-read'),
             ],
           });
+        else if (next === 'edit')
+          releaseAct = tools.restrict({ allow: tools.namesWithEffect('workspace-file') });
         // Registry restrictions take effect immediately; the two cached catalogs need rebuilding too.
         refreshProgressTools?.();
       };
       const resetQueryPhase = (): void => {
         noChangeActRounds = 0;
+        failedEditActRounds = 0;
         setQueryPhase('none');
       };
       const consume = (mode: InputMode): boolean => {
@@ -640,7 +656,7 @@ export class Agent {
           sessionId: input.sessionId,
           tools,
           readOnly: () => readOnly,
-          nativeTools: () => queryState.phase === 'act',
+          nativeTools: () => queryState.phase === 'act' || queryState.phase === 'edit',
           policy,
           executionPolicy,
           ...(this.options.permissionPolicy
@@ -1095,17 +1111,37 @@ export class Agent {
           }
           if (progress === 'conclude') {
             setQueryPhase('conclude');
-          } else if (queryState.phase === 'act') {
+          } else if (queryState.phase === 'act' || queryState.phase === 'edit') {
             const projectChanged = observations.some(
               ({ result }) =>
                 result.change && projectChangedPaths(result.change, workspace).length > 0,
             );
+            const editors = new Set(tools.namesWithEffect('workspace-file'));
+            const editRefused = observations.some(
+              ({ call, result }) =>
+                result.isError &&
+                editors.has(call.name) &&
+                !/excluded by a restriction/.test(result.content),
+            );
             if (projectChanged) {
               // Preserve failure/blocker counts across edits; only leave the edit-only phase.
               resetQueryPhase();
-            } else if (++noChangeActRounds >= 3) {
+            } else if (queryState.phase === 'edit') {
               setQueryPhase('conclude');
-              progress = 'conclude';
+              progress = 'act-conclude';
+            } else if (
+              editRefused
+                ? ++failedEditActRounds >= ACT_FAILED_EDIT_ROUNDS
+                : ++noChangeActRounds >= ACT_NO_CHANGE_ROUNDS
+            ) {
+              // One round of editors alone before the conclusion. The act phase only exists while the project is
+              // unchanged (project work cancels the cutoff), and the reads it spent were for the exact text of an
+              // edit: taking the editors with them ends the run with the change it was about to make unmade.
+              setQueryPhase('edit');
+              // The specs are rebuilt by the phase change: a read-only run has no editors to offer.
+              const canEdit = surface.specs.length > 0;
+              if (!canEdit) setQueryPhase('conclude');
+              progress = canEdit ? 'act-final' : 'act-conclude';
             } else if (progress === 'investigation-conclude') {
               // An exhausted investigation is still exhausted; it cannot buy a fresh allowance of attempts.
               progress = 'continue';

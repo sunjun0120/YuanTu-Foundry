@@ -47,6 +47,7 @@ export function ProductShell(): ReactNode {
         navbarWidth={sidebarWidth}
         asideWidth={view.workspaceWidth}
         asideVisible={view.workspaceOpen && view.page === 'chat'}
+        asideExpanded={view.workspaceFullscreen}
         navbar={
           <>
             <aside
@@ -323,14 +324,6 @@ export function ProductShell(): ReactNode {
                 <div id="tools" className="tool-progress" hidden></div>
                 <div id="goal-root">
                   <ViewSlot name="goal-root" />
-                </div>
-                {/*
-                 * Off for now: the session's deliverable list is drawn at the tail of the transcript, where the newest
-                 * turn reads it as that turn's output. The files are still recorded (`deliverable.presented`); the
-                 * panel comes back by dropping this attribute once its placement is settled.
-                 */}
-                <div id="deliverables-root" hidden>
-                  <ViewSlot name="deliverables-root" />
                 </div>
                 <div id="approvals" aria-label={t('ui.pendingApprovals')}>
                   <ViewSlot name="approvals" />

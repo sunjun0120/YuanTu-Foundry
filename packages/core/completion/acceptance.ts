@@ -12,7 +12,7 @@ import type { SandboxPlan } from '../../sandbox/sandbox-provider.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, open, readdir, realpath } from 'node:fs/promises';
+import { lstat, open, readdir, readlink, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { COMPLETION_LIMITS } from '../../protocol/completion.ts';
 import type { CheckFailureReason } from '../../protocol/index.ts';
@@ -101,7 +101,14 @@ export type AcceptanceSpec =
   | ForbiddenPathUnchangedAcceptanceSpec;
 
 export interface PathSnapshot {
-  version: 1;
+  /**
+   * How the image orders a directory's entries: `1` by English collation, `2` by code unit.
+   *
+   * A baseline is stored and compared in a later run, and collation can change with the ICU a Node build ships, so a
+   * runtime upgrade alone could make an untouched path read as changed. New images use `2`; a stored `1` is compared
+   * against an image taken the same way, so baselines recorded before the change still mean what they meant.
+   */
+  version: 1 | 2;
   state: 'absent' | 'present';
   digest?: string;
   entries: number;
@@ -235,32 +242,49 @@ async function readBoundedFile(root: string, input: string, maxBytes: number): P
   }
 }
 
+/**
+ * A protected path that cannot be imaged is a definition this verifier cannot execute, not an environment fault.
+ *
+ * These used to surface as plain errors, which classify as `environment-error`: the run stopped for review saying
+ * the environment failed, when the fix is to fence a smaller path. Naming them a definition says where to look.
+ */
 function snapshotEntry(state: SnapshotState, label: string, type: string, content?: Buffer): void {
   state.entries++;
   if (state.entries > MAX_SNAPSHOT_ENTRIES)
-    throw new Error(`Path snapshot exceeds ${MAX_SNAPSHOT_ENTRIES} entries`);
+    throw definition(`Path snapshot exceeds ${MAX_SNAPSHOT_ENTRIES} entries; fence a smaller path`);
   state.hash.update(type).update('\0').update(label).update('\0');
   if (content) {
     state.bytes += content.length;
     if (state.bytes > MAX_SNAPSHOT_BYTES)
-      throw new Error(`Path snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes`);
+      throw definition(`Path snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes; fence a smaller path`);
     state.hash.update(content);
   }
   state.hash.update('\0');
 }
+
+/** Directory entry order for each image version (see `PathSnapshot.version`). */
+const ENTRY_ORDER: Record<PathSnapshot['version'], (left: string, right: string) => number> = {
+  1: (left, right) => left.localeCompare(right, 'en'),
+  2: (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+};
 
 async function hashPath(
   root: string,
   target: string,
   label: string,
   state: SnapshotState,
+  version: PathSnapshot['version'],
 ): Promise<void> {
   const stat = await lstat(target);
-  if (stat.isSymbolicLink())
-    throw new Error(`Symbolic links are not allowed in path snapshots: ${label}`);
+  // A link is imaged as what it says, never followed: following it could read outside the workspace, and refusing
+  // it made a fenced directory that merely contains one impossible to protect.
+  if (stat.isSymbolicLink()) {
+    snapshotEntry(state, label, 'link', Buffer.from(await readlink(target), 'utf8'));
+    return;
+  }
   if (stat.isFile()) {
     if (stat.size > MAX_SNAPSHOT_BYTES - state.bytes)
-      throw new Error(`Path snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes`);
+      throw definition(`Path snapshot exceeds ${MAX_SNAPSHOT_BYTES} bytes; fence a smaller path`);
     const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
       const content = await handle.readFile();
@@ -270,26 +294,36 @@ async function hashPath(
     }
     return;
   }
-  if (!stat.isDirectory()) throw new Error(`Unsupported path type in snapshot: ${label}`);
+  if (!stat.isDirectory()) throw definition(`Unsupported path type in snapshot: ${label}`);
   snapshotEntry(state, label, 'directory');
   const entries = await readdir(target, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name, 'en'));
+  const order = ENTRY_ORDER[version];
+  entries.sort((left, right) => order(left.name, right.name));
   for (const entry of entries) {
     const child = path.join(target, entry.name);
     const childLabel = label ? `${label}/${entry.name}` : entry.name;
-    await hashPath(root, child, childLabel, state);
+    await hashPath(root, child, childLabel, state, version);
   }
 }
 
-/** Capture a bounded content snapshot before work that must not alter a path. */
-export async function capturePathSnapshot(root: string, input: string): Promise<PathSnapshot> {
+/**
+ * Capture a bounded content snapshot before work that must not alter a path.
+ *
+ * `version` is for comparing against a stored image: it is taken the way that image was, so a baseline recorded by
+ * an earlier build is still compared like for like.
+ */
+export async function capturePathSnapshot(
+  root: string,
+  input: string,
+  version: PathSnapshot['version'] = 2,
+): Promise<PathSnapshot> {
   const canonicalRoot = await workspaceRoot(root);
   const resolved = await resolveWorkspacePath(canonicalRoot, input);
-  if (!resolved.exists) return { version: 1, state: 'absent', entries: 0, bytes: 0 };
+  if (!resolved.exists) return { version, state: 'absent', entries: 0, bytes: 0 };
   const state: SnapshotState = { hash: createHash('sha256'), entries: 0, bytes: 0 };
-  await hashPath(canonicalRoot, resolved.target, '', state);
+  await hashPath(canonicalRoot, resolved.target, '', state, version);
   return {
-    version: 1,
+    version,
     state: 'present',
     digest: state.hash.digest('hex'),
     entries: state.entries,
@@ -520,6 +554,19 @@ async function verifyOne(
       const commandLine = [spec.command, ...(spec.args ?? [])]
         .map((part) => (/[\s"]/u.test(part) ? JSON.stringify(part) : part))
         .join(' ');
+      /**
+       * What the person reads, quoted so it cannot be mistaken for a shell line.
+       *
+       * The check runs without a shell, so an argument like `a;b` is one argument, but rendered bare it reads as two
+       * commands, and an empty argument vanished entirely. `commandLine` keeps its old spelling on purpose: it is
+       * what an exact-match permission rule — a deny included — was written against, and changing it would silently
+       * stop such a rule from matching.
+       */
+      const displayLine = [spec.command, ...(spec.args ?? [])]
+        .map((part) =>
+          part === '' || /[^\w@%+=:,./\\-]/u.test(part) ? JSON.stringify(part) : part,
+        )
+        .join(' ');
       if (approve) {
         // The boundary `runCommand` will run under, so a policy rule on the network can read it.
         const config = resolveSandboxConfig();
@@ -527,7 +574,7 @@ async function verifyOne(
         const allowed = await approve(
           {
             kind: 'command',
-            description: `Verification command: ${commandLine}`,
+            description: `Verification command (run without a shell): ${displayLine}`,
             boundary: { processFiles: policy.processFiles, network: policy.network },
             toolCall: {
               id: `acceptance:${spec.id}`,
@@ -661,7 +708,11 @@ async function verifyOne(
         ...(passed ? {} : { failureReason: 'assertion-failed' as const }),
       };
     }
-    const snapshot = await capturePathSnapshot(root, spec.path);
+    const snapshot = await capturePathSnapshot(
+      root,
+      spec.path,
+      spec.expectation === 'unchanged' ? spec.baseline.version : undefined,
+    );
     const passed =
       spec.expectation === 'absent'
         ? snapshot.state === 'absent'

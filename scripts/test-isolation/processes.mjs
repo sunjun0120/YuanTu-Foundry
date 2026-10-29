@@ -250,9 +250,14 @@ export async function settleProcesses(isolation, { terminate, timeoutMs = 3000 }
   const deadline = Date.now() + timeoutMs;
   while (typeof terminate === 'function' && remaining().length && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 25));
+  const finalRemaining = remaining();
+  // An unverified registration may disappear while its ownership is being checked.
+  // Confirmed absence retires it; a verified leak still fails even after cleanup.
+  for (const pid of initial)
+    if (!verified.includes(pid) && !finalRemaining.includes(pid)) active.delete(pid);
   return {
     clean: initial.every((pid) => !active.has(pid)),
-    remaining: remaining(),
+    remaining: finalRemaining,
     verified,
     terminated: typeof terminate === 'function' ? verified : [],
     records,

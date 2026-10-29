@@ -478,6 +478,7 @@ async function workspace() {
         };
       if (method === 'subagents.list') return [];
       if (method === 'plan.get') return null;
+      if (method === 'deliverables.get') return [];
       if (method === 'changes.list') return [];
       if (method === 'background.list') return [];
       if (method === 'task.list') return [];

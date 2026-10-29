@@ -499,7 +499,7 @@ export interface HostMethods {
    * the presentation record rather than the filesystem: a path here is something a run *said* was finished.
    */
   'deliverables.get': {
-    params: { sessionId: string };
+    params: { sessionId: string; byTurn?: boolean };
     result: import('./deliverables.ts').PresentedFile[];
   };
   /**

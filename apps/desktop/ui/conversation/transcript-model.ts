@@ -11,6 +11,7 @@ import type { CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import type { Message } from '../../../../packages/protocol/index.ts';
 import type { RunEnding } from '../../../../packages/protocol/run-cancellation.ts';
 import { isRuntimeContext } from '../../../../packages/protocol/context.ts';
+import type { PresentedFile } from '../../../../packages/protocol/deliverables.ts';
 
 export type StepKind = 'result' | 'reasoning' | 'call';
 
@@ -31,7 +32,8 @@ export type TranscriptSegment =
       afterIndex: number;
       ending: RunEnding;
     }
-  | { kind: 'card'; key: string; afterIndex: number; position: number };
+  | { kind: 'card'; key: string; afterIndex: number; position: number }
+  | { kind: 'deliverables'; key: string; afterIndex: number; files: PresentedFile[] };
 
 export interface TranscriptModel {
   /** Messages that survive filtering, with their absolute source index. */
@@ -79,17 +81,20 @@ export function transcriptModel(
   startIndex: number,
   turnChanges: Map<number, unknown> = new Map(),
   previousGroups: ReadonlyMap<string, string> = new Map(),
+  turnDeliverables: ReadonlyMap<number, PresentedFile[]> = new Map(),
 ): TranscriptModel {
   const rows = transcriptRows(messages, startIndex);
   const endings = [...(snapshot?.session.runEndings ?? [])]
     .filter((ending) => ending.afterIndex >= startIndex)
     .sort((a, b) => a.afterIndex - b.afterIndex);
   const cards = [...turnChanges.keys()].sort((a, b) => a - b);
+  const deliveries = [...turnDeliverables.keys()].sort((a, b) => a - b);
   const segments: TranscriptSegment[] = [];
   const groups: Extract<TranscriptSegment, { kind: 'group' }>[] = [];
   let group: Extract<TranscriptSegment, { kind: 'group' }> | null = null;
   let nextEnding = 0;
   let nextCard = 0;
+  let nextDelivery = 0;
   const closeGroup = (): void => {
     group = null;
   };
@@ -139,6 +144,18 @@ export function transcriptModel(
           key: `card:${afterIndex}`,
           afterIndex,
           position: afterIndex,
+        });
+      }
+    }
+    while (nextDelivery < deliveries.length && deliveries[nextDelivery]! < nextIndex) {
+      const afterIndex = deliveries[nextDelivery++]!;
+      if (afterIndex >= index) {
+        closeGroup();
+        segments.push({
+          kind: 'deliverables',
+          key: `deliverables:${afterIndex}`,
+          afterIndex,
+          files: turnDeliverables.get(afterIndex)!,
         });
       }
     }

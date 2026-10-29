@@ -3,6 +3,11 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   windows-x64:
     runs-on: windows-latest
@@ -12,6 +17,18 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+            if ($version -cnotmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+              throw 'Automatic releases require a stable package.json version (for example, 0.1.1)'
+            }
+            if ($env:GITHUB_REF_NAME -cne "v$version") {
+              throw "Release tag '$env:GITHUB_REF_NAME' must match package.json version 'v$version'"
+            }
+          }
       - run: npm ci
       - run: npm run typecheck
       # Report every failing file, as the CI gate does; the exit code is still non-zero on any failure.
@@ -63,6 +80,32 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: YuanTu-Agent-Windows-x64
+          if-no-files-found: error
           path: |
             dist/release/*-setup.exe
             dist/release/*-setup.exe.json
+
+  publish:
+    needs: windows-x64
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: YuanTu-Agent-Windows-x64
+          path: release
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $installer = "release/YuanTu-Agent-$version-windows-x64-setup.exe"
+          Get-Item -LiteralPath $installer, "$installer.json" -ErrorAction Stop | Out-Null
+          # gh uploads both assets to a draft before publishing; existing releases are not overwritten.
+          gh release create $env:RELEASE_TAG $installer "$installer.json" --verify-tag --generate-notes --title "YuanTu Agent $env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

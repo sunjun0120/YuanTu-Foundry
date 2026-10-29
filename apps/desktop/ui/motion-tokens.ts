@@ -13,8 +13,10 @@ export const MOTION = {
   page: { exit: 60, enter: 120 },
   /** Switching a settings category: the same shape, tighter. */
   settings: { exit: 50, enter: 100 },
-  /** The existing sidebar offset, owned by AppShell rather than by Motion. */
-  sidebar: 200,
+  /** Session sidebar width and its content offset, matching the reference's compact rail transition. */
+  sidebar: 280,
+  /** Workspace open/close and enlarge/restore, matching the reference window's width transition. */
+  workspace: 480,
   /** Menus, popovers, tooltips. */
   overlay: { enter: 140, exit: 120 },
   /** Dialogs and drawers. */

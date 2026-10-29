@@ -60,6 +60,7 @@ class FakeClient {
         messages: [],
       };
     if (method === 'plan.get') return plan;
+    if (method === 'deliverables.get') return [];
     if (method === 'completion.current') return null;
     return {};
   }

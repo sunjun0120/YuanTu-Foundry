@@ -303,9 +303,10 @@ export function inspectIsolation(source: string, file: string): IsolationIssue[]
           add(node, 'port', 'Bind loopback port 0 and read the assigned port');
       }
       if (origin && ['fs', 'fs/promises'].includes(origin.module) && writers.has(origin.name)) {
-        const indices = /^(copyFile|cp)/.test(origin.name)
+        // A symbolic link stores its target text; only its destination is written.
+        const indices = /^(copyFile|cp|symlink)/.test(origin.name)
           ? [1]
-          : /^(rename|link|symlink)/.test(origin.name)
+          : /^(rename|link)/.test(origin.name)
             ? [0, 1]
             : [0];
         for (const index of indices) {

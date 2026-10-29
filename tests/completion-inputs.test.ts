@@ -254,21 +254,37 @@ test('an input that escapes the root is refused', async (t) => {
 });
 
 test(
-  'a link is never followed out of the execution root',
+  'a link is recorded as the link, never followed out of the execution root',
   { skip: process.platform === 'win32' ? 'symlink creation needs privileges on Windows' : false },
   async (t) => {
+    /**
+     * A tracked link is ordinary in a repository, and refusing one failed every fingerprint of that repository —
+     * every task and every command-running turn went to review. The link is recorded by what it says instead:
+     * what it points at is never read, and retargeting it is a change.
+     */
     const root = await fixture(t);
     const outside = await fixture(t);
     await writeFile(path.join(outside, 'secret.txt'), 'outside');
+    await writeFile(path.join(outside, 'other.txt'), 'other');
+    await writeFile(path.join(root, 'a.txt'), 'a');
     await symlink(path.join(outside, 'secret.txt'), path.join(root, 'link.txt'));
-    await assert.rejects(
-      snapshotCompletionInputs(root, ['link.txt'], signal),
-      /Symbolic links are not followed/,
-    );
-    await assert.rejects(
-      snapshotCompletionInputs(root, ['.'], signal),
-      /Symbolic links are not followed/,
-    );
+    for (const inputs of [['link.txt'], ['.']]) {
+      const before = await snapshotCompletionInputs(root, inputs, signal);
+      // The target's content is not part of the range: it is never read.
+      await writeFile(path.join(outside, 'secret.txt'), 'changed outside');
+      const untouched = await snapshotCompletionInputs(root, inputs, signal);
+      assert.equal(untouched.digest, before.digest, `${inputs.join()}: the target was not read`);
+      await rm(path.join(root, 'link.txt'));
+      await symlink(path.join(outside, 'other.txt'), path.join(root, 'link.txt'));
+      const retargeted = await snapshotCompletionInputs(root, inputs, signal);
+      assert.notEqual(
+        retargeted.digest,
+        before.digest,
+        `${inputs.join()}: retargeting is a change`,
+      );
+      await rm(path.join(root, 'link.txt'));
+      await symlink(path.join(outside, 'secret.txt'), path.join(root, 'link.txt'));
+    }
   },
 );
 

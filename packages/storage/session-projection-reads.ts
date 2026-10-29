@@ -141,6 +141,10 @@ export class SessionProjectionReads {
     return this.stateOf<PresentedFile[]>('deliverables', sessionId);
   }
 
+  turnDeliverables(sessionId: string): PresentedFile[] {
+    return this.stateOf<{ files: PresentedFile[] }>('turnDeliverables', sessionId).files;
+  }
+
   /** The objective this session is pursuing, or `null` when no run has recorded one. */
   goal(sessionId: string): Goal | null {
     return this.stateOf<Goal | null>('goal', sessionId);

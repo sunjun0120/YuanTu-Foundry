@@ -5,8 +5,8 @@ import { AGENT_SYSTEM_PROMPT } from '../prompt/notices.ts';
 import { redactSecrets } from '../../platform/redact.ts';
 import { definePromptSection, type PromptSection } from '../prompt/sections.ts';
 import {
+  settlementBacklog,
   settlementNoticeText,
-  settlementNotices,
   commandNotices,
   commandNoticeText,
 } from '../subagents/settlements.ts';
@@ -151,7 +151,10 @@ export function createRunPromptSections(options: RunPromptOptions): PromptSectio
       name: 'settlements',
       stage: 'history',
       order: 10,
-      content: () => settlementNoticeText(settlementNotices(options.store, options.sessionId)),
+      content: () => {
+        const { notices, total } = settlementBacklog(options.store, options.sessionId);
+        return settlementNoticeText(notices, total);
+      },
     }),
     /**
      * A background command that finished and whose output nobody has read.

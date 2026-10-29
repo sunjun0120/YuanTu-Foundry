@@ -15,7 +15,7 @@
   "endpointId": "approved-provider",
   "endpointUrl": "https://provider.example.invalid/v1",
   "maxContextTokens": 128000,
-  "maxOutputTokens": 16384,
+  "maxOutputTokens": 32768,
   "promptCache": "auto",
   "executionMode": "no-commands",
   "instanceTimeoutMs": 1200000,

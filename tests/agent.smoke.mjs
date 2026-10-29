@@ -599,7 +599,10 @@ test(
       return page;
     };
     let page = await launch();
-    assert.equal((await page.locator('#attach-image').innerText()).trim(), '+');
+    assert.equal(
+      await page.getByRole('button', { name: '添加图片或文件', exact: true }).isVisible(),
+      true,
+    );
     await page.locator('#permission-trigger').click();
     // Three rungs are offered: the chip writes where a run executes and how
     // much it may do without asking, as one choice. Read-only is a legacy pair, not a rung.
@@ -614,7 +617,11 @@ test(
     await page.screenshot({ path: artifactPath('attachment-permission-menu-dark.png') });
     await page.emulateMedia({ colorScheme: 'light' });
     await page.keyboard.press('Escape');
-    await page.locator('#image-input').setInputFiles({
+    const picker = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: '添加图片或文件', exact: true }).click();
+    await (
+      await picker
+    ).setFiles({
       name: 'unsupported.exe',
       mimeType: 'application/octet-stream',
       buffer: Buffer.from('not supported'),

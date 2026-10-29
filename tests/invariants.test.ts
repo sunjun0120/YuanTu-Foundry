@@ -271,94 +271,119 @@ test('I3: nothing is emitted after run.finished, and cleanup completes first', a
  * locked behind its parent. `reconcileChildRuns` exists precisely to clean up what a crash leaves, so
  * a *normal* outcome must leave nothing for it to find.
  */
-test('I4: completed, cancelled and failed runs leave no running rows or locked sessions', async (t) => {
-  const outcomes: Array<{
-    name: string;
-    provider: Provider;
-    signal?: () => AbortSignal;
-    expect: string;
-  }> = [
-    {
-      name: 'completed',
-      provider: {
-        async complete(request) {
-          if (request.system.includes('You are a sub-agent delegated by a parent agent'))
-            return reply('child report');
-          if (request.messages.some((message) => message.role === 'tool')) return reply('Done');
-          return toolCall('delegate-1', 'delegate_task', { tasks: [{ objective: 'Investigate' }] });
+test(
+  'I4: completed, cancelled and failed runs leave no running rows or locked sessions',
+  { timeout: 30000 },
+  async (t) => {
+    const cancellation = new AbortController();
+    let cancelledChildEntered = false;
+    let cancelledChildSettled = false;
+    const outcomes: Array<{
+      name: string;
+      provider: Provider;
+      signal?: () => AbortSignal;
+      expect: string;
+    }> = [
+      {
+        name: 'completed',
+        provider: {
+          async complete(request) {
+            if (request.system.includes('You are a sub-agent delegated by a parent agent'))
+              return reply('child report');
+            if (request.messages.some((message) => message.role === 'tool')) return reply('Done');
+            return toolCall('delegate-1', 'delegate_task', {
+              tasks: [{ objective: 'Investigate' }],
+            });
+          },
         },
+        expect: 'completed',
       },
-      expect: 'completed',
-    },
-    {
-      name: 'cancelled',
-      provider: {
-        async complete(request) {
-          if (request.system.includes('You are a sub-agent delegated by a parent agent'))
-            return new Promise<ModelResponse>((_resolve, reject) =>
-              request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
-                once: true,
-              }),
-            );
-          if (request.messages.some((message) => message.role === 'tool'))
-            return new Promise<ModelResponse>((_resolve, reject) =>
-              request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
-                once: true,
-              }),
-            );
-          return toolCall('delegate-1', 'delegate_task', { tasks: [{ objective: 'Investigate' }] });
+      {
+        name: 'cancelled',
+        provider: {
+          async complete(request) {
+            request.signal.throwIfAborted();
+            if (request.system.includes('You are a sub-agent delegated by a parent agent')) {
+              return new Promise<ModelResponse>((_resolve, reject) => {
+                request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
+                  once: true,
+                });
+                // Cancel only after delegation has reached a running child and its
+                // abort handler is installed, irrespective of initialization time.
+                cancelledChildEntered = true;
+                cancellation.abort();
+              }).finally(() => {
+                cancelledChildSettled = true;
+              });
+            }
+            if (request.messages.some((message) => message.role === 'tool'))
+              return new Promise<ModelResponse>((_resolve, reject) =>
+                request.signal.addEventListener('abort', () => reject(new Error('aborted')), {
+                  once: true,
+                }),
+              );
+            return toolCall('delegate-1', 'delegate_task', {
+              tasks: [{ objective: 'Investigate' }],
+            });
+          },
         },
+        signal: () => cancellation.signal,
+        expect: 'cancelled',
       },
-      signal: () => {
-        const controller = new AbortController();
-        setTimeout(() => controller.abort(), 150);
-        return controller.signal;
-      },
-      expect: 'cancelled',
-    },
-    {
-      name: 'failed',
-      provider: {
-        async complete(request) {
-          if (request.system.includes('You are a sub-agent delegated by a parent agent'))
-            return reply('child report');
-          if (request.messages.some((message) => message.role === 'tool'))
-            throw new Error('provider exploded');
-          return toolCall('delegate-1', 'delegate_task', { tasks: [{ objective: 'Investigate' }] });
+      {
+        name: 'failed',
+        provider: {
+          async complete(request) {
+            if (request.system.includes('You are a sub-agent delegated by a parent agent'))
+              return reply('child report');
+            if (request.messages.some((message) => message.role === 'tool'))
+              throw new Error('provider exploded');
+            return toolCall('delegate-1', 'delegate_task', {
+              tasks: [{ objective: 'Investigate' }],
+            });
+          },
         },
+        expect: 'failed',
       },
-      expect: 'failed',
-    },
-  ];
-  for (const scenario of outcomes) {
-    const { root, store, session, agent } = await fixture(t, scenario.provider, {
-      subagents: { enabled: true },
-    });
-    const result = await agent.run({
-      sessionId: session.id,
-      prompt: 'Do the work',
-      ...(scenario.signal ? { signal: scenario.signal() } : {}),
-    });
-    assert.equal(result.status, scenario.expect, `${scenario.name}: unexpected run status`);
-    const children = store.childSessions(session.id);
-    assert.ok(children.length >= 1, `${scenario.name}: the scenario must have delegated`);
-    for (const id of [session.id, ...children.map((child) => child.id)]) {
-      assert.equal(
-        store.get(id).activeRun,
-        null,
-        `${scenario.name}: ${id} still claims an active run`,
-      );
+    ];
+    for (const scenario of outcomes) {
+      const { root, store, session, agent } = await fixture(t, scenario.provider, {
+        subagents: { enabled: true },
+      });
+      const result = await agent.run({
+        sessionId: session.id,
+        prompt: 'Do the work',
+        ...(scenario.signal ? { signal: scenario.signal() } : {}),
+      });
+      assert.equal(result.status, scenario.expect, `${scenario.name}: unexpected run status`);
+      if (scenario.name === 'cancelled') {
+        assert.equal(cancelledChildEntered, true, 'cancellation must exercise a running child');
+        assert.equal(
+          cancelledChildSettled,
+          true,
+          'the child must settle before its parent returns',
+        );
+      }
+      const children = store.childSessions(session.id);
+      assert.ok(children.length >= 1, `${scenario.name}: the scenario must have delegated`);
+      for (const id of [session.id, ...children.map((child) => child.id)]) {
+        assert.equal(
+          store.get(id).activeRun,
+          null,
+          `${scenario.name}: ${id} still claims an active run`,
+        );
+      }
+      const db = new DatabaseSync(path.join(root, 'sessions.sqlite'));
+      const leaked = db
+        .prepare(
+          `SELECT id FROM runs WHERE status='running' AND session_id IN (${[session.id, ...children.map((child) => child.id)].map(() => '?').join(',')})`,
+        )
+        .all(session.id, ...children.map((child) => child.id));
+      db.close();
+      assert.deepEqual(leaked, [], `${scenario.name}: a run row was left running`);
     }
-    const db = new DatabaseSync(path.join(root, 'sessions.sqlite'));
-    const leaked = db
-      .prepare(
-        `SELECT id FROM runs WHERE status='running' AND session_id IN (${[session.id, ...children.map((child) => child.id)].map(() => '?').join(',')})`,
-      )
-      .all(session.id, ...children.map((child) => child.id));
-    db.close();
-    assert.deepEqual(leaked, [], `${scenario.name}: a run row was left running`);
-  }
-});
+  },
+);
 
 /**
  * I5 — a run changes what it says it changed, and nothing else.

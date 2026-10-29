@@ -474,3 +474,29 @@ test('the sent schema drops validator-only bounds, and the validator still enfor
   const empty = await registry.execute({ id: '2', name: 'echo', arguments: { text: '' } }, context);
   assert.equal(empty.isError, true, 'the registered minLength is still enforced');
 });
+
+test('YUANTU_TOOL_ALLOWLIST leaves only the named tools, however they are added', async (t) => {
+  // What the subprocess sub-agent provider hands its child to keep the tool filter it promised: a restriction, so
+  // a tool outside the list is not executable, including one a run installs later.
+  const root = await mkdtemp(path.join(tmpdir(), 'yuantu-allowlist-'));
+  const previous = process.env.YUANTU_TOOL_ALLOWLIST;
+  process.env.YUANTU_TOOL_ALLOWLIST = 'read_file, search_files';
+  const tools = createTools(root);
+  t.after(async () => {
+    if (previous === undefined) delete process.env.YUANTU_TOOL_ALLOWLIST;
+    else process.env.YUANTU_TOOL_ALLOWLIST = previous;
+    await tools.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  assert.equal(tools.offers('read_file'), true);
+  assert.equal(tools.offers('search_files'), true);
+  assert.equal(tools.offers('write_file'), false);
+  assert.equal(tools.offers('run_command'), false);
+  tools.replace({
+    name: 'late_tool',
+    description: 'installed after the catalogue was built',
+    inputSchema: { type: 'object', properties: {} },
+    execute: async () => ({ isError: false, content: 'ran' }),
+  });
+  assert.equal(tools.offers('late_tool'), false, 'a tool added later is restricted too');
+});

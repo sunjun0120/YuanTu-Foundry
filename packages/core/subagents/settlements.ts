@@ -21,6 +21,7 @@ import type { CommandRecord } from '../../protocol/jobs.ts';
 import type { SubAgentRole, SubAgentSummary } from '../../protocol/index.ts';
 import type { SessionStore } from '../../storage/sqlite.ts';
 import { unsettledCommands } from '../command-jobs.ts';
+import { logProjection } from '../log-projection.ts';
 /** A settled child the parent has not been told about, in the shape the notice and `collect` both use. */
 export interface SettlementNotice {
   /** The delegation's task id: what `collect_subagents` takes. */
@@ -47,29 +48,57 @@ export function settlementNotices(
   sessionId: string,
   limit = 8,
 ): SettlementNotice[] {
-  const assigned = new Map<
-    string,
-    { childSessionId: string; role: SubAgentRole; objective: string }
-  >();
-  const settled = new Map<string, SettlementNotice>();
-  for (const event of store.events(sessionId)) {
+  return settlementBacklog(store, sessionId, limit).notices;
+}
+/**
+ * The uncollected settlements up to `limit`, and how many there are in all.
+ *
+ * The total is what lets the notice say that more are waiting: a list cut at the limit without saying so reads as
+ * the whole of it, and the ones past the cut would never be asked about.
+ */
+export function settlementBacklog(
+  store: SessionStore,
+  sessionId: string,
+  limit = 8,
+): { notices: SettlementNotice[]; total: number } {
+  const { settled } = settlementLog.read(store, sessionId);
+  const notices: SettlementNotice[] = [];
+  for (const notice of settled.values()) {
+    if (notices.length >= limit) break;
+    // Copied: the fold is kept and continued across calls, and a caller must not be able to edit it.
+    notices.push({ ...notice });
+  }
+  return { notices, total: settled.size };
+}
+/**
+ * The settlement fold, kept per store and continued from the last seq it read (see `logProjection`).
+ *
+ * The notice is assembled for every prompt and `collect_subagents` reads it on every call, so folding the whole log
+ * each time made both cost the session's age rather than what changed since the last read.
+ */
+const settlementLog = logProjection<{
+  assigned: Map<string, { childSessionId: string; role: SubAgentRole; objective: string }>;
+  settled: Map<string, SettlementNotice>;
+}>(
+  () => ({ assigned: new Map(), settled: new Map() }),
+  ({ assigned, settled }, event) => {
     if (event.type === 'subagent.assigned') {
       const id = String(event.data.id ?? '');
       const childSessionId = String(event.data.childSessionId ?? '');
-      if (!id || !childSessionId || assigned.has(id)) continue;
+      if (!id || !childSessionId || assigned.has(id)) return;
       assigned.set(id, {
         childSessionId,
         role: (event.data.role as SubAgentRole | undefined) ?? 'explore',
         objective: String(event.data.objective ?? ''),
       });
-      continue;
+      return;
     }
     if (event.type === 'subagent.finished') {
       const id = String(event.data.id ?? '');
-      if (!id) continue;
+      if (!id) return;
       const known = assigned.get(id);
       const childSessionId = String(event.data.sessionId ?? known?.childSessionId ?? '');
-      if (!childSessionId) continue;
+      if (!childSessionId) return;
       settled.set(id, {
         id,
         childSessionId,
@@ -79,7 +108,7 @@ export function settlementNotices(
         ...(event.data.error ? { reason: String(event.data.error) } : {}),
         ...(event.data.report ? { report: event.data.report as SubAgentSummary['report'] } : {}),
       });
-      continue;
+      return;
     }
     if (event.type === 'subagent.interrupted') {
       // Crash recovery knows the child session but not the task id, so the assignment is what names it.
@@ -87,7 +116,7 @@ export function settlementNotices(
       const entry = [...assigned.entries()].find(
         ([id, child]) => child.childSessionId === childSessionId && !settled.has(id),
       );
-      if (!entry) continue;
+      if (!entry) return;
       const [id, child] = entry;
       settled.set(id, {
         id,
@@ -97,7 +126,7 @@ export function settlementNotices(
         status: 'interrupted',
         ...(event.data.reason ? { reason: String(event.data.reason) } : {}),
       });
-      continue;
+      return;
     }
     if (event.type === 'subagent.collected') {
       const ids = Array.isArray(event.data.ids) ? event.data.ids : [];
@@ -106,14 +135,8 @@ export function settlementNotices(
           if (String(id) === taskId || String(id) === notice.childSessionId) settled.delete(taskId);
         }
     }
-  }
-  const pending: SettlementNotice[] = [];
-  for (const notice of settled.values()) {
-    pending.push(notice);
-    if (pending.length >= limit) break;
-  }
-  return pending;
-}
+  },
+);
 /**
  * The notice as the parent model reads it.
  *
@@ -127,13 +150,21 @@ export function settlementNotices(
  * has and a system prompt does not. The notice says what happened and points at the tool; `collect_subagents`
  * hands over the report itself.
  */
-export function settlementNoticeText(notices: readonly SettlementNotice[]): string {
+export function settlementNoticeText(
+  notices: readonly SettlementNotice[],
+  total = notices.length,
+): string {
   if (!notices.length) return '';
   const lines = notices.map((notice) => {
     const reason = notice.reason ? ` — ${notice.reason}` : '';
     const detail = notice.report ? ' (a structured report is waiting)' : '';
     return `- ${notice.objective || notice.id}: ${notice.status}${reason}${detail}\n  collect_subagents id: ${notice.id}; job_output/send_message childSessionId: ${notice.childSessionId}`;
   });
+  const more = total - notices.length;
+  if (more > 0)
+    lines.push(
+      `- …and ${more} more settled sub-agent(s) not listed here; \`collect_subagents\` with no ids returns them all.`,
+    );
   return (
     '\n\nSub-agents you delegated to that have settled and whose outcome you have not collected:\n' +
     lines.join('\n') +

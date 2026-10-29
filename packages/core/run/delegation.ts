@@ -279,6 +279,8 @@ export function createRunDelegation(options: RunDelegationOptions): SubAgentCoor
   tools.replace(
     workflowTool({
       maxAgents: limits.maxPerRun,
+      // Read per call: the registry's policy is what the deployment configured for every other tool.
+      defaultTimeoutMs: () => tools.deadlines?.defaultMs,
       runAgent: (prompt, options, signal) =>
         delegation.runOne(
           {

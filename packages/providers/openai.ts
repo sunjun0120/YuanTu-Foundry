@@ -458,25 +458,33 @@ export class OpenAIProvider implements Provider {
       reason !== 'content-filter' &&
       dsmlStart(text) !== undefined
     ) {
-      try {
-        if (calls.size || request.toolChoice === 'none' || !request.tools.length)
-          throw new Error('DSML calls conflict with native calls or disabled tools');
-        const normalized = parseDsml(text, request.tools)!;
-        text = normalized.text;
-        toolCalls = normalized.toolCalls;
-        toolArgumentChars += toolCalls.reduce(
-          (count, call) => count + JSON.stringify(call.arguments).length,
-          0,
-        );
-        // The buffered suffix was protocol output, not an answer. All calls still use the registry below.
-        contentBuffer!.flush();
-      } catch (cause) {
-        throw new RunFailure(
-          'unsupported',
-          cause instanceof Error ? cause.message : 'Invalid DSML tool calls',
-          { cause, details: { usage, finishReason: reason, ...counted() } },
-        );
-      }
+      if (!calls.size && (request.toolChoice === 'none' || !request.tools.length)) {
+        // A turn with no tools (a conclusion-only round) still gets DSML from a model that wanted one more call.
+        // Nothing can run, and failing the run would also lose the prose before it: keep the prose as the answer
+        // and drop the block. A turn that is nothing but the block keeps it as text rather than answer nothing.
+        const prose = text.slice(0, dsmlStart(text));
+        const held = contentBuffer!.flush();
+        if (prose.trim()) text = prose;
+        else if (held) request.onText(held);
+      } else
+        try {
+          if (calls.size) throw new Error('DSML calls conflict with native calls');
+          const normalized = parseDsml(text, request.tools)!;
+          text = normalized.text;
+          toolCalls = normalized.toolCalls;
+          toolArgumentChars += toolCalls.reduce(
+            (count, call) => count + JSON.stringify(call.arguments).length,
+            0,
+          );
+          // The buffered suffix was protocol output, not an answer. All calls still use the registry below.
+          contentBuffer!.flush();
+        } catch (cause) {
+          throw new RunFailure(
+            'unsupported',
+            cause instanceof Error ? cause.message : 'Invalid DSML tool calls',
+            { cause, details: { usage, finishReason: reason, ...counted() } },
+          );
+        }
     } else {
       const pending = contentBuffer?.flush();
       if (pending) request.onText(pending);

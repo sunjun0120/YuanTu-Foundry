@@ -195,7 +195,8 @@ export interface CompletionRecord {
 
 /** A bounded content image of one workspace path (the core verifier's `PathSnapshot`). */
 export interface CompletionPathBaseline {
-  version: 1;
+  /** Directory entry order of the image: `1` English collation (older records), `2` code unit. */
+  version: 1 | 2;
   state: 'absent' | 'present';
   digest?: string;
   entries: number;

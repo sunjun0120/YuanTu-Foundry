@@ -120,7 +120,9 @@ export function createCoordinator(options: CoordinatorOptions): SubAgentCoordina
      */
     collected: (ids: readonly string[]) =>
       store.recordEvent(sessionId, 'subagent.collected', { ids: [...ids] }),
-    settlements: () => settlementNotices(store, sessionId),
+    // Every one, not the prompt's eight: `collect_subagents` is where the notice sends the model for the rest, and
+    // each report it hands over is still held to the per-call report bound.
+    settlements: () => settlementNotices(store, sessionId, Number.POSITIVE_INFINITY),
     inbox: () => store.stateOf<readonly PendingSubagentMessage[]>('subagentInbox', sessionId),
     providers: options.providers,
     provider: options.providerName ?? 'in-process',

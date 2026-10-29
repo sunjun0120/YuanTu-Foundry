@@ -91,8 +91,21 @@ test(
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-settings-page-'));
     let release;
-    const url = await httpFixture(t, async (_body, res) => {
-      await new Promise((resolve) => (release = resolve));
+    let chats = 0;
+    const url = await httpFixture(t, async (_body, res, _headers, requestPath) => {
+      if (requestPath === '/v1/models') {
+        res.end(
+          JSON.stringify({
+            data: ['model-a', 'model-b'].map((id) => ({
+              id,
+              context_length: 128000,
+              max_output_tokens: 4096,
+            })),
+          }),
+        );
+        return;
+      }
+      if (++chats > 1) await new Promise((resolve) => (release = resolve));
       sendFrames(res, frames('done'));
     });
     const env = {
@@ -201,7 +214,7 @@ test(
     await page.locator('#prompt').fill('保留这份草稿');
     await page.locator('#open-settings').click();
     await page.locator('#model-settings').click();
-    await page.locator('#settings-model').waitFor();
+    await page.waitForFunction(() => document.querySelector('#settings-model').value === 'model-b');
     const endpointLabels = await readSelectOptions(page, 'settings-connection');
     assert.equal(new Set(endpointLabels).size, 2);
     assert.ok(endpointLabels.every((label) => !label.includes(url)));
@@ -289,9 +302,14 @@ test(
       saved.b.settings.defaultConnectionId,
       'a chat selection does not change the global default',
     );
-    await page.evaluate(() => window.yuantu.invoke({ type: 'create' }));
+    // An untouched session is already "new". Complete a turn so New task really
+    // leaves this session and the default model can be checked in another one.
+    await page.locator('#send').click();
+    await page.getByText('done', { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('#send').dataset.mode === 'send');
+    await page.locator('#new-session').click();
     await page.waitForFunction(() => document.querySelector('#model').value.includes('model-b'));
-    await page.evaluate((sessionId) => window.yuantu.invoke({ type: 'load', id: sessionId }), id);
+    await page.locator(`#sessions .session-item[data-session-id="${id}"]`).click();
     await page.waitForFunction(() => document.querySelector('#model').value.includes('model-a'));
     assert.equal(await page.locator('#model-switch-status').isHidden(), true);
     await page.locator('#prompt').fill('保留这份草稿');
@@ -879,6 +897,9 @@ test(
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), 'yuantu-preset-ui-'));
     const profile = path.join(root, 'profile');
+    const endpoint = await httpFixture(t, (_body, res) => {
+      sendFrames(res, frames('Permission session started'));
+    });
     const env = {
       ...process.env,
       YUANTU_NODE_PATH: process.execPath,
@@ -886,7 +907,7 @@ test(
       YUANTU_API_KEY: 'fixture',
       YUANTU_MODEL: 'fixture',
       YUANTU_MAX_CONTEXT_TOKENS: '128000',
-      YUANTU_BASE_URL: 'http://127.0.0.1:1',
+      YUANTU_BASE_URL: endpoint,
       YUANTU_PROTOCOL: 'anthropic',
     };
     delete env.ELECTRON_RUN_AS_NODE;
@@ -1008,7 +1029,13 @@ test(
      * A new session starts at the default, 帮我批准 — the choice is kept per session id, so there is nothing to
      * clear when a fresh one arrives, and full access never carries over into a conversation that did not ask.
      */
-    await page.evaluate(() => window.yuantu.invoke({ type: 'create' }));
+    // Security choices alone do not start a session; finish a real turn before
+    // asking New task to create a different session with the default preset.
+    await page.locator('#prompt').fill('Start this permission session');
+    await page.locator('#send').click();
+    await page.getByText('Permission session started', { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('#send').dataset.mode === 'send');
+    await page.locator('#new-session').click();
     await page.waitForFunction(
       () => document.querySelector('#permission-mode').value === 'auto',
       undefined,
@@ -1018,7 +1045,7 @@ test(
     const created = await sessionId();
     assert.notEqual(created, initial);
     // Going back to the session that chose full access gives it back: the choice follows the session.
-    await page.evaluate((id) => window.yuantu.invoke({ type: 'load', id }), initial);
+    await page.locator(`#sessions .session-item[data-session-id="${initial}"]`).click();
     await page.waitForFunction(
       () => document.querySelector('#permission-mode').value === 'unconfined',
       undefined,

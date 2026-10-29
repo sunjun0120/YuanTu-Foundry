@@ -1,9 +1,9 @@
 /**
- * The read-only workspace panel: tabs, a tree or one file, and the width/fullscreen controls around them.
+ * The read-only workspace panel: tabs, a tree or one file, and the width/enlarge controls around them.
  *
  * The reads and identity rules are in `workspace-model.ts`; this component draws them. Two behaviours are inherited
  * from the legacy panel because the smoke pins them: the width is draggable **and** keyboard-resizable (Home is the
- * minimum, arrows step by 24px, dragging left widens), and Escape steps back — fullscreen, then the file, then the
+ * minimum, arrows step by 24px, dragging left widens), and Escape steps back — enlarged, then the file, then the
  * panel — rather than closing everything at once.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
@@ -88,7 +88,7 @@ export function WorkspacePanel({
   const selected = state.selected;
   const tab = selected === null ? undefined : state.tabs.get(selected);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     navigation.set({
       ...navigation.getSnapshot(),
       workspaceOpen: state.open,
@@ -98,25 +98,12 @@ export function WorkspacePanel({
     document.body.style.setProperty('--workspace-width', `${actualWidth}px`);
   }, [actualWidth, state.open, fullscreen]);
 
-  useEffect(() => {
-    document.body.dataset.workspaceView = !state.open
-      ? 'closed'
-      : fullscreen
-        ? 'fullscreen'
-        : 'open';
+  useLayoutEffect(() => {
+    const nextView = !state.open ? 'closed' : fullscreen ? 'fullscreen' : 'open';
+    document.body.dataset.workspaceView = nextView;
     document.getElementById('open-workspace')?.setAttribute('aria-expanded', String(state.open));
     document.getElementById('chat-page')!.inert = fullscreen;
-    document.getElementById('chat-sidebar')!.inert = fullscreen;
-    const element = panel.current;
-    if (!element) return;
-    if (fullscreen) {
-      element.setAttribute('role', 'dialog');
-      element.setAttribute('aria-modal', 'true');
-    } else {
-      element.removeAttribute('role');
-      element.removeAttribute('aria-modal');
-    }
-  }, [state.open, fullscreen, actualWidth]);
+  }, [state.open, fullscreen]);
 
   // A newly opened file is scrolled into the tab strip; tabs are compact, and the row shares its width first.
   useLayoutEffect(() => {
@@ -356,7 +343,8 @@ export function WorkspacePanel({
         id="workspace-panel"
         className="workspace-panel"
         aria-label={t('workspace.title')}
-        hidden={!state.open}
+        aria-hidden={!state.open}
+        inert={!state.open}
         onKeyDown={(event) => {
           if (event.key !== 'Escape') return;
           event.stopPropagation();

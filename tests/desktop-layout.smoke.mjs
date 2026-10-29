@@ -104,14 +104,15 @@ test(
         await page.locator('#chat-page').evaluate((el) => getComputedStyle(el).backgroundColor),
         theme === 'dark' ? 'rgb(20, 20, 22)' : 'rgb(248, 248, 247)',
       );
-      assert.equal(await page.locator('.logo-' + theme).isVisible(), true);
+      assert.equal(await page.locator('.brand-logo[role="img"]').isVisible(), true);
+      assert.equal(await page.locator('.brand-mark').isVisible(), true);
+      await page.waitForFunction(() => {
+        const mark = document.querySelector('.brand-mark');
+        return mark instanceof HTMLImageElement && mark.complete && mark.naturalWidth > 0;
+      });
       assert.equal(
-        await page.locator('.logo-' + (theme === 'dark' ? 'light' : 'dark')).isVisible(),
-        false,
-      );
-      assert.equal(
-        await page.locator('.logo-' + theme).evaluate((el) => el.complete && el.naturalWidth > 0),
-        true,
+        await page.locator('.brand-mark').evaluate((el) => getComputedStyle(el).filter),
+        theme === 'dark' ? 'invert(1)' : 'none',
       );
     };
     await page.emulateMedia({ colorScheme: 'dark' });

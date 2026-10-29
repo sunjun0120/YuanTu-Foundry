@@ -15,7 +15,7 @@ function overlayOpen(): boolean {
   for (const node of document.querySelectorAll<HTMLElement>(
     '[role="dialog"], [role="menu"], [role="listbox"]',
   )) {
-    // The workspace panel itself becomes a dialog in fullscreen; its guest is inside it, not behind it.
+    // Workspace chrome belongs to the guest's own panel rather than an overlay behind which it must hide.
     if (node.closest('#workspace-panel')) continue;
     if (node.closest('[hidden], [aria-hidden="true"]')) continue;
     const style = getComputedStyle(node);
@@ -53,7 +53,8 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
     if (!node) return;
     const rect = node.getBoundingClientRect();
     const hidden =
-      node.closest('[hidden]') !== null || document.body.dataset.workspaceView === 'closed';
+      node.closest('[hidden], [aria-hidden="true"], [inert]') !== null ||
+      document.body.dataset.workspaceView === 'closed';
     const visible = !hidden && state.started && !state.error && !state.crashed && !overlayOpen();
     send({
       type: 'layout',
@@ -82,7 +83,7 @@ export function BrowserPane({ id, state }: { id: string; state: BrowserState }):
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['hidden', 'aria-hidden', 'class', 'style', 'data-workspace-view'],
+      attributeFilter: ['hidden', 'aria-hidden', 'inert', 'class', 'style', 'data-workspace-view'],
     });
     schedule();
     return () => {

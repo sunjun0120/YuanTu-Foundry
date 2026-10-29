@@ -522,6 +522,28 @@ test('a workflow that exceeds its own budget is stopped and told which budget it
   );
 });
 
+test('a workflow that states no budget gets the deployment default, and a script loop is stopped', async () => {
+  // The registry exempts `workflow` from its default so a caller can lengthen or lift the bound; a call that says
+  // nothing used to get no bound at all, and a looping script held the run open until somebody pressed Stop.
+  const stub = stubAgents(async () => completion('unused'));
+  const tool = workflowTool({ runAgent: stub.runAgent, defaultTimeoutMs: () => 150 });
+  await assert.rejects(
+    tool.execute!({ code: 'for (;;) {}' }, context(new AbortController().signal)),
+    /exceeded its 150ms budget/,
+  );
+  // `0` still means no deadline: the default applies only when nothing was stated.
+  const slow = stubAgents(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return completion('finished');
+  });
+  const unbounded = workflowTool({ runAgent: slow.runAgent, defaultTimeoutMs: () => 50 });
+  const result = await unbounded.execute!(
+    { timeoutMs: 0, code: "return await agent('slow');" },
+    context(new AbortController().signal),
+  );
+  assert.match(result.content, /finished/);
+});
+
 test('a workflow that runs out of budget stops the children it had already started', async () => {
   /**
    * A deadline used to stop the script and nothing else. The children a script had started were handed the

@@ -334,35 +334,86 @@ fn commands_can_fork_with_piped_stdio() {
 fn runs_commands_concurrently() {
     let node = require_node!();
     let broker = broker();
-    let started = Instant::now();
-    let threads: Vec<_> = ["A", "B"]
+    struct RunningCommand(Child);
+    impl Drop for RunningCommand {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    // Neither command can exit until both have started. Serializing broker requests
+    // therefore fails at the readiness barrier, regardless of machine speed.
+    let script = r#"
+        process.stdin.once('data', data => {
+            if (data.toString().trim() !== 'release') process.exit(2);
+            console.log(process.argv[1]);
+            process.exit(0);
+        });
+        console.log('READY');
+    "#;
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut commands: Vec<_> = ["A", "B"]
         .into_iter()
         .map(|name| {
-            let value = request(
-                &[
-                    &node,
-                    "-e",
-                    "setTimeout(() => console.log(process.argv[1]), 700)",
-                    name,
-                ],
-                r"C:\",
+            let value = request(&[&node, "-e", script, name], r"C:\");
+            let mut child = RunningCommand(
+                exec_command(&broker.pipe, &value)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .unwrap(),
             );
-            let pipe = broker.pipe.clone();
+            let mut reader = BufReader::new(child.0.stdout.take().unwrap());
+            let ready_tx = ready_tx.clone();
             std::thread::spawn(move || {
-                let output = exec(&pipe, &value, "");
-                (name, stdout(&output))
-            })
+                let mut line = String::new();
+                let read = reader.read_line(&mut line);
+                let _ = ready_tx.send((name, read, line, reader));
+            });
+            child
         })
         .collect();
-    for thread in threads {
-        let (name, output) = thread.join().unwrap();
-        assert_eq!(output, name);
+    drop(ready_tx);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut readers = Vec::new();
+    for _ in 0..commands.len() {
+        let (name, read, line, reader) = ready_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("both commands must reach READY before either is released");
+        assert!(read.unwrap() > 0, "command {name} exited before READY");
+        assert_eq!(line.trim(), "READY", "command {name}");
+        readers.push((name, reader));
     }
-    assert!(
-        started.elapsed() < Duration::from_millis(1400),
-        "{:?}",
-        started.elapsed()
-    );
+    for child in &mut commands {
+        child
+            .0
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    for child in &mut commands {
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "command did not exit after release"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(0));
+    }
+    for (name, mut reader) in readers {
+        let mut output = String::new();
+        reader.read_to_string(&mut output).unwrap();
+        assert_eq!(output.trim(), name);
+    }
 }
 
 #[test]

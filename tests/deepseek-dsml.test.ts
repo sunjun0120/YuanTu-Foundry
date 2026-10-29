@@ -210,8 +210,23 @@ test('DSML validates every call before returning any executable batch', async (t
 
 test('DSML never enables absent or disabled tools and refuses mixed native calls', async (t) => {
   for (const input of [request({ tools: [] }), request({ toolChoice: 'none' })]) {
-    const provider = await endpoint(t, block());
-    await assert.rejects(provider.complete(input), /DSML/);
+    // A conclusion-only round: the prose is the answer, the block is dropped, nothing runs.
+    let shown = '';
+    const provider = await endpoint(t, 'Now I will apply the fix.\n\n' + block());
+    const result = await provider.complete({
+      ...input,
+      onText: (part) => {
+        shown += part;
+      },
+    });
+    assert.deepEqual(result.toolCalls, []);
+    assert.equal(result.finishReason, 'stop');
+    assert.equal(result.text, 'Now I will apply the fix.\n\n');
+    assert.equal(shown, result.text);
+    // Nothing but the block: it stays as text instead of an empty answer.
+    const bare = await (await endpoint(t, block())).complete(input);
+    assert.deepEqual(bare.toolCalls, []);
+    assert.equal(bare.text, block());
   }
   const mixed = await endpoint(t, block(), 'tool_calls', true);
   await assert.rejects(mixed.complete(request()), /DSML/);

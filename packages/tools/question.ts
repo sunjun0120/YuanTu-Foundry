@@ -77,7 +77,7 @@ function normalize(value: unknown): Question[] {
         })
       : undefined;
     if (options) {
-      if (options.length > 6) throw new Error('A question may offer at most 6 options');
+      if (options.length > 3) throw new Error('A question may offer at most 3 options');
       const labels = new Set(options.map((option) => option.label));
       if (labels.size !== options.length)
         throw new Error(`Question "${id}" repeats an option label`);
@@ -113,7 +113,7 @@ export function questionTool(): Tool {
   return {
     name: 'ask_user_question',
     description:
-      'Ask the user 1-4 structured questions and wait for the answer (options, optional multi-select, optional free text). Use it only when a decision only the user can make blocks the work (e.g. which of two conventions to follow, a scope choice), instead of guessing or stopping. Put your preferred option first with `recommended: true` (at most one per question). If nobody answers in time the result says so and the run continues; do not wait for it again.',
+      'Ask the user 1-4 structured questions and wait for the answer (options, optional multi-select, optional free text). Use it only when a decision only the user can make blocks the work (e.g. which of two conventions to follow, a scope choice), instead of guessing or stopping. Usually offer 2-3 concise options, never more than 3 per question; group choices or split the question if more are needed. Keep free text available for other answers; it does not count toward the option limit, so do not add an "Other" option. Put your preferred option first with `recommended: true` (at most one per question). If nobody answers in time the result says so and the run continues; do not wait for it again.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -130,7 +130,7 @@ export function questionTool(): Tool {
               options: {
                 type: 'array',
                 minItems: 1,
-                maxItems: 6,
+                maxItems: 3,
                 items: {
                   type: 'object',
                   properties: {

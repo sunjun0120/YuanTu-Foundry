@@ -38,6 +38,7 @@ function fakeController() {
       }
       if (method === 'subagents.list') return [];
       if (method === 'plan.get') return null;
+      if (method === 'deliverables.get') return [];
       return {};
     },
   };

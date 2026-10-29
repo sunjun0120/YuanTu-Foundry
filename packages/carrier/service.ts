@@ -61,6 +61,8 @@ const AUDIT_PAGE = 500;
  * one an export is most likely to be asked of.
  */
 export const EXPORT_MESSAGE_LIMIT = 5_000;
+/** The environment names `readConfig` and the credentials path read; see `CarrierService.isConfigured`. */
+const CONFIG_VARIABLE = /^(YUANTU_|ANTHROPIC_|OPENAI_|HOME$|USERPROFILE$|HOMEDRIVE$|HOMEPATH$)/;
 
 /**
  * The client state machine every carrier shares: sessions, run state, transcript projection, pending
@@ -118,17 +120,42 @@ export class CarrierService {
       offset: 0,
       tail: 1,
     });
-    const total = first.totalMessages;
-    const start = total === undefined ? 0 : Math.max(0, total - EXPORT_MESSAGE_LIMIT);
-    const history = await readDisplayHistory(client, sessionId, EXPORT_MESSAGE_LIMIT, start, {
-      ...(total === undefined ? {} : { endOffset: total }),
-    });
-    const messages = history.messages.map((message) => {
+    const textOnly = (message: Message): Message => {
       if (!('images' in message)) return message;
       const { images: _images, ...text } = message as Message & { images?: unknown };
       return text as Message;
-    });
-    return { title: first.session.title, messages, omitted: history.startOffset };
+    };
+    const total = first.totalMessages;
+    if (total !== undefined) {
+      const start = Math.max(0, total - EXPORT_MESSAGE_LIMIT);
+      const history = await readDisplayHistory(client, sessionId, EXPORT_MESSAGE_LIMIT, start, {
+        endOffset: total,
+      });
+      return {
+        title: first.session.title,
+        messages: history.messages.map(textOnly),
+        omitted: history.startOffset,
+      };
+    }
+    /**
+     * A Host that does not say how long the session is: the newest window cannot be addressed directly, so the
+     * history is walked in windows and only the newest `EXPORT_MESSAGE_LIMIT` are kept. Reading just the first
+     * window used to export the oldest messages and drop the rest without a word.
+     */
+    let kept: Message[] = [];
+    let omitted = 0;
+    let offset = 0;
+    for (;;) {
+      const page = await readDisplayHistory(client, sessionId, EXPORT_MESSAGE_LIMIT, offset);
+      kept.push(...page.messages.map(textOnly));
+      if (kept.length > EXPORT_MESSAGE_LIMIT) {
+        omitted += kept.length - EXPORT_MESSAGE_LIMIT;
+        kept = kept.slice(-EXPORT_MESSAGE_LIMIT);
+      }
+      if (!page.truncated || page.nextOffset <= offset) break;
+      offset = page.nextOffset;
+    }
+    return { title: first.session.title, messages: kept, omitted };
   }
 
   private client: AgentHostClient;
@@ -359,13 +386,26 @@ export class CarrierService {
       }),
     ];
   }
+  /**
+   * Refuse a direct call while there is no Host to answer it.
+   *
+   * The methods below are called by the shell outside `dispatch`, and used to reach the client regardless: with no
+   * link the answer was the transport's own English sentence instead of a code the shell translates. Only the link
+   * is checked, not `ready`, because some of them (the model catalog) are part of bringing a Host up.
+   */
+  private assertLinked(): void {
+    if (this.client.status !== 'ready')
+      throw new CarrierError(this.recovering ? 'hostRecovering' : 'hostNotReady');
+  }
   async updatePermissionPolicy(policy: PermissionPolicySource): Promise<void> {
+    this.assertLinked();
     const sessionId = this.controller.sessionId;
     await this.client.request('permission.update', { policy, ...(sessionId ? { sessionId } : {}) });
     this.permissionPolicies.set(sessionId ?? '', structuredClone(policy));
   }
   /** Refresh the Host's account state after a fixed desktop maintenance operation. */
   async refreshSandboxAccounts(): Promise<void> {
+    this.assertLinked();
     await this.client.request('sandbox.refresh', {});
   }
   /**
@@ -453,12 +493,14 @@ export class CarrierService {
   async listWorkspaceFiles(
     input: { path?: string } = {},
   ): Promise<HostMethods['files.list']['result']> {
+    this.assertLinked();
     return this.client.request('files.list', input);
   }
   async readWorkspaceFile(input: {
     path: string;
     locale?: string;
   }): Promise<HostMethods['files.read']['result']> {
+    this.assertLinked();
     return this.client.request('files.read', input);
   }
   /** On demand: inventories and preserved results must not inflate every streaming snapshot. */
@@ -576,7 +618,11 @@ export class CarrierService {
     } catch {
       /* An unreadable location reads as "no file", which is what `readConfig` will conclude too. */
     }
-    const key = `${stamp}:${JSON.stringify(env)}`;
+    // Only the variables a provider configuration can read: the whole environment was serialized on every
+    // snapshot. The home variables stand in for the default state directory, which `homedir()` derives from them.
+    let key = String(stamp);
+    for (const name of Object.keys(env).sort())
+      if (CONFIG_VARIABLE.test(name)) key += `\0${name}=${env[name] ?? ''}`;
     if (this.configuredMemo?.key === key) return this.configuredMemo.value;
     let value = false;
     try {
@@ -825,7 +871,10 @@ export class CarrierService {
    * session continues from the seq of the last entry held, and only a session this carrier has not read starts at
    * zero. The window is capped, so a long session keeps its newest entries instead of growing without bound.
    */
+  /** Orders the audit reads; see `refreshAudit`. */
+  private auditVersion = 0;
   private async refreshAudit(sessionId: string | null): Promise<void> {
+    const version = ++this.auditVersion;
     if (!sessionId) {
       this.audit = deepFreeze([]);
       this.auditCursor = { sessionId: '', seq: 0 };
@@ -848,8 +897,10 @@ export class CarrierService {
       afterSeq = page.nextSeq;
     }
     // A load can finish after the user moved on; publishing another session's record would be worse than
-    // showing a stale one, so the answer is dropped unless it is still the open session.
-    if (sessionId !== this.controller.sessionId) return;
+    // showing a stale one, so the answer is dropped unless it is still the open session. A read that started
+    // later began from at least what this one did and reads at least as far, so an overtaken answer is dropped too:
+    // landing last, it would wind the window and its cursor back.
+    if (version !== this.auditVersion || sessionId !== this.controller.sessionId) return;
     // A read that found nothing new keeps the frozen window it had, so the window is not sent again for it.
     if (continuing && entries.length === this.audit.length && entries.at(-1) === this.audit.at(-1))
       return;
@@ -997,6 +1048,7 @@ export class CarrierService {
   }
   async configureModels(catalog: ModelCatalogConfiguration): Promise<void> {
     for (const connection of catalog.connections) this.modelSecrets.add(connection.apiKey);
+    this.assertLinked();
     if (!this.client.supports('model-configuration-v1'))
       throw new CarrierError('modelConfigurationUnsupported');
     await this.client.request('model.configure', catalog);
@@ -1116,13 +1168,46 @@ export class CarrierService {
       await this.refreshSessionNames();
       return this.snapshot;
     }
-    if (command.type === 'stopBackground') {
+    /**
+     * The background panel's commands, outside the session gate below but not outside its bookkeeping: a failure
+     * lands in the snapshot and every outcome is published, as for any other command. Stopping a process and
+     * reading the panel stay open whatever else runs — like `cancel`, a person must be able to stop what they see.
+     * Changing the policy or clearing the list changes the session, so a restore or a managing command that is not
+     * a run keeps them out.
+     */
+    if (
+      command.type === 'stopBackground' ||
+      command.type === 'backgroundPolicy' ||
+      command.type === 'pollBackground' ||
+      command.type === 'refreshBackground' ||
+      command.type === 'clearBackground'
+    ) {
       this.error = null;
       try {
-        await this.client.request('background.stop', {
-          sessionId: command.sessionId,
-          id: command.id,
-        });
+        if (
+          (command.type === 'backgroundPolicy' || command.type === 'clearBackground') &&
+          (this.restoring || (this.managing && !this.controller.running))
+        )
+          throw new CarrierError('sessionOperationBusy');
+        const sessionId = this.controller.sessionId;
+        if (command.type === 'stopBackground')
+          await this.client.request('background.stop', {
+            sessionId: command.sessionId,
+            id: command.id,
+          });
+        else if (command.type === 'backgroundPolicy') {
+          if (!sessionId) throw new CarrierError('sessionRequired');
+          await this.client.request('background.policy', {
+            sessionId,
+            policy: command.policy,
+            reset: command.reset,
+          });
+        } else if (command.type === 'clearBackground') {
+          if (sessionId) await this.client.request('background.clear', { sessionId });
+        } else if (command.type === 'pollBackground' && command.sessionId !== sessionId)
+          // The panel reads the open session only, so answering a poll for another session's job with it would
+          // report that job as gone; see `CarrierCommand`.
+          throw new CarrierError('backgroundNotInSession');
         await this.backgroundPanel.refresh();
         return this.snapshot;
       } catch (error) {
@@ -1131,31 +1216,6 @@ export class CarrierService {
       } finally {
         this.publish();
       }
-    }
-    if (command.type === 'backgroundPolicy') {
-      const sessionId = this.controller.sessionId;
-      if (!sessionId) throw new CarrierError('sessionRequired');
-      await this.client.request('background.policy', {
-        sessionId,
-        policy: command.policy,
-        reset: command.reset,
-      });
-      await this.backgroundPanel.refresh();
-      return this.snapshot;
-    }
-    if (command.type === 'pollBackground' || command.type === 'refreshBackground') {
-      // The panel reads the open session only, so answering a poll for another session's job with it would
-      // report that job as gone; see `CarrierCommand`.
-      if (command.type === 'pollBackground' && command.sessionId !== this.controller.sessionId)
-        throw new CarrierError('backgroundNotInSession');
-      await this.backgroundPanel.refresh();
-      return this.snapshot;
-    }
-    if (command.type === 'clearBackground') {
-      const sessionId = this.controller.sessionId;
-      if (sessionId) await this.client.request('background.clear', { sessionId });
-      await this.backgroundPanel.refresh();
-      return this.snapshot;
     }
     /**
      * Commands that answer something a managing command is itself waiting on.

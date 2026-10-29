@@ -303,7 +303,16 @@ export function parseCarrierCommand(input: unknown): CarrierCommand {
     throw new Error('Invalid carrier command');
   };
   if (!input || typeof input !== 'object' || Array.isArray(input)) return invalid();
-  const value = input as Record<string, unknown>;
+  /**
+   * Validated and returned as a private copy: the command used to be the caller's own object, so an in-process
+   * caller could change a field after it passed. Over IPC it is a copy already; in-process it was not.
+   */
+  let value: Record<string, unknown>;
+  try {
+    value = structuredClone(input) as Record<string, unknown>;
+  } catch {
+    return invalid();
+  }
   const fields: Record<string, string[]> = {
     snapshot: ['type'],
     create: ['type'],

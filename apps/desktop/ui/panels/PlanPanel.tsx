@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
 import type { PlanView } from './plan-view.ts';
+import { ProgressMark } from './ProgressMark.tsx';
 
 export function PlanPanel({
   view,
@@ -47,7 +48,10 @@ export function PlanPanel({
       </p>
       <ol id="plan-steps" className="plan-steps" translate="no">
         {view.steps.map((step, index) => (
-          <li key={index}>{step}</li>
+          <li key={index} className="progress-row">
+            <ProgressMark />
+            <span className="progress-label">{step}</span>
+          </li>
         ))}
       </ol>
       <p id="plan-reason" className="plan-reason" translate="no" hidden={!view.reason}>

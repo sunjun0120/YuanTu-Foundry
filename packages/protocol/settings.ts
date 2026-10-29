@@ -535,6 +535,11 @@ export const ENVIRONMENT = {
     description: '是否把工作区 .yuantu 的运行期状态写入仓库的 .git/info/exclude（缺省开启）',
   },
   YUANTU_SUBAGENTS: { kind: 'boolean', description: '是否启用子代理委派' },
+  YUANTU_TOOL_ALLOWLIST: {
+    kind: 'string',
+    description:
+      '只提供这些工具（逗号分隔的工具名；不在列表里的工具既不展示也不能调用）。缺省不限制',
+  },
   YUANTU_SUBAGENT_CONCURRENCY: { kind: 'number', range: [1, 16], description: '子代理并发上限' },
   YUANTU_WORKSPACE_RETENTION_DAYS: {
     kind: 'number',

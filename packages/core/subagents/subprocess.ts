@@ -5,6 +5,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { Usage } from '../../protocol/index.ts';
 import type { SubAgentOutcome, SubAgentProvider } from './providers.ts';
+import { normalizeReport } from './contract.ts';
 
 /** Combined stdout/stderr budget, measured before UTF-8 decoding. */
 const OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -104,13 +105,16 @@ export function readChildResult(stdout: string): { result?: ChildResult; malform
  */
 export function reportFromChild(text: string, sessionId: string) {
   const answer = text.trim() || '(the child produced no answer)';
-  return {
+  // Through the same bounds as a submitted report: the composed one reaches the same readers (the durable record,
+  // the card, the parent), and an answer quoted whole as evidence was the one report nothing kept small.
+  return normalizeReport({
     summary: answer.length > 400 ? `${answer.slice(0, 400)}…` : answer,
     findings: [{ statement: 'Reported by a subprocess child', evidence: answer }],
+    // Kept under the 200-character bound of an `unverified` entry, so the session id at its end survives it.
     unverified: [
-      `This child ran in its own process and workspace, so it could not inspect or change this session's files; its answer is quoted rather than verified against them (child session ${sessionId}).`,
+      `Ran in its own process and workspace, so this is quoted, not verified against this session's files (child session ${sessionId}).`,
     ],
-  };
+  });
 }
 
 export function subprocessProvider(options: SubprocessProviderOptions): SubAgentProvider {
@@ -122,15 +126,19 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
     description:
       'Runs the child as a separate process in its own scratch workspace and database. Read-only by nature: it cannot reach this session’s files.',
     /**
-     * `depthLimit` is declared because the child is a *root* run in its own world — it has no parent lineage to
-     * count against, so the nesting cap the coordinator passes has nothing to bind and cannot be honoured. The
-     * capability is therefore left off, and a request that needs it is refused instead of silently unbounded.
+     * What this provider can actually promise, and nothing more.
      *
-     * `persona`, `toolFilter` and `contextFork` are absent for the same kind of reason: the child's prompt and tool
-     * set are the child's own deployment's business, and there is no mechanism here to hand it this session's
-     * transcript.
+     * - `depthLimit`: the child is started with delegation switched off (`YUANTU_SUBAGENTS=false`), so it can never
+     *   nest at all — any depth cap the coordinator passes is met trivially. Leaving it undeclared refused every
+     *   task, because the coordinator always passes one, and made this provider unreachable.
+     * - `toolFilter`: the filter is handed to the child as `YUANTU_TOOL_ALLOWLIST`, which its catalogue applies as a
+     *   restriction — a tool outside it is not executable, not merely unlisted. The deployment's permission policy is
+     *   withheld too, so the child's `--json` run refuses every permission-requiring operation.
+     *
+     * `persona` and `contextFork` stay absent: the child's prompt is its own deployment's, and there is no mechanism
+     * here to hand it this session's transcript.
      */
-    capabilities: [],
+    capabilities: ['depthLimit', 'toolFilter'],
     async start(request) {
       if (request.task.role === 'general')
         return {
@@ -158,6 +166,24 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
        * and died on a database format its own build did not write. Passing both leaves the child's world wholly its
        * own, which is the property the `general` refusal below is built on.
        */
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...options.env,
+        YUANTU_WORKSPACE: workspace,
+        YUANTU_MAX_CONTEXT_TOKENS: String(options.maxContextTokens),
+        // The child is a one-shot run in its own world: naming its session and scheduling work are the parent's
+        // business, and either one would make a delegated child spend its rounds on bookkeeping nobody reads.
+        YUANTU_WORKFLOWS: 'false',
+        // `'false'` and not `'off'`: this key is parsed as `0|1|true|false`, and any other spelling refuses the
+        // *whole* environment — which costs a spawned child its life before it reads a single byte.
+        YUANTU_SUBAGENTS: 'false',
+        ...(request.options.toolFilter?.length
+          ? { YUANTU_TOOL_ALLOWLIST: request.options.toolFilter.join(',') }
+          : {}),
+      };
+      // An allow rule the deployment wrote for its own runs would let this child's commands through; the child is
+      // promised read-only, so it gets no policy and its non-interactive run refuses every permission request.
+      delete env.YUANTU_PERMISSION_POLICY;
       const child = spawn(
         command,
         [
@@ -172,18 +198,7 @@ export function subprocessProvider(options: SubprocessProviderOptions): SubAgent
         ],
         {
           cwd: workspace,
-          env: {
-            ...process.env,
-            ...options.env,
-            YUANTU_WORKSPACE: workspace,
-            YUANTU_MAX_CONTEXT_TOKENS: String(options.maxContextTokens),
-            // The child is a one-shot run in its own world: naming its session and scheduling work are the parent's
-            // business, and either one would make a delegated child spend its rounds on bookkeeping nobody reads.
-            YUANTU_WORKFLOWS: 'false',
-            // `'false'` and not `'off'`: this key is parsed as `0|1|true|false`, and any other spelling refuses the
-            // *whole* environment — which costs a spawned child its life before it reads a single byte.
-            YUANTU_SUBAGENTS: 'false',
-          },
+          env,
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
         },

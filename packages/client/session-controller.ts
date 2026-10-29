@@ -24,7 +24,7 @@ import type {
 import { isTodoItem } from '../protocol/index.ts';
 import { emptyStatistics, addStatistics, type SessionStatistics } from '../protocol/statistics.ts';
 import { todoDiff } from '../protocol/todos.ts';
-import { isPresentedFile, presentFiles } from '../protocol/deliverables.ts';
+import { isPresentedFile, presentTurnFiles } from '../protocol/deliverables.ts';
 import { isGoal } from '../protocol/goals.ts';
 import {
   readCompletion,
@@ -676,10 +676,18 @@ export class SessionController {
     const liveRun = running ? (snapshot.runId ?? seenRun) : null;
     const moved = seenRun !== liveRun || (running && liveRun === null);
     let transcript = { messages, statistics, historyStart, providerDegraded, runEndings };
-    if (moved) {
-      const reread = await this.history(sessionId, false, client);
+    let turnDeliverables = deliverables;
+    const unsettledDelivery = deliverables.some(
+      (file) => file.runId && file.runId !== liveRun && file.afterIndex === undefined,
+    );
+    if (moved || unsettledDelivery) {
+      const [reread, deliveries] = await Promise.all([
+        this.history(sessionId, false, client),
+        readDeliverables(client, sessionId),
+      ]);
       if (this.staleRead(generation)) return;
       transcript = reread;
+      turnDeliverables = deliveries;
     }
     this.runId = liveRun;
     this.stateRevision++;
@@ -720,7 +728,7 @@ export class SessionController {
       todos: checklist.todos,
       todoChange: checklist.change,
       plan,
-      deliverables,
+      deliverables: turnDeliverables,
       goal,
       completion,
       running,
@@ -995,7 +1003,10 @@ export class SessionController {
       }
       // A session that was left is read again when it is opened; reading it now would only be thrown away.
       if (!this.disposed && this.client.status === 'ready' && this.state.sessionId === sessionId) {
-        const transcript = await this.history(sessionId, true);
+        const [transcript, deliverables] = await Promise.all([
+          this.history(sessionId, true),
+          readDeliverables(this.client, sessionId),
+        ]);
         const workspaces = owns()
           ? await readWorkspaceViews(
               this.client,
@@ -1005,6 +1016,7 @@ export class SessionController {
           : new Map();
         if (owns()) {
           this.applyTranscript(sessionId, transcript);
+          this.state.deliverables = deliverables;
           this.refreshWorkspaceViews(workspaces);
         }
       }
@@ -1164,7 +1176,10 @@ export class SessionController {
     const owns = () =>
       this.state.sessionId === sessionId && this.runId === finishedRun && !this.state.running;
     try {
-      const transcript = await this.history(sessionId, true);
+      const [transcript, deliverables] = await Promise.all([
+        this.history(sessionId, true),
+        readDeliverables(this.client, sessionId),
+      ]);
       if (this.disposed || !owns()) return;
       const workspaces = await readWorkspaceViews(
         this.client,
@@ -1173,6 +1188,7 @@ export class SessionController {
       );
       if (this.disposed || !owns()) return;
       this.applyTranscript(sessionId, transcript);
+      this.state.deliverables = deliverables;
       this.refreshWorkspaceViews(workspaces);
     } catch {
     } finally {
@@ -1440,12 +1456,15 @@ export class SessionController {
         break;
       }
       case 'deliverable.presented':
-        // The fold, not a merge: the event carries the whole list this run has presented, and `presentFiles` is
-        // the same function the store's projection uses, so a live window and a reloaded one agree.
+        // Keep earlier turns intact. The authoritative end position is read once this run settles.
         if (!Array.isArray(event.data.files)) break;
-        this.state.deliverables = presentFiles(
+        this.state.deliverables = presentTurnFiles(
           this.state.deliverables,
-          event.data.files.filter(isPresentedFile),
+          event.data.files.filter(isPresentedFile).map((file) => ({
+            ...file,
+            runId: event.runId,
+            afterIndex: undefined,
+          })),
         );
         break;
       case 'goal.changed':

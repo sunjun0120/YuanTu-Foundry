@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -517,4 +517,104 @@ test('a definition that cannot be executed is an invalid definition', async (t) 
     { id: 'escaped', kind: 'file-contains', path: '..', expected: 'x' },
   ]);
   assert.equal(escaped.checks[0]!.failureReason, 'invalid-definition');
+});
+
+test('a fenced directory that holds a link is imaged by what the link says', async (t) => {
+  // Refusing a link made a fenced directory that merely contained one impossible to protect, and the refusal read as
+  // an environment fault. The link is imaged, never followed, and retargeting it is a change.
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-link-'));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'fenced'));
+  await writeFile(path.join(root, 'fenced', 'a.txt'), 'a');
+  await writeFile(path.join(root, 'b.txt'), 'b');
+  try {
+    await symlink('a.txt', path.join(root, 'fenced', 'link'));
+  } catch {
+    t.skip('this machine cannot create symbolic links');
+    return;
+  }
+  const baseline = await capturePathSnapshot(root, 'fenced');
+  assert.equal(baseline.version, 2, 'new images use code-unit order');
+  const check = () =>
+    verifyAcceptance(root, [
+      {
+        id: 'fence',
+        kind: 'forbidden-path',
+        path: 'fenced',
+        expectation: 'unchanged',
+        baseline,
+      },
+    ]);
+  assert.equal((await check()).passed, true);
+  await rm(path.join(root, 'fenced', 'link'));
+  await symlink('../b.txt', path.join(root, 'fenced', 'link'));
+  const changed = await check();
+  assert.equal(changed.passed, false);
+  assert.equal(changed.checks[0]!.failureReason, 'protected-path-changed');
+});
+
+test('a baseline recorded in the older entry order is compared like for like', async (t) => {
+  // Collation can change with the ICU a Node build ships, so new images order entries by code unit; an image
+  // stored by an earlier build is compared against one taken its own way rather than read as a change.
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-order-'));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'fenced'));
+  // Upper and lower case sort differently under the two orders, so the digests genuinely differ.
+  for (const name of ['B.txt', 'a.txt', 'C.txt'])
+    await writeFile(path.join(root, 'fenced', name), name);
+  const legacy = await capturePathSnapshot(root, 'fenced', 1);
+  const current = await capturePathSnapshot(root, 'fenced');
+  assert.notEqual(legacy.digest, current.digest, 'the two orders produce different images');
+  const result = await verifyAcceptance(root, [
+    {
+      id: 'fence',
+      kind: 'forbidden-path',
+      path: 'fenced',
+      expectation: 'unchanged',
+      baseline: legacy,
+    },
+  ]);
+  assert.equal(result.passed, true, result.checks[0]!.detail);
+});
+
+test('a fenced path too large to image is a definition to fix, not an environment fault', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-large-'));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'fenced'));
+  await Promise.all(
+    Array.from({ length: 2_001 }, (_, index) =>
+      writeFile(path.join(root, 'fenced', `${index}.txt`), ''),
+    ),
+  );
+  const result = await verifyAcceptance(root, [
+    {
+      id: 'fence',
+      kind: 'forbidden-path',
+      path: 'fenced',
+      expectation: 'unchanged',
+      baseline: { version: 2, state: 'absent', entries: 0, bytes: 0 },
+    },
+  ]);
+  assert.equal(result.checks[0]!.failureReason, 'invalid-definition');
+  assert.match(result.checks[0]!.detail, /fence a smaller path/);
+});
+
+test('a verification command is shown quoted so it cannot read as a shell line', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'yuantu-acceptance-display-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const seen: { description: string; command: unknown }[] = [];
+  await withExecutionPolicy(executionPolicy('host'), () =>
+    verifyAcceptance(root, [{ id: 'shown', kind: 'command', command: 'node', args: ['a;b', ''] }], {
+      approve: async (approval) => {
+        seen.push({
+          description: approval.description,
+          command: approval.toolCall.arguments.command,
+        });
+        return false;
+      },
+    }),
+  );
+  assert.equal(seen[0]!.description, 'Verification command (run without a shell): node "a;b" ""');
+  // The policy-facing spelling is unchanged, so an exact-match rule written against it still matches.
+  assert.equal(seen[0]!.command, 'node a;b ');
 });

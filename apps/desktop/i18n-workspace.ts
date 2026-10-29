@@ -126,6 +126,7 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'ui.questionSkip': ['跳过本题', 'Skip this question'],
   'ui.questionRecommended': ['推荐', 'Recommended'],
   'ui.questionCollapse': ['收起', 'Collapse'],
+  'ui.questionExpand': ['展开', 'Expand'],
   'ui.questionClose': ['关闭', 'Close'],
   'ui.questionPrevious': ['上一题', 'Previous question'],
   'ui.questionNext': ['下一题', 'Next question'],
@@ -171,6 +172,7 @@ export const workspaceMessages: Record<string, [string, string]> = {
     'Automatic rounds stopped: this request’s rounds spent their token budget ({rounds} round(s) run). Send a message to continue.',
   ],
   'ui.deliverablesTitle': ['交付物', 'Deliverables'],
+  'ui.turnDeliverablesTitle': ['本轮产物', 'Turn deliverables'],
   'ui.openDeliverable': ['在工作区预览中打开', 'Open in the workspace preview'],
   /**
    * The completion contract, in the words a person decides with.
@@ -433,8 +435,8 @@ export const workspaceMessages: Record<string, [string, string]> = {
   'workspace.error': ['读取失败：{message}', 'Could not read: {message}'],
   'workspace.back': ['返回文件树', 'Back to files'],
   'workspace.fullscreen': ['全屏', 'Fullscreen'],
-  'workspace.fullscreenTitle': ['全屏阅读', 'Read in fullscreen'],
-  'workspace.exitFullscreen': ['退出全屏', 'Exit fullscreen'],
+  'workspace.fullscreenTitle': ['放大窗口', 'Enlarge window'],
+  'workspace.exitFullscreen': ['还原窗口', 'Restore window'],
   'workspace.pathLabel': ['当前文件路径', 'Current file path'],
   'workspace.source': ['源码', 'Source'],
   'workspace.read': ['阅读', 'Read'],

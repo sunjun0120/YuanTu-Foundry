@@ -51,6 +51,7 @@ class FakeClient {
         messages: this.history,
       };
     if (method === 'plan.get') return null;
+    if (method === 'deliverables.get') return [];
     if (method === 'subagents.list') return this.listed;
     if (method === 'workspace.results' && this.workspaceResultStatus)
       return [

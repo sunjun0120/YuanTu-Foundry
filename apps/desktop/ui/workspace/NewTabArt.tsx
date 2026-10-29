@@ -5,10 +5,9 @@
  * `.workspace-new-tab-option`, the frames show one after another through staggered CSS animations (see styles.css).
  * The frames are local SVG files copied to `assets/new-tab/`; the label is text so it follows the locale and theme.
  */
-import type { CSSProperties, ReactNode } from 'react';
+import { useComputedColorScheme } from '@mantine/core';
+import { useId, type CSSProperties, type ReactNode } from 'react';
 
-const fileAsset = (id: string): string => `./assets/new-tab/file/${id}.svg`;
-const browserAsset = (id: string): string => `./assets/new-tab/browser/${id}.svg`;
 const delay = (ms: number): CSSProperties => ({ '--frame-delay': `${ms}ms` }) as CSSProperties;
 
 /** [asset, y offset, height] for each frame of the file card's front sheet. */
@@ -94,14 +93,31 @@ const BROWSER_FRAMES = [
 ] as const;
 
 export function FileCardArt({ label }: { label: string }): ReactNode {
+  const dark = useComputedColorScheme('light') === 'dark';
+  const gradientId = `file-paper-${useId().replace(/:/g, '')}`;
+  const fileAsset = (id: string): string => `./assets/new-tab/file${dark ? '-dark' : ''}/${id}.svg`;
   return (
     <svg className="new-tab-art file-card-art" viewBox="0 0 254 210" aria-hidden="true">
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="1" x2=".08" y2="0">
+          <stop stopColor="var(--ws-art-paper-front)" />
+          <stop offset="1" stopColor="var(--ws-art-paper-front-end)" />
+        </linearGradient>
+      </defs>
       <text x="127" y="43" textAnchor="middle" className="new-tab-art-label">
         {label}
       </text>
       <image href={fileAsset('252aa')} x="63.65" y="83" width="124.7" height="58" />
       <rect className="file-paper-back" x="92" y="92" width="70" height="74" rx="5" />
-      <rect className="file-paper-front" x="92" y="92" width="70" height="74" rx="5" />
+      <rect
+        className="file-paper-front"
+        x="92"
+        y="92"
+        width="70"
+        height="74"
+        rx="5"
+        fill={`url(#${gradientId})`}
+      />
       <image
         className="file-front-rest"
         href={fileAsset('f748b')}
@@ -143,6 +159,9 @@ export function FileCardArt({ label }: { label: string }): ReactNode {
 }
 
 export function BrowserCardArt({ label }: { label: string }): ReactNode {
+  const dark = useComputedColorScheme('light') === 'dark';
+  const browserAsset = (id: string): string =>
+    `./assets/new-tab/browser${dark ? '-dark' : ''}/${id}.svg`;
   return (
     <svg className="new-tab-art browser-card-art" viewBox="0 0 254 210" aria-hidden="true">
       <text x="127" y="43" textAnchor="middle" className="new-tab-art-label">

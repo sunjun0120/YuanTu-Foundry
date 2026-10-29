@@ -1,16 +1,12 @@
 /**
  * The question panel, as a projection of `question-model.ts`.
  *
- * The ids, classes and nesting are the legacy panel's: the smoke suites read `#questions .question-option.selected`
- * and the stylesheet writes `#questions .question-input`, so a visual rewrite is not part of moving the ownership.
+ * Stable ids and classes keep the renderer and smoke suites connected while the presentation follows the
+ * reference clarification card. Selection, drafts, paging and submission still belong to the question model.
  *
- * Two behaviours are deliberately encoded here rather than left to chance:
- *
- * - **The plan card.** The short prompt is the title; the plan itself is a Markdown island under it with its own
- *   `question-plan` class, because a plan is reading material and the question "approve this?" is one line. The
- *   digest never reaches this component: `localizedQuestion` strips it before the body gets here.
- * - **The reading position.** A selection or a submit redraws the same question, so the card keeps its scroll
- *   position; switching to another question is a new decision and starts that card at the top.
+ * The short prompt is the title; the plan itself is a Markdown island under it with its own `question-plan`
+ * class. The digest never reaches this component: `localizedQuestion` strips it before the body gets here.
+ * The conversation owns scrolling; cards grow to fit their contents without a nested scroll region.
  */
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { t } from '../../i18n.ts';
@@ -79,18 +75,8 @@ function QuestionCard({
   actions: QuestionPanelActions;
   markdownActions: MarkdownActions;
 }): ReactNode {
-  const element = useRef<HTMLElement>(null);
-  const shownQuestion = useRef(card.activeQuestionId);
-  useLayoutEffect(() => {
-    if (shownQuestion.current === card.activeQuestionId) return;
-    shownQuestion.current = card.activeQuestionId;
-    // A different question is a different decision: its card starts at its top. Choosing an option or submitting
-    // leaves the same question on screen and must not move the reader, so no other render touches this.
-    if (element.current) element.current.scrollTop = 0;
-  }, [card.activeQuestionId]);
   return (
     <section
-      ref={element}
       className={card.isPlan ? 'question-card question-plan-card' : 'question-card'}
       data-question-id={card.requestId}
       data-active-question={card.activeQuestionId}
@@ -106,10 +92,12 @@ function QuestionCard({
             type="button"
             className="question-collapse"
             aria-expanded={!card.collapsed}
-            aria-label={t('ui.questionCollapse')}
+            aria-label={t(card.collapsed ? 'ui.questionExpand' : 'ui.questionCollapse')}
             onClick={() => actions.toggleCollapsed(card.requestId)}
           >
-            {card.collapsed ? '⌄' : '⌃'}
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
           </button>
           <button
             type="button"
@@ -135,7 +123,6 @@ function QuestionCard({
                     actions.selectOption(card.requestId, card.activeQuestionId, option.value)
                   }
                 >
-                  <span className="question-index">{option.index + 1}</span>
                   <span className="question-option-text">
                     <span className="question-option-head">
                       <span className="question-option-label">{option.label}</span>
@@ -147,6 +134,9 @@ function QuestionCard({
                       <span className="question-option-description">{option.description}</span>
                     )}
                   </span>
+                  <svg className="question-option-arrow" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="m6 4 4 4-4 4" />
+                  </svg>
                 </button>
               </li>
             ))}
@@ -154,16 +144,16 @@ function QuestionCard({
         )}
         {card.allowFreeText ? (
           <label className="question-free">
-            <span className="question-free-icon">✎</span>
             {/*
              * Uncontrolled on purpose: typing must not redraw the card, so the input keeps focus and the caret stays
              * where the person left it. The draft is written on every keystroke and is what Submit reads; the key
              * changes only when the pager moves to another question, which is the one time the value must change.
              */}
-            <input
+            <textarea
               key={card.activeQuestionId}
-              type="text"
+              rows={1}
               className="question-input"
+              aria-label={t('ui.questionFreeText')}
               placeholder={t('ui.questionFreeText')}
               defaultValue={card.freeText}
               onInput={(event) =>

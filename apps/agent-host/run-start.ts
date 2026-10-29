@@ -195,7 +195,7 @@ export async function startRun(
     if (
       event.type === 'context.injected' &&
       event.data.source === 'tool-progress' &&
-      event.data.action === 'conclude'
+      (event.data.action === 'conclude' || event.data.action === 'act-conclude')
     ) {
       queriesConverged = true;
       substantiveToolCalls = 0;

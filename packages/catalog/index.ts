@@ -115,6 +115,21 @@ export function createTools(
 ): ToolRegistry {
   const registry = new ToolRegistry(hooks);
   registry.workspaceRoot = path.resolve(root);
+  /**
+   * An operator's allowlist, applied as a restriction rather than by skipping registrations.
+   *
+   * A restriction covers every name whenever it is installed — the per-run tools a run adds later included — and a
+   * name outside it is not executable at all, not merely hidden. This is what lets a process another runtime
+   * starts (the subprocess sub-agent provider) promise the tool filter it was asked for.
+   */
+  const allowlist = parseSetting(process.env, 'YUANTU_TOOL_ALLOWLIST');
+  if (typeof allowlist === 'string')
+    registry.restrict({
+      allow: allowlist
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean),
+    });
   // Every call the product makes has a wall clock; a bare `ToolRegistry` (a test, an embedder) has none until it
   // is given one, so nothing about the deadline leaks into callers that never asked for it.
   registry.deadlines = toolDeadlinePolicy();

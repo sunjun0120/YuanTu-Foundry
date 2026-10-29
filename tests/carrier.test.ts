@@ -269,6 +269,8 @@ function bareService(controller: Record<string, unknown>, calls: string[]): any 
   service.client = { status: 'ready', request: async (method: string) => calls.push(method) };
   service.unconfirmedPolicies = new Set();
   service.error = null;
+  service.modelSecrets = new Set();
+  service.env = {};
   service.transcript = {
     open: async () => calls.push('transcript'),
     close: () => calls.push('close'),
@@ -354,6 +356,126 @@ test('a background poll for another session is refused instead of answered with 
     /does not belong to the open session/,
   );
   assert.deepEqual(calls, ['background']);
+});
+
+test('background commands report their failures and respect a restore, except stopping a process', async () => {
+  const calls: string[] = [];
+  const published: string[] = [];
+  const service = bareService({}, calls);
+  service.publish = () => published.push(String(service.error?.code ?? service.error));
+  service.restoring = true;
+  const policy = { mode: 'notify', paused: false, maxWakeups: 3, maxRunMs: 60000 };
+  await assert.rejects(
+    service.dispatch({ type: 'backgroundPolicy', policy }),
+    /Session operation is in progress/,
+  );
+  await assert.rejects(service.dispatch({ type: 'clearBackground' }), /Session operation/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(published, ['sessionOperationBusy', 'sessionOperationBusy']);
+  // A person can always stop a process they are looking at.
+  await service.dispatch({ type: 'stopBackground', id: 'job', sessionId: 's1' });
+  assert.deepEqual(calls, ['background.stop', 'background']);
+  service.restoring = false;
+  service.client.request = async () => {
+    throw new Error('policy refused');
+  };
+  await assert.rejects(service.dispatch({ type: 'backgroundPolicy', policy }), /policy refused/);
+  assert.equal(published.at(-1), 'policy refused');
+});
+
+test('direct calls refuse with a translatable code while there is no Host link', async () => {
+  const service = bareService({}, []);
+  service.client.status = 'starting';
+  service.permissionPolicies = new Map();
+  for (const call of [
+    () => service.updatePermissionPolicy({ mode: 'ask' }),
+    () => service.refreshSandboxAccounts(),
+    () => service.listWorkspaceFiles(),
+    () => service.readWorkspaceFile({ path: 'a.txt' }),
+  ])
+    await assert.rejects(call(), (error: { code?: string }) => error.code === 'hostNotReady');
+  service.recovering = true;
+  await assert.rejects(
+    service.refreshSandboxAccounts(),
+    (error: { code?: string }) => error.code === 'hostRecovering',
+  );
+});
+
+test('an audit read that was overtaken does not wind the window back', async () => {
+  const service = Object.create(CarrierService.prototype) as any;
+  service.audit = [];
+  service.auditCursor = { sessionId: '', seq: 0 };
+  service.auditVersion = 0;
+  service.controller = { sessionId: 's1' };
+  const entry = (seq: number) => ({ seq, at: '', type: 'run.started', data: {} });
+  const answers: Array<(entries: unknown[]) => void> = [];
+  service.client = {
+    request: () =>
+      new Promise((resolve) =>
+        answers.push((entries) => resolve({ entries, nextSeq: entries.length })),
+      ),
+  };
+  const older = service.refreshAudit('s1');
+  const newer = service.refreshAudit('s1');
+  answers[1]!([entry(1), entry(2)]);
+  await newer;
+  answers[0]!([entry(1)]);
+  await older;
+  assert.deepEqual(
+    service.audit.map((item: { seq: number }) => item.seq),
+    [1, 2],
+  );
+  assert.equal(service.auditCursor.seq, 2);
+});
+
+test('a parsed command is a copy the caller can no longer change', () => {
+  const input = { type: 'send', prompt: 'safe' };
+  const command = parseCarrierCommand(input) as { prompt: string };
+  input.prompt = '';
+  assert.equal(command.prompt, 'safe');
+  assert.throws(
+    () => parseCarrierCommand({ type: 'send', prompt: 'x', images: [() => 1] }),
+    /Invalid carrier command/,
+  );
+});
+
+test('an export from a Host that does not report its length keeps the newest messages and counts the rest', async () => {
+  const total = 12_000;
+  const service = Object.create(CarrierService.prototype) as any;
+  service.ready = true;
+  service.client = {
+    status: 'ready',
+    request: async (_method: string, params: { offset: number; tail?: number }) => {
+      const from = params.tail ? total - 1 : params.offset;
+      const to = Math.min(total, from + 400);
+      return {
+        session: { title: 'Long' },
+        messages: Array.from({ length: to - from }, (_, i) => ({
+          role: 'user',
+          content: `M${from + i}`,
+          images: [{ mediaType: 'image/png', data: 'x' }],
+        })),
+        ...(to < total ? { nextOffset: to } : {}),
+      };
+    },
+  };
+  const exported = await service.exportTranscript('s1');
+  assert.equal(exported.messages.length, 5_000);
+  assert.equal(exported.omitted, total - 5_000);
+  assert.equal(exported.messages[0].content, `M${total - 5_000}`);
+  assert.equal(exported.messages.at(-1).content, `M${total - 1}`);
+  assert.ok(exported.messages.every((message: object) => !('images' in message)));
+});
+
+test('the configured answer is kept while only unrelated environment variables change', () => {
+  const service = Object.create(CarrierService.prototype) as any;
+  service.configuredMemo = null;
+  const base = { YUANTU_CREDENTIALS_FILE: path.join(tmpdir(), 'yuantu-none', 'credentials.json') };
+  assert.equal(service.isConfigured({ ...base, UNRELATED: '1' }), false);
+  const memo = service.configuredMemo;
+  service.isConfigured({ ...base, UNRELATED: '2' });
+  assert.equal(service.configuredMemo, memo, 'an unrelated variable must not recompute');
+  assert.equal(service.isConfigured({ ...base, YUANTU_API_KEY: 'k', YUANTU_MODEL: 'm' }), true);
 });
 
 test('the changes panel keeps its reply when the session list refreshes underneath it', async () => {

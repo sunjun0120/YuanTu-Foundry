@@ -15,6 +15,8 @@ import { flushSync } from 'react-dom';
 import type { ReactNode } from 'react';
 import type { CarrierSnapshot } from '../../../../packages/carrier/contract.ts';
 import type { Message } from '../../../../packages/protocol/index.ts';
+import type { PresentedFile } from '../../../../packages/protocol/deliverables.ts';
+import type { DeliverableActions } from '../panels/SessionPanels.tsx';
 import { locale } from '../../i18n.ts';
 import { TranscriptCache } from '../../transcript-cache.ts';
 import { useReadable } from '../context.tsx';
@@ -53,6 +55,7 @@ export interface TranscriptMountOptions {
   turnChanges?(): Map<number, HTMLElement>;
   onContinue?(): void;
   onRequestFullAccess?(): void;
+  deliverableActions?: DeliverableActions;
 }
 
 function required<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -86,10 +89,12 @@ function TranscriptHost({
   store,
   registry,
   onContinue,
+  deliverableActions,
 }: {
   store: WritableStore<TranscriptState>;
   registry: GroupRegistry;
   onContinue?: () => void;
+  deliverableActions?: DeliverableActions;
 }): ReactNode {
   const state = useReadable(store);
   // A session is a different conversation: folds, caches and the live group all start over. Language and message
@@ -100,6 +105,7 @@ function TranscriptHost({
       state={state}
       registry={registry}
       onContinue={onContinue}
+      deliverableActions={deliverableActions}
     />
   );
 }
@@ -194,7 +200,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     const anchors = new Map<string, ScrollAnchor>();
     for (const group of host.querySelectorAll<HTMLDetailsElement>(':scope > .process-group')) {
       const key = group.dataset.processKey;
-      const steps = group.querySelector<HTMLElement>(':scope > .process-steps');
+      const steps = group.querySelector<HTMLElement>('.process-steps');
       if (!key || !steps) continue;
       scrolls.set(key, visible ? steps.scrollTop : (processScroll.get(key) ?? 0));
       if (visible && group.open) anchors.set(key, captureAnchor(steps));
@@ -210,7 +216,7 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
     const current = new Set<string>();
     for (const group of host.querySelectorAll<HTMLDetailsElement>(':scope > .process-group')) {
       const key = group.dataset.processKey;
-      const steps = group.querySelector<HTMLElement>(':scope > .process-steps');
+      const steps = group.querySelector<HTMLElement>('.process-steps');
       if (!key || !steps) continue;
       current.add(key);
       // `open` belongs to `Fold` and is applied by the same render that created the node; writing it here would
@@ -251,7 +257,21 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
       ? { scrolls: new Map<string, number>(), anchors: new Map<string, ScrollAnchor>() }
       : captureProcessState();
     const cards = options.turnChanges?.() ?? new Map<number, HTMLElement>();
-    const model = transcriptModel(snapshot, messages, startIndex, cards, previousGroups);
+    const deliveries = new Map<number, PresentedFile[]>();
+    for (const file of snapshot?.session.deliverables ?? []) {
+      if (file.afterIndex === undefined || !Number.isSafeInteger(file.afterIndex)) continue;
+      const files = deliveries.get(file.afterIndex) ?? [];
+      files.push(file);
+      deliveries.set(file.afterIndex, files);
+    }
+    const model = transcriptModel(
+      snapshot,
+      messages,
+      startIndex,
+      cards,
+      previousGroups,
+      deliveries,
+    );
     previousGroups = model.groupKeys;
     const fragments = buildFragments(model, `${sessionId}:${locale()}`);
     const segments = [...model.segments];
@@ -372,7 +392,12 @@ export function mountTranscript(options: TranscriptMountOptions): TranscriptHand
 
   const disposeRegion = registerView(
     'transcript',
-    <TranscriptHost store={store} registry={registry} onContinue={options.onContinue} />,
+    <TranscriptHost
+      store={store}
+      registry={registry}
+      onContinue={options.onContinue}
+      deliverableActions={options.deliverableActions}
+    />,
   );
 
   return {

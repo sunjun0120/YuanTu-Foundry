@@ -812,7 +812,7 @@ test(
 
     await page.evaluate(() => window.__ui.setAside(true));
     await page.waitForFunction(
-      () => (document.getElementById('aside-probe')?.offsetWidth ?? 0) > 0,
+      () => Math.abs((document.getElementById('aside-probe')?.offsetWidth ?? 0) - 360) <= 1,
     );
     const withAside = await page.evaluate(() => ({
       asideWidth: document.getElementById('aside-probe').offsetWidth,

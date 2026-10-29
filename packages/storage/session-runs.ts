@@ -500,8 +500,13 @@ export class SessionRuns {
     return this.countRoundEvents('llm.zero-byte-retry', runId, round, sessionId);
   }
 
+  /** How many attempts this round re-sent because reasoning took their whole output allowance; its own allowance. */
+  reasoningResendCount(runId: string, round: number, sessionId?: string): number {
+    return this.countRoundEvents('llm.reasoning-resend', runId, round, sessionId);
+  }
+
   private countRoundEvents(
-    type: 'llm.retry' | 'llm.zero-byte-retry',
+    type: 'llm.retry' | 'llm.zero-byte-retry' | 'llm.reasoning-resend',
     runId: string,
     round: number,
     sessionId?: string,

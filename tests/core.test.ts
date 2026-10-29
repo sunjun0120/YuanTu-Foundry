@@ -66,8 +66,8 @@ test('changing queries and scratch probes cannot extend investigation indefinite
   assert.equal(result.text, 'Conclusion from collected evidence');
   assert.equal(result.status, 'completed', result.error);
   assert.equal(result.completion, undefined);
-  // Twenty investigation rounds, three act attempts, then the conclusion.
-  assert.ok(requests <= 24, `${requests} requests`);
+  // Twenty investigation rounds, three act attempts, one editors-only round, then the conclusion.
+  assert.ok(requests <= 26, `${requests} requests`);
 });
 
 test('investigation wall time converges even when each query returns new evidence', () => {
@@ -224,6 +224,9 @@ const readRound = (round: number) =>
   toolReply(`read-${round}`, 'read_file', {
     path: round === 1 ? 'target.txt' : `input-${round}.txt`,
   });
+/** A read whose arguments no earlier round used, so the repeated-query guard does not see it as a repeat. */
+const rangeRead = (round: number) =>
+  toolReply(`range-${round}`, 'read_file', { path: 'target.txt', start_line: 1, end_line: round });
 const editRound = (id: string, old_text = 'bad') =>
   toolReply(id, 'edit_file', { path: 'target.txt', old_text, new_text: 'good' });
 
@@ -348,8 +351,10 @@ for (const attempt of [
   'forbidden-program',
   'read-only',
 ] as const) {
-  test(`investigation cutoff bounds three no-change attempts: ${attempt}`, async (t) => {
+  test(`investigation cutoff bounds no-change attempts, then offers editors alone: ${attempt}`, async (t) => {
     const tick = investigationClock(t);
+    // A refused edit is an attempt at the change, so it has a longer allowance than reads.
+    const attempts = attempt === 'failed-edit' ? 4 : 3;
     let requests = 0;
     const ctx = await fixture(t, {
       async complete(request) {
@@ -358,7 +363,7 @@ for (const attempt of [
           tick();
           return readRound(round);
         }
-        if (round <= 7) {
+        if (round <= 4 + attempts) {
           assertActTools(request);
           if (attempt === 'failed-edit') return editRound(`attempt-${round}`, 'absent');
           if (attempt === 'scratch')
@@ -373,28 +378,30 @@ for (const attempt of [
           return toolReply(
             `attempt-${round}`,
             attempt === 'read-only' ? 'read_file' : 'search_files',
-            { path: 'target.txt', ...(attempt === 'read-only' ? {} : { pattern: 'bad' }) },
+            {
+              path: 'target.txt',
+              // Distinct ranges: an identical read repeated is the query guard's case, not this one.
+              ...(attempt === 'read-only'
+                ? { start_line: 1, end_line: round }
+                : { pattern: 'bad' }),
+            },
           );
         }
-        assert.equal(round, 8);
-        assert.deepEqual(request.tools, []);
-        assert.equal(
-          ctx.tools.offers('read_file'),
-          true,
-          'the act restriction is released even in conclusion',
-        );
+        assert.equal(round, 5 + attempts);
+        assert.deepEqual(request.tools.map((tool) => tool.name).sort(), fileEditors);
         return reply('Stopped without changes');
       },
     });
     await investigationFiles(ctx.root);
     const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
     assert.equal(result.status, 'completed', result.error);
-    assert.equal(requests, 8);
+    assert.equal(result.text, 'Stopped without changes');
+    assert.equal(requests, 5 + attempts);
     assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'bad');
     const results = ctx.store
       .messages(ctx.session.id)
       .filter((m) => m.role === 'tool' && m.toolCallId.startsWith('attempt-'));
-    assert.equal(results.length, 3);
+    assert.equal(results.length, attempts);
     for (const result of results) {
       assert.ok(result.role === 'tool');
       assert.equal(
@@ -405,11 +412,82 @@ for (const attempt of [
       if (attempt.startsWith('forbidden'))
         assert.match(result.content, /excluded by a restriction/);
     }
+    for (const action of ['investigation-conclude', 'act-final'])
+      assert.equal(
+        ctx.events.filter((e) => e.type === 'context.injected' && e.data.action === action).length,
+        1,
+        action,
+      );
+    assert.equal(ctx.tools.offers('read_file'), true);
+  });
+}
+
+test('investigation cutoff: a refused edit, its re-read and a second refusal leave room to edit', async (t) => {
+  const tick = investigationClock(t);
+  let requests = 0;
+  const ctx = await fixture(t, {
+    async complete(request) {
+      const round = ++requests;
+      if (round <= 4) {
+        tick();
+        return readRound(round);
+      }
+      if (round === 5) return editRound('refused-1', 'absent');
+      if (round === 6) return readRound(1);
+      if (round === 7) return editRound('refused-2', 'absent');
+      if (round === 8) {
+        assertActTools(request);
+        return editRound('lands');
+      }
+      return reply('Edited');
+    },
+  });
+  await investigationFiles(ctx.root);
+  const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), 'good');
+  assert.ok(
+    !ctx.events.some(
+      (e) => e.type === 'context.injected' && String(e.data.action).startsWith('act-'),
+    ),
+  );
+});
+
+for (const lands of [true, false]) {
+  test(`investigation cutoff: the editors-only round ${lands ? 'lands an edit' : 'concludes unchanged'}`, async (t) => {
+    const tick = investigationClock(t);
+    let requests = 0;
+    const ctx = await fixture(t, {
+      async complete(request) {
+        const round = ++requests;
+        if (round <= 4) {
+          tick();
+          return readRound(round);
+        }
+        if (round <= 7) return rangeRead(round);
+        if (round === 8) {
+          assert.deepEqual(request.tools.map((tool) => tool.name).sort(), fileEditors);
+          assert.match(
+            JSON.stringify(request.messages.at(-1)),
+            /last round with tools: only the file editors remain/,
+          );
+          return editRound('final-edit', lands ? 'bad' : 'absent');
+        }
+        if (!lands) {
+          assert.equal(round, 9);
+          assert.deepEqual(request.tools, []);
+          return reply('Could not edit');
+        }
+        return reply('Edited at the last round');
+      },
+    });
+    await investigationFiles(ctx.root);
+    const result = await ctx.agent.run({ sessionId: ctx.session.id, prompt: 'Fix target.txt' });
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(await readFile(path.join(ctx.root, 'target.txt'), 'utf8'), lands ? 'good' : 'bad');
     assert.equal(
-      ctx.events.filter(
-        (e) => e.type === 'context.injected' && e.data.action === 'investigation-conclude',
-      ).length,
-      1,
+      ctx.events.some((e) => e.type === 'context.injected' && e.data.action === 'act-conclude'),
+      !lands,
     );
     assert.equal(ctx.tools.offers('read_file'), true);
   });
@@ -466,10 +544,11 @@ for (const ending of ['exception', 'cancel', 'conclusion-call'] as const) {
           return readRound(requests);
         }
         if (ending === 'conclusion-call') {
-          if (requests <= 7) {
+          if (requests <= 8) {
             assertActTools(request);
             return editRound(`failed-${requests}`, 'absent');
           }
+          if (requests === 9) return editRound('failed-final', 'absent');
           assert.deepEqual(request.tools, []);
           return readRound(1);
         }
@@ -1807,6 +1886,79 @@ test('output truncation reports token breakdown and live model phase without lea
         (event.data.activity as { phase?: string } | null)?.phase === 'reasoning',
     ),
   );
+  // The re-send was spent once, and the truncation that followed it is the one reported.
+  assert.equal(events.filter((event) => event.type === 'llm.reasoning-resend').length, 1);
+});
+
+test('an attempt that only reasoned to the output limit is re-sent once with a note to act', async (t) => {
+  const seen: Message[][] = [];
+  const provider: Provider = {
+    async complete(request) {
+      seen.push(request.messages);
+      if (seen.length === 1) {
+        request.onReasoning?.('thinking at length');
+        return {
+          ...reply(''),
+          finishReason: 'length',
+          usage: { inputTokens: 9, outputTokens: 100 },
+          outputDiagnostics: {
+            reasoningTokens: 100,
+            reasoningChars: 18,
+            toolArgumentChars: 0,
+            visibleChars: 0,
+          },
+        };
+      }
+      return { ...reply('Acted'), usage: { inputTokens: 9, outputTokens: 20 } };
+    },
+  };
+  const { session, agent, events, store } = await fixture(t, provider, { maxOutputTokens: 100 });
+  const result = await agent.run({ sessionId: session.id, prompt: 'Work' });
+  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.text, 'Acted');
+  assert.equal(seen.length, 2);
+  const note = seen[1]!.at(-1)!;
+  assert.ok(note.role === 'user' && /entire output allowance on reasoning/.test(note.content));
+  assert.ok(!seen[0]!.some((m) => m.role === 'user' && /output allowance/.test(m.content)));
+  // The note is about the discarded attempt only; it never enters the transcript.
+  assert.ok(
+    !store
+      .messages(session.id)
+      .some((m) => m.role === 'user' && /output allowance/.test(m.content)),
+  );
+  assert.equal(events.filter((event) => event.type === 'llm.reasoning-resend').length, 1);
+  assert.ok(
+    events.some((event) => event.type === 'message.reasoning' && event.data.reset === true),
+  );
+  // Both attempts were billed.
+  assert.equal(result.usage?.outputTokens, 120);
+});
+
+test('a truncated attempt that showed text or was mostly a tool call is not re-sent', async (t) => {
+  for (const shape of ['visible', 'tool-arguments'] as const) {
+    let requests = 0;
+    const provider: Provider = {
+      async complete(request) {
+        requests++;
+        if (shape === 'visible') request.onText('Partial answer');
+        return {
+          ...reply(shape === 'visible' ? 'Partial answer' : ''),
+          finishReason: 'length',
+          usage: { inputTokens: 9, outputTokens: 100 },
+          outputDiagnostics: {
+            reasoningTokens: shape === 'visible' ? 95 : 40,
+            reasoningChars: 10,
+            toolArgumentChars: shape === 'visible' ? 0 : 900,
+            visibleChars: shape === 'visible' ? 14 : 0,
+          },
+        };
+      },
+    };
+    const { session, agent } = await fixture(t, provider, { maxOutputTokens: 100 });
+    const result = await agent.run({ sessionId: session.id, prompt: 'Work' });
+    assert.equal(result.status, 'limited', shape);
+    assert.equal(requests, 1, shape);
+  }
 });
 
 // ---- merged from run-queue.test.ts ----

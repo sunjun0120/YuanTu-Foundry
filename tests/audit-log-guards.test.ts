@@ -314,7 +314,7 @@ test('live malformed todo and deliverable frames keep a usable state matching re
   assert.equal(controller.snapshot.todos.length, 1);
   emit('deliverable.presented', { files: [null, { path: 'x', bytes: 1, sha256: 'h', at: 'now' }] });
   assert.deepEqual(controller.snapshot.deliverables, [
-    { path: 'x', bytes: 1, sha256: 'h', at: 'now' },
+    { path: 'x', bytes: 1, sha256: 'h', at: 'now', runId: 'r', afterIndex: undefined },
   ]);
   emit('deliverable.presented', { files: {} });
   assert.equal(controller.snapshot.deliverables.length, 1);

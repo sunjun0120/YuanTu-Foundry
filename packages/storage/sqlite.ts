@@ -481,6 +481,10 @@ export class SessionStore implements PlanRepository {
   deliverables(sessionId: string): PresentedFile[] {
     return this.parts.reads.deliverables(sessionId);
   }
+  /** Per-run declarations, reconstructed from the log without overwriting earlier turns. */
+  turnDeliverables(sessionId: string): PresentedFile[] {
+    return this.parts.reads.turnDeliverables(sessionId);
+  }
   /** The objective this session is pursuing, or `null` when no run has recorded one. */
   goal(sessionId: string): Goal | null {
     return this.parts.reads.goal(sessionId);
@@ -847,6 +851,9 @@ export class SessionStore implements PlanRepository {
   }
   zeroByteRetryCount(runId: string, round: number, sessionId?: string): number {
     return this.parts.runs.zeroByteRetryCount(runId, round, sessionId);
+  }
+  reasoningResendCount(runId: string, round: number, sessionId?: string): number {
+    return this.parts.runs.reasoningResendCount(runId, round, sessionId);
   }
   /** Record a compaction summary over the transcript (see `./session-context.ts`). */
   applyCompaction(id: string, input: Parameters<SessionContext['applyCompaction']>[1]): void {

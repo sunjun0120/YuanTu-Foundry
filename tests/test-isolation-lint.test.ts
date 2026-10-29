@@ -108,6 +108,47 @@ test('filesystem aliases and user-global writes are detected without banning pat
   );
 });
 
+test('symbolic link targets are stored content while destinations remain isolated', () => {
+  for (const [imports, call] of [
+    ["import {symlink} from 'node:fs/promises';", 'symlink'],
+    ["import {symlink as createLink} from 'node:fs/promises';", 'createLink'],
+    ["import fs from 'node:fs'; const createLink = fs.promises.symlink;", 'createLink'],
+    ["import {symlinkSync} from 'node:fs';", 'symlinkSync'],
+    ["import fs from 'node:fs'; const {symlinkSync: createLink} = fs;", 'createLink'],
+  ]) {
+    for (const target of ["'a.txt'", "'../b.txt'"])
+      assert.deepEqual(
+        inspectIsolation(
+          `${imports} ${call}(${target}, path.join(root, 'fenced', 'link'));`,
+          'fixture.ts',
+        ),
+        [],
+        `${call} target ${target}`,
+      );
+    assert.deepEqual(
+      inspectIsolation(`${imports} ${call}('../b.txt', 'shared/link');`, 'fixture.ts').map(
+        (issue) => issue.rule,
+      ),
+      ['write'],
+      `${call} must still check its destination`,
+    );
+  }
+});
+
+test('hard links retain isolation checks for both source and destination', () => {
+  for (const call of ['link', 'linkSync'])
+    for (const args of [
+      "'shared/source', path.join(root, 'link')",
+      "path.join(root, 'source'), 'shared/link'",
+    ])
+      assert.deepEqual(
+        inspectIsolation(`import {${call}} from 'node:fs'; ${call}(${args});`, 'fixture.ts').map(
+          (issue) => issue.rule,
+        ),
+        ['write'],
+      );
+});
+
 test('requested entries include local test helpers transitively', async (t) => {
   const root = await tempRoot(t, 'yuantu-lint-');
   await mkdir(path.join(root, 'tests'));

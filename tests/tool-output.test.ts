@@ -361,6 +361,7 @@ class ProjectionClient {
         messages: [],
       };
     if (method === 'plan.get') return null;
+    if (method === 'deliverables.get') return [];
     if (method === 'subagents.list') return [];
     if (method === 'changes.list') return [];
     if (method === 'background.list') return [];

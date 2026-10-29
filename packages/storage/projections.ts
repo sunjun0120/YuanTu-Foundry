@@ -20,6 +20,7 @@ import type { Disposer } from '../protocol/disposer.ts';
 import { foldMessages } from './events.ts';
 import type { SessionEvent } from './events.ts';
 import { runEndingsProjection } from './run-endings.ts';
+import { turnDeliverablesProjection } from './turn-deliverables.ts';
 
 /**
  * Session projections: folds over the durable log.
@@ -689,6 +690,7 @@ export const BUILT_IN_SESSION_PROJECTIONS: readonly SessionProjection<unknown>[]
   todosProjection,
   todoChangeProjection,
   deliverablesProjection,
+  turnDeliverablesProjection,
   goalProjection,
   stepsProjection,
 ];

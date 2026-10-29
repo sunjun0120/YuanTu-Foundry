@@ -23,6 +23,7 @@ const removedOutputs = [
   'apps/web',
   'apps/agent-acp',
   'packages/sdk',
+  'desktop/img',
   ...[...removedMcpModules, ...removedBackupModules].flatMap((name) =>
     ['.js', '.js.map', '.d.ts'].map((extension) => `apps/desktop/${name}${extension}`),
   ),

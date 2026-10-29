@@ -233,3 +233,81 @@ test('errors from idle eviction and expiry are observed, not left unhandled', as
     'reporting them did not turn them back into unhandled rejections',
   );
 });
+
+test('a turn asked for while the previous one is still finishing waits for it', async () => {
+  /**
+   * A turn keeps working after its run ends (an isolated child exports its result), and a message that arrives then
+   * starts a new turn. Started at once, the two overlapped and the first one's cleanup marked the live second turn
+   * idle — so `interrupt` missed it and `dispose` closed its tools under it.
+   */
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let concurrent = 0;
+  let peak = 0;
+  const order: string[] = [];
+  const residency = new SubAgentResidency();
+  const child = activation(residency, 'queued', {
+    turn: async () => {
+      concurrent++;
+      peak = Math.max(peak, concurrent);
+      order.push(`start ${order.length}`);
+      if (order.length === 1) await firstGate;
+      concurrent--;
+      return idle;
+    },
+  });
+  const first = child.run('one', false);
+  const second = child.run('two', false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(order.length, 1, 'the second turn did not start while the first was live');
+  assert.equal(child.status, 'running');
+  releaseFirst();
+  await first;
+  await second;
+  assert.equal(peak, 1, 'the two turns never overlapped');
+  assert.equal(child.status, 'idle');
+});
+
+test('a queued turn that is interrupted or disposed never starts', async () => {
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let starts = 0;
+  const residency = new SubAgentResidency();
+  const child = activation(residency, 'stopped', {
+    turn: async () => {
+      starts++;
+      if (starts === 1) await firstGate;
+      return idle;
+    },
+  });
+  const first = child.run('one', false);
+  const queued = child.run('two', false);
+  assert.equal(child.interrupt(), true);
+  releaseFirst();
+  await first;
+  await assert.rejects(queued, /Interrupted by the parent agent/);
+  assert.equal(starts, 1, 'the interrupted queued turn did not start');
+  assert.equal(child.status, 'idle');
+
+  let releaseThird = () => {};
+  const thirdGate = new Promise<void>((resolve) => {
+    releaseThird = resolve;
+  });
+  const parked = activation(residency, 'disposed', {
+    turn: async () => {
+      await thirdGate;
+      return idle;
+    },
+  });
+  const running = parked.run('one', false);
+  const waiting = parked.run('two', false);
+  const disposal = parked.dispose();
+  releaseThird();
+  await running;
+  await assert.rejects(waiting, /disposed/);
+  await disposal;
+});

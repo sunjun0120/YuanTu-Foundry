@@ -103,6 +103,10 @@ if (preview) {
         await run('typecheck', [npm, 'run', 'typecheck']);
         await run('test', ['scripts/run-tests.mjs', ...selection.tests]);
       }
+      // The unit selection cannot see a renderer: its coverage lives in the Electron smoke files,
+      // which are not `.test.ts` and therefore never selected. A desktop edit that skipped the full
+      // suite would otherwise be the one change with no UI evidence at all.
+      if (requiresDesktop(changed)) await run('smoke-desktop', [npm, 'run', 'smoke:desktop']);
     }
     console.log('Development checks passed. Full CI/release validation remains a separate gate.');
   } catch (error) {

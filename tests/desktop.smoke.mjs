@@ -673,6 +673,9 @@ test(
     const entry = path.resolve('dist/desktop/main.cjs');
     const driver = path.join(root, 'desktop-driver.cjs');
     const errors = path.join(root, 'desktop-errors.log');
+    const url = await httpFixture(t, (_body, res) =>
+      sendFrames(res, frames('STARTUP_SESSION_PERSISTED')),
+    );
     // Capture errors before the desktop entry runs, including those emitted before Playwright connects.
     await writeFile(
       driver,
@@ -692,7 +695,7 @@ require(${JSON.stringify(entry)});
       YUANTU_API_KEY: 'startup-fixture',
       YUANTU_MODEL: 'fixture',
       YUANTU_MAX_CONTEXT_TOKENS: '128000',
-      YUANTU_BASE_URL: 'http://127.0.0.1:1',
+      YUANTU_BASE_URL: url,
       YUANTU_PROTOCOL: 'anthropic',
     };
     delete env.ELECTRON_RUN_AS_NODE;
@@ -731,7 +734,15 @@ require(${JSON.stringify(entry)});
       );
       assert.ok(sessionId, `${startup} must have an active session`);
       if (initialSession) assert.equal(sessionId, initialSession, 'restart restores the session');
-      else initialSession = sessionId;
+      else {
+        initialSession = sessionId;
+        // Untouched sessions are drafts and intentionally absent from restored history. Complete a real turn
+        // so the next launch exercises sandbox application while restoring a persisted session.
+        await page.locator('#prompt').fill('Persist this startup session');
+        await page.locator('#send').click();
+        await page.getByText('STARTUP_SESSION_PERSISTED', { exact: true }).waitFor();
+        await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
+      }
       await app.close();
       app = undefined;
     }
@@ -823,7 +834,7 @@ test(
     await app.evaluate(({ dialog }) => {
       dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
     });
-    await page.getByRole('button', { name: '添加工作区' }).click();
+    await page.getByRole('button', { name: '添加空间', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
       await page.getByRole('textbox', { name: '任务描述' }).inputValue(),
@@ -835,7 +846,7 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, badRoot);
-    await page.getByRole('button', { name: '添加工作区' }).click();
+    await page.getByRole('button', { name: '添加空间', exact: true }).click();
     await page.locator('.project-error[role="alert"]').waitFor();
     await page.waitForFunction(() => !document.querySelector('#choose-workspace').disabled);
     assert.equal(
@@ -998,7 +1009,7 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, otherRoot);
-    await page.getByRole('button', { name: '添加工作区' }).click();
+    await page.getByRole('button', { name: '添加空间', exact: true }).click();
     await page.waitForFunction(
       (target) =>
         document.querySelector('#workspace').textContent === target &&
@@ -1009,7 +1020,7 @@ test(
     await app.evaluate(({ dialog }, target) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [target] });
     }, root);
-    await page.getByRole('button', { name: '添加工作区' }).click();
+    await page.getByRole('button', { name: '添加空间', exact: true }).click();
     await page.waitForFunction(
       (target) =>
         document.querySelector('#workspace').textContent === target &&
@@ -1163,6 +1174,20 @@ test(
       async () => (await window.yuantu.invoke({ type: 'snapshot' })).state.session.sessionId,
     );
     await page.getByRole('button', { name: '新建任务', exact: true }).click();
+    // Rows remain clickable during a session switch; the action gate ignores a click while creation is pending.
+    // Wait for the new session and the completed operation before asking the UI to load the persisted diff.
+    await waitForPage(
+      page,
+      async (previousId) => {
+        const state = (await window.yuantu.invoke({ type: 'snapshot' })).state;
+        return (
+          state.session.sessionId !== previousId &&
+          !state.session.loading &&
+          !document.querySelector('#choose-workspace').disabled
+        );
+      },
+      id,
+    );
     await page.locator(`[data-session-id="${id}"]`).click();
     await page.locator('#messages .turn-changes').waitFor();
     assert.match(await page.locator('.turn-change-row').textContent(), /main.ts/);

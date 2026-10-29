@@ -326,6 +326,15 @@ export function connectDesktop(runtime: DesktopRuntime) {
       turnChanges: () => turnChangesView.cards(),
       onContinue: () => continuePausedRun(),
       onRequestFullAccess: () => permissionSettings?.requestFullAccess(),
+      deliverableActions: {
+        open: (path) => void workspaceView.open(path),
+        shell: window.yuantu.openWorkspacePath
+          ? {
+              open: (path) => openWorkspaceFile(path, 'open'),
+              reveal: (path) => openWorkspaceFile(path, 'reveal'),
+            }
+          : undefined,
+      },
     });
 
     disposers.push(() => transcriptView.dispose());
@@ -638,7 +647,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
       // Message timestamps are locale-formatted, so they follow the language too.
       const paused = session.error === RUN_CANCELLED;
       const changesIdentity = turnChangesView.update(blocked);
-      const nextTranscriptKey = `${state.workspace}:${session.sessionId}:${session.messageRevision}:${locale()}:${paused}:${changesIdentity}`;
+      const nextTranscriptKey = `${state.workspace}:${session.sessionId}:${session.messageRevision}:${locale()}:${paused}:${changesIdentity}:${JSON.stringify(session.deliverables)}`;
       const transcriptChanged = nextTranscriptKey !== transcriptKey;
       if (transcriptChanged) {
         transcriptKey = nextTranscriptKey;
@@ -662,7 +671,6 @@ export function connectDesktop(runtime: DesktopRuntime) {
       questionsView.render(session.questions);
       sessionPanels.todos(session.todos);
       sessionPanels.goal(session.goal);
-      sessionPanels.deliverables(session.deliverables);
       const historyStart = session.historyStart ?? 0;
       const end = historyStart + session.messages.length;
       if (paintedWindow?.sessionId !== session.sessionId) holdReadingPosition = false;
@@ -716,16 +724,7 @@ export function connectDesktop(runtime: DesktopRuntime) {
         });
     }
 
-    const sessionPanels = mountSessionPanels(
-      () => state,
-      (path) => void workspaceView.open(path),
-      window.yuantu.openWorkspacePath
-        ? {
-            open: (path) => openWorkspaceFile(path, 'open'),
-            reveal: (path) => openWorkspaceFile(path, 'reveal'),
-          }
-        : undefined,
-    );
+    const sessionPanels = mountSessionPanels(() => state);
 
     disposers.push(() => sessionPanels.dispose());
 

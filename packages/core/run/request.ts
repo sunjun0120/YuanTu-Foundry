@@ -34,6 +34,17 @@ class LimitError extends RunFailure {
     this.name = 'LimitError';
   }
 }
+/** How much of a truncated attempt's billed output must be reasoning for it to count as only deliberating. */
+const REASONING_DOMINANT_SHARE = 0.9;
+const REASONING_RESEND_NOTE: Message = {
+  role: 'user',
+  content:
+    '<runtime-context source="output-limit">\n' +
+    'The previous attempt at this turn spent its entire output allowance on reasoning and produced no answer or ' +
+    'tool call, so it was discarded. Do not re-derive what you already worked out: reason briefly, then make ' +
+    'the next tool call or give the answer directly. Keep any single edit small enough to fit.\n' +
+    '</runtime-context>',
+};
 
 export interface RunRequestOptions {
   store: Pick<
@@ -41,6 +52,7 @@ export interface RunRequestOptions {
     | 'contextSurface'
     | 'retryCount'
     | 'zeroByteRetryCount'
+    | 'reasoningResendCount'
     | 'recordEvent'
     | 'renewLease'
     | 'checkpointStream'
@@ -309,6 +321,43 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
     emit('llm.zero-byte-retry', record);
     return true;
   };
+  /**
+   * Whether this truncated attempt is one that only deliberated, and may be sent once more asking for the action.
+   *
+   * A reasoning model can spend the whole output allowance thinking and stop before a word or a complete call:
+   * the 2026-10-29 sample lost a task to 16384 of 16384 tokens of reasoning and nothing else. That is not the
+   * task being too big for the allowance, which is what `output-limit` otherwise means — the same request with a
+   * note to act on the reasoning already done usually lands. Narrow on purpose: nothing visible was streamed (a
+   * re-send would show it twice), reasoning is most of what was billed, and one re-send per round, counted from
+   * its own record like the zero-byte allowance.
+   */
+  let reasoningNote = false;
+  const reasoningResend = (attempt: ModelResponse): boolean => {
+    const reasoning = attempt.outputDiagnostics?.reasoningTokens;
+    if (
+      attempt.finishReason !== 'length' ||
+      attempt.truncation === 'context-window' ||
+      streamedText ||
+      reasoning === undefined ||
+      reasoning < attempt.usage.outputTokens * REASONING_DOMINANT_SHARE
+    )
+      return false;
+    if (store.reasoningResendCount(runId, round, sessionId) >= 1) return false;
+    const record = {
+      runId,
+      round,
+      outputTokens: attempt.usage.outputTokens,
+      reasoningTokens: reasoning,
+    };
+    // Recorded before the re-send: the record is the allowance (see `zeroByteRetry`).
+    store.recordEvent(sessionId, 'llm.reasoning-resend', record);
+    emit('llm.reasoning-resend', record);
+    // The discarded attempt was billed all the same.
+    countUsage(attempt.usage);
+    resetReasoning();
+    reasoningNote = true;
+    return true;
+  };
   const retryRequest = async (cause: unknown): Promise<boolean> => {
     const code = failureCodeOf(cause);
     if (!retryable(code)) return false;
@@ -432,7 +481,8 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             ? { parallelToolCalls: false as const }
             : {}),
           ...(recoveringArguments ? { toolArgumentsRecovery: true, degradedFrom } : {}),
-          messages: context.messages,
+          // The note rides on this request only: it is about the attempt that was discarded, not the conversation.
+          messages: reasoningNote ? [...context.messages, REASONING_RESEND_NOTE] : context.messages,
           tools: specs,
           // The key of the request this is, from the prompt this request carries — see `cacheKeyOf`.
           cacheKey: cacheKeyOf(context.system, specs),
@@ -574,6 +624,7 @@ export async function requestRunRound(options: RunRequestOptions): Promise<Model
             : 'Provider context window exceeded; the overflow recovery allowance is spent',
         );
       }
+      if (!recoveringArguments && reasoningResend(attempt)) continue;
       /**
        * A turn that carried nothing at all goes through the same retry decision as a broken stream.
        *

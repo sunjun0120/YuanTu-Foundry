@@ -26,6 +26,7 @@ import type { Message } from '../../../../packages/protocol/index.ts';
 import { BuiltArticle, BuiltDetails } from './BuiltMessage.tsx';
 import { Fold } from './Fold.tsx';
 import type { TranscriptModel, TranscriptSegment, TranscriptStep } from './transcript-model.ts';
+import { DeliverablesPanel, type DeliverableActions } from '../panels/SessionPanels.tsx';
 
 /** One message's built view, with the pieces the transcript lifts out into process groups. */
 export interface MessageFragment {
@@ -287,10 +288,12 @@ export function Conversation({
   state,
   registry,
   onContinue,
+  deliverableActions,
 }: {
   state: TranscriptState;
   registry: GroupRegistry;
   onContinue?: () => void;
+  deliverableActions?: DeliverableActions;
 }): ReactNode {
   // Every string below comes through `t`/`runEndingText`, and both read the language at call time.
   useLocale();
@@ -315,6 +318,15 @@ export function Conversation({
           );
         if (segment.kind === 'ending')
           return <RunEndingRow key={segment.key} ending={segment.ending} />;
+        if (segment.kind === 'deliverables')
+          return (
+            <DeliverablesPanel
+              key={segment.key}
+              turnKey={segment.key}
+              files={segment.files}
+              {...deliverableActions}
+            />
+          );
         const view = cards.get(segment.afterIndex);
         return view ? <TurnChangeRow key={cardKey(segment, view)} view={view} /> : null;
       })}

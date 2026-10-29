@@ -96,6 +96,7 @@ class FakeClient {
         messages: [],
       };
     if (method === 'plan.get') return null;
+    if (method === 'deliverables.get') return [];
     if (method === 'completion.current') {
       if (this.completion === undefined) throw new Error('Unknown method completion.current');
       return this.completion;

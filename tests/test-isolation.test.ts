@@ -414,6 +414,45 @@ test(
   },
 );
 
+test('settlement accepts an unverified process that exits during its ownership check', async (t) => {
+  const parent = await fixture(t);
+  const isolation = await createIsolation(parent, 'exiting-pid.test.ts', [], process.env);
+  const module = new URL('../scripts/test-isolation/processes.mjs?exiting-pid', import.meta.url)
+    .href;
+  const result = run(
+    isolation,
+    `
+    import fs from 'node:fs';
+    const { settleProcesses } = await import(${JSON.stringify(module)});
+    const processPath = process.env.TMP + '/exiting-pid.ndjson';
+    fs.writeFileSync(processPath, JSON.stringify({event:'owner-start',pid:process.pid})+'\\n');
+    const originalKill = process.kill;
+    let probes = 0;
+    // Deterministically model a process exiting after the initial existence probe.
+    process.kill = (pid, signal) => {
+      if (pid !== process.pid || signal !== 0) throw Error('unexpected process operation');
+      if (++probes === 1) return true;
+      throw Object.assign(new Error('process exited'), {code:'ESRCH'});
+    };
+    let settled;
+    try {
+      settled = await settleProcesses({processPath}, {
+        terminate: () => { throw Error('termination without ownership proof'); },
+        timeoutMs: 0,
+      });
+    } finally { process.kill = originalKill; }
+    console.log(JSON.stringify({clean:settled.clean,remaining:settled.remaining,verified:settled.verified,terminated:settled.terminated}));
+  `,
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    clean: true,
+    remaining: [],
+    verified: [],
+    terminated: [],
+  });
+});
+
 test('settlement retains an active PID when its ownership cannot be proved', async (t) => {
   const parent = await fixture(t);
   const isolation = await createIsolation(parent, 'unverified-pid.test.ts', [], process.env);

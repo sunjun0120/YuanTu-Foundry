@@ -821,6 +821,14 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   );
   await page.locator('#open-workspace').click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'open');
+  const settleWorkspaceWidth = () =>
+    page.waitForFunction(() =>
+      document
+        .querySelector('.desktop-shell')
+        .getAnimations()
+        .every((a) => a.playState !== 'running'),
+    );
+  await settleWorkspaceWidth();
   assert.equal(await page.locator('#workspace-panel').isVisible(), true);
   assert.equal(await page.locator('#workspace-new-tab-page').isVisible(), true);
   assert.equal(await page.locator('#workspace-new-tab').getAttribute('aria-selected'), 'true');
@@ -836,6 +844,7 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   // Start at the supported minimum so a narrow window still has room to grow.
   await resizeHandle.focus();
   await page.keyboard.press('Home');
+  await settleWorkspaceWidth();
   const initialWidth = (await page.locator('#workspace-panel').boundingBox()).width;
   const handleBounds = await resizeHandle.boundingBox();
   const handleY = handleBounds.y + handleBounds.height / 2;
@@ -857,8 +866,10 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   assert.ok(draggedWidth > initialWidth + 80, 'dragging left widens the sidebar');
   await resizeHandle.focus();
   await page.keyboard.press('ArrowRight');
+  await settleWorkspaceWidth();
   assert.equal((await page.locator('#workspace-panel').boundingBox()).width, draggedWidth - 24);
   await page.keyboard.press('ArrowLeft');
+  await settleWorkspaceWidth();
   assert.equal((await page.locator('#workspace-panel').boundingBox()).width, draggedWidth);
   assert.equal(await page.locator('#workspace-expand').count(), 0);
   const opener = page.locator('#open-workspace');
@@ -1080,11 +1091,21 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   await page.locator('#workspace-preview-body .markdown h1').waitFor();
 
   await page.locator('#workspace-fullscreen').click();
-  await page.waitForFunction(() => document.body.dataset.workspaceView === 'fullscreen');
+  await page.waitForFunction(
+    () =>
+      document.body.dataset.workspaceView === 'fullscreen' &&
+      document
+        .querySelector('.desktop-shell')
+        .getAnimations()
+        .every((a) => a.playState !== 'running'),
+  );
   assert.equal(await page.locator('#chat-page').isVisible(), false);
   const fullBounds = await page.locator('#workspace-panel').boundingBox();
   const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-  assert.equal(fullBounds.width, viewport.width);
+  const sidebarBounds = await page.locator('#chat-sidebar').boundingBox();
+  assert.ok(Math.abs(fullBounds.x - sidebarBounds.width) <= 1);
+  assert.ok(Math.abs(fullBounds.width - (viewport.width - sidebarBounds.width)) <= 1);
+  assert.equal(await page.locator('#chat-sidebar').evaluate((sidebar) => sidebar.inert), false);
   assert.equal(fullBounds.height, viewport.height);
   assert.equal(await fillsPanel(), true);
   if (process.env.YUANTU_QA_SCREENSHOT) {
@@ -1124,8 +1145,20 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
   assert.ok((await contrast()) >= 4.5, 'system dark theme applies to the document');
   await page.setViewportSize({ width: 860, height: 720 });
   await page.locator('#workspace-fullscreen').click();
+  await page.waitForFunction(
+    () =>
+      document.body.dataset.workspaceView === 'fullscreen' &&
+      document
+        .querySelector('.desktop-shell')
+        .getAnimations()
+        .every((a) => a.playState !== 'running'),
+  );
   const narrowBounds = await page.locator('#workspace-panel').boundingBox();
-  assert.equal(narrowBounds.width, 860, 'fullscreen also fills a narrow window');
+  const narrowSidebar = await page.locator('#chat-sidebar').boundingBox();
+  assert.ok(
+    Math.abs(narrowBounds.width - (860 - narrowSidebar.width)) <= 1,
+    'an enlarged workspace leaves the session sidebar visible in a narrow window',
+  );
   assert.equal(narrowBounds.height, 720);
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#workspace-preview').isVisible(), true);
@@ -1271,12 +1304,14 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
     .locator('.workspace-tab-close')
     .click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'closed');
+  await page.locator('#workspace-panel').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#workspace-panel').isVisible(), false);
   await page.locator('#open-workspace').click();
   await page.locator('#workspace-new-tab-page').waitFor();
   assert.equal(await page.locator('#workspace-new-tab span').innerText(), '开始');
   await page.locator('#workspace-close').click();
   await page.waitForFunction(() => document.body.dataset.workspaceView === 'closed');
+  await page.locator('#workspace-panel').waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#workspace-panel').isVisible(), false);
   assert.equal(
     await readFile(path.join(root, 'guide.md'), 'utf8'),

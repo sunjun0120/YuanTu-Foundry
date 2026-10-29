@@ -35,7 +35,7 @@ export async function readDeliverables(
   sessionId: string,
 ): Promise<PresentedFile[]> {
   try {
-    return await client.request('deliverables.get', { sessionId });
+    return await client.request('deliverables.get', { sessionId, byTurn: true });
   } catch {
     return [];
   }

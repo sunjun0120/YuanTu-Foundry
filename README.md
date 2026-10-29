@@ -59,6 +59,21 @@ npm.cmd run desktop -- --workspace E:\your-project
 
 Windows 打包后可运行 `npm.cmd run smoke:windows-package`，用独立测试数据验证沙箱开启的窗口启动、工作区与会话恢复及 Host 退出；该命令不执行安装或卸载。构建时只将生成目录设为可继承的 Medium 完整性级别，防止受 Low 标签影响的开发目录产出无法启动的程序。
 
+Windows 自动发布由 [Windows installation 工作流](.github/workflows/windows-package.yml) 执行：推送 `v` 开头的版本标签后，先检查标签与 `package.json` 版本严格一致，再执行测试、打包以及安装、卸载、升级和回滚验证；全部成功后，将安装包和 SHA-256 校验清单发布到 [GitHub Releases](https://github.com/sunjun0120/YuanTu-Foundry/releases)。普通代码提交不触发此打包流程；在 Actions 页面手动运行只生成构建产物，不发布 Release。
+
+合入并推送需要发布的代码（首次包含上述工作流修改）后，以下以发布 `0.1.1` 为例。在干净的工作区执行：
+
+```powershell
+npm.cmd version 0.1.1 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: release 0.1.1"
+git push origin main
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+发布成功后，用户进入 Releases，在对应版本的 Assets 中下载 `YuanTu-Agent-<版本>-windows-x64-setup.exe` 即可安装，无需下载源码或自行编译。当前自动发行沿用升级验证的要求，仅接受 `主版本.次版本.修订号` 格式的稳定版本（如 `0.1.1`）。已有 Release 不会被流程覆盖；若发布中断留下草稿，需先检查并处理该草稿后再重跑发布任务。公开仓库可供所有人下载，私有仓库仍要求下载者具有访问权限。
+
 ---
 
 <a id="architecture"></a>
@@ -628,7 +643,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 
 <!-- settings:start -->
 
-**由代码算出**：共 76 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
+**由代码算出**：共 77 个名字，取自 `packages/protocol/settings.ts` 的 `ENVIRONMENT`；`npm run docs:generate` 重写，`docs:check` 在不一致时失败。
 
 <!-- prettier-ignore -->
 | 变量 | 取值 | 说明 |
@@ -689,6 +704,7 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 | `YUANTU_LSP_AFTER_EDIT` | `0` / `1` | 编辑后是否附加诊断 |
 | `YUANTU_GIT_EXCLUDE` | `0` / `1` | 是否把工作区 .yuantu 的运行期状态写入仓库的 .git/info/exclude（缺省开启） |
 | `YUANTU_SUBAGENTS` | `0` / `1` | 是否启用子代理委派 |
+| `YUANTU_TOOL_ALLOWLIST` | `string` | 只提供这些工具（逗号分隔的工具名；不在列表里的工具既不展示也不能调用）。缺省不限制 |
 | `YUANTU_SUBAGENT_CONCURRENCY` | `1–16` | 子代理并发上限 |
 | `YUANTU_WORKSPACE_RETENTION_DAYS` | `1–3650` | 已移除的隔离工作区保留天数；超过后在 Host 启动时彻底清除（不可再恢复）。缺省不清除 |
 | `YUANTU_SUBAGENT_WORKSPACE` | `auto` / `shared` / `worktree` | 子代理执行目录：auto 自动隔离（默认），shared 沿用委派者目录（旧行为，不做隔离），worktree 连只读子代理也隔离 |
@@ -731,14 +747,14 @@ Host 不监听任何端口。桌面用 `spawnedCarrier` 启动并监管 Host 子
 <!-- prettier-ignore -->
 | 指标 | 值 | 来源 |
 | --- | --- | --- |
-| 工具（空工作区，全部） | 68 个 / 36.8 KB | `createTools().specs()` |
-| 工具（只读运行） | 35 个 / 17.1 KB | `specs({ readOnly: true })` |
-| 工具（默认按需加载，首个请求） | 24 个 / 14.6 KB | `specs({ loaded: new Set() })` |
+| 工具（空工作区，全部） | 68 个 / 37.0 KB | `createTools().specs()` |
+| 工具（只读运行） | 35 个 / 17.4 KB | `specs({ readOnly: true })` |
+| 工具（默认按需加载，首个请求） | 24 个 / 14.9 KB | `specs({ loaded: new Set() })` |
 | `explore` 白名单条目 | 25 条 | `EXPLORE_TOOLS` |
 | 会话 schema 版本 | v32 | 新建库上的 `PRAGMA user_version` |
-| 持久事件类型 / 实时事件类型 | 56 / 52 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
-| 桌面冒烟套件 | 22 | `smoke:desktop` 的清单 |
-| 行为测试文件 | 348 个 | `tests/*.test.ts` |
+| 持久事件类型 / 实时事件类型 | 58 / 53 | `SESSION_EVENT_TYPES`、`AGENT_EVENT_TYPES` |
+| 桌面冒烟套件 | 23 | `smoke:desktop` 的清单 |
+| 行为测试文件 | 350 个 | `tests/*.test.ts` |
 | 整轮快照场景 | 4 个 | `tests/snapshots/*.json`（`npm run snapshot:update` 重写） |
 | CLI 任务型命令 | 25 个，其中 5 个需要模型凭据 | `CLI_COMMANDS`（`apps/shared/cli-commands.ts`，帮助文本由它渲染） |
 | CLI 维护命令 | 9 个 | `CLI_MAINTENANCE_COMMANDS` |

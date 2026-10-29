@@ -25,6 +25,8 @@ export type ToolProgress =
   | 'conclude'
   | 'investigation-warn'
   | 'investigation-conclude'
+  | 'act-final'
+  | 'act-conclude'
   | 'edit-oscillation-warn'
   | 'edit-oscillation-warn-final';
 /** One write that undid an earlier one, as the guard counted it. */
@@ -442,7 +444,11 @@ export function toolProgressNotice(action: Exclude<ToolProgress, 'continue'>): s
                 ? 'You are undoing edits you made earlier in this run. Pick the version the evidence supports best, keep only that one, and stop switching between implementations. If the evidence does not settle the difference between them, state what is uncertain and finish instead of rewriting the same code again.'
                 : action === 'edit-oscillation-warn-final'
                   ? 'Going back and forth over the same code has stopped producing new evidence. Choose the version best supported by what you have already read, say plainly what remains uncertain, and end the work. Do not rewrite that region again.'
-                  : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
+                  : action === 'act-final'
+                    ? 'The rounds allowed after the investigation cutoff are used up and the project is still unchanged. This is the last round with tools: only the file editors remain. Make the edit now, using the exact source you have already read, or answer without tools and say what is unfinished.'
+                    : action === 'act-conclude'
+                      ? 'The rounds allowed after the investigation cutoff are used up. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.'
+                      : 'Further repeated tool calls produced no new information. This next request is for a conclusion only; no tools are available. Answer from existing evidence, distinguish confirmed facts from uncertainty, and state any unfinished work or missing information. Do not claim an unverified fix or completed task.') +
     '\n</runtime-context>'
   );
 }

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { createTools } from '../packages/catalog/index.ts';
 import { AgentHostClient } from '../packages/client/host-client.ts';
 import { parseCarrierCommand } from '../packages/carrier/contract.ts';
+import { questionTool } from '../packages/tools/question.ts';
 import type {
   QuestionOutcome,
   QuestionRequest,
@@ -95,6 +96,71 @@ test('free text and multi-select answers both survive the round trip', async (t)
   );
   assert.match(result.content, /selected: lint, test/);
   assert.match(result.content, /free text: ship it/);
+});
+
+test('three options still allow a separate free-text answer', async (t) => {
+  const { tools } = await fixture(t);
+  const result = await execute(
+    tools,
+    {
+      questions: [
+        {
+          id: 'color',
+          question: 'Which colour?',
+          options: [{ label: 'red', recommended: true }, { label: 'blue' }, { label: 'green' }],
+          allowFreeText: true,
+        },
+      ],
+    },
+    async () => ({
+      answered: true,
+      answers: [{ id: 'color', selected: [], freeText: 'purple' }],
+    }),
+  );
+  assert.equal(result.isError, false);
+  assert.match(result.content, /free text: purple/);
+});
+
+test('a fourth option is refused by the registry before reaching the user', async (t) => {
+  const { tools } = await fixture(t);
+  let asked = false;
+  const result = await execute(
+    tools,
+    {
+      questions: [
+        {
+          id: 'color',
+          question: 'Which colour?',
+          options: [{ label: 'red' }, { label: 'blue' }, { label: 'green' }, { label: 'purple' }],
+        },
+      ],
+    },
+    async () => {
+      asked = true;
+      return { answered: true, answers: [] };
+    },
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.content, /options/i);
+  assert.equal(asked, false);
+});
+
+test('the question tool also refuses a fourth option without registry validation', async () => {
+  await assert.rejects(
+    questionTool().execute(
+      {
+        questions: [
+          {
+            id: 'color',
+            question: 'Which colour?',
+            options: [{ label: 'red' }, { label: 'blue' }, { label: 'green' }, { label: 'purple' }],
+          },
+        ],
+      },
+      { signal: new AbortController().signal, approve: async () => true },
+    ),
+    /at most 3 options/,
+  );
 });
 
 test('a questioner that ignores the signal still cannot outlast the timeout', async (t) => {

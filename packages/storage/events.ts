@@ -263,6 +263,11 @@ export const SESSION_EVENT_TYPES = [
    * restarts between attempts must not come back with a fresh allowance, exactly as for `llm.retry`.
    */
   'llm.zero-byte-retry',
+  /**
+   * An attempt whose output allowance went entirely to reasoning was re-sent once (`llm.reasoning-resend` in
+   * `packages/protocol/events.ts`). Durable for the same reason: the record is the count the next process reads.
+   */
+  'llm.reasoning-resend',
   'provider.degraded',
   /**
    * One write that undid an earlier one in this session's run (`edit-oscillation-warn` in `tool-progress.ts`).
@@ -365,6 +370,8 @@ export const IGNORABLE_SESSION_EVENTS: readonly string[] = [
    * from this record, so a reader that is the *run* never skips it.
    */
   'llm.zero-byte-retry',
+  /** A re-send of an attempt that only reasoned. Like the two above, superseded by what followed it. */
+  'llm.reasoning-resend',
   'provider.degraded',
   /**
    * A write that undid an earlier one. It carries no part of the transcript and no state a reader must act on:

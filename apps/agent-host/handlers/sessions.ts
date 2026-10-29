@@ -68,7 +68,9 @@ export const sessionHandlers: Readonly<Record<string, Handler>> = {
   'deliverables.get': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');
     ownedSession(ctx.store, ctx.workspace, sessionId);
-    return ctx.store.deliverables(sessionId);
+    return params.byTurn === true
+      ? ctx.store.turnDeliverables(sessionId)
+      : ctx.store.deliverables(sessionId);
   },
   'goal.get': async (ctx, params) => {
     const sessionId = required(params, 'sessionId');

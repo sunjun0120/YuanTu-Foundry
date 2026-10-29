@@ -58,6 +58,10 @@ jobs:
       # the internal client smoke remains active. `docs:check` and `references:check` inside it are what
       # make the numbers and the paths in the documentation fail here rather than in a reader's browser.
       - run: npm run check
+      # The grading suites are their own gate. They freeze the whole source tree and drive a real Host
+      # through a scripted corpus, which is why they are not part of the `npm test` a developer runs
+      # after every edit (see EVAL_TESTS). Running them here keeps that decision from becoming a hole.
+      - run: npm run test:eval
       # The advisory gate is a CI step rather than part of `check`, because it reads npm's registry: a local
       # `npm run check` must stay usable offline. Every accepted advisory is listed in scripts/check-audit.mjs
       # with its reason, and an entry that stops being reported fails as stale.

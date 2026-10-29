@@ -97,7 +97,7 @@ test(
     // The report is composed, and says where its evidence came from rather than implying it was verified here.
     assert.equal(outcome.report?.findings.length, 1);
     assert.match(outcome.report!.findings[0]!.evidence, /The answer is 42\./);
-    assert.match(outcome.report!.unverified![0]!, /ran in its own process and workspace/);
+    assert.match(outcome.report!.unverified![0]!, /Ran in its own process and workspace/);
     assert.ok(outcome.usage, 'the child reports what it spent, and the parent folds that in');
   },
 );
@@ -119,16 +119,58 @@ test(
   },
 );
 
-test('the refusal never recommends explore through a provider that cannot enforce its capabilities', async () => {
+test('the provider accepts what an explore task asks for, and refuses what it cannot keep', async () => {
+  // The coordinator always passes a depth cap and an explore task a tool filter; declaring neither refused every
+  // task and left this provider unreachable. Both are kept now: the child cannot delegate, and its catalogue
+  // applies the filter. A persona, a fork or a caller's schema still has no mechanism here.
   const provider = subprocessProvider({ script: 'unused', maxContextTokens: 128000 });
   const registry = new SubAgentProviderRegistry();
   registry.register(provider);
-  assert.throws(
-    () => registry.resolve(provider.name, { maxDepth: 2, toolFilter: ['read_file'] }),
-    /UNSUPPORTED_CAPABILITY/,
+  assert.equal(
+    registry.resolve(provider.name, { maxDepth: 2, toolFilter: ['read_file'] }),
+    provider,
   );
+  for (const options of [
+    { persona: 'a reviewer' },
+    { contextFork: true },
+    { outputSchema: { type: 'object' } },
+  ])
+    assert.throws(() => registry.resolve(provider.name, options), /UNSUPPORTED_CAPABILITY/);
   const declined = await provider.start(request({ role: 'general' }));
   assert.doesNotMatch(declined.error ?? '', /ask for an `explore`/);
+});
+
+test('the child is handed the tool filter and none of the deployment’s permission policy', async (t) => {
+  // A stand-in for the CLI that reports the environment it was started with, so what is asserted is what the child
+  // process actually received.
+  const directory = await tempRoot(t, 'yuantu-subprocess-env-');
+  const script = path.join(directory, 'report-env.cjs');
+  await writeFile(
+    script,
+    [
+      'const text = JSON.stringify({',
+      '  allow: process.env.YUANTU_TOOL_ALLOWLIST ?? null,',
+      '  policy: process.env.YUANTU_PERMISSION_POLICY ?? null,',
+      '  subagents: process.env.YUANTU_SUBAGENTS ?? null,',
+      '});',
+      'process.stdout.write(JSON.stringify({ type: "result", result: { status: "completed", text } }) + "\\n");',
+    ].join('\n'),
+  );
+  const provider = subprocessProvider({
+    script,
+    maxContextTokens: 128000,
+    env: { YUANTU_PERMISSION_POLICY: '{"allow":[{"tool":"run_command"}]}' },
+  });
+  const outcome = await provider.start({
+    ...request(),
+    options: { maxDepth: 2, toolFilter: ['read_file', 'search_files'] },
+  });
+  assert.equal(outcome.status, 'completed', outcome.error);
+  assert.deepEqual(JSON.parse(outcome.text), {
+    allow: 'read_file,search_files',
+    policy: null,
+    subagents: 'false',
+  });
 });
 
 for (const stream of ['stdout', 'stderr', 'combined'] as const) {
@@ -302,14 +344,14 @@ test('the child result reader takes the last result frame and survives frames it
 });
 
 test('a composed report bounds an enormous answer instead of shipping it whole', async () => {
-  // The report is a summary surface: the child's full answer is quoted as evidence, but the one-line summary a
-  // card and a settlement notice read must stay bounded or every fan-out pays for the longest child.
+  // The report is a summary surface, held to the same bounds as a submitted one: the card, the durable record and
+  // the settlement notice read it. The child's whole answer still reaches the parent as the turn's text.
   const report = reportFromChild('x'.repeat(5_000), 'child-1');
   assert.equal(report.summary.length, 401, 'truncated with an ellipsis');
   assert.equal(
     report.findings[0]!.evidence.length,
-    5_000,
-    'the evidence is the answer, not a copy of the summary',
+    300,
+    'the quoted evidence is bounded like any finding',
   );
-  assert.match(report.unverified![0]!, /child-1/);
+  assert.match(report.unverified![0]!, /child-1/, 'and the session id survives its own bound');
 });

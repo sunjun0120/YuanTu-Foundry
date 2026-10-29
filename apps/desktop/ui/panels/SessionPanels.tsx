@@ -12,6 +12,7 @@ import type { PresentedFile } from '../../../../packages/protocol/deliverables.t
 import { t } from '../../i18n.ts';
 import { useLocale } from '../i18n.ts';
 import { deliverablesView, goalView, todosView } from './session-panels-model.ts';
+import { ProgressMark } from './ProgressMark.tsx';
 
 export function TodosPanel({
   snapshot,
@@ -37,12 +38,12 @@ export function TodosPanel({
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
-        <span className="todos-icon" aria-hidden="true">
-          ☷
-        </span>
         <strong id="todos-title">{t('ui.todosTitle')}</strong>
         <span id="todos-summary" className="todos-summary">
           {view.summary}
+        </span>
+        <span className="todos-progress" aria-hidden="true">
+          {view.counts.completed}/{view.total}
         </span>
         <span className="todos-chevron" aria-hidden="true" />
       </summary>
@@ -50,8 +51,14 @@ export function TodosPanel({
         <ul id="todos" className="todos">
           {view.rows.map((row, index) => (
             <li key={index} className={row.className}>
-              <span className="todo-mark">{row.mark}</span>
+              <ProgressMark
+                completed={todos[index]?.status === 'completed'}
+                label={t(`ui.todoStatus.${todos[index]!.status}`)}
+              />
               <span className="todo-content">{row.content}</span>
+              {todos[index]?.status === 'in_progress' ? (
+                <span className="progress-note">{t('ui.todoStatus.in_progress')}</span>
+              ) : null}
             </li>
           ))}
           <li className="todo-count">{view.countText}</li>
@@ -84,36 +91,43 @@ export function GoalPanel({ goal }: { goal: Goal | null }): ReactNode {
   );
 }
 
+export interface DeliverableActions {
+  open?: (path: string) => void;
+  shell?: { open(path: string): void; reveal(path: string): void };
+}
+
 export function DeliverablesPanel({
   files,
   open,
   shell,
+  turnKey,
 }: {
   files: PresentedFile[];
-  open?: (path: string) => void;
-  shell?: { open(path: string): void; reveal(path: string): void };
-}): ReactNode {
+  turnKey?: string;
+} & DeliverableActions): ReactNode {
   useLocale();
   const view = deliverablesView(files);
+  const title = t(turnKey ? 'ui.turnDeliverablesTitle' : 'ui.deliverablesTitle');
   if (!view.visible)
     return (
       <section
-        id="deliverables-panel"
+        id={turnKey ? undefined : 'deliverables-panel'}
         className="deliverables-panel"
-        aria-label={t('ui.deliverablesTitle')}
+        aria-label={title}
         hidden
       />
     );
   return (
     <section
-      id="deliverables-panel"
+      id={turnKey ? undefined : 'deliverables-panel'}
       className="deliverables-panel"
-      aria-label={t('ui.deliverablesTitle')}
+      aria-label={title}
+      data-deliverables-turn={turnKey}
     >
       <div className="deliverables-panel-header">
-        <h2 id="deliverables-title">{t('ui.deliverablesTitle')}</h2>
+        <h2 id={turnKey ? undefined : 'deliverables-title'}>{title}</h2>
       </div>
-      <ul id="deliverables" className="deliverables">
+      <ul id={turnKey ? undefined : 'deliverables'} className="deliverables">
         {view.rows.map((row) => (
           <li key={row.path} className="deliverable" title={row.title}>
             {open ? (

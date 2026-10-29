@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { CarrierSnapshot } from '../packages/carrier/contract.ts';
 import type { Message } from '../packages/protocol/index.ts';
+import type { PresentedFile } from '../packages/protocol/deliverables.ts';
 import {
   transcriptModel,
   transcriptRows,
@@ -18,6 +19,49 @@ function message(overrides: Partial<Message>): Message {
 function snapshot(endings: unknown[] = []): CarrierSnapshot {
   return { session: { runEndings: endings } } as unknown as CarrierSnapshot;
 }
+
+test('turn deliverables follow their answer before the next question and coexist with change cards', () => {
+  const files = new Map<number, PresentedFile[]>([
+    [1, []],
+    [3, []],
+  ]);
+  const model = transcriptModel(
+    snapshot(),
+    [
+      message({ role: 'user', content: 'first' }),
+      message({ content: 'first answer' }),
+      message({ role: 'user', content: 'second' }),
+      message({ content: 'second answer' }),
+    ],
+    0,
+    new Map([[1, {}]]),
+    new Map(),
+    files,
+  );
+  assert.deepEqual(
+    model.segments.map((segment) => segment.kind),
+    ['message', 'message', 'card', 'deliverables', 'message', 'message', 'deliverables'],
+  );
+});
+
+test('deliverables outside loaded history stay out of the transcript', () => {
+  const model = transcriptModel(
+    snapshot(),
+    [message({ content: 'loaded' })],
+    10,
+    new Map(),
+    new Map(),
+    new Map([
+      [2, []],
+      [10, []],
+      [12, []],
+    ]),
+  );
+  assert.deepEqual(
+    model.segments.map((segment) => segment.kind),
+    ['message', 'deliverables'],
+  );
+});
 
 test('runtime context and a superseded provisional answer are not rows', () => {
   const rows = transcriptRows(

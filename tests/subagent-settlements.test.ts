@@ -11,7 +11,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent, type AgentOptions } from '../packages/core/agent.ts';
 import { SubAgentResidency } from '../packages/core/subagents/residency.ts';
-import { settlementNotices, settlementNoticeText } from '../packages/core/subagents/settlements.ts';
+import {
+  settlementBacklog,
+  settlementNotices,
+  settlementNoticeText,
+} from '../packages/core/subagents/settlements.ts';
 import { SessionStore } from '../packages/storage/sqlite.ts';
 import { ToolRegistry } from '../packages/tools/registry.ts';
 import { isRuntimeContext } from '../packages/protocol/context.ts';
@@ -303,4 +307,40 @@ test('the notice names at most a bounded number of children and says what to do 
   assert.ok(!remaining.includes('task-0'));
   assert.ok(!remaining.includes('task-1'));
   assert.equal(settlementNoticeText([]), '');
+});
+
+test('the fold keeps up with the log, and a long backlog says how many are not listed', async (t) => {
+  const { store, session } = await fixture(t);
+  const settle = (index: number) => {
+    store.recordEvent(session.id, 'subagent.assigned', {
+      id: `task-${index}`,
+      childSessionId: `child-${index}`,
+      role: 'explore',
+      objective: `Sweep ${index}`,
+    });
+    store.recordEvent(session.id, 'subagent.finished', {
+      id: `task-${index}`,
+      sessionId: `child-${index}`,
+      role: 'explore',
+      objective: `Sweep ${index}`,
+      status: 'completed',
+    });
+  };
+  for (let index = 0; index < 10; index++) settle(index);
+  const first = settlementBacklog(store, session.id);
+  assert.equal(first.notices.length, 8);
+  assert.equal(first.total, 10);
+  const notice = settlementNoticeText(first.notices, first.total);
+  assert.match(notice, /…and 2 more settled sub-agent\(s\) not listed here/);
+  // A fold continued from where it stopped sees what was appended since, collections included.
+  store.recordEvent(session.id, 'subagent.collected', { ids: ['task-0', 'child-1'] });
+  settle(10);
+  const next = settlementBacklog(store, session.id);
+  assert.equal(next.total, 9);
+  assert.equal(next.notices[0]!.id, 'task-2', 'collected by either id, oldest first');
+  // What a caller is handed is a copy: editing it cannot change the next read.
+  next.notices[0]!.status = 'failed';
+  assert.equal(settlementNotices(store, session.id)[0]!.status, 'completed');
+  // Collecting reads every one, not only the prompt's eight.
+  assert.equal(settlementNotices(store, session.id, Number.POSITIVE_INFINITY).length, 9);
 });

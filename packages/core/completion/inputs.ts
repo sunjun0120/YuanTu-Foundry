@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, readdir, realpath } from 'node:fs/promises';
+import { lstat, open, readdir, readlink, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { WORKSPACE_SCALE_LIMITS } from '../../protocol/workspaces.ts';
 import { runWorkspaceGit } from '../../workspaces/git.ts';
@@ -220,6 +220,29 @@ function admitFile(
 }
 
 /**
+ * A symbolic link, recorded as the link itself: its path and the text it points at.
+ *
+ * Never followed — reading through a link could reach outside the execution root, or a credential the walk would
+ * otherwise refuse — but never refused either. A tracked link is ordinary in a repository, and refusing one made
+ * every fingerprint of that repository fail, which sent each task and every command-running turn to review for a
+ * reason that had nothing to do with the work. What the link *says* is part of the range: retargeting it changes
+ * the digest, and a target inside the range is covered where the walk reaches it on its own.
+ */
+async function admitLink(
+  absolute: string,
+  relative: string,
+  collection: Collection,
+): Promise<void> {
+  if (collection.files >= collection.maxFiles)
+    throw new CompletionInputLimitError(
+      `Completion inputs exceed the ${String(collection.maxFiles)} file limit`,
+    );
+  collection.items.push(`link\0${relative}\0${await readlink(absolute)}\0`);
+  // Counted with the files so the range stays bounded however many links it holds.
+  collection.files += 1;
+}
+
+/**
  * One file's own digest, streamed so memory stays one buffer whatever its size.
  *
  * A file that is not what the walk admitted — another size, another mtime, or a different number of bytes than it
@@ -289,10 +312,10 @@ async function walk(
 ): Promise<void> {
   signal.throwIfAborted();
   const stat = await lstat(absolute);
-  if (stat.isSymbolicLink())
-    throw new CompletionInputLimitError(
-      `Symbolic links are not followed in completion inputs: ${relative}`,
-    );
+  if (stat.isSymbolicLink()) {
+    await admitLink(absolute, relative, collection);
+    return;
+  }
   if (stat.isFile()) {
     admitFile(absolute, relative, stat, collection);
     return;
@@ -301,7 +324,9 @@ async function walk(
     throw new CompletionInputLimitError(`Unsupported path type in completion inputs: ${relative}`);
   if (!includeCurrent) collection.items.push(`directory\0${relative}\0`);
   const entries = await readdir(absolute, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name, 'en'));
+  // Code-unit order, like the Git listing below: a locale's collation can change with the ICU a Node build ships,
+  // and a digest compared across runs must not move because the runtime was upgraded.
+  entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   for (const entry of entries) {
     const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
     if (excluded(childRelative, runtimePaths, defaultSegments)) continue;
@@ -372,10 +397,10 @@ async function snapshotGitVisible(
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw error;
     }
-    if (stat.isSymbolicLink())
-      throw new CompletionInputLimitError(
-        `Symbolic links are not followed in completion inputs: ${relative}`,
-      );
+    if (stat.isSymbolicLink()) {
+      await admitLink(absolute, relative, collection);
+      continue;
+    }
     // A submodule is a directory Git tracks as one entry; walk it so its contents are covered exactly as a
     // recursive listing would have covered them.
     if (stat.isDirectory()) {

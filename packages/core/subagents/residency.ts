@@ -137,6 +137,8 @@ export class ChildActivation {
   private inflight: Promise<ResidentTurnResult> | null = null;
   /** Set by the turn runner while its run is live: this is how a correction reaches the child. */
   private steer: ((message: string, id?: string) => boolean) | null = null;
+  /** How many times `interrupt` has stopped this child: what a queued turn compares against before it starts. */
+  private interrupts = 0;
   constructor(input: ResidentChildInput) {
     this.id = input.id;
     this.childSessionId = input.childSessionId;
@@ -192,6 +194,37 @@ export class ChildActivation {
     signal?: AbortSignal,
   ): Promise<ResidentTurnResult> {
     if (this.disposed) throw new Error('This sub-agent activation has been disposed');
+    /**
+     * A turn waits for the one before it to be over, not just for its model run.
+     *
+     * A turn keeps working after its run ends — an isolated child exports its result — and in that window a message
+     * can no longer be folded in, so the caller starts a new turn. Starting it at once overlapped the two: the first
+     * turn's `finally` then cleared `running`, `inflight` and `steer` while the second was live, so the child read as
+     * idle, `interrupt` missed it, and `dispose` closed its tools under it. Marked running before the wait, so a
+     * caller asking synchronously whether the hand-off happened is told the truth.
+     */
+    this.running = true;
+    const interruptsBefore = this.interrupts;
+    while (this.inflight)
+      await this.inflight.then(
+        () => undefined,
+        () => undefined,
+      );
+    // A turn stopped while it was still queued never starts: the parent's stop, the caller going away and a
+    // disposal all reach it here rather than after it has begun spending.
+    const refusal = this.disposed
+      ? new Error('This sub-agent activation has been disposed')
+      : this.interrupts !== interruptsBefore
+        ? new Error('Interrupted by the parent agent')
+        : signal?.aborted
+          ? signal.reason instanceof Error
+            ? signal.reason
+            : new Error('The call that asked for this turn was cancelled')
+          : undefined;
+    if (refusal) {
+      if (!this.inflight) this.running = false;
+      throw refusal;
+    }
     this.running = true;
     this.controller = new AbortController();
     this.lastUsed = Date.now();
@@ -254,6 +287,8 @@ export class ChildActivation {
   /** Aborts the turn in flight, if any. The activation stays usable afterwards. */
   interrupt(): boolean {
     if (!this.running) return false;
+    // Counted as well as aborted, so a turn still queued behind the running one sees the stop too.
+    this.interrupts++;
     this.controller.abort(new Error('Interrupted by the parent agent'));
     return true;
   }
@@ -309,8 +344,12 @@ export class SubAgentResidency {
    * Leaving the registry is a statement about what callers can *see*, not about the child's resources: an
    * eviction that failed has released nothing, and forgetting the activation here would drop the only reference
    * to a live tool registry. They stay until a close confirms the release, and `disposeAll` reports what is left.
+   *
+   * Held by activation rather than by child session: the same child can be loaded again while its previous
+   * activation is still releasing, and keying by session let the second eviction overwrite the first — which then
+   * dropped out of `disposeAll`'s retry if its release failed.
    */
-  private readonly releasing = new Map<string, ChildActivation>();
+  private readonly releasing = new Set<ChildActivation>();
   /** Release failures already observed, carried to `disposeAll` so a background failure is reported once. */
   private releaseFailures: unknown[] = [];
   private readonly maxResident: number;
@@ -402,11 +441,10 @@ export class SubAgentResidency {
    * unhandled rejection — at the moment the process is trying to stop, which is the worst time to lose it.
    */
   private release(activation: ChildActivation): void {
-    this.releasing.set(activation.childSessionId, activation);
+    this.releasing.add(activation);
     void activation.dispose().then(
       () => {
-        if (this.releasing.get(activation.childSessionId) === activation)
-          this.releasing.delete(activation.childSessionId);
+        this.releasing.delete(activation);
       },
       (error: unknown) => {
         // The activation stays in `releasing`: nothing was released, and `disposeAll` owns the report.

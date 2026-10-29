@@ -1,0 +1,16 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="142" height="57.765" viewBox="0 0 142 57.765" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="&#229;&#137;&#141;&#231;&#137;&#135;&#232;&#191;&#135;&#230;&#184;&#161; 18">
+<use xlink:href="#stroke0_0_73" fill="url(#paint0_linear_0_73)"/>
+<mask id="stroke1_0_73" fill="white">
+<use xlink:href="#stroke0_0_73"/>
+</mask>
+<path d="M2.54867 8.9226L15.0497 52.6872C15.9081 55.6926 18.6549 57.7646 21.7805 57.7646H120.22C123.345 57.7646 126.092 55.6926 126.95 52.6872L139.451 8.9226C140.729 4.45098 137.371 0 132.721 0H9.27946C4.62901 0 1.27139 4.45099 2.54867 8.9226Z" stroke-width="2" stroke="#5E6572" mask="url(#stroke1_0_73)"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_73" x1="71" y1="0" x2="71" y2="57.7646" gradientUnits="userSpaceOnUse">
+<stop stop-color="#4A4A4A"/>
+<stop offset="1" stop-color="#292929"/>
+</linearGradient>
+<path id="stroke0_0_73" d="M132.721 0C137.371 0 140.729 4.45098 139.451 8.9226L126.95 52.6872C126.092 55.6926 123.345 57.7646 120.22 57.7646H21.7805C18.6549 57.7646 15.9081 55.6926 15.0497 52.6872L2.54867 8.9226C1.27139 4.45099 4.62901 0 9.27946 0H132.721Z"/>
+</defs>
+</svg>
