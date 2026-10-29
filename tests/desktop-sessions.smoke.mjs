@@ -1122,6 +1122,10 @@ test('the workspace panel reads files without writing them', { timeout: 60_000 }
     true,
     'Escape exits fullscreen before leaving the file',
   );
+  // The aside animates back from the expanded width, and the chat column is what it leaves behind: until
+  // that transition settles the column really does have no width, so asking before it ends measures the
+  // animation rather than the layout that follows it.
+  await settleWorkspaceWidth();
   assert.equal(await page.locator('#chat-page').isVisible(), true);
   assert.equal(
     await page.locator('#workspace-preview-body').evaluate((body) => body.scrollTop),
